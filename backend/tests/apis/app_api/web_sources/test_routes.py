@@ -8,6 +8,7 @@ background task is never actually scheduled.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -16,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from apis.app_api.documents.models import Document
 from apis.app_api.web_sources import routes as web_routes
+from apis.app_api.web_sources.deletion_service import WebSourceDeletionError
 from apis.app_api.web_sources.models import CrawlJob, CrawlSettings
 from apis.shared.auth.models import User
 from apis.shared.auth.dependencies import get_current_user_from_session
@@ -66,6 +68,11 @@ def _stub_crawl(crawl_id: str = "CRAWL-1") -> CrawlJob:
     )
 
 
+def _stub_permission(permission: str = "owner"):
+    """(assistant, permission) as `resolve_assistant_permission` returns it."""
+    return SimpleNamespace(owner_id=USER_ID), permission
+
+
 @pytest.fixture
 def app() -> FastAPI:
     _app = FastAPI()
@@ -80,9 +87,9 @@ class TestStartCrawl:
         crawl = _stub_crawl()
         run_crawl_mock = AsyncMock(return_value=None)
         with patch(
-            "apis.app_api.web_sources.routes.get_assistant",
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_stub_permission("owner"),
         ), patch(
             "apis.app_api.web_sources.routes.create_document",
             new_callable=AsyncMock,
@@ -113,12 +120,68 @@ class TestStartCrawl:
         # exercising the real crawler.
         run_crawl_mock.assert_called_once()
 
-    def test_returns_404_when_assistant_not_owned(self, app: FastAPI):
+    def test_editor_may_start_a_crawl(self, app: FastAPI):
+        """An editor share is enough to add web content — the SPA already
+        renders the "Add web content" button for anyone who isn't a viewer.
+        """
+        editor = User(
+            email="editor@example.com", user_id="user-editor", name="E", roles=["User"]
+        )
+        mock_auth_user(app, editor)
+        run_crawl_mock = AsyncMock(return_value=None)
+        create_doc_mock = AsyncMock(return_value=_stub_document())
+        create_job_mock = AsyncMock(return_value=_stub_crawl())
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission("editor"),
+        ), patch(
+            "apis.app_api.web_sources.routes.create_document", create_doc_mock,
+        ), patch(
+            "apis.app_api.web_sources.routes.create_crawl_job", create_job_mock,
+        ), patch(
+            "apis.app_api.web_sources.routes.run_crawl", run_crawl_mock,
+        ), patch(
+            "apis.app_api.web_sources.routes.assert_url_is_public",
+            return_value="https://example.com/",
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawl",
+                json={"url": "https://example.com/"},
+            )
+        assert resp.status_code == 202
+
+        # The document row is keyed on the assistant, so the editor's crawl
+        # lands under the same assistant the owner's would...
+        assert create_doc_mock.await_args.kwargs["assistant_id"] == ASSISTANT_ID
+        # ...and the actor fields record the *editor*, not the owner — that
+        # is the whole point of tracking who imported/started.
+        provenance = create_doc_mock.await_args.kwargs["provenance"]
+        assert provenance.imported_by_user_id == "user-editor"
+        assert create_job_mock.await_args.kwargs["started_by_user_id"] == "user-editor"
+        assert run_crawl_mock.call_args.kwargs["user_id"] == "user-editor"
+
+    def test_viewer_gets_403(self, app: FastAPI):
         mock_auth_user(app, _user())
         with patch(
-            "apis.app_api.web_sources.routes.get_assistant",
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value=None,
+            return_value=_stub_permission("viewer"),
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawl",
+                json={"url": "https://example.com/"},
+            )
+        assert resp.status_code == 403
+
+    def test_returns_404_when_assistant_not_visible(self, app: FastAPI):
+        mock_auth_user(app, _user())
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=(None, None),
         ):
             client = TestClient(app)
             resp = client.post(
@@ -130,9 +193,9 @@ class TestStartCrawl:
     def test_returns_422_on_invalid_url(self, app: FastAPI):
         mock_auth_user(app, _user())
         with patch(
-            "apis.app_api.web_sources.routes.get_assistant",
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_stub_permission("owner"),
         ):
             client = TestClient(app)
             # Loopback URL → SSRF guard rejects it.
@@ -145,9 +208,9 @@ class TestStartCrawl:
     def test_returns_422_on_bad_settings_bounds(self, app: FastAPI):
         mock_auth_user(app, _user())
         with patch(
-            "apis.app_api.web_sources.routes.get_assistant",
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_stub_permission("owner"),
         ):
             client = TestClient(app)
             # max_pages above the cap
@@ -175,9 +238,9 @@ class TestListActiveCrawls:
         mock_auth_user(app, _user())
         crawl = _stub_crawl()
         with patch(
-            "apis.app_api.web_sources.routes.get_assistant",
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_stub_permission("owner"),
         ), patch(
             "apis.app_api.web_sources.routes.list_active_crawls",
             new_callable=AsyncMock,
@@ -193,15 +256,42 @@ class TestListActiveCrawls:
         assert len(body["crawls"]) == 1
         assert body["crawls"][0]["crawlId"] == "CRAWL-1"
 
+    def test_editor_may_list_crawls(self, app: FastAPI):
+        mock_auth_user(app, _user())
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission("editor"),
+        ), patch(
+            "apis.app_api.web_sources.routes.list_all_crawls",
+            new_callable=AsyncMock,
+            return_value=[_stub_crawl()],
+        ):
+            client = TestClient(app)
+            resp = client.get(f"/assistants/{ASSISTANT_ID}/web-sources/crawls")
+        assert resp.status_code == 200
+        assert len(resp.json()["crawls"]) == 1
+
+    def test_viewer_gets_403(self, app: FastAPI):
+        mock_auth_user(app, _user())
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission("viewer"),
+        ):
+            client = TestClient(app)
+            resp = client.get(f"/assistants/{ASSISTANT_ID}/web-sources/crawls")
+        assert resp.status_code == 403
+
     def test_returns_all_jobs_without_active_filter(self, app: FastAPI):
         """Default (no ?active=true) is full history — the sync-policy UI
         lists completed crawls as syncable sources."""
         mock_auth_user(app, _user())
         crawl = _stub_crawl()
         with patch(
-            "apis.app_api.web_sources.routes.get_assistant",
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_stub_permission("owner"),
         ), patch(
             "apis.app_api.web_sources.routes.list_all_crawls",
             new_callable=AsyncMock,
@@ -220,9 +310,9 @@ class TestGetCrawl:
         mock_auth_user(app, _user())
         crawl = _stub_crawl()
         with patch(
-            "apis.app_api.web_sources.routes.get_assistant",
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_stub_permission("owner"),
         ), patch(
             "apis.app_api.web_sources.routes.get_crawl_job",
             new_callable=AsyncMock,
@@ -235,12 +325,42 @@ class TestGetCrawl:
         assert resp.status_code == 200
         assert resp.json()["crawlId"] == "CRAWL-1"
 
+    def test_editor_may_get_a_crawl(self, app: FastAPI):
+        mock_auth_user(app, _user())
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission("editor"),
+        ), patch(
+            "apis.app_api.web_sources.routes.get_crawl_job",
+            new_callable=AsyncMock,
+            return_value=_stub_crawl(),
+        ):
+            client = TestClient(app)
+            resp = client.get(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-1"
+            )
+        assert resp.status_code == 200
+
+    def test_viewer_gets_403(self, app: FastAPI):
+        mock_auth_user(app, _user())
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission("viewer"),
+        ):
+            client = TestClient(app)
+            resp = client.get(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-1"
+            )
+        assert resp.status_code == 403
+
     def test_returns_404_when_missing(self, app: FastAPI):
         mock_auth_user(app, _user())
         with patch(
-            "apis.app_api.web_sources.routes.get_assistant",
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_stub_permission("owner"),
         ), patch(
             "apis.app_api.web_sources.routes.get_crawl_job",
             new_callable=AsyncMock,
@@ -251,3 +371,173 @@ class TestGetCrawl:
                 f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-X"
             )
         assert resp.status_code == 404
+
+
+class TestDeleteCrawl:
+    def test_removes_web_source_and_returns_204(self, app: FastAPI):
+        mock_auth_user(app, _user())
+        crawl = _stub_crawl()
+        crawl.status = "complete"
+        delete_mock = AsyncMock(return_value=3)
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission("owner"),
+        ), patch(
+            "apis.app_api.web_sources.routes.get_crawl_job",
+            new_callable=AsyncMock,
+            return_value=crawl,
+        ), patch(
+            "apis.app_api.web_sources.routes.delete_web_source", delete_mock
+        ):
+            client = TestClient(app)
+            resp = client.delete(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-1"
+            )
+        assert resp.status_code == 204
+        # The crawl's own root_url is what scopes the page sweep — not a value
+        # the caller supplies, so a stale client can't widen the blast radius.
+        delete_mock.assert_awaited_once_with(
+            assistant_id=ASSISTANT_ID,
+            crawl_id="CRAWL-1",
+            root_url="https://example.com/",
+            owner_id=USER_ID,
+        )
+
+    def test_editor_may_delete(self, app: FastAPI):
+        """The web-sources list is rendered for editors, so the delete must
+        work for them — the owner-keyed services get the real owner_id."""
+        mock_auth_user(app, _user())
+        crawl = _stub_crawl()
+        crawl.status = "complete"
+        owner = SimpleNamespace(owner_id="someone-else")
+        delete_mock = AsyncMock(return_value=1)
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=(owner, "editor"),
+        ), patch(
+            "apis.app_api.web_sources.routes.get_crawl_job",
+            new_callable=AsyncMock,
+            return_value=crawl,
+        ), patch(
+            "apis.app_api.web_sources.routes.delete_web_source", delete_mock
+        ):
+            client = TestClient(app)
+            resp = client.delete(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-1"
+            )
+        assert resp.status_code == 204
+        assert delete_mock.await_args.kwargs["owner_id"] == "someone-else"
+
+    def test_viewer_gets_403(self, app: FastAPI):
+        mock_auth_user(app, _user())
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission("viewer"),
+        ):
+            client = TestClient(app)
+            resp = client.delete(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-1"
+            )
+        assert resp.status_code == 403
+
+    def test_returns_404_when_crawl_missing(self, app: FastAPI):
+        mock_auth_user(app, _user())
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission(),
+        ), patch(
+            "apis.app_api.web_sources.routes.get_crawl_job",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            client = TestClient(app)
+            resp = client.delete(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-X"
+            )
+        assert resp.status_code == 404
+
+    def test_returns_409_while_crawl_is_running(self, app: FastAPI):
+        """Deleting mid-crawl would strand pages the crawler is still writing."""
+        mock_auth_user(app, _user())
+        crawl = _stub_crawl()  # status='running', started just now
+        delete_mock = AsyncMock(return_value=0)
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission(),
+        ), patch(
+            "apis.app_api.web_sources.routes.get_crawl_job",
+            new_callable=AsyncMock,
+            return_value=crawl,
+        ), patch(
+            "apis.app_api.web_sources.routes.is_crawl_stale", return_value=False
+        ), patch(
+            "apis.app_api.web_sources.routes.delete_web_source", delete_mock
+        ):
+            client = TestClient(app)
+            resp = client.delete(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-1"
+            )
+        assert resp.status_code == 409
+        delete_mock.assert_not_awaited()
+
+    def test_deletes_a_stale_running_crawl(self, app: FastAPI):
+        """A `running` row whose process died is a zombie — it must stay
+        removable, or the UI would show an undeletable 'Crawling…' source."""
+        mock_auth_user(app, _user())
+        crawl = _stub_crawl()  # status='running'
+        delete_mock = AsyncMock(return_value=0)
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission(),
+        ), patch(
+            "apis.app_api.web_sources.routes.get_crawl_job",
+            new_callable=AsyncMock,
+            return_value=crawl,
+        ), patch(
+            "apis.app_api.web_sources.routes.is_crawl_stale", return_value=True
+        ), patch(
+            "apis.app_api.web_sources.routes.delete_web_source", delete_mock
+        ):
+            client = TestClient(app)
+            resp = client.delete(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-1"
+            )
+        assert resp.status_code == 204
+        delete_mock.assert_awaited_once()
+
+    def test_returns_500_when_crawl_row_survives(self, app: FastAPI):
+        mock_auth_user(app, _user())
+        crawl = _stub_crawl()
+        crawl.status = "complete"
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission(),
+        ), patch(
+            "apis.app_api.web_sources.routes.get_crawl_job",
+            new_callable=AsyncMock,
+            return_value=crawl,
+        ), patch(
+            "apis.app_api.web_sources.routes.delete_web_source",
+            new_callable=AsyncMock,
+            side_effect=WebSourceDeletionError("boom"),
+        ):
+            client = TestClient(app)
+            resp = client.delete(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-1"
+            )
+        assert resp.status_code == 500
+
+    def test_returns_401_unauthenticated(self, app: FastAPI):
+        mock_no_auth(app)
+        client = TestClient(app)
+        resp = client.delete(
+            f"/assistants/{ASSISTANT_ID}/web-sources/crawls/CRAWL-1"
+        )
+        assert resp.status_code == 401

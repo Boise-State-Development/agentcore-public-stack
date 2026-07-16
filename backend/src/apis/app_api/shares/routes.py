@@ -26,6 +26,7 @@ from .service import (
     NotOwnerError,
     SessionNotFoundError,
     ShareNotFoundError,
+    ShareStorageUnavailableError,
     ShareTableNotFoundError,
     get_share_service,
 )
@@ -71,6 +72,11 @@ async def create_share(
         raise HTTPException(status_code=403, detail="You do not have permission to share this session")
     except ShareTableNotFoundError:
         raise HTTPException(status_code=503, detail="Share feature unavailable - table not deployed")
+    except ShareStorageUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Sharing is temporarily unavailable. Please try again later.",
+        )
     except Exception as e:
         safe_session_id = session_id.replace("\r", "").replace("\n", "")
         logger.error(f"Error creating share for session {safe_session_id}: {e}", exc_info=True)

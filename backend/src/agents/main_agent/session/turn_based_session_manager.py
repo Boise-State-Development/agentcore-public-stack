@@ -214,6 +214,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             logger.warning(f"Document byte stripping failed, continuing: {e}", exc_info=True)
 
         if not self.compaction_config or not self.compaction_config.enabled:
+            self._repair_restored_history(agent)
             return
 
         try:
@@ -223,6 +224,14 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             self.compaction_state = CompactionState()
             self._valid_cutoff_indices = []
             self._all_messages_for_summary = []
+
+        # Repair tool-use/tool-result pairing and role alternation on the FINAL
+        # restored list — after compaction slicing/truncation — so it is always
+        # the exact history sent to Bedrock. Runs unconditionally (independent of
+        # compaction), mirroring `_strip_document_bytes`, because the corruption
+        # it fixes originates on the write side and can exist regardless of
+        # whether compaction is enabled.
+        self._repair_restored_history(agent)
 
     # =========================================================================
     # Compaction — applied after SDK session restore
@@ -783,6 +792,192 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             logger.debug(f"Stripped inline bytes from {strip_count} document block(s) in history")
 
         return stripped_messages
+
+    # =========================================================================
+    # Tool-pairing / role-alternation repair (restore-time safety net)
+    # =========================================================================
+
+    def _repair_restored_history(self, agent: "Agent") -> None:
+        """Repair tool-use/tool-result pairing on the restored history in place.
+
+        Bedrock Converse rejects any request whose history violates its
+        structural rules — most relevantly:
+        "The number of toolResult blocks at messages.N.content exceeds the
+        number of toolUse blocks of previous turn." A single such violation
+        anywhere in stored history makes EVERY subsequent turn on that session
+        fail, permanently bricking the conversation.
+
+        The corruption originates on the write side: a turn with parallel tool
+        calls in flight that is interrupted (user Stop / dropped connection) or
+        retried can persist duplicated tool-result messages, tool-result
+        messages reordered away from their tool-use turn (assistant, assistant,
+        user, user), or tool-result messages orphaned after a synthetic error
+        turn. The Strands SDK's own ``_fix_broken_tool_use`` only rebuilds the
+        single message immediately after each tool-use turn, so it does not
+        repair duplicates, reordering, or orphans — and it may not run at all on
+        the AgentCore Memory restore path. This is the unconditional safety net.
+
+        Runs on the FINAL ``agent.messages`` (after compaction), mirroring
+        ``_strip_document_bytes``. Best-effort: any failure logs and leaves the
+        history untouched rather than breaking the turn. Kill switch:
+        ``AGENTCORE_MEMORY_HISTORY_REPAIR_ENABLED=false``.
+        """
+        if os.environ.get(EnvVars.HISTORY_REPAIR_ENABLED, "").strip().lower() == "false":
+            return
+        try:
+            messages = agent.messages
+            if not messages:
+                return
+            repaired, fixed = self._repair_tool_pairing(messages)
+            if fixed > 0:
+                logger.warning(
+                    "Restore repair: fixed %d tool-pairing/alternation "
+                    "violation(s) in restored history (%d -> %d messages) "
+                    "for session %s",
+                    fixed, len(messages), len(repaired), self.config.session_id,
+                )
+                agent.messages = repaired
+        except Exception as e:
+            logger.error(f"Restore history repair failed, using history as-is: {e}", exc_info=True)
+
+    @staticmethod
+    def _block_keys(message: Dict) -> tuple:
+        """(has_tool_use, has_tool_result) for a message's content blocks."""
+        has_use = has_result = False
+        for block in message.get("content", []) or []:
+            if isinstance(block, dict):
+                if "toolUse" in block:
+                    has_use = True
+                elif "toolResult" in block:
+                    has_result = True
+        return has_use, has_result
+
+    @staticmethod
+    def _tool_use_ids(message: Dict) -> List[str]:
+        return [
+            b["toolUse"]["toolUseId"]
+            for b in message.get("content", []) or []
+            if isinstance(b, dict) and "toolUse" in b and "toolUseId" in b["toolUse"]
+        ]
+
+    @staticmethod
+    def _tool_result_ids(message: Dict) -> List[str]:
+        return [
+            b["toolResult"]["toolUseId"]
+            for b in message.get("content", []) or []
+            if isinstance(b, dict) and "toolResult" in b and "toolUseId" in b["toolResult"]
+        ]
+
+    @classmethod
+    def _count_pairing_violations(cls, messages: List[Dict]) -> int:
+        """Count Bedrock structural violations: consecutive same-role turns,
+        orphaned/mismatched toolResults, and tool-use turns not answered by the
+        next turn. Zero means the history is already valid — repair can no-op.
+        """
+        violations = 0
+        for i, msg in enumerate(messages):
+            role = msg.get("role")
+            prev = messages[i - 1] if i > 0 else None
+            if prev is not None and prev.get("role") == role:
+                violations += 1
+            has_use, has_result = cls._block_keys(msg)
+            if has_result:
+                prev_use = cls._tool_use_ids(prev) if prev is not None else []
+                if not prev_use or set(cls._tool_result_ids(msg)) != set(prev_use):
+                    violations += 1
+            if has_use and i + 1 < len(messages):
+                if set(cls._tool_use_ids(msg)) != set(cls._tool_result_ids(messages[i + 1])):
+                    violations += 1
+        return violations
+
+    @classmethod
+    def _repair_tool_pairing(cls, messages: List[Dict]) -> tuple:
+        """Return ``(repaired_messages, violations_fixed)``.
+
+        Rebuilds a Bedrock-valid history: every assistant tool-use turn is
+        immediately followed by exactly one user turn carrying one toolResult
+        per toolUseId (missing ones synthesized as errors), duplicate/orphaned
+        toolResult turns are dropped, and consecutive same-role turns are
+        merged. When the history is already valid the input list is returned
+        unchanged (identity) with a count of 0, so healthy sessions pay only a
+        scan.
+        """
+        violations = cls._count_pairing_violations(messages)
+        if violations == 0:
+            return messages, 0
+
+        # Global toolUseId -> toolResult block (last occurrence wins: the most
+        # recent result for an id is the authoritative one).
+        result_by_id: Dict[str, Dict] = {}
+        for msg in messages:
+            for block in msg.get("content", []) or []:
+                if isinstance(block, dict) and "toolResult" in block:
+                    tid = block["toolResult"].get("toolUseId")
+                    if tid:
+                        result_by_id[tid] = block
+
+        def missing_result(tid: str) -> Dict:
+            return {
+                "toolResult": {
+                    "toolUseId": tid,
+                    "content": [{"text": "[tool result unavailable: the turn was interrupted]"}],
+                    "status": "error",
+                }
+            }
+
+        # Forward pass: emit each assistant tool-use turn followed by a freshly
+        # built result turn; drop standalone toolResult-only turns (their blocks
+        # are re-emitted from the map at the correct slot).
+        rebuilt: List[Dict] = []
+        last_index = len(messages) - 1
+        for i, msg in enumerate(messages):
+            has_use, has_result = cls._block_keys(msg)
+
+            if has_result and not has_use:
+                # Standalone tool-result turn: keep only non-toolResult content
+                # (rare mixed text), drop the results themselves.
+                residual = [b for b in msg.get("content", []) if not (isinstance(b, dict) and "toolResult" in b)]
+                if residual:
+                    rebuilt.append({"role": msg.get("role", "user"), "content": residual})
+                continue
+
+            if has_use and i < last_index:
+                rebuilt.append(msg)
+                use_ids = cls._tool_use_ids(msg)
+                rebuilt.append({
+                    "role": "user",
+                    "content": [result_by_id.get(t, missing_result(t)) for t in use_ids],
+                })
+                continue
+
+            # Trailing tool-use turn (last message) or any non-tool turn: emit
+            # as-is. The trailing case is deliberately left for prompt-arrival
+            # handling, matching the SDK's own repair.
+            rebuilt.append(msg)
+
+        # Merge consecutive same-role turns. Guard only on the PREVIOUS turn
+        # having no toolUse: a tool-use turn must stay immediately adjacent to
+        # its result turn, so it can never absorb a following turn — but a
+        # text turn may legitimately merge into a following tool-use turn
+        # (assistant text + toolUse in one turn is valid), keeping the toolUse
+        # at the tail so its result turn still follows. In a merged user turn,
+        # toolResult blocks come first.
+        merged: List[Dict] = []
+        for msg in rebuilt:
+            prev = merged[-1] if merged else None
+            if (
+                prev is not None
+                and prev.get("role") == msg.get("role")
+                and not cls._block_keys(prev)[0]  # prev has no toolUse
+            ):
+                combined = list(prev.get("content", [])) + list(msg.get("content", []))
+                if msg.get("role") == "user":
+                    combined = sorted(combined, key=lambda b: 0 if isinstance(b, dict) and "toolResult" in b else 1)
+                prev["content"] = combined
+            else:
+                merged.append({"role": msg.get("role"), "content": list(msg.get("content", []))})
+
+        return merged, violations
 
     def _truncate_tool_contents(
         self,

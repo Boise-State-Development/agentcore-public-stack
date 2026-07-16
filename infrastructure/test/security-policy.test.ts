@@ -161,6 +161,60 @@ describe('Security policy hardening', () => {
   });
 
   // ──────────────────────────────────────────────────────────
+  // 2b. App-api DynamoDB table grants
+  // ──────────────────────────────────────────────────────────
+
+  describe('App-api shared-conversations table grant', () => {
+    // Regression guard: the shared-conversations table was threaded
+    // into the app-api container as an env var but never granted on
+    // the task role, so every /conversations/{id}/share PutItem and
+    // /conversations/{id}/shares Query returned AccessDeniedException
+    // (surfaced to users as a 500 "Failed to create share"). The grant
+    // lives in app-api-iam-grants.ts under Sid 'SharedConversationsAccess'.
+    it("app-api role can PutItem/Query/GetItem on the shared-conversations table (incl. its GSIs)", () => {
+      // Iterate both AWS::IAM::Policy AND AWS::IAM::ManagedPolicy because
+      // CDK auto-splits oversized inline policies into managed overflow
+      // policies attached to the same role.
+      const candidates: PolicyStatement[] = [];
+      for (const [, r] of Object.entries(template.findResources('AWS::IAM::Policy'))) {
+        const stmts = ((r.Properties as { PolicyDocument?: { Statement?: PolicyStatement[] } })?.PolicyDocument?.Statement) ?? [];
+        for (const s of stmts) candidates.push(s);
+      }
+      for (const [, r] of Object.entries(template.findResources('AWS::IAM::ManagedPolicy'))) {
+        const stmts = ((r.Properties as { PolicyDocument?: { Statement?: PolicyStatement[] } })?.PolicyDocument?.Statement) ?? [];
+        for (const s of stmts) candidates.push(s);
+      }
+
+      const matches = candidates.filter((s) => s.Sid === 'SharedConversationsAccess');
+
+      if (matches.length === 0) {
+        throw new Error(
+          "Could not locate the shared-conversations DynamoDB grant. " +
+            "Looked for Sid 'SharedConversationsAccess' in AWS::IAM::Policy + AWS::IAM::ManagedPolicy. " +
+            "Without it, creating/listing conversation shares fails with AccessDeniedException. " +
+            "If the Sid was renamed, update this test.",
+        );
+      }
+
+      for (const s of matches) {
+        const actions = asArray(s.Action);
+        // The share service does PutItem (create), Query on SessionShareIndex
+        // (list/delete-for-session), and GetItem (retrieve a single share).
+        expect(actions).toContain('dynamodb:PutItem');
+        expect(actions).toContain('dynamodb:Query');
+        expect(actions).toContain('dynamodb:GetItem');
+        // Never a wildcard resource.
+        const resources = asArray(s.Resource);
+        expect(resources).not.toContain('*');
+        // Must cover the table's GSIs (SessionShareIndex) — the list/revoke
+        // paths Query that index, which requires an index/* resource entry.
+        const resourceStrs = resources.map((r) => JSON.stringify(r));
+        expect(resourceStrs.some((r) => r.includes('index/'))).toBe(true);
+      }
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────
   // 3. S3 hardening (encryption + public-access-block)
   // ──────────────────────────────────────────────────────────
 

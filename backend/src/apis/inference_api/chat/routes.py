@@ -8,6 +8,7 @@ These endpoints are at the root level to comply with AWS Bedrock AgentCore Runti
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -92,6 +93,44 @@ PREVIEW_SESSION_PREFIX = "preview-"
 # see _resolve_effective_agent_type. This constant is the compiled-in fallback
 # the policy model itself defaults to, kept aliased so they can never drift.
 DEFAULT_AGENT_TYPE = DEFAULT_CHAT_MODE
+
+
+def _mark_session_cancelled(agent) -> None:
+    """Flip the agent's session-manager ``cancelled`` flag (cooperative stop).
+
+    Both StopHook (tool boundaries) and the stream coordinator (mid-generation)
+    read this flag to unwind the turn. Defensive: a nonstandard agent without a
+    session manager is simply a no-op.
+    """
+    session_manager = getattr(agent, "session_manager", None)
+    if session_manager is not None:
+        session_manager.cancelled = True
+        logger.info("Cooperative stop: cancel observed for the running turn")
+
+
+async def _lease_heartbeat_loop(lease, agent) -> None:
+    """Renew the single-flight session lease and observe cancel requests.
+
+    Runs as a background task for the life of the SSE stream. Renewing on a wall
+    clock (rather than piggybacking on SSE-event cadence) keeps the lease alive
+    across a long silent tool call — code-interpreter / browser can run past the
+    lease window between yielded events — and bounds Stop→resend latency to one
+    interval. Each renew also reports whether a cancel has been armed for this
+    lease owner; on the first such observation we flip the agent's ``cancelled``
+    flag and stop renewing (the turn is unwinding). Best-effort and owner-scoped;
+    cancelled in the stream generator's ``finally``.
+    """
+    from apis.shared.sessions.session_lease import (
+        LEASE_HEARTBEAT_SECONDS,
+        renew_session_lease,
+    )
+
+    while True:
+        await asyncio.sleep(LEASE_HEARTBEAT_SECONDS)
+        cancel_requested = await renew_session_lease(lease)
+        if cancel_requested:
+            _mark_session_cancelled(agent)
+            return
 
 
 def is_preview_session(session_id: str) -> bool:
@@ -1503,6 +1542,42 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             system_prompt = append_active_prompt(system_prompt, prompt_name, prompt_text)
             logger.info(f"Appended custom system prompt: {prompt_name!r}")
 
+    # Per-session single-flight guard (docs/specs/session-single-flight-guard.md,
+    # follow-up to PR #653). A client abort doesn't propagate through the
+    # AgentCore Runtime data plane and the Runtime can route a duplicate
+    # invocation to a *different* container, so two agent loops could otherwise
+    # run concurrently against one AgentCore Memory session and corrupt
+    # tool-pairing history. Acquire a distributed lease at turn-start; reject a
+    # duplicate with 409. Resume / max-tokens continuation re-enter a loop that
+    # already ended, so they take the lease with force=True (never blocked, but
+    # still install it so a fresh duplicate during them is rejected). Preview
+    # sessions and the local no-DynamoDB path (lease None) skip the guard.
+    session_lease = None
+    if not is_preview_session(input_data.session_id):
+        from apis.shared.sessions.session_lease import (
+            acquire_session_lease,
+            SessionBusyError,
+        )
+
+        try:
+            session_lease = await acquire_session_lease(
+                input_data.session_id,
+                user_id,
+                force=is_resume or is_continuation,
+            )
+        except SessionBusyError:
+            logger.warning(
+                "Rejected duplicate concurrent invocation for session %s (409)",
+                scrub_log(input_data.session_id),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "A response is already streaming for this conversation. "
+                    "Wait for it to finish before sending another message."
+                ),
+            )
+
     try:
         # Resume requests rebuild the agent from the persisted PausedTurnSnapshot
         # so a refresh / cache eviction / pod restart between pause and resume
@@ -1912,20 +1987,52 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 except Exception as cleanup_err:
                     logger.error("Failed to clear resolved pending_interrupts: %s", cleanup_err, exc_info=True)
 
+        # Wrap the agent stream so the single-flight session lease is heartbeat-
+        # renewed while the turn runs and released when the stream ends. FastAPI
+        # runs this generator *after* the handler returns, so the lease can't be
+        # released in the handler body without ending it prematurely — the
+        # generator's finally is the release site for the happy path (the two
+        # except handlers below cover pre-stream failures).
+        async def _guarded_stream() -> AsyncGenerator[str, None]:
+            heartbeat_task = (
+                asyncio.create_task(_lease_heartbeat_loop(session_lease, agent))
+                if session_lease is not None
+                else None
+            )
+            try:
+                async for chunk in stream_with_quota_warning():
+                    yield chunk
+            finally:
+                if heartbeat_task is not None:
+                    heartbeat_task.cancel()
+                    # Await the cancelled task so its CancelledError is retrieved
+                    # (never re-raised) before the lease is released.
+                    await asyncio.gather(heartbeat_task, return_exceptions=True)
+                from apis.shared.sessions.session_lease import release_session_lease
+                await release_session_lease(session_lease)
+
         # Stream response from agent as SSE (with optional files)
         # Note: Compression is handled by GZipMiddleware if configured in main.py
         return StreamingResponse(
-            stream_with_quota_warning(),
+            _guarded_stream(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": input_data.session_id},
         )
 
     except HTTPException:
-        # Re-raise HTTP exceptions as-is (e.g., from auth)
+        # Re-raise HTTP exceptions as-is (e.g., from auth). Release the lease
+        # first — a failure raised after acquire (e.g. resume/interrupt 400s)
+        # means the turn won't stream, so its generator finally never runs.
+        from apis.shared.sessions.session_lease import release_session_lease
+        await release_session_lease(session_lease)
         raise
     except Exception as e:
-        # Stream error as a conversational assistant message for better UX
+        # Stream error as a conversational assistant message for better UX.
+        # The agent turn won't run, so release the lease here (the error stream
+        # is a canned single message, not an agent loop).
         logger.error("Error in invocations", exc_info=True)
+        from apis.shared.sessions.session_lease import release_session_lease
+        await release_session_lease(session_lease)
 
         error_event = build_conversational_error_event(code=ErrorCode.AGENT_ERROR, error=e, session_id=input_data.session_id, recoverable=True)
 

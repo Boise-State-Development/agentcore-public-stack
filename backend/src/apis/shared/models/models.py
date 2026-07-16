@@ -161,11 +161,13 @@ class ManagedModelCreate(BaseModel):
     # value is only a ceiling for the admin-configured max_tokens inference
     # param — it is never sent to the provider — so leaving it unset is safe.
     max_output_tokens: Optional[int] = Field(None, alias="maxOutputTokens", ge=1)
-    # Access control: AppRoles (preferred) or legacy JWT roles
+    # Access control. Not stored on the model item: the admin routes write this
+    # through to each named role's ``grantedModels``, which is the source of truth.
     allowed_app_roles: List[str] = Field(
         default_factory=list,
         alias="allowedAppRoles",
-        description="AppRole IDs that can access this model (preferred over availableToRoles)"
+        description="AppRole IDs that should grant this model. Written through to each "
+                    "role's grantedModels; not persisted on the model record."
     )
     available_to_roles: List[str] = Field(
         default_factory=list,
@@ -247,11 +249,14 @@ class ManagedModelUpdate(BaseModel):
     output_modalities: Optional[List[str]] = Field(None, alias="outputModalities")
     max_input_tokens: Optional[int] = Field(None, alias="maxInputTokens", ge=1)
     max_output_tokens: Optional[int] = Field(None, alias="maxOutputTokens", ge=1)
-    # Access control: AppRoles (preferred) or legacy JWT roles
+    # Access control. Not stored on the model item: the admin routes write this
+    # through to each named role's ``grantedModels``, which is the source of truth.
+    # None means "leave role grants alone"; [] means "revoke every direct grant".
     allowed_app_roles: Optional[List[str]] = Field(
         None,
         alias="allowedAppRoles",
-        description="AppRole IDs that can access this model (preferred over availableToRoles)"
+        description="AppRole IDs that should grant this model. Written through to each "
+                    "role's grantedModels; not persisted on the model record."
     )
     available_to_roles: Optional[List[str]] = Field(
         None,
@@ -327,11 +332,23 @@ class ManagedModel(BaseModel):
     output_modalities: List[str] = Field(..., alias="outputModalities")
     max_input_tokens: int = Field(..., alias="maxInputTokens")
     max_output_tokens: Optional[int] = Field(None, alias="maxOutputTokens")
-    # Access control: AppRoles (preferred) or legacy JWT roles
+    # Access control. The AppRole record is the single source of truth: a role
+    # grants a model via its own ``grantedModels``. The two fields below are
+    # DERIVED from those role records on read (see ModelRoleService) and are not
+    # persisted on the model item — access checks never read them.
     allowed_app_roles: List[str] = Field(
         default_factory=list,
         alias="allowedAppRoles",
-        description="AppRole IDs that can access this model (preferred over availableToRoles)"
+        description="[DERIVED] AppRole IDs that grant this model DIRECTLY (the role lists "
+                    "it in grantedModels). Editable via the admin model form, which writes "
+                    "through to each role's grantedModels."
+    )
+    inherited_app_roles: List[str] = Field(
+        default_factory=list,
+        alias="inheritedAppRoles",
+        description="[DERIVED, read-only] AppRole IDs that grant this model indirectly — "
+                    "via a wildcard ('*') grant or via inheritance from a parent role. "
+                    "Cannot be toggled from the model form; edit the role instead."
     )
     available_to_roles: List[str] = Field(
         default_factory=list,
@@ -387,3 +404,20 @@ class ManagedModel(BaseModel):
     )
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
+
+
+class ModelRoleAssignment(BaseModel):
+    """Role assignment info for a model. Mirrors ToolRoleAssignment."""
+
+    role_id: str = Field(..., alias="roleId")
+    display_name: str = Field(..., alias="displayName")
+    grant_type: str = Field(
+        ...,
+        alias="grantType",
+        description="'direct' (role lists the model in grantedModels), "
+                    "'wildcard' (role grants '*'), or 'inherited' (a parent role grants it)",
+    )
+    inherited_from: Optional[str] = Field(None, alias="inheritedFrom")
+    enabled: bool
+
+    model_config = {"populate_by_name": True}

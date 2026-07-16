@@ -4,13 +4,14 @@ Business logic for creating, retrieving, updating, and revoking
 conversation share snapshots.  Supports multiple shares per session.
 """
 
+import json
 import logging
 import os
 import re
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -27,6 +28,15 @@ from .models import (
     SharedConversationResponse,
     UpdateShareRequest,
 )
+from .snapshot_store import (
+    ShareSnapshotStore,
+    ShareSnapshotStoreError,
+    get_share_snapshot_store,
+)
+
+# Snapshot schema version stamped on the S3 body pointer, for forward
+# migration if the body shape ever changes.
+_SNAPSHOT_SCHEMA_VERSION = 1
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +44,13 @@ logger = logging.getLogger(__name__)
 class ShareService:
     """Handles share CRUD operations against the shared-conversations DynamoDB table."""
 
-    def __init__(self) -> None:
+    def __init__(self, snapshot_store: Optional[ShareSnapshotStore] = None) -> None:
         table_name = os.environ.get("SHARED_CONVERSATIONS_TABLE_NAME", "")
         self._table_name = table_name
         self._enabled = bool(table_name)
+        # S3-backed snapshot body store. Injectable for tests; otherwise the
+        # process-global store (bucket from SHARED_CONVERSATIONS_BUCKET_NAME).
+        self._snapshot_store = snapshot_store or get_share_snapshot_store()
 
         if self._enabled:
             self._dynamodb = boto3.resource("dynamodb")
@@ -78,16 +91,32 @@ class ShareService:
 
         metadata_snapshot = metadata.model_dump(by_alias=True, exclude_none=True)
 
-        # Convert floats to Decimal for DynamoDB compatibility
-        messages_snapshot = self._convert_floats_to_decimal(messages_snapshot)
-        metadata_snapshot = self._convert_floats_to_decimal(metadata_snapshot)
-
-        # Build item
         share_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         allowed_emails = self._resolve_allowed_emails(
             request.access_level, request.allowed_emails, user.email
         )
+
+        # Offload the snapshot BODY (messages + metadata) to S3 — a long
+        # conversation exceeds DynamoDB's 400 KB item limit if inlined. The
+        # DynamoDB row keeps only the small control fields plus a pointer.
+        # The body is opaque JSON bytes in S3, so we serialize the raw
+        # model_dump directly and skip the float→Decimal dance (that only
+        # exists to satisfy DynamoDB's boto3 resource, which rejects floats).
+        if not self._snapshot_store.enabled:
+            raise ShareStorageUnavailableError()
+
+        body_bytes = json.dumps(
+            {"metadata": metadata_snapshot, "messages": messages_snapshot}
+        ).encode("utf-8")
+
+        try:
+            bucket_key = self._snapshot_store.put(share_id=share_id, body=body_bytes)
+        except ShareSnapshotStoreError as e:
+            logger.error(
+                f"Failed to store snapshot body for share {self._sanitize_id(share_id)}: {e}"
+            )
+            raise ShareStorageUnavailableError() from e
 
         item = {
             "share_id": share_id,
@@ -96,8 +125,12 @@ class ShareService:
             "owner_email": user.email,
             "access_level": request.access_level,
             "created_at": now,
-            "metadata": metadata_snapshot,
-            "messages": messages_snapshot,
+            "body_ref": {
+                "bucket_key": bucket_key,
+                "format": "json",
+                "schema_version": _SNAPSHOT_SCHEMA_VERSION,
+                "byte_size": len(body_bytes),
+            },
         }
         if allowed_emails is not None:
             item["allowed_emails"] = allowed_emails
@@ -194,6 +227,7 @@ class ShareService:
             raise NotOwnerError()
 
         self._table.delete_item(Key={"share_id": item["share_id"]})
+        self._delete_snapshot_body(item)
         logger.info(f"Revoked share {item['share_id']}")
 
     async def delete_shares_for_session(self, session_id: str) -> int:
@@ -219,6 +253,12 @@ class ShareService:
             with self._table.batch_writer() as batch:
                 for item in items:
                     batch.delete_item(Key={"share_id": item["share_id"]})
+
+            # Best-effort cleanup of each share's S3 snapshot body. The
+            # DynamoDB delete above is what makes the share link stop working;
+            # an S3 miss here only leaves an orphan object, never a live share.
+            for item in items:
+                self._delete_snapshot_body(item)
 
             logger.info(
                 f"Deleted {len(items)} share(s) for session "
@@ -264,8 +304,7 @@ class ShareService:
 
         self._check_access(item, requester)
 
-        snapshot_messages = item.get("messages", [])
-        metadata = item.get("metadata", {})
+        metadata, snapshot_messages = self._load_snapshot_body(item)
         original_title = metadata.get("title", "Untitled Conversation")
         new_title = f"{original_title} (shared)"
 
@@ -428,6 +467,23 @@ class ShareService:
         return obj
 
     @staticmethod
+    def _convert_decimals_to_float(obj: Any) -> Any:
+        """Recursively convert DynamoDB ``Decimal`` values back to native types.
+
+        Legacy inline shares were written with ``_convert_floats_to_decimal``,
+        so their bodies come back off DynamoDB as ``Decimal``. Convert them
+        back — to ``int`` when integral, else ``float`` — so the legacy read
+        path yields the same plain-JSON shape as the S3-backed path.
+        """
+        if isinstance(obj, Decimal):
+            return int(obj) if obj % 1 == 0 else float(obj)
+        elif isinstance(obj, dict):
+            return {k: ShareService._convert_decimals_to_float(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [ShareService._convert_decimals_to_float(item) for item in obj]
+        return obj
+
+    @staticmethod
     def _sanitize_id(value: str, max_length: int = 128) -> str:
         """Return a log-safe version of an ID string.
 
@@ -507,11 +563,64 @@ class ShareService:
             share_url=f"/shared/{item['share_id']}",
         )
 
+    def _load_snapshot_body(self, item: dict) -> Tuple[dict, list]:
+        """Return ``(metadata, messages)`` for a share item.
+
+        Handles three item shapes for backward compatibility:
+
+          - **New** (``body_ref`` present): fetch the JSON body from S3.
+          - **Legacy inline** (``messages`` present, no ``body_ref``): read the
+            body straight off the DynamoDB item, exactly as before the S3
+            offload. Existing shares predate the offload and stay readable
+            with no migration.
+          - **Malformed** (neither): unreadable → ``ShareNotFoundError``.
+        """
+        body_ref = item.get("body_ref")
+        if body_ref:
+            key = body_ref.get("bucket_key")
+            try:
+                raw = self._snapshot_store.get(key)
+                body = json.loads(raw)
+            except (ShareSnapshotStoreError, ValueError) as e:
+                logger.error(
+                    f"Failed to load snapshot body for share "
+                    f"{self._sanitize_id(str(item.get('share_id', '')))} "
+                    f"key={key}: {e}"
+                )
+                raise ShareNotFoundError() from e
+            return body.get("metadata", {}) or {}, body.get("messages", []) or []
+
+        if item.get("messages") is not None:
+            # Legacy inline share — DynamoDB stored floats as Decimal; convert
+            # back so downstream JSON/Pydantic handling matches the S3 path.
+            metadata = self._convert_decimals_to_float(item.get("metadata", {}) or {})
+            messages = self._convert_decimals_to_float(item.get("messages", []))
+            return metadata, messages
+
+        logger.warning(
+            f"Share {self._sanitize_id(str(item.get('share_id', '')))} has neither "
+            "body_ref nor inline messages — treating as unreadable"
+        )
+        raise ShareNotFoundError()
+
+    def _delete_snapshot_body(self, item: dict) -> None:
+        """Best-effort delete of a share's S3 snapshot body.
+
+        No-op for legacy inline shares (no ``body_ref``). Never raises — the
+        store's delete swallows storage misses; a failure here logs but never
+        blocks the DynamoDB delete that actually revokes the share.
+        """
+        body_ref = item.get("body_ref")
+        if not body_ref:
+            return
+        key = body_ref.get("bucket_key")
+        if key:
+            self._snapshot_store.delete(key)
+
     def _build_shared_conversation_response(self, item: dict) -> SharedConversationResponse:
         from apis.shared.sessions.models import MessageResponse
 
-        metadata = item.get("metadata", {})
-        raw_messages = item.get("messages", [])
+        metadata, raw_messages = self._load_snapshot_body(item)
 
         messages = []
         for msg_data in raw_messages:
@@ -554,6 +663,18 @@ class AccessDeniedError(Exception):
 
 class ShareTableNotFoundError(Exception):
     """Raised when the DynamoDB table does not exist (CDK not deployed)."""
+    pass
+
+
+class ShareStorageUnavailableError(Exception):
+    """Raised when the S3 snapshot-body store is unconfigured or unreachable.
+
+    The share body is offloaded to S3; if the bucket is unset (misconfigured
+    deploy / local dev without AWS) or the write fails, creating a share can't
+    proceed. Surfaced to the client as a 503 with a friendly message rather
+    than silently falling back to inline (which would reintroduce the 400 KB
+    item-size failure).
+    """
     pass
 
 
