@@ -430,3 +430,95 @@ class TestInvocationsSingleFlight:
 
         assert resp.status_code == 200
         acquire_mock.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Resume path: interrupt_responses set (OAuth-gated MCP consent / tool approval)
+# ---------------------------------------------------------------------------
+
+
+class TestInvocationsResume:
+    """POST /invocations on the resume path must not raise.
+
+    Regression for the scope bug where ``effective_enabled_tools`` was assigned
+    only in the non-resume branch but referenced unconditionally by the
+    ``stream_with_quota_warning`` closure (attachment guidance + tabular
+    inventory). A resume turn — e.g. the client re-invoking after the user
+    grants an OAuth-gated MCP tool's consent ("connect to Gmail for employees")
+    or answers a tool-approval interrupt — hit
+    ``NameError: cannot access free variable 'effective_enabled_tools'`` before
+    the streaming closure's first yield. That surfaced as a 500 from the
+    inference-api container and, once the AgentCore Runtime data plane
+    translated it, a ``424 Failed Dependency`` to app-api and the SPA.
+
+    The fix binds ``effective_enabled_tools`` from the paused-turn snapshot on
+    the resume branch (the same source the resume ``get_agent`` call uses).
+    """
+
+    @staticmethod
+    def _paused_agent(interrupt_id):
+        """Mock agent whose ``_interrupt_state`` advertises ``interrupt_id`` as a
+        known paused interrupt, so the route's resume id-validation accepts the
+        submitted response instead of rejecting it with a 400."""
+        mock_agent = MagicMock()
+        interrupt_state = MagicMock()
+        interrupt_state.activated = True
+        interrupt_state.interrupts = {interrupt_id: MagicMock()}
+        mock_agent.agent = MagicMock()
+        mock_agent.agent._interrupt_state = interrupt_state
+
+        async def fake_stream(*args, **kwargs):
+            yield 'event: message_start\ndata: {"role": "assistant"}\n\n'
+            yield "event: done\ndata: {}\n\n"
+
+        mock_agent.stream_async = fake_stream
+        return mock_agent
+
+    @staticmethod
+    def _snapshot(enabled_tools):
+        from datetime import datetime, timedelta, timezone
+
+        from apis.shared.sessions.models import PausedTurnSnapshot
+
+        now = datetime.now(timezone.utc)
+        return PausedTurnSnapshot(
+            enabled_tools=enabled_tools,
+            model_id="anthropic.claude-sonnet-4",
+            provider="bedrock",
+            system_prompt="You are helpful.",
+            agent_type="chat",
+            captured_at=now.isoformat(),
+            expires_at=(now + timedelta(minutes=10)).isoformat(),
+        )
+
+    def test_resume_turn_does_not_raise_nameerror(self, authed_app, authed_client):
+        """A resume request (interrupt_responses set) streams a 200 instead of
+        500-ing on the unbound ``effective_enabled_tools``."""
+        interrupt_id = "int-abc"
+        snapshot = self._snapshot(enabled_tools=["gmail_employee"])
+
+        with patch(
+            "apis.inference_api.chat.routes.get_agent",
+            return_value=self._paused_agent(interrupt_id),
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.shared.sessions.metadata.get_paused_turn",
+            return_value=snapshot,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={
+                    "session_id": "sess-resume-1",
+                    "message": "",
+                    "interrupt_responses": [
+                        {"interruptId": interrupt_id, "response": {"approved": True}}
+                    ],
+                },
+            )
+            body = resp.text  # force the streaming generator to run to completion
+
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        assert "event: done" in body
