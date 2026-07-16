@@ -22,11 +22,17 @@ class _FakeConfig:
     session_id = "test-session"
 
 
-class _FakeManager(T):
-    """TurnBasedSessionManager without the heavy AgentCore parent init."""
+def _make_manager() -> T:
+    """A TurnBasedSessionManager built without the heavy AgentCore parent init.
 
-    def __init__(self):
-        self.config = _FakeConfig()
+    ``_repair_restored_history`` only reads ``self.config.session_id`` and calls
+    the ``_repair_tool_pairing`` classmethod, so an instance created via
+    ``__new__`` with just a fake config is sufficient — and avoids a subclass
+    whose ``__init__`` skips ``super().__init__``.
+    """
+    manager = T.__new__(T)
+    manager.config = _FakeConfig()
+    return manager
 
 
 class _FakeAgent:
@@ -221,7 +227,7 @@ class TestRepairWrapper:
     def test_wrapper_mutates_agent_messages(self, monkeypatch):
         monkeypatch.delenv(EnvVars.HISTORY_REPAIR_ENABLED, raising=False)
         agent = _FakeAgent([_txt("user"), _use("a"), _res("a"), _res("a")])
-        _FakeManager()._repair_restored_history(agent)
+        _make_manager()._repair_restored_history(agent)
         ok, why = _is_valid(agent.messages)
         assert ok, why
 
@@ -229,12 +235,12 @@ class TestRepairWrapper:
         monkeypatch.setenv(EnvVars.HISTORY_REPAIR_ENABLED, "false")
         corrupt = [_txt("user"), _use("a"), _res("a"), _res("a")]
         agent = _FakeAgent(corrupt)
-        _FakeManager()._repair_restored_history(agent)
+        _make_manager()._repair_restored_history(agent)
         assert agent.messages is corrupt  # untouched
 
     def test_wrapper_noop_on_healthy_history(self, monkeypatch):
         monkeypatch.delenv(EnvVars.HISTORY_REPAIR_ENABLED, raising=False)
         healthy = [_txt("user"), _use("a"), _res("a"), _txt("assistant")]
         agent = _FakeAgent(healthy)
-        _FakeManager()._repair_restored_history(agent)
+        _make_manager()._repair_restored_history(agent)
         assert agent.messages is healthy  # identity preserved, no rebuild

@@ -1568,7 +1568,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         except SessionBusyError:
             logger.warning(
                 "Rejected duplicate concurrent invocation for session %s (409)",
-                input_data.session_id,
+                scrub_log(input_data.session_id),
             )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -2005,8 +2005,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             finally:
                 if heartbeat_task is not None:
                     heartbeat_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await heartbeat_task
+                    # Await the cancelled task so its CancelledError is retrieved
+                    # (never re-raised) before the lease is released.
+                    await asyncio.gather(heartbeat_task, return_exceptions=True)
                 from apis.shared.sessions.session_lease import release_session_lease
                 await release_session_lease(session_lease)
 
