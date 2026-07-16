@@ -1,3 +1,25 @@
+# Release Notes — v1.6.1
+
+**Release Date:** July 16, 2026
+**Previous Release:** v1.6.0 (July 15, 2026)
+
+---
+
+## Highlights
+
+v1.6.1 is a patch release fixing two agent-invocation regressions. Agents bound to a Mantle-provider model (like `openai.gpt-5.4`) were misrouting to Bedrock and failing with an "invalid model identifier" error, because agent bindings only persist a model id and the invocation path had no provider to key on — it now recovers the provider server-side from the managed-model registry. Separately, every interrupt-resume turn — the OAuth-consent and tool-approval flows, most visibly "connect to Gmail" — was crashing with a 500/424 because a streaming variable was left unbound on the resume path. No infrastructure change and no migration; ships through `backend.yml`.
+
+## 🐛 Bug fixes
+
+- **Agents bound to Mantle models no longer fail with "invalid model identifier."** Agent (assistant) model bindings persist only `model_id`, never `provider`, so previewing or invoking an agent bound to a Mantle model (e.g. `openai.gpt-5.4`) resolved to `provider=None` and misrouted the model to Bedrock ConverseStream — which rejected it, even though the same model works from the normal chat path (which always sends `provider` alongside `model_id`). `_resolve_model_settings` in `apis/inference_api/chat/routes.py` now also returns the model's registered `provider` from the managed-model registry, and the invocation path backfills `effective_provider` from it when the request or binding didn't carry one — fixing all existing provider-less bindings with no data backfill, mirroring how `mantle_api_mode` / `mantle_region` are already recovered. The app-tool-call and app-context-update rebuild paths get the same fallback so a rebuilt agent keys on the same provider as its main turn. On the frontend, the Agent Designer save payload now persists the selected model's `provider` (from the catalog `meta.provider`) alongside `modelId`, so newly created/edited bindings are self-describing (#661)
+- **Interrupt-resume turns no longer 500/424.** Resume turns (OAuth-gated MCP consent or tool-approval — `interrupt_responses` set) crashed with `NameError: cannot access free variable 'effective_enabled_tools'`. The variable is referenced unconditionally by the `stream_with_quota_warning` streaming closure (attachment guidance + tabular inventory) but was only assigned on the non-resume branch, so on resume the closure raised before its first yield, the inference-api container returned 500, and the AgentCore Runtime data plane translated that into a 424 Failed Dependency to app-api and the SPA. This broke every interrupt-resume turn since the agent-designer tool-binding refactor — most visibly "connect to Gmail for employees," which completes via an OAuth-consent resume. `effective_enabled_tools` is now bound from the paused-turn snapshot on the resume branch (the same source the resume `get_agent` call uses), with a resume-path regression test in `tests/routes/test_inference.py` (#662)
+
+## 🚀 Deployment notes
+
+No special steps. Both fixes are backend/frontend code only — no CDK deploy, no new AWS resources, no data migration. Ship through `backend.yml` (app-api + inference-api images) and the frontend deploy; the Agent Designer provider-persistence change rides the standard frontend deploy.
+
+---
+
 # Release Notes — v1.6.0
 
 **Release Date:** July 15, 2026
