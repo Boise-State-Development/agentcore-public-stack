@@ -1652,6 +1652,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     else None
                 ),
             )
+            # The `stream_with_quota_warning` closure below references
+            # `effective_enabled_tools` unconditionally (attachment guidance,
+            # tabular inventory). It is only assigned in the non-resume branch,
+            # so a resume turn — e.g. the client re-invoking after granting an
+            # OAuth-gated MCP tool's consent, or answering a tool-approval
+            # interrupt — would otherwise raise `NameError: cannot access free
+            # variable 'effective_enabled_tools'`, surfacing as a 500 from the
+            # container and a 424 Failed Dependency to the caller. Bind it to the
+            # snapshot's toolset, the same source the resume `get_agent` used.
+            effective_enabled_tools = snapshot.enabled_tools
         else:
             # Build the canonical request inference-params dict. The frontend
             # sends ``inference_params`` directly; legacy ``temperature`` /
