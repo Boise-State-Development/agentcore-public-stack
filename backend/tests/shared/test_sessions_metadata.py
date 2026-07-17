@@ -619,24 +619,28 @@ class TestUpdateSessionActivity:
         assert result.preferences.last_model == "claude-3"
 
     @pytest.mark.asyncio
-    async def test_rotates_sk_to_new_timestamp(self, sessions_metadata_table):
-        """SK rotation keeps recency listing correct — only one row remains."""
+    async def test_activity_updates_in_place_no_rotation(self, sessions_metadata_table):
+        """Issue #175: activity no longer rotates the SK. One static row (S#{id});
+        recency advances via the GSI4 attribute, not a row move."""
         from apis.shared.sessions.metadata import (
             ensure_session_metadata_exists,
             update_session_activity,
         )
         await ensure_session_metadata_exists("s1", "u1")
         items = sessions_metadata_table.scan()["Items"]
-        s_items = [i for i in items if i["SK"].startswith("S#ACTIVE#")]
+        s_items = [i for i in items if i.get("GSI_SK") == "META"]
         assert len(s_items) == 1
-        old_sk = s_items[0]["SK"]
+        assert s_items[0]["SK"] == "S#s1"          # static SK, no timestamp
+        assert s_items[0].get("GSI4_PK") == "USER#u1"  # sparse recency key present (active)
 
         await update_session_activity(session_id="s1", user_id="u1", last_model="claude-3")
 
         items = sessions_metadata_table.scan()["Items"]
-        s_items_after = [i for i in items if i["SK"].startswith("S#ACTIVE#")]
-        assert len(s_items_after) == 1
-        assert s_items_after[0]["SK"] != old_sk
+        s_items_after = [i for i in items if i.get("GSI_SK") == "META"]
+        assert len(s_items_after) == 1             # no duplicate / ghost row
+        assert s_items_after[0]["SK"] == "S#s1"    # SK unchanged — no rotation
+        assert int(s_items_after[0]["messageCount"]) == 1
+        assert s_items_after[0].get("GSI4_PK") == "USER#u1"  # still listed (active)
 
     @pytest.mark.asyncio
     async def test_self_heals_when_row_missing(self, sessions_metadata_table):
@@ -742,10 +746,9 @@ class TestSessionUnread:
 class TestEnsureSessionMetadataExists:
     @pytest.mark.asyncio
     async def test_repeated_calls_do_not_create_duplicates(self, sessions_metadata_table):
-        """Regression: each turn calls ensure_session_metadata_exists; the SK
-        encodes a timestamp, so a put-with-conditional cannot gate creation
-        and would produce one duplicate row per turn (sidebar duplication bug).
-        """
+        """Regression: each turn calls ensure_session_metadata_exists. With the static
+        SK (issue #175) the GSI pre-check + conditional put gate creation, so only the
+        first call creates a row (no sidebar duplication)."""
         from apis.shared.sessions.metadata import ensure_session_metadata_exists
 
         first = await ensure_session_metadata_exists("s1", "u1")
@@ -757,13 +760,13 @@ class TestEnsureSessionMetadataExists:
         assert third is False
 
         items = sessions_metadata_table.scan()["Items"]
-        s_items = [i for i in items if i["SK"].startswith("S#ACTIVE#") and i.get("sessionId") == "s1"]
+        s_items = [i for i in items if i["SK"] == "S#s1" and i.get("sessionId") == "s1"]
         assert len(s_items) == 1
 
     @pytest.mark.asyncio
-    async def test_survives_sk_rotation(self, sessions_metadata_table):
-        """After update_session_activity rotates the SK, a subsequent ensure
-        call must still recognize the session via the GSI and skip the put.
+    async def test_ensure_idempotent_after_activity(self, sessions_metadata_table):
+        """After an activity update, a subsequent ensure call must still recognize the
+        session via the GSI and skip the put — exactly one static row remains.
         """
         from apis.shared.sessions.metadata import (
             ensure_session_metadata_exists,
@@ -777,7 +780,7 @@ class TestEnsureSessionMetadataExists:
         assert again is False
 
         items = sessions_metadata_table.scan()["Items"]
-        s_items = [i for i in items if i["SK"].startswith("S#ACTIVE#") and i.get("sessionId") == "s1"]
+        s_items = [i for i in items if i["SK"] == "S#s1" and i.get("sessionId") == "s1"]
         assert len(s_items) == 1
 
 
@@ -1103,3 +1106,112 @@ class TestCoerceCostTotal:
         result = _coerce_cost_total({"total": 1.5})
         assert isinstance(result, float)
         assert math.isfinite(result)
+
+
+class TestWriteSideMigration:
+    """Issue #175 Phase 1b — writes go static, self-migrate legacy rows, maintain GSI4."""
+
+    @pytest.mark.asyncio
+    async def test_new_session_born_static(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import ensure_session_metadata_exists
+        assert await ensure_session_metadata_exists("s1", "u1") is True
+        rows = [i for i in sessions_metadata_table.scan()["Items"] if i.get("GSI_SK") == "META"]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["SK"] == "S#s1"                 # static, no timestamp
+        assert row["GSI4_PK"] == "USER#u1"
+        assert row["GSI4_SK"].endswith("#s1")
+        assert row["status"] == "active"
+
+    @pytest.mark.asyncio
+    async def test_conditional_put_blocks_duplicate_on_gsi_lag(self, sessions_metadata_table, monkeypatch):
+        """If the GSI pre-check misses an existing row (eventual-consistency lag), the
+        deterministic-SK conditional put still prevents a duplicate — moto raises the
+        real ConditionalCheckFailedException, which ensure swallows."""
+        import apis.shared.sessions.metadata as md
+        _put_migrated_row(sessions_metadata_table, "s1", "2026-01-01T00:00:00Z")
+
+        async def _none(*a, **k):
+            return None
+        monkeypatch.setattr(md, "_get_session_by_gsi", _none)
+
+        assert await md.ensure_session_metadata_exists("s1", "u1") is False
+        rows = [i for i in sessions_metadata_table.scan()["Items"] if i.get("GSI_SK") == "META"]
+        assert len(rows) == 1  # no duplicate created
+
+    @pytest.mark.asyncio
+    async def test_activity_migrates_legacy_row_once(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import update_session_activity
+        _put_legacy_row(sessions_metadata_table, "s1", "2026-01-01T00:00:00Z")  # messageCount=1
+        await update_session_activity(session_id="s1", user_id="u1", last_model="claude-3")
+
+        items = sessions_metadata_table.scan()["Items"]
+        rows = [i for i in items if i.get("GSI_SK") == "META"]
+        assert len(rows) == 1
+        assert rows[0]["SK"] == "S#s1"                                    # migrated to static
+        assert not any(i["SK"].startswith("S#ACTIVE#") for i in items)     # legacy row gone
+        assert rows[0]["GSI4_PK"] == "USER#u1"                            # GSI4 populated
+        assert int(rows[0]["messageCount"]) == 2                          # 1 + 1
+
+    @pytest.mark.asyncio
+    async def test_store_migrates_legacy_to_static(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import store_session_metadata
+        _put_legacy_row(sessions_metadata_table, "s1", "2026-01-01T00:00:00Z")
+        updated = _make_session_metadata("s1", title="Renamed", lastMessageAt="2026-02-02T00:00:00Z")
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=updated)
+
+        items = sessions_metadata_table.scan()["Items"]
+        rows = [i for i in items if i.get("GSI_SK") == "META"]
+        assert len(rows) == 1
+        assert rows[0]["SK"] == "S#s1"
+        assert rows[0]["title"] == "Renamed"
+        assert rows[0]["GSI4_PK"] == "USER#u1"
+        assert not any(i["SK"].startswith("S#ACTIVE#") for i in items)
+
+    @pytest.mark.asyncio
+    async def test_soft_delete_static_row_in_place(self, sessions_metadata_table):
+        from apis.app_api.sessions.services.session_service import SessionService
+        from apis.shared.sessions.metadata import list_user_sessions
+        _put_migrated_row(sessions_metadata_table, "s1", "2026-01-01T00:00:00Z")
+
+        assert await SessionService().delete_session("u1", "s1") is True
+        items = sessions_metadata_table.scan()["Items"]
+        rows = [i for i in items if i.get("GSI_SK") == "META"]
+        assert len(rows) == 1
+        assert rows[0]["SK"] == "S#s1"                     # no move
+        assert rows[0]["status"] == "deleted"
+        assert "GSI4_PK" not in rows[0]                    # dropped from recency index
+        assert not any(i["SK"].startswith("S#DELETED#") for i in items)
+        sessions, _ = await list_user_sessions("u1")
+        assert sessions == []                              # no longer listed
+
+    @pytest.mark.asyncio
+    async def test_soft_delete_legacy_row_migrates(self, sessions_metadata_table):
+        from apis.app_api.sessions.services.session_service import SessionService
+        from apis.shared.sessions.metadata import list_user_sessions
+        _put_legacy_row(sessions_metadata_table, "s1", "2026-01-01T00:00:00Z")
+
+        assert await SessionService().delete_session("u1", "s1") is True
+        items = sessions_metadata_table.scan()["Items"]
+        rows = [i for i in items if i.get("GSI_SK") == "META"]
+        assert len(rows) == 1
+        assert rows[0]["SK"] == "S#s1"                     # migrated to static tombstone
+        assert rows[0]["status"] == "deleted"
+        assert "GSI4_PK" not in rows[0]
+        assert not any(i["SK"].startswith("S#ACTIVE#") for i in items)  # legacy gone
+        sessions, _ = await list_user_sessions("u1")
+        assert sessions == []
+
+    @pytest.mark.asyncio
+    async def test_end_to_end_create_activity_list_delete(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, update_session_activity, list_user_sessions,
+        )
+        from apis.app_api.sessions.services.session_service import SessionService
+        await ensure_session_metadata_exists("s1", "u1")
+        await update_session_activity(session_id="s1", user_id="u1", last_model="claude-3")
+        sessions, _ = await list_user_sessions("u1")
+        assert [s.session_id for s in sessions] == ["s1"]   # visible via GSI4 union
+        await SessionService().delete_session("u1", "s1")
+        sessions, _ = await list_user_sessions("u1")
+        assert sessions == []
