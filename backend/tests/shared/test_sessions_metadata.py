@@ -263,6 +263,119 @@ class TestListUserSessions:
             await list_user_sessions("u1")
 
 
+def _put_legacy_row(table, sid, la, user_id="u1", **extra):
+    """Un-migrated session row: SK encodes lastMessageAt, no GSI4 keys."""
+    item = {
+        "PK": f"USER#{user_id}", "SK": f"S#ACTIVE#{la}#{sid}",
+        "GSI_PK": f"SESSION#{sid}", "GSI_SK": "META",
+        "sessionId": sid, "userId": user_id, "title": "T", "status": "active",
+        "createdAt": la, "lastMessageAt": la, "messageCount": 1,
+    }
+    item.update(extra)
+    table.put_item(Item=item)
+
+
+def _put_migrated_row(table, sid, la, user_id="u1", **extra):
+    """Migrated session row: static SK + sparse SessionRecencyIndex (GSI4) keys."""
+    item = {
+        "PK": f"USER#{user_id}", "SK": f"S#{sid}",
+        "GSI_PK": f"SESSION#{sid}", "GSI_SK": "META",
+        "GSI4_PK": f"USER#{user_id}", "GSI4_SK": f"{la}#{sid}",
+        "sessionId": sid, "userId": user_id, "title": "T", "status": "active",
+        "createdAt": la, "lastMessageAt": la, "messageCount": 1,
+    }
+    item.update(extra)
+    table.put_item(Item=item)
+
+
+class TestListUserSessionsDualScheme:
+    """Issue #175 Phase 1a — union read over legacy + migrated (SessionRecencyIndex) rows."""
+
+    @pytest.mark.asyncio
+    async def test_migrated_only_listed_via_gsi(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import list_user_sessions
+        _put_migrated_row(sessions_metadata_table, "m1", "2026-01-02T00:00:00Z")
+        _put_migrated_row(sessions_metadata_table, "m2", "2026-01-01T00:00:00Z")
+        sessions, token = await list_user_sessions("u1")
+        assert [s.session_id for s in sessions] == ["m1", "m2"]
+        assert token is None
+
+    @pytest.mark.asyncio
+    async def test_union_ordered_newest_first(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import list_user_sessions
+        # interleave the two schemes by timestamp
+        _put_migrated_row(sessions_metadata_table, "m_06", "2026-01-06T00:00:00Z")
+        _put_legacy_row(sessions_metadata_table, "l_05", "2026-01-05T00:00:00Z")
+        _put_migrated_row(sessions_metadata_table, "m_04", "2026-01-04T00:00:00Z")
+        _put_legacy_row(sessions_metadata_table, "l_03", "2026-01-03T00:00:00Z")
+        _put_migrated_row(sessions_metadata_table, "m_02", "2026-01-02T00:00:00Z")
+        _put_legacy_row(sessions_metadata_table, "l_01", "2026-01-01T00:00:00Z")
+
+        sessions, token = await list_user_sessions("u1")
+        assert [s.session_id for s in sessions] == ["m_06", "l_05", "m_04", "l_03", "m_02", "l_01"]
+        assert token is None
+
+    @pytest.mark.asyncio
+    async def test_pagination_across_union_no_dupes_or_gaps(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import list_user_sessions
+        _put_migrated_row(sessions_metadata_table, "m_06", "2026-01-06T00:00:00Z")
+        _put_legacy_row(sessions_metadata_table, "l_05", "2026-01-05T00:00:00Z")
+        _put_migrated_row(sessions_metadata_table, "m_04", "2026-01-04T00:00:00Z")
+        _put_legacy_row(sessions_metadata_table, "l_03", "2026-01-03T00:00:00Z")
+        _put_migrated_row(sessions_metadata_table, "m_02", "2026-01-02T00:00:00Z")
+        _put_legacy_row(sessions_metadata_table, "l_01", "2026-01-01T00:00:00Z")
+
+        seen = []
+        token = None
+        for _ in range(5):  # safety bound
+            page, token = await list_user_sessions("u1", limit=2, next_token=token)
+            seen.extend(s.session_id for s in page)
+            if token is None:
+                break
+        assert seen == ["m_06", "l_05", "m_04", "l_03", "m_02", "l_01"]
+        assert len(seen) == len(set(seen))  # no duplicates across pages
+
+    @pytest.mark.asyncio
+    async def test_ghost_and_preview_rows_skipped(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import list_user_sessions
+        _put_migrated_row(sessions_metadata_table, "good", "2026-01-02T00:00:00Z")
+        # ghost: bare key, missing required fields (the exact prod failure)
+        sessions_metadata_table.put_item(
+            Item={"PK": "USER#u1", "SK": "S#ACTIVE#2026-01-01T00:00:00Z#ghost"}
+        )
+        # preview session should never surface
+        _put_legacy_row(sessions_metadata_table, "preview-abc", "2026-01-03T00:00:00Z")
+
+        sessions, _ = await list_user_sessions("u1")
+        ids = [s.session_id for s in sessions]
+        assert ids == ["good"]
+
+    @pytest.mark.asyncio
+    async def test_graceful_fallback_when_index_missing(self, aws, monkeypatch):
+        """Code deployed before the CDK GSI: GSI query 404s → legacy-only, no crash."""
+        import boto3
+        from apis.shared.sessions.metadata import list_user_sessions
+
+        ddb = boto3.client("dynamodb", region_name="us-east-1")
+        name = "test-sessions-metadata-no-gsi"
+        ddb.create_table(
+            TableName=name,
+            KeySchema=[{"AttributeName": "PK", "KeyType": "HASH"},
+                       {"AttributeName": "SK", "KeyType": "RANGE"}],
+            AttributeDefinitions=[{"AttributeName": "PK", "AttributeType": "S"},
+                                  {"AttributeName": "SK", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        monkeypatch.setenv("DYNAMODB_SESSIONS_METADATA_TABLE_NAME", name)
+        table = boto3.resource("dynamodb", region_name="us-east-1").Table(name)
+        _put_legacy_row(table, "l1", "2026-01-02T00:00:00Z")
+        _put_legacy_row(table, "l2", "2026-01-01T00:00:00Z")
+
+        sessions, token = await list_user_sessions("u1")
+        assert [s.session_id for s in sessions] == ["l1", "l2"]
+        assert token is None
+
+
 class TestStoreUserDisplayText:
     """Tests for the displayText feature (D# records)."""
 
