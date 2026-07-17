@@ -1,3 +1,59 @@
+# Release Notes — v1.7.0
+
+**Release Date:** July 17, 2026
+**Previous Release:** v1.6.1 (July 16, 2026)
+
+---
+
+> 🏗️ **Platform (CDK) deploy required.** This release adds a new `SessionRecencyIndex` GSI on the sessions-metadata table, so it ships through `platform.yml` (CDK) **before** `backend.yml`. Adding the index is a no-op until rows populate its keys and the backend degrades gracefully if it's missing, so deploy order is not load-bearing — but the GSI must exist before the static-sort-key migration proceeds past this release. No data migration and no breaking changes.
+
+---
+
+## Highlights
+
+v1.7.0 gives the agent a full **Word (.docx) document toolset** and advances the **session-metadata static-sort-key migration** (issue #175) through its read-side phases. The agent can now **create, modify, list, and read Word documents** — each backed by `python-docx` running in a Bedrock Code Interpreter sandbox and persisted to the same user-files store as every other generated file — and the result renders inline in chat with a download button. The whole toolset sits behind the single `create_word_document` capability toggle. On the storage side, a new sparse `SessionRecencyIndex` GSI and a **dual-scheme union reader** let session listing work whether or not a session's base sort key has been migrated yet, so the migration can roll out safely in any deploy order. This release also bumps `strands-agents` to 1.48.0 to fix an "Agent force-stopped" crash that hit any turn attaching a non-PDF document. Operators run a CDK deploy for the new GSI; everything else ships through the backend and frontend pipelines.
+
+## Word document toolset
+
+The agent can now produce and edit real Word documents. Four tools — `create_word_document`, `modify_word_document`, `list_word_documents`, `read_word_document` — run `python-docx` inside a Bedrock Code Interpreter session and write to the existing user-files store (S3 + DynamoDB), so generated `.docx` files are persisted and delivered exactly like every other user file. The finished document renders inline in the chat transcript with an accessible download button, no separate export step. The entire toolset is provisioned per-request behind one capability toggle (`create_word_document`), so admins enable Word support with a single grant.
+
+### Backend
+
+- `agents/builtin_tools/word_document_tool.py` — the create/modify/list/read toolset (~730 lines), each tool executing `python-docx` in a Code Interpreter session and round-tripping through the user-files store.
+- `apis/inference_api/chat/routes.py` — `_build_word_document_tools` injects the toolset per request when the `create_word_document` capability is enabled.
+- `scripts/seed_bootstrap_data.py` — seeds `create_word_document` into `DEFAULT_TOOLS` as "Word Documents" (with updated seed tests).
+
+### Frontend
+
+- `renderers/word-document-renderer.component.ts` — a new `word_document` inline-visual renderer showing the generated file with an accessible download button, styled with Tailwind utilities (no scoped CSS); wired into `inline-visual.component.ts`.
+
+### Related fix
+
+- `TurnBasedSessionManager` gains a restore-time content-block sanitizer that drops empty/typeless blocks from restored history, which had caused Bedrock ConverseStream `messages.N.content.M.type: Field required` errors on resume.
+
+## Session-metadata static-sort-key migration (issue #175, read-side)
+
+Active-session listing is being migrated to a **static** base sort key (`S#{session_id}`) with recency served by a dedicated index, replacing a scheme that encoded `lastMessageAt` into the sort key and rotated rows on every message (the source of ghost rows and duplicate-row races). This release lands the read side so every reader tolerates both schemes before any write starts self-migrating rows.
+
+### Infrastructure — Phase 0
+
+- `data/cost-tracking-tables-construct.ts` — new sparse `SessionRecencyIndex` GSI (`GSI4_PK=USER#{id}`, `GSI4_SK={lastMessageAt}#{session_id}`, projection ALL) for newest-first active-session listing once the base sort key becomes static. Adding the index is a no-op until rows populate its keys, so it deploys safely ahead of any code change; IAM is already covered by the `SessionsMetadataAccess` `index/*` wildcard. The `tables-detailed` test now asserts all four GSIs.
+
+### Backend — Phase 1a
+
+- `apis/shared/sessions/metadata.py` — `list_user_sessions` now reads the **union** of two disjoint sources: legacy un-migrated rows (base table, `SK begins_with 'S#ACTIVE#'`) and migrated rows (via `SessionRecencyIndex`), so a session is visible whether or not its base sort key has been migrated. Pagination switches to a self-derived value cursor (`{lastMessageAt}#{session_id}`) — each page is computed independently from the last returned position with no cross-page buffering, and fetching `limit+1` valid rows per source provably detects a next page. Undecodable or legacy cursors fall back to the first page (a harmless reset across the deploy boundary). No writes change and no row migrates in this phase.
+- The reader **degrades to legacy-only** if `SessionRecencyIndex` doesn't exist yet, so the backend is safe whether or not the CDK GSI has been deployed. This initially caught only `ResourceNotFoundException` (what moto raises); real DynamoDB raises `ValidationException` ("The table does not have the specified index") for a missing GSI, so the catch was broadened (scoped by the "specified index" message) to also degrade on the real error — a 1a backend deployed ahead of the GSI now falls back to legacy listing instead of returning a 503. Verified against the prod table.
+
+## Fixed — "Agent force-stopped" on non-PDF document uploads
+
+Auto prompt caching (`CacheConfig` strategy `auto`) appended its `cachePoint` after the last user message's content, so any turn attaching a non-PDF document (`.txt`, `.docx`, `.csv`, …) sent `[text, document, cachePoint]` — and Bedrock's Anthropic adapter rejected that ordering with `ValidationException … messages.N.content.M.type: Field required`, which surfaced to users as "Agent force-stopped" (prod incidents July 14–16, e.g. a `.txt` transcript upload). Bumping `strands-agents` to **1.48.0** places the cache point *before* the first non-PDF document block instead (upstream issue #1966); every placement it produces was verified live against ConverseStream. The bump also corrects a stale `model_config.py` comment that had credited the wrong upstream PR with this behavior.
+
+## 🚀 Deployment notes
+
+Run `platform.yml` (CDK) to create the `SessionRecencyIndex` GSI, then `backend.yml` (app-api + inference-api) and the frontend deploy. Because the Phase 1a reader degrades gracefully when the GSI is absent, a backend deploy that lands before the CDK deploy will still list sessions (legacy-only) rather than error — but run the CDK deploy so recency listing is ready for the next migration phase. No data migration and no breaking changes; the Word toolset is dark until an admin enables the `create_word_document` capability.
+
+---
+
 # Release Notes — v1.6.1
 
 **Release Date:** July 16, 2026
