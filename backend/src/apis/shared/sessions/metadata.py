@@ -1701,6 +1701,82 @@ async def list_user_sessions(
     )
 
 
+def _item_to_session_metadata(item: Dict[str, Any]) -> Optional[SessionMetadata]:
+    """Parse one DynamoDB item into SessionMetadata, or None if it should be skipped.
+
+    Skips preview sessions and ghost/corrupt rows (the latter logged). Shared by
+    both source queries in the transitional union read.
+    """
+    try:
+        item = _convert_decimal_to_float(item)
+        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', 'GSI4_PK', 'GSI4_SK'):
+            item.pop(key, None)
+
+        # Skip preview sessions - they should not appear in user's session list
+        if is_preview_session(item.get('sessionId', '')):
+            return None
+
+        if "pendingInterrupts" in item:
+            item["pendingInterrupts"] = _dedupe_interrupt_dicts(item["pendingInterrupts"])
+
+        return SessionMetadata.model_validate(item)
+    except Exception as e:
+        # JUSTIFICATION: When listing sessions from DynamoDB, individual session parsing
+        # failures should not break the entire list operation. We skip corrupted sessions
+        # and continue processing others. This provides better UX than failing completely.
+        logger.warning(f"Failed to parse session item: {e}")
+        return None
+
+
+def _collect_valid_sessions(table, query_params: Dict[str, Any], want: Optional[int]) -> list[SessionMetadata]:
+    """Query one source, following LastEvaluatedKey until ``want`` valid rows collected.
+
+    DynamoDB ``Limit`` caps items *evaluated*, not *returned* after we drop previews
+    and ghosts, so we page until the partition is exhausted or ``want`` rows are in
+    hand. ``want`` is ``limit + 1`` at the call site — the extra row is the sentinel
+    that tells the merge whether another page exists.
+    """
+    results: list[SessionMetadata] = []
+    params = dict(query_params)
+    while True:
+        response = table.query(**params)
+        for item in response['Items']:
+            metadata = _item_to_session_metadata(item)
+            if metadata is None:
+                continue
+            results.append(metadata)
+            if want and len(results) >= want:
+                return results
+        lek = response.get('LastEvaluatedKey')
+        if not lek:
+            return results
+        params['ExclusiveStartKey'] = lek
+
+
+def _decode_list_cursor(next_token: Optional[str]) -> Optional[Tuple[str, str]]:
+    """Decode a session-list cursor into ``(last_message_at, session_id)``.
+
+    Tolerant: an undecodable or legacy-format token (the pre-migration
+    ``base64(json(LastEvaluatedKey))``) falls back to no-cursor (first page) rather
+    than erroring — a harmless page reset across the migration deploy boundary.
+    """
+    if not next_token:
+        return None
+    try:
+        obj = json.loads(base64.b64decode(next_token).decode('utf-8'))
+        if isinstance(obj, dict) and 'la' in obj:
+            return (obj['la'], obj.get('sid', ''))
+    except Exception as e:
+        logger.warning(f"Invalid next_token: {e}, starting from beginning")
+    return None
+
+
+def _encode_list_cursor(session: SessionMetadata) -> str:
+    """Encode the merge cursor from the last returned session (value-based, not key-based)."""
+    payload = {'la': session.last_message_at, 'sid': session.session_id}
+    return base64.b64encode(json.dumps(payload).encode('utf-8')).decode('utf-8')
+
+
 async def _list_user_sessions_cloud(
     user_id: str,
     table_name: str,
@@ -1708,117 +1784,105 @@ async def _list_user_sessions_cloud(
     next_token: Optional[str] = None
 ) -> Tuple[list[SessionMetadata], Optional[str]]:
     """
-    List active sessions for a user from DynamoDB with efficient pagination
+    List active sessions for a user from DynamoDB — transitional dual-scheme read.
 
-    Args:
-        user_id: User identifier
-        table_name: DynamoDB table name
-        limit: Maximum number of sessions to return (optional)
-        next_token: Pagination token for retrieving next page (optional)
+    Issue #175 Phase 1a (expand read): reads the UNION of two disjoint sources so a
+    session is visible whether or not its base sort key has been migrated to the
+    static ``S#{session_id}`` form:
 
-    Returns:
-        Tuple of (list of SessionMetadata objects, next_token if more sessions exist)
-        Sessions are sorted by last_message_at descending (most recent first)
+      - Legacy rows (un-migrated): base table, ``SK begins_with 'S#ACTIVE#'`` (the SK
+        encodes ``lastMessageAt``, so it sorts by recency natively).
+      - Migrated rows: ``SessionRecencyIndex`` GSI (``GSI4_PK=USER#{id}``,
+        ``GSI4_SK={lastMessageAt}#{session_id}``), sparse + active-only.
 
-    Schema:
-        PK: USER#{user_id}
-        SK: S#ACTIVE#{last_message_at}#{session_id}
+    A session is in exactly one source at a time (a migrated row's base SK no longer
+    matches ``S#ACTIVE#`` and it has GSI4 keys; an un-migrated row has neither), so
+    the two result sets are disjoint — dedupe by ``session_id`` is belt-and-suspenders
+    for the brief mid-migration instant.
 
-    Performance improvements over old schema:
-        - Query only returns session records (no cost records with C# prefix)
-        - No in-memory filtering needed
-        - Sessions sorted by timestamp in SK (no in-memory sorting)
-        - True server-side pagination via DynamoDB's native mechanism
-        - O(page_size) instead of O(sessions + messages)
+    Pagination uses a **value cursor** (``{lastMessageAt}#{session_id}``), not a
+    per-source ``LastEvaluatedKey``, so a page is derived independently from the last
+    returned position with no cross-page buffering. Fetching ``limit + 1`` valid rows
+    from each source is provably sufficient to know whether another page exists.
+
+    If ``SessionRecencyIndex`` does not exist yet (code deployed before the CDK GSI),
+    the GSI query is skipped and the read degrades to legacy-only.
+
+    Kept until the migration completes; Phase 3 collapses this to GSI-only.
     """
     try:
         import boto3
         from boto3.dynamodb.conditions import Key
+        from botocore.exceptions import ClientError
 
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table(table_name)
 
-        # Decode next_token to get ExclusiveStartKey if provided
-        exclusive_start_key = None
-        if next_token:
-            try:
-                decoded = base64.b64decode(next_token).decode('utf-8')
-                exclusive_start_key = json.loads(decoded)
-            except Exception as e:
-                # JUSTIFICATION: Invalid pagination tokens should not break the request.
-                # We fall back to no pagination, which is a reasonable default.
-                # This handles cases where tokens are corrupted, expired, or malformed.
-                logger.warning(f"Invalid next_token: {e}")
+        cursor = _decode_list_cursor(next_token)
+        want = (limit + 1) if limit else None
+        pk = f'USER#{user_id}'
 
-        # Build query parameters with new S#ACTIVE# prefix
-        # This cleanly separates from:
-        # - S#DELETED# (soft-deleted sessions)
-        # - C# (cost records)
-        query_params = {
-            'KeyConditionExpression': Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('S#ACTIVE#'),
-            'ScanIndexForward': False  # Descending order (most recent first) - timestamp is in SK!
+        # Legacy source: base table, S#ACTIVE# prefix. Resuming after a cursor uses
+        # between('S#ACTIVE#', 'S#ACTIVE#{la}#{sid}') — a single range condition that
+        # keeps the prefix filter while bounding the upper end (inclusive; the exact
+        # cursor row is dropped by the strict-less filter below).
+        if cursor:
+            la, sid = cursor
+            legacy_cond = Key('PK').eq(pk) & Key('SK').between('S#ACTIVE#', f'S#ACTIVE#{la}#{sid}')
+        else:
+            legacy_cond = Key('PK').eq(pk) & Key('SK').begins_with('S#ACTIVE#')
+        legacy_params: Dict[str, Any] = {
+            'KeyConditionExpression': legacy_cond,
+            'ScanIndexForward': False,
         }
+        if want:
+            legacy_params['Limit'] = want
+        legacy_sessions = _collect_valid_sessions(table, legacy_params, want)
 
-        if exclusive_start_key:
-            query_params['ExclusiveStartKey'] = exclusive_start_key
+        # Migrated source: SessionRecencyIndex GSI. GSI4_SK < '{la}#{sid}' is a clean
+        # strict-less resume. Degrade to legacy-only if the index isn't there yet.
+        if cursor:
+            la, sid = cursor
+            gsi_cond = Key('GSI4_PK').eq(pk) & Key('GSI4_SK').lt(f'{la}#{sid}')
+        else:
+            gsi_cond = Key('GSI4_PK').eq(pk)
+        gsi_params: Dict[str, Any] = {
+            'IndexName': 'SessionRecencyIndex',
+            'KeyConditionExpression': gsi_cond,
+            'ScanIndexForward': False,
+        }
+        if want:
+            gsi_params['Limit'] = want
+        try:
+            gsi_sessions = _collect_valid_sessions(table, gsi_params, want)
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ResourceNotFoundException':
+                logger.warning(
+                    "SessionRecencyIndex not found; falling back to legacy-only session listing"
+                )
+                gsi_sessions = []
+            else:
+                raise
 
-        if limit:
-            query_params['Limit'] = limit
+        # Merge: sort by (lastMessageAt, sessionId) descending, drop anything not
+        # strictly older than the cursor (removes the inclusive legacy cursor row),
+        # dedupe by session_id.
+        combined = legacy_sessions + gsi_sessions
+        if cursor:
+            combined = [s for s in combined if (s.last_message_at, s.session_id) < cursor]
+        combined.sort(key=lambda s: (s.last_message_at, s.session_id), reverse=True)
 
-        # Pagination loop: DynamoDB's Limit caps items *evaluated*, not items
-        # *returned* after application-level filtering (preview sessions, parse
-        # failures). A single query may return fewer valid sessions than the
-        # requested limit while still having more data in the partition. We keep
-        # querying until we fill the page or exhaust the partition.
-        sessions: list[SessionMetadata] = []
-        last_evaluated_key = None
+        seen: set = set()
+        deduped: list[SessionMetadata] = []
+        for s in combined:
+            if s.session_id in seen:
+                continue
+            seen.add(s.session_id)
+            deduped.append(s)
 
-        while True:
-            response = table.query(**query_params)
-
-            for item in response['Items']:
-                try:
-                    item = _convert_decimal_to_float(item)
-
-                    for key in ['PK', 'SK', 'GSI_PK', 'GSI_SK']:
-                        item.pop(key, None)
-
-                    # Skip preview sessions - they should not appear in user's session list
-                    session_id = item.get('sessionId', '')
-                    if is_preview_session(session_id):
-                        continue
-
-                    if "pendingInterrupts" in item:
-                        item["pendingInterrupts"] = _dedupe_interrupt_dicts(item["pendingInterrupts"])
-
-                    metadata = SessionMetadata.model_validate(item)
-                    sessions.append(metadata)
-
-                    # Stop collecting once we have enough
-                    if limit and len(sessions) >= limit:
-                        break
-                except Exception as e:
-                    # JUSTIFICATION: When listing sessions from DynamoDB, individual session parsing
-                    # failures should not break the entire list operation. We skip corrupted sessions
-                    # and continue processing others. This provides better UX than failing completely.
-                    logger.warning(f"Failed to parse session item: {e}")
-                    continue
-
-            last_evaluated_key = response.get('LastEvaluatedKey')
-
-            # Stop if we've filled the page or there's no more data
-            if (limit and len(sessions) >= limit) or not last_evaluated_key:
-                break
-
-            # Continue querying from where DynamoDB left off
-            query_params['ExclusiveStartKey'] = last_evaluated_key
-
-        # Generate next_token only when there is genuinely more data to fetch
-        next_page_token = None
-        if last_evaluated_key and limit and len(sessions) >= limit:
-            next_page_token = base64.b64encode(
-                json.dumps(last_evaluated_key).encode('utf-8')
-            ).decode('utf-8')
+        has_more = bool(limit) and len(deduped) > limit
+        sessions = deduped[:limit] if limit else deduped
+        next_page_token = _encode_list_cursor(sessions[-1]) if (has_more and sessions) else None
 
         logger.info(f"Listed {len(sessions)} sessions for user {user_id} from DynamoDB")
 
