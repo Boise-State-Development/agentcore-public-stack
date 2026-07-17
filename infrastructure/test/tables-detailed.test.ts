@@ -196,12 +196,29 @@ describe('CostTrackingTablesConstruct — detailed', () => {
     });
   });
 
-  it('SessionsMetadata has 2 GSIs', () => {
+  it('SessionsMetadata has 4 GSIs', () => {
     t.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'test-project-sessions-metadata',
       GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({ IndexName: 'UserTimestampIndex' }),
         Match.objectLike({ IndexName: 'SessionLookupIndex' }),
+        Match.objectLike({ IndexName: 'DueScheduleIndex' }),
+        Match.objectLike({ IndexName: 'SessionRecencyIndex' }),
+      ]),
+    });
+  });
+
+  it('SessionRecencyIndex is keyed GSI4_PK / GSI4_SK', () => {
+    t.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'test-project-sessions-metadata',
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'SessionRecencyIndex',
+          KeySchema: [
+            { AttributeName: 'GSI4_PK', KeyType: 'HASH' },
+            { AttributeName: 'GSI4_SK', KeyType: 'RANGE' },
+          ],
+        }),
       ]),
     });
   });
