@@ -80,6 +80,24 @@ export class CostTrackingTablesConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // SessionRecencyIndex — sparse recency listing for active sessions
+    // (issue #175: docs/specs/session-metadata-static-sort-key.md). Once the
+    // session row's base SK is static (S#{session_id}) rather than encoding
+    // lastMessageAt, newest-first listing moves here: GSI4_PK=USER#{user_id},
+    // GSI4_SK={lastMessageAt}#{session_id} (session_id suffix disambiguates
+    // equal timestamps and gives a stable pagination cursor). Sparse — keys
+    // are written only while status == active; soft-delete removes them so the
+    // row drops out of the active list (mirrors DueScheduleIndex/GSI3). Distinct
+    // GSI4_PK/GSI4_SK attribute names avoid colliding with the other indexes.
+    // Phase 0 of the migration: adding the index is a no-op until rows populate
+    // GSI4 keys, so this deploys safely ahead of any code change.
+    this.sessionsMetadataTable.addGlobalSecondaryIndex({
+      indexName: 'SessionRecencyIndex',
+      partitionKey: { name: 'GSI4_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI4_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
 
 
     // UserCostSummary Table
