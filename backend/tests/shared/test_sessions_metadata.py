@@ -375,6 +375,45 @@ class TestListUserSessionsDualScheme:
         assert [s.session_id for s in sessions] == ["l1", "l2"]
         assert token is None
 
+    @pytest.mark.asyncio
+    async def test_graceful_fallback_on_validationexception(self, sessions_metadata_table, monkeypatch):
+        """Real DynamoDB raises ValidationException (not ResourceNotFoundException) for a
+        missing GSI — moto masks this, so simulate the real error on the index query."""
+        import boto3
+        from botocore.exceptions import ClientError
+        from apis.shared.sessions.metadata import list_user_sessions
+
+        _put_legacy_row(sessions_metadata_table, "l1", "2026-01-02T00:00:00Z")
+        _put_legacy_row(sessions_metadata_table, "l2", "2026-01-01T00:00:00Z")
+
+        real_table = sessions_metadata_table
+
+        class _GsiFailingTable:
+            def query(self, **kwargs):
+                if kwargs.get("IndexName") == "SessionRecencyIndex":
+                    raise ClientError(
+                        {"Error": {
+                            "Code": "ValidationException",
+                            "Message": "The table does not have the specified index: SessionRecencyIndex",
+                        }},
+                        "Query",
+                    )
+                return real_table.query(**kwargs)
+
+        class _FakeResource:
+            def Table(self, _name):
+                return _GsiFailingTable()
+
+        real_resource = boto3.resource
+        monkeypatch.setattr(
+            boto3, "resource",
+            lambda svc, **kw: _FakeResource() if svc == "dynamodb" else real_resource(svc, **kw),
+        )
+
+        sessions, token = await list_user_sessions("u1")
+        assert [s.session_id for s in sessions] == ["l1", "l2"]
+        assert token is None
+
 
 class TestStoreUserDisplayText:
     """Tests for the displayText feature (D# records)."""

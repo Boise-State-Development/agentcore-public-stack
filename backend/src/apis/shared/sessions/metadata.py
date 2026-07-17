@@ -1856,9 +1856,21 @@ async def _list_user_sessions_cloud(
         try:
             gsi_sessions = _collect_valid_sessions(table, gsi_params, want)
         except ClientError as e:
-            if e.response.get('Error', {}).get('Code') == 'ResourceNotFoundException':
+            # An index that doesn't exist yet (code deployed ahead of the CDK GSI)
+            # surfaces differently across engines: real DynamoDB raises
+            # ValidationException ("The table does not have the specified index"),
+            # while moto/table-absent raises ResourceNotFoundException. Catch both
+            # (scoped by message for the ValidationException so genuinely malformed
+            # queries still surface) and degrade to legacy-only.
+            err = e.response.get('Error', {})
+            code = err.get('Code')
+            missing_index = code == 'ResourceNotFoundException' or (
+                code == 'ValidationException' and 'specified index' in err.get('Message', '')
+            )
+            if missing_index:
                 logger.warning(
-                    "SessionRecencyIndex not found; falling back to legacy-only session listing"
+                    "SessionRecencyIndex unavailable (%s); falling back to legacy-only "
+                    "session listing", code
                 )
                 gsi_sessions = []
             else:
