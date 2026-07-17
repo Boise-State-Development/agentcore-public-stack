@@ -5,12 +5,48 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-07-17] Bump `bedrock-agentcore` 1.9.1 → 1.18.0 (closes #571 cross-process Memory reorder + #482 SSE deadlock)
+- **Source**: research/2026-07-17.md ▸ Top 5 #1 — bedrock-agentcore 1.18.0 (Jul 10, PR #572/#573 close #571; #482 fix in 1.17.0/PR #563) — https://github.com/aws/bedrock-agentcore-sdk-python/releases
+- **Surface**: backend (`backend/pyproject.toml` + coupled `boto3`; inference-api chat router + `TurnBasedSessionManager` flush ordering; full local pytest suite)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — retires the queued [2026-05-22] hand-written #482 guard (library-native); the #571 ordering fix complements (not replaces) the just-shipped `_repair_tool_pairing`
+- **Status**: open — **highest priority; the release we've queued for six weeks now exists and landed in-window.** SUPERSEDES the [2026-07-03] "→ 1.17.0" item AND the [2026-07-10] "double-forced" item below (which said "bump to 1.17.0, track 1.18 for #571" — 1.18.0 now exists with the #571 fix, so retarget 1.18.0 and consolidate the two into this one). We're on 1.9.1, ~9 minors behind, exposed to both #571 and #482 while Scheduled Runs + Memory Spaces + conversation-sharing lean hard on Memory. Validate ms event-flooring vs our flush ordering; #564 (eventual-consistency read gap) stays unfixed — keep agent-cache continuity primary.
+
+### [2026-07-17] Audit multi-provider prompt caching (issue #642 + Strands #3144)
+- **Source**: research/2026-07-17.md ▸ Top 5 #2 — internal issue #642 (Jul 11); Strands #3144 (`CacheConfig(strategy="auto")` never caches system prompt, fix PR #3145 open) — https://github.com/strands-agents/sdk-python/issues/3144
+- **Surface**: backend (`to_bedrock_config` cache-point injection; Mantle Responses builder `build_mantle_model`/`_create_mantle_model`; OpenAI-compatible path; `CountTokensBedrockModel` cache-token read)
+- **Effort × Impact**: L–M × M–H
+- **Subtracts**: yes — consolidates per-provider cache logic; kills a silent full-input-token cost regression if a Mantle/OpenAI path caches nothing
+- **Status**: open — a filed internal tech-debt issue with a library-confirmed failure mode. Instrument `cache_read`/`cache_write` ratios per provider (Strands 1.46 surfaces them); confirm the Bedrock manual cache-point still engages post-1.47 and do NOT switch to `strategy="auto"` expecting system-prompt caching. Strongest internal-signal fit after the bump.
+
+### [2026-07-17] Adopt Strands `Limits` on the unattended Scheduled Runs / headless lane
+- **Source**: research/2026-07-17.md ▸ Top 5 #3 — convergent harness rail (Claude Code 2.1.212 spawn cap + opencode 1.18.2 `subagent_depth`); Strands `Limits` now available (we're on 1.47).
+- **Surface**: backend (headless/scheduled path `apis/shared/harness/run_agent_headless` per [2026-07-06] managed-Harness spike + agent-loop per-invocation config)
+- **Effort × Impact**: L–M × M
+- **Subtracts**: yes — retires any hand-rolled `max_turns` guard on the headless lane (library-native)
+- **Unlocks**: first-class per-invocation cost/turn cap on the highest-blast-radius lane (a runaway loop there burns quota unattended) — the capability the [2026-07-03] Strands bump listed but that still needs wiring now the bump landed
+- **Status**: open — scope to the scheduled/headless lane first; dovetails with the queued quota-cooldown work.
+
+### [2026-07-17] Harden the SPA SSE parser (unterminated-frame + line-ending handling)
+- **Source**: research/2026-07-17.md ▸ Top 5 #4 — assistant-stream@0.3.26 (Jul 16, spec-complete SSE decoder) — https://github.com/Yonom/assistant-ui/releases — reinforced by the 1.6.0 SSE/restore bug cluster (#653 tab-switch duplicate invocation, tool-pairing repair, single-flight lease)
+- **Surface**: frontend (SPA SSE parser service — the one allowlisting `session_title` past Completed-state gating; keyed per-session)
+- **Effort × Impact**: L–M × M
+- **Subtracts**: yes — replaces ad-hoc frame handling with a spec-complete decode pass
+- **Status**: open — pattern-only (implement in Angular signals, do NOT add the React dep): discard unterminated/partial frames + tighten line-endings on the interrupt-resume + tab-switch paths just stabilized. Defensive, lands on exactly the surface 1.6.0 hardened.
+
+### [2026-07-17] Durable curl fix — stop pinning curl to an upstream version in the Dockerfiles
+- **Source**: research/2026-07-17.md ▸ Top 5 #5 — internal friction (Nightly + Backend Deploy broke Jul 11–13 on `curl=8.14.1-2+deb13u3` "version not found"); partially fixed by floating to `deb13u*` (commit `74cd7b0a`, 1.5.0)
+- **Surface**: infra/CI (`backend/Dockerfile.app-api` + `Dockerfile.inference-api` line 42 `apt-get install curl=...`; check `scheduled-runs`/`kb-sync`)
+- **Effort × Impact**: L × M–H
+- **Subtracts**: yes — removes a recurring deploy-breaker class; the `deb13u*` wildcard only defers the next break to a Debian series/base-image bump
+- **Status**: open — replace the version-pinned curl with unpinned (latest security patch) or the base image's `curl-minimal` (as the Lambda images already do). The pin was never a supply-chain control — it's a HEALTHCHECK runtime probe. Cheapest durable win; the band-aid will bite again.
+
 ### [2026-07-10] Bump `bedrock-agentcore` off 1.9.1 — now double-forced (#482 SSE deadlock + NEW #571 Memory-reorder)
 - **Source**: research/2026-07-10.md ▸ Top 5 #1 — https://github.com/aws/bedrock-agentcore-sdk-python/pull/563 (#482, in 1.17.0) + **NEW** https://github.com/aws/bedrock-agentcore-sdk-python/issues/571 (cross-process Memory event-reorder corruption, fix pending a post-1.17.0 release).
 - **Surface**: backend (`backend/pyproject.toml`, inference-api chat router, `AgentCoreMemorySessionManager` usage; full local pytest suite)
 - **Effort × Impact**: M × H
 - **Subtracts**: yes — retires the queued [2026-05-22] #482 hand-written guard (library-native subtraction)
-- **Status**: open — **updates/supersedes the [2026-07-03] agentcore bump item with #571 evidence + a feature-tied forcing function.** 1.1.0/1.2.0 shipped Scheduled Runs (multi-replica Runtime) + Memory Spaces (heavier Memory use), amplifying exactly the failure classes #482/#571 corrupt. Bump to 1.17.0 now (closes #482); **track 1.18 for the #571 fix** (not yet released — latest is still 1.17.0). Frame the PR as incident-prevention against the new features, not hygiene.
+- **Status**: open — **CONSOLIDATED into the [2026-07-17] "→ 1.18.0" item above** (the #571 fix this entry was tracking landed in 1.18.0 on Jul 10 — the post-1.17.0 release it awaited). Treat as one item; review-prep should resolve this stub. 1.1.0/1.2.0 shipped Scheduled Runs (multi-replica Runtime) + Memory Spaces (heavier Memory use), amplifying exactly the failure classes #482/#571 corrupt.
 
 ### [2026-07-10] Bump Strands 1.40 → 1.47; adopt `continue_on_error` MCP resilience (#3101) + hook ordering
 - **Source**: research/2026-07-10.md ▸ Top 5 #2 — Strands 1.46–1.47 (https://github.com/strands-agents/sdk-python/releases). **Supersedes the [2026-07-03] 1.45 item** (now 7 minors behind).
@@ -18,7 +54,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: M–H × H
 - **Subtracts**: candidate — hand-rolled MCP-abort handling (`continue_on_error`), custom cache-point plumbing (`cache_tools_ttl`), runaway guard (`Limits`)
 - **Unlocks**: a flaky external/Gateway MCP server no longer aborts the turn (newly relevant — Scheduled Runs use external tools unattended); `Limits` per-invocation cost caps; deterministic hook ordering (the enabler for the tool-approval fix)
-- **Status**: open — adopt `continue_on_error` on the MCP client + optional hook ordering (#2559); audit `cache_tools_ttl`/`context_manager="auto"`/`Limits` (decisions.md 2026-05-18 bars a bare compaction swap). Only breaking change 1.45→1.47 is the N/A in-process memory-store rename. Run full local pytest; watch compaction + context-attribution.
+- **Status**: open — **the bump itself SHIPPED** (commit `42e69bc7` "upgrade Strands to 1.47.0"; the pin is now 1.47.0). Remaining follow-on work is separately queued: `Limits` adoption on the headless lane is the [2026-07-17] item above; `continue_on_error` on the MCP client + optional hook ordering (#2559) + the `cache_tools_ttl`/`context_manager="auto"` audits are still open here (decisions.md 2026-05-18 bars a bare compaction swap). Review-prep should split "bump = done" from the un-adopted capabilities.
 
 ### [2026-07-10] Audit whether prompt caching actually engages in `to_bedrock_config` (Strands #3144)
 - **Source**: research/2026-07-10.md ▸ Top 5 #3 — **NEW** Strands open issue #3144 (`CacheConfig(strategy="auto")` never caches the system prompt); Strands 1.46 now surfaces `cache_read`/`cache_write` tokens in the metadata chunk (#2302). https://github.com/strands-agents/sdk-python/issues
@@ -26,7 +62,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: L–M × M–H
 - **Subtracts**: no — a cost-correctness audit (may confirm we're fine, or expose a silent full-input-token regression)
 - **Unlocks**: potentially large per-turn cost cut if caching is silently off; a verifiable caching invariant
-- **Status**: open — cheapest high-upside item this week. Assert cache points are written *and* read by inspecting `cache_read`/`cache_write` counts across a multi-turn session; fix cache-point placement if the system prompt/tool schema isn't caching. Measurement is nearly free now that 1.46 surfaces the tokens.
+- **Status**: open — **subsumed by / merge with the [2026-07-17] "multi-provider prompt caching" item above** (same Bedrock cache-point surface + Strands #3144, extended to the Mantle/OpenAI provider shapes). Assert cache points are written *and* read via `cache_read`/`cache_write` counts; measurement is nearly free now that 1.46 surfaces the tokens.
 
 ### [2026-07-10] Tool-approval policy layer + signed approvals (Vercel AI SDK) — evolve the queued approval item
 - **Source**: research/2026-07-10.md ▸ Top 5 #4 — Vercel AI SDK tool-approvals (https://ai-sdk.dev/docs/agents/tool-approvals). Builds on the [2026-07-03] tool-approval item.
