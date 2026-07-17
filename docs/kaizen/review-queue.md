@@ -5,6 +5,45 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-07-10] Bump `bedrock-agentcore` off 1.9.1 — now double-forced (#482 SSE deadlock + NEW #571 Memory-reorder)
+- **Source**: research/2026-07-10.md ▸ Top 5 #1 — https://github.com/aws/bedrock-agentcore-sdk-python/pull/563 (#482, in 1.17.0) + **NEW** https://github.com/aws/bedrock-agentcore-sdk-python/issues/571 (cross-process Memory event-reorder corruption, fix pending a post-1.17.0 release).
+- **Surface**: backend (`backend/pyproject.toml`, inference-api chat router, `AgentCoreMemorySessionManager` usage; full local pytest suite)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — retires the queued [2026-05-22] #482 hand-written guard (library-native subtraction)
+- **Status**: open — **updates/supersedes the [2026-07-03] agentcore bump item with #571 evidence + a feature-tied forcing function.** 1.1.0/1.2.0 shipped Scheduled Runs (multi-replica Runtime) + Memory Spaces (heavier Memory use), amplifying exactly the failure classes #482/#571 corrupt. Bump to 1.17.0 now (closes #482); **track 1.18 for the #571 fix** (not yet released — latest is still 1.17.0). Frame the PR as incident-prevention against the new features, not hygiene.
+
+### [2026-07-10] Bump Strands 1.40 → 1.47; adopt `continue_on_error` MCP resilience (#3101) + hook ordering
+- **Source**: research/2026-07-10.md ▸ Top 5 #2 — Strands 1.46–1.47 (https://github.com/strands-agents/sdk-python/releases). **Supersedes the [2026-07-03] 1.45 item** (now 7 minors behind).
+- **Surface**: backend (`agents/main_agent/` hooks + `to_bedrock_config` + compaction, `FilteredMCPClient`/gateway targets, `CountTokensBedrockModel`)
+- **Effort × Impact**: M–H × H
+- **Subtracts**: candidate — hand-rolled MCP-abort handling (`continue_on_error`), custom cache-point plumbing (`cache_tools_ttl`), runaway guard (`Limits`)
+- **Unlocks**: a flaky external/Gateway MCP server no longer aborts the turn (newly relevant — Scheduled Runs use external tools unattended); `Limits` per-invocation cost caps; deterministic hook ordering (the enabler for the tool-approval fix)
+- **Status**: open — adopt `continue_on_error` on the MCP client + optional hook ordering (#2559); audit `cache_tools_ttl`/`context_manager="auto"`/`Limits` (decisions.md 2026-05-18 bars a bare compaction swap). Only breaking change 1.45→1.47 is the N/A in-process memory-store rename. Run full local pytest; watch compaction + context-attribution.
+
+### [2026-07-10] Audit whether prompt caching actually engages in `to_bedrock_config` (Strands #3144)
+- **Source**: research/2026-07-10.md ▸ Top 5 #3 — **NEW** Strands open issue #3144 (`CacheConfig(strategy="auto")` never caches the system prompt); Strands 1.46 now surfaces `cache_read`/`cache_write` tokens in the metadata chunk (#2302). https://github.com/strands-agents/sdk-python/issues
+- **Surface**: backend (`agents/main_agent/` cache-point config in `to_bedrock_config`; the metadata/usage path feeding `CountTokensBedrockModel` + the context-attribution badge)
+- **Effort × Impact**: L–M × M–H
+- **Subtracts**: no — a cost-correctness audit (may confirm we're fine, or expose a silent full-input-token regression)
+- **Unlocks**: potentially large per-turn cost cut if caching is silently off; a verifiable caching invariant
+- **Status**: open — cheapest high-upside item this week. Assert cache points are written *and* read by inspecting `cache_read`/`cache_write` counts across a multi-turn session; fix cache-point placement if the system prompt/tool schema isn't caching. Measurement is nearly free now that 1.46 surfaces the tokens.
+
+### [2026-07-10] Tool-approval policy layer + signed approvals (Vercel AI SDK) — evolve the queued approval item
+- **Source**: research/2026-07-10.md ▸ Top 5 #4 — Vercel AI SDK tool-approvals (https://ai-sdk.dev/docs/agents/tool-approvals). Builds on the [2026-07-03] tool-approval item.
+- **Surface**: frontend + backend (tool-approval `BeforeToolCall` hook in `apis/shared`, `tool_use`/`tool_result` SSE contract, frontend tool-call card + signal store; reuses `beginContinuationStreaming`)
+- **Effort × Impact**: M × M
+- **Subtracts**: yes — replaces ad-hoc synthetic-error approval handling with explicit approve/deny/user-approval lifecycle states
+- **Unlocks**: server-side **policy layer** deciding auto-approve vs prompt via per-tool input-inspecting functions (gate on the tool's args, not just identity); cryptographically-signed, tamper-proof approval history; closes the "approval hook can't see through the tool-fold" hole (pairs with the Strands hook-ordering bump)
+- **Status**: open — **fold into the queued [2026-07-03] tool-approval item** rather than run a separate track; sequence after the Strands hook-ordering bump lands. The new-this-week piece is the policy layer + integrity check, beyond last week's basic human-in-the-loop.
+
+### [2026-07-10] Wire a CloudWatch `ActiveSessionCount` alarm on the inference-api runtime
+- **Source**: research/2026-07-10.md ▸ Top 5 #5 — **NEW** AgentCore Runtime `ActiveSessionCount` metric (https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/release-notes.html)
+- **Surface**: infrastructure (CloudWatch alarm on the inference-api runtime's `AWS/Bedrock-AgentCore` `ActiveSessionCount` gauge; PlatformStack observability)
+- **Effort × Impact**: L × M
+- **Subtracts**: no — ops addition; justified as cheap early-warning for the exact failure class the agentcore bump fixes (defense-in-depth while the bump is pending)
+- **Unlocks**: proactive detection of session-leak/exhaustion and the #482 hang (a hung container manifests as session pileup) before a 429
+- **Status**: open — low-effort ops win that pairs with the agentcore bump. Alarm when concurrent sessions approach the raised quota (5,000 us-west-2).
+
 ### [2026-07-06] Spike: managed AgentCore Harness as the headless/scheduled run engine — ✅ SPIKE + Q2 LIVE PROBE COMPLETE, recommend Ship (headless-only, GO-with-boundary)
 - **Source**: `scoping/2026-07-06-managed-harness-build-vs-adopt.md` (brief) + `scoping/2026-07-06-managed-harness-spike-findings.md` (**findings — 3 gating questions answered**). Surfaced while dogfooding scheduled runs (Phil asked whether we use the AWS Harness feature; we use the lower-level Runtime). AWS **managed Harness** is now GA.
 - **Surface**: backend (`apis/shared/harness/run_agent_headless` — swap the Runtime `/invocations` target for an `InvokeHarness` endpoint on the headless lane only; swap `sse.py` accumulator for a Converse-stream one → same `RunResult`) + infra (a managed-Harness resource + OAuth-inbound JWT authorizer — a 1:1 port of our existing Runtime `customJwtAuthorizer`, `inference-agentcore-construct.ts:275`). Interactive `inference-api` untouched.
