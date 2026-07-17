@@ -334,12 +334,16 @@ class ModelConfig:
         # place cache points per-model: for a model that supports automatic
         # caching it injects a cachePoint on the system/tools/last-user blocks;
         # for one that doesn't it logs a warning and no-ops, so this is safe to
-        # set whenever caching is enabled. The earlier SDK blocker — strands PR
-        # #1438, where `cachePoint` blocks collided with non-PDF document
-        # attachments — was fixed in strands-agents 1.39.0 (we pin 1.40.0).
-        # Cache hits are user-visible in the cost/context badge the moment this
-        # is on.
-        # See: https://github.com/strands-agents/sdk-python/pull/1438
+        # set whenever caching is enabled. Requires strands-agents>=1.48.0: a
+        # cachePoint trailing a non-PDF `document` attachment is rejected by
+        # Bedrock's Anthropic adapter with "ValidationException ...
+        # content.N.type: Field required" (agent force-stop on any turn with a
+        # txt/docx/csv attachment; upstream issue #1966). 1.48.0 inserts the
+        # cachePoint before the first non-PDF document instead, and skips the
+        # cache point entirely (uncached turn, not an error) when a non-PDF
+        # document is the first content block. Cache hits are user-visible in
+        # the cost/context badge the moment this is on.
+        # See: https://github.com/strands-agents/sdk-python/issues/1966
         if self.caching_enabled:
             from strands.models import CacheConfig
             config["cache_config"] = CacheConfig(strategy="auto")
