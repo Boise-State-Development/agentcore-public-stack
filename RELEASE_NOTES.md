@@ -1,3 +1,32 @@
+# Release Notes — v1.7.1
+
+**Release Date:** July 17, 2026
+**Previous Release:** v1.7.0 (July 17, 2026)
+
+---
+
+> 🚀 **Backend-only release.** No CDK deploy and no data migration — ship through `backend.yml`. Session rows self-migrate to the static sort key on their next write; nothing to run.
+
+---
+
+## Highlights
+
+v1.7.1 is a patch fixing a Word-document save failure and advancing the **session-metadata static-sort-key migration** (issue #175) to its write side. Saving a generated Word document no longer fails with `PermanentRedirect` in the AgentCore Runtime — the S3 client now resolves the user-files bucket's real region instead of trusting `AWS_REGION`. On the storage side, new sessions are now **born with a static sort key** and legacy rows **self-migrate in place** on their next write, so rows stop rotating on every message — structurally eliminating the ghost-row race behind the "Failed to parse session item" warnings and closing the first-turn duplicate-row race.
+
+## Fixed — Word-document saves failing with `PermanentRedirect`
+
+The user-files S3 client pinned its endpoint to `https://s3.{AWS_REGION}.amazonaws.com`. In the AgentCore Runtime, `AWS_REGION` does not reliably match the bucket's region, and the explicit `endpoint_url` disabled botocore's automatic S3 region redirect — so `PutObject` failed with `PermanentRedirect` and Word-document saves broke. The client (`agents/builtin_tools/word_document_tool.py`) now resolves the bucket's true region via `HeadBucket` (reading the `x-amz-bucket-region` header, which maps to the `s3:ListBucket` permission the runtime role already holds — avoiding the ungranted `s3:GetBucketLocation`) and drops the hardcoded `endpoint_url`. This fixes both the save and the presigned download URL region; if the region lookup is ever unavailable, botocore's now-enabled built-in redirect still corrects it.
+
+## Session-metadata static-sort-key migration (issue #175, write-side)
+
+v1.7.0 landed the read side (every reader tolerates both sort-key schemes); v1.7.1 turns on the **write** side. New sessions are now created at a static base sort key (`S#{session_id}` plus the `SessionRecencyIndex` keys) behind a real `attribute_not_exists(PK)` conditional put, and any still-legacy row does a one-time in-place migration to the static SK on its next write. Because the row no longer encodes `lastMessageAt` in the sort key, it never moves — the ghost-row race that produced "Failed to parse session item" warnings is structurally eliminated for every migrated row, and the deterministic sort key makes the first-turn duplicate-row guard meaningful for the first time. `delete_session` now resolves the raw sort key via the GSI (catching migrated rows the old `S#ACTIVE#…` reconstruction missed) and soft-deletes in place; the sparse recency index is set for active rows and removed for deleted ones. All resolve-then-update writers already operate on the current sort key and need no change. Covered by `TestWriteSideMigration` (born-static, one-time migrate, no rotation, in-place/legacy soft-delete, end-to-end) against the real `ConditionalCheckFailedException` contract.
+
+## 🚀 Deployment notes
+
+Ship through `backend.yml` (app-api + inference-api). No CDK deploy and no data migration — rows migrate themselves on their next write, and readers already tolerate both schemes as of v1.7.0. No breaking changes.
+
+---
+
 # Release Notes — v1.7.0
 
 **Release Date:** July 17, 2026
