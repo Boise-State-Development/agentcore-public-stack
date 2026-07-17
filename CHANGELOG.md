@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.7.1] - 2026-07-17
+
+Patch release fixing a Word-document save failure in the AgentCore Runtime and advancing the **session-metadata static-sort-key migration** (issue #175) to its write side. Word tools now resolve the user-files bucket's real region instead of pinning to `AWS_REGION`, so `PutObject` no longer fails with `PermanentRedirect`. On the storage side, new sessions are now born with a static sort key and legacy rows self-migrate in place on their next write, structurally eliminating the ghost-row race behind the "Failed to parse session item" warnings and closing the first-turn duplicate-row race. No infra or data migration; ship through `backend.yml`.
+
+### ✨ Improved
+
+- Static-sort-key write path for session metadata (issue #175 Phase 1b) — new sessions are born at a static sort key (`S#{session_id}` + `SessionRecencyIndex` keys) guarded by a real `attribute_not_exists(PK)` conditional put, and legacy rows do a one-time in-place migration to the static SK on their next write. Rows no longer rotate on every message, so the ghost-row race that produced "Failed to parse session item" warnings is structurally eliminated for migrated rows, and the deterministic SK closes the first-turn duplicate-row race the old timestamped SK could not gate. `delete_session` resolves the raw SK via the GSI (catching migrated rows the old reconstruction missed) and soft-deletes in place. The recency index is updated (`SET GSI4`) for active rows and removed for deleted ones (#673)
+
+### 🐛 Fixed
+
+- Word-document `PutObject` no longer fails with `PermanentRedirect` in the AgentCore Runtime — the user-files S3 client pinned its endpoint to `https://s3.{AWS_REGION}.amazonaws.com`, but the runtime's `AWS_REGION` does not reliably match the bucket region and the explicit `endpoint_url` disabled botocore's automatic region redirect. The client now resolves the bucket's true region via `HeadBucket` (`x-amz-bucket-region`, backed by the `s3:ListBucket` the runtime role already has) and drops the hardcoded `endpoint_url`, fixing both the save and the presigned download URL (#674)
+
 ## [1.7.0] - 2026-07-17
 
 Feature release adding a full **Word (.docx) document toolset** for the agent and advancing the **session-metadata static-sort-key migration** (issue #175) through its read-side phases. The agent can now create, modify, list, and read Word documents — rendered inline in chat with a download button — behind the `create_word_document` capability toggle. On the storage side, a new sparse `SessionRecencyIndex` GSI plus a dual-scheme union reader let session listing work whether or not a session's base sort key has been migrated, deploying safely in any order. Also bumps `strands-agents` to 1.48.0 to fix an "Agent force-stopped" crash on non-PDF document uploads. Requires a CDK deploy for the new GSI; ships the rest via `backend.yml` + the frontend pipeline.
