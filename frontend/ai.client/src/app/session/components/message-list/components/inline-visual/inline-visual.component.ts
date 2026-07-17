@@ -1,6 +1,7 @@
 import { Component, input, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { ChartRendererComponent } from './renderers/chart-renderer.component';
 import { DefaultRendererComponent } from './renderers/default-renderer.component';
+import { WordDocumentRendererComponent } from './renderers/word-document-renderer.component';
 import { VisualStateService } from '../../../../services/visual-state/visual-state.service';
 
 /**
@@ -10,7 +11,7 @@ import { VisualStateService } from '../../../../services/visual-state/visual-sta
 @Component({
   selector: 'app-inline-visual',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ChartRendererComponent, DefaultRendererComponent],
+  imports: [ChartRendererComponent, DefaultRendererComponent, WordDocumentRendererComponent],
   template: `
     @if (!isDismissed()) {
       <div class="inline-visual-container">
@@ -22,6 +23,9 @@ import { VisualStateService } from '../../../../services/visual-state/visual-sta
               (dismiss)="onDismiss()"
               (toggleExpanded)="onToggleExpanded()"
             />
+          }
+          @case ('word_document') {
+            <app-word-document-renderer [payload]="payload()" />
           }
           @default {
             <app-default-renderer

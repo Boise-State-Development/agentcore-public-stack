@@ -213,6 +213,19 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         except Exception as e:
             logger.warning(f"Document byte stripping failed, continuing: {e}", exc_info=True)
 
+        # Drop empty/unrecognized content blocks from restored history. The
+        # write side runs `_filter_empty_text` in `append_message`, but history
+        # restored from AgentCore Memory bypasses it — a single block that comes
+        # back without a recognized Bedrock discriminator (an empty {} block, or
+        # a key lost on the memory serialization round-trip) makes Bedrock reject
+        # EVERY subsequent turn with "messages.N.content.M.type: Field required",
+        # permanently bricking the session. Runs unconditionally, mirroring
+        # `_strip_document_bytes` / `_repair_restored_history`.
+        try:
+            agent.messages = self._sanitize_restored_content_blocks(agent.messages)
+        except Exception as e:
+            logger.warning(f"Content-block sanitize failed, continuing: {e}", exc_info=True)
+
         if not self.compaction_config or not self.compaction_config.enabled:
             self._repair_restored_history(agent)
             return
@@ -746,6 +759,44 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         if len(text) <= max_length:
             return text
         return text[:max_length] + f"\n... [truncated, {len(text) - max_length} chars removed]"
+
+    def _sanitize_restored_content_blocks(self, messages: List[Dict]) -> List[Dict]:
+        """Drop empty/unrecognized content blocks from restored history.
+
+        ``append_message`` runs ``_filter_empty_text`` on the write side, but
+        history restored from AgentCore Memory bypasses it. A single block that
+        comes back without a recognized Bedrock discriminator — an empty ``{}``
+        block, an empty/whitespace ``text`` block, or a key dropped on the
+        memory serialization round-trip — triggers Bedrock's
+        "messages.N.content.M.type: Field required" ValidationException, which
+        fails every subsequent turn on the session. This reuses the same
+        recognized-key filter as the write path and additionally drops any
+        message left with no content (``_repair_restored_history`` runs after
+        and fixes any role-alternation gap the drop introduces).
+        """
+        sanitized: List[Dict] = []
+        dropped_blocks = 0
+        dropped_messages = 0
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            original = msg.get("content", [])
+            cleaned = self._filter_empty_text(msg)
+            content = cleaned.get("content", [])
+            if isinstance(original, list) and isinstance(content, list):
+                dropped_blocks += max(0, len(original) - len(content))
+            if isinstance(content, list) and len(content) == 0:
+                dropped_messages += 1
+                continue
+            sanitized.append(cleaned)
+
+        if dropped_blocks or dropped_messages:
+            logger.warning(
+                "Restore sanitize: dropped %d invalid content block(s) and %d "
+                "empty message(s) from restored history for session %s",
+                dropped_blocks, dropped_messages, self.config.session_id,
+            )
+        return sanitized
 
     def _strip_document_bytes(self, messages: List[Dict]) -> List[Dict]:
         """Replace document content blocks' inline bytes with a text placeholder.
