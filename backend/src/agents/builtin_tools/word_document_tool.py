@@ -47,6 +47,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from strands import tool
 
@@ -118,13 +119,65 @@ def _validate_document_name(name: str) -> Tuple[bool, Optional[str]]:
 
 
 _s3_client = None
+_bucket_region: Optional[str] = None
+
+
+def _resolve_bucket_region(bucket: str) -> str:
+    """Discover the user-files bucket's real region.
+
+    The AgentCore Runtime's ``AWS_REGION`` does not reliably match the
+    deployment/bucket region. Pinning the S3 client to the wrong region makes
+    ``PutObject`` fail with ``PermanentRedirect``. ``get_bucket_location`` is
+    region-agnostic (queried against us-east-1) and returns the true region;
+    a null ``LocationConstraint`` means us-east-1. Falls back to the env
+    region if the lookup is unavailable (e.g. missing s3:GetBucketLocation) —
+    ``PutObject`` still succeeds in that case because the client below no
+    longer hard-pins ``endpoint_url``, so botocore's built-in S3 region
+    redirect can correct it.
+    """
+    global _bucket_region
+    if _bucket_region:
+        return _bucket_region
+    # HeadBucket (maps to s3:ListBucket, which the runtime role has) returns
+    # the true region in the ``x-amz-bucket-region`` header — on a 200 when
+    # probed from the matching region and on the 301 otherwise. This avoids
+    # depending on s3:GetBucketLocation, which the inference-api role is not
+    # granted.
+    region = None
+    try:
+        probe = boto3.client("s3", region_name="us-east-1")
+        resp = probe.head_bucket(Bucket=bucket)
+        region = (
+            resp.get("ResponseMetadata", {})
+            .get("HTTPHeaders", {})
+            .get("x-amz-bucket-region")
+        )
+    except ClientError as exc:
+        region = (
+            exc.response.get("ResponseMetadata", {})
+            .get("HTTPHeaders", {})
+            .get("x-amz-bucket-region")
+        )
+        if not region:
+            logger.warning(f"Could not resolve region for bucket {bucket}: {exc}")
+    except Exception as exc:  # pragma: no cover - fall back to env region
+        logger.warning(f"Could not resolve region for bucket {bucket}: {exc}")
+    _bucket_region = region or _region()
+    return _bucket_region
 
 
 def _s3():
-    """Regional, SigV4 S3 client (matches FileUploadService config)."""
+    """SigV4 S3 client pinned to the user-files bucket's actual region.
+
+    Uses the bucket's real region (not ``AWS_REGION``) so ``PutObject`` never
+    hits ``PermanentRedirect`` in the AgentCore Runtime. No explicit
+    ``endpoint_url``: botocore then builds the correct regional virtual-host
+    endpoint (which keeps presigned download URLs CORS-safe) and can still
+    auto-correct the region if the resolved value is off.
+    """
     global _s3_client
     if _s3_client is None:
-        region = _region()
+        region = _resolve_bucket_region(_user_files_bucket())
         _s3_client = boto3.client(
             "s3",
             region_name=region,
@@ -132,7 +185,6 @@ def _s3():
                 signature_version="s3v4",
                 s3={"addressing_style": "virtual"},
             ),
-            endpoint_url=f"https://s3.{region}.amazonaws.com",
         )
     return _s3_client
 
