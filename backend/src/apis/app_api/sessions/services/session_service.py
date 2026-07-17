@@ -221,56 +221,60 @@ class SessionService:
             return False
 
         try:
-            # Get current session via GSI to find its SK
-            session = await self.get_session(user_id, session_id)
-            if not session:
+            # Resolve the raw row (with its actual SK) via GSI. Do NOT reconstruct the
+            # SK from lastMessageAt — under the static-SK schema (issue #175) a migrated
+            # row lives at S#{session_id}, not S#ACTIVE#{lastMessageAt}#{id}, so a
+            # reconstructed key would miss it entirely.
+            from apis.shared.sessions.metadata import _get_session_by_gsi, _static_session_sk
+
+            existing = await _get_session_by_gsi(session_id, user_id, self.table)
+            if not existing:
                 logger.info("Session not found for deletion")
                 return False
 
-            if session.deleted:
+            if existing.get('deleted') or existing.get('status') == 'deleted':
                 logger.info("Session already deleted")
                 return True
 
             now = datetime.now(timezone.utc)
             deleted_at = now.isoformat()
-
-            # Build old and new SKs
-            old_sk = f'S#ACTIVE#{session.last_message_at}#{session_id}'
-            new_sk = f'S#DELETED#{deleted_at}#{session_id}'
             pk = f'USER#{user_id}'
+            old_sk = existing['SK']
+            target_sk = _static_session_sk(session_id)
 
-            # Build the deleted item with all fields
-            deleted_item = {
-                'PK': pk,
-                'SK': new_sk,
-                'GSI_PK': f'SESSION#{session_id}',
-                'GSI_SK': 'META',
-                'sessionId': session_id,
-                'userId': user_id,
-                'title': session.title or '',
-                'status': 'deleted',
-                'createdAt': session.created_at,
-                'lastMessageAt': session.last_message_at,
-                'messageCount': session.message_count or 0,
-                'starred': session.starred or False,
-                'tags': session.tags or [],
-                'deleted': True,
-                'deletedAt': deleted_at
-            }
-
-            # Include preferences if present
-            # Convert floats to Decimals since DynamoDB high-level API requires Decimal for numbers
-            if session.preferences:
-                prefs = session.preferences.model_dump(by_alias=True)
-                deleted_item['preferences'] = _convert_float_to_decimal(prefs)
-
-            # Use high-level API: put_item + delete_item
-            # Put new item first, then delete old - if put fails, nothing is lost
-            # This is simpler and more reliable than transact_write_items
-            self.table.put_item(Item=deleted_item)
-            self.table.delete_item(
-                Key={'PK': pk, 'SK': old_sk}
-            )
+            if old_sk == target_sk:
+                # Already migrated — soft-delete in place: flip status + drop the sparse
+                # recency keys so the row leaves the active listing. No row move.
+                self.table.update_item(
+                    Key={'PK': pk, 'SK': target_sk},
+                    UpdateExpression=(
+                        "SET #s = :d, deleted = :true, deletedAt = :da "
+                        "REMOVE GSI4_PK, GSI4_SK"
+                    ),
+                    ExpressionAttributeNames={'#s': 'status'},
+                    ExpressionAttributeValues={':d': 'deleted', ':true': True, ':da': deleted_at},
+                )
+            else:
+                # Legacy row — migrate to the static tombstone (status=deleted, no GSI4)
+                # and drop the old row. One-time move; carry existing fields.
+                deleted_item = {
+                    k: v for k, v in existing.items()
+                    if k not in ('PK', 'SK', 'GSI4_PK', 'GSI4_SK')
+                }
+                deleted_item.update({
+                    'PK': pk,
+                    'SK': target_sk,
+                    'GSI_PK': f'SESSION#{session_id}',
+                    'GSI_SK': 'META',
+                    'sessionId': session_id,
+                    'userId': user_id,
+                    'status': 'deleted',
+                    'deleted': True,
+                    'deletedAt': deleted_at,
+                })
+                # existing came back with Decimals converted to floats — put_item needs Decimal.
+                self.table.put_item(Item=_convert_float_to_decimal(deleted_item))
+                self.table.delete_item(Key={'PK': pk, 'SK': old_sk})
 
             logger.info("Soft-deleted session")
 

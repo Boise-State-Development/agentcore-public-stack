@@ -641,14 +641,12 @@ async def _store_session_metadata_cloud(
         # Convert floats to Decimal for DynamoDB compatibility
         item = _convert_floats_to_decimal(item)
 
-        # Determine SK based on session status
+        # Static SK (issue #175): identity no longer encodes lastMessageAt or status,
+        # so the row never moves. active/deleted is the `status` attribute; recency
+        # lives in the sparse SessionRecencyIndex (GSI4), present only while active.
         last_message_at = session_metadata.last_message_at or datetime.now(timezone.utc).isoformat()
-
-        if session_metadata.deleted:
-            deleted_at = session_metadata.deleted_at or datetime.now(timezone.utc).isoformat()
-            new_sk = f"S#DELETED#{deleted_at}#{session_id}"
-        else:
-            new_sk = f"S#ACTIVE#{last_message_at}#{session_id}"
+        is_active = not session_metadata.deleted
+        new_sk = _static_session_sk(session_id)
 
         # Build primary key
         pk = f'USER#{user_id}'
@@ -656,41 +654,43 @@ async def _store_session_metadata_cloud(
         # Add GSI keys for direct lookup
         item['GSI_PK'] = f'SESSION#{session_id}'
         item['GSI_SK'] = 'META'
+        # Sparse recency keys — added for active, absent for deleted.
+        item.update(_recency_gsi_keys(user_id, session_id, last_message_at, is_active))
 
         if existing_session:
-            # Session exists - check if SK needs to change
+            # Session exists - check if the (now static) SK needs to change, which
+            # only happens when migrating a legacy row (S#ACTIVE#…/S#DELETED#…).
             old_sk = existing_session.get('SK')
 
             if old_sk and old_sk != new_sk:
-                # SK changed (timestamp updated) - need transactional move
-                # Deep merge existing with new data
+                # Legacy row → migrate to the static SK. Deep-merge existing onto the
+                # new item, but drop any stale GSI4 keys so status drives them freshly.
                 merged_item = _deep_merge(
-                    {k: v for k, v in existing_session.items() if k not in ['PK', 'SK']},
+                    {k: v for k, v in existing_session.items()
+                     if k not in ['PK', 'SK', 'GSI4_PK', 'GSI4_SK']},
                     item
                 )
                 merged_item['PK'] = pk
                 merged_item['SK'] = new_sk
+                if not is_active:
+                    merged_item.pop('GSI4_PK', None)
+                    merged_item.pop('GSI4_SK', None)
 
-                # Move session: put new SK first, then delete old SK
-                # Using high-level Table API (put_item + delete_item) instead of
-                # transact_write_items to avoid low-level serialization issues
-                logger.debug(f"🔄 Moving session: old_sk={old_sk[:50]}..., new_sk={new_sk[:50]}...")
+                # Put new SK first, then delete old — if the put fails the original
+                # is untouched. This is the row's one-time migration move.
+                logger.debug(f"🔄 Migrating session to static SK: old_sk={old_sk[:50]}...")
                 try:
-                    # Convert floats to Decimal for DynamoDB compatibility
                     decimal_item = _convert_floats_to_decimal(merged_item)
-
-                    # Put new item first — if this fails, original is untouched
                     table.put_item(Item=decimal_item)
-                    # Delete old item
                     table.delete_item(Key={'PK': pk, 'SK': old_sk})
-                    logger.info(f"💾 Moved session metadata in DynamoDB (SK changed)")
+                    logger.info(f"💾 Migrated session metadata to static SK")
                 except Exception as move_error:
-                    logger.error(f"Session move failed - PK={pk}, old_SK={old_sk}, new_SK={new_sk}")
-                    logger.error(f"Move error: {move_error}")
+                    logger.error(f"Session migration failed - PK={pk}, old_SK={old_sk}, new_SK={new_sk}")
+                    logger.error(f"Migration error: {move_error}")
                     raise
             else:
-                # SK unchanged - simple update with deep merge
-                # Build update expression for partial update
+                # Already static — in-place update. GSI4 keys are SET when active and
+                # REMOVEd when the session is (being) soft-deleted.
                 update_expression_parts = []
                 expression_attribute_names = {}
                 expression_attribute_values = {}
@@ -707,17 +707,30 @@ async def _store_session_metadata_cloud(
                     expression_attribute_names[placeholder_name] = key_name
                     expression_attribute_values[placeholder_value] = value
 
+                remove_parts = []
+                if not is_active:
+                    for gsi_key in ('GSI4_PK', 'GSI4_SK'):
+                        expression_attribute_names[f"#{gsi_key}"] = gsi_key
+                        remove_parts.append(f"#{gsi_key}")
+
+                update_expression = ""
                 if update_expression_parts:
                     update_expression = "SET " + ", ".join(update_expression_parts)
-                    table.update_item(
-                        Key={'PK': pk, 'SK': old_sk},
-                        UpdateExpression=update_expression,
-                        ExpressionAttributeNames=expression_attribute_names,
-                        ExpressionAttributeValues=expression_attribute_values
-                    )
+                if remove_parts:
+                    update_expression += (" " if update_expression else "") + "REMOVE " + ", ".join(remove_parts)
+
+                if update_expression:
+                    kwargs = {
+                        'Key': {'PK': pk, 'SK': old_sk},
+                        'UpdateExpression': update_expression,
+                        'ExpressionAttributeNames': expression_attribute_names,
+                    }
+                    if expression_attribute_values:
+                        kwargs['ExpressionAttributeValues'] = expression_attribute_values
+                    table.update_item(**kwargs)
                 logger.info(f"💾 Updated session metadata in DynamoDB table {table_name}")
         else:
-            # New session - create with put_item
+            # New session - create with put_item at the static SK
             item['PK'] = pk
             item['SK'] = new_sk
             table.put_item(Item=item)
@@ -738,6 +751,28 @@ async def _store_session_metadata_cloud(
                 detail=str(e)
             )
         )
+
+
+def _static_session_sk(session_id: str) -> str:
+    """Target base sort key (issue #175): static — does NOT encode lastMessageAt,
+    so the row never has to move. One row per session for its whole lifetime."""
+    return f"S#{session_id}"
+
+
+def _recency_gsi_keys(
+    user_id: str, session_id: str, last_message_at: str, is_active: bool
+) -> Dict[str, str]:
+    """SessionRecencyIndex (GSI4) keys for newest-first active-session listing.
+
+    Sparse: present only while the session is active, so soft-delete simply removes
+    them and the row drops out of the recency list (mirrors DueScheduleIndex/GSI3).
+    """
+    if is_active:
+        return {
+            "GSI4_PK": f"USER#{user_id}",
+            "GSI4_SK": f"{last_message_at}#{session_id}",
+        }
+    return {}
 
 
 async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
@@ -772,11 +807,14 @@ async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
 
     try:
         import boto3
+        from botocore.exceptions import ClientError
         from datetime import datetime, timezone
 
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(sessions_metadata_table)
 
+        # Catch a pre-existing row (legacy S#ACTIVE#… or already-migrated S#{id}) so
+        # we don't create a second row for the same session.
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if existing is not None:
             return False
@@ -784,9 +822,10 @@ async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
         now = datetime.now(timezone.utc).isoformat()
         item = {
             "PK": f"USER#{user_id}",
-            "SK": f"S#ACTIVE#{now}#{session_id}",
+            "SK": _static_session_sk(session_id),
             "GSI_PK": f"SESSION#{session_id}",
             "GSI_SK": "META",
+            **_recency_gsi_keys(user_id, session_id, now, is_active=True),
             "sessionId": session_id,
             "userId": user_id,
             "title": "New Conversation",
@@ -798,7 +837,18 @@ async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
             "tags": [],
         }
 
-        table.put_item(Item=item)
+        # The SK is now deterministic (S#{session_id}), so attribute_not_exists is a
+        # real idempotency guard (issue #175): two concurrent first turns compute the
+        # same key and DynamoDB serialises the conditional put — one wins, the other
+        # gets ConditionalCheckFailed. This closes the first-turn duplicate-row race
+        # that the old timestamped SK made impossible to guard.
+        try:
+            table.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                logger.info(f"Session {session_id} already exists (concurrent create); skipping")
+                return False
+            raise
         logger.info(f"💾 Pre-created session metadata for {session_id}")
         return True
     except Exception as e:
@@ -998,39 +1048,52 @@ async def update_session_activity(
 
         now = datetime.now(timezone.utc).isoformat()
         pk = f"USER#{user_id}"
+        target_sk = _static_session_sk(session_id)
+        gsi4 = _recency_gsi_keys(user_id, session_id, now, is_active=True)
 
-        # Phase A: targeted update of owned attributes on the current SK.
-        # Disjoint from title, starred, tags, pendingInterrupts.
-        table.update_item(
-            Key={"PK": pk, "SK": old_sk},
-            UpdateExpression="ADD messageCount :one SET lastMessageAt = :t, preferences = :p",
-            ExpressionAttributeValues={
-                ":one": 1,
-                ":t": now,
-                ":p": _convert_floats_to_decimal(merged_prefs),
-            },
-        )
+        if old_sk == target_sk:
+            # Already migrated (issue #175): pure in-place update — lastMessageAt is a
+            # plain attribute and recency lives in GSI4_SK, so SET-ting GSI4_SK just
+            # re-positions the index entry. No row move → no SK rotation → the
+            # ghost-row race is structurally gone.
+            table.update_item(
+                Key={"PK": pk, "SK": target_sk},
+                UpdateExpression=(
+                    "ADD messageCount :one "
+                    "SET lastMessageAt = :t, preferences = :p, GSI4_PK = :gp, GSI4_SK = :gs"
+                ),
+                ExpressionAttributeValues={
+                    ":one": 1,
+                    ":t": now,
+                    ":p": _convert_floats_to_decimal(merged_prefs),
+                    ":gp": gsi4["GSI4_PK"],
+                    ":gs": gsi4["GSI4_SK"],
+                },
+            )
+            logger.info("Updated session activity for %s (in-place, static SK)", session_id)
+            return True
 
-        # Phase B: SK rotation. lastMessageAt is encoded in the SK for
-        # recency listing, so a per-turn change forces a row move. Fresh
-        # read carries any concurrent write (e.g. title-gen) that landed
-        # between Phase A and now.
-        new_sk = f"S#ACTIVE#{now}#{session_id}"
-        if new_sk != old_sk:
-            fresh_resp = table.get_item(Key={"PK": pk, "SK": old_sk})
-            fresh = fresh_resp.get("Item")
-            if not fresh:
-                logger.warning(
-                    "update_session_activity: row vanished between Phase A and Phase B for %s",
-                    session_id,
-                )
-                return True
-            carried = {k: v for k, v in fresh.items() if k not in ("PK", "SK")}
-            new_item = {"PK": pk, "SK": new_sk, **carried}
-            table.put_item(Item=new_item)
-            table.delete_item(Key={"PK": pk, "SK": old_sk})
+        # Legacy row — perform the row's FINAL rotation to the static SK, carrying any
+        # concurrent write (e.g. title-gen) that landed since resolution, and populate
+        # GSI4. After this the session is static forever and every update is in-place.
+        fresh_resp = table.get_item(Key={"PK": pk, "SK": old_sk})
+        fresh = fresh_resp.get("Item")
+        if not fresh:
+            logger.warning(
+                "update_session_activity: row vanished before migration for %s", session_id
+            )
+            return True
+        carried = {
+            k: v for k, v in fresh.items() if k not in ("PK", "SK", "GSI4_PK", "GSI4_SK")
+        }
+        carried["lastMessageAt"] = now
+        carried["messageCount"] = int(fresh.get("messageCount", 0) or 0) + 1
+        carried["preferences"] = _convert_floats_to_decimal(merged_prefs)
+        new_item = {"PK": pk, "SK": target_sk, **carried, **gsi4}
+        table.put_item(Item=new_item)
+        table.delete_item(Key={"PK": pk, "SK": old_sk})
 
-        logger.info("Updated session activity for %s (sk_rotated=%s)", session_id, new_sk != old_sk)
+        logger.info("Migrated + updated session activity for %s (legacy -> static SK)", session_id)
         return True
     except Exception as e:
         logger.error("update_session_activity failed for %s: %s", session_id, e, exc_info=True)
