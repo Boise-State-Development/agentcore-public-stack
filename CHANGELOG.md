@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.7.0] - 2026-07-17
+
+Feature release adding a full **Word (.docx) document toolset** for the agent and advancing the **session-metadata static-sort-key migration** (issue #175) through its read-side phases. The agent can now create, modify, list, and read Word documents — rendered inline in chat with a download button — behind the `create_word_document` capability toggle. On the storage side, a new sparse `SessionRecencyIndex` GSI plus a dual-scheme union reader let session listing work whether or not a session's base sort key has been migrated, deploying safely in any order. Also bumps `strands-agents` to 1.48.0 to fix an "Agent force-stopped" crash on non-PDF document uploads. Requires a CDK deploy for the new GSI; ships the rest via `backend.yml` + the frontend pipeline.
+
+### 🚀 Added
+
+- Word document tools — `create_word_document`, `modify_word_document`, `list_word_documents`, and `read_word_document`, each running `python-docx` inside a Bedrock Code Interpreter session and persisting to the existing user-files store (S3 + DynamoDB). Injected per-request via `_build_word_document_tools`, gated by the single `create_word_document` capability toggle, and seeded into bootstrap `DEFAULT_TOOLS` as "Word Documents". A new frontend `word_document` inline-visual renderer shows the generated file with an accessible download button (#670)
+
+### ✨ Improved
+
+- Dual-scheme union read for session listing (issue #175 Phase 1a) — `list_user_sessions` now reads the union of legacy (base-table `S#ACTIVE#` sort key) and migrated (`SessionRecencyIndex` GSI) sessions, so a session is visible regardless of migration state. Pagination uses a self-derived value cursor (`{lastMessageAt}#{session_id}`) with no cross-page buffering, and undecodable/legacy cursors fall back to the first page across the deploy boundary. No writes change and no row migrates in this phase (#667)
+
+### 🐛 Fixed
+
+- Session listing degrades to legacy-only when `SessionRecencyIndex` is absent — the Phase 1a reader caught only `ResourceNotFoundException` (what moto raises), but real DynamoDB raises `ValidationException` ("The table does not have the specified index") for a missing GSI, so a 1a backend deployed ahead of the CDK GSI would 503 instead of degrading. The catch now also handles the scoped `ValidationException`, restoring order-independent deploys (#669)
+- "Agent force-stopped" on non-PDF document uploads — auto prompt caching appended its `cachePoint` after the last user message's content, so any turn attaching a `.txt`/`.docx`/`.csv`/… document sent `[text, document, cachePoint]` and Bedrock's Anthropic adapter rejected it with `messages.N.content.M.type: Field required`. Bumping `strands-agents` to 1.48.0 places the cache point before the first non-PDF document block instead (upstream issue #1966); every placement verified live against ConverseStream (#668)
+- Restore-time content-block sanitizer — `TurnBasedSessionManager` now drops empty/typeless content blocks from restored history that could trigger Bedrock ConverseStream `messages.N.content.M.type: Field required` on resume (#670)
+
+### 🏗️ Infrastructure
+
+- New sparse `SessionRecencyIndex` GSI on the sessions-metadata table (`GSI4_PK=USER#{id}`, `GSI4_SK={lastMessageAt}#{session_id}`, projection ALL) for newest-first active-session listing once the base sort key becomes static (issue #175 Phase 0). Adding the index is a no-op until rows populate its keys, so it deploys safely ahead of any code change; IAM is already covered by the `SessionsMetadataAccess` `index/*` wildcard (#666)
+
+### 📦 Dependencies
+
+- `strands-agents` 1.47.0 → 1.48.0 (cachePoint-before-document fix, upstream #1966) (#668)
+
 ## [1.6.1] - 2026-07-16
 
 Patch release fixing two agent-invocation regressions. Agents bound to a Mantle-provider model (e.g. `openai.gpt-5.4`) no longer misroute to Bedrock and fail with "invalid model identifier" — the invocation path now backfills the model's registered `provider` server-side. And interrupt-resume turns (OAuth-consent or tool-approval flows, most visibly "connect to Gmail") no longer 500/424: `effective_enabled_tools` is now bound on the resume branch. No infra or migration; ship through `backend.yml`.
