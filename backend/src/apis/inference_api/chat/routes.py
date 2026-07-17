@@ -459,6 +459,47 @@ def _build_artifact_tools(
     return tools
 
 
+# ============================================================
+# Word Document Tool Injection
+# ============================================================
+
+WORD_DOCUMENT_TOOL_IDS = {"create_word_document"}
+
+
+def _build_word_document_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create context-bound Word document tools if enabled by the user.
+
+    Identity is captured by closure (same pattern as the artifact and
+    spreadsheet tools) since the runtime does not populate ToolContext.
+    """
+    if not enabled_tools or not WORD_DOCUMENT_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    # The Word capability is a single toggle: enabling create_word_document
+    # provisions the full document toolset (create/modify/list/read) so the
+    # model can round-trip on a document without extra admin catalog entries.
+    from agents.builtin_tools.word_document_tool import (
+        make_create_word_document_tool,
+        make_list_word_documents_tool,
+        make_modify_word_document_tool,
+        make_read_word_document_tool,
+    )
+
+    tools = [
+        make_create_word_document_tool(session_id, user_id),
+        make_modify_word_document_tool(session_id, user_id),
+        make_list_word_documents_tool(session_id, user_id),
+        make_read_word_document_tool(session_id, user_id),
+    ]
+
+    logger.info(f"Created {len(tools)} word document tools")
+    return tools
+
+
 def _build_memory_tools(agent_memory, user_id: str, user_email: str) -> list:
     """Context-bound Memory-Space tools for an Agent's resolved memory binding.
 
@@ -1777,6 +1818,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 session_id=input_data.session_id,
                 user_id=user_id,
             ) + _build_artifact_tools(
+                enabled_tools=effective_enabled_tools,
+                session_id=input_data.session_id,
+                user_id=user_id,
+            ) + _build_word_document_tools(
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,

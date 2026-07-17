@@ -431,6 +431,21 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "isPublic": True,
         "forwardAuthToken": False,
     },
+    {
+        # Single catalog entry / toggle that provisions the whole Word
+        # document toolset. Enabling this one id injects create/modify/list/
+        # read at runtime — see WORD_DOCUMENT_TOOL_IDS and
+        # _build_word_document_tools in apis/inference_api/chat/routes.py.
+        # Keep the toolId as "create_word_document": it is the gate key.
+        "toolId": "create_word_document",
+        "displayName": "Word Documents",
+        "description": "Create, edit, read, and list Word (.docx) documents using python-docx in a sandboxed environment. Generated files are saved to the chat's Files with a download link.",
+        "category": "document",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": True,
+        "forwardAuthToken": False,
+    },
 ]
 
 
