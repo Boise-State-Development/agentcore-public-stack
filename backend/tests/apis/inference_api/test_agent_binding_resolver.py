@@ -80,17 +80,22 @@ def _tool_binding(ref: str) -> AgentBinding:
     return AgentBinding(kind="tool", ref=ref)
 
 
-def _patch_skill_access(monkeypatch, allowed, *, enabled=True) -> MagicMock:
-    """Patch the skills flag + AppRole gate for skill resolution. ``allowed`` is a bool or a
-    set of skill ids the invoker may access."""
+def _patch_skill_access(monkeypatch, allowed, *, enabled=True) -> AsyncMock:
+    """Patch the skills flag + the §6 invoke-through predicate for skill resolution.
+
+    ``allowed`` is ``True`` (everything resolves) or a set of skill ids that do.
+    The predicate itself is exercised against real records in
+    ``tests/apis/shared/skills/test_access.py``; here it is a seam so the
+    resolver's own block/dedupe behavior is tested in isolation.
+    """
     monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: enabled)
-    svc = MagicMock()
-    if isinstance(allowed, bool):
-        svc.can_access_skill = AsyncMock(return_value=allowed)
-    else:
-        svc.can_access_skill = AsyncMock(side_effect=lambda user, sid: sid in allowed)
-    monkeypatch.setattr(f"{MODULE}.get_app_role_service", lambda: svc)
-    return svc
+    predicate = AsyncMock(
+        side_effect=lambda invoker, refs, owner_id: (
+            set(refs) if allowed is True else {r for r in refs if r in allowed}
+        )
+    )
+    monkeypatch.setattr(f"{MODULE}.resolve_invocable_skill_ids", predicate)
+    return predicate
 
 
 def _skill_binding(ref: str) -> AgentBinding:
@@ -258,10 +263,10 @@ class TestSkillResolution:
     @pytest.mark.asyncio
     async def test_no_skill_binding_is_none(self, monkeypatch):
         # No skill binding ⇒ plan.skills is None and we never consult the flag or RBAC.
-        svc = _patch_skill_access(monkeypatch, True)
+        predicate = _patch_skill_access(monkeypatch, True)
         plan = await resolve_agent_invocation(_assistant(bindings=[]), _user())
         assert plan.skills is None
-        svc.can_access_skill.assert_not_awaited()
+        predicate.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_accessible_skills_become_override(self, monkeypatch):
@@ -299,8 +304,31 @@ class TestSkillResolution:
 
     @pytest.mark.asyncio
     async def test_skill_access_checked_against_invoker(self, monkeypatch):
-        svc = _patch_skill_access(monkeypatch, True)
+        predicate = _patch_skill_access(monkeypatch, True)
         await resolve_agent_invocation(_assistant(bindings=[_skill_binding("research")]), _user())
-        # can_access_skill(invoker, skill_id) — the INVOKING user, not the author.
-        args = svc.can_access_skill.await_args.args
-        assert args[0].user_id == "u-bob" and args[1] == "research"
+        # (invoker, refs, agent_owner_id) — resolved against the INVOKING user,
+        # with the AGENT's owner supplied for the invoke-through clause. Passing
+        # the invoker as the owner would collapse clause 3 into a no-op; passing
+        # the author as the subject would skip per-invoker gating entirely.
+        invoker, refs, owner_id = predicate.await_args.args
+        assert invoker.user_id == "u-bob"
+        assert refs == ["research"]
+        assert owner_id == "u-alice"
+
+    @pytest.mark.asyncio
+    async def test_refs_deduped_before_predicate(self, monkeypatch):
+        # The predicate does a batch read per call; duplicate bindings must not
+        # multiply it, and the resolved order must follow first-binding order.
+        predicate = _patch_skill_access(monkeypatch, True)
+        await resolve_agent_invocation(
+            _assistant(
+                bindings=[
+                    _skill_binding("writing"),
+                    _skill_binding("research"),
+                    _skill_binding("writing"),
+                ]
+            ),
+            _user(),
+        )
+        assert predicate.await_count == 1
+        assert predicate.await_args.args[1] == ["writing", "research"]

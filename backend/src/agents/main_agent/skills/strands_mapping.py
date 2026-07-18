@@ -183,9 +183,17 @@ def make_read_skill_file_tool(records: List[Any]):
 
     The tool is the S3-vs-filesystem adapter the spec calls for (§5): the
     ``AgentSkills`` plugin discloses metadata + instructions but never reads
-    files for programmatic skills. Access is implicitly gated — ``records`` is
-    exactly the turn's effective (RBAC-resolved, selection-narrowed) skill set,
-    so a skill the invoker cannot use is simply absent from ``by_slug``.
+    files for programmatic skills.
+
+    **Access (§6) is enforced structurally, not re-checked per call.** ``records``
+    is exactly the turn's effective skill set — already resolved against the
+    invoker (catalog ∪ own for plain chat; the invoke-through predicate for an
+    Agent's bindings) and narrowed by the opt-in selection. A skill the invoker
+    cannot use is simply absent from ``by_slug``, so there is no id the model can
+    name to reach one. That is strictly stronger than re-running the predicate on
+    an arbitrary caller-supplied id, and it keeps a single resolution point:
+    anything that widens access has to widen the effective set, where the tiering
+    rules actually live.
     """
     by_slug = {slugify_skill_name(getattr(r, "skill_id", "")): r for r in records}
     store = get_skill_resource_store()

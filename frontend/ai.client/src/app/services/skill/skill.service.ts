@@ -4,9 +4,10 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
 
 /**
- * One skill the user's roles grant, as returned by GET /skills/.
- * `userEnabled` is the explicit preference (null = untouched);
- * `isEnabled` is the effective state (untouched skills default to on).
+ * One skill the user can reach (catalog-granted ∪ authored), as returned by
+ * GET /skills/. `userEnabled` is the explicit preference (null = untouched);
+ * `isEnabled` is the effective state — untouched skills default to **off**
+ * (Skills v2 D6 opt-in, the reverse of tools).
  */
 export interface UserSkill {
   skillId: string;
@@ -26,9 +27,14 @@ export interface SkillsResponse {
 /**
  * Service for the user's accessible skills and per-skill preferences.
  *
- * The skills-mode sibling of ToolService: the backend returns only the
- * ACTIVE skills the user's RBAC roles grant (the same set the SkillAgent
- * can activate), and preferences persist globally per user.
+ * The sibling of ToolService: the backend returns the ACTIVE skills the user
+ * can reach (RBAC-granted catalog ∪ skills they authored), and preferences
+ * persist globally per user.
+ *
+ * Unlike ToolService this does NOT load in its constructor. Skills are opt-in
+ * and the feature is off in every deployed env until PR-5, so the load is
+ * deferred to the first open of the model-settings panel (and to an
+ * Agent-bound conversation, which needs the names to render locked rows).
  */
 @Injectable({
   providedIn: 'root'
@@ -139,6 +145,17 @@ export class SkillService {
       this._skills.set(response.skills);
       this._initialized.set(true);
     } catch (err: unknown) {
+      const status = (err as { status?: number } | null)?.status;
+      if (status === 404) {
+        // Kill switch off — the `/skills` router isn't mounted when
+        // SKILLS_ENABLED is false. Treat it as "no skills" rather than an
+        // error: the picker stays hidden (`hasSkills()` is false) and nothing
+        // is logged, which is the state of every deployed env until PR-5.
+        // Mark initialized so we don't re-probe on every panel open.
+        this._skills.set([]);
+        this._initialized.set(true);
+        return;
+      }
       const message = err instanceof Error ? err.message : 'Failed to load skills';
       this._error.set(message);
       console.error('Skill load error:', err);
