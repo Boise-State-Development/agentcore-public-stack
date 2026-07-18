@@ -10,7 +10,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.core import AgentFactory
-from agents.main_agent.skills.strands_mapping import build_skills_plugin
+from agents.main_agent.skills.strands_mapping import build_skills_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,14 @@ class ChatAgent(BaseAgent):
             tools = self._build_filtered_tools()
             hooks = self._create_hooks()
 
-            plugin = build_skills_plugin(self._accessible_skill_ids)
+            # Skills disclosure: the AgentSkills plugin injects the catalog +
+            # activation tool; read_skill_file is the S3 adapter for reference
+            # files (added after tool filtering — it is infrastructure, not an
+            # RBAC-gated tool, and is implicitly scoped to the turn's skills).
+            plugin, read_skill_file = build_skills_runtime(self._accessible_skill_ids)
             plugins = [plugin] if plugin else None
             if plugin:
+                tools = list(tools) + [read_skill_file]
                 logger.info(
                     "ChatAgent: skills disclosure enabled (%d accessible skill ids)",
                     len(self._accessible_skill_ids or []),

@@ -81,8 +81,15 @@ class SkillResourceRef(BaseModel):
     s3_key: str = Field(
         ...,
         alias="s3Key",
-        description="Object key in the skill-resources bucket "
-        "(skills/{skill_id}/{content_hash})",
+        description="Object key in the skill-resources bucket, in the standard "
+        "agentskills.io layout (skills/{skill_id}/{references|scripts|assets}/{filename})",
+    )
+    # Skills v2: which agentskills.io bundle directory the file belongs to.
+    # ``script`` files are accept-and-inert (stored + listed, never executed).
+    # Old manifest rows (v1, content-hash keyed) default to ``reference``.
+    kind: str = Field(
+        default="reference",
+        description="Bundle directory: reference | script | asset",
     )
 
     model_config = {"populate_by_name": True}
@@ -208,6 +215,7 @@ class SkillDefinition(BaseModel):
                     "size": r.size,
                     "contentType": r.content_type,
                     "s3Key": r.s3_key,
+                    "kind": r.kind,
                 }
                 for r in self.resources
             ],
@@ -246,6 +254,8 @@ class SkillDefinition(BaseModel):
                     size=int(r.get("size", 0)),
                     content_type=r.get("contentType", ""),
                     s3_key=r.get("s3Key", ""),
+                    # Old rows predate kind → default to reference.
+                    kind=r.get("kind", "reference"),
                 )
                 for r in (item.get("resources") or [])
             ],

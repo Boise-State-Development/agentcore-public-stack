@@ -41,6 +41,34 @@ async def test_create_and_get(skill_service, admin_user):
 
 
 @pytest.mark.asyncio
+async def test_create_writes_skill_md_projection(skill_service, admin_user):
+    # The S3 prefix becomes a valid agentskills.io bundle: SKILL.md is projected
+    # from the row with a slugged `name`.
+    await skill_service.create_skill(
+        _skill(allowed_tools=["web_search"]), admin_user
+    )
+    content = skill_service.resource_store.get(
+        "skills/pdf_workflows/SKILL.md"
+    ).decode()
+    assert content.startswith("---\n")
+    assert "name: pdf-workflows" in content
+    assert "allowed-tools:" in content
+    assert "# PDF Workflows" in content
+
+
+@pytest.mark.asyncio
+async def test_update_refreshes_skill_md_projection(skill_service, admin_user):
+    await skill_service.create_skill(_skill(), admin_user)
+    await skill_service.update_skill(
+        "pdf_workflows", {"instructions": "# Rewritten body"}, admin_user
+    )
+    content = skill_service.resource_store.get(
+        "skills/pdf_workflows/SKILL.md"
+    ).decode()
+    assert "# Rewritten body" in content
+
+
+@pytest.mark.asyncio
 async def test_get_all_skills_status_filter(skill_service, admin_user):
     await skill_service.create_skill(_skill("skill_one", status=SkillStatus.ACTIVE), admin_user)
     await skill_service.create_skill(_skill("skill_two", status=SkillStatus.DRAFT), admin_user)

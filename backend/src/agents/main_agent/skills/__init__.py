@@ -15,14 +15,18 @@ standard natively and skills no longer bind tools.
 
 from .strands_mapping import (
     build_skills_plugin,
+    build_skills_runtime,
     fetch_active_skill_records,
+    make_read_skill_file_tool,
     record_to_strands_skill,
     slugify_skill_name,
 )
 
 __all__ = [
     "build_skills_plugin",
+    "build_skills_runtime",
     "fetch_active_skill_records",
+    "make_read_skill_file_tool",
     "record_to_strands_skill",
     "slugify_skill_name",
 ]

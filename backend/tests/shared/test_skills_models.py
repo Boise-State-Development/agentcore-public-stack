@@ -144,20 +144,40 @@ class TestSkillResourcesRoundTrip:
             "size",
             "contentType",
             "s3Key",
+            "kind",
         }
         assert first["filename"] == "forms.md"
         assert first["contentHash"] == "a" * 64
+        assert first["kind"] == "reference"
 
     def test_resources_round_trip_preserves_manifest(self):
-        skill = _skill(resources=[self._ref(filename="forms.md", size=10)])
+        skill = _skill(
+            resources=[self._ref(filename="run.py", size=10, kind="script")]
+        )
         restored = SkillDefinition.from_dynamo_item(skill.to_dynamo_item())
 
         assert len(restored.resources) == 1
         ref = restored.resources[0]
-        assert ref.filename == "forms.md"
+        assert ref.filename == "run.py"
         assert ref.size == 10
         assert ref.content_type == "text/markdown"
         assert ref.s3_key.startswith("skills/pdf_workflows/")
+        assert ref.kind == "script"
+
+    def test_legacy_resource_row_defaults_kind_reference(self):
+        # A v1 manifest entry (no `kind`) deserializes to reference.
+        item = _skill().to_dynamo_item()
+        item["resources"] = [
+            {
+                "filename": "forms.md",
+                "contentHash": "b" * 64,
+                "size": 5,
+                "contentType": "text/markdown",
+                "s3Key": "skills/pdf_workflows/" + "b" * 64,
+            }
+        ]
+        restored = SkillDefinition.from_dynamo_item(item)
+        assert restored.resources[0].kind == "reference"
 
     def test_size_coerced_from_decimal(self):
         # DynamoDB returns numbers as Decimal; from_dynamo_item coerces to int.
