@@ -80,6 +80,21 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'my-skills/new',
+        loadComponent: () => import('./my-skills/my-skill-form.page').then(m => m.MySkillFormPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'my-skills/:skillId/edit',
+        loadComponent: () => import('./my-skills/my-skill-form.page').then(m => m.MySkillFormPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'my-skills',
+        loadComponent: () => import('./my-skills/my-skills.page').then(m => m.MySkillsPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'memories',
         loadComponent: () => import('./memory/memory-dashboard.page').then(m => m.MemoryDashboardPage),
         canActivate: [authGuard],

@@ -48,6 +48,54 @@ class TestSkillCatalogRepository:
         assert {s.skill_id for s in skills} == {"skill_one", "skill_two"}
 
     @pytest.mark.asyncio
+    async def test_list_skills_filters_by_owner(self, skill_repository):
+        await skill_repository.create_skill(_make_skill("catalog_one"))
+        await skill_repository.create_skill(_make_skill("mine", owner_id="user-1"))
+
+        catalog = await skill_repository.list_skills(owner_id="system")
+        mine = await skill_repository.list_skills(owner_id="user-1")
+
+        assert {s.skill_id for s in catalog} == {"catalog_one"}
+        assert {s.skill_id for s in mine} == {"mine"}
+
+    @pytest.mark.asyncio
+    async def test_list_skills_by_owner_uses_the_owner_index(self, skill_repository):
+        """GSI4 partition query — the 'list my skills' path for the user tier."""
+        await skill_repository.create_skill(_make_skill("catalog_one"))
+        await skill_repository.create_skill(
+            _make_skill("mine_b", display_name="Bravo", owner_id="user-1")
+        )
+        await skill_repository.create_skill(
+            _make_skill("mine_a", display_name="Alpha", owner_id="user-1")
+        )
+        await skill_repository.create_skill(_make_skill("theirs", owner_id="user-2"))
+
+        mine = await skill_repository.list_skills_by_owner("user-1")
+
+        # Sorted by display name, and scoped strictly to that owner.
+        assert [s.skill_id for s in mine] == ["mine_a", "mine_b"]
+
+    @pytest.mark.asyncio
+    async def test_list_skills_by_owner_filters_status(self, skill_repository):
+        await skill_repository.create_skill(_make_skill("active_one", owner_id="user-1"))
+        await skill_repository.create_skill(
+            _make_skill("draft_one", owner_id="user-1", status=SkillStatus.DRAFT)
+        )
+
+        active = await skill_repository.list_skills_by_owner(
+            "user-1", status=SkillStatus.ACTIVE.value
+        )
+
+        assert [s.skill_id for s in active] == ["active_one"]
+
+    @pytest.mark.asyncio
+    async def test_list_skills_by_owner_is_empty_for_an_unknown_owner(
+        self, skill_repository
+    ):
+        await skill_repository.create_skill(_make_skill("catalog_one"))
+        assert await skill_repository.list_skills_by_owner("nobody") == []
+
+    @pytest.mark.asyncio
     async def test_list_does_not_pick_up_other_pk_items(
         self, skill_repository, role_repository
     ):

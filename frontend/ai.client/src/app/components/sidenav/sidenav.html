@@ -62,6 +62,22 @@
                 <span class="ml-auto rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-amber-700 dark:bg-amber-400/15 dark:text-amber-300">Preview</span>
             </a>
         }
+
+        <!-- My Skills (user-authored skill bundles; hidden while SKILLS_ENABLED is off) -->
+        @if (showMySkills()) {
+            <a
+                routerLink="/my-skills"
+                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                (click)="sidenavService.close()"
+                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+                    </svg>
+                </div>
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">My Skills</span>
+            </a>
+        }
     </div>
 
     <nav class="flex-1 overflow-y-auto px-3 pb-4">

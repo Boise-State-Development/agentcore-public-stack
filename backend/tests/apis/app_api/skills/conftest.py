@@ -122,6 +122,41 @@ def skill_service(app_roles_table, skill_resource_store):
 
 
 @pytest.fixture()
+def user_skill_service(skill_service):
+    """UserSkillService sharing the moto-backed catalog service + repository."""
+    from apis.app_api.skills.user_service import UserSkillService
+
+    return UserSkillService(
+        repository=skill_service.repository,
+        catalog_service=skill_service,
+    )
+
+
+@pytest.fixture()
+def author_user() -> User:
+    """A plain (non-admin) user who authors their own skills."""
+    return User(
+        user_id="user-author",
+        email="author@example.com",
+        name="Author",
+        roles=["user"],
+        raw_token="test-token",
+    )
+
+
+@pytest.fixture()
+def other_user() -> User:
+    """A second plain user — used to prove owner isolation."""
+    return User(
+        user_id="user-other",
+        email="other@example.com",
+        name="Other",
+        roles=["user"],
+        raw_token="test-token",
+    )
+
+
+@pytest.fixture()
 def admin_user() -> User:
     return User(
         user_id="admin-1",

@@ -14,6 +14,7 @@ from .freshness import (
 )
 from .models import (
     SKILL_ID_PATTERN,
+    SYSTEM_OWNER_ID,
     AddRemoveSkillRolesRequest,
     AdminSkillListResponse,
     AdminSkillResponse,
@@ -28,7 +29,7 @@ from .models import (
     SkillUpdateRequest,
     SkillVisibility,
 )
-from .access import resolve_accessible_skill_ids
+from .access import resolve_accessible_skill_ids, resolve_owned_skill_ids
 from .models import UserSkillPreference
 from .repository import SkillCatalogRepository, get_skill_catalog_repository
 from .resource_store import (
@@ -39,6 +40,7 @@ from .resource_store import (
 
 __all__ = [
     "SKILL_ID_PATTERN",
+    "SYSTEM_OWNER_ID",
     "SkillDefinition",
     "SkillResourceRef",
     "SkillResourcesResponse",
@@ -62,5 +64,6 @@ __all__ = [
     "get_skill_updated_at",
     "invalidate",
     "resolve_accessible_skill_ids",
+    "resolve_owned_skill_ids",
     "UserSkillPreference",
 ]

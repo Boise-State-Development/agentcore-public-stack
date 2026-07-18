@@ -25,6 +25,10 @@ from pydantic import BaseModel, Field
 # Regex for a skill_id — identical shape to tool_id (see ToolCreateRequest).
 SKILL_ID_PATTERN = r"^[a-z][a-z0-9_]{2,49}$"
 
+# ``owner_id`` of an admin-catalog skill. Anything else is a user-authored
+# skill (Skills v2 PR-3): governed by ownership, not by RBAC ``granted_skills``.
+SYSTEM_OWNER_ID = "system"
+
 
 class SkillStatus(str, Enum):
     """Availability status of a skill (mirrors ToolStatus)."""
