@@ -20,6 +20,7 @@ from apis.shared.rbac.admin_service import (
 )
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 from apis.shared.skills.models import (
+    SYSTEM_OWNER_ID,
     SkillDefinition,
     SkillResourceRef,
     SkillRoleAssignment,
@@ -82,7 +83,12 @@ class SkillCatalogService:
         self, status: Optional[str] = None, include_roles: bool = True
     ) -> List[SkillDefinition]:
         """
-        Get all skills in the catalog.
+        Get all skills in the admin catalog.
+
+        Scoped to ``owner_id == "system"``: user-authored skills (Skills v2
+        PR-3) live in the same table but are governed by ownership, not by RBAC
+        role grants, so they are not part of the catalog an admin curates and
+        must not appear on the admin skills page.
 
         Args:
             status: Optional status filter
@@ -91,7 +97,9 @@ class SkillCatalogService:
         Returns:
             List of SkillDefinition objects
         """
-        skills = await self.repository.list_skills(status=status)
+        skills = await self.repository.list_skills(
+            status=status, owner_id=SYSTEM_OWNER_ID
+        )
 
         if include_roles:
             for skill in skills:
@@ -407,6 +415,15 @@ class SkillCatalogService:
             skill_id, {"resources": resources}, admin_user_id=admin.user_id
         )
 
+    def write_skill_md(self, skill: SkillDefinition) -> None:
+        """Write the skill's SKILL.md projection to S3 (best-effort).
+
+        Public entry point for the user-authored tier (``UserSkillService``),
+        which reuses this bundle machinery so both tiers emit identical
+        agentskills.io layouts.
+        """
+        self._write_skill_md(skill)
+
     def _write_skill_md(self, skill: SkillDefinition) -> None:
         """Write the skill's SKILL.md projection to S3 (best-effort).
 
@@ -517,9 +534,7 @@ class SkillCatalogService:
             app_role_ids: AppRole IDs that should grant this skill
             admin: Admin user performing the action
         """
-        skill = await self.get_skill(skill_id)
-        if not skill:
-            raise ValueError(f"Skill '{skill_id}' not found")
+        await self._require_catalog_skill(skill_id)
 
         current_roles = await self.get_roles_for_skill(skill_id)
         current_role_ids = {
@@ -550,6 +565,7 @@ class SkillCatalogService:
         self, skill_id: str, app_role_ids: List[str], admin: User
     ) -> None:
         """Add AppRoles to skill access (preserves existing)."""
+        await self._require_catalog_skill(skill_id)
         for role_id in app_role_ids:
             await self._add_skill_to_role(role_id, skill_id, admin)
 
@@ -557,8 +573,28 @@ class SkillCatalogService:
         self, skill_id: str, app_role_ids: List[str], admin: User
     ) -> None:
         """Remove AppRoles from skill access."""
+        await self._require_catalog_skill(skill_id)
         for role_id in app_role_ids:
             await self._remove_skill_from_role(role_id, skill_id, admin)
+
+    async def _require_catalog_skill(self, skill_id: str) -> SkillDefinition:
+        """Assert a skill exists AND belongs to the admin catalog.
+
+        Role grants are the catalog's governance mechanism. A user-authored
+        skill (Skills v2 PR-3) is reached through ownership — and, once PR-4
+        lands, through invoke-through on a shared Agent. Granting one to an
+        AppRole would hand a private, user-owned document to a whole role, so
+        the role endpoints refuse to touch anything outside the catalog.
+        """
+        skill = await self.get_skill(skill_id)
+        if not skill:
+            raise ValueError(f"Skill '{skill_id}' not found")
+        if skill.owner_id != SYSTEM_OWNER_ID:
+            raise ValueError(
+                f"Skill '{skill_id}' is user-authored and cannot be granted to "
+                "AppRoles. Only admin catalog skills carry role grants."
+            )
+        return skill
 
     async def _add_skill_to_role(
         self, role_id: str, skill_id: str, admin: User

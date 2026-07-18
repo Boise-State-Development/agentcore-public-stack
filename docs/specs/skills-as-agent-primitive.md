@@ -319,8 +319,26 @@ access can use this agent's skills and knowledge."*
   `skill_registry` / `skill_tools` retired (`"skill"` is now a ChatAgent alias);
   agentskills.io S3 bundle layout + `SKILL.md` write-through projection;
   `allowed_tools`/`skill_metadata` + resource `kind` on the model.
-- **PR-3 — User-authored tier.** Owner-scoped `/skills` CRUD + upload routes
-  (session auth), GSI4 list-my-skills, My Skills page.
+- **PR-3 — User-authored tier. ✅ DONE** (branch `feature/skills-v2-user-tier`).
+  Owner-scoped `/skills/mine` CRUD + bundle-upload routes (session auth),
+  `list_skills_by_owner` over GSI4, `UserSkillService` (ownership resolved on
+  every path; a skill you don't own is 404, never 403), and the My Skills SPA
+  page (list + form, SKILL.md import prefill, reference/script/asset upload).
+  Two tier boundaries were closed along the way, both of which would have
+  leaked private skills:
+  1. `get_all_skill_ids` (the RBAC `"*"` wildcard expansion) now lists **only
+     catalog skills** — a wildcard grant must never sweep in other users'
+     authored skills.
+  2. The admin role-grant endpoints refuse a user-authored skill
+     (`_require_catalog_skill`), since granting one to an AppRole would hand a
+     private document to a whole role. The admin catalog list is likewise
+     scoped to `owner_id == "system"`.
+  `resolve_accessible_skill_ids` now returns **catalog ∪ own**, which is what
+  makes an authored skill reachable at runtime at all. Skill ids are allocated
+  server-side from the display name and suffixed on collision (`docx` →
+  `docx_2`), keeping ids globally unique — the runtime activation key is the
+  slugified id, so same-named skills in one turn would be ambiguous to the
+  model — without a 409 that would disclose an invisible skill's existence.
 - **PR-4 — Selection surfaces.** Chat opt-in picker; Designer palette union;
   invoke-through predicate in the binding resolver + `read_skill_file`;
   share-dialog copy.

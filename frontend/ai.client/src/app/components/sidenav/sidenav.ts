@@ -9,6 +9,7 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
 import { AgentService } from '../../agents/services/agent.service';
+import { MySkillService } from '../../my-skills/services/my-skill.service';
 
 @Component({
   selector: 'app-sidenav',
@@ -22,6 +23,7 @@ export class Sidenav {
   private bffSession = inject(BffSessionService);
   private memorySpaceService = inject(MemorySpaceService);
   private agentService = inject(AgentService);
+  private mySkillService = inject(MySkillService);
   protected sidenavService = inject(SidenavService);
   protected userService = inject(UserService);
 
@@ -59,6 +61,14 @@ export class Sidenav {
    */
   readonly showAgents = computed(() => this.agentService.accessible$() === true);
 
+  /**
+   * Whether to show the "My Skills" nav entry. Rides the authored-skills list
+   * the same way the two above ride theirs: the `/skills` router is only
+   * mounted when `SKILLS_ENABLED` is on, so a 404 flips `accessible$` false
+   * and the entry stays hidden. `null` (unresolved) also hides it.
+   */
+  readonly showMySkills = computed(() => this.mySkillService.accessible$() === true);
+
   constructor() {
     // Kick off the accessibility probes once the user is authenticated —
     // mirrors UserService's own permissions-fetch gating.
@@ -66,6 +76,7 @@ export class Sidenav {
       if (this.userService.currentUser()) {
         void this.memorySpaceService.loadSpaces();
         void this.agentService.loadAgents();
+        void this.mySkillService.loadSkills().catch(() => undefined);
       }
     });
   }

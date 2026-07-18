@@ -319,7 +319,43 @@ class TestSeedExampleSkills:
         assert len(item["resources"]) == 1
         ref = item["resources"][0]
         assert ref["filename"] == "extraction_tips.md"
-        assert ref["s3Key"].startswith(f"skills/{EXAMPLE_SKILL_ID}/")
-        # Bytes really landed in S3 at the content-addressed key.
+        # Standard agentskills.io bundle layout, not the v1 content-hash key —
+        # a seeded prefix must be a portable bundle on day one (Skills v2).
+        assert ref["s3Key"] == f"skills/{EXAMPLE_SKILL_ID}/references/extraction_tips.md"
+        assert ref["kind"] == "reference"
         body = s3.get_object(Bucket=bucket, Key=ref["s3Key"])["Body"].read()
         assert b"Extraction Tips" in body
+
+    def test_writes_the_skill_md_projection(self, dynamodb_table, monkeypatch):
+        """The seeded prefix must be a valid bundle, not just loose bytes.
+
+        Without SKILL.md the prefix cannot be handed to a managed Harness
+        (``{"s3": {"uri": ...}}``) or exported as-is.
+        """
+        bucket = "test-skill-resources"
+        s3 = boto3.client("s3", region_name=REGION)
+        s3.create_bucket(Bucket=bucket)
+        monkeypatch.setenv("S3_SKILL_RESOURCES_BUCKET_NAME", bucket)
+        seed_default_role(TABLE_NAME, REGION)
+
+        seed_example_skills(TABLE_NAME, REGION)
+
+        body = s3.get_object(
+            Bucket=bucket, Key=f"skills/{EXAMPLE_SKILL_ID}/SKILL.md"
+        )["Body"].read().decode()
+
+        assert body.startswith("---")
+        assert "name: web-research" in body
+        assert "Fetch web pages and turn them into accurate, citable notes." in body
+        assert "# Web Research Assistant" in body
+
+    def test_seeded_instructions_name_no_retired_v1_tools(self):
+        """The v1 disclosure meta-tools were deleted in Skills v2 PR-1/PR-2.
+
+        Seed prose naming them would tell the model to call tools that no
+        longer exist — the exact drift that stranded dev's row.
+        """
+        from seed_bootstrap_data import EXAMPLE_SKILL_INSTRUCTIONS
+
+        assert "skill_executor" not in EXAMPLE_SKILL_INSTRUCTIONS
+        assert "skill_dispatcher" not in EXAMPLE_SKILL_INSTRUCTIONS
