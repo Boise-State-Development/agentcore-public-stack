@@ -477,10 +477,9 @@ class ExternalMCPIntegration:
         ``collect_tool_name_filters`` folds every scoped id for one server into
         a single client per agent build, so the base uniquely identifies it.
 
-        Without this, a skill that bound a *subset* of an external MCP server
-        resolved to no client at fold time → the skill folded zero tools and
-        the model reported the server "not connected" (the OAuth consent gate
-        never fired because no FoldedMCPTool existed to trigger it).
+        Without this, a *subset*-scoped selection of an external MCP server
+        resolved to no client → the model reported the server "not connected"
+        and the OAuth consent gate never fired.
         """
         base = base_tool_id(tool_id)
         # Exact keys win — a whole-server binding has no "|allow:" suffix.

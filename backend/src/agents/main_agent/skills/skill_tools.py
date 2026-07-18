@@ -32,9 +32,7 @@ from strands import tool
 logger = logging.getLogger(__name__)
 
 # Agent-facing name of the executor meta-tool (both the module-level tool and
-# the per-registry pairs from make_skill_tools use this function name). The
-# OAuth consent gate matches tool_use dicts against it to see through the
-# fold (see skills/mcp_binding.make_folded_tool_provider_lookup).
+# the per-registry pairs from make_skill_tools use this function name).
 SKILL_EXECUTOR_TOOL_NAME = "skill_executor"
 
 # Module-level registry reference, set by set_dispatcher_registry(). Used only

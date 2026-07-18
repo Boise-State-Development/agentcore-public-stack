@@ -5,16 +5,16 @@ Replaces individual skill tools with skill_dispatcher + skill_executor,
 injecting a lightweight skill catalog into the system prompt instead of
 loading all tool schemas upfront.
 
+Skills are pure knowledge bundles (instructions + reference material) — they
+do not bind or grant tools (Skills v2). The tool universe for a turn comes
+solely from the Agent's bindings + the user's RBAC-gated enabled_tools.
+
 Two skill sources:
 
-- **DB / admin-managed** (PR-6): when ``accessible_skill_ids`` is provided
-  (the caller resolved them from the user's RBAC roles), the registry loads
-  those ACTIVE skills from the catalog repository. A granted skill's bound
-  catalog tools are added to the agent's tool universe so they materialize
-  (skill-as-grant). Local tools fold behind the two meta-tools by object
-  identity; gateway / external MCP bound tools fold via the MCP client (their
-  schemas are dropped from the model tool list and they execute through
-  ``call_tool_sync`` — see ``skills/mcp_binding.py``, PR-6b).
+- **DB / admin-managed**: when ``accessible_skill_ids`` is provided (the
+  caller resolved them from the user's RBAC roles), the registry loads those
+  ACTIVE skills from the catalog repository and surfaces their instructions
+  through the meta-tools. No tools are bound.
 - **File / dev** (legacy): when ``accessible_skill_ids`` is None, the registry
   scans ``definitions/*/SKILL.md`` and binds local ``@skill``-decorated tools
   by their ``_skill_name`` stamp, exactly as before — unchanged behavior.
@@ -79,7 +79,7 @@ class SkillAgent(ChatAgent):
 
     Overrides _create_agent() to:
     1. Discover skills (DB-backed when RBAC ids are supplied, else file scan)
-    2. Bind tools to skills (by catalog id for DB skills, by _skill_name for file)
+    2. Bind local @skill tools (file/dev path only; DB skills bind none)
     3. Replace skill-bound tools with skill_dispatcher + skill_executor
     4. Inject the skill catalog into the system prompt
 
@@ -117,25 +117,7 @@ class SkillAgent(ChatAgent):
         else:
             self._registry.discover_skills()
 
-        # Skill-as-grant: a granted skill's bound catalog tools become available
-        # whenever this agent runs, independent of the user's per-tool
-        # enabled_tools. Fold them into the enabled set so they materialize.
-        original_enabled_tools = kwargs.get("enabled_tools")
-        bound_ids = self._registry.all_bound_tool_ids()
-        if bound_ids:
-            existing = list(original_enabled_tools or [])
-            kwargs["enabled_tools"] = list(dict.fromkeys(existing + bound_ids))
-
         super().__init__(**kwargs)
-
-        # Resume hashes the construction snapshot's enabled_tools into the
-        # cache key. The augmentation above is recomputed deterministically by
-        # this same constructor, so the snapshot must store the ORIGINAL
-        # (route-supplied) enabled_tools — not the augmented set — or a resume
-        # would land on a different cache slot and orphan the paused agent
-        # (same hazard the system_prompt snapshot avoids). The cache key on the
-        # live turn already uses the original enabled_tools + skills_hash.
-        self._construction_snapshot["enabled_tools"] = original_enabled_tools
 
     def _create_agent(self) -> None:
         """Create the Strands Agent with skill disclosure instead of raw tool schemas."""
@@ -158,11 +140,10 @@ class SkillAgent(ChatAgent):
                 )
                 return
 
-            # Step 3: Bind tools to skills.
-            if self._db_mode:
-                self._bind_catalog_tools()  # local tools (by catalog id)
-                self._bind_mcp_tools()      # gateway / external MCP tools (folded)
-            else:
+            # Step 3: Bind tools to skills. Only the file/dev path binds tools
+            # (local @skill-decorated callables); DB-backed skills are pure
+            # instruction bundles and carry no bound tools.
+            if not self._db_mode:
                 self._registry.bind_tools(all_tools)
 
             # Step 4: Fold skill-bound tools out of the top-level list (matched
@@ -208,147 +189,6 @@ class SkillAgent(ChatAgent):
         except Exception as e:
             logger.error(f"Error creating skill agent: {e}")
             raise
-
-    def _bind_catalog_tools(self) -> None:
-        """Resolve each DB skill's bound LOCAL catalog tool ids to live objects.
-
-        Local tools resolve via the agent's tool registry (the same instances
-        the tool filter materialized), so they fold cleanly behind the meta-
-        tools by object identity. Gateway / external MCP bound ids don't resolve
-        to individual objects here (they're live client objects) and are handled
-        by :meth:`_bind_mcp_tools`.
-        """
-        catalog_map: dict = {}
-        for tid in self._registry.all_bound_tool_ids():
-            if self.tool_registry.has_tool(tid):
-                catalog_map[tid] = self.tool_registry.get_tool(tid)
-
-        self._registry.bind_catalog_tools(catalog_map)
-
-    def _bind_mcp_tools(self) -> None:
-        """Fold a granted skill's gateway / external MCP bound tools (PR-6b).
-
-        These materialize as *client objects* (one ``MCPClient`` per server,
-        exposing many tools), not individual callables — which is why PR-6a left
-        them visible. Here each bound non-local id is classified (gateway vs
-        external), resolved to its concrete MCP tool(s) + owning client, wrapped
-        as a ``FoldedMCPTool`` bound into the registry (so the meta-tools can
-        show its schema and run it), and its agent-facing name is folded off the
-        client's model tool list. The client object stays in the agent's tool
-        list, so Strands keeps its session alive for ``call_tool_sync``.
-        """
-        non_local = [
-            tid
-            for tid in self._registry.all_bound_tool_ids()
-            if not self.tool_registry.has_tool(tid)
-        ]
-        if not non_local:
-            return
-
-        # Classify the non-local bound ids with the same filter that
-        # materialized the clients (its external set was populated from the
-        # augmented enabled_tools in __init__).
-        classified = self.tool_filter.filter_tools_extended(non_local)
-        gateway_ids = classified.gateway_tool_ids
-        external_ids = classified.external_mcp_tool_ids
-        if not gateway_ids and not external_ids:
-            return
-
-        from agents.main_agent.integrations.external_mcp_client import (
-            get_external_mcp_integration,
-        )
-        from agents.main_agent.integrations.mcp_tool_folding import (
-            reset_folded_tool_names,
-            set_folded_tool_names,
-        )
-        from agents.main_agent.skills.mcp_binding import resolve_mcp_bindings
-
-        external_integration = get_external_mcp_integration()
-
-        # Clients are process-global and reused across agent builds; a prior
-        # build's fold persists on them (set_folded_tool_names only adds).
-        # resolve_mcp_bindings enumerates an external server through that same
-        # fold-filtered list_tools_sync, so a stale fold makes this re-bind see
-        # zero tools (the bound tool "works once, then disappears"). Reset each
-        # client this build will resolve so enumeration sees the full server;
-        # the fold is recomputed and re-applied from the bindings just below.
-        gateway_client = self.gateway_integration.client
-        if gateway_client is not None:
-            reset_folded_tool_names(gateway_client)
-        seen_clients: set = set()
-        for tid in external_ids:
-            client = external_integration.get_client(tid, self.user_id)
-            if client is not None and id(client) not in seen_clients:
-                seen_clients.add(id(client))
-                reset_folded_tool_names(client)
-
-        bindings = resolve_mcp_bindings(
-            gateway_ids=gateway_ids,
-            external_ids=external_ids,
-            gateway_client=gateway_client,
-            expand_gateway=self._expand_gateway_tool_ids,
-            external_client_lookup=lambda tid: external_integration.get_client(
-                tid, self.user_id
-            ),
-        )
-
-        if bindings.catalog_map:
-            self._registry.bind_catalog_tools(bindings.catalog_map)
-        for client, names in bindings.fold_by_client.items():
-            set_folded_tool_names(client, names)
-
-        folded_count = sum(len(v) for v in bindings.catalog_map.values())
-        logger.info(
-            "SkillAgent folded %d gateway/external MCP tool(s) behind the meta-"
-            "tools (%d unresolved)",
-            folded_count,
-            len(bindings.unresolved),
-        )
-
-    def _build_tool_use_provider_lookup(self):
-        """See through the skill fold for the OAuth consent gate.
-
-        Skill-bound external MCP tools execute via ``skill_executor``, so the
-        consent hook's ``provider_lookup`` (keyed on ``MCPAgentTool``) can't
-        map them. This resolver reads the executor's tool_use input and maps
-        the folded tool's owning client back to its OAuth provider, so an
-        unauthorized call pauses the turn with ``oauth_required`` exactly
-        like a directly-enabled tool would.
-        """
-        from agents.main_agent.integrations.external_mcp_client import (
-            get_external_mcp_integration,
-        )
-        from agents.main_agent.skills.mcp_binding import (
-            make_folded_tool_provider_lookup,
-        )
-
-        integration = get_external_mcp_integration()
-        return make_folded_tool_provider_lookup(
-            self._registry, integration.provider_for_client
-        )
-
-    def _build_tool_use_approval_lookup(self):
-        """See through the skill fold for the per-tool approval gate.
-
-        Skill-bound external MCP tools execute via ``skill_executor``, so the
-        approval hook's ``approval_names_lookup`` (keyed on ``MCPAgentTool``)
-        can't gate them — an admin's ``needs_approval`` flag was silently
-        bypassed in skills mode. This resolver reads the executor's tool_use
-        input and checks the folded tool against its owning client's flagged
-        set, so the user sees the same approval prompt (describing the inner
-        tool, not the executor) as a directly-enabled tool would raise.
-        """
-        from agents.main_agent.integrations.external_mcp_client import (
-            get_external_mcp_integration,
-        )
-        from agents.main_agent.skills.mcp_binding import (
-            make_folded_tool_approval_lookup,
-        )
-
-        integration = get_external_mcp_integration()
-        return make_folded_tool_approval_lookup(
-            self._registry, integration.approval_names_for_client
-        )
 
     @property
     def registry(self) -> Optional[SkillRegistry]:
