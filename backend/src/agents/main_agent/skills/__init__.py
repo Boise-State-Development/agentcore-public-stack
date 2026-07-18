@@ -1,30 +1,28 @@
+"""Skills runtime (Skills v2).
+
+Skills are pure knowledge bundles (agentskills.io format) disclosed at runtime
+by the vended Strands ``AgentSkills`` plugin — metadata (name + description) is
+injected into the system prompt, and full instructions load on demand via the
+plugin's ``skills`` activation tool. This package holds the adapter that maps
+our DynamoDB ``SkillDefinition`` rows into programmatic ``strands.Skill``
+instances and builds the plugin.
+
+The homegrown progressive-disclosure engine (``SkillRegistry`` +
+``skill_dispatcher``/``skill_executor`` meta-tools + ``SkillAgent``) and the
+tool-binding machinery it served are removed — the plugin implements the same
+standard natively and skills no longer bind tools.
 """
-Progressive Skill Disclosure System
 
-Provides a three-level disclosure architecture for managing tool complexity:
-- Level 1 (Catalog): Skill names + descriptions injected into system prompt
-- Level 2 (Instructions): Full SKILL.md loaded on-demand via skill_dispatcher
-- Level 3 (Execution): Tool invocation via skill_executor
-
-This approach is dramatically more token-efficient than loading all tool schemas
-upfront, especially as the number of tools grows.
-"""
-
-from .decorators import skill, register_skill
-from .skill_registry import SkillRegistry
-from .skill_tools import (
-    make_skill_tools,
-    skill_dispatcher,
-    skill_executor,
-    set_dispatcher_registry,
+from .strands_mapping import (
+    build_skills_plugin,
+    fetch_active_skill_records,
+    record_to_strands_skill,
+    slugify_skill_name,
 )
 
 __all__ = [
-    "skill",
-    "register_skill",
-    "SkillRegistry",
-    "make_skill_tools",
-    "skill_dispatcher",
-    "skill_executor",
-    "set_dispatcher_registry",
+    "build_skills_plugin",
+    "fetch_active_skill_records",
+    "record_to_strands_skill",
+    "slugify_skill_name",
 ]

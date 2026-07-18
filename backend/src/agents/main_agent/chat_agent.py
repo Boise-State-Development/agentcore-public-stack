@@ -10,6 +10,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.core import AgentFactory
+from agents.main_agent.skills.strands_mapping import build_skills_plugin
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +23,43 @@ class ChatAgent(BaseAgent):
     - Strands Agent creation with filtered tools and hooks
     - Text message streaming via StreamCoordinator
     - Multimodal prompt building (text + files)
+    - Skills disclosure (Skills v2): when ``accessible_skill_ids`` is provided,
+      the vended Strands ``AgentSkills`` plugin injects an ``<available_skills>``
+      catalog and a ``skills`` activation tool. Skills are pure knowledge
+      bundles — they bind no tools (the tool universe comes solely from the
+      Agent's bindings + RBAC-gated ``enabled_tools``).
     """
 
+    def __init__(
+        self,
+        accessible_skill_ids: Optional[List[str]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Args:
+            accessible_skill_ids: Effective skill ids for this turn (already
+                RBAC-resolved and narrowed by the request's selection). When
+                non-empty an ``AgentSkills`` plugin is added; ``None``/empty
+                keeps plain chat behavior. Stored BEFORE ``super().__init__``
+                because ``BaseAgent.__init__`` calls ``_create_agent`` at its tail.
+            **kwargs: All BaseAgent constructor args (session_id, user_id, ...).
+        """
+        self._accessible_skill_ids = accessible_skill_ids
+        super().__init__(**kwargs)
+
     def _create_agent(self) -> None:
-        """Create Strands Agent with filtered tools and session management."""
+        """Create Strands Agent with filtered tools, hooks, and skills plugin."""
         try:
             tools = self._build_filtered_tools()
             hooks = self._create_hooks()
+
+            plugin = build_skills_plugin(self._accessible_skill_ids)
+            plugins = [plugin] if plugin else None
+            if plugin:
+                logger.info(
+                    "ChatAgent: skills disclosure enabled (%d accessible skill ids)",
+                    len(self._accessible_skill_ids or []),
+                )
 
             self.agent = AgentFactory.create_agent(
                 model_config=self.model_config,
@@ -36,6 +67,7 @@ class ChatAgent(BaseAgent):
                 tools=tools,
                 session_manager=self.session_manager,
                 hooks=hooks,
+                plugins=plugins,
             )
 
         except Exception as e:

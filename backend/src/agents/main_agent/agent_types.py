@@ -56,9 +56,13 @@ def create_agent(agent_type: str = "chat", **kwargs) -> BaseAgent:
 # Register built-in agent types
 def _register_defaults():
     from agents.main_agent.chat_agent import ChatAgent
-    from agents.main_agent.skill_agent import SkillAgent
     register_agent_type("chat", ChatAgent)
-    register_agent_type("skill", SkillAgent)
+    # Skills v2: the SkillAgent subclass is retired — skills disclosure is the
+    # vended Strands AgentSkills plugin, wired inside ChatAgent when the turn
+    # carries accessible_skill_ids. "skill" stays a registered alias so the
+    # existing agent_type/skills_hash cache-key + paused-turn resume path
+    # (which the spec keeps) resolve to a ChatAgent-with-plugin unchanged.
+    register_agent_type("skill", ChatAgent)
 
     # Voice agent is optional (requires strands-agents[bidi])
     try:
