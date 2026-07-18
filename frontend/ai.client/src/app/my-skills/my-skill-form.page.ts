@@ -62,6 +62,14 @@ export class MySkillFormPage {
   protected readonly uploading = signal(false);
   protected readonly viewing = signal<{ filename: string; content: string } | null>(null);
 
+  /**
+   * Frontmatter carried through from an import (or a loaded skill) that has no
+   * form control of its own. Preserved verbatim on save so a bundle
+   * round-trips (D2); `allowedTools` is advisory display metadata (D4).
+   */
+  protected readonly allowedTools = signal<string[]>([]);
+  private readonly skillMetadata = signal<Record<string, unknown>>({});
+
   protected readonly form = this.fb.nonNullable.group({
     displayName: ['', [Validators.required, Validators.maxLength(200)]],
     description: ['', [Validators.required, Validators.maxLength(2000)]],
@@ -97,6 +105,8 @@ export class MySkillFormPage {
         instructions: skill.instructions,
       });
       this.resources.set(skill.resources);
+      this.allowedTools.set(skill.allowedTools ?? []);
+      this.skillMetadata.set(skill.skillMetadata ?? {});
     } catch {
       this.error.set("We couldn't load that skill. It may have been deleted.");
     }
@@ -119,6 +129,9 @@ export class MySkillFormPage {
       description: parsed.description || this.form.controls.description.value,
       instructions: parsed.instructions,
     });
+    // Everything the form has no control for still round-trips (D2/D4).
+    this.allowedTools.set(parsed.allowedTools);
+    this.skillMetadata.set(parsed.metadata);
     this.importNotice.set(
       parsed.name || parsed.description
         ? `Prefilled from ${file.name}. Review the name and description before saving.`
@@ -237,7 +250,11 @@ export class MySkillFormPage {
 
     this.saving.set(true);
     this.error.set(null);
-    const value = this.form.getRawValue();
+    const value = {
+      ...this.form.getRawValue(),
+      allowedTools: this.allowedTools(),
+      skillMetadata: this.skillMetadata(),
+    };
 
     try {
       const id = this.skillId();

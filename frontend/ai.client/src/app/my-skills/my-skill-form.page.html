@@ -106,6 +106,26 @@
         </p>
       </div>
 
+      <!-- Advisory allowed-tools (D4: displayed, never enforced) -->
+      @if (allowedTools().length > 0) {
+        <div class="rounded-2xl border border-gray-200 p-4 dark:border-gray-700">
+          <h2 class="text-sm/6 font-medium text-gray-900 dark:text-white">Tools this skill mentions</h2>
+          <ul role="list" class="mt-2 flex flex-wrap gap-2">
+            @for (tool of allowedTools(); track tool) {
+              <li
+                class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-300"
+              >
+                {{ tool }}
+              </li>
+            }
+          </ul>
+          <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
+            Carried over from the imported bundle for reference. Skills never grant tools — the
+            agent you bind this to decides which tools are available.
+          </p>
+        </div>
+      }
+
       <!-- Supporting files -->
       <fieldset class="rounded-2xl border border-gray-200 p-4 dark:border-gray-700">
         <legend class="px-1 text-sm/6 font-medium text-gray-900 dark:text-white">
@@ -192,8 +212,8 @@
               <li class="flex items-center justify-between gap-3 py-2">
                 <span class="min-w-0 text-sm/6 text-gray-900 dark:text-white">
                   <span class="truncate">{{ pending.filename }}</span>
-                  <span class="ml-2 text-xs text-gray-500 capitalize dark:text-gray-500">
-                    {{ pending.kind }} · uploads when you save
+                  <span class="ml-2 text-xs text-gray-500 dark:text-gray-500">
+                    <span class="capitalize">{{ pending.kind }}</span> · uploads when you save
                   </span>
                 </span>
                 <button
