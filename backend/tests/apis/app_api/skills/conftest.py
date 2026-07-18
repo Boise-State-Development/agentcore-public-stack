@@ -110,13 +110,11 @@ def skill_service(app_roles_table, skill_resource_store):
     from apis.shared.rbac.repository import AppRoleRepository
     from apis.shared.rbac.service import AppRoleService
     from apis.shared.skills.repository import SkillCatalogRepository
-    from apis.shared.tools.repository import ToolCatalogRepository
 
     cache = AppRoleCache()
     role_repo = AppRoleRepository(table_name=TABLE)
     return SkillCatalogService(
         repository=SkillCatalogRepository(table_name=TABLE),
-        tool_repository=ToolCatalogRepository(table_name=TABLE),
         app_role_service=AppRoleService(repository=role_repo, cache=cache),
         app_role_admin_service=AppRoleAdminService(repository=role_repo, cache=cache),
         resource_store=skill_resource_store,

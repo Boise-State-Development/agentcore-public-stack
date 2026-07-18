@@ -781,11 +781,11 @@ def seed_default_tools(
 # =============================================================================
 #
 # Seeds one demonstrable admin-managed Skill so the feature can be exercised
-# end-to-end: SKILL.md-style instructions + a bound LOCAL catalog tool
-# (fetch_url_content, seeded above) + a supporting reference file (uploaded to
-# the skill-resources S3 bucket and referenced by the row's `resources`
-# manifest). Mirrors the real `pdf`/`docx` bundle shape, where the instructions
-# body names a reference file the agent reads on demand via skill_dispatcher.
+# end-to-end: SKILL.md-style instructions + a supporting reference file
+# (uploaded to the skill-resources S3 bucket and referenced by the row's
+# `resources` manifest). Mirrors the real `pdf`/`docx` bundle shape, where the
+# instructions body names a reference file the agent reads on demand. Skills
+# are pure knowledge bundles (Skills v2) — they bind no tools.
 #
 # The skill is granted to the `default` role so any user can reach it once an
 # assistant opts into agent_type="skill". It is otherwise inert: the default
@@ -825,11 +825,10 @@ EXAMPLE_SKILL_INSTRUCTIONS = (
     "accurate, citable notes.\n"
     "\n"
     "## Workflow\n"
-    "1. Use the bound `fetch_url_content` tool (via `skill_executor`) to pull\n"
-    "   the page text for each URL the user provides.\n"
+    "1. Use a web-fetching tool (e.g. `fetch_url_content`, if the agent has it\n"
+    "   enabled) to pull the page text for each URL the user provides.\n"
     "2. Extract the relevant facts. For handling tables, paywalls, and noisy\n"
-    "   pages, read `extraction_tips.md` — call `skill_dispatcher` again with\n"
-    "   `reference=\"extraction_tips.md\"`.\n"
+    "   pages, read the `extraction_tips.md` reference file.\n"
     "3. Summarize with inline source attributions (page title + URL).\n"
     "\n"
     "Never invent details that are not present in the fetched content.\n"
@@ -951,7 +950,7 @@ def seed_example_skills(
     table_name: str,
     region: str,
 ) -> SeedResult:
-    """Seed one example bundled skill (instructions + bound tool + reference file)."""
+    """Seed one example knowledge skill (instructions + reference file)."""
     result = SeedResult(category="skill")
     session = boto3.Session(region_name=region)
     dynamodb = session.resource("dynamodb")
@@ -1002,7 +1001,6 @@ def seed_example_skills(
         "displayName": "Web Research Assistant",
         "description": "Fetch web pages and turn them into accurate, citable notes.",
         "instructions": EXAMPLE_SKILL_INSTRUCTIONS,
-        "boundToolIds": ["fetch_url_content"],
         "compose": [],
         "resources": resources,
         "status": "active",

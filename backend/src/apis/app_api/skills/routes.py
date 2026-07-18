@@ -33,7 +33,6 @@ class UserSkillResponse(BaseModel):
     display_name: str = Field(..., alias="displayName")
     description: str
     category: Optional[str] = None
-    bound_tool_count: int = Field(..., alias="boundToolCount")
     user_enabled: Optional[bool] = Field(None, alias="userEnabled")
     is_enabled: bool = Field(..., alias="isEnabled")
 
@@ -81,7 +80,6 @@ async def get_user_skills(
             display_name=record.display_name,
             description=record.description,
             category=record.category,
-            bound_tool_count=len(record.bound_tool_ids),
             user_enabled=preferences.get(record.skill_id),
             is_enabled=preferences.get(record.skill_id, True),
         )

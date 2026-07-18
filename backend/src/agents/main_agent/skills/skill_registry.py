@@ -103,7 +103,6 @@ class SkillRegistry:
                     "type": meta.get("type", "tool"),
                     "compose": meta.get("compose", []),
                     "tools": [],
-                    "bound_tool_ids": [],
                     "resources": [],
                     # File mode: instructions live in the SKILL.md body, read
                     # on demand from md_path (kept None-instructions so
@@ -124,15 +123,15 @@ class SkillRegistry:
     def load_records(self, records: List[Any]) -> int:
         """Populate the registry from DynamoDB-backed skill records.
 
-        The admin-managed (DB) source of skills (PR-6). Each record is a
+        The admin-managed (DB) source of skills. Each record is a
         ``SkillDefinition``-shaped object (duck-typed via ``getattr`` so tests
         can pass simple stand-ins): ``skill_id``, ``description``,
-        ``instructions``, ``compose``, ``bound_tool_ids``, ``resources``.
+        ``instructions``, ``compose``, ``resources``.
 
         Unlike ``discover_skills`` (file scan), instructions are carried inline
         on the record (no file), and the skill keys on ``skill_id`` — the
-        stable id the model references in the catalog. Returns the number of
-        records loaded.
+        stable id the model references in the catalog. DB skills carry no bound
+        tools (Skills v2). Returns the number of records loaded.
         """
         count = 0
         for rec in records:
@@ -144,8 +143,7 @@ class SkillRegistry:
                 "type": "tool",
                 "compose": list(getattr(rec, "compose", []) or []),
                 "tools": [],
-                "bound_tool_ids": list(getattr(rec, "bound_tool_ids", []) or []),
-                # Reference-file manifest — served on demand in PR-6b.
+                # Reference-file manifest — served on demand.
                 "resources": list(getattr(rec, "resources", []) or []),
                 # DB mode: instructions are inline (no md_path file).
                 "instructions": getattr(rec, "instructions", "") or "",
@@ -157,46 +155,6 @@ class SkillRegistry:
 
         logger.info(f"Loaded {count} skill records from repository")
         return count
-
-    def all_bound_tool_ids(self) -> List[str]:
-        """Return the de-duplicated union of every skill's bound catalog
-        tool ids (admin/DB skills). Used to augment the agent's tool universe
-        so a granted skill's bound tools materialize (skill-as-grant)."""
-        seen: Dict[str, None] = {}
-        for info in self._skills.values():
-            for tid in info.get("bound_tool_ids", []) or []:
-                seen.setdefault(tid, None)
-        return list(seen.keys())
-
-    def bind_catalog_tools(self, catalog_map: Dict[str, Any]) -> int:
-        """Bind tools to skills by catalog ``tool_id`` (admin/DB skills).
-
-        ``catalog_map`` maps a catalog ``tool_id`` to the live tool object the
-        agent materialized for it — or a *list* of objects, since one catalog
-        id can expand to several runtime tools (a gateway target or external
-        MCP server with many tools; see ``mcp_binding.resolve_mcp_bindings``).
-        For each skill, every ``bound_tool_id`` that resolves in the map is
-        attached. This is the cross-source-aware analog of ``bind_tools`` (which
-        matches the local-only ``_skill_name`` stamp): local tools and folded
-        gateway/external MCP tools both resolve here in PR-6b.
-
-        Returns the number of (skill, tool) bindings made.
-        """
-        bound = 0
-        for info in self._skills.values():
-            existing_ids = {id(t) for t in info["tools"]}
-            for tid in info.get("bound_tool_ids", []) or []:
-                value = catalog_map.get(tid)
-                if value is None:
-                    continue
-                tool_objs = value if isinstance(value, list) else [value]
-                for tool_obj in tool_objs:
-                    if id(tool_obj) not in existing_ids:
-                        info["tools"].append(tool_obj)
-                        existing_ids.add(id(tool_obj))
-                        bound += 1
-        logger.info(f"Bound {bound} catalog tools across {len(self._skills)} skills")
-        return bound
 
     def bind_tools(self, tools: List[Any]) -> int:
         """

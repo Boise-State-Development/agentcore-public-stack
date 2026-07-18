@@ -147,12 +147,11 @@ class _Rec:
     """Minimal SkillDefinition stand-in (duck-typed by load_records)."""
 
     def __init__(self, skill_id, description="", instructions="", compose=None,
-                 bound_tool_ids=None, resources=None, status="active"):
+                 resources=None, status="active"):
         self.skill_id = skill_id
         self.description = description
         self.instructions = instructions
         self.compose = compose or []
-        self.bound_tool_ids = bound_tool_ids or []
         self.resources = resources or []
         self.status = status
 
@@ -163,8 +162,7 @@ class TestDbSource:
     def test_load_records_populates_registry(self):
         reg = SkillRegistry()
         n = reg.load_records([
-            _Rec("pdf_workflows", description="PDFs", instructions="# PDF body",
-                 bound_tool_ids=["fill_pdf_form"]),
+            _Rec("pdf_workflows", description="PDFs", instructions="# PDF body"),
             _Rec("doc_basics", description="Docs"),
         ])
         assert n == 2
@@ -180,75 +178,11 @@ class TestDbSource:
         # DB mode: instructions come from the record, not a file.
         assert reg.load_instructions("pdf_workflows") == "# Inline body"
 
-    def test_all_bound_tool_ids_unions_and_dedupes(self):
+    def test_db_skills_carry_no_tools(self):
+        # Skills v2: DB-backed skills are pure instruction bundles.
         reg = SkillRegistry()
-        reg.load_records([
-            _Rec("a", bound_tool_ids=["t1", "t2"]),
-            _Rec("b", bound_tool_ids=["t2", "t3"]),
-        ])
-        assert sorted(reg.all_bound_tool_ids()) == ["t1", "t2", "t3"]
-
-    def test_bind_catalog_tools_binds_matching_ids_only(self):
-        reg = SkillRegistry()
-        reg.load_records([_Rec("a", bound_tool_ids=["local_tool", "gateway_x"])])
-
-        def local_tool():
-            return "ok"
-        local_tool.tool_name = "local_tool"
-
-        # Only the resolvable (local) id is in the map; the gateway id is not.
-        reg.bind_catalog_tools({"local_tool": local_tool})
-        tools = reg.get_tools("a")
-        assert tools == [local_tool]
-        # Schema reflects the bound local tool.
-        assert reg.get_tool_schemas("a")[0]["name"] == "local_tool"
-
-    def test_bind_catalog_tools_is_idempotent(self):
-        reg = SkillRegistry()
-        reg.load_records([_Rec("a", bound_tool_ids=["t"])])
-
-        def t():
-            return 1
-        t.tool_name = "t"
-
-        reg.bind_catalog_tools({"t": t})
-        reg.bind_catalog_tools({"t": t})
-        assert reg.get_tools("a") == [t]  # not double-bound
-
-    def test_db_composite_aggregates_child_tools(self):
-        reg = SkillRegistry()
-        reg.load_records([
-            _Rec("child", bound_tool_ids=["t"]),
-            _Rec("parent", compose=["child"]),
-        ])
-
-        def t():
-            return 1
-        t.tool_name = "t"
-
-        reg.bind_catalog_tools({"t": t})
-        assert reg.get_tools("parent") == [t]
-
-    def test_bind_catalog_tools_accepts_list_value(self):
-        # One catalog id can expand to several runtime tools (gateway target /
-        # external server with many) — bind_catalog_tools accepts a list.
-        reg = SkillRegistry()
-        reg.load_records([_Rec("a", bound_tool_ids=["server"])])
-
-        t1 = SimpleNamespace(tool_name="search")
-        t2 = SimpleNamespace(tool_name="fetch")
-        reg.bind_catalog_tools({"server": [t1, t2]})
-
-        tools = reg.get_tools("a")
-        assert tools == [t1, t2]
-
-    def test_bind_catalog_tools_list_is_idempotent(self):
-        reg = SkillRegistry()
-        reg.load_records([_Rec("a", bound_tool_ids=["server"])])
-        t1 = SimpleNamespace(tool_name="search")
-        reg.bind_catalog_tools({"server": [t1]})
-        reg.bind_catalog_tools({"server": [t1]})
-        assert reg.get_tools("a") == [t1]
+        reg.load_records([_Rec("a", instructions="# body")])
+        assert reg.get_tools("a") == []
 
 
 def _ref(filename, s3_key="k", content_type="text/markdown", size=10):

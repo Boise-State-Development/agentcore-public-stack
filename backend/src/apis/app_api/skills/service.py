@@ -5,9 +5,8 @@ Service for skill catalog operations with AppRole integration. Mirrors
 ``ToolCatalogService``: CRUD over skill metadata, bidirectional role sync
 (updating ``granted_skills`` on AppRoles), and ``allowedAppRoles`` hydration.
 
-Skill-specific: ``create_skill``/``update_skill`` validate that every
-``bound_tool_id`` exists in the tool catalog and is ACTIVE (spec §6), since a
-skill folds those catalog tools behind the meta-tools at runtime.
+Skills are pure knowledge bundles (Skills v2): they carry no bound tools, so
+there is no tool-catalog validation here.
 """
 
 import logging
@@ -34,16 +33,6 @@ from apis.shared.skills.resource_store import (
     compute_content_hash,
     get_skill_resource_store,
 )
-from apis.shared.tools.models import ToolStatus
-from apis.shared.tools.scoped_ids import (
-    base_tool_id,
-    base_tool_ids,
-    parse_scoped_tool_id,
-)
-from apis.shared.tools.repository import (
-    ToolCatalogRepository,
-    get_tool_catalog_repository,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -63,21 +52,18 @@ class SkillCatalogService:
     Service for skill catalog operations.
 
     Skill access is determined by AppRoles (granted_skills). This service
-    provides catalog CRUD, bound-tool validation against the tool catalog, and
-    bidirectional sync between skills and AppRoles.
+    provides catalog CRUD and bidirectional sync between skills and AppRoles.
     """
 
     def __init__(
         self,
         repository: Optional[SkillCatalogRepository] = None,
-        tool_repository: Optional[ToolCatalogRepository] = None,
         app_role_service: Optional[AppRoleService] = None,
         app_role_admin_service: Optional[AppRoleAdminService] = None,
         resource_store: Optional[SkillResourceStore] = None,
     ):
         """Initialize with dependencies."""
         self.repository = repository or get_skill_catalog_repository()
-        self.tool_repository = tool_repository or get_tool_catalog_repository()
         self.app_role_service = app_role_service or get_app_role_service()
         self.app_role_admin_service = (
             app_role_admin_service or get_app_role_admin_service()
@@ -116,76 +102,6 @@ class SkillCatalogService:
         """Get a specific skill by ID."""
         return await self.repository.get_skill(skill_id)
 
-    async def _validate_bound_tools(self, bound_tool_ids: List[str]) -> None:
-        """
-        Validate that every bound tool exists in the catalog and is ACTIVE.
-
-        A skill folds its bound catalog tools behind the meta-tools at runtime,
-        so binding an unknown or disabled tool would silently drop it. Reject
-        such bindings up front (spec §6).
-
-        A scoped id (``tool_id::mcp_tool_name``) binds a single tool of an MCP
-        server. Its base catalog tool must exist + be active, and — when the
-        server has a curated tool list — the named tool must be one it exposes.
-        Servers whose tools are discovered live have no curated list, so the
-        name can't be validated statically and is accepted.
-
-        Raises:
-            ValueError: If any bound tool is unknown, non-active, scoped onto a
-                tool the server doesn't expose, or scoped onto a non-MCP tool.
-        """
-        if not bound_tool_ids:
-            return
-
-        # Dedupe while preserving the admin's set for clear error messages.
-        requested = list(dict.fromkeys(bound_tool_ids))
-        base_ids = base_tool_ids(requested)
-        found = await self.tool_repository.batch_get_tools(base_ids)
-        by_id = {t.tool_id: t for t in found}
-
-        unknown = [tid for tid in requested if base_tool_id(tid) not in by_id]
-        disabled = [
-            tid
-            for tid in requested
-            if base_tool_id(tid) in by_id
-            and by_id[base_tool_id(tid)].status != ToolStatus.ACTIVE.value
-        ]
-
-        # Per-tool bindings: the named tool must belong to the server (when the
-        # server exposes a curated list) and the base must be an MCP server.
-        unexposed: List[str] = []
-        not_mcp: List[str] = []
-        for tid in requested:
-            base, tool_name = parse_scoped_tool_id(tid)
-            if tool_name is None or base not in by_id or tid in disabled:
-                continue
-            tool = by_id[base]
-            if tool.protocol not in ("mcp", "mcp_external"):
-                not_mcp.append(tid)
-                continue
-            names = tool.curated_tool_names()
-            if names is not None and tool_name not in names:
-                unexposed.append(tid)
-
-        problems = []
-        if unknown:
-            problems.append(f"unknown tool(s): {', '.join(sorted(unknown))}")
-        if disabled:
-            problems.append(f"non-active tool(s): {', '.join(sorted(disabled))}")
-        if not_mcp:
-            problems.append(
-                f"per-tool binding on non-MCP tool(s): {', '.join(sorted(not_mcp))}"
-            )
-        if unexposed:
-            problems.append(
-                f"tool(s) not exposed by their server: {', '.join(sorted(unexposed))}"
-            )
-        if problems:
-            raise ValueError(
-                "Cannot bind " + "; ".join(problems) + ". "
-                "Bound tools must exist in the catalog and be active."
-            )
-
     async def create_skill(
         self, skill: SkillDefinition, admin: User
     ) -> SkillDefinition:
@@ -200,10 +116,8 @@ class SkillCatalogService:
             Created SkillDefinition
 
         Raises:
-            ValueError: If a bound tool is unknown/disabled, or the skill exists
+            ValueError: If the skill already exists
         """
-        await self._validate_bound_tools(skill.bound_tool_ids)
-
         skill.created_by = admin.user_id
         skill.updated_by = admin.user_id
 
@@ -234,13 +148,7 @@ class SkillCatalogService:
 
         Returns:
             Updated SkillDefinition or None if not found
-
-        Raises:
-            ValueError: If the new bound tools are unknown/disabled
         """
-        if "bound_tool_ids" in updates and updates["bound_tool_ids"] is not None:
-            await self._validate_bound_tools(updates["bound_tool_ids"])
-
         updated = await self.repository.update_skill(
             skill_id, updates, admin_user_id=admin.user_id
         )

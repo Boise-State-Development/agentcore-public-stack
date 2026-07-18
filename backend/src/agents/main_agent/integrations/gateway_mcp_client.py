@@ -16,7 +16,6 @@ from agents.main_agent.integrations.mcp_apps import (
     ensure_ui_extension_session_patch,
     record_and_filter_ui_tools,
 )
-from agents.main_agent.integrations.mcp_tool_folding import drop_folded_tools
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +93,6 @@ class FilteredMCPClient(MCPClient):
         # `self` is the client hosting these tools — recorded so PR #3 can
         # issue `resources/read` against it.
         filtered_tools = record_and_filter_ui_tools(filtered_tools, client=self)
-
-        # Drop tools folded behind a skill's meta-tools (PR-6b). No-op unless a
-        # SkillAgent registered a fold set for this client. The tools stay
-        # executable via skill_executor → this client's call_tool_sync.
-        filtered_tools = drop_folded_tools(self, filtered_tools)
 
         return PaginatedList(filtered_tools, token=paginated_result.pagination_token)
 

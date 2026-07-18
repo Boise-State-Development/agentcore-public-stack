@@ -256,13 +256,13 @@ class TestSeedExampleSkills:
         assert result.created == 1
         assert result.failed == 0
 
-        # SKILL# record — instructions + bound LOCAL tool + active.
+        # SKILL# record — instructions (knowledge bundle) + active.
         item = dynamodb_table.get_item(
             Key={"PK": f"SKILL#{EXAMPLE_SKILL_ID}", "SK": "METADATA"}
         )["Item"]
         assert item["skillId"] == EXAMPLE_SKILL_ID
         assert item["status"] == "active"
-        assert item["boundToolIds"] == ["fetch_url_content"]
+        assert "boundToolIds" not in item
         assert item["instructions"]
         assert item["GSI4PK"] == "OWNER#system"
         # No bucket configured → seeded without reference bytes.

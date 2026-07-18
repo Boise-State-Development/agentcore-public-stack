@@ -6,8 +6,6 @@ import { SUPPRESS_ERROR_TOAST } from '../auth/error.interceptor';
 
 export interface UserSettings {
   defaultModelId: string | null;
-  /** User-level default for the skills/tools mode toggle. */
-  preferredAgentMode?: 'skill' | 'chat' | null;
 }
 
 @Injectable({

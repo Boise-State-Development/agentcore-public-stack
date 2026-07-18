@@ -89,13 +89,13 @@ class TestSkills:
         monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: True)
         monkeypatch.setattr(f"{MODULE}.resolve_accessible_skill_ids", AsyncMock(return_value=["pdf"]))
         skill = SimpleNamespace(skill_id="pdf", display_name="PDF", description="PDF tools",
-                                bound_tool_ids=["t1"], compose=[])
+                                compose=[])
         repo = MagicMock()
         repo.batch_get_skills = AsyncMock(return_value=[skill])
         monkeypatch.setattr(f"{MODULE}.get_skill_catalog_repository", lambda: repo)
         items = await bc.list_bindable("skill", _user())
         assert items[0].ref == "pdf"
-        assert items[0].meta["boundToolIds"] == ["t1"]
+        assert items[0].meta["compose"] == []
 
 
 # --------------------------------------------------------------------------- kb

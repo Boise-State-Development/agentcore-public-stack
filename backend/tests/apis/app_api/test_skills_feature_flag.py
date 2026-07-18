@@ -1,11 +1,11 @@
 """Tests for the SKILLS_ENABLED feature gate.
 
-The skills feature (admin catalog, user picker, skills mode) is deferred and
-disabled by default. These tests pin two things:
+The skills feature (admin catalog, user picker) is deferred and disabled by
+default. These tests pin two things:
 
 * the ``skills_enabled()`` helper's parsing + default-off behavior, and
-* that the admin skills + chat-mode-policy subrouters are unmounted while the
-  flag is off and mounted while it is on.
+* that the admin skills subrouter is unmounted while the flag is off and
+  mounted while it is on.
 
 The admin subrouter mounts conditionally at import time, so — like the
 fine-tuning gate in tests/routes/test_admin_lows.py — these reload the module
@@ -79,10 +79,8 @@ def admin_router_paths():
 def test_admin_skills_unmounted_when_disabled(admin_router_paths):
     paths = admin_router_paths(enabled=False)
     assert not any("/skills" in p for p in paths)
-    assert not any(p.endswith("/settings/chat") for p in paths)
 
 
 def test_admin_skills_mounted_when_enabled(admin_router_paths):
     paths = admin_router_paths(enabled=True)
     assert any("/skills" in p for p in paths)
-    assert any(p.endswith("/settings/chat") for p in paths)

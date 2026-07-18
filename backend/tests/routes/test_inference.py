@@ -258,18 +258,19 @@ class TestInvocationsInvalid:
 
 
 # ---------------------------------------------------------------------------
-# PR-7: default agent_type flips to "skill"
+# Skills v2: default agent_type is "chat" (skills are opt-in)
 # ---------------------------------------------------------------------------
 
 
-class TestDefaultAgentTypeFlip:
-    """When the client omits agent_type, the turn routes through SkillAgent."""
+class TestDefaultAgentType:
+    """Skills v2: an omitted agent_type defaults to plain chat (no skills);
+    skills only resolve when the client explicitly pins agent_type="skill"
+    (the per-turn picker / agent-binding path)."""
 
     @pytest.fixture(autouse=True)
     def _skills_enabled(self, monkeypatch):
-        # The skill-default behavior only applies when the feature is on; off
-        # by default, every turn is forced to chat (covered in
-        # tests/routes/test_agent_mode_policy.py).
+        # Explicit agent_type="skill" only routes through SkillAgent when the
+        # feature is on; off by default, every turn is forced to chat.
         monkeypatch.setenv("SKILLS_ENABLED", "true")
 
     def _mock_agent(self):
@@ -281,7 +282,7 @@ class TestDefaultAgentTypeFlip:
         agent.stream_async = fake_stream
         return agent
 
-    def test_omitted_agent_type_defaults_to_skill(self, authed_app, authed_client):
+    def test_omitted_agent_type_defaults_to_chat(self, authed_app, authed_client):
         get_agent_mock = MagicMock(return_value=self._mock_agent())
         resolve_mock = AsyncMock(return_value=["web_research"])
         with patch(
@@ -295,13 +296,41 @@ class TestDefaultAgentTypeFlip:
         ):
             resp = authed_client.post(
                 "/invocations",
-                json={"session_id": "sess-skill", "message": "hi"},
+                json={"session_id": "sess-default", "message": "hi"},
             )
             _ = resp.text  # force the streaming generator to run
 
         assert resp.status_code == 200
-        # Skills were resolved even though the client sent no agent_type,
-        # and get_agent was built as a skill agent with them threaded in.
+        # No agent_type sent → plain chat, no skill resolution.
+        resolve_mock.assert_not_awaited()
+        kwargs = get_agent_mock.call_args.kwargs
+        assert kwargs["agent_type"] == "chat"
+        assert kwargs["accessible_skill_ids"] is None
+
+    def test_explicit_skill_resolves_skills(self, authed_app, authed_client):
+        get_agent_mock = MagicMock(return_value=self._mock_agent())
+        resolve_mock = AsyncMock(return_value=["web_research"])
+        with patch(
+            "apis.inference_api.chat.routes.get_agent", get_agent_mock
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes._resolve_accessible_skill_ids",
+            resolve_mock,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={
+                    "session_id": "sess-skill",
+                    "message": "hi",
+                    "agent_type": "skill",
+                },
+            )
+            _ = resp.text
+
+        assert resp.status_code == 200
+        # Explicit skill → skills resolved and threaded into the agent build.
         resolve_mock.assert_awaited()
         kwargs = get_agent_mock.call_args.kwargs
         assert kwargs["agent_type"] == "skill"

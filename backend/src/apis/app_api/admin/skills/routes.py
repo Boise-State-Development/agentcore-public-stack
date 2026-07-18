@@ -75,9 +75,8 @@ async def admin_create_skill(
 ):
     """Create a new skill catalog entry.
 
-    Every bound_tool_id is validated against the tool catalog (must exist and
-    be ACTIVE). This only creates the catalog entry; use the role endpoints to
-    grant it to AppRoles.
+    This only creates the catalog entry; use the role endpoints to grant it to
+    AppRoles.
     """
     logger.info("Admin creating skill")
 
@@ -89,7 +88,6 @@ async def admin_create_skill(
             display_name=request.display_name,
             description=request.description,
             instructions=request.instructions,
-            bound_tool_ids=request.bound_tool_ids,
             compose=request.compose,
             status=request.status,
             category=request.category,
