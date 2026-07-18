@@ -107,6 +107,14 @@ jobs:
       # config.ts treats as the default (on). Set the `CDK_MEMORY_SPACES_ENABLED`
       # variable to "false" in an environment only to dark-stop the feature there.
       CDK_MEMORY_SPACES_ENABLED: ${{ vars.CDK_MEMORY_SPACES_ENABLED }}
+      # Skills v2 (knowledge bundles: admin catalog, My Skills authoring, and
+      # skill resolution on the invocation path). Default ON with a kill switch:
+      # unset resolves to empty string, which config.ts treats as the default
+      # (on). Set the `CDK_SKILLS_ENABLED` variable to "false" in an environment
+      # only to dark-stop the feature there. NOTE this gates feature *existence*;
+      # who sees the user-facing surfaces is the `skills` RBAC capability, which
+      # keeps them admin-only until GA (one role grant, no redeploy).
+      CDK_SKILLS_ENABLED: ${{ vars.CDK_SKILLS_ENABLED }}
       # Agent Designer /agents surface. Default OFF (opt-in) until the Phase-4
       # Designer UI ships — a headless API helps no forker. Set the
       # `CDK_AGENTS_API_ENABLED` variable to "true" in an environment (e.g. dev)
