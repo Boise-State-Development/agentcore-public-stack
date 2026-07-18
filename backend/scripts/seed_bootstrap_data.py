@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -835,12 +836,72 @@ EXAMPLE_SKILL_INSTRUCTIONS = (
 )
 
 
+def _skill_slug(skill_id: str) -> str:
+    """agentskills.io-valid skill name from a catalog id.
+
+    Mirrors ``apis/shared/skills/bundle.py::slugify_skill_name``. Duplicated
+    rather than imported because this script is standalone — ``seed.sh`` runs it
+    straight after infra deploy, without the app package on the path.
+    """
+    slug = skill_id.strip().lower().replace("_", "-")
+    slug = re.sub(r"[^a-z0-9-]+", "-", slug)
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    return slug[:64].strip("-") or "skill"
+
+
+def _write_skill_md(
+    skill_id: str, description: str, instructions: str, region: str
+) -> None:
+    """Write the skill's ``SKILL.md`` projection so the prefix is a real bundle.
+
+    Mirrors ``apis/shared/skills/bundle.py::generate_skill_md`` for the subset
+    the seed uses (no advisory tools, no frontmatter passthrough). Without this
+    the seeded prefix holds only resource bytes and is not a valid
+    agentskills.io bundle — it could not be handed to a managed Harness or
+    exported as-is. Best-effort, like the reference upload.
+    """
+    bucket = os.environ.get("S3_SKILL_RESOURCES_BUCKET_NAME", "")
+    if not bucket:
+        return
+
+    content = (
+        "---\n"
+        f"name: {_skill_slug(skill_id)}\n"
+        f"description: {description}\n"
+        "---\n"
+        "\n"
+        f"{instructions.strip()}\n"
+    )
+    key = f"skills/{skill_id}/SKILL.md"
+    try:
+        s3 = boto3.Session(region_name=region).client("s3")
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown",
+            ServerSideEncryption="AES256",
+        )
+    except ClientError as e:
+        logger.warning(
+            "Could not write SKILL.md for skill '%s' to %s — seeding without "
+            "the projection: %s",
+            skill_id,
+            bucket,
+            e,
+        )
+        return
+
+    logger.info("Wrote SKILL.md for skill '%s' to s3://%s/%s", skill_id, bucket, key)
+
+
 def _upload_skill_reference(
     skill_id: str, filename: str, content: bytes, content_type: str, region: str
 ) -> Optional[dict[str, Any]]:
     """Upload a reference file's bytes to the skill-resources bucket.
 
-    Content-addressed (``skills/{skill_id}/{sha256}``), mirroring
+    Stored in the standard agentskills.io bundle layout
+    (``skills/{skill_id}/references/{filename}``), mirroring
     ``apis/shared/skills/resource_store.py``. Best-effort: returns the manifest
     entry on success, or ``None`` (with a warning) when the bucket is not
     configured or the put fails, so the skill still seeds without the bytes.
@@ -856,7 +917,7 @@ def _upload_skill_reference(
         return None
 
     digest = hashlib.sha256(content).hexdigest()
-    key = f"skills/{skill_id}/{digest}"
+    key = f"skills/{skill_id}/references/{filename}"
     try:
         s3 = boto3.Session(region_name=region).client("s3")
         s3.put_object(
@@ -884,6 +945,7 @@ def _upload_skill_reference(
         "size": len(content),
         "contentType": content_type,
         "s3Key": key,
+        "kind": "reference",
     }
 
 
@@ -991,6 +1053,8 @@ def seed_example_skills(
 
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
+    description = "Fetch web pages and turn them into accurate, citable notes."
+
     item: dict[str, Any] = {
         "PK": pk,
         "SK": sk,
@@ -999,7 +1063,7 @@ def seed_example_skills(
         "GSI4SK": f"SKILL#{skill_id}",
         "skillId": skill_id,
         "displayName": "Web Research Assistant",
-        "description": "Fetch web pages and turn them into accurate, citable notes.",
+        "description": description,
         "instructions": EXAMPLE_SKILL_INSTRUCTIONS,
         "compose": [],
         "resources": resources,
@@ -1026,6 +1090,9 @@ def seed_example_skills(
         result.failed += 1
         result.details.append(msg)
         return result
+
+    # Projection last: the row is the source of truth, so it must exist first.
+    _write_skill_md(skill_id, description, EXAMPLE_SKILL_INSTRUCTIONS, region)
 
     _grant_skill_to_default_role(table, skill_id)
     return result
