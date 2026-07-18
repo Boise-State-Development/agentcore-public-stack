@@ -1215,3 +1215,80 @@ class TestWriteSideMigration:
         await SessionService().delete_session("u1", "s1")
         sessions, _ = await list_user_sessions("u1")
         assert sessions == []
+
+
+class TestListContractOnMarker:
+    """Issue #175 Phase 3 — list read contracts to GSI-only once the marker is set."""
+
+    @staticmethod
+    def _set_marker(table):
+        table.put_item(Item={"PK": "MIGRATION#session-sk", "SK": "STATE", "complete": True})
+
+    @pytest.mark.asyncio
+    async def test_dual_read_when_marker_absent(self, sessions_metadata_table, monkeypatch):
+        import apis.shared.sessions.metadata as md
+        monkeypatch.setattr(md, "_migration_complete_cache", False)
+        _put_legacy_row(sessions_metadata_table, "leg", "2026-01-02T00:00:00Z")
+        _put_migrated_row(sessions_metadata_table, "mig", "2026-01-01T00:00:00Z")
+
+        sessions, _ = await md.list_user_sessions("u1")
+        assert sorted(s.session_id for s in sessions) == ["leg", "mig"]  # union of both
+
+    @pytest.mark.asyncio
+    async def test_gsi_only_when_marker_set(self, sessions_metadata_table, monkeypatch):
+        import apis.shared.sessions.metadata as md
+        monkeypatch.setattr(md, "_migration_complete_cache", False)
+        _put_legacy_row(sessions_metadata_table, "leg", "2026-01-02T00:00:00Z")
+        _put_migrated_row(sessions_metadata_table, "mig", "2026-01-01T00:00:00Z")
+        self._set_marker(sessions_metadata_table)
+
+        sessions, _ = await md.list_user_sessions("u1")
+        assert [s.session_id for s in sessions] == ["mig"]  # legacy row excluded
+
+    @pytest.mark.asyncio
+    async def test_marker_result_is_memoised(self, sessions_metadata_table, monkeypatch):
+        import apis.shared.sessions.metadata as md
+        monkeypatch.setattr(md, "_migration_complete_cache", False)
+        self._set_marker(sessions_metadata_table)
+        _put_migrated_row(sessions_metadata_table, "mig", "2026-01-01T00:00:00Z")
+
+        await md.list_user_sessions("u1")
+        assert md._migration_complete_cache is True  # cached after first observation
+
+    @pytest.mark.asyncio
+    async def test_gsi_failure_falls_back_to_legacy_even_with_marker(self, sessions_metadata_table, monkeypatch):
+        """Marker set but the GSI query errors → still read legacy so the list never blanks."""
+        import boto3
+        import apis.shared.sessions.metadata as md
+        from botocore.exceptions import ClientError
+
+        monkeypatch.setattr(md, "_migration_complete_cache", False)
+        _put_legacy_row(sessions_metadata_table, "leg", "2026-01-02T00:00:00Z")
+        self._set_marker(sessions_metadata_table)
+        real_table = sessions_metadata_table
+
+        class _GsiFailingTable:
+            def get_item(self, **kw):
+                return real_table.get_item(**kw)  # marker lookup goes through
+
+            def query(self, **kw):
+                if kw.get("IndexName") == "SessionRecencyIndex":
+                    raise ClientError(
+                        {"Error": {"Code": "ValidationException",
+                                   "Message": "The table does not have the specified index: SessionRecencyIndex"}},
+                        "Query",
+                    )
+                return real_table.query(**kw)
+
+        class _FakeResource:
+            def Table(self, _name):
+                return _GsiFailingTable()
+
+        real_resource = boto3.resource
+        monkeypatch.setattr(
+            boto3, "resource",
+            lambda svc, **kw: _FakeResource() if svc == "dynamodb" else real_resource(svc, **kw),
+        )
+
+        sessions, _ = await md.list_user_sessions("u1")
+        assert [s.session_id for s in sessions] == ["leg"]  # fell back to legacy, not blank
