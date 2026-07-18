@@ -370,8 +370,9 @@
         </div>
       }
 
-      <!-- Skills Section — shown only once skills are loaded (opt-in picker,
-           later PR) or the active Agent locks a bound set. Inert otherwise. -->
+      <!-- Skills Section — the opt-in picker (D6). Shown once skills are loaded
+           (lazily, on first panel open) or the active Agent locks a bound set;
+           inert otherwise, which is every env until SKILLS_ENABLED flips. -->
       @if (skillService.hasSkills() || skillService.agentLocked()) {
       <div class="border-b border-gray-200 dark:border-white/10">
         <button
@@ -414,9 +415,15 @@
               </div>
             } @else if (!skillService.hasSkills()) {
               <div class="text-sm/6 text-gray-500 dark:text-gray-400">
-                No skills are available for your role.
+                No skills are available to you yet.
               </div>
             } @else {
+              @if (!skillService.agentLocked()) {
+                <p class="mb-3 text-xs/5 text-gray-500 dark:text-gray-400">
+                  Skills are off by default. Turn on the ones you want this
+                  conversation to be able to use.
+                </p>
+              }
               <div class="space-y-3" role="group" aria-labelledby="skills-heading">
                 @for (skill of skillService.visibleSkills(); track skill.skillId) {
                   <div class="flex items-start justify-between gap-3">

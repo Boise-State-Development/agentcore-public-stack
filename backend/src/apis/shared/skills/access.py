@@ -14,10 +14,17 @@ Two tiers feed the result (Skills v2 §5):
   it needs no role.
 
 Selection (``enabled_skills``) narrows this set per turn; it never widens it.
+
+A third tier exists only *through an Agent* — **invoke-through** (§6/D7):
+skills the Agent's owner authored resolve for anyone the Agent is shared with.
+It deliberately does NOT live in ``resolve_accessible_skill_ids``, because that
+function feeds the plain-chat picker and the design-time bindable palette; a
+skill reachable only by invoking someone's Agent must never appear there. See
+:func:`resolve_invocable_skill_ids`.
 """
 
 import logging
-from typing import List
+from typing import List, Optional, Set
 
 from apis.shared.auth.models import User
 
@@ -72,3 +79,61 @@ async def resolve_accessible_skill_ids(user: User) -> List[str]:
     # grant (a user may hold a role that grants a skill they also authored).
     seen = set(catalog)
     return catalog + [sid for sid in owned if sid not in seen]
+
+
+async def resolve_invocable_skill_ids(
+    invoker: User, requested_ids: List[str], agent_owner_id: Optional[str]
+) -> Set[str]:
+    """Which of ``requested_ids`` may resolve for ``invoker`` through this Agent (§6).
+
+    The **invoke-through** predicate. A skill bound on an Agent resolves when any
+    of three clauses holds:
+
+    1. **Catalog grant** — the invoker's RBAC roles reach the skill; or
+    2. **Ownership** — the invoker authored it; or
+    3. **Invoke-through** — the *Agent's owner* authored it, and the invoker has
+       share-access to the Agent.
+
+    Clauses 1+2 are exactly ``resolve_accessible_skill_ids``. Note this is
+    deliberately NOT ``AppRoleService.can_access_skill``: that returns ``True``
+    for a ``"*"`` wildcard role against *any* id, including another user's
+    private authored skill, and it has no ownership clause at all (so an author
+    binding their own skill was blocked on their own invocation). Routing
+    through the shared resolver expands ``"*"`` over the catalog only.
+
+    Clause 3's **share-access half is the caller's precondition**: this is
+    reached only after ``get_assistant_with_access_check`` has already admitted
+    the invoker to the Agent, so owner-match is the only part left to test here.
+    That owner-match is what blocks **chain-sharing** — a skill merely shared
+    *to* the Agent's owner cannot be laundered to a wider audience by binding it
+    and re-sharing the Agent. Invoke-through extends the owner's *own* skills
+    and nothing else.
+
+    A ``system``-owned Agent gets no clause 3: catalog skills are governed by
+    RBAC alone, and an owner-match on ``"system"`` would hand the whole catalog
+    to anyone who could invoke one.
+
+    Returns the allowed subset as a set; the caller decides what a miss means
+    (the binding resolver blocks the turn with the offending id, D5). Never
+    raises — clause 3 degrades to "not granted" on any lookup failure.
+    """
+    allowed = set(await resolve_accessible_skill_ids(invoker))
+
+    missing = [sid for sid in requested_ids if sid not in allowed]
+    if not missing or not agent_owner_id:
+        return allowed
+
+    from apis.shared.skills.models import SYSTEM_OWNER_ID
+
+    if agent_owner_id == SYSTEM_OWNER_ID:
+        return allowed
+
+    try:
+        from apis.shared.skills.repository import get_skill_catalog_repository
+
+        records = await get_skill_catalog_repository().batch_get_skills(missing)
+        allowed |= {r.skill_id for r in records if r.owner_id == agent_owner_id}
+    except Exception:
+        logger.warning("Failed to resolve invoke-through skills", exc_info=True)
+
+    return allowed

@@ -112,6 +112,16 @@ export type ShareAssistantDialogResult = {
           </div>
         </div>
 
+        <!--
+          Disclosure (Skills v2 §6/D7). Sharing is the grant boundary for the
+          content welded to this agent: invited people can invoke its bound
+          skills and search its knowledge base, even where they hold no
+          individual grant on either. Say so before they share, not after.
+        -->
+        <p class="mt-4 rounded-2xl bg-gray-50 px-3 py-2 text-xs/5 text-gray-500 dark:bg-white/5 dark:text-gray-400">
+          People with access can use this agent's skills and knowledge.
+        </p>
+
         <!-- Content -->
         <div class="mt-6">
           @if (isPublic()) {

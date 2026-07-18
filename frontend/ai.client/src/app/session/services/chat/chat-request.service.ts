@@ -8,6 +8,7 @@ import { SessionService } from '../session/session.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
+import { SkillService } from '../../../services/skill/skill.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { FileAttachmentData } from '../models/message.model';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
@@ -38,6 +39,7 @@ export class ChatRequestService implements OnDestroy {
   private userService = inject(UserService);
   private modelService = inject(ModelService);
   private toolService = inject(ToolService);
+  private skillService = inject(SkillService);
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
@@ -222,6 +224,18 @@ export class ChatRequestService implements OnDestroy {
       enabled_tools: this.toolService.getEnabledToolIds(),
       provider: isDefaultModel ? null : selectedModel.provider,
     };
+
+    // Skills v2 D6: skills are opt-in, so send the selection only when there is
+    // one. Omitting the key is the "no skills" signal the backend already
+    // defaults to, which keeps a plain turn's payload identical to before and
+    // avoids paying for the skill resolution server-side. Agent-bound
+    // conversations send the locked set, but the backend re-resolves an Agent's
+    // bindings per invoker and replaces this outright — the client is never the
+    // authority here.
+    const enabledSkillIds = this.skillService.getEnabledSkillIds();
+    if (enabledSkillIds.length > 0) {
+      requestObject['enabled_skills'] = enabledSkillIds;
+    }
 
     // Per-model inference param overrides set in the Settings → Advanced
     // panel. Backend layers these on top of admin defaults and clamps to the

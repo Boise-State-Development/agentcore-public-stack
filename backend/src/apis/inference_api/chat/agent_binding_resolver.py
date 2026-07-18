@@ -21,11 +21,12 @@ Phase 3 lands incrementally:
   the same ``AppRoleService.can_access_tool`` gate; a bound tool the invoker lacks blocks the
   turn (D5). Absent tool bindings ⇒ the request's ``enabled_tools`` drive the turn as today.
 - ``skill`` bindings → the effective skill set (**replace**, same shape as tools): when an
-  Agent binds skills they *are* the turn's skills, re-resolved per invoker via
-  ``AppRoleService.can_access_skill``; a bound skill the invoker lacks — or the skills feature
-  being disabled in this environment — blocks the turn (D5). The caller then forces skill-mode
-  (``agent_type="skill"``) for the turn so the SkillAgent actually discloses them. Absent skill
-  bindings ⇒ the request's ``agent_type``/``enabled_skills`` drive the turn as today.
+  Agent binds skills they *are* the turn's skills, re-resolved per invoker via the
+  invoke-through predicate (§6/D7, ``resolve_invocable_skill_ids``); a bound skill the
+  invoker lacks — or the skills feature being disabled in this environment — blocks the
+  turn (D5). The caller hands the result to ChatAgent as ``accessible_skill_ids``, which
+  is what mounts the ``AgentSkills`` disclosure plugin. Absent skill bindings ⇒ the
+  request's ``enabled_skills`` drive the turn as today.
 - ``knowledge_base`` stays with the existing RAG path.
 """
 
@@ -40,6 +41,7 @@ from apis.shared.auth.models import User
 from apis.shared.feature_flags import memory_spaces_enabled, skills_enabled
 from apis.shared.memory.service import MemorySpaceService
 from apis.shared.rbac.service import get_app_role_service
+from apis.shared.skills.access import resolve_invocable_skill_ids
 
 _ROLE_RANK = {"viewer": 1, "editor": 2, "owner": 3}
 
@@ -103,10 +105,10 @@ class ResolvedSkills:
 
     ``skill_ids`` **replaces** the request's ``enabled_skills`` for this turn so ChatAgent's
     AgentSkills plugin discloses exactly these (an Agent that binds skills owns its skills,
-    like tools own the toolset). Every id has already passed the
-    invoker's ``AppRoleService.can_access_skill`` gate; a bound skill the invoker could not
-    access blocks the turn before this is constructed (D5). Always non-empty — the resolver
-    returns ``None`` (no skill binding) rather than an empty ``ResolvedSkills``.
+    like tools own the toolset). Every id has already passed the invoker's invoke-through
+    predicate (§6); a bound skill the invoker could not access blocks the turn before this
+    is constructed (D5). Always non-empty — the resolver returns ``None`` (no skill
+    binding) rather than an empty ``ResolvedSkills``.
     """
 
     skill_ids: List[str]
@@ -162,13 +164,28 @@ async def resolve_agent_invocation(assistant: Assistant, invoker: User) -> Agent
 async def _resolve_skills(assistant: Assistant, invoker: User) -> Optional[ResolvedSkills]:
     """Resolve the Agent's ``skill`` bindings to an effective skill set for ``invoker`` (D5).
 
-    Each bound skill is re-checked against the invoker with ``AppRoleService.can_access_skill``
-    (the same AppRole layer the harness's model/tool gates use); a single missing skill blocks
-    the turn (block-with-message, no silent drop — D5). The skills feature being disabled in
+    Each bound skill is re-checked against the invoker with the **invoke-through**
+    predicate (§6/D7, ``resolve_invocable_skill_ids``): catalog grant ∪ ownership ∪
+    "the Agent's owner authored it". A single missing skill blocks the turn
+    (block-with-message, no silent drop — D5). The skills feature being disabled in
     this environment also blocks — design-time refuses to create these while the flag is off,
     so reaching here with the flag off is environment drift (mirror ``_resolve_memory``).
     Returns ``None`` when the Agent binds no skills, leaving the request's ``agent_type`` /
     ``enabled_skills`` in force.
+
+    This is the **only** place invoke-through applies. It is AGENT-scoped, not
+    user-scoped: widening the shared ``resolve_accessible_skill_ids`` instead would
+    leak an Agent owner's private skills into every invoker's plain-chat picker.
+
+    Clause 3 of the predicate also requires the invoker to have share-access to the
+    Agent. That half is already satisfied here by construction — the caller reaches
+    this resolver only after ``get_assistant_with_access_check`` has admitted the
+    invoker — so the predicate only re-tests the owner-match half.
+
+    Replaces the previous ``AppRoleService.can_access_skill`` check, which was wrong on
+    two axes: it had no ownership clause (an author binding their *own* authored skill
+    was blocked on their own invocation), and its ``"*"`` wildcard matched any id at all,
+    including another user's private authored skill.
     """
     skill_bindings = [b for b in (assistant.bindings or []) if b.kind == "skill"]
     if not skill_bindings:
@@ -179,19 +196,22 @@ async def _resolve_skills(assistant: Assistant, invoker: User) -> Optional[Resol
             "This agent uses Skills, which aren't enabled in this environment."
         )
 
-    app_role_service = get_app_role_service()
-    resolved: List[str] = []
+    refs: List[str] = []
     for binding in skill_bindings:
-        ref = binding.ref
-        if not await app_role_service.can_access_skill(invoker, ref):
+        if binding.ref not in refs:
+            refs.append(binding.ref)
+
+    invocable = await resolve_invocable_skill_ids(
+        invoker, refs, getattr(assistant, "owner_id", None)
+    )
+    for ref in refs:
+        if ref not in invocable:
             raise AgentBindingBlockedError(
                 f"This agent uses the skill **{ref}**, which isn't available to your account. "
                 "Ask an administrator for access, or use a different agent."
             )
-        if ref not in resolved:
-            resolved.append(ref)
 
-    return ResolvedSkills(skill_ids=resolved)
+    return ResolvedSkills(skill_ids=refs)
 
 
 async def _resolve_tools(assistant: Assistant, invoker: User) -> Optional[ResolvedTools]:

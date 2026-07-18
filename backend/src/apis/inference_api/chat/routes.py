@@ -843,13 +843,13 @@ async def ping():
 
 
 async def _resolve_accessible_skill_ids(current_user: User) -> list[str]:
-    """Resolve the skills a user's RBAC roles grant (admin/DB-backed).
+    """Resolve every skill a user can reach: RBAC-granted catalog ∪ own.
 
     Thin delegate to the shared resolver (``apis.shared.skills.access``) used
     by both this path and the user-facing skills API, so the picker and the
     runtime can never drift. Kept as a module-level seam for tests. Never
-    raises — on any failure the user simply gets no skills (the SkillAgent
-    degrades to chat).
+    raises — on any failure the user simply gets no skills and the turn runs
+    without the disclosure plugin.
     """
     from apis.shared.skills.access import resolve_accessible_skill_ids
 
@@ -859,16 +859,19 @@ async def _resolve_accessible_skill_ids(current_user: User) -> list[str]:
 def _apply_enabled_skills_filter(
     accessible_skill_ids: list[str], enabled_skills: Optional[list[str]]
 ) -> list[str]:
-    """Narrow the RBAC-accessible skill set by the client's per-turn selection.
+    """Narrow the accessible skill set by the client's per-turn selection.
 
-    ``None`` means the client predates (or isn't using) the skills picker —
-    all accessible skills stay active, the pre-picker behavior. A list is an
-    intersection: client input can narrow the set, never grant. The result
-    stays a list (possibly empty) because SkillAgent distinguishes [] (DB
-    mode, zero skills → degrade to chat) from None (file-scan fallback).
+    Intersection only: client input can narrow the set, never grant.
+
+    ``None`` (or an empty list) means **no skills** — Skills v2 D6 flips plain
+    chat to opt-in, unlike tools. This is the reverse of v1, where absent meant
+    "every accessible skill". Opt-in is what keeps prompt bloat and instruction
+    conflicts bounded as the catalog grows across two authorship tiers; a client
+    that predates the picker now simply gets a plain chat turn, which is the
+    safe direction to fail.
     """
-    if enabled_skills is None:
-        return accessible_skill_ids
+    if not enabled_skills:
+        return []
     requested = set(enabled_skills)
     return [sid for sid in accessible_skill_ids if sid in requested]
 
@@ -900,21 +903,26 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # that binds skills is coerced to "skill" later by the agent-binding
     # resolver.
     effective_agent_type = input_data.agent_type or DEFAULT_AGENT_TYPE
-    # Skills feature deferred for this environment: never route a turn through
-    # the SkillAgent, regardless of the client's request or any stored policy.
-    # Only the skill mode is neutralized — voice and other agent types pass
-    # through untouched.
+    # Skills feature deferred for this environment: neutralize the legacy
+    # "skill" agent type, which is a ChatAgent alias since v2 PR-2. Voice and
+    # other agent types pass through untouched.
     if not skills_enabled() and effective_agent_type == "skill":
         effective_agent_type = "chat"
-    # Resolve the user's *effective* skills once for the whole request — only
-    # for the skill agent path: the RBAC-accessible set (admin/DB-backed),
-    # narrowed by the client's per-turn enabled_skills selection. Threaded into
-    # every get_agent call below so they share one skills_hash cache key
-    # (otherwise the app-tool-call / resume paths would miss the main turn's
-    # cached SkillAgent). An explicit agent_type="chat" opts out and stays free
-    # of the extra reads.
+    # Resolve the user's *effective* skills once for the whole request: the
+    # accessible set (catalog ∪ own), narrowed by the client's per-turn
+    # enabled_skills selection. Threaded into every get_agent call below so they
+    # share one skills_hash cache key (otherwise the app-tool-call / resume paths
+    # would miss the main turn's cached agent).
+    #
+    # Skills v2: this is no longer gated on agent_type == "skill". Skills are a
+    # plain-chat capability now — the picker in model settings sends
+    # enabled_skills on an ordinary turn and ChatAgent mounts the AgentSkills
+    # plugin. The opt-in default (D6) is what keeps this cheap: an absent or
+    # empty selection short-circuits to [] without touching RBAC or the skill
+    # table, so every turn that doesn't ask for skills costs exactly what it did
+    # before. An Agent's skill bindings override this further down.
     effective_skill_ids = None
-    if effective_agent_type == "skill":
+    if skills_enabled() and input_data.enabled_skills:
         effective_skill_ids = _apply_enabled_skills_filter(
             await _resolve_accessible_skill_ids(current_user),
             input_data.enabled_skills,
@@ -1643,22 +1651,24 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_type=snapshot.agent_type,
                 is_resume=True,
                 # Resume must rebuild the SAME cache key the original turn used,
-                # or the paused agent is orphaned. The original turn's
-                # skills_hash was derived from its *effective* skill set only
-                # when it was a skill turn; mirror that off the snapshot's type
-                # (a turn explicitly built as "chat" carried no skills → empty
-                # skills_hash). New snapshots carry that exact set in
-                # enabled_skills; legacy snapshots (written before the field
-                # existed) fall back to this request's resolution, the
-                # pre-skills-picker behavior.
+                # or the paused agent is orphaned. New snapshots carry the
+                # original turn's exact effective set in enabled_skills, so
+                # replay it verbatim — including [] (a turn that deliberately
+                # carried no skills → empty skills_hash).
+                #
+                # Skills v2: this must NOT be gated on snapshot.agent_type ==
+                # "skill" any more. A plain-chat turn now carries skills too, so
+                # that gate would resolve a skills-bearing "chat" snapshot back
+                # to None and orphan its paused agent. The snapshot's own field
+                # is the authority.
+                #
+                # Legacy snapshots (written before enabled_skills existed) still
+                # fall back to this request's resolution, and only for a "skill"
+                # turn — that is exactly what those turns were built with.
                 accessible_skill_ids=(
-                    (
-                        snapshot.enabled_skills
-                        if snapshot.enabled_skills is not None
-                        else effective_skill_ids
-                    )
-                    if snapshot.agent_type == "skill"
-                    else None
+                    snapshot.enabled_skills
+                    if snapshot.enabled_skills is not None
+                    else (effective_skill_ids if snapshot.agent_type == "skill" else None)
                 ),
             )
             # The `stream_with_quota_warning` closure below references

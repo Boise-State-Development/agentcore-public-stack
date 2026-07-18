@@ -190,6 +190,15 @@ export class ModelSettings {
         this.hasBeenOpened.set(true);
       }
 
+      // Load the skills picker lazily on first open. SkillService deliberately
+      // has no constructor load (unlike ToolService): skills are opt-in and the
+      // feature is off in every deployed env until PR-5, so a boot-time fetch
+      // would be a guaranteed 404 for every user. `initialized` is set even on
+      // that 404, so this probes at most once per session.
+      if (isOpen && !this.skillService.initialized()) {
+        void this.skillService.loadSkills();
+      }
+
       // Prevent background scrolling when panel is open
       if (isOpen) {
         document.body.style.overflow = 'hidden';

@@ -319,7 +319,7 @@ access can use this agent's skills and knowledge."*
   `skill_registry` / `skill_tools` retired (`"skill"` is now a ChatAgent alias);
   agentskills.io S3 bundle layout + `SKILL.md` write-through projection;
   `allowed_tools`/`skill_metadata` + resource `kind` on the model.
-- **PR-3 — User-authored tier. ✅ DONE** (branch `feature/skills-v2-user-tier`).
+- **PR-3 — User-authored tier. ✅ MERGED** (PR #683).
   Owner-scoped `/skills/mine` CRUD + bundle-upload routes (session auth),
   `list_skills_by_owner` over GSI4, `UserSkillService` (ownership resolved on
   every path; a skill you don't own is 404, never 403), and the My Skills SPA
@@ -339,9 +339,36 @@ access can use this agent's skills and knowledge."*
   `docx_2`), keeping ids globally unique — the runtime activation key is the
   slugified id, so same-named skills in one turn would be ambiguous to the
   model — without a 409 that would disclose an invisible skill's existence.
-- **PR-4 — Selection surfaces.** Chat opt-in picker; Designer palette union;
-  invoke-through predicate in the binding resolver + `read_skill_file`;
-  share-dialog copy.
+- **PR-4 — Selection surfaces. ✅ DONE** (branch
+  `feature/skills-v2-selection-surfaces`). Chat opt-in picker wired end-to-end
+  (the SPA now sends `enabled_skills`; the picker's untouched default flipped to
+  *off* on both sides); the invoke-through predicate
+  (`resolve_invocable_skill_ids`) in the binding resolver; share-dialog
+  disclosure copy. The Designer palette union needed no code — `/agents/bindable`
+  already delegates to `resolve_accessible_skill_ids`, which PR-3 widened to
+  catalog ∪ own.
+
+  Three latent bugs surfaced, all from skills having never actually run on the
+  plain-chat path before:
+  1. Skill resolution was gated on `agent_type == "skill"`, so the picker could
+     never have taken effect. Skills are now driven by the *selection*, on any
+     turn; `agent_type` gates nothing (`"skill"` remains a ChatAgent alias only
+     so stale SPA sessions don't 422).
+  2. The binding resolver gated on `AppRoleService.can_access_skill`, which has
+     no ownership clause (an author was blocked on their **own** authored skill
+     when they invoked their own Agent) and whose `"*"` wildcard matched *any*
+     id, including another user's private skill. Routing clauses 1+2 through
+     `resolve_accessible_skill_ids` fixes both — this was the third `"*"`
+     over-expansion in the epic, after PR-3's two.
+  3. Paused-turn resume and the construction snapshot both keyed skills off
+     `agent_type == "skill"`, which would have orphaned the paused agent of any
+     plain-chat turn carrying skills. Both now key off the snapshot's own
+     `enabled_skills`.
+
+  `read_skill_file` needed no per-call predicate: its record set *is* the turn's
+  effective skill set, so there is no id the model can name to reach a skill the
+  invoker cannot use — structurally stronger than re-checking a caller-supplied
+  id, and it keeps one resolution point.
 - **PR-5 — Flip.** `SKILLS_ENABLED=true` on dev-ai; dogfood with a real
   Anthropic-format bundle (e.g. their `docx` skill) uploaded as a user skill
   and bound to an Agent.
@@ -354,8 +381,11 @@ access can use this agent's skills and knowledge."*
 
 - **Spike go/no-go (PR-2)** is the only open technical risk; everything else is
   deletion or reuse of proven v1 machinery.
-- **`enabled_skills` default flip** (absent → none, per D6) — confirm no client
-  besides the SPA sends skill turns before the flip lands (API-key surface
-  sends none today; it inherits opt-in semantics naturally).
+- ~~**`enabled_skills` default flip** (absent → none, per D6)~~ — **landed in
+  PR-4.** No other client sends skill turns: the API-key surface, the schedules
+  form, and the assistant preview all omit the field, so they inherit opt-in
+  semantics naturally. The flip is also what keeps skills free for turns that
+  don't want them — an absent selection short-circuits before any RBAC or
+  skill-table read.
 - **Deprecation window** for `agent_type="skill"` in stored session preferences
   and paused snapshots: coerce to `"chat"` on read; remove after one release.

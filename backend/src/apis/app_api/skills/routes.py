@@ -101,7 +101,12 @@ async def get_user_skills(
             description=record.description,
             category=record.category,
             user_enabled=preferences.get(record.skill_id),
-            is_enabled=preferences.get(record.skill_id, True),
+            # Skills v2 D6: opt-in. An untouched skill is OFF, unlike tools.
+            # This is the picker's half of the same default the runtime enforces
+            # in `_apply_enabled_skills_filter` (absent selection ⇒ no skills);
+            # the two must agree or the UI would show skills as active that the
+            # turn never loads.
+            is_enabled=preferences.get(record.skill_id, False),
         )
         for record in records
         if record.status == SkillStatus.ACTIVE

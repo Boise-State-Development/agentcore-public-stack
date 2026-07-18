@@ -79,7 +79,7 @@ class TestGetUserSkills:
                 _skill("web_research", "Web Research"),
                 _skill("pdf_workflows", "PDF Workflows"),
             ],
-            prefs={"web_research": False},
+            prefs={"web_research": True},
         )
         client = _make_client(monkeypatch, ["web_research", "pdf_workflows"], repo)
 
@@ -87,13 +87,16 @@ class TestGetUserSkills:
         assert body["totalCount"] == 2
         by_id = {s["skillId"]: s for s in body["skills"]}
 
-        # Toggled-off skill: explicit preference surfaces, effective off
-        assert by_id["web_research"]["userEnabled"] is False
-        assert by_id["web_research"]["isEnabled"] is False
+        # Toggled-on skill: explicit preference surfaces, effective on
+        assert by_id["web_research"]["userEnabled"] is True
+        assert by_id["web_research"]["isEnabled"] is True
 
-        # Untouched skill: no preference, enabled by default
+        # Untouched skill: no preference, DISABLED by default. Skills v2 D6
+        # flips this from v1 — the picker is opt-in, unlike tools, and this must
+        # agree with the runtime's absent-selection-means-no-skills default or
+        # the UI would show skills as active that the turn never loads.
         assert by_id["pdf_workflows"]["userEnabled"] is None
-        assert by_id["pdf_workflows"]["isEnabled"] is True
+        assert by_id["pdf_workflows"]["isEnabled"] is False
 
         # Sorted by display name
         assert [s["skillId"] for s in body["skills"]] == [

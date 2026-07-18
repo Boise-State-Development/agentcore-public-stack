@@ -175,10 +175,11 @@ async def get_agent(
 
     freshness_hash = await get_freshness_hash(enabled_tools or [])
 
-    # Skills dimension of the cache key (skill turns only). Digest of the
-    # user's accessible skill ids + their updated_at, so an edit to a granted
-    # skill or a role-grant change invalidates the cached agent. Empty string
-    # for the chat path (no accessible_skill_ids) — key unchanged.
+    # Skills dimension of the cache key. Digest of the turn's effective skill
+    # ids + their updated_at, so an edit to a granted skill or a role-grant
+    # change invalidates the cached agent. Empty string when the turn carries no
+    # skills — which, under the D6 opt-in default, is the common case — so those
+    # keys are byte-identical to the pre-skills ones.
     skills_hash = ""
     if accessible_skill_ids:
         from apis.shared.skills.freshness import (
@@ -253,12 +254,17 @@ async def get_agent(
     agent = create_agent(**create_kwargs)
 
     # Stamp the type onto the construction snapshot so a paused turn can
-    # resume on the same factory variant after cache eviction. Skill turns
-    # also stamp their effective skill set: resume must rebuild the same
+    # resume on the same factory variant after cache eviction. A turn carrying
+    # skills also stamps its effective set: resume must rebuild the same
     # skills_hash cache key even if the user toggles skills mid-pause.
+    #
+    # Skills v2: stamped for any non-voice type, not just "skill" — a plain
+    # "chat" turn now carries skills via the opt-in picker, and gating this on
+    # the type would leave those snapshots blank and orphan the paused agent on
+    # resume.
     if hasattr(agent, "_construction_snapshot"):
         agent._construction_snapshot["agent_type"] = resolved_agent_type
-        if resolved_agent_type == "skill" and accessible_skill_ids is not None:
+        if resolved_agent_type != "voice" and accessible_skill_ids is not None:
             agent._construction_snapshot["enabled_skills"] = list(accessible_skill_ids)
 
     # Don't cache agents with context-bound extra_tools
