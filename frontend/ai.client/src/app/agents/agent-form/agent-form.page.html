@@ -252,7 +252,7 @@
           <ng-icon name="heroSparkles" class="size-5 text-purple-500" aria-hidden="true" />
           <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Skills</h2>
         </div>
-        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Reusable instruction bundles with their own bound tools.</p>
+        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Reusable instruction bundles the agent can load on demand.</p>
         <div class="mt-4 flex flex-wrap gap-2">
           @for (s of skills(); track s.ref) {
             <button type="button" (click)="toggleSkill(s.ref)" class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition" [class.border-purple-500]="isSkillSelected(s.ref)" [class.bg-purple-50]="isSkillSelected(s.ref)" [class.text-purple-700]="isSkillSelected(s.ref)" [class.dark:bg-purple-900/30]="isSkillSelected(s.ref)" [class.dark:text-purple-300]="isSkillSelected(s.ref)" [class.border-gray-200]="!isSkillSelected(s.ref)" [class.text-gray-700]="!isSkillSelected(s.ref)" [class.dark:border-gray-700]="!isSkillSelected(s.ref)" [class.dark:text-gray-300]="!isSkillSelected(s.ref)" [appTooltip]="s.description" appTooltipPosition="top">

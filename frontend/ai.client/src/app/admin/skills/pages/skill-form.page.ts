@@ -65,7 +65,7 @@ import {
               {{ isEditMode() ? 'Edit Skill' : 'Create Skill' }}
             </h1>
             <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-              {{ isEditMode() ? 'Update skill instructions, reference files and bound tools.' : 'Author a new skill, or import a SKILL.md to prefill it.' }}
+              {{ isEditMode() ? 'Update skill instructions and reference files.' : 'Author a new skill, or import a SKILL.md to prefill it.' }}
             </p>
           </div>
 

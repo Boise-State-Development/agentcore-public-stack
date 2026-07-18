@@ -4,6 +4,7 @@ import {
   inject,
   signal,
   computed,
+  ElementRef,
   OnInit,
   OnDestroy,
 } from '@angular/core';
@@ -130,6 +131,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
   private themeService = inject(ThemeService);
   private toast = inject(ToastService);
   private dialog = inject(Dialog);
+  private host = inject(ElementRef<HTMLElement>);
 
   form!: FormGroup;
   private formSub?: Subscription;
@@ -494,12 +496,32 @@ export class AgentFormPage implements OnInit, OnDestroy {
     return bindings;
   }
 
+  /**
+   * Scroll the first invalid control into view and focus it. `markAllAsTouched`
+   * alone only reveals the inline error, which is usually below the fold once the
+   * author has scrolled down to the Model/Skills sections — an invalid save then
+   * reads as a click that did nothing.
+   */
+  private revealFirstInvalidControl(): void {
+    // Match on the element type rather than [formControlName]: the starters array
+    // binds `[formControlName]="$index"`, which renders no attribute to select on.
+    const first = (this.host.nativeElement as HTMLElement).querySelector<HTMLElement>(
+      'form input.ng-invalid, form textarea.ng-invalid, form select.ng-invalid',
+    );
+    if (!first) return;
+    first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // preventScroll: the smooth scroll above owns the movement; focus would jump it.
+    first.focus({ preventScroll: true });
+  }
+
   /** Save the current form and return the agent id, or null if it wasn't saved
    * (invalid form, no model, or a server error). Shows the error toast; the caller
    * decides where to go on success. */
   private async persist(): Promise<string | null> {
     if (this.form.invalid) {
       this.form.markAllAsTouched();
+      this.revealFirstInvalidControl();
+      this.toast.error('Fix the highlighted fields before saving.');
       return null;
     }
     if (!this.selectedModelId()) {
