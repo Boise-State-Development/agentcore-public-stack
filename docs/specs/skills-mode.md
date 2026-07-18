@@ -1,5 +1,10 @@
 # Skills Mode — user-visible mode toggle + admin policy
 
+> **SUPERSEDED (2026-07-16) by `skills-as-agent-primitive.md`.** The skills-mode
+> toggle, `preferredAgentMode`, and the admin chat-mode policy were removed in
+> Skills v2 PR-1 ("the great deletion"); skills are now opt-in per-turn, not a
+> mode. This document is retained for build history only.
+
 > Status: DRAFT (spec only, nothing built). Follows on from
 > `admin-skills-rbac-tool-binding.md` Phase 1 (PR-1..7, all merged — default
 > `agent_type` is already `"skill"` server-side as of #470). This spec makes the
