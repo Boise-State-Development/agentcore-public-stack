@@ -241,11 +241,13 @@ async def test_skills_hash_separates_skill_agent_cache_slots(
 
 @pytest.mark.asyncio
 async def test_chat_path_unaffected_by_skills_hash(mock_create_agent, mock_freshness_hash):
-    """The default chat path passes no accessible skills → skills_hash empty,
-    cache behaves exactly as before, and accessible_skill_ids isn't forwarded.
+    """The default chat path passes no accessible skills → skills_hash empty and
+    cache behaves exactly as before. Skills v2: ChatAgent (the target of both
+    "chat" and "skill" types) accepts accessible_skill_ids, so it is forwarded —
+    as None on the chat path, which adds no AgentSkills plugin.
     """
     a = await service.get_agent(session_id="s", user_id="u")
     a_again = await service.get_agent(session_id="s", user_id="u")
     assert a is a_again
     assert mock_create_agent.call_count == 1
-    assert "accessible_skill_ids" not in mock_create_agent.call_args.kwargs
+    assert mock_create_agent.call_args.kwargs.get("accessible_skill_ids") is None

@@ -310,13 +310,15 @@ access can use this agent's skills and knowledge."*
   machinery, the hook shims, the stream-coordinator unwrap, skills mode
   (backend policy + SPA toggle). Flag stays off; suite green. Largest-negative-
   diff PR of the epic.
-- **PR-2 — Spike + runtime swap.** *Spike gate:* verify `AgentSkills` prompt
-  injection composes with our prompt assembly, agent cache (`skills_hash`),
-  and paused-turn resume; verify `agent.state` persistence of active skills
-  survives our session manager. Go → wire plugin into `ChatAgent`, add
-  `read_skill_file`, retire `SkillAgent`/`skill_registry` disclosure, normalize
-  S3 layout + SKILL.md projection. No-go → fall back to the (much smaller,
-  fold-free) homegrown dispatcher and record why.
+- **PR-2 — Spike + runtime swap. ✅ DONE** (branch
+  `feature/skills-v2-runtime-swap`). *Spike gate:* **GO** — see
+  `skills-v2-pr2-spike-findings.md` (20/20; `AgentSkills` block-level injection
+  preserves cache points, `skills_hash` cache key + paused-turn resume compose,
+  `agent.state` round-trips our session manager). Delivered: `AgentSkills`
+  plugin wired into `ChatAgent`; `read_skill_file` S3 adapter; `SkillAgent` /
+  `skill_registry` / `skill_tools` retired (`"skill"` is now a ChatAgent alias);
+  agentskills.io S3 bundle layout + `SKILL.md` write-through projection;
+  `allowed_tools`/`skill_metadata` + resource `kind` on the model.
 - **PR-3 — User-authored tier.** Owner-scoped `/skills` CRUD + upload routes
   (session auth), GSI4 list-my-skills, My Skills page.
 - **PR-4 — Selection surfaces.** Chat opt-in picker; Designer palette union;

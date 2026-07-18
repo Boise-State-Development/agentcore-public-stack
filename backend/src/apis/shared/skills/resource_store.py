@@ -6,17 +6,18 @@ progressive disclosure) are too large to inline in the DynamoDB
 ``skill-resources`` S3 bucket and the row carries only a lightweight
 ``SkillResourceRef`` manifest.
 
-This store mirrors the content-hash + dedupe shape used by the MCP-Apps
-UI-resource persistence and the artifacts bucket:
+Skills v2 stores objects in the **standard agentskills.io bundle layout** so a
+skill's S3 prefix is a valid bundle (attachable to the managed-Harness lane,
+exportable as-is):
 
-  - Objects are **content-addressed**: the key is
-    ``skills/{skill_id}/{content_hash}`` where ``content_hash`` is the
-    sha256 hex of the bytes. Two reference files with identical content
-    within a skill therefore resolve to the same object (dedupe) — a
-    re-upload of unchanged bytes is a no-op ``head_object`` instead of a
-    re-``put``.
-  - The manifest on the catalog row references objects by key; the bytes
-    never travel through DynamoDB.
+  - ``skills/{skill_id}/SKILL.md`` — write-through projection of the row.
+  - ``skills/{skill_id}/{references|scripts|assets}/{filename}`` — supporting
+    files, keyed by their bundle directory + filename (NOT content-addressed;
+    dedupe is dropped in favor of the readable standard layout — bundles are
+    small). Re-uploading the same filename overwrites its object.
+  - The manifest on the catalog row references objects by key; the bytes never
+    travel through DynamoDB. The manifest still records a ``content_hash`` per
+    file for change detection/display.
 
 Boundary: this module lives under ``apis/shared/skills/`` and is import-
 clean (it never imports ``app_api``/``inference_api``). The admin write
@@ -61,13 +62,28 @@ class SkillResourceStoreError(RuntimeError):
     """
 
 
-def content_key(skill_id: str, content_hash: str) -> str:
-    """Return the content-addressed object key for a skill's file."""
-    return f"skills/{skill_id}/{content_hash}"
+# Resource ``kind`` → bundle subdirectory (agentskills.io standard).
+KIND_DIRS: dict = {"reference": "references", "script": "scripts", "asset": "assets"}
+
+
+def resource_key(skill_id: str, kind: str, filename: str) -> str:
+    """Return the standard bundle object key for one of a skill's files.
+
+    ``skills/{skill_id}/{references|scripts|assets}/{filename}``. An unknown
+    ``kind`` falls back to ``references`` (defensive; callers pass a validated
+    kind).
+    """
+    subdir = KIND_DIRS.get(kind, "references")
+    return f"skills/{skill_id}/{subdir}/{filename}"
+
+
+def skill_md_key(skill_id: str) -> str:
+    """Return the object key for a skill's projected ``SKILL.md``."""
+    return f"skills/{skill_id}/SKILL.md"
 
 
 def compute_content_hash(content: bytes) -> str:
-    """Return the sha256 hex digest used as the content address."""
+    """Return the sha256 hex digest recorded in the manifest for change detection."""
     return hashlib.sha256(content).hexdigest()
 
 
@@ -109,29 +125,46 @@ class SkillResourceStore:
             )
 
     def put(
-        self, *, skill_id: str, content: bytes, content_type: str
+        self,
+        *,
+        skill_id: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        kind: str = "reference",
     ) -> str:
-        """Persist file bytes content-addressed; return the object key.
+        """Persist a supporting file into the standard bundle layout; return the key.
 
-        Computes the sha256 of ``content``, derives the
-        ``skills/{skill_id}/{content_hash}`` key, and uploads. If an object
-        already exists at that key (same content), the upload is skipped
-        (dedupe) — the key is returned either way.
+        The key is ``skills/{skill_id}/{references|scripts|assets}/{filename}``
+        (not content-addressed). Re-uploading the same ``(kind, filename)``
+        overwrites the object in place — the manifest, keyed by filename, stays
+        a single entry.
         """
+        key = resource_key(skill_id, kind, filename)
+        return self._put_bytes(
+            skill_id=skill_id, key=key, content=content, content_type=content_type
+        )
+
+    def put_skill_md(self, *, skill_id: str, content: str) -> str:
+        """Write the projected ``SKILL.md`` for a skill; return the key.
+
+        Text is UTF-8 encoded. Overwrites in place (the row is the source of
+        truth, so the projection is always fully rewritten).
+        """
+        key = skill_md_key(skill_id)
+        return self._put_bytes(
+            skill_id=skill_id,
+            key=key,
+            content=content.encode("utf-8"),
+            content_type="text/markdown",
+        )
+
+    def _put_bytes(
+        self, *, skill_id: str, key: str, content: bytes, content_type: str
+    ) -> str:
+        """Upload bytes to ``key`` (overwrite); return the key."""
         self._require_enabled()
-        digest = compute_content_hash(content)
-        key = content_key(skill_id, digest)
         client = self._client()
-
-        if self._object_exists(key):
-            logger.info(
-                "skill-resources: dedupe hit for skill=%s key=%s (%d bytes)",
-                skill_id,
-                key,
-                len(content),
-            )
-            return key
-
         try:
             client.put_object(
                 Bucket=self.bucket_name,
@@ -148,7 +181,7 @@ class SkillResourceStore:
                 e,
             )
             raise SkillResourceStoreError(
-                f"failed to store reference file for skill '{skill_id}'"
+                f"failed to store object for skill '{skill_id}'"
             ) from e
 
         logger.info(
@@ -189,19 +222,6 @@ class SkillResourceStore:
             logger.warning(
                 "skill-resources: delete failed for key=%s", s3_key, exc_info=True
             )
-
-    def _object_exists(self, key: str) -> bool:
-        client = self._client()
-        try:
-            client.head_object(Bucket=self.bucket_name, Key=key)
-            return True
-        except ClientError as e:
-            code = e.response.get("Error", {}).get("Code", "")
-            if code in ("404", "NoSuchKey", "NotFound"):
-                return False
-            # Any other error (permissions, throttling) is real — surface it
-            # rather than masquerading as "absent" and double-uploading.
-            raise
 
 
 _store: Optional[SkillResourceStore] = None

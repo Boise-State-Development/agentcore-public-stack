@@ -8,7 +8,7 @@ create/edit form populates its tool picker from GET /admin/tools.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
 from apis.shared.auth import User, require_admin
@@ -262,13 +262,16 @@ async def list_skill_resources(
 async def upload_skill_resource(
     skill_id: str,
     file: UploadFile = File(...),
+    kind: str = Form("reference"),
     admin: User = Depends(require_admin),
 ):
-    """Upload (or replace) one supporting reference file for a skill.
+    """Upload (or replace) one supporting file for a skill.
 
-    Bytes are stored content-addressed in S3; the catalog row's manifest is
-    updated atomically. Re-uploading the same filename replaces it. Returns
-    the skill's updated manifest.
+    Bytes are stored in the standard agentskills.io bundle layout
+    (``references/`` | ``scripts/`` | ``assets/`` per ``kind``); the catalog
+    row's manifest is updated atomically. Re-uploading the same filename
+    replaces it. ``script`` files are stored inert (never executed). Returns the
+    skill's updated manifest.
     """
     logger.info("Admin uploading skill reference file")
 
@@ -281,6 +284,7 @@ async def upload_skill_resource(
             content=content,
             content_type=file.content_type or "",
             admin=admin,
+            kind=kind,
         )
     except ValueError as e:
         raise _resource_value_error(e)

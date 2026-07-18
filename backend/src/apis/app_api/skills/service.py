@@ -28,11 +28,15 @@ from apis.shared.skills.repository import (
     SkillCatalogRepository,
     get_skill_catalog_repository,
 )
+from apis.shared.skills.bundle import generate_skill_md
 from apis.shared.skills.resource_store import (
     SkillResourceStore,
+    SkillResourceStoreError,
     compute_content_hash,
     get_skill_resource_store,
 )
+
+VALID_RESOURCE_KINDS = ("reference", "script", "asset")
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +126,7 @@ class SkillCatalogService:
         skill.updated_by = admin.user_id
 
         created = await self.repository.create_skill(skill)
+        self._write_skill_md(created)
 
         logger.info(
             f"Admin {admin.email} created skill: {skill.skill_id}",
@@ -154,6 +159,10 @@ class SkillCatalogService:
         )
 
         if updated:
+            # Keep the SKILL.md projection in sync with the row (best-effort).
+            # A pure resource-manifest update also lands here, but regenerating
+            # is cheap and idempotent.
+            self._write_skill_md(updated)
             logger.info(
                 f"Admin {admin.email} updated skill: {skill_id}",
                 extra={
@@ -230,20 +239,30 @@ class SkillCatalogService:
         content: bytes,
         content_type: str,
         admin: User,
+        kind: str = "reference",
     ) -> List[SkillResourceRef]:
-        """Upload (or replace) one reference file and update the manifest.
+        """Upload (or replace) one supporting file and update the manifest.
 
-        Bytes are stored content-addressed in S3 (dedupe); the manifest on
+        Bytes are stored in the standard agentskills.io bundle layout
+        (``skills/{id}/{references|scripts|assets}/{filename}``); the manifest on
         the catalog row is updated atomically (single row write). Re-uploading
-        the same filename replaces its manifest entry; any S3 object that is
-        no longer referenced afterward is garbage-collected.
+        the same filename replaces its manifest entry (and overwrites its object
+        in place); a file whose ``(kind, filename)`` key changed is
+        garbage-collected. ``script`` files are accept-and-inert (stored,
+        listed, never executed — D5).
 
         Returns the skill's updated manifest.
 
         Raises:
-            ValueError: If the skill is missing, the filename is invalid, the
-                file is too large, or the per-skill file cap is exceeded.
+            ValueError: If the skill is missing, the kind or filename is invalid,
+                the file is too large, or the per-skill file cap is exceeded.
         """
+        if kind not in VALID_RESOURCE_KINDS:
+            raise ValueError(
+                f"Invalid resource kind '{kind}'. Expected one of "
+                f"{', '.join(VALID_RESOURCE_KINDS)}."
+            )
+
         skill = await self.repository.get_skill(skill_id)
         if skill is None:
             raise ValueError(f"Skill '{skill_id}' not found")
@@ -270,7 +289,11 @@ class SkillCatalogService:
         resolved_type = content_type or "application/octet-stream"
         digest = compute_content_hash(content)
         s3_key = self.resource_store.put(
-            skill_id=skill_id, content=content, content_type=resolved_type
+            skill_id=skill_id,
+            filename=filename,
+            content=content,
+            content_type=resolved_type,
+            kind=kind,
         )
         new_ref = SkillResourceRef(
             filename=filename,
@@ -278,6 +301,7 @@ class SkillCatalogService:
             size=len(content),
             content_type=resolved_type,
             s3_key=s3_key,
+            kind=kind,
         )
 
         new_resources = [r for r in existing if r.filename != filename]
@@ -374,10 +398,41 @@ class SkillCatalogService:
         resources: List[SkillResourceRef],
         admin: User,
     ) -> None:
-        """Write the manifest to the catalog row (single atomic item write)."""
+        """Write the manifest to the catalog row (single atomic item write).
+
+        The SKILL.md projection is NOT rewritten here: its frontmatter does not
+        list resources, so a manifest change never alters it.
+        """
         await self.repository.update_skill(
             skill_id, {"resources": resources}, admin_user_id=admin.user_id
         )
+
+    def _write_skill_md(self, skill: SkillDefinition) -> None:
+        """Write the skill's SKILL.md projection to S3 (best-effort).
+
+        The DynamoDB row is the source of truth; this projection exists only so
+        the S3 prefix is a valid, portable agentskills.io bundle. When storage
+        is unconfigured (local dev) or the write fails, log and continue — never
+        fail the catalog write on the projection.
+        """
+        if not self.resource_store.enabled:
+            return
+        try:
+            content = generate_skill_md(
+                skill_id=skill.skill_id,
+                description=skill.description,
+                instructions=skill.instructions,
+                allowed_tools=skill.allowed_tools,
+                skill_metadata=skill.skill_metadata,
+            )
+            self.resource_store.put_skill_md(skill_id=skill.skill_id, content=content)
+        except SkillResourceStoreError:
+            logger.warning(
+                "skill-resources: SKILL.md projection failed for skill=%s "
+                "(row is source of truth; continuing)",
+                skill.skill_id,
+                exc_info=True,
+            )
 
     def _gc_orphaned(
         self,
@@ -386,11 +441,9 @@ class SkillCatalogService:
     ) -> None:
         """Delete S3 objects no longer referenced by the new manifest.
 
-        Objects are content-addressed, so a key still referenced by another
-        manifest entry (identical content under a different filename) is
-        retained. Best-effort: a failed cleanup never fails the write — the
-        manifest is already consistent; an orphaned object is only wasted
-        storage.
+        Keys are now path-based (``.../{kind}/{filename}``), so a removed file —
+        or one whose kind changed — orphans its old key. Best-effort: a failed
+        cleanup never fails the write; an orphaned object is only wasted storage.
         """
         old_keys = {r.s3_key for r in old_resources}
         new_keys = {r.s3_key for r in new_resources}

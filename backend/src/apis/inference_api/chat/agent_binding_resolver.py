@@ -101,9 +101,9 @@ class ResolvedTools:
 class ResolvedSkills:
     """The Agent's ``skill`` bindings resolved to an effective skill set for the invoker.
 
-    ``skill_ids`` **replaces** the request's ``enabled_skills`` for this turn and the caller
-    forces ``agent_type="skill"`` so the SkillAgent discloses exactly these (an Agent that
-    binds skills owns its skills, like tools own the toolset). Every id has already passed the
+    ``skill_ids`` **replaces** the request's ``enabled_skills`` for this turn so ChatAgent's
+    AgentSkills plugin discloses exactly these (an Agent that binds skills owns its skills,
+    like tools own the toolset). Every id has already passed the
     invoker's ``AppRoleService.can_access_skill`` gate; a bound skill the invoker could not
     access blocks the turn before this is constructed (D5). Always non-empty — the resolver
     returns ``None`` (no skill binding) rather than an empty ``ResolvedSkills``.

@@ -1760,8 +1760,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 else input_data.enabled_tools
             )
 
-            # An Agent's skill bindings replace the request's skills for this turn and
-            # force skill-mode so the SkillAgent discloses exactly the bound set (D5,
+            # An Agent's skill bindings replace the request's skills for this turn so
+            # ChatAgent's AgentSkills plugin discloses exactly the bound set (D5,
             # resolved per invoker above). Reassigning these function-scope locals here
             # (before the main-turn get_agent below) makes them flow into construction —
             # and thus the paused-turn snapshot — so a bound-skill agent resumes on the
