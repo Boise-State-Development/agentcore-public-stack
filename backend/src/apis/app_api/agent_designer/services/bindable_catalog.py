@@ -154,7 +154,7 @@ async def _list_skills(user: User) -> List[BindableItem]:
             ref=s.skill_id,
             label=s.display_name,
             description=s.description or "",
-            meta={"boundToolIds": s.bound_tool_ids, "compose": s.compose},
+            meta={"compose": s.compose},
         )
         for s in skills
     ]

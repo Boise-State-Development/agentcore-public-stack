@@ -118,11 +118,6 @@ class SkillDefinition(BaseModel):
         ..., description="Level-2 SKILL.md body, loaded on dispatch"
     )
 
-    # Bound capabilities
-    bound_tool_ids: List[str] = Field(
-        default_factory=list,
-        description="Catalog tool_ids bound to this skill (span all protocols)",
-    )
     compose: List[str] = Field(
         default_factory=list,
         description="skill_ids composed into this skill (composite skills)",
@@ -187,7 +182,6 @@ class SkillDefinition(BaseModel):
             "displayName": self.display_name,
             "description": self.description,
             "instructions": self.instructions,
-            "boundToolIds": list(self.bound_tool_ids),
             "compose": list(self.compose),
             # Reference-file manifest (camelCase maps, mirroring the row's
             # convention). The bytes live in S3; this is just pointers.
@@ -225,7 +219,6 @@ class SkillDefinition(BaseModel):
             display_name=item.get("displayName", ""),
             description=item.get("description", ""),
             instructions=item.get("instructions", ""),
-            bound_tool_ids=list(item.get("boundToolIds") or []),
             compose=list(item.get("compose") or []),
             resources=[
                 SkillResourceRef(
@@ -269,7 +262,6 @@ class SkillCreateRequest(BaseModel):
     # SKILL.md body — uncapped (instructions can be long); empty is allowed so
     # an admin can save a draft and fill it in later.
     instructions: str = Field(default="")
-    bound_tool_ids: List[str] = Field(default_factory=list, alias="boundToolIds")
     compose: List[str] = Field(default_factory=list)
     status: SkillStatus = Field(default=SkillStatus.ACTIVE)
     category: Optional[str] = None
@@ -285,7 +277,6 @@ class SkillUpdateRequest(BaseModel):
     )
     description: Optional[str] = Field(None, max_length=500)
     instructions: Optional[str] = None
-    bound_tool_ids: Optional[List[str]] = Field(None, alias="boundToolIds")
     compose: Optional[List[str]] = None
     status: Optional[SkillStatus] = None
     category: Optional[str] = None
@@ -344,7 +335,6 @@ class AdminSkillResponse(BaseModel):
     display_name: str = Field(..., alias="displayName")
     description: str
     instructions: str
-    bound_tool_ids: List[str] = Field(default_factory=list, alias="boundToolIds")
     compose: List[str] = Field(default_factory=list)
     resources: List[SkillResourceRef] = Field(default_factory=list)
     status: SkillStatus
@@ -371,7 +361,6 @@ class AdminSkillResponse(BaseModel):
             display_name=skill.display_name,
             description=skill.description,
             instructions=skill.instructions,
-            bound_tool_ids=list(skill.bound_tool_ids),
             compose=list(skill.compose),
             resources=list(skill.resources),
             status=skill.status,

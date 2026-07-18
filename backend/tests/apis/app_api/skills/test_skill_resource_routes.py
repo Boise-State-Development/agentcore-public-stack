@@ -36,7 +36,6 @@ def _create_skill(client, skill_id="pdf_workflows"):
             "displayName": "PDF Workflows",
             "description": "Fill, merge and split PDFs.",
             "instructions": "# PDF Workflows",
-            "boundToolIds": [],
         },
     )
     assert resp.status_code == 200, resp.text

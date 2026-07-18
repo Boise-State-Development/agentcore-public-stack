@@ -14,8 +14,7 @@ def _make_skill(skill_id="pdf_workflows", **kw) -> SkillDefinition:
         skill_id=skill_id,
         display_name="PDF Workflows",
         description="Fill, merge and split PDFs.",
-        instructions="# PDF Workflows\nUse the bound tools.",
-        bound_tool_ids=["fill_pdf_form"],
+        instructions="# PDF Workflows\nInstructions for working with PDFs.",
     )
     defaults.update(kw)
     return SkillDefinition(**defaults)
@@ -30,7 +29,6 @@ class TestSkillCatalogRepository:
         result = await skill_repository.get_skill("pdf_workflows")
         assert result is not None
         assert result.display_name == "PDF Workflows"
-        assert result.bound_tool_ids == ["fill_pdf_form"]
 
     @pytest.mark.asyncio
     async def test_get_nonexistent(self, skill_repository):
@@ -80,18 +78,18 @@ class TestSkillCatalogRepository:
         await skill_repository.create_skill(_make_skill())
         updated = await skill_repository.update_skill(
             "pdf_workflows",
-            {"display_name": "PDF Tools", "bound_tool_ids": ["fill_pdf_form", "merge_pdf"]},
+            {"display_name": "PDF Tools", "compose": ["doc_basics"]},
             admin_user_id="admin-2",
         )
         assert updated is not None
         assert updated.display_name == "PDF Tools"
-        assert updated.bound_tool_ids == ["fill_pdf_form", "merge_pdf"]
+        assert updated.compose == ["doc_basics"]
         assert updated.updated_by == "admin-2"
 
         # Persisted.
         reloaded = await skill_repository.get_skill("pdf_workflows")
         assert reloaded.display_name == "PDF Tools"
-        assert reloaded.bound_tool_ids == ["fill_pdf_form", "merge_pdf"]
+        assert reloaded.compose == ["doc_basics"]
 
     @pytest.mark.asyncio
     async def test_update_nonexistent_returns_none(self, skill_repository):

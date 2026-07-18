@@ -1,38 +1,24 @@
 """SkillCatalogService tests (moto-backed).
 
-Covers CRUD, bound-tool validation against the tool catalog, allowedAppRoles
-hydration, and bidirectional role sync (writing granted_skills onto AppRoles).
+Covers CRUD, allowedAppRoles hydration, and bidirectional role sync (writing
+granted_skills onto AppRoles).
 """
 
 import pytest
 
 from apis.shared.rbac.models import AppRoleCreate
 from apis.shared.skills.models import SkillDefinition, SkillStatus
-from apis.shared.tools.models import ToolDefinition, ToolProtocol, ToolStatus
 
 
-def _skill(skill_id="pdf_workflows", bound_tool_ids=None, **kw) -> SkillDefinition:
+def _skill(skill_id="pdf_workflows", **kw) -> SkillDefinition:
     defaults = dict(
         skill_id=skill_id,
         display_name="PDF Workflows",
         description="Fill, merge and split PDFs.",
         instructions="# PDF Workflows",
-        bound_tool_ids=bound_tool_ids if bound_tool_ids is not None else [],
     )
     defaults.update(kw)
     return SkillDefinition(**defaults)
-
-
-async def _seed_tool(tool_repo, tool_id, status=ToolStatus.ACTIVE):
-    await tool_repo.create_tool(
-        ToolDefinition(
-            tool_id=tool_id,
-            display_name=tool_id,
-            description="x",
-            protocol=ToolProtocol.LOCAL,
-            status=status,
-        )
-    )
 
 
 async def _seed_role(skill_service, role_id, admin_user, **kw):
@@ -97,117 +83,6 @@ async def test_hard_delete_removes_row(skill_service, admin_user):
 @pytest.mark.asyncio
 async def test_delete_missing_returns_false(skill_service, admin_user):
     assert await skill_service.delete_skill("nope", admin_user) is False
-
-
-# ── bound-tool validation ────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_create_with_active_bound_tool(skill_service, tool_repo, admin_user):
-    await _seed_tool(tool_repo, "fill_pdf_form")
-    created = await skill_service.create_skill(
-        _skill(bound_tool_ids=["fill_pdf_form"]), admin_user
-    )
-    assert created.bound_tool_ids == ["fill_pdf_form"]
-
-
-@pytest.mark.asyncio
-async def test_create_rejects_unknown_bound_tool(skill_service, admin_user):
-    with pytest.raises(ValueError, match="unknown tool"):
-        await skill_service.create_skill(
-            _skill(bound_tool_ids=["does_not_exist"]), admin_user
-        )
-    # Nothing persisted.
-    assert await skill_service.get_skill("pdf_workflows") is None
-
-
-@pytest.mark.asyncio
-async def test_create_rejects_disabled_bound_tool(skill_service, tool_repo, admin_user):
-    await _seed_tool(tool_repo, "old_tool", status=ToolStatus.DISABLED)
-    with pytest.raises(ValueError, match="non-active tool"):
-        await skill_service.create_skill(
-            _skill(bound_tool_ids=["old_tool"]), admin_user
-        )
-
-
-@pytest.mark.asyncio
-async def test_update_revalidates_bound_tools(skill_service, tool_repo, admin_user):
-    await _seed_tool(tool_repo, "fill_pdf_form")
-    await skill_service.create_skill(_skill(bound_tool_ids=["fill_pdf_form"]), admin_user)
-
-    with pytest.raises(ValueError, match="unknown tool"):
-        await skill_service.update_skill(
-            "pdf_workflows", {"bound_tool_ids": ["ghost"]}, admin_user
-        )
-
-
-# ── scoped (per-tool) bindings ───────────────────────────────────────────────
-
-
-async def _seed_mcp_tool(tool_repo, tool_id, tool_names, status=ToolStatus.ACTIVE):
-    """Seed an external-MCP catalog tool with a curated tools[] list."""
-    from apis.shared.tools.models import MCPServerConfig, MCPToolEntry
-
-    await tool_repo.create_tool(
-        ToolDefinition(
-            tool_id=tool_id,
-            display_name=tool_id,
-            description="x",
-            protocol=ToolProtocol.MCP_EXTERNAL,
-            status=status,
-            mcp_config=MCPServerConfig(
-                server_url="https://example.com/mcp",
-                tools=[MCPToolEntry(name=n) for n in tool_names],
-            ),
-        )
-    )
-
-
-@pytest.mark.asyncio
-async def test_bind_scoped_tool_exposed_by_server(skill_service, tool_repo, admin_user):
-    await _seed_mcp_tool(tool_repo, "gmail", ["send", "search", "draft"])
-    created = await skill_service.create_skill(
-        _skill(bound_tool_ids=["gmail::send", "gmail::search"]), admin_user
-    )
-    assert created.bound_tool_ids == ["gmail::send", "gmail::search"]
-
-
-@pytest.mark.asyncio
-async def test_bind_scoped_tool_not_exposed_is_rejected(skill_service, tool_repo, admin_user):
-    await _seed_mcp_tool(tool_repo, "gmail", ["send", "search"])
-    with pytest.raises(ValueError, match="not exposed by their server"):
-        await skill_service.create_skill(
-            _skill(bound_tool_ids=["gmail::delete_everything"]), admin_user
-        )
-
-
-@pytest.mark.asyncio
-async def test_bind_scoped_tool_on_server_with_no_curated_list(skill_service, tool_repo, admin_user):
-    # No curated tools[] (discovered live) → the name can't be validated
-    # statically and is accepted.
-    await _seed_mcp_tool(tool_repo, "dyn", [])
-    created = await skill_service.create_skill(
-        _skill(bound_tool_ids=["dyn::live_tool"]), admin_user
-    )
-    assert created.bound_tool_ids == ["dyn::live_tool"]
-
-
-@pytest.mark.asyncio
-async def test_scoped_binding_on_local_tool_is_rejected(skill_service, tool_repo, admin_user):
-    # A local tool is a single tool — per-tool scoping is meaningless.
-    await _seed_tool(tool_repo, "fill_pdf_form")
-    with pytest.raises(ValueError, match="non-MCP tool"):
-        await skill_service.create_skill(
-            _skill(bound_tool_ids=["fill_pdf_form::x"]), admin_user
-        )
-
-
-@pytest.mark.asyncio
-async def test_scoped_binding_on_unknown_base_is_rejected(skill_service, admin_user):
-    with pytest.raises(ValueError, match="unknown tool"):
-        await skill_service.create_skill(
-            _skill(bound_tool_ids=["ghost::tool"]), admin_user
-        )
 
 
 # ── role sync + hydration ────────────────────────────────────────────────────

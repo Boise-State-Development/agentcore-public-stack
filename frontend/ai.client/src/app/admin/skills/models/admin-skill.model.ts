@@ -36,7 +36,6 @@ export interface AdminSkill {
   displayName: string;
   description: string;
   instructions: string;
-  boundToolIds: string[];
   compose: string[];
   resources: SkillResourceRef[];
   status: SkillStatus;
@@ -93,7 +92,6 @@ export interface SkillCreateRequest {
   displayName: string;
   description: string;
   instructions?: string;
-  boundToolIds?: string[];
   compose?: string[];
   status?: SkillStatus;
   category?: string | null;
@@ -106,7 +104,6 @@ export interface SkillUpdateRequest {
   displayName?: string;
   description?: string;
   instructions?: string;
-  boundToolIds?: string[];
   compose?: string[];
   status?: SkillStatus;
   category?: string | null;

@@ -25,13 +25,12 @@ def _user() -> User:
     )
 
 
-def _skill(skill_id: str, display_name: str, status=SkillStatus.ACTIVE, bound=None):
+def _skill(skill_id: str, display_name: str, status=SkillStatus.ACTIVE):
     return SkillDefinition(
         skill_id=skill_id,
         display_name=display_name,
         description=f"{display_name} description",
         instructions="...",
-        bound_tool_ids=bound or [],
         status=status,
     )
 
@@ -77,7 +76,7 @@ class TestGetUserSkills:
     def test_lists_active_accessible_skills_with_prefs_merged(self, monkeypatch):
         repo = _FakeRepo(
             skills=[
-                _skill("web_research", "Web Research", bound=["t1", "t2"]),
+                _skill("web_research", "Web Research"),
                 _skill("pdf_workflows", "PDF Workflows"),
             ],
             prefs={"web_research": False},
@@ -91,7 +90,6 @@ class TestGetUserSkills:
         # Toggled-off skill: explicit preference surfaces, effective off
         assert by_id["web_research"]["userEnabled"] is False
         assert by_id["web_research"]["isEnabled"] is False
-        assert by_id["web_research"]["boundToolCount"] == 2
 
         # Untouched skill: no preference, enabled by default
         assert by_id["pdf_workflows"]["userEnabled"] is None

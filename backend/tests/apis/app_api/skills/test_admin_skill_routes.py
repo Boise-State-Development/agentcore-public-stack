@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 from apis.shared.auth import require_admin
 from apis.shared.rbac.models import AppRoleCreate
-from apis.shared.tools.models import ToolDefinition, ToolProtocol, ToolStatus
 from apis.app_api.admin.skills import routes as skill_routes
 
 
@@ -29,22 +28,9 @@ def _create_body(skill_id="pdf_workflows", **kw):
         "displayName": "PDF Workflows",
         "description": "Fill, merge and split PDFs.",
         "instructions": "# PDF Workflows",
-        "boundToolIds": [],
     }
     body.update(kw)
     return body
-
-
-async def _seed_tool(tool_repo, tool_id, status=ToolStatus.ACTIVE):
-    await tool_repo.create_tool(
-        ToolDefinition(
-            tool_id=tool_id,
-            display_name=tool_id,
-            description="x",
-            protocol=ToolProtocol.LOCAL,
-            status=status,
-        )
-    )
 
 
 def test_create_and_get(client):
@@ -72,24 +58,6 @@ def test_list(client):
     body = resp.json()
     assert body["total"] == 2
     assert {s["skillId"] for s in body["skills"]} == {"skill_one", "skill_two"}
-
-
-def test_create_rejects_unknown_bound_tool(client):
-    resp = client.post(
-        "/skills/", json=_create_body(boundToolIds=["ghost_tool"])
-    )
-    assert resp.status_code == 400
-    assert "unknown tool" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_create_with_active_bound_tool(client, tool_repo):
-    await _seed_tool(tool_repo, "fill_pdf_form")
-    resp = client.post(
-        "/skills/", json=_create_body(boundToolIds=["fill_pdf_form"])
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["boundToolIds"] == ["fill_pdf_form"]
 
 
 def test_update(client):
