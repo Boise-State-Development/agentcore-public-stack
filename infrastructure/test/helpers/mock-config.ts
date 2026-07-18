@@ -54,6 +54,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     memorySpaces: {
       enabled: false,
     },
+    skills: {
+      enabled: false,
+    },
     agents: {
       enabled: false,
     },

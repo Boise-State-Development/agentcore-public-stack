@@ -35,6 +35,19 @@ from apis.shared.rbac.service import get_app_role_service
 #: Phase B). Granted to the beta cohort's role; GA = grant to ``default``.
 SCHEDULED_RUNS_CAPABILITY = "scheduled-runs"
 
+#: Gates the user-facing Skills *surfaces* — the chat picker (``GET /skills/``,
+#: ``PUT /skills/preferences``) and My Skills authoring (``/skills/mine/*``).
+#: Skills v2 PR-5 turns ``SKILLS_ENABLED`` on everywhere but keeps the surfaces
+#: to admins first: ``system_admin``'s ``"*"`` tools grant satisfies this
+#: implicitly, so no seeding is needed for the admin cohort. **GA = grant
+#: ``skills`` to the ``default`` role — one config change, no redeploy.**
+#:
+#: Deliberately does NOT gate the runtime. An Agent shared to an ordinary user
+#: must still resolve its bound skills for them (invoke-through, §6/D7), and a
+#: capability check there would break exactly that path. Authoring and
+#: selection are gated; invocation through someone else's Agent is not.
+SKILLS_CAPABILITY = "skills"
+
 
 async def user_has_capability(user: User, capability_id: str) -> bool:
     """True iff ``user`` resolves the capability through their AppRoles.
