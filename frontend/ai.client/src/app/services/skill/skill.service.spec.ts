@@ -1,10 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { SkillService, UserSkill, SkillsResponse } from './skill.service';
 import { ConfigService } from '../config.service';
-import { ChatModeService } from '../chat-mode/chat-mode.service';
 import { signal } from '@angular/core';
 
 describe('SkillService', () => {
@@ -12,34 +11,33 @@ describe('SkillService', () => {
   let httpMock: HttpTestingController;
 
   const mockSkills: UserSkill[] = [
-    { skillId: 'pdf_workflows', displayName: 'PDF Workflows', description: 'Work with PDFs', category: 'document', boundToolCount: 2, userEnabled: null, isEnabled: true },
-    { skillId: 'web_research', displayName: 'Web Research', description: 'Research the web', category: 'research', boundToolCount: 3, userEnabled: false, isEnabled: false },
+    { skillId: 'pdf_workflows', displayName: 'PDF Workflows', description: 'Work with PDFs', category: 'document', userEnabled: null, isEnabled: true },
+    { skillId: 'web_research', displayName: 'Web Research', description: 'Research the web', category: 'research', userEnabled: false, isEnabled: false },
   ];
 
   const mockResponse: SkillsResponse = { skills: mockSkills, totalCount: 2 };
 
-  function configure(skillsEnabled: boolean) {
+  function configure() {
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
         SkillService,
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
-        { provide: ChatModeService, useValue: { skillsEnabled: signal(skillsEnabled) } },
       ],
     });
 
     service = TestBed.inject(SkillService);
     httpMock = TestBed.inject(HttpTestingController);
-    // Flush the constructor effect that gates the auto-load on the policy.
-    TestBed.tick();
   }
 
   async function setup() {
-    configure(true);
+    configure();
+    const promise = service.loadSkills();
     await vi.waitFor(() => {
       httpMock.expectOne('http://localhost:8000/skills/').flush(mockResponse);
     });
+    await promise;
   }
 
   afterEach(() => {
@@ -47,10 +45,10 @@ describe('SkillService', () => {
     httpMock.match(() => true);
   });
 
-  describe('auto-load gating', () => {
-    it('does not fetch skills when the feature is disabled', () => {
-      configure(false);
-      // No /skills/ request is issued; verify() in afterEach would fail on one.
+  describe('construction', () => {
+    it('does not fetch skills on construction (loading is deferred)', () => {
+      configure();
+      // No /skills/ request is issued on construction.
       httpMock.verify();
       expect(service.initialized()).toBe(false);
       expect(service.skills()).toEqual([]);
@@ -106,7 +104,7 @@ describe('SkillService', () => {
   describe('loadSkills', () => {
     beforeEach(setup);
 
-    it('should load skills from constructor', () => {
+    it('should load skills', () => {
       expect(service.skills()).toEqual(mockSkills);
       expect(service.initialized()).toBe(true);
       expect(service.loading()).toBe(false);

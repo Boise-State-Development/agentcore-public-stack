@@ -30,8 +30,6 @@ from apis.shared.errors import (
 from apis.shared.feature_flags import agents_enabled, skills_enabled
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.models.managed_models import list_managed_models
-from apis.shared.platform_settings.models import DEFAULT_CHAT_MODE, ChatModeSettings
-from apis.shared.platform_settings.service import get_chat_mode_settings_service
 from apis.shared.quota import (
     QuotaExceededEvent,
     build_no_quota_configured_event,
@@ -77,22 +75,11 @@ router = APIRouter(tags=["agentcore-runtime"])
 # Preview session prefix - sessions with this prefix skip persistence
 PREVIEW_SESSION_PREFIX = "preview-"
 
-# Default agent factory variant for a user turn when the client doesn't pin one
-# (PR-7). Flipped from "chat" to "skill": every turn now routes through the
-# SkillAgent's progressive disclosure, which folds a granted skill's bound tools
-# behind the two meta-tools. Safe by construction — a user with zero accessible
-# skills gets a SkillAgent that degrades to plain ChatAgent behavior
-# (skill_agent.py), so this is a no-op for them. Clients can still opt out per
-# turn by sending agent_type="chat". (The lower-level service.get_agent keeps a
-# conservative "chat" fallback for direct/programmatic callers that don't
-# resolve skills; this request-policy default lives here.)
-#
-# Since the skills-mode work (docs/specs/skills-mode.md) the *runtime* default
-# comes from the admin-managed chat-mode policy (apis.shared.platform_settings),
-# which also decides whether a client agent_type override is honored at all —
-# see _resolve_effective_agent_type. This constant is the compiled-in fallback
-# the policy model itself defaults to, kept aliased so they can never drift.
-DEFAULT_AGENT_TYPE = DEFAULT_CHAT_MODE
+# Default agent factory variant for a user turn when the client doesn't pin one.
+# Skills v2: plain chat is the default; skills are opt-in (selected per-turn or
+# bound on an Agent). A client can still pin agent_type explicitly (e.g. an
+# Agent that binds skills resolves to "skill" via the agent-binding resolver).
+DEFAULT_AGENT_TYPE = "chat"
 
 
 def _mark_session_cancelled(agent) -> None:
@@ -869,31 +856,6 @@ async def _resolve_accessible_skill_ids(current_user: User) -> list[str]:
     return await resolve_accessible_skill_ids(current_user)
 
 
-def _resolve_effective_agent_type(
-    requested: Optional[str], settings: ChatModeSettings
-) -> str:
-    """Apply the admin chat-mode policy to a client's requested agent type.
-
-    The client's choice between "skill" and "chat" is honored only while the
-    policy allows mode toggling; otherwise the admin default wins (UI gating
-    alone is not enforcement — the SPA hides the toggle, but any client can
-    craft a request). Other values ("voice", future internal types) pass
-    through untouched: the policy governs the user-facing mode pair only.
-    """
-    if (
-        requested in ("skill", "chat")
-        and requested != settings.default_mode
-        and not settings.allow_mode_toggle
-    ):
-        logger.info(
-            "Client agent_type=%s overridden to %s (mode toggling disabled by admin)",
-            requested,
-            settings.default_mode,
-        )
-        requested = None
-    return requested or settings.default_mode
-
-
 def _apply_enabled_skills_filter(
     accessible_skill_ids: list[str], enabled_skills: Optional[list[str]]
 ) -> list[str]:
@@ -932,16 +894,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
     is_resume = bool(input_data.interrupt_responses)
-    # Resolve the effective agent type once: the client's explicit choice
-    # (honored only while the admin chat-mode policy allows toggling), else
-    # the policy's default mode. Used for the skill resolution below and the
-    # non-resume get_agent calls (resume reuses the snapshot's type). The
-    # settings read is TTL-cached in-process (~60s) and degrades to compiled-in
-    # defaults, so this adds no per-turn Dynamo cost and can't fail the turn.
-    chat_mode_settings = await get_chat_mode_settings_service().get_settings()
-    effective_agent_type = _resolve_effective_agent_type(
-        input_data.agent_type, chat_mode_settings
-    )
+    # Resolve the effective agent type: the client's explicit choice, else the
+    # compiled-in default ("chat"). Used for the skill resolution below and the
+    # non-resume get_agent calls (resume reuses the snapshot's type). An Agent
+    # that binds skills is coerced to "skill" later by the agent-binding
+    # resolver.
+    effective_agent_type = input_data.agent_type or DEFAULT_AGENT_TYPE
     # Skills feature deferred for this environment: never route a turn through
     # the SkillAgent, regardless of the client's request or any stored policy.
     # Only the skill mode is neutralized — voice and other agent types pass

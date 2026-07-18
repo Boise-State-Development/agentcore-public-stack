@@ -9,8 +9,6 @@ import { SessionService } from '../session/session.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
-import { SkillService } from '../../../services/skill/skill.service';
-import { ChatModeService, ChatMode } from '../../../services/chat-mode/chat-mode.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
@@ -21,7 +19,6 @@ describe('ChatRequestService', () => {
   let mockRouter: any;
   let mockModelService: any;
   let mockToolService: any;
-  let currentMode: ChatMode;
   // Captured from the constructor's setResumeHandler(...) calls so the tests
   // can drive the (private) resume paths the way the consent/approval UIs do.
   let oauthResumeHandler: ((interruptIds: string[], context?: { sessionId?: string }) => Promise<void>) | null;
@@ -29,7 +26,6 @@ describe('ChatRequestService', () => {
 
   beforeEach(() => {
     TestBed.resetTestingModule();
-    currentMode = 'skill';
     mockChatHttpService = {
       sendChatRequest: vi.fn().mockResolvedValue(undefined),
     };
@@ -59,8 +55,6 @@ describe('ChatRequestService', () => {
         { provide: UserService, useValue: { getUser: vi.fn().mockReturnValue({ user_id: 'user1' }) } },
         { provide: ModelService, useValue: mockModelService },
         { provide: ToolService, useValue: mockToolService },
-        { provide: SkillService, useValue: { getEnabledSkillIds: vi.fn().mockReturnValue(['skill_a']) } },
-        { provide: ChatModeService, useValue: { mode: () => currentMode } },
         { provide: FileUploadService, useValue: { getReadyFileById: vi.fn() } },
         {
           provide: OAuthConsentService,
@@ -87,7 +81,7 @@ describe('ChatRequestService', () => {
     TestBed.resetTestingModule();
   });
 
-  it('should submit chat request with existing session (skills mode)', async () => {
+  it('should submit chat request with existing session', async () => {
     await service.submitChatRequest('Hello', 'session1');
 
     expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
@@ -96,15 +90,13 @@ describe('ChatRequestService', () => {
         session_id: 'session1',
         model_id: 'test-model',
         provider: 'test',
-        agent_type: 'skill',
-        enabled_skills: ['skill_a'],
-        // Skills mode: capabilities come from skills, not the tool picker.
-        enabled_tools: [],
+        // Always forward the tool selection; skills-mode plumbing is removed.
+        enabled_tools: ['tool1', 'tool2'],
       })
     );
   });
 
-  it('should submit chat request with new session (skills mode)', async () => {
+  it('should submit chat request with new session', async () => {
     await service.submitChatRequest('Hello', null);
 
     expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
@@ -112,35 +104,26 @@ describe('ChatRequestService', () => {
         message: 'Hello',
         model_id: 'test-model',
         provider: 'test',
-        agent_type: 'skill',
-        enabled_skills: ['skill_a'],
-        enabled_tools: [],
-      })
-    );
-  });
-
-  it('sends the tool selection and no skills in tools mode', async () => {
-    currentMode = 'chat';
-    await service.submitChatRequest('Hello', 'session1');
-
-    expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent_type: 'chat',
         enabled_tools: ['tool1', 'tool2'],
       })
     );
+  });
+
+  it('never sends agent_type or enabled_skills (skills mode removed)', async () => {
+    await service.submitChatRequest('Hello', 'session1');
+
     const sent = mockChatHttpService.sendChatRequest.mock.calls[0][0];
+    expect('agent_type' in sent).toBe(false);
     expect('enabled_skills' in sent).toBe(false);
   });
 
-  it('assistant turns carry no agent_type or enabled_skills (pre-skills-mode behavior)', async () => {
+  it('assistant turns carry no agent_type or enabled_skills', async () => {
     await service.submitChatRequest('Hello', 'session1', undefined, 'assistant1');
 
     const sent = mockChatHttpService.sendChatRequest.mock.calls[0][0];
     expect('agent_type' in sent).toBe(false);
     expect('enabled_skills' in sent).toBe(false);
-    // Assistants forward the user's tool selection (skills mode is excluded for
-    // assistant turns), so the raw tool picker selection rides along.
+    // Assistants forward the user's tool selection, so it rides along.
     expect(sent['enabled_tools']).toEqual(['tool1', 'tool2']);
   });
 

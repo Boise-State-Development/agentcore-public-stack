@@ -5,7 +5,6 @@ import {
   inject,
 } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { ChatModeService } from '../services/chat-mode/chat-mode.service';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -137,7 +136,6 @@ interface NavGroup {
 })
 export class AdminLayout {
   private router = inject(Router);
-  private chatMode = inject(ChatModeService);
 
   private readonly allNavGroups: NavGroup[] = [
     {
@@ -175,17 +173,11 @@ export class AdminLayout {
   ];
 
   /**
-   * Nav groups with the Skills entry hidden while the skills feature is
-   * disabled for this environment (deferred release). The pages stay routed
-   * but unlinked; the backend forces tools mode and 404s the skills APIs.
+   * Nav groups. The Skills entry is always linked; access is governed by
+   * admin RBAC and the skills route only mounts when the feature is enabled
+   * (SKILLS_ENABLED), so no client-side feature gate is needed here.
    */
-  readonly navGroups = computed<NavGroup[]>(() => {
-    if (this.chatMode.skillsEnabled()) return this.allNavGroups;
-    return this.allNavGroups.map((group) => ({
-      ...group,
-      items: group.items.filter((item) => item.route !== '/admin/skills'),
-    }));
-  });
+  readonly navGroups = computed<NavGroup[]>(() => this.allNavGroups);
 
   onMobileNavChange(event: Event): void {
     const select = event.target as HTMLSelectElement;

@@ -4,7 +4,6 @@ import { heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath,
 import { ModelService } from '../../session/services/model/model.service';
 import { ToolService, Tool } from '../../services/tool/tool.service';
 import { SkillService } from '../../services/skill/skill.service';
-import { ChatMode, ChatModeService } from '../../services/chat-mode/chat-mode.service';
 import { SystemPromptsService } from '../../services/system-prompts/system-prompts.service';
 import {
   KNOWN_PARAMS,
@@ -54,7 +53,6 @@ export class ModelSettings {
   protected modelService = inject(ModelService);
   protected toolService = inject(ToolService);
   protected skillService = inject(SkillService);
-  protected chatModeService = inject(ChatModeService);
   protected systemPromptsService = inject(SystemPromptsService);
 
   // Input to control visibility
@@ -355,10 +353,6 @@ export class ModelSettings {
 
   toggleSkills(): void {
     this.isSkillsOpen.update((open) => !open);
-  }
-
-  setMode(mode: ChatMode): void {
-    this.chatModeService.setMode(mode, this.sessionId());
   }
 
   toggleSkill(skillId: string): void {

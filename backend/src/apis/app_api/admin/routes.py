@@ -914,14 +914,6 @@ from .system_prompts.routes import router as system_prompts_admin_router
 
 router.include_router(system_prompts_admin_router)
 
-# ========== Include Platform Settings Admin Subrouter (conditional) ==========
-# Currently only hosts the chat-mode (skills vs. tools) policy, which is part
-# of the deferred skills feature. Mount it only when skills are enabled.
-if skills_enabled():
-    from .settings.routes import router as settings_admin_router
-
-    router.include_router(settings_admin_router)
-
 # ========== Include Fine-Tuning Admin Subrouter (conditional) ==========
 if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":
     from .fine_tuning.routes import router as fine_tuning_admin_router
