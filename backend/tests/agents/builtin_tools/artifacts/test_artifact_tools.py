@@ -231,7 +231,10 @@ def test_record_satisfies_minter(aws) -> None:
 
 @pytest.mark.parametrize(
     "enabled,expected",
-    [(None, 0), ([], 0), (["other"], 0), (["create_artifact"], 1),
+    # create_artifact is the single gate key: it provisions create + update.
+    # A stale "update_artifact" preference on its own grants nothing.
+    [(None, 0), ([], 0), (["other"], 0), (["update_artifact"], 0),
+     (["create_artifact"], 2),
      (["create_artifact", "update_artifact"], 2)],
 )
 def test_routes_gating(enabled, expected) -> None:
