@@ -97,7 +97,8 @@ async def admin_create_skill(
         raise HTTPException(status_code=400, detail=str(e))
 
     # Drop the all-skill-ids snapshot so the new skill is recognized by
-    # SkillAccessService on the very next chat turn in this process.
+    # ``skills.access.resolve_accessible_skill_ids`` on the very next chat
+    # turn in this process.
     from apis.shared.skills.freshness import invalidate as invalidate_freshness
 
     invalidate_freshness(created.skill_id)
