@@ -199,16 +199,6 @@ class AppRoleService:
 
         return model_id in permissions.models
 
-    async def can_access_skill(self, user: User, skill_id: str) -> bool:
-        """Check if user can access a specific skill."""
-        permissions = await self.resolve_user_permissions(user)
-
-        # Wildcard grants access to all
-        if "*" in permissions.skills:
-            return True
-
-        return skill_id in permissions.skills
-
     async def get_accessible_tools(self, user: User) -> List[str]:
         """Get list of tool IDs user can access."""
         permissions = await self.resolve_user_permissions(user)

@@ -182,10 +182,10 @@ async def _resolve_skills(assistant: Assistant, invoker: User) -> Optional[Resol
     this resolver only after ``get_assistant_with_access_check`` has admitted the
     invoker — so the predicate only re-tests the owner-match half.
 
-    Replaces the previous ``AppRoleService.can_access_skill`` check, which was wrong on
-    two axes: it had no ownership clause (an author binding their *own* authored skill
-    was blocked on their own invocation), and its ``"*"`` wildcard matched any id at all,
-    including another user's private authored skill.
+    Replaced the previous ``AppRoleService.can_access_skill`` check (since removed),
+    which was wrong on two axes: it had no ownership clause (an author binding their
+    *own* authored skill was blocked on their own invocation), and its ``"*"`` wildcard
+    matched any id at all, including another user's private authored skill.
     """
     skill_bindings = [b for b in (assistant.bindings or []) if b.kind == "skill"]
     if not skill_bindings:
