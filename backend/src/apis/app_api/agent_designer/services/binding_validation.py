@@ -12,7 +12,7 @@ Resolution scope:
   re-resolves each bound tool against the *invoker* (``AppRoleService.can_access_tool``, D5).
 - ``skill``          → feature-flagged; author must have the skill in the ``/agents/bindable``
   palette (``resolve_accessible_skill_ids``, the SAME source the picker fetches). Run-time then
-  re-resolves each bound skill against the *invoker* (``AppRoleService.can_access_skill``, D5).
+  re-resolves each bound skill against the *invoker* (``resolve_invocable_skill_ids``, D5).
 - ``memory_space``   → feature-flagged; author needs viewer+ (read) / editor+ (readwrite).
 - ``knowledge_base`` → **managed implicitly** (the KB is welded to the agent and its index
   is not user-configurable), so it is NOT author-settable; the compat layer synthesizes it
@@ -202,7 +202,7 @@ def _validate_skill(binding: AgentBinding, accessible_skill_ids: set) -> None:
         raise BindingValidationError("skill binding requires a non-empty 'ref'.", status_code=400)
     # The skill id must be in the author's palette (resolve_accessible_skill_ids) — the exact
     # source the Designer picker fetches. Run-time re-resolves against the invoker via
-    # AppRoleService.can_access_skill (D5).
+    # resolve_invocable_skill_ids (D5), which adds the Agent-owner invoke-through clause.
     if ref not in accessible_skill_ids:
         raise BindingValidationError(
             f"You do not have access to skill '{ref}'.", status_code=403

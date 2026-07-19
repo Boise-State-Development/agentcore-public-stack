@@ -95,11 +95,12 @@ async def resolve_invocable_skill_ids(
        share-access to the Agent.
 
     Clauses 1+2 are exactly ``resolve_accessible_skill_ids``. Note this is
-    deliberately NOT ``AppRoleService.can_access_skill``: that returns ``True``
-    for a ``"*"`` wildcard role against *any* id, including another user's
-    private authored skill, and it has no ownership clause at all (so an author
-    binding their own skill was blocked on their own invocation). Routing
-    through the shared resolver expands ``"*"`` over the catalog only.
+    deliberately NOT a bare RBAC permission check (the removed
+    ``AppRoleService.can_access_skill``): that returned ``True`` for a ``"*"``
+    wildcard role against *any* id, including another user's private authored
+    skill, and it had no ownership clause at all (so an author binding their own
+    skill was blocked on their own invocation). Routing through the shared
+    resolver expands ``"*"`` over the catalog only.
 
     Clause 3's **share-access half is the caller's precondition**: this is
     reached only after ``get_assistant_with_access_check`` has already admitted
