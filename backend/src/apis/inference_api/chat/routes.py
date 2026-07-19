@@ -415,7 +415,7 @@ def _build_spreadsheet_tools(
 # Artifact Authoring Tool Injection
 # ============================================================
 
-ARTIFACT_TOOL_IDS = {"create_artifact", "update_artifact"}
+ARTIFACT_TOOL_IDS = {"create_artifact"}
 
 
 def _build_artifact_tools(
@@ -424,23 +424,23 @@ def _build_artifact_tools(
     user_id: str,
 ) -> list:
     """Create context-bound artifact authoring tools if enabled by the user."""
-    if not enabled_tools:
+    if not enabled_tools or not ARTIFACT_TOOL_IDS.intersection(enabled_tools):
         return []
 
-    requested = ARTIFACT_TOOL_IDS.intersection(enabled_tools)
-    if not requested:
-        return []
-
+    # Artifacts are a single toggle: enabling create_artifact provisions the
+    # full authoring toolset (create + update) so the model can iterate on a
+    # document without a second admin catalog entry. The legacy
+    # "update_artifact" catalog row is retired — see
+    # backend/scripts/backfill_artifact_tool_merge.py.
     from agents.builtin_tools.artifacts import (
         make_create_artifact_tool,
         make_update_artifact_tool,
     )
 
-    tools = []
-    if "create_artifact" in requested:
-        tools.append(make_create_artifact_tool(session_id, user_id))
-    if "update_artifact" in requested:
-        tools.append(make_update_artifact_tool(session_id, user_id))
+    tools = [
+        make_create_artifact_tool(session_id, user_id),
+        make_update_artifact_tool(session_id, user_id),
+    ]
 
     logger.info(f"Created {len(tools)} artifact authoring tools")
     return tools

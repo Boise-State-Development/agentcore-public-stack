@@ -413,19 +413,14 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        # Single catalog entry / toggle that provisions the whole artifact
+        # toolset. Enabling this one id injects create/update at runtime — see
+        # ARTIFACT_TOOL_IDS and _build_artifact_tools in
+        # apis/inference_api/chat/routes.py. Keep the toolId as
+        # "create_artifact": it is the gate key.
         "toolId": "create_artifact",
-        "displayName": "Create Artifact",
-        "description": "Save standalone HTML or Markdown documents as versioned artifacts the user can open and iterate on.",
-        "category": "document",
-        "protocol": "local",
-        "enabledByDefault": True,
-        "isPublic": True,
-        "forwardAuthToken": False,
-    },
-    {
-        "toolId": "update_artifact",
-        "displayName": "Update Artifact",
-        "description": "Replace an existing artifact's content, creating a new immutable version.",
+        "displayName": "Artifacts",
+        "description": "Save standalone HTML or Markdown documents as versioned artifacts the user can open and iterate on. Updates create a new immutable version.",
         "category": "document",
         "protocol": "local",
         "enabledByDefault": True,

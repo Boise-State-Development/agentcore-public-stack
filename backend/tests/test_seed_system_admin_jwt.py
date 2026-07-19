@@ -131,7 +131,7 @@ class TestSeedDefaultTools:
         """Creates the default tool entries."""
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 7
+        assert result.created == 6
         assert result.failed == 0
 
         # Verify fetch_url_content
@@ -187,7 +187,7 @@ class TestSeedDefaultTools:
         )
         item = resp["Item"]
         assert item["toolId"] == "create_artifact"
-        assert item["displayName"] == "Create Artifact"
+        assert item["displayName"] == "Artifacts"
         assert item["category"] == "document"
         assert item["protocol"] == "local"
         assert item["enabledByDefault"] is True
@@ -195,17 +195,12 @@ class TestSeedDefaultTools:
         assert item["GSI1PK"] == "CATEGORY#document"
         assert item["GSI1SK"] == "TOOL#create_artifact"
 
-        # Verify update_artifact
+        # update_artifact is no longer its own catalog row: create_artifact is
+        # the single gate key that provisions the whole artifact toolset.
         resp = dynamodb_table.get_item(
             Key={"PK": "TOOL#update_artifact", "SK": "METADATA"}
         )
-        item = resp["Item"]
-        assert item["toolId"] == "update_artifact"
-        assert item["displayName"] == "Update Artifact"
-        assert item["category"] == "document"
-        assert item["protocol"] == "local"
-        assert item["enabledByDefault"] is True
-        assert item["isPublic"] is True
+        assert "Item" not in resp
 
         # Verify create_word_document (single toggle for the whole Word toolset)
         resp = dynamodb_table.get_item(
@@ -227,7 +222,7 @@ class TestSeedDefaultTools:
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.skipped == 7
+        assert result.skipped == 6
         assert result.created == 0
 
     def test_partial_skip(self, dynamodb_table):
@@ -241,7 +236,7 @@ class TestSeedDefaultTools:
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 6
+        assert result.created == 5
         assert result.skipped == 1
 
 
