@@ -4,6 +4,41 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.8.0] - 2026-07-19
+
+Feature release delivering **Skills v2** — skills are redesigned from tool-binding containers into pure, portable knowledge bundles that Agents load on demand, and for the first time **any signed-in user can author their own**. Skills ship enabled by default. Also completes the session-metadata static-sort-key migration (issue #175 Phases 2–3) with an operator backfill and a GSI-only read contraction, and consolidates the two artifact tool-catalog rows into a single "Artifacts" toggle. **Three backfill scripts must be run per environment** — see [RELEASE_NOTES.md](RELEASE_NOTES.md) deployment notes. No new AWS resources; a CDK deploy is needed only to set the `SKILLS_ENABLED` env var explicitly.
+
+### 🚀 Added
+
+- User-authored skills tier ("My Skills") — owner-scoped CRUD at `/skills/mine/*` over a new user tier in the app-roles table (GSI4-indexed), with bundle file upload, plus a `/my-skills` page and form in the SPA. Every route resolves ownership through `UserSkillService`; a skill you do not own is indistinguishable from one that does not exist (#683)
+- Skills selection surfaces — a "Skills" section in the chat model-settings panel listing every skill a user can reach (RBAC-granted catalog skills **union** their own), each with an opt-in toggle, plus **invoke-through**: an Agent shared to an ordinary user resolves its bound skills for them even if they could not select those skills themselves (#684)
+- `read_skill_file` progressive-disclosure tool and agentskills.io bundle support — skills are stored as portable S3 bundles with a `SKILL.md` write-through projection, so a skill prefix can be handed to a managed Harness or exported as-is (#681)
+
+### ✨ Improved
+
+- Session listing contracts to a single GSI query once the migration marker is set (issue #175 Phase 3) — the legacy base-table query is skipped after the Phase 2 backfill writes `PK=MIGRATION#session-sk`. Fails open: an absent marker or a GSI error keeps the dual-read path, so the deploy is order-independent and forks that never run the backfill are unaffected. The marker result is memoised only on success, so a container started before the backfill picks up the flip without a restart (#678)
+- Static-SK backfill for the cold tail (issue #175 Phase 2) — `backend/scripts/backfill_session_static_sk.py` migrates legacy session rows and removes ghost stubs. Dry-run by default, idempotent, and `--set-marker` refuses to write the completion marker while any legacy rows remain (#677)
+
+### ⚠️ Changed
+
+- **Breaking (conceptual):** skills no longer bind tools. A skill is now instructions + reference files only; `allowedTools` persists as advisory metadata and **never grants a tool**. The skills mode toggle is gone, and the runtime moved to the Strands `AgentSkills` plugin with `agent_type="skill"` kept as a temporary ChatAgent alias. Existing skill rows keep working; their tool lists simply stop granting (#680, #681)
+- Artifact tool catalog collapsed from two rows to one — "Create Artifact" and "Update Artifact" are now a single **"Artifacts"** toggle (`toolId` `create_artifact`), which injects both tools at runtime. **Requires `backend/scripts/backfill_artifact_tool_merge.py`** to promote existing role grants, user preferences, and assistant bindings before the retired row is deleted (#689)
+- The `skills` RBAC capability gate was removed from the user-facing skills routes. It could not be granted from the admin roles UI — that form builds `grantedTools` from the tool catalog, and a capability id is not a tool — so an admin granting a catalog skill to a role would have found it silently invisible with no in-product fix. Access is now `SKILLS_ENABLED` per environment plus a role's `grantedSkills` per cohort (#692)
+- The "My Skills" sidenav entry is hidden pending a navigation decision; the `/my-skills` route, page, and backend surface remain live and reachable by direct URL (#690)
+
+### 🐛 Fixed
+
+- Saving an Agent with an invalid form no longer looks like a click that did nothing — the first invalid control is scrolled into view and focused, with an explanatory toast. Also corrects stale copy on the agent and admin skill forms that still claimed skills carry their own bound tools (#682)
+
+### 🏗️ Infrastructure
+
+- `SKILLS_ENABLED` is threaded into both app-api and inference-api from `config.skills.enabled` (default ON with a `CDK_SKILLS_ENABLED=false` kill switch). No new AWS resources — the skill-resources S3 bucket and app-roles table already exist. Note that deployed containers set no `SKILLS_ENABLED` today, and unset now reads as enabled, so **skills activate on the `backend.yml` deploy, before any CDK deploy** (#685)
+
+### 📚 Docs
+
+- Skills v2 design spec — skills as a pure knowledge primitive bound on Agents (#679)
+- Agent Directory spec (#688) and Skill Creator spec (#691) — design documents for unbuilt features
+
 ## [1.7.1] - 2026-07-17
 
 Patch release fixing a Word-document save failure in the AgentCore Runtime and advancing the **session-metadata static-sort-key migration** (issue #175) to its write side. Word tools now resolve the user-files bucket's real region instead of pinning to `AWS_REGION`, so `PutObject` no longer fails with `PermanentRedirect`. On the storage side, new sessions are now born with a static sort key and legacy rows self-migrate in place on their next write, structurally eliminating the ghost-row race behind the "Failed to parse session item" warnings and closing the first-turn duplicate-row race. No infra or data migration; ship through `backend.yml`.
