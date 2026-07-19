@@ -41,8 +41,28 @@ class AppRoleService:
         Algorithm:
         1. Check user cache
         2. For each JWT role, find matching AppRoles
-        3. Merge permissions (union for tools/models, highest priority for quota)
-        4. Cache and return
+        3. If *nothing* matched, fall back to the ``default`` role
+        4. Merge permissions (union for tools/models, highest priority for quota)
+        5. Cache and return
+
+        **``default`` is a fallback, not a universal role.** Step 3
+        consults it only when the user matched *zero* AppRoles; it is never
+        merged alongside a matched role. Prod's ``default`` additionally
+        carries no ``jwtRoleMappings`` at all, so granting something there
+        reaches only users who match nothing else — never the cohort roles
+        (prod: ``faculty``/``staff``/``student``/``demo_day``). Comments
+        across this repo previously framed feature GA as "one grant to
+        ``default``, no redeploy"; that was wrong and has been corrected.
+        Reaching everyone means granting to each cohort role, or changing
+        ``default`` to merge as a baseline rather than substitute.
+
+        Related: the admin roles UI builds its ``grantedTools`` control from
+        the tool catalog (``admin/roles/pages/role-form.page.ts``,
+        ``availableTools()``) with no free-text entry. Anything that is not a
+        catalog tool — a feature-capability id, say — therefore cannot be
+        granted from the UI at all, only by hand-writing DynamoDB items. That
+        is what made the short-lived ``skills`` capability gate inoperable and
+        got it removed; weigh it before routing a new grant through this axis.
 
         Args:
             user: Authenticated user with JWT roles
