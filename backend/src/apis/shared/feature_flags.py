@@ -16,15 +16,27 @@ import os
 
 
 def skills_enabled() -> bool:
-    """Whether the Skills feature is enabled for this environment.
+    """Whether the Skills feature exists in this environment.
 
-    Covers the admin skills catalog, the user-facing skills picker, and
-    skills mode (routing turns through the ``SkillAgent``). Defaults off;
-    set ``SKILLS_ENABLED=true`` to turn it on. While off, new turns are
-    forced through the plain ``ChatAgent`` and the skills surfaces are
-    unmounted / hidden, but all skills data and code remain intact.
+    Covers the admin skills catalog, the user-facing skills picker, My Skills
+    authoring, and skill resolution on the runtime path. **Default ON with a
+    kill switch** (house style, mirroring ``SCHEDULED_RUNS_ENABLED``): unset or
+    empty resolves to enabled; only the literal ``"false"`` (case-insensitive)
+    disables. The CDK side threads ``config.skills.enabled`` into this env var
+    with the same empty-string-safe ternary, so an unset GitHub Actions
+    variable can never silently turn the feature off.
+
+    Flipped from default-off in Skills v2 PR-5, once the epic was complete and
+    dogfooded end to end (a real agentskills.io bundle uploaded as a user skill,
+    bound to an Agent, exercised L1→L2→L3 including ``read_skill_file``).
+
+    Note this flag gates *feature existence* per environment; *who* may use it
+    is a role's ``grantedSkills`` — two independent controls. (A ``skills`` RBAC
+    *capability* briefly gated the user-facing surfaces on top of this; it was
+    removed because a capability id cannot be granted from the admin roles UI.
+    See ``AppRoleService.resolve_user_permissions``.)
     """
-    return os.environ.get("SKILLS_ENABLED", "false").lower() == "true"
+    return os.environ.get("SKILLS_ENABLED", "").strip().lower() != "false"
 
 
 def scheduled_runs_enabled() -> bool:
@@ -39,9 +51,9 @@ def scheduled_runs_enabled() -> bool:
     empty-string-safe ternary, so an unset GitHub Actions variable can
     never silently turn the feature off.
 
-    Note this flag gates *feature existence* per environment; *who* can use
-    it is the ``scheduled-runs`` RBAC capability
-    (``apis.shared.rbac.capabilities``) — two independent controls.
+    Note this flag is the *only* control on this surface. A ``scheduled-runs``
+    RBAC capability once gated *who* could use it, but that gate 403'd in prod
+    and was dropped; the routes are deliberately ungated now.
     """
     return os.environ.get("SCHEDULED_RUNS_ENABLED", "").strip().lower() != "false"
 

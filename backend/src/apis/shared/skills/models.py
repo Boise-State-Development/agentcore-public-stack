@@ -25,6 +25,10 @@ from pydantic import BaseModel, Field
 # Regex for a skill_id — identical shape to tool_id (see ToolCreateRequest).
 SKILL_ID_PATTERN = r"^[a-z][a-z0-9_]{2,49}$"
 
+# ``owner_id`` of an admin-catalog skill. Anything else is a user-authored
+# skill (Skills v2 PR-3): governed by ownership, not by RBAC ``granted_skills``.
+SYSTEM_OWNER_ID = "system"
+
 
 class SkillStatus(str, Enum):
     """Availability status of a skill (mirrors ToolStatus)."""
@@ -81,8 +85,15 @@ class SkillResourceRef(BaseModel):
     s3_key: str = Field(
         ...,
         alias="s3Key",
-        description="Object key in the skill-resources bucket "
-        "(skills/{skill_id}/{content_hash})",
+        description="Object key in the skill-resources bucket, in the standard "
+        "agentskills.io layout (skills/{skill_id}/{references|scripts|assets}/{filename})",
+    )
+    # Skills v2: which agentskills.io bundle directory the file belongs to.
+    # ``script`` files are accept-and-inert (stored + listed, never executed).
+    # Old manifest rows (v1, content-hash keyed) default to ``reference``.
+    kind: str = Field(
+        default="reference",
+        description="Bundle directory: reference | script | asset",
     )
 
     model_config = {"populate_by_name": True}
@@ -118,14 +129,23 @@ class SkillDefinition(BaseModel):
         ..., description="Level-2 SKILL.md body, loaded on dispatch"
     )
 
-    # Bound capabilities
-    bound_tool_ids: List[str] = Field(
-        default_factory=list,
-        description="Catalog tool_ids bound to this skill (span all protocols)",
-    )
     compose: List[str] = Field(
         default_factory=list,
         description="skill_ids composed into this skill (composite skills)",
+    )
+
+    # Skills v2 (agentskills.io frontmatter passthrough). ``allowed_tools`` is
+    # ADVISORY ONLY — Strands parses it and marks it "Experimental: not yet
+    # enforced"; the platform never grants, mounts, or folds a tool because a
+    # skill names it (spec D1/D4). ``skill_metadata`` carries the remaining
+    # frontmatter (license, compatibility, arbitrary keys) round-trip-faithfully.
+    allowed_tools: List[str] = Field(
+        default_factory=list,
+        description="Advisory tool names from SKILL.md frontmatter; never enforced (D4)",
+    )
+    skill_metadata: dict = Field(
+        default_factory=dict,
+        description="agentskills.io frontmatter passthrough (license, compatibility, ...)",
     )
 
     # Supporting reference files (rev 2026-06-09 §0.2; PR-4). Lightweight
@@ -187,8 +207,9 @@ class SkillDefinition(BaseModel):
             "displayName": self.display_name,
             "description": self.description,
             "instructions": self.instructions,
-            "boundToolIds": list(self.bound_tool_ids),
             "compose": list(self.compose),
+            "allowedTools": list(self.allowed_tools),
+            "skillMetadata": dict(self.skill_metadata),
             # Reference-file manifest (camelCase maps, mirroring the row's
             # convention). The bytes live in S3; this is just pointers.
             "resources": [
@@ -198,6 +219,7 @@ class SkillDefinition(BaseModel):
                     "size": r.size,
                     "contentType": r.content_type,
                     "s3Key": r.s3_key,
+                    "kind": r.kind,
                 }
                 for r in self.resources
             ],
@@ -225,8 +247,9 @@ class SkillDefinition(BaseModel):
             display_name=item.get("displayName", ""),
             description=item.get("description", ""),
             instructions=item.get("instructions", ""),
-            bound_tool_ids=list(item.get("boundToolIds") or []),
             compose=list(item.get("compose") or []),
+            allowed_tools=list(item.get("allowedTools") or []),
+            skill_metadata=dict(item.get("skillMetadata") or {}),
             resources=[
                 SkillResourceRef(
                     filename=r.get("filename", ""),
@@ -235,6 +258,8 @@ class SkillDefinition(BaseModel):
                     size=int(r.get("size", 0)),
                     content_type=r.get("contentType", ""),
                     s3_key=r.get("s3Key", ""),
+                    # Old rows predate kind → default to reference.
+                    kind=r.get("kind", "reference"),
                 )
                 for r in (item.get("resources") or [])
             ],
@@ -269,7 +294,6 @@ class SkillCreateRequest(BaseModel):
     # SKILL.md body — uncapped (instructions can be long); empty is allowed so
     # an admin can save a draft and fill it in later.
     instructions: str = Field(default="")
-    bound_tool_ids: List[str] = Field(default_factory=list, alias="boundToolIds")
     compose: List[str] = Field(default_factory=list)
     status: SkillStatus = Field(default=SkillStatus.ACTIVE)
     category: Optional[str] = None
@@ -285,7 +309,6 @@ class SkillUpdateRequest(BaseModel):
     )
     description: Optional[str] = Field(None, max_length=500)
     instructions: Optional[str] = None
-    bound_tool_ids: Optional[List[str]] = Field(None, alias="boundToolIds")
     compose: Optional[List[str]] = None
     status: Optional[SkillStatus] = None
     category: Optional[str] = None
@@ -344,7 +367,6 @@ class AdminSkillResponse(BaseModel):
     display_name: str = Field(..., alias="displayName")
     description: str
     instructions: str
-    bound_tool_ids: List[str] = Field(default_factory=list, alias="boundToolIds")
     compose: List[str] = Field(default_factory=list)
     resources: List[SkillResourceRef] = Field(default_factory=list)
     status: SkillStatus
@@ -371,7 +393,6 @@ class AdminSkillResponse(BaseModel):
             display_name=skill.display_name,
             description=skill.description,
             instructions=skill.instructions,
-            bound_tool_ids=list(skill.bound_tool_ids),
             compose=list(skill.compose),
             resources=list(skill.resources),
             status=skill.status,

@@ -98,3 +98,55 @@ describe('isValidSkillId', () => {
     (id) => expect(isValidSkillId(id)).toBe(false)
   );
 });
+
+describe('parseSkillMarkdown — frontmatter passthrough (Skills v2 D2/D4)', () => {
+  it('carries non-reserved frontmatter into metadata', () => {
+    const parsed = parseSkillMarkdown(
+      ['---', 'name: Docx', 'description: Word docs.', 'license: MIT', 'version: 2.1', '---', '', 'Body.'].join('\n'),
+    );
+
+    expect(parsed.metadata).toEqual({ license: 'MIT', version: '2.1' });
+  });
+
+  it('excludes the reserved keys from metadata', () => {
+    const parsed = parseSkillMarkdown(
+      ['---', 'name: Docx', 'description: Word docs.', 'allowed-tools: Read', '---', '', 'Body.'].join('\n'),
+    );
+
+    expect(parsed.metadata).toEqual({});
+    expect(parsed.name).toBe('Docx');
+    expect(parsed.description).toBe('Word docs.');
+  });
+
+  it('splits a comma-separated allowed-tools scalar', () => {
+    const parsed = parseSkillMarkdown(
+      ['---', 'name: Docx', 'allowed-tools: Read, Write, Bash', '---', '', 'Body.'].join('\n'),
+    );
+
+    expect(parsed.allowedTools).toEqual(['Read', 'Write', 'Bash']);
+  });
+
+  it('splits an inline-array allowed-tools value', () => {
+    const parsed = parseSkillMarkdown(
+      ['---', 'name: Docx', 'allowed-tools: [Read, "Write"]', '---', '', 'Body.'].join('\n'),
+    );
+
+    expect(parsed.allowedTools).toEqual(['Read', 'Write']);
+  });
+
+  it('returns empty passthrough when there is no frontmatter', () => {
+    const parsed = parseSkillMarkdown('Just a body.');
+
+    expect(parsed.allowedTools).toEqual([]);
+    expect(parsed.metadata).toEqual({});
+    expect(parsed.instructions).toBe('Just a body.');
+  });
+
+  it('returns empty allowedTools when the key is absent', () => {
+    const parsed = parseSkillMarkdown(
+      ['---', 'name: Docx', '---', '', 'Body.'].join('\n'),
+    );
+
+    expect(parsed.allowedTools).toEqual([]);
+  });
+});

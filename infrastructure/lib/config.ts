@@ -51,6 +51,7 @@ export interface AppConfig {
   kbSync: KbSyncConfig;
   scheduledRuns: ScheduledRunsConfig;
   memorySpaces: MemorySpacesConfig;
+  skills: SkillsConfig;
   agents: AgentsConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
@@ -169,6 +170,23 @@ export interface ScheduledRunsConfig {
  * are provisioned unconditionally, so this only gates route mounting at runtime.
  */
 export interface MemorySpacesConfig {
+  enabled: boolean;
+}
+
+/**
+ * Skills feature flag (Skills v2). Default ON with a kill switch — the epic is
+ * complete and dogfooded, so it ships enabled for every deployer (opt-out),
+ * disabled per environment with CDK_SKILLS_ENABLED=false (or a
+ * `skills.enabled: false` cdk.json context). Sets the SKILLS_ENABLED env var on
+ * app-api and inference-api; the skills data lives in the shared app-roles
+ * table, so this only gates route mounting and skill resolution at runtime.
+ *
+ * This gates *feature existence* per environment, and is now the only gate on
+ * the user-facing surfaces: the `skills` RBAC capability that used to keep them
+ * admin-only was removed (it could not be granted from the admin roles UI). Who
+ * can reach *which* skills is a role's `grantedSkills`, edited in that UI.
+ */
+export interface SkillsConfig {
   enabled: boolean;
 }
 
@@ -377,6 +395,18 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_MEMORY_SPACES_ENABLED
         ? process.env.CDK_MEMORY_SPACES_ENABLED !== 'false'
         : scope.node.tryGetContext('memorySpaces')?.enabled ?? true,
+    },
+    skills: {
+      // Default ON with a kill switch (house style, mirroring memorySpaces /
+      // scheduledRuns): the workflow forwards an EMPTY STRING when the variable is
+      // unset, so treat empty/unset as the default (on) and only the literal
+      // "false" as the kill switch. A `skills.enabled: false` cdk.json context can
+      // also force it off. Skills v2 is complete and dogfooded end to end, so it
+      // ships on everywhere; the user-facing surfaces stay admin-only via the
+      // separate `skills` RBAC capability until GA.
+      enabled: process.env.CDK_SKILLS_ENABLED
+        ? process.env.CDK_SKILLS_ENABLED !== 'false'
+        : scope.node.tryGetContext('skills')?.enabled ?? true,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

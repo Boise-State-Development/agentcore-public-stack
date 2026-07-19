@@ -1840,6 +1840,37 @@ def _encode_list_cursor(session: SessionMetadata) -> str:
     return base64.b64encode(json.dumps(payload).encode('utf-8')).decode('utf-8')
 
 
+# --- Issue #175 Phase 3: contract the dual-scheme read once migration completes ---
+_MIGRATION_MARKER_PK = "MIGRATION#session-sk"
+_MIGRATION_MARKER_SK = "STATE"
+# Memoised once observed True. The marker only ever goes unset -> set (the Phase 2
+# backfill sets it after confirming zero legacy rows), never back, so caching a True
+# result per-process is safe. A False/absent result is NOT cached, so a container
+# that started before the backfill picks up the flip on a later list call.
+_migration_complete_cache = False
+
+
+def _is_session_migration_complete(table) -> bool:
+    """True once the Phase 2 backfill has set the migration-complete marker.
+
+    Gates ``list_user_sessions`` from the dual-scheme union down to a GSI-only read.
+    Fails open (returns False -> keep dual-read) on any error, and stays in dual-read
+    for downstream/forked deployments that haven't run the backfill — so removing the
+    legacy branch here can never blank the sidebar on un-migrated data.
+    """
+    global _migration_complete_cache
+    if _migration_complete_cache:
+        return True
+    try:
+        resp = table.get_item(Key={"PK": _MIGRATION_MARKER_PK, "SK": _MIGRATION_MARKER_SK})
+        if (resp.get("Item") or {}).get("complete"):
+            _migration_complete_cache = True
+            return True
+    except Exception as e:
+        logger.debug("migration marker check failed (staying in dual-read): %s", e)
+    return False
+
+
 async def _list_user_sessions_cloud(
     user_id: str,
     table_name: str,
@@ -1885,25 +1916,13 @@ async def _list_user_sessions_cloud(
         want = (limit + 1) if limit else None
         pk = f'USER#{user_id}'
 
-        # Legacy source: base table, S#ACTIVE# prefix. Resuming after a cursor uses
-        # between('S#ACTIVE#', 'S#ACTIVE#{la}#{sid}') — a single range condition that
-        # keeps the prefix filter while bounding the upper end (inclusive; the exact
-        # cursor row is dropped by the strict-less filter below).
-        if cursor:
-            la, sid = cursor
-            legacy_cond = Key('PK').eq(pk) & Key('SK').between('S#ACTIVE#', f'S#ACTIVE#{la}#{sid}')
-        else:
-            legacy_cond = Key('PK').eq(pk) & Key('SK').begins_with('S#ACTIVE#')
-        legacy_params: Dict[str, Any] = {
-            'KeyConditionExpression': legacy_cond,
-            'ScanIndexForward': False,
-        }
-        if want:
-            legacy_params['Limit'] = want
-        legacy_sessions = _collect_valid_sessions(table, legacy_params, want)
+        # GSI-only once the migration is complete (marker set); otherwise dual-read
+        # the union so un-migrated legacy rows stay visible — for downstream/forked
+        # deployments that haven't run the Phase 2 backfill yet.
+        gsi_only = _is_session_migration_complete(table)
 
         # Migrated source: SessionRecencyIndex GSI. GSI4_SK < '{la}#{sid}' is a clean
-        # strict-less resume. Degrade to legacy-only if the index isn't there yet.
+        # strict-less resume.
         if cursor:
             la, sid = cursor
             gsi_cond = Key('GSI4_PK').eq(pk) & Key('GSI4_SK').lt(f'{la}#{sid}')
@@ -1916,6 +1935,7 @@ async def _list_user_sessions_cloud(
         }
         if want:
             gsi_params['Limit'] = want
+        gsi_failed = False
         try:
             gsi_sessions = _collect_valid_sessions(table, gsi_params, want)
         except ClientError as e:
@@ -1936,8 +1956,31 @@ async def _list_user_sessions_cloud(
                     "session listing", code
                 )
                 gsi_sessions = []
+                gsi_failed = True
             else:
                 raise
+
+        # Legacy source: base table, S#ACTIVE# prefix. Skipped once migration is
+        # complete (GSI-only), UNLESS the GSI query failed — then fall back to legacy
+        # regardless so a transient index error never blanks the list. Resuming after
+        # a cursor uses between('S#ACTIVE#', 'S#ACTIVE#{la}#{sid}') — a single range
+        # condition that keeps the prefix filter while bounding the upper end
+        # (inclusive; the exact cursor row is dropped by the strict-less filter below).
+        if gsi_only and not gsi_failed:
+            legacy_sessions: list[SessionMetadata] = []
+        else:
+            if cursor:
+                la, sid = cursor
+                legacy_cond = Key('PK').eq(pk) & Key('SK').between('S#ACTIVE#', f'S#ACTIVE#{la}#{sid}')
+            else:
+                legacy_cond = Key('PK').eq(pk) & Key('SK').begins_with('S#ACTIVE#')
+            legacy_params: Dict[str, Any] = {
+                'KeyConditionExpression': legacy_cond,
+                'ScanIndexForward': False,
+            }
+            if want:
+                legacy_params['Limit'] = want
+            legacy_sessions = _collect_valid_sessions(table, legacy_params, want)
 
         # Merge: sort by (lastMessageAt, sessionId) descending, drop anything not
         # strictly older than the cursor (removes the inclusive legacy cursor row),

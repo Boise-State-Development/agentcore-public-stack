@@ -646,7 +646,6 @@ export class SessionService {
       // unchanged. The BFF mirrors this convention.
       selectedPromptId?: string | null;
       customPromptText?: string;
-      agentType?: 'skill' | 'chat';
     }
   ): Promise<SessionMetadata> {
     return this.updateSessionMetadata(sessionId, preferences);

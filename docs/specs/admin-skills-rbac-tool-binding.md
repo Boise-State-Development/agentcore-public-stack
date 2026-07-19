@@ -1,5 +1,11 @@
 # Admin-Managed Skills with RBAC + Tool Binding
 
+> **Tool-binding portions SUPERSEDED (2026-07-16) by
+> `skills-as-agent-primitive.md`.** Skills v2 PR-1 removed `bound_tool_ids`, the
+> MCP tool-folding machinery, and the hook shims; skills are now pure knowledge
+> bundles that bind no tools. The RBAC/admin-catalog/reference-file portions of
+> this spec remain accurate. Retained for build history.
+
 **Status:** Design / Plan — **re-scoped 2026-06-09**
 **Author:** (drafted with Claude)
 **Date:** 2026-06-08 (rev. 2026-06-09)

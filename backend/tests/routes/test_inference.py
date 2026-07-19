@@ -258,18 +258,25 @@ class TestInvocationsInvalid:
 
 
 # ---------------------------------------------------------------------------
-# PR-7: default agent_type flips to "skill"
+# Skills v2: default agent_type is "chat" (skills are opt-in)
 # ---------------------------------------------------------------------------
 
 
-class TestDefaultAgentTypeFlip:
-    """When the client omits agent_type, the turn routes through SkillAgent."""
+class TestDefaultAgentType:
+    """Skills v2 D6: skills are opt-in and driven by the per-turn SELECTION,
+    not by agent_type.
+
+    PR-4 decouples the two. Skills resolve on any turn that sends a non-empty
+    ``enabled_skills`` (the model-settings picker), including a plain chat turn;
+    an absent or empty selection means *no skills* — the reverse of v1, where
+    absent meant "everything accessible". ``agent_type`` no longer gates
+    anything: ``"skill"`` is a ChatAgent alias kept only so stale SPA sessions
+    don't 422.
+    """
 
     @pytest.fixture(autouse=True)
     def _skills_enabled(self, monkeypatch):
-        # The skill-default behavior only applies when the feature is on; off
-        # by default, every turn is forced to chat (covered in
-        # tests/routes/test_agent_mode_policy.py).
+        # Skills only resolve when the feature is on; off by default.
         monkeypatch.setenv("SKILLS_ENABLED", "true")
 
     def _mock_agent(self):
@@ -281,7 +288,7 @@ class TestDefaultAgentTypeFlip:
         agent.stream_async = fake_stream
         return agent
 
-    def test_omitted_agent_type_defaults_to_skill(self, authed_app, authed_client):
+    def test_omitted_agent_type_defaults_to_chat(self, authed_app, authed_client):
         get_agent_mock = MagicMock(return_value=self._mock_agent())
         resolve_mock = AsyncMock(return_value=["web_research"])
         with patch(
@@ -295,17 +302,133 @@ class TestDefaultAgentTypeFlip:
         ):
             resp = authed_client.post(
                 "/invocations",
-                json={"session_id": "sess-skill", "message": "hi"},
+                json={"session_id": "sess-default", "message": "hi"},
             )
             _ = resp.text  # force the streaming generator to run
 
         assert resp.status_code == 200
-        # Skills were resolved even though the client sent no agent_type,
-        # and get_agent was built as a skill agent with them threaded in.
+        # No selection sent → plain chat, no skills, and — because the opt-in
+        # default short-circuits before the resolver — no RBAC/skill-table read
+        # at all. That is what keeps skills free for turns that don't want them.
+        resolve_mock.assert_not_awaited()
+        kwargs = get_agent_mock.call_args.kwargs
+        assert kwargs["agent_type"] == "chat"
+        assert kwargs["accessible_skill_ids"] is None
+
+    def test_selection_resolves_skills_on_a_plain_chat_turn(self, authed_app, authed_client):
+        get_agent_mock = MagicMock(return_value=self._mock_agent())
+        resolve_mock = AsyncMock(return_value=["web_research", "writing"])
+        with patch(
+            "apis.inference_api.chat.routes.get_agent", get_agent_mock
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes._resolve_accessible_skill_ids",
+            resolve_mock,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={
+                    "session_id": "sess-picker",
+                    "message": "hi",
+                    "enabled_skills": ["web_research"],
+                },
+            )
+            _ = resp.text
+
+        assert resp.status_code == 200
+        # The picker drives skills on an ordinary chat turn — no agent_type sent.
         resolve_mock.assert_awaited()
         kwargs = get_agent_mock.call_args.kwargs
-        assert kwargs["agent_type"] == "skill"
+        assert kwargs["agent_type"] == "chat"
+        # Narrowed to the selection, never widened to the full accessible set.
         assert kwargs["accessible_skill_ids"] == ["web_research"]
+
+    def test_selection_cannot_grant_an_inaccessible_skill(self, authed_app, authed_client):
+        get_agent_mock = MagicMock(return_value=self._mock_agent())
+        resolve_mock = AsyncMock(return_value=["web_research"])
+        with patch(
+            "apis.inference_api.chat.routes.get_agent", get_agent_mock
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes._resolve_accessible_skill_ids",
+            resolve_mock,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={
+                    "session_id": "sess-forged",
+                    "message": "hi",
+                    "enabled_skills": ["web_research", "someone-elses-private-skill"],
+                },
+            )
+            _ = resp.text
+
+        assert resp.status_code == 200
+        # The picker is a UI convenience, not a grant. A forged body naming a
+        # skill the user cannot reach is intersected away.
+        kwargs = get_agent_mock.call_args.kwargs
+        assert kwargs["accessible_skill_ids"] == ["web_research"]
+
+    def test_empty_selection_is_no_skills(self, authed_app, authed_client):
+        get_agent_mock = MagicMock(return_value=self._mock_agent())
+        resolve_mock = AsyncMock(return_value=["web_research"])
+        with patch(
+            "apis.inference_api.chat.routes.get_agent", get_agent_mock
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes._resolve_accessible_skill_ids",
+            resolve_mock,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={
+                    "session_id": "sess-empty",
+                    "message": "hi",
+                    "enabled_skills": [],
+                },
+            )
+            _ = resp.text
+
+        assert resp.status_code == 200
+        # Every skill unchecked in the picker is indistinguishable from never
+        # having opened it — no skills, no reads.
+        resolve_mock.assert_not_awaited()
+        assert get_agent_mock.call_args.kwargs["accessible_skill_ids"] is None
+
+    def test_flag_off_ignores_the_selection(self, authed_app, authed_client, monkeypatch):
+        monkeypatch.setenv("SKILLS_ENABLED", "false")
+        get_agent_mock = MagicMock(return_value=self._mock_agent())
+        resolve_mock = AsyncMock(return_value=["web_research"])
+        with patch(
+            "apis.inference_api.chat.routes.get_agent", get_agent_mock
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes._resolve_accessible_skill_ids",
+            resolve_mock,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={
+                    "session_id": "sess-flag-off",
+                    "message": "hi",
+                    "enabled_skills": ["web_research"],
+                },
+            )
+            _ = resp.text
+
+        assert resp.status_code == 200
+        # SKILLS_ENABLED is the master gate; a selection can't route around it.
+        # (This is the state of every deployed env until PR-5 flips it.)
+        resolve_mock.assert_not_awaited()
+        assert get_agent_mock.call_args.kwargs["accessible_skill_ids"] is None
 
     def test_explicit_chat_opts_out(self, authed_app, authed_client):
         get_agent_mock = MagicMock(return_value=self._mock_agent())
@@ -330,7 +453,7 @@ class TestDefaultAgentTypeFlip:
             _ = resp.text
 
         assert resp.status_code == 200
-        # Explicit chat → no skill resolution, no skills forwarded.
+        # Explicit chat with no selection → no skill resolution, none forwarded.
         resolve_mock.assert_not_awaited()
         kwargs = get_agent_mock.call_args.kwargs
         assert kwargs["agent_type"] == "chat"

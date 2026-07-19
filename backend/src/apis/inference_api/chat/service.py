@@ -72,10 +72,10 @@ def _create_cache_key(
 
     `skills_hash` is the skills analog: a digest of the user's resolved
     accessible skill ids AND their `updated_at` values (skills/freshness).
-    A SkillAgent's tool universe is derived from the user's granted skills,
-    which `enabled_tools` does not capture — so without this an edit to a
-    granted skill (or a role grant change) would serve a stale agent. Empty
-    for chat agents (no skills), so the default path is unaffected.
+    A skill turn's `<available_skills>` disclosure is derived from the user's
+    granted skills, which `enabled_tools` does not capture — so without this an
+    edit to a granted skill (or a role grant change) would serve a stale agent.
+    Empty for chat turns with no skills, so the default path is unaffected.
     """
     tools_hash = _hash_tools(enabled_tools)
 
@@ -175,10 +175,11 @@ async def get_agent(
 
     freshness_hash = await get_freshness_hash(enabled_tools or [])
 
-    # Skills dimension of the cache key (skill agents only). Digest of the
-    # user's accessible skill ids + their updated_at, so an edit to a granted
-    # skill or a role-grant change invalidates the cached SkillAgent. Empty
-    # string for the chat path (no accessible_skill_ids) — key unchanged.
+    # Skills dimension of the cache key. Digest of the turn's effective skill
+    # ids + their updated_at, so an edit to a granted skill or a role-grant
+    # change invalidates the cached agent. Empty string when the turn carries no
+    # skills — which, under the D6 opt-in default, is the common case — so those
+    # keys are byte-identical to the pre-skills ones.
     skills_hash = ""
     if accessible_skill_ids:
         from apis.shared.skills.freshness import (
@@ -224,9 +225,9 @@ async def get_agent(
     # Cache miss - create new agent
     logger.debug("⚠️ Agent cache miss - creating new instance")
 
-    # Create agent via the type registry. Default "chat" preserves the
-    # existing MainAgent (= ChatAgent) behavior; "skill" routes through
-    # SkillAgent's progressive skill disclosure.
+    # Create agent via the type registry. Both "chat" and "skill" resolve to
+    # ChatAgent (Skills v2 retired the SkillAgent subclass); a "skill" turn just
+    # carries accessible_skill_ids, which adds the AgentSkills disclosure plugin.
     resolved_agent_type = agent_type or "chat"
     create_kwargs: Dict[str, Any] = dict(
         agent_type=resolved_agent_type,
@@ -244,19 +245,26 @@ async def get_agent(
         mantle_api_mode=mantle_api_mode,
         mantle_region=mantle_region,
     )
-    # Only the SkillAgent accepts accessible_skill_ids; ChatAgent's constructor
-    # would reject the unknown kwarg, so gate it on the skill type.
-    if resolved_agent_type == "skill":
+    # Skills v2: ChatAgent (now the target of both "chat" and "skill" types)
+    # accepts accessible_skill_ids and conditionally adds the AgentSkills
+    # plugin. Pass it through whenever resolved — VoiceAgent does not take the
+    # kwarg, so keep it off that path.
+    if resolved_agent_type != "voice":
         create_kwargs["accessible_skill_ids"] = accessible_skill_ids
     agent = create_agent(**create_kwargs)
 
     # Stamp the type onto the construction snapshot so a paused turn can
-    # resume on the same factory variant after cache eviction. Skill turns
-    # also stamp their effective skill set: resume must rebuild the same
+    # resume on the same factory variant after cache eviction. A turn carrying
+    # skills also stamps its effective set: resume must rebuild the same
     # skills_hash cache key even if the user toggles skills mid-pause.
+    #
+    # Skills v2: stamped for any non-voice type, not just "skill" — a plain
+    # "chat" turn now carries skills via the opt-in picker, and gating this on
+    # the type would leave those snapshots blank and orphan the paused agent on
+    # resume.
     if hasattr(agent, "_construction_snapshot"):
         agent._construction_snapshot["agent_type"] = resolved_agent_type
-        if resolved_agent_type == "skill" and accessible_skill_ids is not None:
+        if resolved_agent_type != "voice" and accessible_skill_ids is not None:
             agent._construction_snapshot["enabled_skills"] = list(accessible_skill_ids)
 
     # Don't cache agents with context-bound extra_tools

@@ -1,20 +1,19 @@
-import { Injectable, inject, signal, computed, effect } from '@angular/core';
+import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
-import { ChatModeService } from '../chat-mode/chat-mode.service';
 
 /**
- * One skill the user's roles grant, as returned by GET /skills/.
- * `userEnabled` is the explicit preference (null = untouched);
- * `isEnabled` is the effective state (untouched skills default to on).
+ * One skill the user can reach (catalog-granted ∪ authored), as returned by
+ * GET /skills/. `userEnabled` is the explicit preference (null = untouched);
+ * `isEnabled` is the effective state — untouched skills default to **off**
+ * (Skills v2 D6 opt-in, the reverse of tools).
  */
 export interface UserSkill {
   skillId: string;
   displayName: string;
   description: string;
   category: string | null;
-  boundToolCount: number;
   userEnabled: boolean | null;
   isEnabled: boolean;
 }
@@ -28,9 +27,14 @@ export interface SkillsResponse {
 /**
  * Service for the user's accessible skills and per-skill preferences.
  *
- * The skills-mode sibling of ToolService: the backend returns only the
- * ACTIVE skills the user's RBAC roles grant (the same set the SkillAgent
- * can activate), and preferences persist globally per user.
+ * The sibling of ToolService: the backend returns the ACTIVE skills the user
+ * can reach (RBAC-granted catalog ∪ skills they authored), and preferences
+ * persist globally per user.
+ *
+ * Unlike ToolService this does NOT load in its constructor. Skills are opt-in
+ * and the feature is off in every deployed env until PR-5, so the load is
+ * deferred to the first open of the model-settings panel (and to an
+ * Agent-bound conversation, which needs the names to render locked rows).
  */
 @Injectable({
   providedIn: 'root'
@@ -38,12 +42,8 @@ export interface SkillsResponse {
 export class SkillService {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
-  private chatMode = inject(ChatModeService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/skills`);
-
-  /** Guards the one-time auto-load so it fires at most once. */
-  private autoLoadTriggered = false;
 
   // Internal state signals
   private _skills = signal<UserSkill[]>([]);
@@ -65,21 +65,6 @@ export class SkillService {
 
   /** True when the skill set is dictated by the active Agent and toggles are locked. */
   readonly agentLocked = computed(() => this._agentLockedSkillIds() !== null);
-
-  constructor() {
-    // Load the user's skills once the feature is known to be enabled. While
-    // skills are deferred (disabled) the /skills API is unmounted, so gating
-    // on the policy avoids a guaranteed 404 on every session; when enabled,
-    // the effect fires as soon as the chat-mode policy resolves.
-    effect(() => {
-      if (this.chatMode.skillsEnabled() && !this.autoLoadTriggered) {
-        this.autoLoadTriggered = true;
-        this.loadSkills().catch(err => {
-          console.error('Failed to load skills on initialization:', err);
-        });
-      }
-    });
-  }
 
   // Computed signals
   readonly enabledSkills = computed(() =>
@@ -160,6 +145,17 @@ export class SkillService {
       this._skills.set(response.skills);
       this._initialized.set(true);
     } catch (err: unknown) {
+      const status = (err as { status?: number } | null)?.status;
+      if (status === 404) {
+        // Kill switch off — the `/skills` router isn't mounted when
+        // SKILLS_ENABLED is false. Treat it as "no skills" rather than an
+        // error: the picker stays hidden (`hasSkills()` is false) and nothing
+        // is logged, which is the state of every deployed env until PR-5.
+        // Mark initialized so we don't re-probe on every panel open.
+        this._skills.set([]);
+        this._initialized.set(true);
+        return;
+      }
       const message = err instanceof Error ? err.message : 'Failed to load skills';
       this._error.set(message);
       console.error('Skill load error:', err);

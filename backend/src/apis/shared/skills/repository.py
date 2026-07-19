@@ -8,9 +8,10 @@ DynamoDB operations for the admin-managed Skill catalog. Mirrors
   - Skill: PK=SKILL#{skill_id}, SK=METADATA
 
 ``SkillOwnerIndex`` (GSI4: GSI4PK=OWNER#{owner_id}, GSI4SK=SKILL#{skill_id})
-is provisioned for a Phase-2 "list my skills" query; v1 admin lists scan by
-``begins_with(PK, "SKILL#")``. See
-``docs/specs/admin-skills-rbac-tool-binding.md`` (§5).
+backs the user-authored tier's "list my skills" query
+(``list_skills_by_owner``). Admin catalog lists still scan by
+``begins_with(PK, "SKILL#")`` and narrow to ``owner_id == "system"``. See
+``docs/specs/skills-as-agent-primitive.md`` (§4, PR-3).
 """
 
 import logging
@@ -19,11 +20,15 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import boto3
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-from .models import SkillDefinition, SkillStatus, UserSkillPreference
+from .models import SYSTEM_OWNER_ID, SkillDefinition, SkillStatus, UserSkillPreference
 
 logger = logging.getLogger(__name__)
+
+# GSI4 — see module docstring. Provisioned in the CDK auth-tables construct.
+SKILL_OWNER_INDEX = "SkillOwnerIndex"
 
 
 class SkillCatalogRepository:
@@ -69,13 +74,17 @@ class SkillCatalogRepository:
             raise
 
     async def list_skills(
-        self, status: Optional[str] = None
+        self, status: Optional[str] = None, owner_id: Optional[str] = None
     ) -> List[SkillDefinition]:
         """
-        List all skills, optionally filtered by status.
+        List all skills, optionally filtered by status and/or owner.
 
         Args:
             status: Optional status filter (active, draft, disabled)
+            owner_id: Optional owner filter. Pass ``"system"`` to get only the
+                admin catalog (excluding every user-authored skill); pass a user
+                id to get that user's skills — though ``list_skills_by_owner``
+                is the cheap GSI-backed path for the latter.
 
         Returns:
             List of SkillDefinition objects
@@ -105,6 +114,9 @@ class SkillCatalogRepository:
             if status:
                 skills = [s for s in skills if s.status == status]
 
+            if owner_id is not None:
+                skills = [s for s in skills if s.owner_id == owner_id]
+
             # Sort by category then display_name
             skills.sort(key=lambda s: (s.category or "", s.display_name))
 
@@ -112,6 +124,52 @@ class SkillCatalogRepository:
 
         except ClientError as e:
             logger.error(f"Error listing skills: {e}")
+            raise
+
+    async def list_skills_by_owner(
+        self, owner_id: str, status: Optional[str] = None
+    ) -> List[SkillDefinition]:
+        """
+        List the skills authored by one owner, via the ``SkillOwnerIndex`` GSI.
+
+        This is the "list my skills" query for the user-authored tier — a
+        partition query, not a table scan, so it stays cheap as the catalog
+        grows. Passing ``"system"`` returns the admin catalog.
+
+        Args:
+            owner_id: Author identity (a user id, or ``"system"``)
+            status: Optional status filter (active, draft, disabled)
+
+        Returns:
+            List of SkillDefinition objects, sorted by display name
+        """
+        try:
+            key_condition = Key("GSI4PK").eq(f"OWNER#{owner_id}")
+
+            response = self._table.query(
+                IndexName=SKILL_OWNER_INDEX,
+                KeyConditionExpression=key_condition,
+            )
+            items = response.get("Items", [])
+
+            while "LastEvaluatedKey" in response:
+                response = self._table.query(
+                    IndexName=SKILL_OWNER_INDEX,
+                    KeyConditionExpression=key_condition,
+                    ExclusiveStartKey=response["LastEvaluatedKey"],
+                )
+                items.extend(response.get("Items", []))
+
+            skills = [SkillDefinition.from_dynamo_item(item) for item in items]
+
+            if status:
+                skills = [s for s in skills if s.status == status]
+
+            skills.sort(key=lambda s: s.display_name.lower())
+            return skills
+
+        except ClientError as e:
+            logger.error(f"Error listing skills for owner {owner_id}: {e}")
             raise
 
     async def create_skill(self, skill: SkillDefinition) -> SkillDefinition:

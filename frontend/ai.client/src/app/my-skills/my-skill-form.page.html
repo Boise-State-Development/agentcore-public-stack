@@ -1,0 +1,275 @@
+<div class="min-h-dvh">
+  <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+    <a
+      routerLink="/my-skills"
+      class="inline-flex items-center gap-1.5 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+    >
+      <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
+      My Skills
+    </a>
+
+    <h1 class="mt-4 text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl dark:text-white">
+      {{ isEdit() ? 'Edit skill' : 'New skill' }}
+    </h1>
+
+    @if (error()) {
+      <div
+        role="alert"
+        class="mt-6 rounded-2xl bg-red-50 px-4 py-3 text-sm/6 text-red-800 dark:bg-red-900/20 dark:text-red-400"
+      >
+        {{ error() }}
+      </div>
+    }
+
+    <form [formGroup]="form" (ngSubmit)="onSubmit()" class="mt-8 space-y-6">
+      <!-- Import from SKILL.md -->
+      @if (!isEdit()) {
+        <div class="rounded-2xl border border-dashed border-gray-300 p-4 dark:border-gray-700">
+          <label
+            for="skill-md-import"
+            class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            <ng-icon name="heroArrowUpTray" class="size-4" aria-hidden="true" />
+            Import a SKILL.md
+          </label>
+          <input
+            id="skill-md-import"
+            type="file"
+            class="sr-only"
+            accept=".md,.markdown,text/markdown,text/plain"
+            (change)="onImportSelected($event)"
+          />
+          <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
+            Already have a skill in the
+            <code class="text-xs">agentskills.io</code> format? Import it to prefill this form.
+          </p>
+          @if (importNotice()) {
+            <p role="status" class="mt-2 text-sm/6 text-blue-700 dark:text-blue-400">
+              {{ importNotice() }}
+            </p>
+          }
+        </div>
+      }
+
+      <!-- Name -->
+      <div>
+        <label for="displayName" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+          Name
+        </label>
+        <input
+          id="displayName"
+          type="text"
+          formControlName="displayName"
+          required
+          class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        />
+        @if (form.controls.displayName.touched && form.controls.displayName.invalid) {
+          <p class="mt-1 text-sm/6 text-red-700 dark:text-red-400">A name is required.</p>
+        }
+      </div>
+
+      <!-- Description -->
+      <div>
+        <label for="description" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+          Description
+        </label>
+        <textarea
+          id="description"
+          rows="2"
+          formControlName="description"
+          required
+          class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        ></textarea>
+        <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+          One line explaining when to use this skill. This is what the agent reads when deciding
+          whether the skill is relevant — make it specific.
+        </p>
+        @if (form.controls.description.touched && form.controls.description.invalid) {
+          <p class="mt-1 text-sm/6 text-red-700 dark:text-red-400">A description is required.</p>
+        }
+      </div>
+
+      <!-- Instructions -->
+      <div>
+        <label for="instructions" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+          Instructions
+        </label>
+        <textarea
+          id="instructions"
+          rows="14"
+          formControlName="instructions"
+          class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        ></textarea>
+        <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+          Markdown. The agent loads this only after it decides the skill applies, so length here
+          costs nothing until it's used.
+        </p>
+      </div>
+
+      <!-- Advisory allowed-tools (D4: displayed, never enforced) -->
+      @if (allowedTools().length > 0) {
+        <div class="rounded-2xl border border-gray-200 p-4 dark:border-gray-700">
+          <h2 class="text-sm/6 font-medium text-gray-900 dark:text-white">Tools this skill mentions</h2>
+          <ul role="list" class="mt-2 flex flex-wrap gap-2">
+            @for (tool of allowedTools(); track tool) {
+              <li
+                class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-300"
+              >
+                {{ tool }}
+              </li>
+            }
+          </ul>
+          <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
+            Carried over from the imported bundle for reference. Skills never grant tools — the
+            agent you bind this to decides which tools are available.
+          </p>
+        </div>
+      }
+
+      <!-- Supporting files -->
+      <fieldset class="rounded-2xl border border-gray-200 p-4 dark:border-gray-700">
+        <legend class="px-1 text-sm/6 font-medium text-gray-900 dark:text-white">
+          Supporting files
+        </legend>
+
+        <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+          Optional. The agent can read these on demand once the skill is active — up to
+          {{ maxFiles }} files, 1 MB each.
+        </p>
+
+        <div class="mt-4 flex flex-wrap items-center gap-3">
+          <label for="file-kind" class="text-sm/6 text-gray-700 dark:text-gray-300">Add as</label>
+          <select
+            id="file-kind"
+            [value]="uploadKind()"
+            (change)="setUploadKind($any($event.target).value)"
+            class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          >
+            @for (kind of resourceKinds; track kind.value) {
+              <option [value]="kind.value">{{ kind.label }}</option>
+            }
+          </select>
+
+          <label
+            for="resource-upload"
+            class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            <ng-icon name="heroArrowUpTray" class="size-4" aria-hidden="true" />
+            {{ uploading() ? 'Uploading…' : 'Choose files' }}
+          </label>
+          <input
+            id="resource-upload"
+            type="file"
+            multiple
+            class="sr-only"
+            [disabled]="uploading()"
+            (change)="onFilesSelected($event)"
+          />
+        </div>
+
+        <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
+          {{ kindHint(uploadKind()) }}
+        </p>
+
+        <!-- Uploaded (edit mode) -->
+        @if (resources().length > 0) {
+          <ul role="list" class="mt-4 divide-y divide-gray-100 dark:divide-gray-700">
+            @for (resource of resources(); track resource.filename) {
+              <li class="flex items-center justify-between gap-3 py-2">
+                <span class="min-w-0 text-sm/6 text-gray-900 dark:text-white">
+                  <span class="truncate">{{ resource.filename }}</span>
+                  <span class="ml-2 text-xs text-gray-500 capitalize dark:text-gray-500">
+                    {{ resource.kind }}
+                  </span>
+                </span>
+                <span class="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    (click)="viewResource(resource.filename)"
+                    [attr.aria-label]="'View ' + resource.filename"
+                    class="rounded-2xl p-1.5 text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-700"
+                  >
+                    <ng-icon name="heroEye" class="size-4" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    (click)="deleteResource(resource.filename)"
+                    [attr.aria-label]="'Delete ' + resource.filename"
+                    class="rounded-2xl p-1.5 text-red-700 hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-red-400 dark:hover:bg-red-900/20"
+                  >
+                    <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                  </button>
+                </span>
+              </li>
+            }
+          </ul>
+        }
+
+        <!-- Staged (create mode) -->
+        @if (pendingList().length > 0) {
+          <ul role="list" class="mt-4 divide-y divide-gray-100 dark:divide-gray-700">
+            @for (pending of pendingList(); track pending.filename) {
+              <li class="flex items-center justify-between gap-3 py-2">
+                <span class="min-w-0 text-sm/6 text-gray-900 dark:text-white">
+                  <span class="truncate">{{ pending.filename }}</span>
+                  <span class="ml-2 text-xs text-gray-500 dark:text-gray-500">
+                    <span class="capitalize">{{ pending.kind }}</span> · uploads when you save
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  (click)="removePending(pending.filename)"
+                  [attr.aria-label]="'Remove ' + pending.filename"
+                  class="shrink-0 rounded-2xl p-1.5 text-red-700 hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-red-400 dark:hover:bg-red-900/20"
+                >
+                  <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                </button>
+              </li>
+            }
+          </ul>
+        }
+
+        <!-- Inline viewer -->
+        @if (viewing(); as preview) {
+          <div class="mt-4 rounded-2xl border border-gray-200 dark:border-gray-700">
+            <div
+              class="flex items-center justify-between gap-3 border-b border-gray-200 px-3 py-2 dark:border-gray-700"
+            >
+              <span class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">
+                {{ preview.filename }}
+              </span>
+              <button
+                type="button"
+                (click)="closeViewer()"
+                class="rounded-2xl px-2 py-1 text-sm/6 text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-700"
+              >
+                Close
+              </button>
+            </div>
+            <pre
+              class="max-h-80 overflow-auto p-3 font-mono text-xs whitespace-pre-wrap text-gray-800 dark:text-gray-200"
+              >{{ preview.content }}</pre
+            >
+          </div>
+        }
+      </fieldset>
+
+      <!-- Actions -->
+      <div class="flex items-center gap-3">
+        <button
+          type="submit"
+          [disabled]="saving()"
+          class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+        >
+          {{ saving() ? 'Saving…' : isEdit() ? 'Save changes' : 'Create skill' }}
+        </button>
+        <a
+          routerLink="/my-skills"
+          class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-300 dark:hover:bg-gray-700"
+        >
+          Cancel
+        </a>
+      </div>
+    </form>
+  </div>
+</div>

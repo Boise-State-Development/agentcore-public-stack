@@ -140,7 +140,8 @@ class AgentFactory:
         system_prompt: str,
         tools: List[Any],
         session_manager: Any,
-        hooks: Optional[List[Any]] = None
+        hooks: Optional[List[Any]] = None,
+        plugins: Optional[List[Any]] = None,
     ) -> Agent:
         """
         Create a Strands Agent instance with the appropriate model provider
@@ -151,6 +152,9 @@ class AgentFactory:
             tools: List of tools (local tools and/or MCP clients)
             session_manager: Session manager instance
             hooks: Optional list of agent hooks
+            plugins: Optional list of Strands plugins (e.g. AgentSkills). A
+                plugin auto-registers its hooks and tools with the agent, so
+                this is how skills disclosure is wired (Skills v2).
 
         Returns:
             Agent: Configured Strands Agent instance
@@ -202,6 +206,7 @@ class AgentFactory:
             tool_executor=SequentialToolExecutor(),
             session_manager=session_manager,
             hooks=hooks if hooks else None,
+            plugins=plugins if plugins else None,
             retry_strategy=retry_strategy,
         )
 

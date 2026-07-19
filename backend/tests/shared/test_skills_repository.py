@@ -14,8 +14,7 @@ def _make_skill(skill_id="pdf_workflows", **kw) -> SkillDefinition:
         skill_id=skill_id,
         display_name="PDF Workflows",
         description="Fill, merge and split PDFs.",
-        instructions="# PDF Workflows\nUse the bound tools.",
-        bound_tool_ids=["fill_pdf_form"],
+        instructions="# PDF Workflows\nInstructions for working with PDFs.",
     )
     defaults.update(kw)
     return SkillDefinition(**defaults)
@@ -30,7 +29,6 @@ class TestSkillCatalogRepository:
         result = await skill_repository.get_skill("pdf_workflows")
         assert result is not None
         assert result.display_name == "PDF Workflows"
-        assert result.bound_tool_ids == ["fill_pdf_form"]
 
     @pytest.mark.asyncio
     async def test_get_nonexistent(self, skill_repository):
@@ -48,6 +46,54 @@ class TestSkillCatalogRepository:
         await skill_repository.create_skill(_make_skill("skill_two"))
         skills = await skill_repository.list_skills()
         assert {s.skill_id for s in skills} == {"skill_one", "skill_two"}
+
+    @pytest.mark.asyncio
+    async def test_list_skills_filters_by_owner(self, skill_repository):
+        await skill_repository.create_skill(_make_skill("catalog_one"))
+        await skill_repository.create_skill(_make_skill("mine", owner_id="user-1"))
+
+        catalog = await skill_repository.list_skills(owner_id="system")
+        mine = await skill_repository.list_skills(owner_id="user-1")
+
+        assert {s.skill_id for s in catalog} == {"catalog_one"}
+        assert {s.skill_id for s in mine} == {"mine"}
+
+    @pytest.mark.asyncio
+    async def test_list_skills_by_owner_uses_the_owner_index(self, skill_repository):
+        """GSI4 partition query — the 'list my skills' path for the user tier."""
+        await skill_repository.create_skill(_make_skill("catalog_one"))
+        await skill_repository.create_skill(
+            _make_skill("mine_b", display_name="Bravo", owner_id="user-1")
+        )
+        await skill_repository.create_skill(
+            _make_skill("mine_a", display_name="Alpha", owner_id="user-1")
+        )
+        await skill_repository.create_skill(_make_skill("theirs", owner_id="user-2"))
+
+        mine = await skill_repository.list_skills_by_owner("user-1")
+
+        # Sorted by display name, and scoped strictly to that owner.
+        assert [s.skill_id for s in mine] == ["mine_a", "mine_b"]
+
+    @pytest.mark.asyncio
+    async def test_list_skills_by_owner_filters_status(self, skill_repository):
+        await skill_repository.create_skill(_make_skill("active_one", owner_id="user-1"))
+        await skill_repository.create_skill(
+            _make_skill("draft_one", owner_id="user-1", status=SkillStatus.DRAFT)
+        )
+
+        active = await skill_repository.list_skills_by_owner(
+            "user-1", status=SkillStatus.ACTIVE.value
+        )
+
+        assert [s.skill_id for s in active] == ["active_one"]
+
+    @pytest.mark.asyncio
+    async def test_list_skills_by_owner_is_empty_for_an_unknown_owner(
+        self, skill_repository
+    ):
+        await skill_repository.create_skill(_make_skill("catalog_one"))
+        assert await skill_repository.list_skills_by_owner("nobody") == []
 
     @pytest.mark.asyncio
     async def test_list_does_not_pick_up_other_pk_items(
@@ -80,18 +126,18 @@ class TestSkillCatalogRepository:
         await skill_repository.create_skill(_make_skill())
         updated = await skill_repository.update_skill(
             "pdf_workflows",
-            {"display_name": "PDF Tools", "bound_tool_ids": ["fill_pdf_form", "merge_pdf"]},
+            {"display_name": "PDF Tools", "compose": ["doc_basics"]},
             admin_user_id="admin-2",
         )
         assert updated is not None
         assert updated.display_name == "PDF Tools"
-        assert updated.bound_tool_ids == ["fill_pdf_form", "merge_pdf"]
+        assert updated.compose == ["doc_basics"]
         assert updated.updated_by == "admin-2"
 
         # Persisted.
         reloaded = await skill_repository.get_skill("pdf_workflows")
         assert reloaded.display_name == "PDF Tools"
-        assert reloaded.bound_tool_ids == ["fill_pdf_form", "merge_pdf"]
+        assert reloaded.compose == ["doc_basics"]
 
     @pytest.mark.asyncio
     async def test_update_nonexistent_returns_none(self, skill_repository):

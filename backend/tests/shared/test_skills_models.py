@@ -30,7 +30,6 @@ def _skill(**kw) -> SkillDefinition:
 class TestSkillRoundTrip:
     def test_to_dynamo_item_keys_and_camel_case(self):
         skill = _skill(
-            bound_tool_ids=["fill_pdf_form", "gateway_weather"],
             compose=["doc_basics"],
             category="document",
             status=SkillStatus.ACTIVE,
@@ -50,7 +49,8 @@ class TestSkillRoundTrip:
         # snake_case -> camelCase, same convention as ToolDefinition.
         assert item["skillId"] == "pdf_workflows"
         assert item["displayName"] == "PDF Workflows"
-        assert item["boundToolIds"] == ["fill_pdf_form", "gateway_weather"]
+        # Skills v2: no tool bindings persisted.
+        assert "boundToolIds" not in item
         assert item["compose"] == ["doc_basics"]
         assert item["status"] == "active"
         assert item["category"] == "document"
@@ -63,7 +63,6 @@ class TestSkillRoundTrip:
 
     def test_round_trip_preserves_fields(self):
         skill = _skill(
-            bound_tool_ids=["fill_pdf_form"],
             compose=["doc_basics"],
             category="document",
             owner_id="user-42",
@@ -77,7 +76,6 @@ class TestSkillRoundTrip:
         assert restored.display_name == "PDF Workflows"
         assert restored.description == skill.description
         assert restored.instructions == skill.instructions
-        assert restored.bound_tool_ids == ["fill_pdf_form"]
         assert restored.compose == ["doc_basics"]
         assert restored.status == "active"
         assert restored.category == "document"
@@ -88,7 +86,6 @@ class TestSkillRoundTrip:
 
     def test_defaults(self):
         skill = _skill()
-        assert skill.bound_tool_ids == []
         assert skill.compose == []
         assert skill.status == "active"
         assert skill.category is None
@@ -106,7 +103,6 @@ class TestSkillRoundTrip:
         }
         restored = SkillDefinition.from_dynamo_item(item)
         assert restored.skill_id == "minimal_skill"
-        assert restored.bound_tool_ids == []
         assert restored.owner_id == "system"
         assert restored.visibility == "admin"
         assert isinstance(restored.created_at, datetime)
@@ -148,20 +144,40 @@ class TestSkillResourcesRoundTrip:
             "size",
             "contentType",
             "s3Key",
+            "kind",
         }
         assert first["filename"] == "forms.md"
         assert first["contentHash"] == "a" * 64
+        assert first["kind"] == "reference"
 
     def test_resources_round_trip_preserves_manifest(self):
-        skill = _skill(resources=[self._ref(filename="forms.md", size=10)])
+        skill = _skill(
+            resources=[self._ref(filename="run.py", size=10, kind="script")]
+        )
         restored = SkillDefinition.from_dynamo_item(skill.to_dynamo_item())
 
         assert len(restored.resources) == 1
         ref = restored.resources[0]
-        assert ref.filename == "forms.md"
+        assert ref.filename == "run.py"
         assert ref.size == 10
         assert ref.content_type == "text/markdown"
         assert ref.s3_key.startswith("skills/pdf_workflows/")
+        assert ref.kind == "script"
+
+    def test_legacy_resource_row_defaults_kind_reference(self):
+        # A v1 manifest entry (no `kind`) deserializes to reference.
+        item = _skill().to_dynamo_item()
+        item["resources"] = [
+            {
+                "filename": "forms.md",
+                "contentHash": "b" * 64,
+                "size": 5,
+                "contentType": "text/markdown",
+                "s3Key": "skills/pdf_workflows/" + "b" * 64,
+            }
+        ]
+        restored = SkillDefinition.from_dynamo_item(item)
+        assert restored.resources[0].kind == "reference"
 
     def test_size_coerced_from_decimal(self):
         # DynamoDB returns numbers as Decimal; from_dynamo_item coerces to int.

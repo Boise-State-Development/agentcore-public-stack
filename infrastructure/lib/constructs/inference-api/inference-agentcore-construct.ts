@@ -347,6 +347,14 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_MEMORY_SPACES_TABLE_NAME: props.refs.memorySpacesTable.tableName,
         MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
 
+        // Skills v2 (default ON with a kill switch, mirroring the app-api flag).
+        // Gates skill resolution on the invocation path — the AgentSkills plugin's
+        // <available_skills> block, the `skills` activation tool, and
+        // `read_skill_file`. Must stay in step with app-api: design-time refuses to
+        // bind a skill while the flag is off there, so a mismatch would let an Agent
+        // be built with skills the runtime then blocks.
+        SKILLS_ENABLED: config.skills.enabled ? 'true' : 'false',
+
         // Agent Designer harness resolution (Phase 3): the runtime resolves an
         // Agent's bindings + modelConfig at invocation. Gates that resolution;
         // default off, mirrors the app-api flag. Without it the harness ignores

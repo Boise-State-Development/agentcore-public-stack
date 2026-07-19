@@ -5,9 +5,8 @@ Service for skill catalog operations with AppRole integration. Mirrors
 ``ToolCatalogService``: CRUD over skill metadata, bidirectional role sync
 (updating ``granted_skills`` on AppRoles), and ``allowedAppRoles`` hydration.
 
-Skill-specific: ``create_skill``/``update_skill`` validate that every
-``bound_tool_id`` exists in the tool catalog and is ACTIVE (spec §6), since a
-skill folds those catalog tools behind the meta-tools at runtime.
+Skills are pure knowledge bundles (Skills v2): they carry no bound tools, so
+there is no tool-catalog validation here.
 """
 
 import logging
@@ -21,6 +20,7 @@ from apis.shared.rbac.admin_service import (
 )
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 from apis.shared.skills.models import (
+    SYSTEM_OWNER_ID,
     SkillDefinition,
     SkillResourceRef,
     SkillRoleAssignment,
@@ -29,21 +29,15 @@ from apis.shared.skills.repository import (
     SkillCatalogRepository,
     get_skill_catalog_repository,
 )
+from apis.shared.skills.bundle import generate_skill_md
 from apis.shared.skills.resource_store import (
     SkillResourceStore,
+    SkillResourceStoreError,
     compute_content_hash,
     get_skill_resource_store,
 )
-from apis.shared.tools.models import ToolStatus
-from apis.shared.tools.scoped_ids import (
-    base_tool_id,
-    base_tool_ids,
-    parse_scoped_tool_id,
-)
-from apis.shared.tools.repository import (
-    ToolCatalogRepository,
-    get_tool_catalog_repository,
-)
+
+VALID_RESOURCE_KINDS = ("reference", "script", "asset")
 
 logger = logging.getLogger(__name__)
 
@@ -63,21 +57,18 @@ class SkillCatalogService:
     Service for skill catalog operations.
 
     Skill access is determined by AppRoles (granted_skills). This service
-    provides catalog CRUD, bound-tool validation against the tool catalog, and
-    bidirectional sync between skills and AppRoles.
+    provides catalog CRUD and bidirectional sync between skills and AppRoles.
     """
 
     def __init__(
         self,
         repository: Optional[SkillCatalogRepository] = None,
-        tool_repository: Optional[ToolCatalogRepository] = None,
         app_role_service: Optional[AppRoleService] = None,
         app_role_admin_service: Optional[AppRoleAdminService] = None,
         resource_store: Optional[SkillResourceStore] = None,
     ):
         """Initialize with dependencies."""
         self.repository = repository or get_skill_catalog_repository()
-        self.tool_repository = tool_repository or get_tool_catalog_repository()
         self.app_role_service = app_role_service or get_app_role_service()
         self.app_role_admin_service = (
             app_role_admin_service or get_app_role_admin_service()
@@ -92,7 +83,12 @@ class SkillCatalogService:
         self, status: Optional[str] = None, include_roles: bool = True
     ) -> List[SkillDefinition]:
         """
-        Get all skills in the catalog.
+        Get all skills in the admin catalog.
+
+        Scoped to ``owner_id == "system"``: user-authored skills (Skills v2
+        PR-3) live in the same table but are governed by ownership, not by RBAC
+        role grants, so they are not part of the catalog an admin curates and
+        must not appear on the admin skills page.
 
         Args:
             status: Optional status filter
@@ -101,7 +97,9 @@ class SkillCatalogService:
         Returns:
             List of SkillDefinition objects
         """
-        skills = await self.repository.list_skills(status=status)
+        skills = await self.repository.list_skills(
+            status=status, owner_id=SYSTEM_OWNER_ID
+        )
 
         if include_roles:
             for skill in skills:
@@ -115,76 +113,6 @@ class SkillCatalogService:
     async def get_skill(self, skill_id: str) -> Optional[SkillDefinition]:
         """Get a specific skill by ID."""
         return await self.repository.get_skill(skill_id)
-
-    async def _validate_bound_tools(self, bound_tool_ids: List[str]) -> None:
-        """
-        Validate that every bound tool exists in the catalog and is ACTIVE.
-
-        A skill folds its bound catalog tools behind the meta-tools at runtime,
-        so binding an unknown or disabled tool would silently drop it. Reject
-        such bindings up front (spec §6).
-
-        A scoped id (``tool_id::mcp_tool_name``) binds a single tool of an MCP
-        server. Its base catalog tool must exist + be active, and — when the
-        server has a curated tool list — the named tool must be one it exposes.
-        Servers whose tools are discovered live have no curated list, so the
-        name can't be validated statically and is accepted.
-
-        Raises:
-            ValueError: If any bound tool is unknown, non-active, scoped onto a
-                tool the server doesn't expose, or scoped onto a non-MCP tool.
-        """
-        if not bound_tool_ids:
-            return
-
-        # Dedupe while preserving the admin's set for clear error messages.
-        requested = list(dict.fromkeys(bound_tool_ids))
-        base_ids = base_tool_ids(requested)
-        found = await self.tool_repository.batch_get_tools(base_ids)
-        by_id = {t.tool_id: t for t in found}
-
-        unknown = [tid for tid in requested if base_tool_id(tid) not in by_id]
-        disabled = [
-            tid
-            for tid in requested
-            if base_tool_id(tid) in by_id
-            and by_id[base_tool_id(tid)].status != ToolStatus.ACTIVE.value
-        ]
-
-        # Per-tool bindings: the named tool must belong to the server (when the
-        # server exposes a curated list) and the base must be an MCP server.
-        unexposed: List[str] = []
-        not_mcp: List[str] = []
-        for tid in requested:
-            base, tool_name = parse_scoped_tool_id(tid)
-            if tool_name is None or base not in by_id or tid in disabled:
-                continue
-            tool = by_id[base]
-            if tool.protocol not in ("mcp", "mcp_external"):
-                not_mcp.append(tid)
-                continue
-            names = tool.curated_tool_names()
-            if names is not None and tool_name not in names:
-                unexposed.append(tid)
-
-        problems = []
-        if unknown:
-            problems.append(f"unknown tool(s): {', '.join(sorted(unknown))}")
-        if disabled:
-            problems.append(f"non-active tool(s): {', '.join(sorted(disabled))}")
-        if not_mcp:
-            problems.append(
-                f"per-tool binding on non-MCP tool(s): {', '.join(sorted(not_mcp))}"
-            )
-        if unexposed:
-            problems.append(
-                f"tool(s) not exposed by their server: {', '.join(sorted(unexposed))}"
-            )
-        if problems:
-            raise ValueError(
-                "Cannot bind " + "; ".join(problems) + ". "
-                "Bound tools must exist in the catalog and be active."
-            )
 
     async def create_skill(
         self, skill: SkillDefinition, admin: User
@@ -200,14 +128,13 @@ class SkillCatalogService:
             Created SkillDefinition
 
         Raises:
-            ValueError: If a bound tool is unknown/disabled, or the skill exists
+            ValueError: If the skill already exists
         """
-        await self._validate_bound_tools(skill.bound_tool_ids)
-
         skill.created_by = admin.user_id
         skill.updated_by = admin.user_id
 
         created = await self.repository.create_skill(skill)
+        self._write_skill_md(created)
 
         logger.info(
             f"Admin {admin.email} created skill: {skill.skill_id}",
@@ -234,18 +161,16 @@ class SkillCatalogService:
 
         Returns:
             Updated SkillDefinition or None if not found
-
-        Raises:
-            ValueError: If the new bound tools are unknown/disabled
         """
-        if "bound_tool_ids" in updates and updates["bound_tool_ids"] is not None:
-            await self._validate_bound_tools(updates["bound_tool_ids"])
-
         updated = await self.repository.update_skill(
             skill_id, updates, admin_user_id=admin.user_id
         )
 
         if updated:
+            # Keep the SKILL.md projection in sync with the row (best-effort).
+            # A pure resource-manifest update also lands here, but regenerating
+            # is cheap and idempotent.
+            self._write_skill_md(updated)
             logger.info(
                 f"Admin {admin.email} updated skill: {skill_id}",
                 extra={
@@ -322,20 +247,30 @@ class SkillCatalogService:
         content: bytes,
         content_type: str,
         admin: User,
+        kind: str = "reference",
     ) -> List[SkillResourceRef]:
-        """Upload (or replace) one reference file and update the manifest.
+        """Upload (or replace) one supporting file and update the manifest.
 
-        Bytes are stored content-addressed in S3 (dedupe); the manifest on
+        Bytes are stored in the standard agentskills.io bundle layout
+        (``skills/{id}/{references|scripts|assets}/{filename}``); the manifest on
         the catalog row is updated atomically (single row write). Re-uploading
-        the same filename replaces its manifest entry; any S3 object that is
-        no longer referenced afterward is garbage-collected.
+        the same filename replaces its manifest entry (and overwrites its object
+        in place); a file whose ``(kind, filename)`` key changed is
+        garbage-collected. ``script`` files are accept-and-inert (stored,
+        listed, never executed — D5).
 
         Returns the skill's updated manifest.
 
         Raises:
-            ValueError: If the skill is missing, the filename is invalid, the
-                file is too large, or the per-skill file cap is exceeded.
+            ValueError: If the skill is missing, the kind or filename is invalid,
+                the file is too large, or the per-skill file cap is exceeded.
         """
+        if kind not in VALID_RESOURCE_KINDS:
+            raise ValueError(
+                f"Invalid resource kind '{kind}'. Expected one of "
+                f"{', '.join(VALID_RESOURCE_KINDS)}."
+            )
+
         skill = await self.repository.get_skill(skill_id)
         if skill is None:
             raise ValueError(f"Skill '{skill_id}' not found")
@@ -362,7 +297,11 @@ class SkillCatalogService:
         resolved_type = content_type or "application/octet-stream"
         digest = compute_content_hash(content)
         s3_key = self.resource_store.put(
-            skill_id=skill_id, content=content, content_type=resolved_type
+            skill_id=skill_id,
+            filename=filename,
+            content=content,
+            content_type=resolved_type,
+            kind=kind,
         )
         new_ref = SkillResourceRef(
             filename=filename,
@@ -370,6 +309,7 @@ class SkillCatalogService:
             size=len(content),
             content_type=resolved_type,
             s3_key=s3_key,
+            kind=kind,
         )
 
         new_resources = [r for r in existing if r.filename != filename]
@@ -466,10 +406,50 @@ class SkillCatalogService:
         resources: List[SkillResourceRef],
         admin: User,
     ) -> None:
-        """Write the manifest to the catalog row (single atomic item write)."""
+        """Write the manifest to the catalog row (single atomic item write).
+
+        The SKILL.md projection is NOT rewritten here: its frontmatter does not
+        list resources, so a manifest change never alters it.
+        """
         await self.repository.update_skill(
             skill_id, {"resources": resources}, admin_user_id=admin.user_id
         )
+
+    def write_skill_md(self, skill: SkillDefinition) -> None:
+        """Write the skill's SKILL.md projection to S3 (best-effort).
+
+        Public entry point for the user-authored tier (``UserSkillService``),
+        which reuses this bundle machinery so both tiers emit identical
+        agentskills.io layouts.
+        """
+        self._write_skill_md(skill)
+
+    def _write_skill_md(self, skill: SkillDefinition) -> None:
+        """Write the skill's SKILL.md projection to S3 (best-effort).
+
+        The DynamoDB row is the source of truth; this projection exists only so
+        the S3 prefix is a valid, portable agentskills.io bundle. When storage
+        is unconfigured (local dev) or the write fails, log and continue — never
+        fail the catalog write on the projection.
+        """
+        if not self.resource_store.enabled:
+            return
+        try:
+            content = generate_skill_md(
+                skill_id=skill.skill_id,
+                description=skill.description,
+                instructions=skill.instructions,
+                allowed_tools=skill.allowed_tools,
+                skill_metadata=skill.skill_metadata,
+            )
+            self.resource_store.put_skill_md(skill_id=skill.skill_id, content=content)
+        except SkillResourceStoreError:
+            logger.warning(
+                "skill-resources: SKILL.md projection failed for skill=%s "
+                "(row is source of truth; continuing)",
+                skill.skill_id,
+                exc_info=True,
+            )
 
     def _gc_orphaned(
         self,
@@ -478,11 +458,9 @@ class SkillCatalogService:
     ) -> None:
         """Delete S3 objects no longer referenced by the new manifest.
 
-        Objects are content-addressed, so a key still referenced by another
-        manifest entry (identical content under a different filename) is
-        retained. Best-effort: a failed cleanup never fails the write — the
-        manifest is already consistent; an orphaned object is only wasted
-        storage.
+        Keys are now path-based (``.../{kind}/{filename}``), so a removed file —
+        or one whose kind changed — orphans its old key. Best-effort: a failed
+        cleanup never fails the write; an orphaned object is only wasted storage.
         """
         old_keys = {r.s3_key for r in old_resources}
         new_keys = {r.s3_key for r in new_resources}
@@ -556,9 +534,7 @@ class SkillCatalogService:
             app_role_ids: AppRole IDs that should grant this skill
             admin: Admin user performing the action
         """
-        skill = await self.get_skill(skill_id)
-        if not skill:
-            raise ValueError(f"Skill '{skill_id}' not found")
+        await self._require_catalog_skill(skill_id)
 
         current_roles = await self.get_roles_for_skill(skill_id)
         current_role_ids = {
@@ -589,6 +565,7 @@ class SkillCatalogService:
         self, skill_id: str, app_role_ids: List[str], admin: User
     ) -> None:
         """Add AppRoles to skill access (preserves existing)."""
+        await self._require_catalog_skill(skill_id)
         for role_id in app_role_ids:
             await self._add_skill_to_role(role_id, skill_id, admin)
 
@@ -596,8 +573,28 @@ class SkillCatalogService:
         self, skill_id: str, app_role_ids: List[str], admin: User
     ) -> None:
         """Remove AppRoles from skill access."""
+        await self._require_catalog_skill(skill_id)
         for role_id in app_role_ids:
             await self._remove_skill_from_role(role_id, skill_id, admin)
+
+    async def _require_catalog_skill(self, skill_id: str) -> SkillDefinition:
+        """Assert a skill exists AND belongs to the admin catalog.
+
+        Role grants are the catalog's governance mechanism. A user-authored
+        skill (Skills v2 PR-3) is reached through ownership — and, once PR-4
+        lands, through invoke-through on a shared Agent. Granting one to an
+        AppRole would hand a private, user-owned document to a whole role, so
+        the role endpoints refuse to touch anything outside the catalog.
+        """
+        skill = await self.get_skill(skill_id)
+        if not skill:
+            raise ValueError(f"Skill '{skill_id}' not found")
+        if skill.owner_id != SYSTEM_OWNER_ID:
+            raise ValueError(
+                f"Skill '{skill_id}' is user-authored and cannot be granted to "
+                "AppRoles. Only admin catalog skills carry role grants."
+            )
+        return skill
 
     async def _add_skill_to_role(
         self, role_id: str, skill_id: str, admin: User

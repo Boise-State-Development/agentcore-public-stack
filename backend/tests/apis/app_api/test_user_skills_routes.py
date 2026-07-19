@@ -25,13 +25,12 @@ def _user() -> User:
     )
 
 
-def _skill(skill_id: str, display_name: str, status=SkillStatus.ACTIVE, bound=None):
+def _skill(skill_id: str, display_name: str, status=SkillStatus.ACTIVE):
     return SkillDefinition(
         skill_id=skill_id,
         display_name=display_name,
         description=f"{display_name} description",
         instructions="...",
-        bound_tool_ids=bound or [],
         status=status,
     )
 
@@ -77,10 +76,10 @@ class TestGetUserSkills:
     def test_lists_active_accessible_skills_with_prefs_merged(self, monkeypatch):
         repo = _FakeRepo(
             skills=[
-                _skill("web_research", "Web Research", bound=["t1", "t2"]),
+                _skill("web_research", "Web Research"),
                 _skill("pdf_workflows", "PDF Workflows"),
             ],
-            prefs={"web_research": False},
+            prefs={"web_research": True},
         )
         client = _make_client(monkeypatch, ["web_research", "pdf_workflows"], repo)
 
@@ -88,14 +87,16 @@ class TestGetUserSkills:
         assert body["totalCount"] == 2
         by_id = {s["skillId"]: s for s in body["skills"]}
 
-        # Toggled-off skill: explicit preference surfaces, effective off
-        assert by_id["web_research"]["userEnabled"] is False
-        assert by_id["web_research"]["isEnabled"] is False
-        assert by_id["web_research"]["boundToolCount"] == 2
+        # Toggled-on skill: explicit preference surfaces, effective on
+        assert by_id["web_research"]["userEnabled"] is True
+        assert by_id["web_research"]["isEnabled"] is True
 
-        # Untouched skill: no preference, enabled by default
+        # Untouched skill: no preference, DISABLED by default. Skills v2 D6
+        # flips this from v1 — the picker is opt-in, unlike tools, and this must
+        # agree with the runtime's absent-selection-means-no-skills default or
+        # the UI would show skills as active that the turn never loads.
         assert by_id["pdf_workflows"]["userEnabled"] is None
-        assert by_id["pdf_workflows"]["isEnabled"] is True
+        assert by_id["pdf_workflows"]["isEnabled"] is False
 
         # Sorted by display name
         assert [s["skillId"] for s in body["skills"]] == [

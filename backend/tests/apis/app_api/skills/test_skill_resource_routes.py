@@ -2,7 +2,7 @@
 
 Covers the reference-file lifecycle: upload → list manifest → read bytes →
 re-upload (replace) → delete, plus validation (filename, size, empty, caps),
-content-hash dedupe / orphan GC, and 404s for missing skills/files.
+the standard-bundle key layout, orphan GC, and 404s for missing skills/files.
 """
 
 import boto3
@@ -36,7 +36,6 @@ def _create_skill(client, skill_id="pdf_workflows"):
             "displayName": "PDF Workflows",
             "description": "Fill, merge and split PDFs.",
             "instructions": "# PDF Workflows",
-            "boundToolIds": [],
         },
     )
     assert resp.status_code == 200, resp.text
@@ -48,6 +47,11 @@ def _bucket_keys():
         o["Key"]
         for o in s3.list_objects_v2(Bucket=SKILL_RESOURCES_BUCKET).get("Contents", [])
     ]
+
+
+def _resource_keys():
+    """Bucket keys excluding the write-through SKILL.md projection objects."""
+    return [k for k in _bucket_keys() if not k.endswith("/SKILL.md")]
 
 
 def _upload(client, skill_id, filename, body, content_type="text/markdown"):
@@ -69,7 +73,8 @@ class TestUploadAndList:
         assert ref["filename"] == "forms.md"
         assert ref["size"] == len(b"# Forms")
         assert ref["contentType"] == "text/markdown"
-        assert ref["s3Key"] == f"skills/pdf_workflows/{ref['contentHash']}"
+        assert ref["s3Key"] == "skills/pdf_workflows/references/forms.md"
+        assert ref["kind"] == "reference"
 
         listed = client.get("/skills/pdf_workflows/resources")
         assert listed.status_code == 200
@@ -108,7 +113,7 @@ class TestReadBytes:
         )
 
 
-class TestReplaceAndDedupe:
+class TestReplaceAndLayout:
     def test_reupload_same_filename_replaces(self, client):
         _create_skill(client)
         _upload(client, "pdf_workflows", "forms.md", b"v1")
@@ -123,35 +128,34 @@ class TestReplaceAndDedupe:
             == b"v2-longer"
         )
 
-    def test_reupload_garbage_collects_orphaned_object(self, client):
+    def test_reupload_same_filename_overwrites_in_place(self, client):
         _create_skill(client)
         _upload(client, "pdf_workflows", "forms.md", b"v1")
         _upload(client, "pdf_workflows", "forms.md", b"v2")
-        # Only the current object remains; the v1 object was GC'd.
-        keys = _bucket_keys()
-        assert len(keys) == 1
+        # Same (kind, filename) → same key → exactly one resource object.
+        assert _resource_keys() == ["skills/pdf_workflows/references/forms.md"]
 
-    def test_identical_content_two_filenames_dedupes_object(self, client):
+    def test_two_filenames_are_two_objects(self, client):
+        # Dedupe is dropped: identical content under two filenames is two objects.
         _create_skill(client)
         _upload(client, "pdf_workflows", "a.md", b"identical")
         _upload(client, "pdf_workflows", "b.md", b"identical")
-        # Manifest has both filenames...
         names = [
             r["filename"]
             for r in client.get("/skills/pdf_workflows/resources").json()["resources"]
         ]
         assert names == ["a.md", "b.md"]
-        # ...but only one S3 object (content-addressed).
-        assert len(_bucket_keys()) == 1
+        assert sorted(_resource_keys()) == [
+            "skills/pdf_workflows/references/a.md",
+            "skills/pdf_workflows/references/b.md",
+        ]
 
-    def test_delete_one_keeps_shared_object(self, client):
-        # a.md and b.md share one content-addressed object; deleting a.md must
-        # NOT delete the object b.md still references.
+    def test_delete_one_leaves_the_other(self, client):
         _create_skill(client)
         _upload(client, "pdf_workflows", "a.md", b"identical")
         _upload(client, "pdf_workflows", "b.md", b"identical")
         client.delete("/skills/pdf_workflows/resources/a.md")
-        assert len(_bucket_keys()) == 1
+        assert _resource_keys() == ["skills/pdf_workflows/references/b.md"]
         assert client.get("/skills/pdf_workflows/resources/b.md").content == b"identical"
 
 
@@ -162,7 +166,8 @@ class TestDelete:
         resp = client.delete("/skills/pdf_workflows/resources/forms.md")
         assert resp.status_code == 200
         assert resp.json()["resources"] == []
-        assert _bucket_keys() == []
+        # The resource object is gone; the SKILL.md projection is untouched.
+        assert _resource_keys() == []
         assert (
             client.get("/skills/pdf_workflows/resources/forms.md").status_code == 404
         )

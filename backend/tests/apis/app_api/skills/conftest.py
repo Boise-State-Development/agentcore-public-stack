@@ -110,16 +110,49 @@ def skill_service(app_roles_table, skill_resource_store):
     from apis.shared.rbac.repository import AppRoleRepository
     from apis.shared.rbac.service import AppRoleService
     from apis.shared.skills.repository import SkillCatalogRepository
-    from apis.shared.tools.repository import ToolCatalogRepository
 
     cache = AppRoleCache()
     role_repo = AppRoleRepository(table_name=TABLE)
     return SkillCatalogService(
         repository=SkillCatalogRepository(table_name=TABLE),
-        tool_repository=ToolCatalogRepository(table_name=TABLE),
         app_role_service=AppRoleService(repository=role_repo, cache=cache),
         app_role_admin_service=AppRoleAdminService(repository=role_repo, cache=cache),
         resource_store=skill_resource_store,
+    )
+
+
+@pytest.fixture()
+def user_skill_service(skill_service):
+    """UserSkillService sharing the moto-backed catalog service + repository."""
+    from apis.app_api.skills.user_service import UserSkillService
+
+    return UserSkillService(
+        repository=skill_service.repository,
+        catalog_service=skill_service,
+    )
+
+
+@pytest.fixture()
+def author_user() -> User:
+    """A plain (non-admin) user who authors their own skills."""
+    return User(
+        user_id="user-author",
+        email="author@example.com",
+        name="Author",
+        roles=["user"],
+        raw_token="test-token",
+    )
+
+
+@pytest.fixture()
+def other_user() -> User:
+    """A second plain user — used to prove owner isolation."""
+    return User(
+        user_id="user-other",
+        email="other@example.com",
+        name="Other",
+        roles=["user"],
+        raw_token="test-token",
     )
 
 

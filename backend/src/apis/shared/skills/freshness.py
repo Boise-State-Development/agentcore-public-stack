@@ -9,9 +9,11 @@ here, both backed by DynamoDB reads of the skill catalog:
    the freshness hash in a cache key causes the next build to miss and
    rebuild with the fresh config (the runtime ``skills_hash`` in spec §8.3).
 
-2. **All-known-skill-ids snapshot** (``get_all_skill_ids``). The set of
-   skill IDs known to the catalog — the source of truth that RBAC's
-   wildcard (``"*"``) skill access needs to enumerate.
+2. **Catalog-skill-ids snapshot** (``get_all_skill_ids``). The set of
+   ADMIN-CATALOG skill IDs — the source of truth that RBAC's wildcard
+   (``"*"``) skill access needs to enumerate. User-authored skills are
+   deliberately excluded: a ``"*"`` grant is a grant over the catalog an
+   admin curates, never over other users' private skills (Skills v2 PR-3).
 
 Reads are TTL-cached so the per-turn overhead is bounded to at most one
 DynamoDB read per cache key per TTL window, per process. Admin routes call
@@ -98,12 +100,17 @@ async def get_freshness_hash(skill_ids: List[str]) -> str:
 
 
 async def get_all_skill_ids() -> FrozenSet[str]:
-    """Return the set of all known skill IDs, TTL-cached per process.
+    """Return the set of ADMIN-CATALOG skill IDs, TTL-cached per process.
 
     Listed once per TTL window via `repository.list_skills()` and reused
     across that window. Used by RBAC skill access to enumerate "every skill
-    the system knows about" (e.g. expanding a `"*"` wildcard grant) without
+    the catalog offers" (e.g. expanding a `"*"` wildcard grant) without
     scanning DynamoDB on every chat turn.
+
+    User-authored skills (``owner_id != "system"``) are excluded: a wildcard
+    RBAC grant must never sweep in another user's private skills. Owned
+    skills reach their author through ``access.resolve_accessible_skill_ids``
+    instead, via the ownership union.
 
     On a repository error, returns the last-known set if available, else an
     empty frozenset — never raises (auth must not break on a transient DB
@@ -114,11 +121,12 @@ async def get_all_skill_ids() -> FrozenSet[str]:
     if cached is not None and now - cached[1] < _TTL_SECONDS:
         return cached[0]
 
+    from apis.shared.skills.models import SYSTEM_OWNER_ID
     from apis.shared.skills.repository import get_skill_catalog_repository
 
     try:
         repo = get_skill_catalog_repository()
-        skills = await repo.list_skills()
+        skills = await repo.list_skills(owner_id=SYSTEM_OWNER_ID)
         ids = frozenset(s.skill_id for s in skills)
     except Exception:
         logger.exception("Failed to list skill IDs for catalog snapshot")

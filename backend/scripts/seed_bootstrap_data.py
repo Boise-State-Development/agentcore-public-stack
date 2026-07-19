@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -412,19 +413,14 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        # Single catalog entry / toggle that provisions the whole artifact
+        # toolset. Enabling this one id injects create/update at runtime — see
+        # ARTIFACT_TOOL_IDS and _build_artifact_tools in
+        # apis/inference_api/chat/routes.py. Keep the toolId as
+        # "create_artifact": it is the gate key.
         "toolId": "create_artifact",
-        "displayName": "Create Artifact",
-        "description": "Save standalone HTML or Markdown documents as versioned artifacts the user can open and iterate on.",
-        "category": "document",
-        "protocol": "local",
-        "enabledByDefault": True,
-        "isPublic": True,
-        "forwardAuthToken": False,
-    },
-    {
-        "toolId": "update_artifact",
-        "displayName": "Update Artifact",
-        "description": "Replace an existing artifact's content, creating a new immutable version.",
+        "displayName": "Artifacts",
+        "description": "Save standalone HTML or Markdown documents as versioned artifacts the user can open and iterate on. Updates create a new immutable version.",
         "category": "document",
         "protocol": "local",
         "enabledByDefault": True,
@@ -781,11 +777,11 @@ def seed_default_tools(
 # =============================================================================
 #
 # Seeds one demonstrable admin-managed Skill so the feature can be exercised
-# end-to-end: SKILL.md-style instructions + a bound LOCAL catalog tool
-# (fetch_url_content, seeded above) + a supporting reference file (uploaded to
-# the skill-resources S3 bucket and referenced by the row's `resources`
-# manifest). Mirrors the real `pdf`/`docx` bundle shape, where the instructions
-# body names a reference file the agent reads on demand via skill_dispatcher.
+# end-to-end: SKILL.md-style instructions + a supporting reference file
+# (uploaded to the skill-resources S3 bucket and referenced by the row's
+# `resources` manifest). Mirrors the real `pdf`/`docx` bundle shape, where the
+# instructions body names a reference file the agent reads on demand. Skills
+# are pure knowledge bundles (Skills v2) — they bind no tools.
 #
 # The skill is granted to the `default` role so any user can reach it once an
 # assistant opts into agent_type="skill". It is otherwise inert: the default
@@ -825,15 +821,73 @@ EXAMPLE_SKILL_INSTRUCTIONS = (
     "accurate, citable notes.\n"
     "\n"
     "## Workflow\n"
-    "1. Use the bound `fetch_url_content` tool (via `skill_executor`) to pull\n"
-    "   the page text for each URL the user provides.\n"
+    "1. Use a web-fetching tool (e.g. `fetch_url_content`, if the agent has it\n"
+    "   enabled) to pull the page text for each URL the user provides.\n"
     "2. Extract the relevant facts. For handling tables, paywalls, and noisy\n"
-    "   pages, read `extraction_tips.md` — call `skill_dispatcher` again with\n"
-    "   `reference=\"extraction_tips.md\"`.\n"
+    "   pages, read the `extraction_tips.md` reference file.\n"
     "3. Summarize with inline source attributions (page title + URL).\n"
     "\n"
     "Never invent details that are not present in the fetched content.\n"
 )
+
+
+def _skill_slug(skill_id: str) -> str:
+    """agentskills.io-valid skill name from a catalog id.
+
+    Mirrors ``apis/shared/skills/bundle.py::slugify_skill_name``. Duplicated
+    rather than imported because this script is standalone — ``seed.sh`` runs it
+    straight after infra deploy, without the app package on the path.
+    """
+    slug = skill_id.strip().lower().replace("_", "-")
+    slug = re.sub(r"[^a-z0-9-]+", "-", slug)
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    return slug[:64].strip("-") or "skill"
+
+
+def _write_skill_md(
+    skill_id: str, description: str, instructions: str, region: str
+) -> None:
+    """Write the skill's ``SKILL.md`` projection so the prefix is a real bundle.
+
+    Mirrors ``apis/shared/skills/bundle.py::generate_skill_md`` for the subset
+    the seed uses (no advisory tools, no frontmatter passthrough). Without this
+    the seeded prefix holds only resource bytes and is not a valid
+    agentskills.io bundle — it could not be handed to a managed Harness or
+    exported as-is. Best-effort, like the reference upload.
+    """
+    bucket = os.environ.get("S3_SKILL_RESOURCES_BUCKET_NAME", "")
+    if not bucket:
+        return
+
+    content = (
+        "---\n"
+        f"name: {_skill_slug(skill_id)}\n"
+        f"description: {description}\n"
+        "---\n"
+        "\n"
+        f"{instructions.strip()}\n"
+    )
+    key = f"skills/{skill_id}/SKILL.md"
+    try:
+        s3 = boto3.Session(region_name=region).client("s3")
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown",
+            ServerSideEncryption="AES256",
+        )
+    except ClientError as e:
+        logger.warning(
+            "Could not write SKILL.md for skill '%s' to %s — seeding without "
+            "the projection: %s",
+            skill_id,
+            bucket,
+            e,
+        )
+        return
+
+    logger.info("Wrote SKILL.md for skill '%s' to s3://%s/%s", skill_id, bucket, key)
 
 
 def _upload_skill_reference(
@@ -841,7 +895,8 @@ def _upload_skill_reference(
 ) -> Optional[dict[str, Any]]:
     """Upload a reference file's bytes to the skill-resources bucket.
 
-    Content-addressed (``skills/{skill_id}/{sha256}``), mirroring
+    Stored in the standard agentskills.io bundle layout
+    (``skills/{skill_id}/references/{filename}``), mirroring
     ``apis/shared/skills/resource_store.py``. Best-effort: returns the manifest
     entry on success, or ``None`` (with a warning) when the bucket is not
     configured or the put fails, so the skill still seeds without the bytes.
@@ -857,7 +912,7 @@ def _upload_skill_reference(
         return None
 
     digest = hashlib.sha256(content).hexdigest()
-    key = f"skills/{skill_id}/{digest}"
+    key = f"skills/{skill_id}/references/{filename}"
     try:
         s3 = boto3.Session(region_name=region).client("s3")
         s3.put_object(
@@ -885,6 +940,7 @@ def _upload_skill_reference(
         "size": len(content),
         "contentType": content_type,
         "s3Key": key,
+        "kind": "reference",
     }
 
 
@@ -951,7 +1007,7 @@ def seed_example_skills(
     table_name: str,
     region: str,
 ) -> SeedResult:
-    """Seed one example bundled skill (instructions + bound tool + reference file)."""
+    """Seed one example knowledge skill (instructions + reference file)."""
     result = SeedResult(category="skill")
     session = boto3.Session(region_name=region)
     dynamodb = session.resource("dynamodb")
@@ -992,6 +1048,8 @@ def seed_example_skills(
 
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
+    description = "Fetch web pages and turn them into accurate, citable notes."
+
     item: dict[str, Any] = {
         "PK": pk,
         "SK": sk,
@@ -1000,9 +1058,8 @@ def seed_example_skills(
         "GSI4SK": f"SKILL#{skill_id}",
         "skillId": skill_id,
         "displayName": "Web Research Assistant",
-        "description": "Fetch web pages and turn them into accurate, citable notes.",
+        "description": description,
         "instructions": EXAMPLE_SKILL_INSTRUCTIONS,
-        "boundToolIds": ["fetch_url_content"],
         "compose": [],
         "resources": resources,
         "status": "active",
@@ -1028,6 +1085,9 @@ def seed_example_skills(
         result.failed += 1
         result.details.append(msg)
         return result
+
+    # Projection last: the row is the source of truth, so it must exist first.
+    _write_skill_md(skill_id, description, EXAMPLE_SKILL_INSTRUCTIONS, region)
 
     _grant_skill_to_default_role(table, skill_id)
     return result

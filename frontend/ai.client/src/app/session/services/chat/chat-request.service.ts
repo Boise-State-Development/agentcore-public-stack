@@ -9,7 +9,6 @@ import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { SkillService } from '../../../services/skill/skill.service';
-import { ChatModeService } from '../../../services/chat-mode/chat-mode.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { FileAttachmentData } from '../models/message.model';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
@@ -41,7 +40,6 @@ export class ChatRequestService implements OnDestroy {
   private modelService = inject(ModelService);
   private toolService = inject(ToolService);
   private skillService = inject(SkillService);
-  private chatModeService = inject(ChatModeService);
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
@@ -219,30 +217,24 @@ export class ChatRequestService implements OnDestroy {
     // If using the system default model, send null for model_id to let backend use its default
     const isDefaultModel = this.modelService.isUsingDefaultModel();
 
-    // Skills mode vs. tools mode (assistant turns are excluded below — they
-    // keep their pre-skills-mode behavior and let the server default apply).
-    const chatMode = this.chatModeService.mode();
-    const isSkillsMode = !assistantId && chatMode === 'skill';
-
-    // In skills mode capabilities come exclusively from the enabled skills'
-    // bound tools — the raw tool selection is intentionally not sent.
-    const enabledTools = isSkillsMode ? [] : this.toolService.getEnabledToolIds();
-
     const requestObject: Record<string, unknown> = {
       message,
       session_id,
       model_id: isDefaultModel ? null : selectedModel.modelId,
-      enabled_tools: enabledTools,
+      enabled_tools: this.toolService.getEnabledToolIds(),
       provider: isDefaultModel ? null : selectedModel.provider,
     };
 
-    if (!assistantId) {
-      // Pin the turn to the user's mode. The server honors this only while
-      // the admin policy allows toggling; otherwise it enforces the default.
-      requestObject['agent_type'] = chatMode;
-      if (isSkillsMode) {
-        requestObject['enabled_skills'] = this.skillService.getEnabledSkillIds();
-      }
+    // Skills v2 D6: skills are opt-in, so send the selection only when there is
+    // one. Omitting the key is the "no skills" signal the backend already
+    // defaults to, which keeps a plain turn's payload identical to before and
+    // avoids paying for the skill resolution server-side. Agent-bound
+    // conversations send the locked set, but the backend re-resolves an Agent's
+    // bindings per invoker and replaces this outright — the client is never the
+    // authority here.
+    const enabledSkillIds = this.skillService.getEnabledSkillIds();
+    if (enabledSkillIds.length > 0) {
+      requestObject['enabled_skills'] = enabledSkillIds;
     }
 
     // Per-model inference param overrides set in the Settings → Advanced

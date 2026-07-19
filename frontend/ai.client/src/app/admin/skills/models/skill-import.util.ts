@@ -22,7 +22,27 @@ export interface ParsedSkillMarkdown {
   description: string;
   /** The markdown body after the frontmatter (→ instructions). */
   instructions: string;
+  /**
+   * Frontmatter `allowed-tools`, split into names. **Advisory only** — the
+   * platform never grants a tool because a skill names it (Skills v2 D1/D4).
+   * Empty when the key is absent.
+   */
+  allowedTools: string[];
+  /**
+   * Every other frontmatter key (license, compatibility, arbitrary keys),
+   * carried verbatim so an imported bundle round-trips (D2). `name`,
+   * `description` and `allowed-tools` are excluded — they have their own
+   * fields above, and the backend regenerates them into the SKILL.md
+   * projection.
+   */
+  metadata: Record<string, string>;
 }
+
+/**
+ * Frontmatter keys that map to first-class fields rather than metadata
+ * passthrough. Mirrors the backend `_RESERVED_METADATA_KEYS`.
+ */
+const RESERVED_KEYS = new Set(['name', 'description', 'allowed-tools', 'instructions']);
 
 /**
  * Parse a SKILL.md into prefill fields.
@@ -37,13 +57,46 @@ export function parseSkillMarkdown(text: string): ParsedSkillMarkdown {
   const normalized = text.replace(/\r\n/g, '\n');
   const fm = extractFrontmatter(normalized);
   if (!fm) {
-    return { name: '', description: '', instructions: normalized.trim() };
+    return {
+      name: '',
+      description: '',
+      instructions: normalized.trim(),
+      allowedTools: [],
+      metadata: {},
+    };
   }
+
+  const metadata: Record<string, string> = {};
+  for (const [key, value] of Object.entries(fm.fields)) {
+    if (!RESERVED_KEYS.has(key)) {
+      metadata[key] = value;
+    }
+  }
+
   return {
     name: fm.fields['name'] ?? '',
     description: fm.fields['description'] ?? '',
     instructions: fm.body.trim(),
+    allowedTools: parseToolList(fm.fields['allowed-tools'] ?? ''),
+    metadata,
   };
+}
+
+/**
+ * Split an `allowed-tools` frontmatter value into tool names.
+ *
+ * The ecosystem writes this either as a comma-separated scalar
+ * (`allowed-tools: Read, Write`) or as an inline YAML array
+ * (`allowed-tools: [Read, Write]`). Both collapse to the same list; a
+ * block-sequence form (one `- item` per line) is not a `key: value` scalar and
+ * so never reaches here.
+ */
+function parseToolList(value: string): string[] {
+  const inner = value.trim().replace(/^\[/, '').replace(/\]$/, '');
+  return inner
+    .split(',')
+    .map((tool) => stripQuotes(tool.trim()))
+    .filter((tool) => tool.length > 0);
 }
 
 interface Frontmatter {

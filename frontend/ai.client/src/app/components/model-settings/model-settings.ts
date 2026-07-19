@@ -4,7 +4,6 @@ import { heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath,
 import { ModelService } from '../../session/services/model/model.service';
 import { ToolService, Tool } from '../../services/tool/tool.service';
 import { SkillService } from '../../services/skill/skill.service';
-import { ChatMode, ChatModeService } from '../../services/chat-mode/chat-mode.service';
 import { SystemPromptsService } from '../../services/system-prompts/system-prompts.service';
 import {
   KNOWN_PARAMS,
@@ -54,7 +53,6 @@ export class ModelSettings {
   protected modelService = inject(ModelService);
   protected toolService = inject(ToolService);
   protected skillService = inject(SkillService);
-  protected chatModeService = inject(ChatModeService);
   protected systemPromptsService = inject(SystemPromptsService);
 
   // Input to control visibility
@@ -190,6 +188,15 @@ export class ModelSettings {
 
       if (isOpen && !this.hasBeenOpened()) {
         this.hasBeenOpened.set(true);
+      }
+
+      // Load the skills picker lazily on first open. SkillService deliberately
+      // has no constructor load (unlike ToolService): skills are opt-in and the
+      // feature is off in every deployed env until PR-5, so a boot-time fetch
+      // would be a guaranteed 404 for every user. `initialized` is set even on
+      // that 404, so this probes at most once per session.
+      if (isOpen && !this.skillService.initialized()) {
+        void this.skillService.loadSkills();
       }
 
       // Prevent background scrolling when panel is open
@@ -355,10 +362,6 @@ export class ModelSettings {
 
   toggleSkills(): void {
     this.isSkillsOpen.update((open) => !open);
-  }
-
-  setMode(mode: ChatMode): void {
-    this.chatModeService.setMode(mode, this.sessionId());
   }
 
   toggleSkill(skillId: string): void {

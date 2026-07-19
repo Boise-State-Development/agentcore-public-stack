@@ -4,7 +4,6 @@ Mirrors the tool/model coverage in test_app_role_service.py and
 test_app_role_admin_service.py:
 - skills union merge across roles (service)
 - wildcard skills (service)
-- can_access_skill: wildcard / match / no-match (service)
 - only enabled roles contribute skills (service)
 - inheritance merge of granted_skills (admin _compute_effective_permissions)
 - add_skill_to_role / remove_skill_from_role (admin)
@@ -87,42 +86,6 @@ async def test_wildcard_in_skills(service, mock_app_role_repo, make_app_role, us
     perms = await service.resolve_user_permissions(user)
 
     assert "*" in perms.skills
-
-
-@pytest.mark.asyncio
-async def test_can_access_skill_with_wildcard(service, mock_app_role_repo, make_app_role, user):
-    role_a = make_app_role(role_id="editor", skills=["*"], priority=1)
-    mock_app_role_repo.get_roles_for_jwt_role.side_effect = lambda r: {
-        "Editor": ["editor"],
-        "Viewer": [],
-    }.get(r, [])
-    mock_app_role_repo.get_role.side_effect = lambda rid: {"editor": role_a}.get(rid)
-
-    assert await service.can_access_skill(user, "any_skill") is True
-
-
-@pytest.mark.asyncio
-async def test_can_access_skill_with_match(service, mock_app_role_repo, make_app_role, user):
-    role_a = make_app_role(role_id="editor", skills=["pdf_workflows"], priority=1)
-    mock_app_role_repo.get_roles_for_jwt_role.side_effect = lambda r: {
-        "Editor": ["editor"],
-        "Viewer": [],
-    }.get(r, [])
-    mock_app_role_repo.get_role.side_effect = lambda rid: {"editor": role_a}.get(rid)
-
-    assert await service.can_access_skill(user, "pdf_workflows") is True
-
-
-@pytest.mark.asyncio
-async def test_can_access_skill_with_no_match(service, mock_app_role_repo, make_app_role, user):
-    role_a = make_app_role(role_id="editor", skills=["pdf_workflows"], priority=1)
-    mock_app_role_repo.get_roles_for_jwt_role.side_effect = lambda r: {
-        "Editor": ["editor"],
-        "Viewer": [],
-    }.get(r, [])
-    mock_app_role_repo.get_role.side_effect = lambda rid: {"editor": role_a}.get(rid)
-
-    assert await service.can_access_skill(user, "other_skill") is False
 
 
 @pytest.mark.asyncio

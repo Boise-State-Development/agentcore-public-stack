@@ -17,8 +17,6 @@ export interface SessionPreferences {
   selectedPromptId?: string;
   customPromptText?: string;
   assistantId?: string;
-  /** Agent mode this conversation runs in ('skill' or 'chat'). */
-  agentType?: 'skill' | 'chat';
   /** Display state for promoted visuals, keyed by tool_use_id */
   visualState?: Record<string, VisualDisplayState>;
 }
@@ -82,5 +80,4 @@ export interface UpdateSessionMetadataRequest {
   selectedPromptId?: string | null;
   customPromptText?: string;
   assistantId?: string;
-  agentType?: 'skill' | 'chat';
 }

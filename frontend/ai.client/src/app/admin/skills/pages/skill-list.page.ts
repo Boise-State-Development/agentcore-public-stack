@@ -17,14 +17,11 @@ import {
   heroPencilSquare,
   heroTrash,
   heroUserGroup,
-  heroWrenchScrewdriver,
   heroDocumentText,
 } from '@ng-icons/heroicons/outline';
 import { AdminSkillService } from '../services/admin-skill.service';
 import { AdminSkill, SKILL_STATUSES } from '../models/admin-skill.model';
 import { AppRolesService } from '../../roles/services/app-roles.service';
-import { parseScopedToolId } from '../../../shared/utils/scoped-tool-id';
-import { AdminToolService } from '../../tools/services/admin-tool.service';
 import {
   SkillRoleDialogComponent,
   SkillRoleDialogData,
@@ -43,7 +40,6 @@ import {
       heroPencilSquare,
       heroTrash,
       heroUserGroup,
-      heroWrenchScrewdriver,
       heroDocumentText,
     }),
   ],
@@ -55,7 +51,7 @@ import {
           <div>
             <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Skill Catalog</h1>
             <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-              Author skills that bundle instructions, reference files and bound tools, then grant them to roles.
+              Author skills that bundle instructions and reference files, then grant them to roles.
             </p>
           </div>
           <a
@@ -186,12 +182,6 @@ import {
                       </p>
                     </div>
 
-                    <!-- Bound tools count -->
-                    <span class="hidden shrink-0 items-center gap-1 text-xs/5 text-gray-500 sm:inline-flex dark:text-gray-400" [title]="skill.boundToolIds.length + ' bound tool(s)'">
-                      <ng-icon name="heroWrenchScrewdriver" class="size-4" aria-hidden="true" />
-                      {{ skill.boundToolIds.length }}
-                    </span>
-
                     <!-- Reference files count -->
                     <span class="hidden shrink-0 items-center gap-1 text-xs/5 text-gray-500 sm:inline-flex dark:text-gray-400" [title]="skill.resources.length + ' reference file(s)'">
                       <ng-icon name="heroDocumentText" class="size-4" aria-hidden="true" />
@@ -252,21 +242,6 @@ import {
                         </div>
 
                         <div>
-                          <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Bound tools</dt>
-                          <dd class="mt-1 flex flex-wrap gap-1.5">
-                            @if (skill.boundToolIds.length > 0) {
-                              @for (toolId of skill.boundToolIds; track toolId) {
-                                <span class="inline-flex items-center rounded-2xl bg-blue-100 px-2 py-0.5 font-mono text-xs/5 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" [title]="toolId">
-                                  {{ getToolDisplayName(toolId) }}
-                                </span>
-                              }
-                            } @else {
-                              <span class="text-xs/5 italic text-gray-500 dark:text-gray-400">No tools bound</span>
-                            }
-                          </dd>
-                        </div>
-
-                        <div>
                           <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Reference files</dt>
                           <dd class="mt-1 flex flex-wrap gap-1.5">
                             @if (skill.resources.length > 0) {
@@ -311,7 +286,6 @@ export class SkillListPage {
   adminSkillService = inject(AdminSkillService);
   private dialog = inject(Dialog);
   private appRolesService = inject(AppRolesService);
-  private adminToolService = inject(AdminToolService);
 
   readonly skillsResource = this.adminSkillService.skillsResource;
   readonly statuses = SKILL_STATUSES;
@@ -373,13 +347,6 @@ export class SkillListPage {
 
   getRoleDisplayName(roleId: string): string {
     return this.appRolesService.getRoleById(roleId)?.displayName ?? roleId;
-  }
-
-  getToolDisplayName(toolId: string): string {
-    // A scoped id (`base::mcpToolName`) binds one tool of a server.
-    const { base, name } = parseScopedToolId(toolId);
-    const serverName = this.adminToolService.getToolById(base)?.displayName ?? base;
-    return name ? `${serverName} · ${name}` : serverName;
   }
 
   getStatusClass(status: string): string {

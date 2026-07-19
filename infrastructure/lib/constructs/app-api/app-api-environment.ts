@@ -295,6 +295,11 @@ export function buildAppApiEnvironment(
     MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
     DYNAMODB_MEMORY_SPACES_TABLE_NAME: params.memorySpacesTableName,
     S3_MEMORY_SPACES_BUCKET_NAME: params.memorySpacesBucketName,
+    // Skills v2 (default ON with a kill switch per env). Skills live in the
+    // shared app-roles table, which is already wired, so this only gates route
+    // mounting. Cohort access is the separate `skills` RBAC capability — this
+    // flag only gates feature existence per environment.
+    SKILLS_ENABLED: config.skills.enabled ? 'true' : 'false',
     // Kill switch for the Agent Designer /agents surface (default off per env).
     // Gates only whether the routes 404; the assistant store it reads is always
     // present, so no extra table/bucket wiring is needed here.

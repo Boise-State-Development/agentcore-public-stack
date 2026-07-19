@@ -131,7 +131,7 @@ class TestSeedDefaultTools:
         """Creates the default tool entries."""
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 7
+        assert result.created == 6
         assert result.failed == 0
 
         # Verify fetch_url_content
@@ -187,7 +187,7 @@ class TestSeedDefaultTools:
         )
         item = resp["Item"]
         assert item["toolId"] == "create_artifact"
-        assert item["displayName"] == "Create Artifact"
+        assert item["displayName"] == "Artifacts"
         assert item["category"] == "document"
         assert item["protocol"] == "local"
         assert item["enabledByDefault"] is True
@@ -195,17 +195,12 @@ class TestSeedDefaultTools:
         assert item["GSI1PK"] == "CATEGORY#document"
         assert item["GSI1SK"] == "TOOL#create_artifact"
 
-        # Verify update_artifact
+        # update_artifact is no longer its own catalog row: create_artifact is
+        # the single gate key that provisions the whole artifact toolset.
         resp = dynamodb_table.get_item(
             Key={"PK": "TOOL#update_artifact", "SK": "METADATA"}
         )
-        item = resp["Item"]
-        assert item["toolId"] == "update_artifact"
-        assert item["displayName"] == "Update Artifact"
-        assert item["category"] == "document"
-        assert item["protocol"] == "local"
-        assert item["enabledByDefault"] is True
-        assert item["isPublic"] is True
+        assert "Item" not in resp
 
         # Verify create_word_document (single toggle for the whole Word toolset)
         resp = dynamodb_table.get_item(
@@ -227,7 +222,7 @@ class TestSeedDefaultTools:
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.skipped == 7
+        assert result.skipped == 6
         assert result.created == 0
 
     def test_partial_skip(self, dynamodb_table):
@@ -241,7 +236,7 @@ class TestSeedDefaultTools:
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 6
+        assert result.created == 5
         assert result.skipped == 1
 
 
@@ -256,13 +251,13 @@ class TestSeedExampleSkills:
         assert result.created == 1
         assert result.failed == 0
 
-        # SKILL# record — instructions + bound LOCAL tool + active.
+        # SKILL# record — instructions (knowledge bundle) + active.
         item = dynamodb_table.get_item(
             Key={"PK": f"SKILL#{EXAMPLE_SKILL_ID}", "SK": "METADATA"}
         )["Item"]
         assert item["skillId"] == EXAMPLE_SKILL_ID
         assert item["status"] == "active"
-        assert item["boundToolIds"] == ["fetch_url_content"]
+        assert "boundToolIds" not in item
         assert item["instructions"]
         assert item["GSI4PK"] == "OWNER#system"
         # No bucket configured → seeded without reference bytes.
@@ -319,7 +314,43 @@ class TestSeedExampleSkills:
         assert len(item["resources"]) == 1
         ref = item["resources"][0]
         assert ref["filename"] == "extraction_tips.md"
-        assert ref["s3Key"].startswith(f"skills/{EXAMPLE_SKILL_ID}/")
-        # Bytes really landed in S3 at the content-addressed key.
+        # Standard agentskills.io bundle layout, not the v1 content-hash key —
+        # a seeded prefix must be a portable bundle on day one (Skills v2).
+        assert ref["s3Key"] == f"skills/{EXAMPLE_SKILL_ID}/references/extraction_tips.md"
+        assert ref["kind"] == "reference"
         body = s3.get_object(Bucket=bucket, Key=ref["s3Key"])["Body"].read()
         assert b"Extraction Tips" in body
+
+    def test_writes_the_skill_md_projection(self, dynamodb_table, monkeypatch):
+        """The seeded prefix must be a valid bundle, not just loose bytes.
+
+        Without SKILL.md the prefix cannot be handed to a managed Harness
+        (``{"s3": {"uri": ...}}``) or exported as-is.
+        """
+        bucket = "test-skill-resources"
+        s3 = boto3.client("s3", region_name=REGION)
+        s3.create_bucket(Bucket=bucket)
+        monkeypatch.setenv("S3_SKILL_RESOURCES_BUCKET_NAME", bucket)
+        seed_default_role(TABLE_NAME, REGION)
+
+        seed_example_skills(TABLE_NAME, REGION)
+
+        body = s3.get_object(
+            Bucket=bucket, Key=f"skills/{EXAMPLE_SKILL_ID}/SKILL.md"
+        )["Body"].read().decode()
+
+        assert body.startswith("---")
+        assert "name: web-research" in body
+        assert "Fetch web pages and turn them into accurate, citable notes." in body
+        assert "# Web Research Assistant" in body
+
+    def test_seeded_instructions_name_no_retired_v1_tools(self):
+        """The v1 disclosure meta-tools were deleted in Skills v2 PR-1/PR-2.
+
+        Seed prose naming them would tell the model to call tools that no
+        longer exist — the exact drift that stranded dev's row.
+        """
+        from seed_bootstrap_data import EXAMPLE_SKILL_INSTRUCTIONS
+
+        assert "skill_executor" not in EXAMPLE_SKILL_INSTRUCTIONS
+        assert "skill_dispatcher" not in EXAMPLE_SKILL_INSTRUCTIONS

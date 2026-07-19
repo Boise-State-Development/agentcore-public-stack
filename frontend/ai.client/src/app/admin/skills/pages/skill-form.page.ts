@@ -8,8 +8,6 @@ import {
 } from '@angular/core';
 import { RouterLink, Router, ActivatedRoute } from '@angular/router';
 import { FormBuilder, FormGroup, Validators, ReactiveFormsModule } from '@angular/forms';
-import { Dialog } from '@angular/cdk/dialog';
-import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -17,12 +15,10 @@ import {
   heroTrash,
   heroEye,
   heroArrowUpTray,
-  heroWrenchScrewdriver,
   heroDocumentText,
   heroXMark,
 } from '@ng-icons/heroicons/outline';
 import { AdminSkillService } from '../services/admin-skill.service';
-import { AdminToolService } from '../../tools/services/admin-tool.service';
 import {
   SkillResourceRef,
   SkillStatus,
@@ -34,12 +30,6 @@ import {
   parseSkillMarkdown,
   slugifySkillId,
 } from '../models/skill-import.util';
-import {
-  ToolPickerDialogComponent,
-  ToolPickerDialogData,
-  ToolPickerDialogResult,
-} from '../components/tool-picker-dialog.component';
-import { parseScopedToolId } from '../../../shared/utils/scoped-tool-id';
 
 @Component({
   selector: 'app-skill-form',
@@ -52,7 +42,6 @@ import { parseScopedToolId } from '../../../shared/utils/scoped-tool-id';
       heroTrash,
       heroEye,
       heroArrowUpTray,
-      heroWrenchScrewdriver,
       heroDocumentText,
       heroXMark,
     }),
@@ -76,7 +65,7 @@ import { parseScopedToolId } from '../../../shared/utils/scoped-tool-id';
               {{ isEditMode() ? 'Edit Skill' : 'Create Skill' }}
             </h1>
             <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-              {{ isEditMode() ? 'Update skill instructions, reference files and bound tools.' : 'Author a new skill, or import a SKILL.md to prefill it.' }}
+              {{ isEditMode() ? 'Update skill instructions and reference files.' : 'Author a new skill, or import a SKILL.md to prefill it.' }}
             </p>
           </div>
 
@@ -220,45 +209,6 @@ import { parseScopedToolId } from '../../../shared/utils/scoped-tool-id';
                 placeholder="# How to use these tools&#10;&#10;Describe the procedure the agent should follow…"
                 class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
               ></textarea>
-            </section>
-
-            <!-- Bound Tools -->
-            <section class="space-y-4">
-              <div class="flex items-center justify-between gap-3">
-                <div>
-                  <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Bound tools</h2>
-                  <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-                    Catalog tools this skill carries. The agent loads only these when the skill is active.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  (click)="openToolPicker()"
-                  class="inline-flex shrink-0 items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                >
-                  <ng-icon name="heroWrenchScrewdriver" class="size-4" aria-hidden="true" />
-                  Bind tools
-                </button>
-              </div>
-              @if (boundToolIds().length > 0) {
-                <div class="flex flex-wrap gap-1.5">
-                  @for (toolId of boundToolIds(); track toolId) {
-                    <span class="inline-flex items-center gap-1 rounded-2xl bg-blue-100 py-0.5 pl-2.5 pr-1 text-xs/5 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-                      <span class="font-mono" [title]="toolId">{{ toolDisplayName(toolId) }}</span>
-                      <button
-                        type="button"
-                        (click)="removeTool(toolId)"
-                        [attr.aria-label]="'Remove ' + toolId"
-                        class="flex size-4 items-center justify-center rounded-full hover:bg-blue-200 dark:hover:bg-blue-800"
-                      >
-                        <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
-                      </button>
-                    </span>
-                  }
-                </div>
-              } @else {
-                <p class="text-sm/6 italic text-gray-500 dark:text-gray-400">No tools bound yet.</p>
-              }
             </section>
 
             <!-- Reference Files -->
@@ -440,9 +390,7 @@ export class SkillFormPage implements OnInit {
   private fb = inject(FormBuilder);
   private router = inject(Router);
   private route = inject(ActivatedRoute);
-  private dialog = inject(Dialog);
   private adminSkillService = inject(AdminSkillService);
-  private adminToolService = inject(AdminToolService);
 
   readonly statuses = SKILL_STATUSES;
   readonly categories = SKILL_CATEGORIES;
@@ -454,9 +402,6 @@ export class SkillFormPage implements OnInit {
   skillId = signal<string | null>(null);
 
   readonly isEditMode = computed(() => !!this.skillId());
-
-  // Bound tools (managed via the picker dialog).
-  readonly boundToolIds = signal<string[]>([]);
 
   // Reference files: live manifest in edit mode, staged Files in create mode.
   readonly resources = signal<SkillResourceRef[]>([]);
@@ -502,7 +447,6 @@ export class SkillFormPage implements OnInit {
         status: skill.status,
         category: skill.category ?? '',
       });
-      this.boundToolIds.set([...skill.boundToolIds]);
       this.resources.set([...skill.resources]);
     } catch (err: unknown) {
       this.error.set(err instanceof Error ? err.message : 'Failed to load skill.');
@@ -515,14 +459,6 @@ export class SkillFormPage implements OnInit {
 
   asValue(event: Event): string {
     return (event.target as HTMLInputElement | HTMLTextAreaElement).value;
-  }
-
-  toolDisplayName(toolId: string): string {
-    // A scoped id (`base::mcpToolName`) binds one tool of a server — show
-    // "Server · tool" so the chip reads cleanly.
-    const { base, name } = parseScopedToolId(toolId);
-    const serverName = this.adminToolService.getToolById(base)?.displayName ?? base;
-    return name ? `${serverName} · ${name}` : serverName;
   }
 
   formatSize(bytes: number): string {
@@ -552,27 +488,11 @@ export class SkillFormPage implements OnInit {
       }
       this.form.patchValue(patch);
       this.importNotice.set(
-        'Imported from SKILL.md. Tool bindings are not imported — pick them below. Review the Skill ID, then add reference files.'
+        'Imported from SKILL.md. Review the Skill ID, then add reference files.'
       );
     } catch {
       this.error.set('Could not read the selected SKILL.md file.');
     }
-  }
-
-  // --- Bound tools -----------------------------------------------------------
-
-  async openToolPicker(): Promise<void> {
-    const dialogRef = this.dialog.open<ToolPickerDialogResult>(ToolPickerDialogComponent, {
-      data: { selectedToolIds: this.boundToolIds() } as ToolPickerDialogData,
-    });
-    const result = await firstValueFrom(dialogRef.closed);
-    if (result !== undefined) {
-      this.boundToolIds.set(result);
-    }
-  }
-
-  removeTool(toolId: string): void {
-    this.boundToolIds.update((ids) => ids.filter((id) => id !== toolId));
   }
 
   // --- Reference files -------------------------------------------------------
@@ -690,7 +610,6 @@ export class SkillFormPage implements OnInit {
           instructions: v.instructions,
           status: v.status,
           category,
-          boundToolIds: this.boundToolIds(),
         });
       } else {
         const created = await this.adminSkillService.createSkill({
@@ -700,7 +619,6 @@ export class SkillFormPage implements OnInit {
           instructions: v.instructions,
           status: v.status,
           category,
-          boundToolIds: this.boundToolIds(),
         });
         // Upload any staged reference files now that the skill exists.
         for (const file of this.pendingFiles()) {

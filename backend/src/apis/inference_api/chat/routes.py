@@ -30,8 +30,6 @@ from apis.shared.errors import (
 from apis.shared.feature_flags import agents_enabled, skills_enabled
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.models.managed_models import list_managed_models
-from apis.shared.platform_settings.models import DEFAULT_CHAT_MODE, ChatModeSettings
-from apis.shared.platform_settings.service import get_chat_mode_settings_service
 from apis.shared.quota import (
     QuotaExceededEvent,
     build_no_quota_configured_event,
@@ -77,22 +75,11 @@ router = APIRouter(tags=["agentcore-runtime"])
 # Preview session prefix - sessions with this prefix skip persistence
 PREVIEW_SESSION_PREFIX = "preview-"
 
-# Default agent factory variant for a user turn when the client doesn't pin one
-# (PR-7). Flipped from "chat" to "skill": every turn now routes through the
-# SkillAgent's progressive disclosure, which folds a granted skill's bound tools
-# behind the two meta-tools. Safe by construction — a user with zero accessible
-# skills gets a SkillAgent that degrades to plain ChatAgent behavior
-# (skill_agent.py), so this is a no-op for them. Clients can still opt out per
-# turn by sending agent_type="chat". (The lower-level service.get_agent keeps a
-# conservative "chat" fallback for direct/programmatic callers that don't
-# resolve skills; this request-policy default lives here.)
-#
-# Since the skills-mode work (docs/specs/skills-mode.md) the *runtime* default
-# comes from the admin-managed chat-mode policy (apis.shared.platform_settings),
-# which also decides whether a client agent_type override is honored at all —
-# see _resolve_effective_agent_type. This constant is the compiled-in fallback
-# the policy model itself defaults to, kept aliased so they can never drift.
-DEFAULT_AGENT_TYPE = DEFAULT_CHAT_MODE
+# Default agent factory variant for a user turn when the client doesn't pin one.
+# Skills v2: plain chat is the default; skills are opt-in (selected per-turn or
+# bound on an Agent). A client can still pin agent_type explicitly (e.g. an
+# Agent that binds skills resolves to "skill" via the agent-binding resolver).
+DEFAULT_AGENT_TYPE = "chat"
 
 
 def _mark_session_cancelled(agent) -> None:
@@ -428,7 +415,7 @@ def _build_spreadsheet_tools(
 # Artifact Authoring Tool Injection
 # ============================================================
 
-ARTIFACT_TOOL_IDS = {"create_artifact", "update_artifact"}
+ARTIFACT_TOOL_IDS = {"create_artifact"}
 
 
 def _build_artifact_tools(
@@ -437,23 +424,23 @@ def _build_artifact_tools(
     user_id: str,
 ) -> list:
     """Create context-bound artifact authoring tools if enabled by the user."""
-    if not enabled_tools:
+    if not enabled_tools or not ARTIFACT_TOOL_IDS.intersection(enabled_tools):
         return []
 
-    requested = ARTIFACT_TOOL_IDS.intersection(enabled_tools)
-    if not requested:
-        return []
-
+    # Artifacts are a single toggle: enabling create_artifact provisions the
+    # full authoring toolset (create + update) so the model can iterate on a
+    # document without a second admin catalog entry. The legacy
+    # "update_artifact" catalog row is retired — see
+    # backend/scripts/backfill_artifact_tool_merge.py.
     from agents.builtin_tools.artifacts import (
         make_create_artifact_tool,
         make_update_artifact_tool,
     )
 
-    tools = []
-    if "create_artifact" in requested:
-        tools.append(make_create_artifact_tool(session_id, user_id))
-    if "update_artifact" in requested:
-        tools.append(make_update_artifact_tool(session_id, user_id))
+    tools = [
+        make_create_artifact_tool(session_id, user_id),
+        make_update_artifact_tool(session_id, user_id),
+    ]
 
     logger.info(f"Created {len(tools)} artifact authoring tools")
     return tools
@@ -856,57 +843,35 @@ async def ping():
 
 
 async def _resolve_accessible_skill_ids(current_user: User) -> list[str]:
-    """Resolve the skills a user's RBAC roles grant (admin/DB-backed).
+    """Resolve every skill a user can reach: RBAC-granted catalog ∪ own.
 
     Thin delegate to the shared resolver (``apis.shared.skills.access``) used
     by both this path and the user-facing skills API, so the picker and the
     runtime can never drift. Kept as a module-level seam for tests. Never
-    raises — on any failure the user simply gets no skills (the SkillAgent
-    degrades to chat).
+    raises — on any failure the user simply gets no skills and the turn runs
+    without the disclosure plugin.
     """
     from apis.shared.skills.access import resolve_accessible_skill_ids
 
     return await resolve_accessible_skill_ids(current_user)
 
 
-def _resolve_effective_agent_type(
-    requested: Optional[str], settings: ChatModeSettings
-) -> str:
-    """Apply the admin chat-mode policy to a client's requested agent type.
-
-    The client's choice between "skill" and "chat" is honored only while the
-    policy allows mode toggling; otherwise the admin default wins (UI gating
-    alone is not enforcement — the SPA hides the toggle, but any client can
-    craft a request). Other values ("voice", future internal types) pass
-    through untouched: the policy governs the user-facing mode pair only.
-    """
-    if (
-        requested in ("skill", "chat")
-        and requested != settings.default_mode
-        and not settings.allow_mode_toggle
-    ):
-        logger.info(
-            "Client agent_type=%s overridden to %s (mode toggling disabled by admin)",
-            requested,
-            settings.default_mode,
-        )
-        requested = None
-    return requested or settings.default_mode
-
-
 def _apply_enabled_skills_filter(
     accessible_skill_ids: list[str], enabled_skills: Optional[list[str]]
 ) -> list[str]:
-    """Narrow the RBAC-accessible skill set by the client's per-turn selection.
+    """Narrow the accessible skill set by the client's per-turn selection.
 
-    ``None`` means the client predates (or isn't using) the skills picker —
-    all accessible skills stay active, the pre-picker behavior. A list is an
-    intersection: client input can narrow the set, never grant. The result
-    stays a list (possibly empty) because SkillAgent distinguishes [] (DB
-    mode, zero skills → degrade to chat) from None (file-scan fallback).
+    Intersection only: client input can narrow the set, never grant.
+
+    ``None`` (or an empty list) means **no skills** — Skills v2 D6 flips plain
+    chat to opt-in, unlike tools. This is the reverse of v1, where absent meant
+    "every accessible skill". Opt-in is what keeps prompt bloat and instruction
+    conflicts bounded as the catalog grows across two authorship tiers; a client
+    that predates the picker now simply gets a plain chat turn, which is the
+    safe direction to fail.
     """
-    if enabled_skills is None:
-        return accessible_skill_ids
+    if not enabled_skills:
+        return []
     requested = set(enabled_skills)
     return [sid for sid in accessible_skill_ids if sid in requested]
 
@@ -932,31 +897,32 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
     is_resume = bool(input_data.interrupt_responses)
-    # Resolve the effective agent type once: the client's explicit choice
-    # (honored only while the admin chat-mode policy allows toggling), else
-    # the policy's default mode. Used for the skill resolution below and the
-    # non-resume get_agent calls (resume reuses the snapshot's type). The
-    # settings read is TTL-cached in-process (~60s) and degrades to compiled-in
-    # defaults, so this adds no per-turn Dynamo cost and can't fail the turn.
-    chat_mode_settings = await get_chat_mode_settings_service().get_settings()
-    effective_agent_type = _resolve_effective_agent_type(
-        input_data.agent_type, chat_mode_settings
-    )
-    # Skills feature deferred for this environment: never route a turn through
-    # the SkillAgent, regardless of the client's request or any stored policy.
-    # Only the skill mode is neutralized — voice and other agent types pass
-    # through untouched.
+    # Resolve the effective agent type: the client's explicit choice, else the
+    # compiled-in default ("chat"). Used for the skill resolution below and the
+    # non-resume get_agent calls (resume reuses the snapshot's type). An Agent
+    # that binds skills is coerced to "skill" later by the agent-binding
+    # resolver.
+    effective_agent_type = input_data.agent_type or DEFAULT_AGENT_TYPE
+    # Skills feature deferred for this environment: neutralize the legacy
+    # "skill" agent type, which is a ChatAgent alias since v2 PR-2. Voice and
+    # other agent types pass through untouched.
     if not skills_enabled() and effective_agent_type == "skill":
         effective_agent_type = "chat"
-    # Resolve the user's *effective* skills once for the whole request — only
-    # for the skill agent path: the RBAC-accessible set (admin/DB-backed),
-    # narrowed by the client's per-turn enabled_skills selection. Threaded into
-    # every get_agent call below so they share one skills_hash cache key
-    # (otherwise the app-tool-call / resume paths would miss the main turn's
-    # cached SkillAgent). An explicit agent_type="chat" opts out and stays free
-    # of the extra reads.
+    # Resolve the user's *effective* skills once for the whole request: the
+    # accessible set (catalog ∪ own), narrowed by the client's per-turn
+    # enabled_skills selection. Threaded into every get_agent call below so they
+    # share one skills_hash cache key (otherwise the app-tool-call / resume paths
+    # would miss the main turn's cached agent).
+    #
+    # Skills v2: this is no longer gated on agent_type == "skill". Skills are a
+    # plain-chat capability now — the picker in model settings sends
+    # enabled_skills on an ordinary turn and ChatAgent mounts the AgentSkills
+    # plugin. The opt-in default (D6) is what keeps this cheap: an absent or
+    # empty selection short-circuits to [] without touching RBAC or the skill
+    # table, so every turn that doesn't ask for skills costs exactly what it did
+    # before. An Agent's skill bindings override this further down.
     effective_skill_ids = None
-    if effective_agent_type == "skill":
+    if skills_enabled() and input_data.enabled_skills:
         effective_skill_ids = _apply_enabled_skills_filter(
             await _resolve_accessible_skill_ids(current_user),
             input_data.enabled_skills,
@@ -1685,22 +1651,24 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_type=snapshot.agent_type,
                 is_resume=True,
                 # Resume must rebuild the SAME cache key the original turn used,
-                # or the paused agent is orphaned. The original turn's
-                # skills_hash was derived from its *effective* skill set only
-                # when it was a skill turn; mirror that off the snapshot's type
-                # (a turn explicitly built as "chat" carried no skills → empty
-                # skills_hash). New snapshots carry that exact set in
-                # enabled_skills; legacy snapshots (written before the field
-                # existed) fall back to this request's resolution, the
-                # pre-skills-picker behavior.
+                # or the paused agent is orphaned. New snapshots carry the
+                # original turn's exact effective set in enabled_skills, so
+                # replay it verbatim — including [] (a turn that deliberately
+                # carried no skills → empty skills_hash).
+                #
+                # Skills v2: this must NOT be gated on snapshot.agent_type ==
+                # "skill" any more. A plain-chat turn now carries skills too, so
+                # that gate would resolve a skills-bearing "chat" snapshot back
+                # to None and orphan its paused agent. The snapshot's own field
+                # is the authority.
+                #
+                # Legacy snapshots (written before enabled_skills existed) still
+                # fall back to this request's resolution, and only for a "skill"
+                # turn — that is exactly what those turns were built with.
                 accessible_skill_ids=(
-                    (
-                        snapshot.enabled_skills
-                        if snapshot.enabled_skills is not None
-                        else effective_skill_ids
-                    )
-                    if snapshot.agent_type == "skill"
-                    else None
+                    snapshot.enabled_skills
+                    if snapshot.enabled_skills is not None
+                    else (effective_skill_ids if snapshot.agent_type == "skill" else None)
                 ),
             )
             # The `stream_with_quota_warning` closure below references
@@ -1802,8 +1770,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 else input_data.enabled_tools
             )
 
-            # An Agent's skill bindings replace the request's skills for this turn and
-            # force skill-mode so the SkillAgent discloses exactly the bound set (D5,
+            # An Agent's skill bindings replace the request's skills for this turn so
+            # ChatAgent's AgentSkills plugin discloses exactly the bound set (D5,
             # resolved per invoker above). Reassigning these function-scope locals here
             # (before the main-turn get_agent below) makes them flow into construction —
             # and thus the paused-turn snapshot — so a bound-skill agent resumes on the

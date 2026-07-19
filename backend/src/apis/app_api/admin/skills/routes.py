@@ -8,7 +8,7 @@ create/edit form populates its tool picker from GET /admin/tools.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
 from apis.shared.auth import User, require_admin
@@ -75,9 +75,8 @@ async def admin_create_skill(
 ):
     """Create a new skill catalog entry.
 
-    Every bound_tool_id is validated against the tool catalog (must exist and
-    be ACTIVE). This only creates the catalog entry; use the role endpoints to
-    grant it to AppRoles.
+    This only creates the catalog entry; use the role endpoints to grant it to
+    AppRoles.
     """
     logger.info("Admin creating skill")
 
@@ -89,7 +88,6 @@ async def admin_create_skill(
             display_name=request.display_name,
             description=request.description,
             instructions=request.instructions,
-            bound_tool_ids=request.bound_tool_ids,
             compose=request.compose,
             status=request.status,
             category=request.category,
@@ -99,7 +97,8 @@ async def admin_create_skill(
         raise HTTPException(status_code=400, detail=str(e))
 
     # Drop the all-skill-ids snapshot so the new skill is recognized by
-    # SkillAccessService on the very next chat turn in this process.
+    # ``skills.access.resolve_accessible_skill_ids`` on the very next chat
+    # turn in this process.
     from apis.shared.skills.freshness import invalidate as invalidate_freshness
 
     invalidate_freshness(created.skill_id)
@@ -264,13 +263,16 @@ async def list_skill_resources(
 async def upload_skill_resource(
     skill_id: str,
     file: UploadFile = File(...),
+    kind: str = Form("reference"),
     admin: User = Depends(require_admin),
 ):
-    """Upload (or replace) one supporting reference file for a skill.
+    """Upload (or replace) one supporting file for a skill.
 
-    Bytes are stored content-addressed in S3; the catalog row's manifest is
-    updated atomically. Re-uploading the same filename replaces it. Returns
-    the skill's updated manifest.
+    Bytes are stored in the standard agentskills.io bundle layout
+    (``references/`` | ``scripts/`` | ``assets/`` per ``kind``); the catalog
+    row's manifest is updated atomically. Re-uploading the same filename
+    replaces it. ``script`` files are stored inert (never executed). Returns the
+    skill's updated manifest.
     """
     logger.info("Admin uploading skill reference file")
 
@@ -283,6 +285,7 @@ async def upload_skill_resource(
             content=content,
             content_type=file.content_type or "",
             admin=admin,
+            kind=kind,
         )
     except ValueError as e:
         raise _resource_value_error(e)
