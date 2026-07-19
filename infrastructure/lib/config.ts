@@ -181,10 +181,10 @@ export interface MemorySpacesConfig {
  * app-api and inference-api; the skills data lives in the shared app-roles
  * table, so this only gates route mounting and skill resolution at runtime.
  *
- * This gates *feature existence* per environment. *Who* sees the user-facing
- * surfaces is the separate `skills` RBAC capability
- * (backend `apis.shared.rbac.capabilities`), which keeps them admin-only during
- * rollout — GA is one grant of `skills` to the `default` role, no redeploy.
+ * This gates *feature existence* per environment, and is now the only gate on
+ * the user-facing surfaces: the `skills` RBAC capability that used to keep them
+ * admin-only was removed (it could not be granted from the admin roles UI). Who
+ * can reach *which* skills is a role's `grantedSkills`, edited in that UI.
  */
 export interface SkillsConfig {
   enabled: boolean;
