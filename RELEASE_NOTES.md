@@ -1,3 +1,104 @@
+# Release Notes — v1.8.0
+
+**Release Date:** July 19, 2026
+**Previous Release:** v1.7.1 (July 17, 2026)
+
+---
+
+> ⚠️ **Three backfill scripts must be run per environment.** Skills activate on the `backend.yml` deploy itself — before any CDK deploy — because deployed containers set no `SKILLS_ENABLED` and unset now reads as enabled. No new AWS resources. See the Deployment notes at the end of this entry.
+
+---
+
+## Highlights
+
+v1.8.0 delivers **Skills v2**, a ground-up redesign of what a skill *is*. Skills were containers that bound tools; they are now **pure, portable knowledge bundles** — instructions plus reference files — that an Agent loads on demand through progressive disclosure. For the first time, **any signed-in user can author their own skills**, not just admins, and a skill bound to a shared Agent resolves for whoever uses that Agent. Skills ship **enabled by default**. This release also completes the session-metadata static-sort-key migration (issue #175) through its backfill and read-contraction phases, and collapses the two artifact tool-catalog rows into a single "Artifacts" toggle. Operators must run three backfill scripts; there are no new AWS resources and no dependency changes.
+
+## Skills v2 — knowledge bundles as an Agent primitive
+
+A skill used to be a container that carried its own bound tools, which made it a second, parallel permission axis fighting the RBAC one. A skill is now **instructions + reference files only**. `allowedTools` still persists on the record but is advisory metadata that **never grants a tool** — tool access is RBAC's job, exclusively. The agent discovers skills by name and description (L1), reads `SKILL.md` when one looks relevant (L2), and pulls individual reference files through the new `read_skill_file` tool only as needed (L3), so a large skill library costs almost nothing in context until something is actually used.
+
+The storage format is now **agentskills.io-standard bundles** in S3, with a `SKILL.md` write-through projection generated from the DynamoDB row. That makes a skill prefix portable: it can be handed to a managed Harness as `{"s3": {"uri": ...}}` or exported as-is, which the previous content-addressed layout could not do.
+
+### Backend
+
+- `apis/app_api/skills/routes.py` — user-facing surfaces: the picker (`GET /skills/`, `PUT /skills/preferences`) and owner-scoped My Skills CRUD (`/skills/mine/*`), including bundle file upload. Ownership resolves through `UserSkillService`, so a skill you do not own is indistinguishable from one that does not exist.
+- The runtime swapped the bespoke `SkillAgent` for the Strands **`AgentSkills` plugin**; `agent_type="skill"` remains a temporary ChatAgent alias for pre-existing snapshots and is scheduled for removal one release out.
+- `read_skill_file` added for L3 progressive disclosure. `scripts/` files in a bundle are accept-and-inert by design — stored, listed, and readable, never executed.
+- A new user tier in the app-roles table, GSI4-indexed for owner lookups.
+- The `skills` RBAC capability gate was **removed**. It kept the surfaces admin-only during rollout, but it could not be granted from the admin roles UI at all — that form builds `grantedTools` from the tool catalog, and a capability id is not a tool. An admin granting a catalog skill to a role would have found it silently invisible to that role's users with no way to fix it in-product. Access is now `SKILLS_ENABLED` per environment plus a role's `grantedSkills` per cohort, which the roles UI *can* edit.
+
+### Frontend
+
+- A **Skills** section in the chat model-settings panel lists every skill the user can reach — RBAC-granted catalog skills **union** the ones they authored — each with an opt-in toggle. Skills are off by default; the section renders only when the user actually has one, so it stays invisible for users with no grants.
+- When an Agent binds a fixed skill set, the picker shows only those skills, locked, with an explanatory note.
+- A `/my-skills` page and authoring form for the user tier. **The sidenav entry is deliberately hidden** pending a decision on how users should reach the page — the route, page, and backend surface are fully live and reachable by direct URL.
+
+### Infrastructure
+
+- `SKILLS_ENABLED` threaded into app-api and inference-api from `config.skills.enabled`, default ON with a `CDK_SKILLS_ENABLED=false` per-environment kill switch. Design-time refuses to bind a skill while the flag is off on app-api, so the two services must stay in step — a mismatch would let an Agent be built with skills the runtime then blocks.
+- **No new AWS resources.** The skill-resources S3 bucket and the app-roles table both predate this release.
+
+### Test Coverage
+
+~1,800 lines of new skills tests across the runtime plugin, the user tier's ownership boundaries, resource-store layout, and the SPA picker and My Skills services.
+
+## Session-metadata migration completed (issue #175, Phases 2–3)
+
+v1.7.0 landed the read side and v1.7.1 the write side; v1.8.0 finishes the job for rows that never get written again. **Phase 2** adds `backend/scripts/backfill_session_static_sk.py`, which migrates the cold tail of legacy rows and deletes ghost stubs. It is dry-run by default, idempotent, and throttled; the static put is guarded by `ConditionExpression=Attr("SK").not_exists()` so it can never clobber a row a live writer already migrated with fresher data. Its `--set-marker` flag re-scans and **refuses to write the completion marker while any legacy rows remain**, so multiple passes are expected on a large table.
+
+**Phase 3** then lets session listing skip the legacy base-table query entirely once that marker (`PK=MIGRATION#session-sk`) is present — one DynamoDB query per list call instead of two. It **fails open**: an absent marker, or a handled GSI error, keeps the dual-read path, so the deploy is order-independent and downstream forks that never run the backfill are unaffected. The marker result is memoised only on success, so a container that started before the backfill picks up the flip on a later list call with no restart.
+
+Users notice nothing — list contents, ordering, and cursor encoding are unchanged.
+
+## Artifacts consolidated to one catalog toggle
+
+Admins previously saw "Create Artifact" and "Update Artifact" as two unrelated rows in the tool catalog, to grant and toggle separately, even though updating an artifact is meaningless without creating one. They are now a single **"Artifacts"** entry (`toolId` `create_artifact`) that injects both tools at runtime.
+
+This requires `backend/scripts/backfill_artifact_tool_merge.py`, which promotes existing role grants, user tool preferences, and assistant bindings from the retired `update_artifact` id onto the kept one before deleting the retired row. Promotion happens **before** deletion, so an aborted run degrades to "both granted" rather than "neither." An explicit *enable* of the retired id carries over; an explicit *disable* deliberately does not.
+
+## 🐛 Bug fixes
+
+- **Saving an Agent with an invalid form looked like a click that did nothing.** The inline validation error was usually below the fold once the author had scrolled to the Model or Skills sections, so the save button appeared inert. The first invalid control is now scrolled into view and focused, with a "Fix the highlighted fields before saving" toast. The same change corrects stale copy on the agent and admin skill forms that still described skills as carrying their own bound tools.
+
+## ⚠️ Breaking changes
+
+- **Skills no longer bind tools.** This is a conceptual break, not a data break: existing skill rows keep working and keep their `allowedTools` values, but those values stop granting anything. Any workflow that relied on a skill to confer tool access must grant those tools through RBAC instead. The skills mode toggle is gone.
+- **The `update_artifact` tool-catalog row is retired.** Run the artifact backfill below before or immediately after deploying, or roles and users that had been granted `update_artifact` alone will lose it.
+
+## 🏗️ Infrastructure
+
+- No new AWS resources, no new IAM, no dependency changes.
+- The only CDK delta is the `SKILLS_ENABLED` environment variable on the app-api task definition and the inference-api Runtime. Because unset now reads as enabled, **a CDK deploy is not required to activate skills** — it only makes the setting explicit, and is required only to *disable* skills in a given environment.
+
+## 🚀 Deployment notes
+
+Standard order: `platform.yml` (optional this release — see above) → `backend.yml` → `frontend-deploy.yml`.
+
+**Skills go live the moment `backend.yml` completes.** With the surfaces ungated, any signed-in user can then author skills at `/my-skills` and use any skill their role grants. Nothing is *linked* — the sidenav entry is hidden and no catalog skills are granted by default — but the route is present in the SPA bundle. If an environment is not ready for that, set `CDK_SKILLS_ENABLED=false` for it and deploy `platform.yml` **before** `backend.yml`.
+
+Then run the three backfills, each **dry-run first** (all three are dry-run by default and idempotent), dev before prod:
+
+```bash
+# 1. Artifact tool merge — required; the retired row is deleted at the end
+python backend/scripts/backfill_artifact_tool_merge.py --table <prefix>-app-roles
+python backend/scripts/backfill_artifact_tool_merge.py --table <prefix>-app-roles --apply
+
+# 2. Skill bundles — brings any pre-v2 skill up to the agentskills.io layout
+python backend/scripts/backfill_skill_bundles.py \
+    --table <prefix>-app-roles --bucket <prefix>-skill-resources
+python backend/scripts/backfill_skill_bundles.py \
+    --table <prefix>-app-roles --bucket <prefix>-skill-resources --apply
+
+# 3. Session static-SK cold tail — optional but unlocks the Phase 3 read path
+python backend/scripts/backfill_session_static_sk.py --table <prefix>-sessions-metadata
+python backend/scripts/backfill_session_static_sk.py \
+    --table <prefix>-sessions-metadata --apply --set-marker
+```
+
+Notes on each: the artifact script promotes grants before deleting the retired row, so an interrupted run is safe. The skill-bundle script *copies* legacy objects and only removes them with an explicit `--delete-legacy` once the copy is verified. The session script deletes ghost stubs and migrated legacy rows permanently and has no rollback path — take the dry-run output seriously, and expect `--set-marker` to no-op until a pass reaches zero legacy rows. Session listing keeps working correctly whether or not you ever run script 3.
+
+---
+
 # Release Notes — v1.7.1
 
 **Release Date:** July 17, 2026
