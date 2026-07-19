@@ -9,9 +9,9 @@ the literal ``"false"`` disables. These tests pin three things:
   which must NOT read as disabled,
 * that the admin skills subrouter mounts with the flag on and unmounts with it
   explicitly off, and
-* that the ``skills`` capability — not the flag — is what gates *who* sees the
-  user-facing surfaces, and that it 404s (never 403s) so the SPA hides the nav
-  entry rather than surfacing an error.
+* that the flag is now the *only* gate on the user-facing surfaces — every
+  route requires a session, and the removed ``skills`` capability gate has not
+  crept back.
 
 The admin subrouter mounts conditionally at import time, so — like the
 fine-tuning gate in tests/routes/test_admin_lows.py — these reload the module
@@ -100,75 +100,67 @@ def test_admin_skills_mounted_when_enabled(admin_router_paths):
 # ---------------------------------------------------------------------------
 
 
-class TestSkillsCapabilityGate:
-    """PR-5 keeps the surfaces admin-only while the flag itself is on.
+class TestSkillsRouteAuth:
+    """``SKILLS_ENABLED`` is the only gate on *whether* these routes exist.
 
-    Two independent controls: ``SKILLS_ENABLED`` says the feature exists in this
-    environment, the ``skills`` capability says who sees it. GA is one grant of
-    ``skills`` to the ``default`` role — no redeploy.
+    The per-user ``skills`` capability that used to gate them was removed (see
+    the "Access model" note in ``apis.app_api.skills.routes``): it could not be
+    granted from the admin roles UI, so an admin granting a catalog skill to a
+    role had no in-product way to make it visible. Access is now governed by
+    ``grantedSkills`` per role, which the roles UI *can* edit.
+
+    What still has to hold is that every route requires a session.
     """
 
-    @pytest.mark.asyncio
-    async def test_holder_passes_through(self, monkeypatch):
-        from apis.app_api.skills import routes as skills_routes
+    def test_every_user_facing_route_requires_a_session(self):
+        """No skills route may be reachable unauthenticated.
 
-        user = _user()
-        monkeypatch.setattr(
-            skills_routes, "user_has_capability", _capability_stub(True)
-        )
-        assert await skills_routes.require_skills_capability(current=user) is user
-
-    @pytest.mark.asyncio
-    async def test_non_holder_gets_404_not_403(self, monkeypatch):
-        """404 on purpose: the SPA hides the nav entry by riding this call.
-
-        A 403 would surface an error toast instead of hiding the surface — the
-        failure mode that got the scheduled-runs capability gate reverted in
-        prod. Pin the status so a well-meaning "403 is more correct" change
-        can't silently reintroduce it.
-        """
-        from fastapi import HTTPException
-
-        from apis.app_api.skills import routes as skills_routes
-
-        monkeypatch.setattr(
-            skills_routes, "user_has_capability", _capability_stub(False)
-        )
-        with pytest.raises(HTTPException) as exc:
-            await skills_routes.require_skills_capability(current=_user())
-        assert exc.value.status_code == 404
-
-    def test_every_user_facing_route_is_gated(self):
-        """No user-facing skills route may depend on the session directly.
-
-        A new route added with the bare session dependency would be reachable
-        by the whole org the moment the flag went on — the gate has to be the
-        default, not a thing each route remembers.
+        The capability gate is gone, so ``get_current_user_from_session`` is the
+        only thing standing between these routes and an anonymous caller. A new
+        route added without it would expose authoring and preferences to the
+        internet, so assert the dependency is present on every one rather than
+        trusting each route to remember it.
         """
         from apis.app_api.skills import routes as skills_routes
 
-        ungated = []
+        unauthenticated = []
         for route in skills_routes.router.routes:
             deps = getattr(route, "dependant", None)
-            names = {
-                sub.call.__name__
-                for sub in getattr(deps, "dependencies", [])
-                if getattr(sub, "call", None)
-            }
-            if "require_skills_capability" not in names:
-                ungated.append(getattr(route, "path", "?"))
+            names = _dependency_names(deps)
+            if "get_current_user_from_session" not in names:
+                unauthenticated.append(getattr(route, "path", "?"))
 
-        assert ungated == [], f"ungated skills routes: {ungated}"
+        assert unauthenticated == [], (
+            f"skills routes missing session auth: {unauthenticated}"
+        )
+
+    def test_no_capability_gate_remains(self):
+        """Pin the removal.
+
+        Re-adding a capability dependency here would silently re-break the
+        admin flow (grant a skill to a role → users still can't see it, with no
+        UI to fix it). If a future change genuinely needs one, it has to make
+        the capability grantable from the roles UI first.
+        """
+        from apis.app_api.skills import routes as skills_routes
+
+        assert not hasattr(skills_routes, "require_skills_capability")
+
+        gated = [
+            getattr(route, "path", "?")
+            for route in skills_routes.router.routes
+            if any(
+                "capability" in name
+                for name in _dependency_names(getattr(route, "dependant", None))
+            )
+        ]
+        assert gated == [], f"capability-gated skills routes reintroduced: {gated}"
 
 
-def _user():
-    from apis.shared.auth.models import User
-
-    return User(email="u@example.edu", user_id="u-1", name="u", roles=[])
-
-
-def _capability_stub(result: bool):
-    async def _stub(user, capability_id):
-        return result
-
-    return _stub
+def _dependency_names(dependant) -> set:
+    """Names of a route's sub-dependency callables (empty set if none)."""
+    return {
+        sub.call.__name__
+        for sub in getattr(dependant, "dependencies", [])
+        if getattr(sub, "call", None)
+    }

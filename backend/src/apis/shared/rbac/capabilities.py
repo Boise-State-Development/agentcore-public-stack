@@ -18,8 +18,17 @@ Consequences to be aware of:
   a real tool in practice (no tool in the catalog is named like a feature),
   and a granted capability id simply matches no tool at agent-build time —
   but pick ids that read as features, not tools.
-* GA for a capability = grant its id to the ``default`` role. One config
-  change, no redeploy (scheduled-agent-runs.md §6, "GA path").
+* GA for a capability is **not** one grant to the ``default`` role, despite
+  what earlier comments here claimed. ``default`` is a *fallback* — resolution
+  falls back to it only when a user matches zero roles (``service.py``
+  "Step 3"), and in prod it carries no JWT mappings at all. Granting a
+  capability there reaches only unmapped users. Reaching everyone means
+  granting to each cohort role (prod: ``faculty``/``staff``/``student``/
+  ``demo_day``), or changing ``default`` to merge as a baseline.
+* A capability id cannot be granted from the admin roles UI: that form builds
+  ``grantedTools`` from the tool catalog, and a capability is not a tool. Any
+  capability gate is therefore operable only by hand-writing DynamoDB items —
+  weigh that before adding one.
 
 If capabilities outgrow this (per-capability metadata, UI surfacing), the
 RBAC gap ledger already names the real fix: extend the grant vocabulary
@@ -31,22 +40,20 @@ from __future__ import annotations
 from apis.shared.auth.models import User
 from apis.shared.rbac.service import get_app_role_service
 
-#: Gates the headless-runs surface ("Run now" today; schedule CRUD in
-#: Phase B). Granted to the beta cohort's role; GA = grant to ``default``.
+#: Was intended to gate the headless-runs surface. **Currently unused**: the
+#: RBAC gate on ``/schedules`` + ``/runs`` was dropped (it 403'd in prod), so
+#: scheduled runs ship kill-switch-only. Kept as the worked example for the
+#: grant mechanism above — note the GA caveats in the module docstring before
+#: wiring it, or anything like it, to a route.
 SCHEDULED_RUNS_CAPABILITY = "scheduled-runs"
 
-#: Gates the user-facing Skills *surfaces* — the chat picker (``GET /skills/``,
-#: ``PUT /skills/preferences``) and My Skills authoring (``/skills/mine/*``).
-#: Skills v2 PR-5 turns ``SKILLS_ENABLED`` on everywhere but keeps the surfaces
-#: to admins first: ``system_admin``'s ``"*"`` tools grant satisfies this
-#: implicitly, so no seeding is needed for the admin cohort. **GA = grant
-#: ``skills`` to the ``default`` role — one config change, no redeploy.**
-#:
-#: Deliberately does NOT gate the runtime. An Agent shared to an ordinary user
-#: must still resolve its bound skills for them (invoke-through, §6/D7), and a
-#: capability check there would break exactly that path. Authoring and
-#: selection are gated; invocation through someone else's Agent is not.
-SKILLS_CAPABILITY = "skills"
+#: NOTE: there is deliberately no ``skills`` capability. The user-facing skills
+#: surfaces were gated on one during the v2 rollout and it was removed — see the
+#: "Access model" note in ``apis.app_api.skills.routes``. The short version: a
+#: capability id cannot be granted from the admin roles UI (that form builds
+#: ``grantedTools`` from the tool catalog), so the gate was unoperable in
+#: product. Skills are governed by ``SKILLS_ENABLED`` per environment and by a
+#: role's ``grantedSkills`` per cohort, which is a complete model on its own.
 
 
 async def user_has_capability(user: User, capability_id: str) -> bool:

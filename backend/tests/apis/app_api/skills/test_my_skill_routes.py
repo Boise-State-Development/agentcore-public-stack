@@ -20,12 +20,6 @@ def client(user_skill_service, author_user, monkeypatch):
     app = FastAPI()
     app.include_router(skill_routes.router)
     app.dependency_overrides[get_current_user_from_session] = lambda: author_user
-    # PR-5: routes hang off the `skills` capability gate, which would otherwise
-    # resolve RBAC against DynamoDB. Ownership — what this file tests — is
-    # enforced inside UserSkillService, independently of the gate.
-    app.dependency_overrides[skill_routes.require_skills_capability] = (
-        lambda: author_user
-    )
     with TestClient(app) as c:
         yield c
 
@@ -39,9 +33,6 @@ def other_client(user_skill_service, other_user, monkeypatch):
     app = FastAPI()
     app.include_router(skill_routes.router)
     app.dependency_overrides[get_current_user_from_session] = lambda: other_user
-    app.dependency_overrides[skill_routes.require_skills_capability] = (
-        lambda: other_user
-    )
     with TestClient(app) as c:
         yield c
 
@@ -50,12 +41,12 @@ def test_my_skills_routes_use_session_auth_not_bearer():
     """A Bearer-only dependency here would 401-loop the cookie-bearing SPA.
 
     Walks the TRANSITIVE dependency tree, not just each route's direct
-    dependencies: since PR-5 the routes depend on ``require_skills_capability``,
-    which in turn depends on the session. The invariant being pinned is "the
-    session dependency is reachable from every /mine route", which is what
-    actually keeps the cookie-bearing SPA off the 401-redirect loop — asserting
-    the flat shape instead would break on any future gate wrapper while proving
-    less.
+    dependencies. The routes depend on the session directly today (the
+    ``require_skills_capability`` wrapper they used to nest under was removed),
+    but the invariant being pinned is "the session dependency is reachable from
+    every /mine route", which is what actually keeps the cookie-bearing SPA off
+    the 401-redirect loop — asserting the flat shape instead would break on any
+    future wrapper while proving less.
     """
     paths = [
         r

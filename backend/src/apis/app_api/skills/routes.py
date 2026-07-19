@@ -16,6 +16,22 @@ Two surfaces live here:
    indistinguishable from one that does not exist.
 
 Admin catalog management routes are in ``apis.app_api.admin.skills.routes``.
+
+**Access model.** These routes require only an authenticated session. There is
+no per-user capability gate: ``SKILLS_ENABLED`` decides whether the feature
+exists in this environment, and a role's ``grantedSkills`` decides *which*
+catalog skills a user can reach. Both surfaces are already self-limiting —
+``GET /skills/`` returns only what ``resolve_accessible_skill_ids`` grants
+(so a user with no grants gets an empty list and the SPA renders no picker),
+and every ``/skills/mine/*`` route is owner-scoped, so a user only ever sees
+skills they authored.
+
+The ``skills`` RBAC capability that used to gate these routes was removed: it
+kept the surfaces admin-only during the v2 rollout, but it could not be granted
+from the admin roles UI (that form builds ``grantedTools`` from the tool
+catalog, and a capability id is not a tool), so an admin who granted a catalog
+skill to a role would find it silently invisible to that role's users with no
+way to fix it in-product.
 """
 
 import logging
@@ -25,7 +41,6 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, Upl
 from pydantic import BaseModel, Field
 
 from apis.shared.auth import User, get_current_user_from_session
-from apis.shared.rbac.capabilities import SKILLS_CAPABILITY, user_has_capability
 from apis.shared.skills.access import resolve_accessible_skill_ids
 from apis.shared.skills.models import (
     SkillDefinition,
@@ -45,29 +60,6 @@ from .user_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/skills", tags=["skills"])
-
-
-async def require_skills_capability(
-    current: User = Depends(get_current_user_from_session),
-) -> User:
-    """Gate the user-facing skills surfaces on the ``skills`` RBAC capability.
-
-    ``SKILLS_ENABLED`` says the feature *exists* here; this says *who* sees it.
-    During the initial rollout only ``system_admin`` holds it (implicitly, via
-    the ``"*"`` tools grant); GA is one grant of ``skills`` to the ``default``
-    role — no redeploy (see ``apis.shared.rbac.capabilities``).
-
-    Raises **404, not 403**, on purpose. The SPA hides the "My Skills" nav entry
-    by riding this list call — a 404 flips ``accessible$`` false and the entry
-    stays hidden, exactly as it already behaves when the router is unmounted. A
-    403 would surface an error toast instead of hiding the surface, and the
-    scheduled-runs capability gate was reverted in prod for precisely that class
-    of problem. Not a security boundary: the runtime is deliberately ungated so
-    invoke-through keeps working for ordinary users.
-    """
-    if not await user_has_capability(current, SKILLS_CAPABILITY):
-        raise HTTPException(status_code=404, detail="Not found")
-    return current
 
 
 class UserSkillResponse(BaseModel):
@@ -102,7 +94,7 @@ class SkillPreferencesRequest(BaseModel):
 
 @router.get("/", response_model=UserSkillsResponse)
 async def get_user_skills(
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ) -> UserSkillsResponse:
     """
     Get the ACTIVE skills the current user's roles grant, with the user's
@@ -143,7 +135,7 @@ async def get_user_skills(
 @router.put("/preferences")
 async def update_skill_preferences(
     request: SkillPreferencesRequest,
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ):
     """
     Save the user's per-skill enabled/disabled preferences.
@@ -268,7 +260,7 @@ def _resource_value_error(e: ValueError) -> HTTPException:
 
 @router.get("/mine", response_model=MySkillListResponse)
 async def list_my_skills(
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ) -> MySkillListResponse:
     """List every skill the current user authored (any status)."""
     logger.info(f"User {user.name} listing authored skills")
@@ -283,7 +275,7 @@ async def list_my_skills(
 @router.post("/mine", response_model=MySkillResponse)
 async def create_my_skill(
     request: CreateMySkillRequest,
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ) -> MySkillResponse:
     """Create a skill owned by the current user."""
     logger.info(f"User {user.name} creating an authored skill")
@@ -307,7 +299,7 @@ async def create_my_skill(
 @router.get("/mine/{skill_id}", response_model=MySkillResponse)
 async def get_my_skill(
     skill_id: str,
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ) -> MySkillResponse:
     """Get one of the current user's authored skills."""
     try:
@@ -322,7 +314,7 @@ async def get_my_skill(
 async def update_my_skill(
     skill_id: str,
     request: UpdateMySkillRequest,
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ) -> MySkillResponse:
     """Update one of the current user's authored skills."""
     logger.info(f"User {user.name} updating an authored skill")
@@ -339,7 +331,7 @@ async def update_my_skill(
 @router.delete("/mine/{skill_id}")
 async def delete_my_skill(
     skill_id: str,
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ):
     """Delete one of the current user's authored skills and its bundle files."""
     logger.info(f"User {user.name} deleting an authored skill")
@@ -360,7 +352,7 @@ async def delete_my_skill(
 @router.get("/mine/{skill_id}/resources", response_model=SkillResourcesResponse)
 async def list_my_skill_resources(
     skill_id: str,
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ):
     """List an owned skill's supporting-file manifest (no bytes)."""
     try:
@@ -376,7 +368,7 @@ async def upload_my_skill_resource(
     skill_id: str,
     file: UploadFile = File(...),
     kind: str = Form("reference"),
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ):
     """Upload (or replace) one supporting file on an owned skill.
 
@@ -408,7 +400,7 @@ async def upload_my_skill_resource(
 async def read_my_skill_resource(
     skill_id: str,
     filename: str,
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ):
     """Return the raw bytes of one of an owned skill's supporting files."""
     try:
@@ -433,7 +425,7 @@ async def read_my_skill_resource(
 async def delete_my_skill_resource(
     skill_id: str,
     filename: str,
-    user: User = Depends(require_skills_capability),
+    user: User = Depends(get_current_user_from_session),
 ):
     """Delete one supporting file from an owned skill. Returns the manifest."""
     logger.info(f"User {user.name} deleting a skill bundle file")

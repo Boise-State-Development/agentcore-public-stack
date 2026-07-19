@@ -69,11 +69,6 @@ def _make_client(
     app = FastAPI()
     app.include_router(skills_routes.router)
     app.dependency_overrides[get_current_user_from_session] = _user
-    # The routes hang off `require_skills_capability` (PR-5), which resolves the
-    # `skills` RBAC capability against DynamoDB. These tests are about the route
-    # behavior, not the gate — the gate has its own tests in
-    # tests/apis/app_api/test_skills_feature_flag.py.
-    app.dependency_overrides[skills_routes.require_skills_capability] = _user
     return TestClient(app)
 
 
