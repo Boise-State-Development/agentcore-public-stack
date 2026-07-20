@@ -311,6 +311,23 @@ class ModelConfig:
         # Default to configured provider
         return self.provider
 
+    def bedrock_cache_points_supported(self) -> bool:
+        """Whether explicit Bedrock cachePoints (tools/system) may be sent.
+
+        Mirrors Strands' ``BedrockModel._cache_strategy`` predicate: Anthropic
+        models are the only Bedrock family with prompt-cache support. Auto
+        (message-level) caching no-ops safely on other models, but explicit
+        tools/system cachePoints would be sent verbatim and rejected with a
+        ValidationException — so both are gated here, alongside
+        ``caching_enabled``, on the Bedrock provider path.
+        """
+        model_lower = self.model_id.lower()
+        return (
+            self.caching_enabled
+            and self.get_provider() == ModelProvider.BEDROCK
+            and ("claude" in model_lower or "anthropic" in model_lower)
+        )
+
     def to_bedrock_config(self) -> Dict[str, Any]:
         """Convert to BedrockModel kwargs, translating canonical inference params."""
         config: Dict[str, Any] = {"model_id": self.model_id}
@@ -330,11 +347,34 @@ class ModelConfig:
         # unconditionally on the Bedrock path.
         config["use_native_token_count"] = True
 
-        # Bedrock prompt caching. CacheConfig(strategy="auto") lets Strands
-        # place cache points per-model: for a model that supports automatic
-        # caching it injects a cachePoint on the system/tools/last-user blocks;
-        # for one that doesn't it logs a warning and no-ops, so this is safe to
-        # set whenever caching is enabled. Requires strands-agents>=1.48.0: a
+        # Bedrock prompt caching — three cachePoints per request (Bedrock
+        # allows max 4; nothing else in this codebase adds one, see the
+        # position test in tests/agents/main_agent/core/test_bedrock_cache_points.py):
+        #
+        #   1. toolConfig tail   — cache_tools="default" (_build_tools_cache_point)
+        #   2. system tail       — SystemContentBlock list built by
+        #                          AgentFactory.create_agent (the deprecated
+        #                          cache_prompt config key is NOT used)
+        #   3. last user message — CacheConfig(strategy="auto"), which places
+        #                          exactly ONE message-level point and strips
+        #                          any others (_inject_cache_point). It does
+        #                          not touch the system/tools points.
+        #
+        # The tools+system points make a message-level lookup miss cost a
+        # cache READ of the stable prefix instead of a full re-write at
+        # $2.5/MTok (write premium). One proven miss mode is structural:
+        # Anthropic's cache lookback checks only ~20 content blocks behind
+        # the breakpoint, so a wide parallel tool fan-out (e.g. 18 parallel
+        # calls = ~38 new blocks) pushes the previous checkpoint out of range
+        # and forces a full re-write (prod session aecd387d: cacheRead=0,
+        # cacheWrite=134k mid-turn). With separate tools/system points the
+        # ~28k-token static prefix still reads from cache on those turns.
+        #
+        # For a model whose id Strands doesn't recognize as cache-capable,
+        # auto strategy logs a warning and no-ops — but cache_tools and a
+        # system cachePoint are sent unconditionally once configured, so both
+        # are gated on bedrock_cache_points_supported() (the same predicate
+        # Strands' auto mode uses). Requires strands-agents>=1.48.0: a
         # cachePoint trailing a non-PDF `document` attachment is rejected by
         # Bedrock's Anthropic adapter with "ValidationException ...
         # content.N.type: Field required" (agent force-stop on any turn with a
@@ -347,6 +387,8 @@ class ModelConfig:
         if self.caching_enabled:
             from strands.models import CacheConfig
             config["cache_config"] = CacheConfig(strategy="auto")
+            if self.bedrock_cache_points_supported():
+                config["cache_tools"] = "default"
 
         if self.retry_config:
             from botocore.config import Config as BotocoreConfig

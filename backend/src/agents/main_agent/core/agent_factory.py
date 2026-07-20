@@ -196,12 +196,29 @@ class AgentFactory:
                 f"({model_config.retry_config.sdk_initial_delay}s-{model_config.retry_config.sdk_max_delay}s backoff)"
             )
 
+        # Bedrock prompt caching: give the system prompt its own cachePoint by
+        # passing it as a SystemContentBlock list with a trailing cachePoint
+        # (the cache_prompt model-config key is deprecated). Together with
+        # cache_tools (set in to_bedrock_config) this keeps the stable
+        # system+tools prefix readable from cache even when the auto-placed
+        # message-level cache point misses — see the cachePoint budget comment
+        # in ModelConfig.to_bedrock_config. Strands' auto strategy strips only
+        # message-level cachePoints, never system ones. Agent.system_prompt
+        # remains the plain string (split_system_prompt concatenates the text
+        # blocks), so hashing/attribution/voice consumers are unaffected.
+        agent_system_prompt: Any = system_prompt
+        if system_prompt and model_config.bedrock_cache_points_supported():
+            agent_system_prompt = [
+                {"text": system_prompt},
+                {"cachePoint": {"type": "default"}},
+            ]
+
         # Create agent with session manager, hooks, and system prompt
         # Use SequentialToolExecutor to prevent concurrent browser operations
         # This prevents "Failed to start and initialize Playwright" errors with NovaAct
         agent = Agent(
             model=model,
-            system_prompt=system_prompt,
+            system_prompt=agent_system_prompt,
             tools=tools,
             tool_executor=SequentialToolExecutor(),
             session_manager=session_manager,
