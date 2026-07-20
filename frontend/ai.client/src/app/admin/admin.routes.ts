@@ -12,6 +12,10 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./costs/admin-costs.page').then(m => m.AdminCostsPage),
   },
   {
+    path: 'costs/sessions/:id',
+    loadComponent: () => import('./costs/pages/session-cost-anatomy.page').then(m => m.SessionCostAnatomyPage),
+  },
+  {
     path: 'quota',
     loadChildren: () => import('./quota-tiers/quota-routing.module').then(m => m.quotaRoutes),
   },

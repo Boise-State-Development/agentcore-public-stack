@@ -7,10 +7,12 @@ import {
   signal,
 } from '@angular/core';
 import { Router } from '@angular/router';
+import { FormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
   heroArrowDownTray,
+  heroMagnifyingGlass,
 } from '@ng-icons/heroicons/outline';
 import { AdminCostStateService } from './services';
 import { PeriodSelectorComponent } from './components/period-selector.component';
@@ -28,6 +30,7 @@ import { ModelBreakdownComponent } from './components/model-breakdown.component'
 @Component({
   selector: 'app-admin-costs',
   imports: [
+    FormsModule,
     NgIcon,
     PeriodSelectorComponent,
     SystemSummaryCardComponent,
@@ -35,7 +38,7 @@ import { ModelBreakdownComponent } from './components/model-breakdown.component'
     CostTrendsChartComponent,
     ModelBreakdownComponent,
   ],
-  providers: [provideIcons({ heroArrowLeft, heroArrowDownTray })],
+  providers: [provideIcons({ heroArrowLeft, heroArrowDownTray, heroMagnifyingGlass })],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div>
@@ -66,6 +69,46 @@ import { ModelBreakdownComponent } from './components/model-breakdown.component'
             </button>
           </div>
         </div>
+        <!-- Session cost anatomy lookup -->
+        <form
+          (ngSubmit)="onInspectSession()"
+          class="mb-6 flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between dark:border-gray-700 dark:bg-gray-800"
+        >
+          <div>
+            <label for="session-lookup" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+              Session Cost Anatomy
+            </label>
+            <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+              Look up per-call cache diagnostics for a session ID.
+            </p>
+          </div>
+          <div class="flex items-center gap-2 sm:w-96">
+            <div class="relative flex-1">
+              <ng-icon
+                name="heroMagnifyingGlass"
+                class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+                aria-hidden="true"
+              />
+              <input
+                type="text"
+                id="session-lookup"
+                name="sessionLookup"
+                [ngModel]="sessionLookupId()"
+                (ngModelChange)="sessionLookupId.set($event)"
+                placeholder="Session ID…"
+                class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 font-mono text-sm/6 text-gray-900 placeholder:font-sans placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+              />
+            </div>
+            <button
+              type="submit"
+              [disabled]="!sessionLookupId().trim()"
+              class="shrink-0 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            >
+              Inspect
+            </button>
+          </div>
+        </form>
+
         @if (loading()) {
           <!-- Loading State -->
           <div class="flex items-center justify-center h-64">
@@ -177,6 +220,9 @@ export class AdminCostsPage implements OnInit {
   trends = this.stateService.trends;
   modelUsage = this.stateService.modelUsage;
 
+  // Session-id lookup for the cost-anatomy drill-down
+  sessionLookupId = signal('');
+
   // Track pagination state for top users
   private topUsersLimit = signal(20);
   hasMoreUsers = computed(
@@ -236,6 +282,13 @@ export class AdminCostsPage implements OnInit {
 
   onUserClick(userId: string): void {
     this.router.navigate(['/admin/users', userId]);
+  }
+
+  onInspectSession(): void {
+    const sessionId = this.sessionLookupId().trim();
+    if (sessionId) {
+      this.router.navigate(['/admin/costs/sessions', sessionId]);
+    }
   }
 
   async onLoadMoreUsers(): Promise<void> {

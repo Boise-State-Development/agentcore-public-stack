@@ -65,6 +65,35 @@ describe('AdminCostHttpService', () => {
     req.flush(mockSummary);
   });
 
+  it('should get session cost anatomy', () => {
+    const mockAnatomy = {
+      sessionId: 'sess-1',
+      calls: [],
+      totalCost: 1.23,
+      totalCacheReadTokens: 1000,
+      totalCacheWriteTokens: 500,
+      avoidableMissCount: 0,
+      wastedUsd: 0,
+      cacheEfficiency: 2 / 3,
+    };
+
+    service.getSessionCostAnatomy('sess-1').subscribe(anatomy => {
+      expect(anatomy).toEqual(mockAnatomy);
+    });
+
+    const req = httpMock.expectOne('http://localhost:8000/admin/costs/sessions/sess-1/calls');
+    expect(req.request.method).toBe('GET');
+    req.flush(mockAnatomy);
+  });
+
+  it('should URL-encode the session id in the anatomy request', () => {
+    service.getSessionCostAnatomy('a/b c').subscribe();
+
+    const req = httpMock.expectOne('http://localhost:8000/admin/costs/sessions/a%2Fb%20c/calls');
+    expect(req.request.method).toBe('GET');
+    req.flush({ sessionId: 'a/b c', calls: [] });
+  });
+
   it('should export data', () => {
     const mockBlob = new Blob(['csv data'], { type: 'text/csv' });
 
