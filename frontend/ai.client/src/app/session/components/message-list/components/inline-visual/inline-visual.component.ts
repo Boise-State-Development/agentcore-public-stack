@@ -1,7 +1,7 @@
 import { Component, input, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { ChartRendererComponent } from './renderers/chart-renderer.component';
 import { DefaultRendererComponent } from './renderers/default-renderer.component';
-import { WordDocumentRendererComponent } from './renderers/word-document-renderer.component';
+import { FileDownloadRendererComponent } from './renderers/file-download-renderer.component';
 import { VisualStateService } from '../../../../services/visual-state/visual-state.service';
 
 /**
@@ -11,7 +11,7 @@ import { VisualStateService } from '../../../../services/visual-state/visual-sta
 @Component({
   selector: 'app-inline-visual',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ChartRendererComponent, DefaultRendererComponent, WordDocumentRendererComponent],
+  imports: [ChartRendererComponent, DefaultRendererComponent, FileDownloadRendererComponent],
   template: `
     @if (!isDismissed()) {
       <div class="inline-visual-container">
@@ -24,8 +24,13 @@ import { VisualStateService } from '../../../../services/visual-state/visual-sta
               (toggleExpanded)="onToggleExpanded()"
             />
           }
+          @case ('file_download') {
+            <app-file-download-renderer [payload]="payload()" />
+          }
           @case ('word_document') {
-            <app-word-document-renderer [payload]="payload()" />
+            <!-- Backward-compat alias: cards persisted before the shared
+                 file_download ui_type still route to the same renderer. -->
+            <app-file-download-renderer [payload]="payload()" />
           }
           @default {
             <app-default-renderer
