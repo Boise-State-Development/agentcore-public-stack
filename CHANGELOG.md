@@ -4,6 +4,37 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.9.0] - 2026-07-20
+
+Feature release making **Bedrock prompt-cache economics stable and measurable**. Three cache-busting defects in the model-call path are fixed (per-turn history mutation, nondeterministic skill ordering, single-cachePoint fragility), and a new observability layer makes every model call's cache behavior diagnosable: prefix fingerprints and a `cacheStatus` classification on each cost row, an admin Session Cost Anatomy drill-down page, CloudWatch EMF metrics, and a dashboard with alarms. Also fixes chat-input textarea sizing and points the deployed runtime's Word-document tools at the real user-files bucket. Requires a CDK deploy (new dashboard construct + one runtime env var); no data migration.
+
+### 🚀 Added
+
+- Prompt-cache observability per model call — `PrefixFingerprintHook` hashes the three cacheable prefix components (toolConfig, effective system prompt, message history) onto each cost row; write-time `cacheStatus` classification (`first_write | hit | miss_ttl_expired | miss_avoidable | uncached`) with `wastedUsd` for avoidable misses priced from the row's own pricing snapshot; session-row cache rollups (`totalCacheReadTokens`, `totalCacheWriteTokens`, `avoidableMissCount`, `wastedUsd`); `GET /admin/costs/sessions/{sessionId}/calls` admin endpoint; and per-call CloudWatch EMF metrics. Kill switch `PROMPT_CACHE_OBSERVABILITY_ENABLED=false` (default ON) (#697)
+- Admin **Session Cost Anatomy** page at `/admin/costs/sessions/:id` — chronological per-call table with color-coded `cacheStatus` badges and prefix-fingerprint diffing that names which hash (tools/system/history) flipped versus the previous call, plus session-level cache summary and a session-id lookup form on the Cost Analytics dashboard (#700)
+
+### ⚡ Performance
+
+- Restored conversation history is now byte-stable between turns — tool-content truncation is driven by a persisted `truncation_anchor` in compaction state instead of a sliding window that re-mutated history every turn, which forced a full prompt-cache prefix re-write (~$2.50/MTok on a 35k–150k-token prefix) nearly every turn (#697)
+- Skill records reach the `<available_skills>` system-prompt block in deterministic order (sorted at the repository, RBAC-union, and injection layers), removing a per-turn prompt-cache invalidator (#697)
+- Model calls now carry 3 of Bedrock's max-4 cachePoints (toolConfig tail, system tail, last-user-message) so a message-level cache miss still reads the stable tools+system prefix from cache instead of re-writing everything; the added points are gated to models that support them (#697)
+
+### 🐛 Fixed
+
+- Chat input textarea is scrollable once content exceeds its max height, clamps its growth, and resets to its base height after sending (#696)
+- The first cache write after a run of below-threshold (uncached) calls is classified `first_write`, not `miss_avoidable` — it no longer inflates the AvoidableMiss/WastedUsd metrics or the Session Cost Anatomy page (#701)
+- Word-document tools on the deployed runtime save to the real user-files bucket — `S3_USER_FILES_BUCKET_NAME` is now set on the inference-api Runtime, where its absence made the tools fall back to a literal `user-files` bucket and fail with `AccessDenied` (#702)
+- Word-document tools fail fast with a clear "storage is not configured" message when the bucket env var is unset, instead of surfacing a confusing S3 `PermanentRedirect`/`AccessDenied` mid-run (#706)
+
+### 🏗️ Infrastructure
+
+- `PromptCacheObservabilityConstruct` (`lib/constructs/observability/`) — CloudWatch dashboard over the `AgentCoreStack/PromptCache` EMF metrics (cache read/write tokens, cache-efficiency expression, AvoidableMiss, WastedUsd) with a Logs Insights widget grouped by `cacheStatus`, plus console-only alarms on AvoidableMiss and WastedUsd (stricter in prod; `NOT_BREACHING` on missing data so the kill switch stays quiet) (#699)
+- `S3_USER_FILES_BUCKET_NAME` added to the inference-api AgentCore Runtime environment (#702)
+
+### 📚 Docs
+
+- CLAUDE.md — prompt-cache determinism/byte-stability contract, the fingerprint-based cache-miss debugging recipe, and a token-cost-effectiveness design tenet (#697, #698)
+
 ## [1.8.0] - 2026-07-19
 
 Feature release delivering **Skills v2** — skills are redesigned from tool-binding containers into pure, portable knowledge bundles that Agents load on demand, and for the first time **any signed-in user can author their own**. Skills ship enabled by default. Also completes the session-metadata static-sort-key migration (issue #175 Phases 2–3) with an operator backfill and a GSI-only read contraction, and consolidates the two artifact tool-catalog rows into a single "Artifacts" toggle. **Three backfill scripts must be run per environment** — see [RELEASE_NOTES.md](RELEASE_NOTES.md) deployment notes. No new AWS resources; a CDK deploy is needed only to set the `SKILLS_ENABLED` env var explicitly.

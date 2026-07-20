@@ -1,3 +1,69 @@
+# Release Notes — v1.9.0
+
+**Release Date:** July 20, 2026
+**Previous Release:** v1.8.0 (July 19, 2026)
+
+---
+
+> 🏗️ **CDK deploy required this release** — a new CloudWatch dashboard construct and one new env var on the inference-api Runtime. No data migration, no backfills, no dependency changes. Standard order: `platform.yml` → `backend.yml` → `frontend-deploy.yml`.
+
+---
+
+## Highlights
+
+v1.9.0 makes **Bedrock prompt-cache spend stable and measurable**. A production conversation audit found 75% of one session's cost was avoidable cache re-writes; this release fixes the three defects behind that waste — restored history that mutated every turn, skills injected in nondeterministic order, and a single fragile cachePoint — and adds the observability to prove it and catch regressions: every model call now records prefix fingerprints and a `cacheStatus` verdict, admins get a per-session **Cost Anatomy** drill-down page, and operators get a CloudWatch dashboard with alarms on avoidable waste. Smaller fixes: the chat input textarea scrolls and resets correctly, and Word-document saves work on the deployed runtime (the container wasn't told which S3 bucket to use).
+
+## Prompt-cache stability — stop paying for avoidable re-writes
+
+Bedrock prompt caching is exact-prefix-match: if any byte of the cached prefix changes between turns, the whole prefix re-writes at the $2.50/MTok cache-write premium instead of reading at the ~$0.30/MTok cache-read rate. On a typical 35k–150k-token session prefix, one silent cache-buster costs more per turn than most turns' actual work. Three were found and fixed (#697):
+
+- **Restored history is now byte-stable.** Tool-content truncation ran on every session restore behind a sliding protected-turns window, so each new turn re-mutated the turn that had just aged past the window — invalidating the cache nearly every turn. Truncation is now driven by a persisted `truncation_anchor` in the session's compaction state: it advances only when the compaction checkpoint advances (where the slice already pays a single re-write) or opportunistically when the cache TTL (default 300s, `AGENTCORE_MEMORY_COMPACTION_CACHE_TTL_SECONDS`) has lapsed since the previous turn and the cache entry is dead anyway — so pending truncations apply for free.
+- **Skills inject in deterministic order.** Skill records reached the `<available_skills>` system-prompt block in whatever order DynamoDB `batch_get_item` and Python set iteration produced, changing the system prompt between turns of the same session. Ordering is now sorted at three layers: the skills repository, the RBAC grant-union resolver (which returned `list(set)` — order varies per process via hash randomization), and the injection point itself.
+- **Three cachePoints instead of one.** The auto strategy places a single message-level cachePoint; when its lookup misses (one proven mode: a wide parallel tool fan-out pushes the previous checkpoint past Anthropic's ~20-block cache lookback), *nothing* was read and the entire prefix re-wrote. Requests now carry 3 of Bedrock's max-4 cachePoints — toolConfig tail, system-prompt tail, and the existing last-user-message point — so a message-level miss still reads the stable tools+system prefix from cache. The added points are gated on `ModelConfig.bedrock_cache_points_supported()` since non-Anthropic models reject them.
+
+## Prompt-cache observability — every model call explains its cache behavior
+
+Diagnosing the waste above originally took hours of manual forensics against raw DynamoDB cost rows. That whole class of investigation is now a column diff (#697, #700, #699, #701).
+
+### Backend
+
+- `PrefixFingerprintHook` (a Strands `BeforeModelCallEvent` hook) hashes the three cacheable prefix components per model call — toolConfig (order-sensitive canonical JSON), the effective system prompt captured *after* AgentSkills injection, and message history excluding the newest message — and the stream coordinator persists them on the turn's cost rows. When a cache miss happens, the hash that changed between consecutive calls names the cache-buster.
+- Each cost row gets a write-time `cacheStatus` — `first_write`, `hit`, `miss_ttl_expired`, `miss_avoidable`, or `uncached` — derived against the session's previous cost row, plus `wastedUsd` for avoidable misses priced at the cache-write premium over cache-read from the row's own pricing snapshot. Turn rows now write sequentially so each call classifies against its true predecessor. A follow-up fix (#701) classifies the first write after a run of below-threshold calls as `first_write` rather than `miss_avoidable`, so short-prompt sessions don't inflate the waste metrics.
+- Session rows carry rollups next to `totalCost` — `totalCacheReadTokens`, `totalCacheWriteTokens`, `avoidableMissCount`, `wastedUsd` — so lists and admin views get a cache-efficiency ratio without scanning cost rows.
+- `GET /admin/costs/sessions/{sessionId}/calls` (admin-only) returns the chronological per-call rows with token splits, cost, `cacheStatus`, and fingerprints, plus a session-level cache summary.
+- Everything derived is behind `PROMPT_CACHE_OBSERVABILITY_ENABLED` (default ON, `=false` to disable the hook, the classification's extra GSI read, and EMF emission). Raw cache read/write token rollups are unaffected — they're usage passthrough, not derived.
+
+### Frontend
+
+- New **Session Cost Anatomy** page at `/admin/costs/sessions/:id`: summary tiles (total cost, cache efficiency, avoidable misses, wasted USD, cache read/write tokens) over a chronological calls table with color-coded `cacheStatus` badges. Fingerprint diffing flags which hash — tools, system, or history — flipped versus the previous fingerprinted call, which is the diagnosis on any `miss_avoidable` row. Expandable rows show full hashes and message counts; a session-id lookup form on the Cost Analytics dashboard is the entry point.
+
+### Infrastructure
+
+- `PromptCacheObservabilityConstruct` (new `lib/constructs/observability/` area, composed into `PlatformStack`) builds a CloudWatch dashboard over the `AgentCoreStack/PromptCache` EMF namespace both APIs emit into: cache read/write token trends, a cache-efficiency MathExpression, AvoidableMiss and WastedUsd, and a Logs Insights widget grouped by `cacheStatus`. Console-only alarms on AvoidableMiss and WastedUsd Sums (stricter thresholds in prod, `NOT_BREACHING` on missing data so the kill switch keeps them quiet). Deliberately no SNS — alerting infra remains out of scope, matching kb-sync and scheduled runs.
+
+### Test Coverage
+
+~1,800 lines of new tests: fingerprint/classification unit tests (including the below-threshold regression), cachePoint position and budget assertions, forced-order skill-sorting regressions, CDK construct assertions, and Vitest specs for the anatomy page, diff util, and HTTP service.
+
+## 🐛 Bug fixes
+
+- **The chat input became unusable on long prompts.** The textarea carried `overflow-hidden` with unclamped height growth, so past its 200px cap the content could neither be seen nor scrolled — and after sending, the box stayed expanded. Growth is now clamped with scrolling enabled past the cap, and the input resets to its base height on submit (#696)
+- **Word-document saves failed on the deployed runtime with `AccessDenied`.** The AgentCore Runtime env set the user-files *table* name but not `S3_USER_FILES_BUCKET_NAME`, so the Word tools fell back to a literal `user-files` bucket the role has no access to. The env var is now set on the Runtime (#702), and the tools fail fast with a clear "storage is not configured" message — before spending a Code Interpreter run — if the variable is ever missing again (#706)
+
+## 🏗️ Infrastructure
+
+- New CloudWatch dashboard + alarms construct (see spotlight above) — CloudWatch-console resources only, no SNS, no new IAM of note.
+- `S3_USER_FILES_BUCKET_NAME` on the inference-api Runtime environment; the role's existing `UserFilesBucketAccess` grant already covers the bucket (#702)
+- New env var `PROMPT_CACHE_OBSERVABILITY_ENABLED` on app-api and inference-api (default ON; set `=false` per environment to disable the observability layer — caching itself stays on).
+
+## 🚀 Deployment notes
+
+Standard order, and this release uses all three: **`platform.yml` first** (the dashboard construct and the Runtime env var are CDK changes; the runtime picks up its current image via SSM, so the infra deploy is safe on its own) → `backend.yml` → `frontend-deploy.yml`. No backfills, no data migration, no dependency changes.
+
+After deploy, the **PromptCache dashboard** appears in the CloudWatch console. Expect `first_write` rows at the start of sessions and after idle gaps — only `miss_avoidable` indicates regression. The observability layer is per-call metadata; if it ever needs to be silenced in an environment, set `PROMPT_CACHE_OBSERVABILITY_ENABLED=false` and redeploy that service — the alarms go quiet on missing data by design.
+
+---
+
 # Release Notes — v1.8.0
 
 **Release Date:** July 19, 2026
