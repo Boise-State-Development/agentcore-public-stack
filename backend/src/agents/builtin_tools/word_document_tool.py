@@ -69,6 +69,10 @@ class _DocGenError(Exception):
     """Raised when Code Interpreter fails to run the document code."""
 
 
+class _StorageNotConfiguredError(Exception):
+    """Raised when the user-files S3 bucket is not configured for the runtime."""
+
+
 def _region() -> str:
     return (
         os.environ.get("AWS_REGION")
@@ -190,7 +194,18 @@ def _s3():
 
 
 def _user_files_bucket() -> str:
-    return os.environ.get("S3_USER_FILES_BUCKET_NAME", "user-files")
+    # Fail loudly rather than silently targeting a literal "user-files" bucket
+    # the runtime has no access to. That default misreported a missing env var
+    # as an S3 PermanentRedirect / AccessDenied and cost real debugging time.
+    # The runtime env is wired in infrastructure's
+    # inference-agentcore-construct.ts (S3_USER_FILES_BUCKET_NAME).
+    bucket = os.environ.get("S3_USER_FILES_BUCKET_NAME")
+    if not bucket:
+        raise _StorageNotConfiguredError(
+            "S3_USER_FILES_BUCKET_NAME is not set; the runtime cannot store or "
+            "retrieve Word documents."
+        )
+    return bucket
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +527,16 @@ _NO_CI_MESSAGE = (
     "not found in the environment or Parameter Store."
 )
 
+_NO_STORAGE_MESSAGE = (
+    "❌ Word document storage is not configured "
+    "(S3_USER_FILES_BUCKET_NAME is not set on the runtime)."
+)
+
+
+def _storage_configured() -> bool:
+    """True when the user-files bucket env var is set."""
+    return bool(os.environ.get("S3_USER_FILES_BUCKET_NAME"))
+
 
 # ---------------------------------------------------------------------------
 # Tool factories
@@ -577,6 +602,8 @@ def make_create_word_document_tool(session_id: str, user_id: str):
         code_interpreter_id = _get_code_interpreter_id()
         if not code_interpreter_id:
             return _error(_NO_CI_MESSAGE)
+        if not _storage_configured():
+            return _error(_NO_STORAGE_MESSAGE)
 
         try:
             file_bytes = await asyncio.to_thread(
@@ -642,6 +669,8 @@ def make_modify_word_document_tool(session_id: str, user_id: str):
         code_interpreter_id = _get_code_interpreter_id()
         if not code_interpreter_id:
             return _error(_NO_CI_MESSAGE)
+        if not _storage_configured():
+            return _error(_NO_STORAGE_MESSAGE)
 
         source = await _find_word_document(user_id, session_id, document_name)
         if source is None:
@@ -754,6 +783,8 @@ def make_read_word_document_tool(session_id: str, user_id: str):
         code_interpreter_id = _get_code_interpreter_id()
         if not code_interpreter_id:
             return _error(_NO_CI_MESSAGE)
+        if not _storage_configured():
+            return _error(_NO_STORAGE_MESSAGE)
 
         source = await _find_word_document(user_id, session_id, document_name)
         if source is None:

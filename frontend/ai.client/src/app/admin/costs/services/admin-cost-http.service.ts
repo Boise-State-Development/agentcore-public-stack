@@ -12,6 +12,7 @@ import {
   DashboardRequestOptions,
   TopUsersRequestOptions,
   TrendsRequestOptions,
+  SessionCostAnatomy,
 } from '../models';
 
 /**
@@ -126,6 +127,17 @@ export class AdminCostHttpService {
       .set('endDate', options.endDate);
 
     return this.http.get<CostTrend[]>(`${this.baseUrl()}/trends`, { params });
+  }
+
+  /**
+   * Get the per-model-call cost anatomy for one session.
+   * Returns chronological call rows with cache status, prefix fingerprints,
+   * and session-level cache rollups. 404 when the session has no cost rows.
+   */
+  getSessionCostAnatomy(sessionId: string): Observable<SessionCostAnatomy> {
+    return this.http.get<SessionCostAnatomy>(
+      `${this.baseUrl()}/sessions/${encodeURIComponent(sessionId)}/calls`
+    );
   }
 
   /**

@@ -262,6 +262,11 @@ def build_skills_runtime(
     if not records:
         return None, None
 
+    # Deterministic order regardless of fetch order: these records become the
+    # <available_skills> system-prompt block, and any order flip between turns
+    # of a session invalidates the Bedrock prompt cache (exact-prefix match).
+    records = sorted(records, key=lambda r: getattr(r, "skill_id", "") or "")
+
     skills = [record_to_strands_skill(r) for r in records]
     plugin = AgentSkills(skills=skills)
     read_tool = make_read_skill_file_tool(records)

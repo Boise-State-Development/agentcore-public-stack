@@ -39,6 +39,8 @@ npx cdk deploy {prefix}-PlatformStack
 - **Admin endpoints** go under `/admin/<domain>/`, user-facing under `/<domain>/`
 - **Errors stream as assistant messages** via SSE (not HTTP error codes)
 - **Signal-based state** throughout frontend (`signal()`, `computed()`)
+- **Prompt-cache stability is a contract.** Bedrock prompt caching is exact-prefix-match: any list that reaches the system prompt or `toolConfig` (skills, tools, models, MCP tool listings) must be deterministically ordered at its source, and restored conversation history must be byte-stable between compaction-state changes (see the truncation anchor in `TurnBasedSessionManager`). An order flip or history mutation between turns silently re-writes a 30k–150k-token prefix at the $2.50/MTok cache-write premium. `PROMPT_CACHE_OBSERVABILITY_ENABLED=false` disables the observability layer (fingerprint hook, cacheStatus derivation, EMF metrics) — the caching itself stays on
+- **Token cost effectiveness is a design tenet — engineer against waste, not against context.** Before merging a change that touches the model call path, answer: what does this add to the prompt, on every turn, for the life of every session? (1) Anything in the cacheable prefix (system prompt, `toolConfig`, restored history) must be deterministic and append-only — see the prompt-cache contract above. (2) Per-turn payloads (tool results, MCP responses, retrieved documents) should be bounded or offloaded, never unbounded pass-through. (3) Don't guess — verify: `cacheStatus` + fingerprint hashes on the session's `C#` rows, `GET /admin/costs/sessions/{id}/calls`, and the `AgentCoreStack/PromptCache` EMF metrics exist to prove a change's cost impact. The balance: "cost effective" means eliminating waste (avoidable cache re-writes, duplicated context, oversized payloads) — it never means stripping context the model needs for a quality answer. When cost and answer quality genuinely conflict, quality wins; look for the cheaper path to the *same* quality, not a cheaper answer
 - **All dependencies use exact version pins** — no `^`, `~`, or `>=`
 - **Never install packages without explicit user approval**
 
@@ -118,6 +120,7 @@ Do not reintroduce a Bearer-only `Depends(...)` on any user-facing route. If you
 - **Tool not appearing:** Check `__init__.py` export, RBAC permissions, `enabled_tools`, ToolRegistry
 - **Session not persisting:** Check AgentCore Memory config, session_id, TurnBasedSessionManager flush
 - **SSE stream disconnecting:** Check 600s timeout, client connection, quota exceeded events
+- **Cost spike / cache miss:** Check `cacheStatus` + `toolConfigHash`/`systemPromptHash`/`historyHash` on the session's `C#` rows in sessions-metadata (or `GET /admin/costs/sessions/{id}/calls`) — the hash that changed between consecutive calls names the cache-buster
 
 ## Coding Standards
 

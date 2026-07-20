@@ -38,6 +38,11 @@ import { ToolService } from '../../../services/tool/tool.service';
 import { VoiceChatService, type VoiceStatus } from '../../services/voice';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 
+// Must stay in sync with the inline min-height/max-height on the textarea in
+// chat-input.component.html.
+const MIN_TEXTAREA_HEIGHT_PX = 60;
+const MAX_TEXTAREA_HEIGHT_PX = 200;
+
 interface Message {
   content: string;
   timestamp: Date;
@@ -97,7 +102,6 @@ export class ChatInputComponent {
 
   // Signals for state management
   userInput = signal('');
-  isExpanded = signal(false);
   isFocused = signal(false);
   isDraggingOver = signal(false);
 
@@ -219,7 +223,7 @@ export class ChatInputComponent {
 
     // Clear input and pending uploads
     this.userInput.set('');
-    this.isExpanded.set(false);
+    this.resetTextareaHeight();
     this.fileUploadService.clearReadyUploads();
   }
 
@@ -296,10 +300,29 @@ export class ChatInputComponent {
   onTextareaInput(event: Event) {
     const textarea = event.target as HTMLTextAreaElement;
     this.userInput.set(textarea.value);
-    
-    // Auto-expand based on content
+    this.autoResize(textarea);
+  }
+
+  /**
+   * Grow the textarea with its content up to MAX_TEXTAREA_HEIGHT_PX, past which
+   * it scrolls internally (the template sets overflow-y-auto). Without the clamp
+   * the inline height keeps growing past max-height and the scrollbar never
+   * becomes usable.
+   */
+  private autoResize(textarea: HTMLTextAreaElement): void {
     textarea.style.height = 'auto';
-    textarea.style.height = textarea.scrollHeight + 'px';
+    const height = Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX);
+    textarea.style.height = `${height}px`;
+  }
+
+  /** Collapse the textarea back to a single row (after submit or clear). */
+  private resetTextareaHeight(): void {
+    const textarea = this.messageInput()?.nativeElement;
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = `${MIN_TEXTAREA_HEIGHT_PX}px`;
+    textarea.scrollTop = 0;
   }
 
   onKeyDown(event: KeyboardEvent) {

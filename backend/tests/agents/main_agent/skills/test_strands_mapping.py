@@ -130,6 +130,28 @@ class TestBuildSkillsRuntime:
         assert isinstance(plugin, AgentSkills)
         assert read_tool.tool_name == "read_skill_file"
 
+    def test_prompt_order_stable_across_fetch_order(self, monkeypatch):
+        # The plugin renders <available_skills> in the order it receives the
+        # skills; a between-turn order flip changes the system prompt and
+        # invalidates the Bedrock prompt cache. Regardless of the order the
+        # fetch returns records, the runtime must produce one canonical order.
+        recs = [
+            _record(skill_id="zeta_skill"),
+            _record(skill_id="alpha_skill"),
+            _record(skill_id="midway_skill"),
+        ]
+
+        def names_for(fetch_order):
+            monkeypatch.setattr(
+                sm, "fetch_active_skill_records", lambda ids: list(fetch_order)
+            )
+            plugin, _ = sm.build_skills_runtime(["any"])
+            return [s.name for s in plugin.get_available_skills()]
+
+        forward = names_for(recs)
+        reversed_order = names_for(list(reversed(recs)))
+        assert forward == reversed_order == ["alpha-skill", "midway-skill", "zeta-skill"]
+
 
 class TestReadSkillFile:
     def _tool(self, monkeypatch, records, store):

@@ -22,6 +22,7 @@ from .models import (
     TierUsageSummary,
     CostTrend,
     AdminCostDashboard,
+    SessionCostAnatomy,
 )
 from .service import AdminCostService
 
@@ -107,6 +108,60 @@ async def get_cost_dashboard(
             status_code=500,
             detail="Failed to retrieve cost dashboard"
         )
+
+
+@router.get("/sessions/{session_id}/calls", response_model=SessionCostAnatomy)
+async def get_session_cost_anatomy(
+    session_id: str,
+    admin_user: User = Depends(require_admin),
+    service: AdminCostService = Depends(get_cost_service)
+):
+    """
+    Get the per-model-call "cost anatomy" of a session.
+
+    Returns one row per model call — timestamp, input/cacheRead/cacheWrite/
+    output tokens, cost, derived cacheStatus (first_write | hit |
+    miss_ttl_expired | miss_avoidable | uncached), and the prompt-cache
+    prefix fingerprint hashes (toolConfig / system prompt / history) — plus
+    session-level rollups (cache efficiency, avoidable-miss count, wastedUsd).
+
+    This is the forensic view for diagnosing avoidable prompt-cache
+    re-writes: on a miss_avoidable row, diff its fingerprint hashes against
+    the previous row's to see which prefix component changed.
+
+    Args:
+        session_id: Session identifier (any user's session — admin scope)
+        admin_user: Authenticated admin user (injected)
+        service: Admin cost service (injected)
+
+    Returns:
+        SessionCostAnatomy with chronological per-call rows
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 404 if the session has no cost records
+            - 500 if server error
+    """
+    logger.info("Admin requesting session cost anatomy")
+
+    try:
+        anatomy = await service.get_session_cost_anatomy(session_id)
+    except Exception as e:
+        logger.error(f"Error getting session cost anatomy: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve session cost anatomy"
+        )
+
+    if not anatomy.calls:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No cost records found for session {session_id}"
+        )
+
+    return anatomy
 
 
 @router.get("/top-users", response_model=List[TopUserCost])

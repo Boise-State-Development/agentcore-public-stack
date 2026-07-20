@@ -5,6 +5,20 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-07-19] Track harness-sdk#3348 (rolling pair of message cachePoints) — local workaround gated on dashboard evidence
+- **Source**: Phil-initiated (PR #697 follow-up) — https://github.com/strands-agents/harness-sdk/issues/3348 (filed by philmerrell, open, no maintainer response yet); prod session aecd387d (18-way parallel tool fan-out → cacheRead=0 / cacheWrite=134k mid-turn, the ~20-block Anthropic lookback miss mode documented in `model_config.py:366`)
+- **Surface**: backend (`agents/main_agent/core/model_config.py` 3-cachePoint budget). If built locally: strands 1.48's `_inject_cache_point` **strips any pre-existing message-level cachePoints**, so a rolling pair requires dropping `CacheConfig(strategy="auto")` and hand-placing both points via a hook — the 4th Bedrock cachePoint slot is free. Position tests in `tests/agents/main_agent/core/test_bedrock_cache_points.py` are the safety net.
+- **Effort × Impact**: (track) free × M; (local workaround) M × M — but high regression risk in the highest cost-of-regression area
+- **Subtracts**: no — upstream-native fix preferred; a local workaround would later be deleted in favor of it
+- **Status**: open — check #3348 each scan. Do NOT build the local workaround until the `AvoidableMiss`/`WastedUsd` dashboard (PR #697 follow-up, in flight) shows the fan-out miss mode fires often enough to earn the risk.
+
+### [2026-07-19] Spike: ContextOffloader adoption (ingestion-time tool-result offload → S3)
+- **Source**: Phil-initiated (PR #697 follow-up) — strands 1.48.0 ships `ContextOffloader` as a vended plugin (`strands/vended_plugins/context_offloader/`): hooks `AfterToolCallEvent`, token-gates results (default 2,500 via `model.count_tokens`), stores oversized blocks, rewrites to preview + reference, registers `retrieve_offloaded_content`. Relates to long-open issue #266 (large tool-result offload).
+- **Surface**: backend (`agent_factory.py` — `plugins=` already plumbed; a custom S3 `Storage` backend is the real build — the plugin ships InMemory/File only, and references must survive AgentCore Runtime restores across turns)
+- **Effort × Impact**: M–H × M–H (payoff directly measurable by the PR #697 cache/cost metrics)
+- **Subtracts**: partial — bounds MCP/tool payload growth at the source instead of relying solely on reactive below-anchor truncation in `TurnBasedSessionManager` (which stays for legacy history)
+- **Status**: open — spike before commitment; four known gotchas: (1) `evict_after_cycles=20` runs on `BeforeModelCallEvent` and touches *prior* messages — potential byte-stability cache-buster, verify semantics or set `None` and expire via S3 lifecycle; (2) `model.count_tokens` per tool result adds latency, and Bedrock CountTokens rejects `us.*` inference-profile ids (de-prefix precedent in context attribution); (3) adoption flips `toolConfigHash` once (expected; the new tool must land in the deterministically-ordered tool list); (4) check SPA tool-result rendering against placeholder content.
+
 ### [2026-07-17] Bump `bedrock-agentcore` 1.9.1 → 1.18.0 (closes #571 cross-process Memory reorder + #482 SSE deadlock)
 - **Source**: research/2026-07-17.md ▸ Top 5 #1 — bedrock-agentcore 1.18.0 (Jul 10, PR #572/#573 close #571; #482 fix in 1.17.0/PR #563) — https://github.com/aws/bedrock-agentcore-sdk-python/releases
 - **Surface**: backend (`backend/pyproject.toml` + coupled `boto3`; inference-api chat router + `TurnBasedSessionManager` flush ordering; full local pytest suite)

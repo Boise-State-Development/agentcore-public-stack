@@ -319,7 +319,11 @@ class SkillCatalogRepository:
             skill_ids: List of skill identifiers
 
         Returns:
-            List of SkillDefinition objects (may be shorter if some not found)
+            List of SkillDefinition objects (may be shorter if some not found),
+            sorted by skill_id. DynamoDB batch_get_item response order is
+            arbitrary; these records feed the <available_skills> system-prompt
+            block, and an order flip between turns invalidates the Bedrock
+            prompt cache (exact-prefix match).
         """
         if not skill_ids:
             return []
@@ -342,7 +346,7 @@ class SkillCatalogRepository:
                     [SkillDefinition.from_dynamo_item(item) for item in items]
                 )
 
-            return skills
+            return sorted(skills, key=lambda s: s.skill_id)
 
         except ClientError as e:
             logger.error(f"Error batch getting skills: {e}")
