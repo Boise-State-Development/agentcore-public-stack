@@ -310,6 +310,12 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_MANAGED_MODELS_TABLE_NAME: managedModelsTableName,
         DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
         DYNAMODB_USER_FILES_TABLE_NAME: userFilesTableName,
+        // Bucket the runtime writes generated Word docs to (create/modify
+        // word-document tools). Without this the tool falls back to the
+        // literal "user-files" default and PutObject is AccessDenied. The
+        // runtime role's UserFilesBucketAccess statement already grants
+        // Get/Put/Delete/List on this bucket.
+        S3_USER_FILES_BUCKET_NAME: props.refs.fileUploadBucket.bucketName,
         DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME: systemPromptsTableName,
 
         // Auth providers
