@@ -49,6 +49,7 @@ class TestCompactionStateToDict:
             "lastInputTokens",
             "updatedAt",
             "totalSummarizedTurns",
+            "truncationAnchor",
         }
 
     def test_to_dict_values_match(self):
@@ -98,6 +99,17 @@ class TestCompactionStateFromDictValid:
         assert state.summary is None
         assert state.last_input_tokens == 0
         assert state.updated_at is None
+
+    def test_from_dict_roundtrips_truncation_anchor(self):
+        state = CompactionState.from_dict({"checkpoint": 3, "truncationAnchor": 9})
+        assert state.truncation_anchor == 9
+
+    def test_from_dict_legacy_record_defaults_anchor_to_checkpoint(self):
+        """Records written before the anchor existed must not re-truncate
+        retained history: the anchor defaults to the checkpoint, so nothing
+        the slice keeps is mutated on restore."""
+        state = CompactionState.from_dict({"checkpoint": 7})
+        assert state.truncation_anchor == 7
 
 
 # ---------------------------------------------------------------------------

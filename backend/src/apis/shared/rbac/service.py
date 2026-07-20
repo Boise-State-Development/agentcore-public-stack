@@ -192,9 +192,13 @@ class AppRoleService:
         return UserEffectivePermissions(
             user_id=user_id,
             app_roles=[r.role_id for r in roles],
-            tools=list(all_tools),
-            models=list(all_models),
-            skills=list(all_skills),
+            # Sorted for a deterministic order across processes (set iteration
+            # varies with hash randomization). These lists reach the model's
+            # system prompt / tool config, where an order flip between turns
+            # invalidates the Bedrock prompt cache.
+            tools=sorted(all_tools),
+            models=sorted(all_models),
+            skills=sorted(all_skills),
             quota_tier=quota_tier,
             resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
         )

@@ -276,6 +276,54 @@ class DynamoDBStorage(MetadataStorage):
         except ClientError as e:
             raise Exception(f"Failed to get session metadata: {e}")
 
+    async def get_session_cost_records(
+        self,
+        session_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get ALL cost records for a session, chronologically, without a user
+        filter — the admin cost-anatomy view inspects any user's session.
+        Non-admin surfaces must keep using ``get_session_metadata`` (which
+        filters by userId).
+
+        Schema:
+            GSI: SessionLookupIndex
+                GSI_PK: SESSION#<session_id>
+                GSI_SK: begins_with C#  (C#<timestamp> — chronological sort)
+        """
+        from boto3.dynamodb.conditions import Key
+
+        try:
+            items: List[Dict[str, Any]] = []
+            last_evaluated_key = None
+            while True:
+                query_kwargs = {
+                    "IndexName": "SessionLookupIndex",
+                    "KeyConditionExpression": (
+                        Key("GSI_PK").eq(f"SESSION#{session_id}")
+                        & Key("GSI_SK").begins_with("C#")
+                    ),
+                    "ScanIndexForward": True,
+                }
+                if last_evaluated_key:
+                    query_kwargs["ExclusiveStartKey"] = last_evaluated_key
+                response = self.sessions_metadata_table.query(**query_kwargs)
+                items.extend(response.get("Items", []))
+                last_evaluated_key = response.get("LastEvaluatedKey")
+                if not last_evaluated_key:
+                    break
+
+            results = []
+            for item in items:
+                item_float = self._convert_decimal_to_float(item)
+                for key in ["PK", "SK", "GSI_PK", "GSI_SK", "GSI1PK", "GSI1SK", "ttl"]:
+                    item_float.pop(key, None)
+                results.append(item_float)
+            return results
+
+        except ClientError as e:
+            raise Exception(f"Failed to get session cost records: {e}")
+
     async def get_user_cost_summary(
         self,
         user_id: str,

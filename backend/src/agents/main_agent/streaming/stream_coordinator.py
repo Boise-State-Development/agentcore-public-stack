@@ -11,6 +11,10 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from agents.main_agent.config.constants import EnvVars
+from agents.main_agent.session.hooks.prefix_fingerprint import (
+    get_prefix_fingerprint,
+    reset_prefix_fingerprints,
+)
 from apis.shared.errors import (
     ConversationalErrorEvent,
     ErrorCode,
@@ -80,6 +84,11 @@ class StreamCoordinator:
         # Set environment variables for browser session isolation
         os.environ[EnvVars.SESSION_ID] = session_id
         os.environ[EnvVars.USER_ID] = user_id
+
+        # Per-turn prompt-cache prefix fingerprints: clear the previous
+        # turn's entries so entry N of this turn maps to the turn's Nth
+        # model call (the agent instance is cached across turns).
+        reset_prefix_fingerprints(agent)
 
         # Track timing for latency metrics
         stream_start_time = time.time()
@@ -933,19 +942,24 @@ class StreamCoordinator:
                             first_token_time=first_token_for_message,
                             agent=main_agent_wrapper,  # Use wrapper instead of internal agent
                             citations=citations_for_message,  # Pass citations for persistence
+                            call_index=idx,  # Nth model call of this turn (prefix fingerprint lookup)
                         )
                     )
 
-                # Execute all metadata storage tasks in parallel
-                # Use return_exceptions=True to prevent one failure from cancelling others
-                if metadata_tasks:
-                    results = await asyncio.gather(*metadata_tasks, return_exceptions=True)
-                    # Log any failures (but don't raise - metadata failures shouldn't break streaming)
-                    for idx, result in enumerate(results):
-                        if isinstance(result, Exception):
-                            logger.error(f"Failed to store metadata for message {message_ids_to_store[idx]}: {result}")
+                # Execute metadata storage tasks SEQUENTIALLY, in call order.
+                # The write path derives each call's cacheStatus from the
+                # session's previous cost row; parallel writes would race the
+                # turn's own rows and misclassify calls 2..N. These are
+                # post-stream background writes, so the latency cost is
+                # invisible to the user.
+                for idx, task in enumerate(metadata_tasks):
+                    try:
+                        await task
+                    except Exception as task_error:
+                        # Log but don't raise - metadata failures shouldn't break streaming
+                        logger.error(f"Failed to store metadata for message {message_ids_to_store[idx]}: {task_error}")
 
-                logger.info(f"✅ Message metadata stored for {len(message_ids_to_store)} assistant messages (parallel)")
+                logger.info(f"✅ Message metadata stored for {len(message_ids_to_store)} assistant messages (sequential)")
 
             # Store displayText for user message if original_message differs from augmented
             if original_message:
@@ -2072,6 +2086,7 @@ class StreamCoordinator:
         first_token_time: Optional[float],
         agent: Any = None,
         citations: Optional[List] = None,
+        call_index: Optional[int] = None,
     ) -> None:
         """
         Store message-level metadata (token usage, latency, model info, citations)
@@ -2086,6 +2101,10 @@ class StreamCoordinator:
             first_token_time: Timestamp of first token received
             agent: Agent instance for extracting model info
             citations: Optional list of citation dicts from RAG retrieval
+            call_index: Index of this model call within the turn, used to
+                look up the matching prompt-cache prefix fingerprint stashed
+                by PrefixFingerprintHook. None → latest fingerprint (single-
+                call paths like interrupted-turn persistence).
         """
         try:
             from apis.shared.sessions.models import Attribution, LatencyMetrics, MessageMetadata, ModelInfo, TokenUsage
@@ -2219,6 +2238,16 @@ class StreamCoordinator:
                 )
                 if context_window is not None:
                     metadata_kwargs["contextWindow"] = context_window
+
+                # Prompt-cache prefix fingerprints for this model call
+                # (extra field via extra="allow"; persisted on the cost row
+                # so cache misses are diagnosable component-by-component).
+                strands_agent = getattr(agent, "agent", None) if agent is not None else None
+                if strands_agent is not None:
+                    prefix_fingerprint = get_prefix_fingerprint(strands_agent, call_index)
+                    if prefix_fingerprint:
+                        metadata_kwargs["prefixFingerprints"] = prefix_fingerprint
+
                 message_metadata = MessageMetadata(**metadata_kwargs)
 
                 # Store metadata

@@ -16,6 +16,9 @@ from .models import (
     TierUsageSummary,
     CostTrend,
     AdminCostDashboard,
+    PrefixFingerprints,
+    SessionCallRow,
+    SessionCostAnatomy,
 )
 
 logger = logging.getLogger(__name__)
@@ -312,6 +315,99 @@ class AdminCostService:
         except Exception as e:
             logger.error(f"Error getting daily trends: {e}")
             raise
+
+    async def get_session_cost_anatomy(self, session_id: str) -> SessionCostAnatomy:
+        """
+        Get the per-model-call cost anatomy for one session.
+
+        Reads every C# cost record for the session (chronological) and maps
+        each to a SessionCallRow with token splits, cost, derived cacheStatus,
+        and the prompt-cache prefix fingerprints — the data needed to see
+        where a session's spend went and which prefix component broke the
+        cache on a miss. Rows written before this feature shipped simply lack
+        cacheStatus/fingerprints and render as nulls.
+
+        Args:
+            session_id: Session identifier (any user's — admin scope).
+
+        Returns:
+            SessionCostAnatomy with per-call rows and session-level rollups.
+        """
+        records = await self.storage.get_session_cost_records(session_id)
+
+        calls: List[SessionCallRow] = []
+        total_cost = 0.0
+        total_cache_read = 0
+        total_cache_write = 0
+        avoidable_misses = 0
+        wasted_usd = 0.0
+
+        for record in records:
+            token_usage = record.get("tokenUsage") or {}
+            model_info = record.get("modelInfo") or {}
+            fingerprints_raw = record.get("prefixFingerprints")
+
+            # cost is a breakdown dict ({"total": ...}) on the streaming path
+            # or a bare float on the legacy path.
+            cost_raw = record.get("cost")
+            if isinstance(cost_raw, dict):
+                cost_raw = cost_raw.get("total")
+            try:
+                cost = float(cost_raw) if cost_raw is not None else 0.0
+            except (TypeError, ValueError):
+                cost = 0.0
+
+            cache_read = int(token_usage.get("cacheReadInputTokens") or 0)
+            cache_write = int(token_usage.get("cacheWriteInputTokens") or 0)
+            cache_status = record.get("cacheStatus")
+            row_wasted = float(record.get("wastedUsd") or 0.0)
+
+            total_cost += cost
+            total_cache_read += cache_read
+            total_cache_write += cache_write
+            if cache_status == "miss_avoidable":
+                avoidable_misses += 1
+            wasted_usd += row_wasted
+
+            gap_raw = record.get("cacheGapSeconds")
+            calls.append(SessionCallRow(
+                timestamp=record.get("timestamp", ""),
+                message_id=record.get("messageId"),
+                model_id=model_info.get("modelId"),
+                input_tokens=int(token_usage.get("inputTokens") or 0),
+                output_tokens=int(token_usage.get("outputTokens") or 0),
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                cost=cost,
+                cache_status=cache_status,
+                cache_gap_seconds=int(gap_raw) if gap_raw is not None else None,
+                wasted_usd=row_wasted,
+                prefix_fingerprints=(
+                    PrefixFingerprints(**fingerprints_raw)
+                    if isinstance(fingerprints_raw, dict) else None
+                ),
+            ))
+
+        cache_traffic = total_cache_read + total_cache_write
+        cache_efficiency = (
+            total_cache_read / cache_traffic if cache_traffic > 0 else None
+        )
+
+        logger.info(
+            f"Session cost anatomy: {len(calls)} calls, "
+            f"{avoidable_misses} avoidable misses, wasted=${wasted_usd:.4f}"
+        )
+
+        return SessionCostAnatomy(
+            session_id=session_id,
+            calls=calls,
+            total_cost=round(total_cost, 6),
+            total_cache_read_tokens=total_cache_read,
+            total_cache_write_tokens=total_cache_write,
+            avoidable_miss_count=avoidable_misses,
+            wasted_usd=round(wasted_usd, 6),
+            cache_efficiency=cache_efficiency,
+        )
 
     async def get_dashboard(
         self,
