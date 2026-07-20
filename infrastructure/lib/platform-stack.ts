@@ -70,6 +70,9 @@ import { AgentCoreGatewayConstruct } from './constructs/gateway/agentcore-gatewa
 import { McpSandboxBucketConstruct } from './constructs/mcp-sandbox/mcp-sandbox-bucket-construct';
 import { McpSandboxDistributionConstruct } from './constructs/mcp-sandbox/mcp-sandbox-distribution-construct';
 
+// Observability (cross-service dashboards + alarms)
+import { PromptCacheObservabilityConstruct } from './constructs/observability/prompt-cache-observability-construct';
+
 // Fine-tuning (data half lives in Platform)
 import { FineTuningDataConstruct } from './constructs/fine-tuning/fine-tuning-data-construct';
 
@@ -629,6 +632,15 @@ export class PlatformStack extends cdk.Stack {
       config: this._config,
       frontendUrl,
       documentsBucket: this.ragDocumentsBucket,
+    });
+
+    // ============================================================
+    // Prompt-cache observability — cross-service dashboard + alarms
+    // over the EMF metrics both APIs emit (PR #697 follow-up).
+    // Metric-namespace-based, so no typed refs are needed.
+    // ============================================================
+    new PromptCacheObservabilityConstruct(this, 'PromptCacheObservability', {
+      config,
     });
   }
 
