@@ -19,32 +19,44 @@ class TestCompactionState:
         assert state.summary is None
         assert state.last_input_tokens == 0
         assert state.updated_at is None
+        assert state.truncation_anchor == 0
 
     def test_to_dict(self):
         state = CompactionState(
             checkpoint=10,
             summary="Test summary",
             last_input_tokens=50000,
-            updated_at="2025-01-15T10:00:00Z"
+            updated_at="2025-01-15T10:00:00Z",
+            truncation_anchor=14,
         )
         d = state.to_dict()
         assert d["checkpoint"] == 10
         assert d["summary"] == "Test summary"
         assert d["lastInputTokens"] == 50000
         assert d["updatedAt"] == "2025-01-15T10:00:00Z"
+        assert d["truncationAnchor"] == 14
 
     def test_from_dict(self):
         data = {
             "checkpoint": 5,
             "summary": "Previous context",
             "lastInputTokens": 75000,
-            "updatedAt": "2025-01-15T12:00:00Z"
+            "updatedAt": "2025-01-15T12:00:00Z",
+            "truncationAnchor": 9,
         }
         state = CompactionState.from_dict(data)
         assert state.checkpoint == 5
         assert state.summary == "Previous context"
         assert state.last_input_tokens == 75000
         assert state.updated_at == "2025-01-15T12:00:00Z"
+        assert state.truncation_anchor == 9
+
+    def test_from_dict_legacy_record_defaults_anchor_to_checkpoint(self):
+        """Records written before the anchor existed must not re-truncate
+        retained history: the anchor defaults to the checkpoint, so nothing
+        the slice keeps is mutated."""
+        state = CompactionState.from_dict({"checkpoint": 7})
+        assert state.truncation_anchor == 7
 
     def test_from_dict_handles_none(self):
         state = CompactionState.from_dict(None)
@@ -66,18 +78,21 @@ class TestCompactionConfig:
         assert config.token_threshold == 100_000
         assert config.protected_turns == 3
         assert config.max_tool_content_length == 500
+        assert config.cache_ttl_seconds == 300
 
     def test_from_env(self, monkeypatch):
         monkeypatch.setenv("AGENTCORE_MEMORY_COMPACTION_ENABLED", "true")
         monkeypatch.setenv("AGENTCORE_MEMORY_COMPACTION_TOKEN_THRESHOLD", "50000")
         monkeypatch.setenv("AGENTCORE_MEMORY_COMPACTION_PROTECTED_TURNS", "3")
         monkeypatch.setenv("AGENTCORE_MEMORY_COMPACTION_MAX_TOOL_CONTENT_LENGTH", "1000")
+        monkeypatch.setenv("AGENTCORE_MEMORY_COMPACTION_CACHE_TTL_SECONDS", "600")
 
         config = CompactionConfig.from_env()
         assert config.enabled is True
         assert config.token_threshold == 50000
         assert config.protected_turns == 3
         assert config.max_tool_content_length == 1000
+        assert config.cache_ttl_seconds == 600
 
 
 class TestCompactionHelpers:
@@ -158,29 +173,6 @@ class TestCompactionHelpers:
 
         # Should find indices 0, 4, 8 (the actual user questions, not tool results)
         assert valid_indices == [0, 4, 8]
-
-    def test_find_protected_indices(self, mock_messages):
-        """Test finding indices that should be protected from truncation"""
-        protected_turns = 2
-
-        # Find valid cutoff indices first
-        turn_start_indices = []
-        for i, msg in enumerate(mock_messages):
-            if msg.get('role') == 'user':
-                content = msg.get('content', [])
-                is_tool_result = any(
-                    isinstance(block, dict) and 'toolResult' in block
-                    for block in content if isinstance(content, list)
-                )
-                if not is_tool_result:
-                    turn_start_indices.append(i)
-
-        # With 3 turns at [0, 4, 8] and protected_turns=2, protect from index 4 onwards
-        turns_to_protect = min(protected_turns, len(turn_start_indices))
-        protected_start_idx = turn_start_indices[-turns_to_protect]  # Index 4
-
-        protected_indices = set(range(protected_start_idx, len(mock_messages)))
-        assert protected_indices == {4, 5, 6, 7, 8, 9}
 
     def test_checkpoint_calculation(self, mock_messages):
         """Test checkpoint is set at oldest protected turn boundary"""

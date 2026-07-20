@@ -29,6 +29,14 @@ class CompactionState:
     # compaction event in this session. Surfaced on session-metadata GET so
     # the frontend's end-of-conversation indicator survives a refresh.
     total_summarized_turns: int = 0
+    # Absolute message index below which tool contents are truncated on
+    # restore. Bedrock prompt caching requires an exact prefix match, so
+    # truncation must be a pure function of persisted state — this anchor
+    # only moves when the checkpoint advances (the slice already forces a
+    # cache re-write) or when the prompt cache has already expired between
+    # turns (the re-write is free then). It must never be derived from a
+    # per-restore sliding window.
+    truncation_anchor: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for DynamoDB storage."""
@@ -38,6 +46,7 @@ class CompactionState:
             "lastInputTokens": self.last_input_tokens,
             "updatedAt": self.updated_at,
             "totalSummarizedTurns": self.total_summarized_turns,
+            "truncationAnchor": self.truncation_anchor,
         }
 
     @classmethod
@@ -45,12 +54,17 @@ class CompactionState:
         """Create from DynamoDB item dictionary."""
         if not data:
             return cls()
+        checkpoint = int(data.get("checkpoint", 0))
         return cls(
-            checkpoint=int(data.get("checkpoint", 0)),
+            checkpoint=checkpoint,
             summary=data.get("summary"),
             last_input_tokens=int(data.get("lastInputTokens", 0)),
             updated_at=data.get("updatedAt"),
             total_summarized_turns=int(data.get("totalSummarizedTurns", 0)),
+            # Legacy records predate the anchor: default it to the checkpoint
+            # so nothing retained by the slice is truncated (byte-stable from
+            # the first restore under the anchor design).
+            truncation_anchor=int(data.get("truncationAnchor", checkpoint)),
         )
 
 
@@ -83,6 +97,11 @@ class CompactionConfig:
     token_threshold: int = 100_000  # Trigger checkpoint when exceeded
     protected_turns: int = 3  # Recent turns to protect from truncation
     max_tool_content_length: int = 500  # Max chars before truncating tool output
+    # Bedrock prompt-cache TTL. When more than this many seconds have passed
+    # since the previous turn, the cache entry has already expired, so pending
+    # truncations can be applied without forcing an otherwise-avoidable
+    # prefix re-write.
+    cache_ttl_seconds: int = 300
 
     @classmethod
     def from_env(cls) -> "CompactionConfig":
@@ -92,4 +111,5 @@ class CompactionConfig:
             token_threshold=int(os.environ.get(EnvVars.COMPACTION_TOKEN_THRESHOLD, str(Defaults.COMPACTION_TOKEN_THRESHOLD))),
             protected_turns=int(os.environ.get(EnvVars.COMPACTION_PROTECTED_TURNS, str(Defaults.COMPACTION_PROTECTED_TURNS))),
             max_tool_content_length=int(os.environ.get(EnvVars.COMPACTION_MAX_TOOL_CONTENT_LENGTH, str(Defaults.COMPACTION_MAX_TOOL_CONTENT_LENGTH))),
+            cache_ttl_seconds=int(os.environ.get(EnvVars.COMPACTION_CACHE_TTL_SECONDS, str(Defaults.COMPACTION_CACHE_TTL_SECONDS))),
         )

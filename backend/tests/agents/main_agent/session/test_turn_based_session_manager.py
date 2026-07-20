@@ -130,33 +130,6 @@ class TestFindValidCutoffIndices:
         assert mgr._find_valid_cutoff_indices(messages) == []
 
 
-class TestFindProtectedIndices:
-
-    def test_protect_last_2_turns(self, make_session_manager):
-        mgr = make_session_manager()
-        messages = make_conversation(4)  # indices 0-7, turns at 0,2,4,6
-        protected = mgr._find_protected_indices(messages, 2)
-        # Last 2 turn starts are at index 4 and 6, so protect 4..7
-        assert protected == set(range(4, 8))
-
-    def test_zero_protected_turns(self, make_session_manager):
-        mgr = make_session_manager()
-        messages = make_conversation(3)
-        assert mgr._find_protected_indices(messages, 0) == set()
-
-    def test_more_protected_than_available(self, make_session_manager):
-        mgr = make_session_manager()
-        messages = make_conversation(2)  # 4 messages, 2 turns
-        protected = mgr._find_protected_indices(messages, 10)
-        # All messages protected since we only have 2 turns
-        assert protected == set(range(0, 4))
-
-    def test_no_valid_cutoffs(self, make_session_manager):
-        mgr = make_session_manager()
-        messages = [make_assistant_message("a1")]
-        assert mgr._find_protected_indices(messages, 2) == set()
-
-
 # ===========================================================================
 # Task 3 — Tool content truncation (Stage 1)
 # ===========================================================================
@@ -589,19 +562,21 @@ class TestInitialize:
         assert mgr.message_count == 6
 
     def test_existing_agent_compaction_no_checkpoint(self, make_session_manager, compaction_config):
-        """Compaction enabled with checkpoint=0 should load all messages with truncation."""
+        """Compaction enabled with checkpoint=0 loads all messages untouched:
+        with no truncation anchor set, even a long tool result is preserved
+        byte-for-byte (truncation is anchor-driven, never per-restore)."""
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr._load_compaction_state = MagicMock(return_value=CompactionState())
 
-        # A valid Converse history: the truncatable toolResult is preceded by
-        # its matching toolUse turn, so the restore-time pairing repair no-ops
-        # and this test exercises compaction/truncation in isolation.
+        # A valid Converse history: the toolResult is preceded by its matching
+        # toolUse turn, so the restore-time pairing repair no-ops and this
+        # test exercises compaction in isolation.
         messages = [
             make_user_message("q1"),
             make_assistant_message("a1"),
             make_user_message("q2"),
             make_tool_use_message("t1", "search", {"q": "x"}),
-            make_tool_result_message("t1", "x" * 200),  # will be truncated
+            make_tool_result_message("t1", "x" * 200),
         ]
         session_agent = self._make_mock_session_agent()
         mgr.read_agent = MagicMock(return_value=session_agent)
@@ -611,8 +586,9 @@ class TestInitialize:
         agent = self._make_mock_agent()
         mgr.initialize(agent)
 
-        # All 5 messages kept (checkpoint=0), but truncation applied
+        # All 5 messages kept (checkpoint=0) with no truncation (anchor=0)
         assert len(agent.messages) == 5
+        assert agent.messages[4]["content"][0]["toolResult"]["content"][0]["text"] == "x" * 200
         # Valid cutoffs cached for user text messages (indices 0, 2); the
         # toolResult user turn at index 4 is not a valid cutoff.
         assert mgr._valid_cutoff_indices == [0, 2]
@@ -641,10 +617,12 @@ class TestInitialize:
         assert "<conversation_summary>" in first_text
 
     def test_existing_agent_compaction_checkpoint_plus_truncation(self, make_session_manager, compaction_config):
-        """Both checkpoint slicing and truncation should apply."""
+        """Checkpoint slicing plus anchor-driven truncation: messages between
+        the checkpoint and the persisted truncation anchor are truncated;
+        messages at or after the anchor are preserved byte-for-byte."""
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr._load_compaction_state = MagicMock(
-            return_value=CompactionState(checkpoint=2)
+            return_value=CompactionState(checkpoint=2, truncation_anchor=5)
         )
 
         # Valid Converse history: the truncatable toolResult follows its
@@ -655,7 +633,11 @@ class TestInitialize:
             make_assistant_message("old2"),
             make_user_message("new1"),
             make_tool_use_message("t1", "search", {"q": "r"}),
-            make_tool_result_message("t1", "r" * 200),  # truncatable
+            make_tool_result_message("t1", "r" * 200),  # below anchor: truncated
+            make_assistant_message("answer1"),
+            make_user_message("new2"),
+            make_tool_use_message("t2", "search", {"q": "s"}),
+            make_tool_result_message("t2", "s" * 200),  # at/after anchor: preserved
         ]
         session_agent = self._make_mock_session_agent()
         mgr.read_agent = MagicMock(return_value=session_agent)
@@ -665,8 +647,13 @@ class TestInitialize:
         agent = self._make_mock_agent()
         mgr.initialize(agent)
 
-        # Sliced from index 2: [new1, toolUse, toolResult] = 3 messages remain
-        assert len(agent.messages) == 3
+        # Sliced from index 2: 7 messages remain
+        assert len(agent.messages) == 7
+        # Absolute index 4 (below anchor 5) truncated to max_tool_content_length=50
+        truncated_text = agent.messages[2]["content"][0]["toolResult"]["content"][0]["text"]
+        assert "[truncated" in truncated_text
+        # Absolute index 8 (after anchor) untouched
+        assert agent.messages[6]["content"][0]["toolResult"]["content"][0]["text"] == "s" * 200
 
     def test_duplicate_agent_id_raises(self, make_session_manager):
         """Second initialize with same agent_id should raise SessionException."""

@@ -179,13 +179,6 @@ def test_compaction_with_messages():
     logger.info(f"Added {len(test_messages)} test messages")
     logger.info(f"Total messages: {len(agent.messages)}")
 
-    # Test truncation
-    protected_indices = session_manager._find_protected_indices(
-        agent.messages,
-        session_manager.compaction_config.protected_turns
-    )
-    logger.info(f"Protected indices: {protected_indices}")
-
     # Test valid cutoff indices
     valid_indices = session_manager._find_valid_cutoff_indices(agent.messages)
     logger.info(f"Valid cutoff indices: {valid_indices}")

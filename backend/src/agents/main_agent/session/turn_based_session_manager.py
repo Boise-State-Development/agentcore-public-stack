@@ -7,8 +7,17 @@ LTM retrieval correctly.  We only override initialize() to layer on compaction
 after the SDK finishes its standard session restore.
 
 Compaction Strategy (two-feature approach):
-- Stage 1: Tool content truncation — applied every turn, reduces verbose tool I/O
+- Stage 1: Tool content truncation — applied only below the persisted
+  truncation anchor, which moves at checkpoint advances or when the Bedrock
+  prompt cache has already expired between turns
 - Stage 2: Checkpoint + Summary — triggered when token threshold exceeded
+
+Byte-stability contract: between compaction-state changes, restoring the same
+stored history must produce byte-identical ``agent.messages``. Bedrock prompt
+caching requires an exact prefix match, so any per-restore mutation of older
+turns (e.g. a sliding truncation window) breaks the cached prefix and forces a
+full re-write (~$2.5/MTok on a 35k–150k prefix) nearly every turn — far more
+expensive than the read tokens truncation saves.
 
 Based on: https://github.com/aws-samples/sample-strands-agent-with-agentcore
 """
@@ -43,7 +52,8 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
     Features:
     - Checkpoint-based message loading (skip old messages, prepend summary)
-    - Tool content truncation (reduce verbose tool I/O in older turns)
+    - Tool content truncation below a persisted anchor (cache-safe: history
+      is byte-stable between compaction-state changes)
     - Session cancellation support (via cancelled flag)
     - Compaction state persisted in DynamoDB session metadata
     """
@@ -235,6 +245,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         except Exception as e:
             logger.error(f"Compaction failed, using full history: {e}", exc_info=True)
             self.compaction_state = CompactionState()
+            # Force update_after_turn to re-load persisted state rather than
+            # saving these defaults over the real checkpoint/anchor.
+            self._compaction_state_loaded = False
             self._valid_cutoff_indices = []
             self._all_messages_for_summary = []
 
@@ -257,7 +270,16 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         Modifies agent.messages in-place to:
         1. Skip old messages (checkpoint-based)
         2. Prepend conversation summary
-        3. Truncate verbose tool content in older turns
+        3. Truncate tool content strictly below the persisted truncation anchor
+
+        Byte-stability contract: this derivation must be a pure function of
+        (stored history, persisted compaction state). Truncation is therefore
+        driven ONLY by ``compaction_state.truncation_anchor`` — never by a
+        window computed from the current message count, which would re-mutate
+        an older turn on every restore and break Bedrock's exact-prefix cache
+        match. The anchor moves at checkpoint advances (``update_after_turn``,
+        where the slice already pays the one cache re-write) and
+        opportunistically here when the prompt cache has already expired.
         """
         all_messages = agent.messages
 
@@ -278,12 +300,20 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # if update_after_turn actually advances the checkpoint)
         self._all_messages_for_summary = all_messages[:]
 
+        # Advance the truncation anchor only while the prompt cache is
+        # already cold — the prefix re-write is unavoidable then, so pending
+        # truncations are free. Persisted before use so subsequent restores
+        # derive the identical history.
+        self._maybe_advance_truncation_anchor()
+
         # Apply checkpoint: skip old messages, prepend summary
         checkpoint = self.compaction_state.checkpoint
         stage = "none"
+        offset = 0
 
         if checkpoint > 0 and checkpoint < len(all_messages):
             messages_to_process = all_messages[checkpoint:]
+            offset = checkpoint
 
             summary = self.compaction_state.summary
             if summary and messages_to_process:
@@ -294,25 +324,78 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         else:
             messages_to_process = all_messages
 
-        # Apply truncation (always when compaction enabled)
-        protected_indices = self._find_protected_indices(
-            messages_to_process, self.compaction_config.protected_turns
-        )
-        truncated_messages, truncation_count, _ = self._truncate_tool_contents(
-            messages_to_process, protected_indices=protected_indices
-        )
+        # Truncate only messages strictly below the anchor (absolute index),
+        # translated into post-slice coordinates via the checkpoint offset.
+        truncation_count = 0
+        anchor = min(max(self.compaction_state.truncation_anchor, offset), len(all_messages))
+        if anchor > offset:
+            protected_indices = set(range(anchor - offset, len(messages_to_process)))
+            messages_to_process, truncation_count, _ = self._truncate_tool_contents(
+                messages_to_process, protected_indices=protected_indices
+            )
+            if truncation_count > 0:
+                stage = "checkpoint+truncation" if stage == "checkpoint" else "truncation"
 
-        if truncation_count > 0:
-            stage = "checkpoint+truncation" if stage == "checkpoint" else "truncation"
-
-        agent.messages = truncated_messages
+        agent.messages = messages_to_process
 
         logger.info(
             f"Compaction initialized: stage={stage}, "
             f"original={self._total_message_count_at_init}, "
             f"final={len(agent.messages)}, "
+            f"anchor={self.compaction_state.truncation_anchor}, "
             f"truncations={truncation_count}"
         )
+
+    def _maybe_advance_truncation_anchor(self) -> None:
+        """Advance the truncation anchor while the prompt cache is already cold.
+
+        The anchor normally moves only when the checkpoint advances (that
+        slice already forces one full prefix re-write, so folding truncation
+        into it costs nothing extra). But when more than
+        ``cache_ttl_seconds`` have passed since the previous turn, the
+        Bedrock prompt-cache entry has expired anyway — the next call
+        re-writes the prefix regardless — so the anchor can slide up to the
+        protected-turns boundary for free. Persisted immediately so every
+        subsequent restore derives the identical truncated history.
+        """
+        state = self.compaction_state
+        config = self.compaction_config
+        if not self._cache_window_expired(state.updated_at, config.cache_ttl_seconds):
+            return
+
+        cutoffs = self._valid_cutoff_indices
+        if len(cutoffs) <= config.protected_turns:
+            return
+
+        sliding_anchor = cutoffs[-config.protected_turns]
+        if sliding_anchor <= max(state.truncation_anchor, state.checkpoint):
+            return
+
+        logger.info(
+            "Truncation anchor advance (cache expired): %d -> %d",
+            state.truncation_anchor, sliding_anchor,
+        )
+        state.truncation_anchor = sliding_anchor
+        self._save_compaction_state(state)
+
+    @staticmethod
+    def _cache_window_expired(updated_at: Optional[str], ttl_seconds: int) -> bool:
+        """True when the previous turn is older than the prompt-cache TTL.
+
+        ``updated_at`` is stamped by ``_save_compaction_state`` on every turn,
+        so it is a faithful proxy for the previous model call. Unparseable or
+        missing timestamps return False (conservative: assume the cache may
+        still be warm and leave history untouched).
+        """
+        if not updated_at:
+            return False
+        try:
+            last = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return False
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last).total_seconds() > ttl_seconds
 
     # =========================================================================
     # Compaction State Persistence
@@ -642,6 +725,12 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             summary = self._generate_fallback_summary(messages_to_summarize)
 
         self.compaction_state.checkpoint = new_checkpoint
+        # The anchor rides the checkpoint: everything the slice retains stays
+        # byte-identical until the next compaction-state change, so the single
+        # mutation (slice + summary) is paid with exactly one cache re-write.
+        self.compaction_state.truncation_anchor = max(
+            self.compaction_state.truncation_anchor, new_checkpoint
+        )
         self.compaction_state.summary = summary
         # Running total persisted alongside the rest of the compaction state
         # so a refresh can rehydrate the end-of-conversation summary indicator.
@@ -736,19 +825,6 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             if msg.get("role") == "user" and not self._has_tool_result(msg):
                 valid_indices.append(i)
         return valid_indices
-
-    def _find_protected_indices(self, messages: List[Dict], protected_turns: int) -> set:
-        """Find message indices that should be protected from truncation."""
-        if protected_turns <= 0:
-            return set()
-
-        turn_start_indices = self._find_valid_cutoff_indices(messages)
-        if not turn_start_indices:
-            return set()
-
-        turns_to_protect = min(protected_turns, len(turn_start_indices))
-        protected_start_idx = turn_start_indices[-turns_to_protect]
-        return set(range(protected_start_idx, len(messages)))
 
     # =========================================================================
     # Truncation (Stage 1 Compaction)
