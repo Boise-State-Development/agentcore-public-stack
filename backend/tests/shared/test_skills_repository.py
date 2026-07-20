@@ -170,5 +170,30 @@ class TestSkillCatalogRepository:
         assert {s.skill_id for s in skills} == {"skill_one", "skill_two"}
 
     @pytest.mark.asyncio
+    async def test_batch_get_skills_sorted_regardless_of_response_order(
+        self, skill_repository, monkeypatch
+    ):
+        # DynamoDB batch_get_item response order is arbitrary; these records
+        # feed the <available_skills> system-prompt block, where an order flip
+        # between turns invalidates the Bedrock prompt cache. Force a
+        # descending response order and assert the repo still returns sorted.
+        for sid in ("zeta", "alpha", "midway"):
+            await skill_repository.create_skill(_make_skill(sid))
+
+        client = skill_repository._dynamodb.meta.client
+        real_batch_get = client.batch_get_item
+
+        def descending_batch_get(**kwargs):
+            response = real_batch_get(**kwargs)
+            for items in response.get("Responses", {}).values():
+                items.sort(key=lambda item: item["PK"], reverse=True)
+            return response
+
+        monkeypatch.setattr(client, "batch_get_item", descending_batch_get)
+
+        skills = await skill_repository.batch_get_skills(["zeta", "alpha", "midway"])
+        assert [s.skill_id for s in skills] == ["alpha", "midway", "zeta"]
+
+    @pytest.mark.asyncio
     async def test_batch_get_empty(self, skill_repository):
         assert await skill_repository.batch_get_skills([]) == []
