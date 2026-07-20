@@ -237,6 +237,16 @@ async def _store_message_metadata_cloud(
         # Extract timestamp for SK and GSI
         timestamp = metadata_dict.get("attribution", {}).get("timestamp", datetime.now(timezone.utc).isoformat())
 
+        # Derive prompt-cache observability (cacheStatus / wastedUsd) from
+        # this call's usage + the session's previous cost row. Best-effort:
+        # {} on any failure so it can never block the critical write.
+        cache_observability = _derive_cache_observability(
+            session_id=session_id,
+            table=table,
+            timestamp=timestamp,
+            message_metadata=message_metadata,
+        )
+
         # Generate unique ID for SK to prevent collisions
         unique_id = str(uuid_lib.uuid4())
 
@@ -270,7 +280,11 @@ async def _store_message_metadata_cloud(
             "ttl": ttl,
 
             # Cost and usage metadata
-            **metadata_decimal
+            **metadata_decimal,
+
+            # Derived prompt-cache observability (cacheStatus, cacheGapSeconds,
+            # wastedUsd) — {} when derivation was skipped or failed
+            **_convert_floats_to_decimal(cache_observability),
         }
 
         # Store in DynamoDB
@@ -279,14 +293,21 @@ async def _store_message_metadata_cloud(
         logger.info(f"💾 Stored cost record in DynamoDB table {table_name}")
         logger.info(f"   Session: {session_id}, Message: {message_id}, SK: C#{timestamp}#{unique_id[:8]}...")
 
+        # Per-call EMF metrics (CacheReadTokens / CacheWriteTokens /
+        # AvoidableMiss / WastedUsd) for the fleet cache-efficiency
+        # dashboard + alarm. Best-effort, never raises.
+        _emit_cache_metrics(session_id, message_metadata, cache_observability)
+
         # Bump session-level aggregates (totalCost, lastContextTokens,
-        # contextWindow) for the session-cost badge. Best-effort — drift is
-        # repaired by lazy backfill on the next metadata read.
+        # contextWindow, cache-efficiency counters) for the session-cost
+        # badge and admin lists. Best-effort — drift is repaired by lazy
+        # backfill on the next metadata read.
         await _bump_session_aggregates(
             session_id=session_id,
             user_id=user_id,
             message_metadata=message_metadata,
             table=table,
+            cache_observability=cache_observability,
         )
 
         # Update pre-aggregated cost summary for fast quota checks
@@ -311,6 +332,160 @@ async def _store_message_metadata_cloud(
             )
         )
 
+
+
+def _extract_cache_usage(message_metadata: MessageMetadata) -> Tuple[int, int]:
+    """Return (cache_read_tokens, cache_write_tokens) from a metadata object."""
+    token_usage = message_metadata.token_usage
+    if not token_usage:
+        return 0, 0
+    return (
+        token_usage.cache_read_input_tokens or 0,
+        token_usage.cache_write_input_tokens or 0,
+    )
+
+
+def _extract_pricing_dict(message_metadata: MessageMetadata) -> Optional[Dict[str, Any]]:
+    """Return the pricingSnapshot as a camelCase dict, or None."""
+    if not message_metadata.model_info:
+        return None
+    pricing = message_metadata.model_info.pricing_snapshot
+    if pricing is None:
+        return None
+    if hasattr(pricing, "model_dump"):
+        return pricing.model_dump(by_alias=True)
+    return pricing
+
+
+def _derive_cache_observability(
+    session_id: str,
+    table,
+    timestamp: str,
+    message_metadata: MessageMetadata,
+) -> Dict[str, Any]:
+    """Classify this model call's prompt-cache outcome against the previous call.
+
+    Queries the session's most recent existing ``C#`` cost row (one GSI read,
+    Limit=1) and derives:
+
+    - ``cacheStatus``: first_write | hit | miss_ttl_expired | miss_avoidable
+      | uncached (see ``apis.shared.observability.CacheStatus``).
+    - ``cacheGapSeconds``: whole seconds since the previous call, when known.
+    - ``wastedUsd``: for avoidable misses, the re-written previously-cached
+      prefix priced at the cache-write premium over the cache-read rate,
+      using this row's own pricingSnapshot.
+
+    The stream coordinator writes a turn's rows sequentially in call order,
+    so within a multi-call turn each call sees its predecessor. Returns {}
+    when there is no token usage to classify or on any failure — derivation
+    must never block the critical cost-record write.
+    """
+    try:
+        from boto3.dynamodb.conditions import Key
+        from datetime import datetime
+
+        from apis.shared.observability import (
+            CacheStatus,
+            classify_cache_status,
+            compute_wasted_usd,
+        )
+
+        if not message_metadata.token_usage:
+            return {}
+
+        cache_read, cache_write = _extract_cache_usage(message_metadata)
+
+        # Most recent existing cost row for this session (GSI_SK = C#<timestamp>
+        # sorts chronologically; descending scan + Limit=1 = the previous call).
+        response = table.query(
+            IndexName="SessionLookupIndex",
+            KeyConditionExpression=(
+                Key("GSI_PK").eq(f"SESSION#{session_id}")
+                & Key("GSI_SK").begins_with("C#")
+            ),
+            ScanIndexForward=False,
+            Limit=1,
+        )
+        prev_items = response.get("Items", [])
+        prev_row = _convert_decimal_to_float(prev_items[0]) if prev_items else None
+
+        gap_seconds: Optional[float] = None
+        prev_cached_prefix: Optional[int] = None
+        if prev_row:
+            prev_ts = prev_row.get("timestamp")
+            try:
+                current_dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                prev_dt = datetime.fromisoformat(str(prev_ts).replace("Z", "+00:00"))
+                gap_seconds = (current_dt - prev_dt).total_seconds()
+            except (ValueError, AttributeError, TypeError):
+                gap_seconds = None
+
+            prev_usage = prev_row.get("tokenUsage") or {}
+            prev_cached_prefix = int(
+                (prev_usage.get("cacheReadInputTokens") or 0)
+                + (prev_usage.get("cacheWriteInputTokens") or 0)
+            )
+
+        status = classify_cache_status(
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+            previous_call_exists=prev_row is not None,
+            gap_seconds=gap_seconds,
+        )
+        wasted_usd = compute_wasted_usd(
+            cache_status=status,
+            cache_write_tokens=cache_write,
+            previous_cached_prefix_tokens=prev_cached_prefix,
+            pricing_snapshot=_extract_pricing_dict(message_metadata),
+        )
+
+        result: Dict[str, Any] = {
+            "cacheStatus": status.value,
+            "wastedUsd": round(wasted_usd, 6),
+        }
+        if gap_seconds is not None and gap_seconds >= 0:
+            result["cacheGapSeconds"] = int(gap_seconds)
+
+        if status is CacheStatus.MISS_AVOIDABLE:
+            logger.warning(
+                "🔥 Avoidable prompt-cache miss: session=%s gap=%ss cacheWrite=%d wasted=$%.6f",
+                session_id, result.get("cacheGapSeconds"), cache_write, wasted_usd,
+            )
+        return result
+
+    except Exception as e:
+        # JUSTIFICATION: cache classification is derived observability; the
+        # authoritative usage numbers are already on the row. Never block the
+        # cost-record write over it.
+        logger.debug("Cache observability derivation skipped: %s", e)
+        return {}
+
+
+def _emit_cache_metrics(
+    session_id: str,
+    message_metadata: MessageMetadata,
+    cache_observability: Dict[str, Any],
+) -> None:
+    """Emit per-call EMF metrics for the fleet cache dashboard. Never raises."""
+    try:
+        from apis.shared.observability import CacheStatus, emit_prompt_cache_metrics
+
+        if not message_metadata.token_usage:
+            return
+
+        cache_read, cache_write = _extract_cache_usage(message_metadata)
+        status = cache_observability.get("cacheStatus")
+        emit_prompt_cache_metrics(
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+            avoidable_miss=status == CacheStatus.MISS_AVOIDABLE.value,
+            wasted_usd=cache_observability.get("wastedUsd") or 0.0,
+            model_id=message_metadata.model_info.model_id if message_metadata.model_info else None,
+            session_id=session_id,
+            cache_status=status,
+        )
+    except Exception as e:  # noqa: BLE001 - metrics must never break the write path
+        logger.debug("Cache EMF emission skipped: %s", e)
 
 
 async def _update_cost_summary_async(
@@ -1240,6 +1415,7 @@ async def _bump_session_aggregates(
     user_id: str,
     message_metadata: MessageMetadata,
     table,
+    cache_observability: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Atomically update the session row's denormalized cost + context fields.
 
@@ -1247,6 +1423,10 @@ async def _bump_session_aggregates(
     ``update_item`` call:
 
       - ``ADD totalCost :c``  — concurrent-safe across overlapping turns.
+      - ``ADD totalCacheReadTokens / totalCacheWriteTokens / avoidableMissCount
+        / wastedUsd`` — per-session cache-efficiency rollups so lists and
+        admin views can show a cache-efficiency ratio without scanning the
+        session's cost rows.
       - ``SET lastContextTokens :t, contextWindow :w`` — last-write-wins,
         which is the right behavior for "most recent turn."
 
@@ -1293,7 +1473,33 @@ async def _bump_session_aggregates(
             update_parts_set.append("contextWindow = :w")
             values[":w"] = int(context_window)
 
-        update_expression = "ADD totalCost :c SET " + ", ".join(update_parts_set)
+        # Per-session cache-efficiency rollups (next to totalCost). Zero
+        # deltas are added unconditionally so the attributes exist (as 0)
+        # from the session's first call — simpler consumers, no sparse-field
+        # handling.
+        cache_read = token_usage.cache_read_input_tokens or 0 if token_usage else 0
+        cache_write = token_usage.cache_write_input_tokens or 0 if token_usage else 0
+        observability = cache_observability or {}
+        is_avoidable_miss = observability.get("cacheStatus") == "miss_avoidable"
+        wasted_usd = observability.get("wastedUsd") or 0.0
+
+        update_parts_add = [
+            "totalCost :c",
+            "totalCacheReadTokens :cacheRead",
+            "totalCacheWriteTokens :cacheWrite",
+            "avoidableMissCount :avoidableMiss",
+            "wastedUsd :wasted",
+        ]
+        values[":cacheRead"] = int(cache_read)
+        values[":cacheWrite"] = int(cache_write)
+        values[":avoidableMiss"] = 1 if is_avoidable_miss else 0
+        # wastedUsd comes from our own compute_wasted_usd (finite, rounded),
+        # but coerce defensively — a bad value must not break the bump.
+        values[":wasted"] = Decimal(str(_coerce_cost_total(wasted_usd)))
+
+        update_expression = (
+            "ADD " + ", ".join(update_parts_add) + " SET " + ", ".join(update_parts_set)
+        )
 
         table.update_item(
             Key={"PK": f"USER#{user_id}", "SK": sk},

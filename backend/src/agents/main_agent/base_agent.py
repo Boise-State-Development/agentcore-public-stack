@@ -17,6 +17,7 @@ from agents.main_agent.session.hooks import (
     OAuthConsentHook,
     MCPExternalApprovalHook,
     ContextAttributionHook,
+    PrefixFingerprintHook,
 )
 from agents.main_agent.tools import (
     create_default_registry,
@@ -296,6 +297,12 @@ class BaseAgent(ABC):
         # stashes it on the agent for the stream coordinator to surface on the
         # final metadata SSE event.
         hooks.append(ContextAttributionHook())
+
+        # Per-model-call prompt-cache prefix fingerprints (toolConfig /
+        # system prompt / history hashes). Best-effort; the stream
+        # coordinator persists them on each call's metadata row so avoidable
+        # cache misses are diagnosable from stored data.
+        hooks.append(PrefixFingerprintHook())
 
         return hooks
 

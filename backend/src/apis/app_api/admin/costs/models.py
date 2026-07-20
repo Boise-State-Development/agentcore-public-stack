@@ -96,6 +96,55 @@ class CostTrend(BaseModel):
     active_users: int = Field(..., alias="activeUsers")
 
 
+class PrefixFingerprints(BaseModel):
+    """Prompt-cache prefix hashes for one model call (see PrefixFingerprintHook)."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    tool_config_hash: Optional[str] = Field(None, alias="toolConfigHash")
+    system_prompt_hash: Optional[str] = Field(None, alias="systemPromptHash")
+    history_hash: Optional[str] = Field(None, alias="historyHash")
+    message_count: Optional[int] = Field(None, alias="messageCount")
+
+
+class SessionCallRow(BaseModel):
+    """One model call within a session's cost anatomy."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    timestamp: str
+    message_id: Optional[int] = Field(None, alias="messageId")
+    model_id: Optional[str] = Field(None, alias="modelId")
+
+    input_tokens: int = Field(0, alias="inputTokens")
+    output_tokens: int = Field(0, alias="outputTokens")
+    cache_read_tokens: int = Field(0, alias="cacheReadTokens")
+    cache_write_tokens: int = Field(0, alias="cacheWriteTokens")
+
+    cost: float = 0.0
+    cache_status: Optional[str] = Field(None, alias="cacheStatus")
+    cache_gap_seconds: Optional[int] = Field(None, alias="cacheGapSeconds")
+    wasted_usd: float = Field(0.0, alias="wastedUsd")
+    prefix_fingerprints: Optional[PrefixFingerprints] = Field(
+        None, alias="prefixFingerprints"
+    )
+
+
+class SessionCostAnatomy(BaseModel):
+    """Per-call cost anatomy for one session (admin cache-miss forensics)."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId")
+    calls: List[SessionCallRow]
+
+    total_cost: float = Field(0.0, alias="totalCost")
+    total_cache_read_tokens: int = Field(0, alias="totalCacheReadTokens")
+    total_cache_write_tokens: int = Field(0, alias="totalCacheWriteTokens")
+    avoidable_miss_count: int = Field(0, alias="avoidableMissCount")
+    wasted_usd: float = Field(0.0, alias="wastedUsd")
+    # cacheRead / (cacheRead + cacheWrite) over the session; None until
+    # there has been any cache activity.
+    cache_efficiency: Optional[float] = Field(None, alias="cacheEfficiency")
+
+
 class AdminCostDashboard(BaseModel):
     """Complete admin cost dashboard response combining all metrics."""
     model_config = ConfigDict(populate_by_name=True)
