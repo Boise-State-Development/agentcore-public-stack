@@ -91,6 +91,59 @@ export interface AdminCostDashboard {
   dailyTrends?: CostTrend[];
 }
 
+// ========== Session Cost Anatomy ==========
+
+/**
+ * Derived prompt-cache status for one model call.
+ * Null on rows persisted before the cache-observability feature.
+ */
+export type CacheStatus =
+  | 'first_write'
+  | 'hit'
+  | 'miss_ttl_expired'
+  | 'miss_avoidable'
+  | 'uncached';
+
+/** Prompt-cache prefix hashes for one model call. */
+export interface PrefixFingerprints {
+  toolConfigHash?: string | null;
+  systemPromptHash?: string | null;
+  historyHash?: string | null;
+  messageCount?: number | null;
+}
+
+/** One model call within a session's cost anatomy. */
+export interface SessionCallRow {
+  timestamp: string;
+  messageId?: number | null;
+  modelId?: string | null;
+
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+
+  cost: number;
+  cacheStatus?: CacheStatus | null;
+  cacheGapSeconds?: number | null;
+  wastedUsd: number;
+  prefixFingerprints?: PrefixFingerprints | null;
+}
+
+/** Per-call cost anatomy for one session (admin cache-miss forensics). */
+export interface SessionCostAnatomy {
+  sessionId: string;
+  calls: SessionCallRow[];
+
+  totalCost: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
+  avoidableMissCount: number;
+  wastedUsd: number;
+  /** cacheRead / (cacheRead + cacheWrite); null until any cache activity. */
+  cacheEfficiency: number | null;
+}
+
 // ========== API Request Options ==========
 
 export interface DashboardRequestOptions {
