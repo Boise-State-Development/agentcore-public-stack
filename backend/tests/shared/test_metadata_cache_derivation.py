@@ -121,6 +121,17 @@ class TestDeriveCacheObservability:
         result = self._derive(table, _metadata())
         assert result["cacheStatus"] == "uncached"
 
+    def test_first_write_after_below_threshold_uncached_call(self):
+        # Session whose prior calls were all below the minimum cacheable
+        # prefix: the previous row shows zero cache activity, so this call's
+        # write (crossing the threshold) is the expected first population —
+        # not miss_avoidable, and never priced as waste.
+        table = _FakeTable([_prev_row(seconds_ago=30)])
+        result = self._derive(table, _metadata(cache_write=4122))
+        assert result["cacheStatus"] == "first_write"
+        assert result["wastedUsd"] == 0.0
+        assert result["cacheGapSeconds"] == 30
+
     def test_query_targets_previous_row_descending_limit_1(self):
         table = _FakeTable()
         self._derive(table, _metadata(cache_write=100))

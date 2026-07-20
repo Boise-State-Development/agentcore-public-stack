@@ -437,6 +437,7 @@ def _derive_cache_observability(
             cache_write_tokens=cache_write,
             previous_call_exists=prev_row is not None,
             gap_seconds=gap_seconds,
+            previous_cached_prefix_tokens=prev_cached_prefix,
         )
         wasted_usd = compute_wasted_usd(
             cache_status=status,

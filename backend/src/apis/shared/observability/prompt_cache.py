@@ -52,15 +52,18 @@ CACHE_TTL_SECONDS = 300
 class CacheStatus(str, Enum):
     """Derived per-call prompt-cache outcome.
 
-    - ``first_write``: no previous call row for the session — the initial,
-      expected cache population.
+    - ``first_write``: the initial, expected cache population — either no
+      previous call row for the session, or every activity-bearing signal
+      says no cache existed yet (the previous call was ``uncached``, e.g.
+      the prompt was below the model's minimum cacheable prefix, so there
+      was nothing to read from).
     - ``hit``: tokens were read from cache (``cacheReadInputTokens > 0``).
       Partial re-writes of a changed suffix still count as hits.
     - ``miss_ttl_expired``: nothing read, cache re-written, and the gap since
       the previous call exceeded the cache TTL — unavoidable.
-    - ``miss_avoidable``: nothing read, cache re-written, previous call was
-      within the TTL — the prefix must have changed. This is the bug class
-      the fingerprints exist to diagnose.
+    - ``miss_avoidable``: nothing read, cache re-written, previous call had a
+      live cache entry within the TTL — the prefix must have changed. This is
+      the bug class the fingerprints exist to diagnose.
     - ``uncached``: no cache activity at all (caching disabled, non-Bedrock
       provider, or prompt below the minimum cacheable length).
     """
@@ -94,6 +97,7 @@ def classify_cache_status(
     cache_write_tokens: int,
     previous_call_exists: bool,
     gap_seconds: Optional[float],
+    previous_cached_prefix_tokens: Optional[int] = None,
 ) -> CacheStatus:
     """Classify one model call's cache outcome.
 
@@ -103,12 +107,22 @@ def classify_cache_status(
         previous_call_exists: Whether the session has an earlier call row.
         gap_seconds: Seconds since the previous call row's timestamp; None
             when unknown (treated conservatively as expired, not avoidable).
+        previous_cached_prefix_tokens: Previous call's cacheRead + cacheWrite
+            token total, or None when unknown. Zero means the previous call
+            was uncached (e.g. prompt below the model's minimum cacheable
+            prefix), so no cache entry existed for this call to read.
     """
     if cache_read_tokens > 0:
         return CacheStatus.HIT
     if cache_write_tokens <= 0:
         return CacheStatus.UNCACHED
     if not previous_call_exists:
+        return CacheStatus.FIRST_WRITE
+    if previous_cached_prefix_tokens is not None and previous_cached_prefix_tokens <= 0:
+        # The previous call wrote nothing to the cache, so there was no entry
+        # to read from — this write is the session's first real population
+        # (typically the first prompt to cross the minimum cacheable length),
+        # not a miss of any kind.
         return CacheStatus.FIRST_WRITE
     if gap_seconds is None or gap_seconds > CACHE_TTL_SECONDS:
         return CacheStatus.MISS_TTL_EXPIRED

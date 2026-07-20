@@ -78,6 +78,35 @@ class TestClassifyCacheStatus:
             is CacheStatus.UNCACHED
         )
 
+    def test_below_threshold_then_crossing_is_first_write(self):
+        # Prior calls were below the minimum cacheable prefix (uncached), so
+        # no cache entry existed — the first call that crosses the threshold
+        # is the expected initial population, not an avoidable miss.
+        assert (
+            classify_cache_status(
+                0,
+                4122,
+                previous_call_exists=True,
+                gap_seconds=45,
+                previous_cached_prefix_tokens=0,
+            )
+            is CacheStatus.FIRST_WRITE
+        )
+
+    def test_unknown_previous_prefix_stays_avoidable(self):
+        # None means we couldn't see the previous call's cache split — keep
+        # the pre-existing (avoidable) classification rather than masking.
+        assert (
+            classify_cache_status(
+                0,
+                5000,
+                previous_call_exists=True,
+                gap_seconds=45,
+                previous_cached_prefix_tokens=None,
+            )
+            is CacheStatus.MISS_AVOIDABLE
+        )
+
 
 class TestComputeWastedUsd:
     def test_avoidable_miss_priced_at_write_read_premium(self):
