@@ -388,7 +388,13 @@ def _derive_cache_observability(
             CacheStatus,
             classify_cache_status,
             compute_wasted_usd,
+            prompt_cache_observability_enabled,
         )
+
+        # Kill switch: also skips the session cache rollups and (via the
+        # empty dict) the EMF emission downstream.
+        if not prompt_cache_observability_enabled():
+            return {}
 
         if not message_metadata.token_usage:
             return {}
@@ -468,7 +474,14 @@ def _emit_cache_metrics(
 ) -> None:
     """Emit per-call EMF metrics for the fleet cache dashboard. Never raises."""
     try:
-        from apis.shared.observability import CacheStatus, emit_prompt_cache_metrics
+        from apis.shared.observability import (
+            CacheStatus,
+            emit_prompt_cache_metrics,
+            prompt_cache_observability_enabled,
+        )
+
+        if not prompt_cache_observability_enabled():
+            return
 
         if not message_metadata.token_usage:
             return

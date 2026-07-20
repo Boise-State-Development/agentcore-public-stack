@@ -23,8 +23,25 @@ import from any package (agents/, app_api, inference_api all may import
 
 import hashlib
 import json
+import os
 from enum import Enum
 from typing import Any, Mapping, Optional
+
+# Kill switch for the whole prompt-cache observability layer (fingerprint
+# hook, per-call cacheStatus derivation + session rollups, EMF emission).
+# Default ON; only the literal string "false" disables it — an empty or
+# unset value stays enabled (workflow env vars can materialize as "").
+PROMPT_CACHE_OBSERVABILITY_ENABLED_ENV = "PROMPT_CACHE_OBSERVABILITY_ENABLED"
+
+
+def prompt_cache_observability_enabled() -> bool:
+    """Whether prompt-cache observability is enabled (env kill switch).
+
+    Read per call (no module-level caching) so tests and live config changes
+    behave predictably; the env read is negligible next to the DynamoDB
+    lookup and hash work it gates.
+    """
+    return os.environ.get(PROMPT_CACHE_OBSERVABILITY_ENABLED_ENV, "").lower() != "false"
 
 # Bedrock prompt-cache TTL (sliding, seconds). A gap between consecutive
 # model calls larger than this means the cache entry legitimately expired —

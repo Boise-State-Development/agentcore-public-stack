@@ -192,3 +192,43 @@ class TestBumpSessionAggregatesCacheCounters:
         assert values[":cacheRead"] == 0
         assert values[":cacheWrite"] == 0
         assert values[":avoidableMiss"] == 0
+
+
+class TestKillSwitch:
+    """PROMPT_CACHE_OBSERVABILITY_ENABLED=false disables derivation and EMF."""
+
+    def test_flag_default_and_parsing(self, monkeypatch):
+        from apis.shared.observability import (
+            PROMPT_CACHE_OBSERVABILITY_ENABLED_ENV,
+            prompt_cache_observability_enabled,
+        )
+
+        monkeypatch.delenv(PROMPT_CACHE_OBSERVABILITY_ENABLED_ENV, raising=False)
+        assert prompt_cache_observability_enabled() is True
+        # Empty string (workflow env vars can materialize as "") stays enabled
+        monkeypatch.setenv(PROMPT_CACHE_OBSERVABILITY_ENABLED_ENV, "")
+        assert prompt_cache_observability_enabled() is True
+        monkeypatch.setenv(PROMPT_CACHE_OBSERVABILITY_ENABLED_ENV, "FALSE")
+        assert prompt_cache_observability_enabled() is False
+        monkeypatch.setenv(PROMPT_CACHE_OBSERVABILITY_ENABLED_ENV, "true")
+        assert prompt_cache_observability_enabled() is True
+
+    def test_derivation_disabled_returns_empty(self, monkeypatch):
+        monkeypatch.setenv("PROMPT_CACHE_OBSERVABILITY_ENABLED", "false")
+        table = _FakeTable([_prev_row(seconds_ago=30, cache_write=5000)])
+        result = md._derive_cache_observability(
+            session_id="sess-1",
+            table=table,
+            timestamp=NOW.isoformat(),
+            message_metadata=_metadata(cache_read=5000, cache_write=100),
+        )
+        assert result == {}
+
+    def test_emf_disabled_emits_nothing(self, monkeypatch, capsys):
+        monkeypatch.setenv("PROMPT_CACHE_OBSERVABILITY_ENABLED", "false")
+        md._emit_cache_metrics(
+            session_id="sess-1",
+            message_metadata=_metadata(cache_read=1000, cache_write=200),
+            cache_observability={"cacheStatus": "miss_avoidable", "wastedUsd": 0.01},
+        )
+        assert capsys.readouterr().out == ""

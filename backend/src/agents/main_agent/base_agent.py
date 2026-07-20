@@ -302,7 +302,11 @@ class BaseAgent(ABC):
         # system prompt / history hashes). Best-effort; the stream
         # coordinator persists them on each call's metadata row so avoidable
         # cache misses are diagnosable from stored data.
-        hooks.append(PrefixFingerprintHook())
+        # PROMPT_CACHE_OBSERVABILITY_ENABLED=false disables the layer.
+        from apis.shared.observability import prompt_cache_observability_enabled
+
+        if prompt_cache_observability_enabled():
+            hooks.append(PrefixFingerprintHook())
 
         return hooks
 
