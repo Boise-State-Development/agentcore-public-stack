@@ -33,6 +33,7 @@ ALLOWED_MIME_TYPES = {
     "text/csv": "csv",
     "application/vnd.ms-excel": "xls",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
     "text/markdown": "md",
     # Images (Bedrock-supported)
     "image/png": "png",
@@ -50,6 +51,7 @@ ALLOWED_EXTENSIONS = {
     ".csv": "text/csv",
     ".xls": "application/vnd.ms-excel",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".md": "text/markdown",
     # Images
     ".png": "image/png",

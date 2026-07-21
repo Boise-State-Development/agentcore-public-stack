@@ -531,6 +531,48 @@ def _build_excel_spreadsheet_tools(
     return tools
 
 
+# ============================================================
+# PowerPoint Presentation Tool Injection
+# ============================================================
+
+POWERPOINT_PRESENTATION_TOOL_IDS = {"create_powerpoint_presentation"}
+
+
+def _build_powerpoint_presentation_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create context-bound PowerPoint presentation tools if enabled by the user.
+
+    Identity is captured by closure (same pattern as the Word document and Excel
+    spreadsheet tools) since the runtime does not populate ToolContext.
+    """
+    if not enabled_tools or not POWERPOINT_PRESENTATION_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    # The PowerPoint capability is a single toggle: enabling
+    # create_powerpoint_presentation provisions the full deck toolset
+    # (create/modify/list/read) so the model can round-trip on a presentation
+    # without extra admin catalog entries.
+    from agents.builtin_tools.powerpoint_presentation_tool import (
+        make_create_powerpoint_presentation_tool,
+        make_list_powerpoint_presentations_tool,
+        make_modify_powerpoint_presentation_tool,
+        make_read_powerpoint_presentation_tool,
+    )
+
+    tools = [
+        make_create_powerpoint_presentation_tool(session_id, user_id),
+        make_modify_powerpoint_presentation_tool(session_id, user_id),
+        make_list_powerpoint_presentations_tool(session_id, user_id),
+        make_read_powerpoint_presentation_tool(session_id, user_id),
+    ]
+
+    logger.info(f"Created {len(tools)} powerpoint presentation tools")
+    return tools
+
+
 def _build_memory_tools(agent_memory, user_id: str, user_email: str) -> list:
     """Context-bound Memory-Space tools for an Agent's resolved memory binding.
 
@@ -1838,6 +1880,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 session_id=input_data.session_id,
                 user_id=user_id,
             ) + _build_excel_spreadsheet_tools(
+                enabled_tools=effective_enabled_tools,
+                session_id=input_data.session_id,
+                user_id=user_id,
+            ) + _build_powerpoint_presentation_tools(
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,

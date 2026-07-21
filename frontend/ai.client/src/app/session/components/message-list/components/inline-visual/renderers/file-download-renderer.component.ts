@@ -25,6 +25,8 @@ const DOCUMENT_ICON =
   'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z';
 const SPREADSHEET_ICON =
   'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2';
+const PRESENTATION_ICON =
+  'M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v10a2 2 0 002 2z';
 
 const WORD_STYLE: FileKindStyle = {
   iconPath: DOCUMENT_ICON,
@@ -33,6 +35,10 @@ const WORD_STYLE: FileKindStyle = {
 const EXCEL_STYLE: FileKindStyle = {
   iconPath: SPREADSHEET_ICON,
   badgeClass: 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400',
+};
+const POWERPOINT_STYLE: FileKindStyle = {
+  iconPath: PRESENTATION_ICON,
+  badgeClass: 'bg-orange-50 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400',
 };
 const GENERIC_STYLE: FileKindStyle = {
   iconPath: DOCUMENT_ICON,
@@ -46,6 +52,9 @@ function styleForFilename(filename: string): FileKindStyle {
   }
   if (lower.endsWith('.docx') || lower.endsWith('.doc')) {
     return WORD_STYLE;
+  }
+  if (lower.endsWith('.pptx') || lower.endsWith('.ppt')) {
+    return POWERPOINT_STYLE;
   }
   return GENERIC_STYLE;
 }
