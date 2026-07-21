@@ -1,3 +1,45 @@
+# Release Notes — v1.10.0
+
+**Release Date:** July 21, 2026
+**Previous Release:** v1.9.0 (July 20, 2026)
+
+---
+
+> 🏗️ **CDK deploy required this release** — the SPA CloudFront distribution's response-headers policy changes (MCP Apps CSP fix). No new AWS resources, no data migration, no dependency changes. Standard order: `platform.yml` → `backend.yml` → `frontend-deploy.yml`.
+
+---
+
+## Highlights
+
+v1.10.0 brings **Excel spreadsheets to chat**: the agent can now create, edit, read, and list real `.xlsx` workbooks — built with openpyxl inside the sandboxed Code Interpreter and delivered through the chat Files panel with a download link — governed by a single "Excel Spreadsheets" catalog toggle. The same work extracts a shared office-document storage module that the Word tools now ride on. The release also fixes a day-one CSP gap that **blocked every MCP App iframe on deployed environments**: the SPA's `frame-src` never allowed the `mcp-sandbox` origin, and localhost testing (which bypasses CloudFront's headers) had masked it since the feature shipped.
+
+## Excel spreadsheets in chat
+
+Users can ask the agent to build or revise real Excel workbooks mid-conversation — budget templates, rosters, data exports — and get a downloadable `.xlsx` back in the chat's Files panel.
+
+### Backend
+
+- `agents/builtin_tools/excel_spreadsheet_tool.py` (530+ lines) — four tools: `create_excel_spreadsheet`, `modify_excel_spreadsheet`, `list_excel_spreadsheets`, `read_excel_spreadsheet`. Generation and edits run openpyxl inside the sandboxed AgentCore Code Interpreter; nothing executes in the API container.
+- `agents/builtin_tools/office/_storage.py` — new shared storage module (Code Interpreter execution + S3 persistence) common to Word and Excel; `word_document_tool.py` is refactored onto it, dropping ~270 lines of duplicated plumbing.
+- `apis/inference_api/chat/routes.py` — the toolset is injected at runtime when the catalog toggle is enabled. One catalog entry ("Excel Spreadsheets", gate key `create_excel_spreadsheet`, `enabledByDefault: false`) provisions all four tools; it is distinct from the spreadsheet *analysis* tools (`list_spreadsheets`/`analyze_spreadsheet`), which read uploaded tabular files.
+- Generated files persist to the user-files bucket (`S3_USER_FILES_BUCKET_NAME`) and surface in the session's Files panel.
+
+### Frontend
+
+- New generic `file-download-renderer` component replaces the Word-specific `word-document-renderer` — all generated office documents (Word and Excel) now share one inline card with filename, type, and download link.
+
+## 🐛 Bug fixes
+
+- **MCP App UIs were blank on every deployed environment** — demoing an MCP App (e.g. Excalidraw) on a domained deploy failed with `Framing 'https://mcp-sandbox.{domain}/' violates the Content Security Policy directive: "frame-src 'self' https://artifacts.{domain}"`. Root cause: the MCP Apps rollout wired the *inbound* direction (the sandbox proxy's `frame-ancestors` is locked to the SPA origin) but never extended the SPA's own *outbound* `frame-src`, and all live verification ran on localhost:4200, which bypasses CloudFront's response headers. `PlatformStack` now threads the sandbox proxy origin (`https://mcp-sandbox.{domain}`) into `SpaDistributionConstruct` as a required prop, and a new synth-time test (`infrastructure/test/spa-frame-src-csp.test.ts`) asserts both iframe origins are present in the frontend headers policy so the gap can't silently reopen (#714)
+
+## 🚀 Deployment notes
+
+- **Run `platform.yml`** — the SPA distribution's `ResponseHeadersPolicy` changes (CSP `frame-src` gains the `mcp-sandbox.{domain}` origin). Quick, low-risk CloudFront-only update; then `backend.yml` and `frontend-deploy.yml` as usual.
+- **Enable the Excel tool per environment** — the "Excel Spreadsheets" catalog entry ships in the bootstrap seed data with `enabledByDefault: false`. Environments seeded before this release won't have the row: add it via the admin Tools page (or re-run the tools seeding) and grant it to the appropriate roles via RBAC.
+- The MCP Apps fix needs no configuration — environments where `mcp-sandbox.{domain}` is deployed start working as soon as the new headers policy is live (a hard refresh may be needed to drop the cached CSP).
+
+---
+
 # Release Notes — v1.9.0
 
 **Release Date:** July 20, 2026
