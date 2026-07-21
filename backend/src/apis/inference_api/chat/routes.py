@@ -557,6 +557,7 @@ def _build_powerpoint_presentation_tools(
     # without extra admin catalog entries.
     from agents.builtin_tools.powerpoint_presentation_tool import (
         make_create_powerpoint_presentation_tool,
+        make_list_powerpoint_layouts_tool,
         make_list_powerpoint_presentations_tool,
         make_modify_powerpoint_presentation_tool,
         make_read_powerpoint_presentation_tool,
@@ -567,6 +568,7 @@ def _build_powerpoint_presentation_tools(
         make_modify_powerpoint_presentation_tool(session_id, user_id),
         make_list_powerpoint_presentations_tool(session_id, user_id),
         make_read_powerpoint_presentation_tool(session_id, user_id),
+        make_list_powerpoint_layouts_tool(session_id, user_id),
     ]
 
     logger.info(f"Created {len(tools)} powerpoint presentation tools")
