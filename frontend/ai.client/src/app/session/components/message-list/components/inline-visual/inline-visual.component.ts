@@ -27,6 +27,9 @@ import { VisualStateService } from '../../../../services/visual-state/visual-sta
           @case ('word_document') {
             <app-word-document-renderer [payload]="payload()" />
           }
+          @case ('workspace_file') {
+            <app-word-document-renderer [payload]="payload()" />
+          }
           @default {
             <app-default-renderer
               [payload]="payload()"

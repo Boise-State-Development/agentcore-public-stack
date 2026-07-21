@@ -487,6 +487,47 @@ def _build_word_document_tools(
     return tools
 
 
+# ============================================================
+# Workspace Tool Injection
+# ============================================================
+
+WORKSPACE_TOOL_IDS = {"workspace_files"}
+
+
+def _build_workspace_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create context-bound workspace file tools if enabled by the user.
+
+    Identity is captured by closure (same pattern as the artifact and word
+    document tools). The "workspace_files" catalog entry is a single toggle
+    that provisions the full toolset (list/read/write).
+    """
+    from apis.shared.feature_flags import workspace_tools_enabled
+
+    if not workspace_tools_enabled():
+        return []
+    if not enabled_tools or not WORKSPACE_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    from agents.builtin_tools.workspace_tools import (
+        make_workspace_list_tool,
+        make_workspace_read_tool,
+        make_workspace_write_tool,
+    )
+
+    tools = [
+        make_workspace_list_tool(session_id, user_id),
+        make_workspace_read_tool(session_id, user_id),
+        make_workspace_write_tool(session_id, user_id),
+    ]
+
+    logger.info(f"Created {len(tools)} workspace tools")
+    return tools
+
+
 def _build_memory_tools(agent_memory, user_id: str, user_email: str) -> list:
     """Context-bound Memory-Space tools for an Agent's resolved memory binding.
 
@@ -1790,6 +1831,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 session_id=input_data.session_id,
                 user_id=user_id,
             ) + _build_word_document_tools(
+                enabled_tools=effective_enabled_tools,
+                session_id=input_data.session_id,
+                user_id=user_id,
+            ) + _build_workspace_tools(
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,

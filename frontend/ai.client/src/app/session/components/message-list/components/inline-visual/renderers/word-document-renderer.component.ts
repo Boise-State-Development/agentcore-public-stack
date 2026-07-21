@@ -1,10 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 /**
- * Payload for the word_document inline visual, produced by the
- * create_word_document tool. download_url is a short-lived presigned S3 GET
- * URL whose response forces Content-Disposition: attachment, so a plain
- * click downloads the file (no new tab / navigation needed).
+ * Payload for the word_document and workspace_file inline visuals, produced
+ * by the create_word_document and workspace_write tools. download_url is a
+ * short-lived presigned S3 GET URL whose response forces
+ * Content-Disposition: attachment, so a plain click downloads the file (no
+ * new tab / navigation needed).
  */
 interface WordDocumentPayload {
   filename: string;
