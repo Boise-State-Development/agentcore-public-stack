@@ -155,6 +155,11 @@ class FileMetadata(BaseModel):
     # Status
     status: FileStatus = Field(default=FileStatus.PENDING)
 
+    # Provenance: "upload" (SPA attachment flow) or the id of the agent tool
+    # that produced the file (e.g. "agent", "word_document"). Display-only —
+    # never part of an access decision.
+    source: str = Field(default="upload", description="Origin of the file")
+
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -195,6 +200,7 @@ class FileMetadata(BaseModel):
             "s3Key": self.s3_key,
             "s3Bucket": self.s3_bucket,
             "s3Uri": self.s3_uri,
+            "source": self.source,
             "status": self.status if isinstance(self.status, str) else self.status.value,
             "createdAt": self.created_at.isoformat() + "Z",
             "updatedAt": self.updated_at.isoformat() + "Z",
@@ -217,6 +223,7 @@ class FileMetadata(BaseModel):
             s3_key=item.get("s3Key", ""),
             s3_bucket=item.get("s3Bucket", ""),
             status=item.get("status", FileStatus.PENDING),
+            source=item.get("source", "upload"),
             created_at=datetime.fromisoformat(created_at.rstrip("Z")) if created_at else datetime.now(timezone.utc),
             updated_at=datetime.fromisoformat(updated_at.rstrip("Z")) if updated_at else datetime.now(timezone.utc),
             ttl=item.get("ttl"),

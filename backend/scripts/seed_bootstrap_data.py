@@ -443,6 +443,21 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        # Single catalog entry / toggle that provisions the whole workspace
+        # toolset. Enabling this one id injects list/read/write at runtime —
+        # see WORKSPACE_TOOL_IDS and _build_workspace_tools in
+        # apis/inference_api/chat/routes.py. Keep the toolId as
+        # "workspace_files": it is the gate key.
+        "toolId": "workspace_files",
+        "displayName": "File Workspace",
+        "description": "List, read, and save files in the conversation's workspace. Reads uploaded text files on demand and saves text deliverables (markdown, CSV, JSON) to the chat's Files with a download link.",
+        "category": "document",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": True,
+        "forwardAuthToken": False,
+    },
+    {
         # Single catalog entry / toggle that provisions the whole Excel
         # spreadsheet toolset. Enabling this one id injects create/modify/list/
         # read at runtime — see EXCEL_SPREADSHEET_TOOL_IDS and

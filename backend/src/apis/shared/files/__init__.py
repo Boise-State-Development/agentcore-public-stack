@@ -37,6 +37,17 @@ from .file_resolver import (
     get_file_resolver,
 )
 
+from .workspace import (
+    WorkspaceError,
+    WorkspaceFileNotFoundError,
+    WorkspaceQuotaExceededError,
+    WorkspaceStorageNotConfiguredError,
+    WorkspaceValidationError,
+    list_workspace_files,
+    read_workspace_file,
+    write_workspace_file,
+)
+
 __all__ = [
     # Models
     "FileStatus",
@@ -65,4 +76,13 @@ __all__ = [
     "FileResolverError",
     "FileResolver",
     "get_file_resolver",
+    # Workspace
+    "WorkspaceError",
+    "WorkspaceFileNotFoundError",
+    "WorkspaceQuotaExceededError",
+    "WorkspaceStorageNotConfiguredError",
+    "WorkspaceValidationError",
+    "list_workspace_files",
+    "read_workspace_file",
+    "write_workspace_file",
 ]
