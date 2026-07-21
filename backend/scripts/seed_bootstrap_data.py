@@ -457,6 +457,23 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "isPublic": True,
         "forwardAuthToken": False,
     },
+    {
+        # Single catalog entry / toggle that provisions the whole Excel
+        # spreadsheet toolset. Enabling this one id injects create/modify/list/
+        # read at runtime — see EXCEL_SPREADSHEET_TOOL_IDS and
+        # _build_excel_spreadsheet_tools in apis/inference_api/chat/routes.py.
+        # Keep the toolId as "create_excel_spreadsheet": it is the gate key.
+        # Distinct from the spreadsheet *analysis* tools (list_spreadsheets /
+        # analyze_spreadsheet), which read uploaded tabular files.
+        "toolId": "create_excel_spreadsheet",
+        "displayName": "Excel Spreadsheets",
+        "description": "Create, edit, read, and list Excel (.xlsx) spreadsheets using openpyxl in a sandboxed environment. Generated files are saved to the chat's Files with a download link.",
+        "category": "document",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": True,
+        "forwardAuthToken": False,
+    },
 ]
 
 

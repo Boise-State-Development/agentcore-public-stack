@@ -18,7 +18,7 @@ Design notes
 * Binary files are returned by reference (presigned URL), never base64 — file
   bytes do not flow through the model (token-cost tenet, CLAUDE.md).
 * ``workspace_write`` returns the same inline download-card contract as the
-  word tool (``ui_type: "workspace_file"``) so the SPA renders a first-class
+  word tool (``ui_type: "file_download"``) so the SPA renders a first-class
   download card.
 """
 
@@ -169,11 +169,11 @@ def make_workspace_write_tool(session_id: str, user_id: str):
             return _error(f"❌ Failed to save '{filename}': {exc}")
 
         # Same promoted download-card contract as word_document_tool — the
-        # SPA routes ui_type "workspace_file" to the inline download card.
+        # SPA routes ui_type "file_download" to the inline download card.
         return json.dumps(
             {
                 "success": True,
-                "ui_type": "workspace_file",
+                "ui_type": "file_download",
                 "ui_display": "inline",
                 "payload": {
                     "filename": result["filename"],

@@ -617,6 +617,7 @@ export class PlatformStack extends cdk.Stack {
       config,
       bucket: this.spaBucket,
       appApiUrl: this._albDns.albUrl,
+      mcpSandboxOrigin: this.mcpSandboxProxyOrigin,
     });
     this.spaDistribution = spaDist.distribution;
     this.spaDistributionDomainName = spaDist.distributionDomainName;

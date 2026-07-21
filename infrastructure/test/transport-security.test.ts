@@ -59,6 +59,7 @@ describe('Transport security baseline', () => {
         config,
         bucket: bucket.bucket,
         appApiUrl: 'https://api.example.com',
+        mcpSandboxOrigin: 'https://mcp-sandbox.example.com',
       });
 
       const t = Template.fromStack(stack);

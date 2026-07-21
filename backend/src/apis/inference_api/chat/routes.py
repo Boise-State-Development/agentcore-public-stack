@@ -528,6 +528,50 @@ def _build_workspace_tools(
     return tools
 
 
+# ============================================================
+# Excel Spreadsheet Tool Injection
+# ============================================================
+
+EXCEL_SPREADSHEET_TOOL_IDS = {"create_excel_spreadsheet"}
+
+
+def _build_excel_spreadsheet_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create context-bound Excel spreadsheet tools if enabled by the user.
+
+    Identity is captured by closure (same pattern as the Word document and
+    spreadsheet analysis tools) since the runtime does not populate ToolContext.
+    Distinct from the spreadsheet *analysis* tools (list_spreadsheets /
+    analyze_spreadsheet): this toolset creates/modifies/reads/lists generated
+    .xlsx files, it doesn't analyze uploaded ones.
+    """
+    if not enabled_tools or not EXCEL_SPREADSHEET_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    # The Excel capability is a single toggle: enabling create_excel_spreadsheet
+    # provisions the full workbook toolset (create/modify/list/read) so the
+    # model can round-trip on a spreadsheet without extra admin catalog entries.
+    from agents.builtin_tools.excel_spreadsheet_tool import (
+        make_create_excel_spreadsheet_tool,
+        make_list_excel_spreadsheets_tool,
+        make_modify_excel_spreadsheet_tool,
+        make_read_excel_spreadsheet_tool,
+    )
+
+    tools = [
+        make_create_excel_spreadsheet_tool(session_id, user_id),
+        make_modify_excel_spreadsheet_tool(session_id, user_id),
+        make_list_excel_spreadsheets_tool(session_id, user_id),
+        make_read_excel_spreadsheet_tool(session_id, user_id),
+    ]
+
+    logger.info(f"Created {len(tools)} excel spreadsheet tools")
+    return tools
+
+
 def _build_memory_tools(agent_memory, user_id: str, user_email: str) -> list:
     """Context-bound Memory-Space tools for an Agent's resolved memory binding.
 
@@ -1835,6 +1879,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 session_id=input_data.session_id,
                 user_id=user_id,
             ) + _build_workspace_tools(
+                enabled_tools=effective_enabled_tools,
+                session_id=input_data.session_id,
+                user_id=user_id,
+            ) + _build_excel_spreadsheet_tools(
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,

@@ -25,6 +25,14 @@ export interface SpaDistributionConstructProps {
    * the resolved string.
    */
   appApiUrl: string;
+  /**
+   * MCP Apps sandbox-proxy origin (`https://mcp-sandbox.{domainName}` on
+   * domained deploys). Included in the `frame-src` CSP directive so the
+   * SPA can frame MCP App UIs; without it CloudFront's CSP blocks the
+   * sandbox iframe (localhost dev bypasses CloudFront, so the block only
+   * shows up on deployed environments).
+   */
+  mcpSandboxOrigin: string;
 }
 
 /**
@@ -46,8 +54,9 @@ export interface SpaDistributionConstructProps {
  *     embedding), Referrer-Policy=strict-origin-when-cross-origin, HSTS
  *     1y w/ subdomains, X-XSS-Protection.
  *   - The `frame-src` CSP directive opens `https://artifacts.{domainName}`
- *     so the SPA can embed artifact iframes. Other resource types remain unrestricted
- *     by CSP (defended by the other security headers).
+ *     and the MCP Apps sandbox-proxy origin (`https://mcp-sandbox.{domainName}`)
+ *     so the SPA can embed artifact and MCP App iframes. Other resource types
+ *     remain unrestricted by CSP (defended by the other security headers).
  *
  * Custom domain: if `config.domainName` and
  * `config.frontend.certificateArn` are both set, the distribution
@@ -70,7 +79,7 @@ export class SpaDistributionConstruct extends Construct {
   ) {
     super(scope, id);
 
-    const { config, bucket, appApiUrl } = props;
+    const { config, bucket, appApiUrl, mcpSandboxOrigin } = props;
 
     // OAC for CloudFront → S3 access (S3 bucket has block-public-access).
     new cloudfront.CfnOriginAccessControl(this, 'FrontendOAC', {
@@ -129,7 +138,7 @@ export class SpaDistributionConstruct extends Construct {
           ...(artifactsOrigin
             ? {
                 contentSecurityPolicy: {
-                  contentSecurityPolicy: `frame-src 'self' ${artifactsOrigin}`,
+                  contentSecurityPolicy: `frame-src 'self' ${artifactsOrigin} ${mcpSandboxOrigin}`,
                   override: true,
                 },
               }

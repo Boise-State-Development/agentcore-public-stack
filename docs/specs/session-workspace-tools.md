@@ -153,10 +153,9 @@ workspace_write(filename: str, content: str, mime_type: str = "text/plain") -> s
   download URL.
 - Returns the inline download-card contract
   (`ui_type` / `ui_display: "inline"` / payload) so the SPA renders a
-  first-class download card. Reuse the existing `word_document` renderer
-  contract; a generic `workspace_file` `ui_type` variant in
-  `inline-visual.component.ts` is a small frontend addition in the same PR
-  (cross-package contract: coordinate both sides).
+  first-class download card. Reuses the shared `file_download` `ui_type`
+  already routed to `FileDownloadRendererComponent` in
+  `inline-visual.component.ts`, so no frontend change is needed.
 - Filename validation mirrors the word tool's (`_validate_document_name`
   generalized): no path separators, no traversal, extension must match
   `mime_type`.
@@ -220,7 +219,7 @@ its own PR with `cacheStatus` verification, not as a rider on this one.
 `apis/shared/files/workspace.py` (bounded ranged read, list queries, write
 helper extracted/shared with `_store_document`), `source` field on
 `FileMetadata` (additive, default `"upload"` on read), the three tool
-factories + registry/catalog/RBAC wiring, `workspace_file` inline card,
+factories + registry/catalog/RBAC wiring, `file_download` inline card,
 tests (unit + import-boundary clean).
 
 **PR-2 (optional, later) — word tool convergence.** Reimplement

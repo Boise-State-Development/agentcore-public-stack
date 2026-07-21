@@ -133,7 +133,7 @@ class TestWorkspaceWrite:
 
         card = json.loads(result)
         assert card["success"] is True
-        assert card["ui_type"] == "workspace_file"
+        assert card["ui_type"] == "file_download"
         assert card["ui_display"] == "inline"
         assert card["payload"] == {
             "filename": "report.md",
