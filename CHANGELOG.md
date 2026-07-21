@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.10.0] - 2026-07-21
+
+Feature release adding **Excel spreadsheet creation and editing to chat** — a four-tool `.xlsx` toolset behind a single "Excel Spreadsheets" catalog toggle, built on a new shared office-document storage module — and fixing the CSP gap that **blocked every MCP App iframe on deployed environments**. Requires a CDK deploy (SPA CloudFront response-headers change); no data migration.
+
+### 🚀 Added
+
+- Excel spreadsheet toolset — `create_excel_spreadsheet`, `modify_excel_spreadsheet`, `list_excel_spreadsheets`, `read_excel_spreadsheet` build and edit `.xlsx` files via openpyxl in the sandboxed Code Interpreter; generated files persist to the user-files S3 bucket and appear in the chat Files panel with a download link. One catalog entry ("Excel Spreadsheets", gate key `create_excel_spreadsheet`, off by default) provisions the whole set (#709)
+
+### ✨ Improved
+
+- Word-document tools refactored onto the new shared `office/_storage.py` module (Code Interpreter + S3 persistence now common to Word and Excel), and all generated office documents render through a generic file-download renderer that replaces the Word-specific one (#709)
+
+### 🐛 Fixed
+
+- MCP App UIs now render on deployed environments — the SPA distribution's CSP `frame-src` never included the `mcp-sandbox.{domain}` origin, so every domained deploy blocked the App iframe with a CSP violation (localhost bypasses CloudFront's headers, which masked it). `PlatformStack` now threads the sandbox proxy origin into `SpaDistributionConstruct`, with a synth-time regression test (#714)
+
 ## [1.9.0] - 2026-07-20
 
 Feature release making **Bedrock prompt-cache economics stable and measurable**. Three cache-busting defects in the model-call path are fixed (per-turn history mutation, nondeterministic skill ordering, single-cachePoint fragility), and a new observability layer makes every model call's cache behavior diagnosable: prefix fingerprints and a `cacheStatus` classification on each cost row, an admin Session Cost Anatomy drill-down page, CloudWatch EMF metrics, and a dashboard with alarms. Also fixes chat-input textarea sizing and points the deployed runtime's Word-document tools at the real user-files bucket. Requires a CDK deploy (new dashboard construct + one runtime env var); no data migration.

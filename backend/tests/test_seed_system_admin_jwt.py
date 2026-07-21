@@ -131,7 +131,7 @@ class TestSeedDefaultTools:
         """Creates the default tool entries."""
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 6
+        assert result.created == 7
         assert result.failed == 0
 
         # Verify fetch_url_content
@@ -216,13 +216,27 @@ class TestSeedDefaultTools:
         assert item["GSI1PK"] == "CATEGORY#document"
         assert item["GSI1SK"] == "TOOL#create_word_document"
 
+        # Verify create_excel_spreadsheet (single toggle for the whole Excel toolset)
+        resp = dynamodb_table.get_item(
+            Key={"PK": "TOOL#create_excel_spreadsheet", "SK": "METADATA"}
+        )
+        item = resp["Item"]
+        assert item["toolId"] == "create_excel_spreadsheet"
+        assert item["displayName"] == "Excel Spreadsheets"
+        assert item["category"] == "document"
+        assert item["protocol"] == "local"
+        assert item["enabledByDefault"] is False
+        assert item["isPublic"] is True
+        assert item["GSI1PK"] == "CATEGORY#document"
+        assert item["GSI1SK"] == "TOOL#create_excel_spreadsheet"
+
     def test_skips_existing_tools(self, dynamodb_table):
         """Skips tools that already exist."""
         seed_default_tools(TABLE_NAME, REGION)
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.skipped == 6
+        assert result.skipped == 7
         assert result.created == 0
 
     def test_partial_skip(self, dynamodb_table):
@@ -236,7 +250,7 @@ class TestSeedDefaultTools:
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 5
+        assert result.created == 6
         assert result.skipped == 1
 
 
