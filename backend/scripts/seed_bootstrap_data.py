@@ -474,6 +474,21 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "isPublic": True,
         "forwardAuthToken": False,
     },
+    {
+        # Single catalog entry / toggle that provisions the whole PowerPoint
+        # presentation toolset. Enabling this one id injects create/modify/list/
+        # read at runtime — see POWERPOINT_PRESENTATION_TOOL_IDS and
+        # _build_powerpoint_presentation_tools in apis/inference_api/chat/routes.py.
+        # Keep the toolId as "create_powerpoint_presentation": it is the gate key.
+        "toolId": "create_powerpoint_presentation",
+        "displayName": "PowerPoint Presentations",
+        "description": "Create, edit, read, and list PowerPoint (.pptx) presentations using python-pptx in a sandboxed environment. Generated files are saved to the chat's Files with a download link.",
+        "category": "document",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": True,
+        "forwardAuthToken": False,
+    },
 ]
 
 
