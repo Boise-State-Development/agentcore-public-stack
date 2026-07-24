@@ -43,6 +43,7 @@ _DEFAULT_CONTENT_TYPE = "text/html; charset=utf-8"
 # for a Markdown artifact: a self-contained HTML render wrapper.
 _RENDERED_CONTENT_TYPE = "text/html; charset=utf-8"
 _MARKDOWN_MIME_TYPES = frozenset({"text/markdown", "text/x-markdown"})
+_HTML_MIME_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 
 # Markdown is base64-embedded so no character ever needs HTML/JS escaping
 # and there is no second network fetch (the artifact-origin CSP sets
@@ -132,10 +133,47 @@ _MARKDOWN_RENDER_TEMPLATE = """<!doctype html>
 """
 
 
+def _bare_type(content_type: Optional[str]) -> str:
+    """MIME type with any `; charset=` suffix stripped, lowercased."""
+    return (content_type or "").split(";")[0].strip().lower()
+
+
 def _is_markdown(content_type: Optional[str]) -> bool:
     """True for a Markdown MIME type, ignoring any `; charset=` suffix."""
-    bare = (content_type or "").split(";")[0].strip().lower()
-    return bare in _MARKDOWN_MIME_TYPES
+    return _bare_type(content_type) in _MARKDOWN_MIME_TYPES
+
+
+def _looks_like_html_document(content: str) -> bool:
+    """True if `content` opens like a full standalone HTML document.
+
+    The create_artifact contract requires HTML artifacts to be a complete
+    document (`<!doctype html>` + a full `<html>…</html>`), which is what
+    the sandboxed iframe needs to render.
+    """
+    head = content.lstrip()[:1024].lower()
+    return head.startswith("<!doctype html") or head.startswith("<html")
+
+
+def _coerce_content_type(content: str, content_type: str) -> str:
+    """Safety net for HTML-typed content that isn't an HTML document.
+
+    `content_type` defaults to `text/html`, so a request like "make a
+    markdown recipe" easily produces raw Markdown authored under the HTML
+    type. Stored verbatim as HTML, that renders as run-together `#`/`**`
+    source instead of a formatted document. When HTML-typed content lacks
+    the required document shell it is almost always Markdown the model
+    forgot to type, so reclassify it as Markdown (which the writer wraps
+    into a proper render document). Markdown and non-HTML types pass
+    through untouched.
+    """
+    if _bare_type(content_type) not in _HTML_MIME_TYPES:
+        return content_type
+    if _looks_like_html_document(content):
+        return content_type
+    logger.info(
+        "reclassifying HTML-typed artifact as markdown (no HTML document shell)"
+    )
+    return "text/markdown"
 
 
 def _wrap_markdown(title: str, markdown: str) -> str:
@@ -265,7 +303,7 @@ def create_artifact_record(
     """Create v1 of a new artifact. Returns (artifact_id, version)."""
     artifact_id = uuid.uuid4().hex
     version = 1
-    content_type = content_type or _DEFAULT_CONTENT_TYPE
+    content_type = _coerce_content_type(content, content_type or _DEFAULT_CONTENT_TYPE)
     now = _now_iso()
     content_key = _put_object(
         user_id, artifact_id, version, content, content_type, title
@@ -337,7 +375,9 @@ def update_artifact_record(
     current = int(head["version"])
     version = current + 1
     title = title or head.get("title", "")
-    content_type = content_type or head.get("content_type") or _DEFAULT_CONTENT_TYPE
+    content_type = _coerce_content_type(
+        content, content_type or head.get("content_type") or _DEFAULT_CONTENT_TYPE
+    )
     now = _now_iso()
     content_key = _put_object(
         user_id, artifact_id, version, content, content_type, title

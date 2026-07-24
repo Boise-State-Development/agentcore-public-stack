@@ -188,6 +188,60 @@ def test_markdown_update_rewraps_inherited_type(aws) -> None:
     assert _embedded_markdown(body) == new_md
 
 
+def test_markdown_content_under_default_type_is_reclassified(aws) -> None:
+    """Regression: raw Markdown authored under the default HTML type (the
+    model forgot content_type="text/markdown") must be treated as Markdown
+    so it renders, not stored verbatim as run-together HTML source."""
+    ddb, s3 = aws
+    aid, _ = service.create_artifact_record(USER, SESSION, "Recipe", MD, "")
+
+    # Row is corrected to Markdown → card badge reads "MD", not "HTML".
+    assert _item(ddb, aid, "V#00001")["content_type"] == "text/markdown"
+
+    body = s3.get_object(
+        Bucket=BUCKET, Key=f"{USER}/{aid}/v1/index.html"
+    )["Body"].read().decode()
+    assert body.lstrip().startswith("<!doctype html>")
+    assert "https://esm.sh/marked@14.1.4" in body
+    assert _embedded_markdown(body) == MD
+
+
+def test_markdown_content_under_explicit_html_type_is_reclassified(aws) -> None:
+    ddb, s3 = aws
+    aid, _ = service.create_artifact_record(USER, SESSION, "Recipe", MD, "text/html")
+    assert _item(ddb, aid, "V#00001")["content_type"] == "text/markdown"
+    body = s3.get_object(
+        Bucket=BUCKET, Key=f"{USER}/{aid}/v1/index.html"
+    )["Body"].read().decode()
+    assert _embedded_markdown(body) == MD
+
+
+def test_full_html_document_not_reclassified(aws) -> None:
+    """A genuine standalone HTML document keeps its HTML type and is
+    stored verbatim (the safety net must not touch real HTML)."""
+    ddb, s3 = aws
+    aid, _ = service.create_artifact_record(USER, SESSION, "Page", DOC, "text/html")
+    assert _item(ddb, aid, "V#00001")["content_type"] == "text/html"
+    assert s3.get_object(
+        Bucket=BUCKET, Key=f"{USER}/{aid}/v1/index.html"
+    )["Body"].read().decode() == DOC
+
+
+def test_update_reclassifies_markdown_under_inherited_html_type(aws) -> None:
+    """An HTML artifact updated with raw Markdown (content_type omitted →
+    inherits HTML from HEAD) is reclassified so the new version renders."""
+    ddb, s3 = aws
+    aid, _ = service.create_artifact_record(USER, SESSION, "Page", DOC, "text/html")
+    new_md = "# Rewritten\n\nNow it's **markdown**.\n"
+    ver = service.update_artifact_record(USER, aid, new_md, None, None)
+    assert ver == 2
+    assert _item(ddb, aid, "V#00002")["content_type"] == "text/markdown"
+    body = s3.get_object(
+        Bucket=BUCKET, Key=f"{USER}/{aid}/v2/index.html"
+    )["Body"].read().decode()
+    assert _embedded_markdown(body) == new_md
+
+
 def test_html_artifact_not_wrapped(aws) -> None:
     _, s3 = aws
     aid, _ = service.create_artifact_record(USER, SESSION, "Page", DOC, "text/html")
