@@ -139,6 +139,15 @@ export class AgentFormPage implements OnInit, OnDestroy {
   readonly agentId = signal<string | null>(null);
   readonly saving = signal(false);
   readonly loadingAgent = signal(false);
+  /** The RBAC-filtered binding palettes are fetched on every entry (create + edit). */
+  readonly loadingPalettes = signal(true);
+  /**
+   * The page is still assembling. Both fetches feed sections of the same form
+   * (the palettes render the Model/Tools/Skills/Memory pickers; the record fills
+   * the persona + selections), so the editor stays behind a skeleton until both
+   * settle — otherwise the form paints empty and then visibly rewrites itself.
+   */
+  readonly loading = computed(() => this.loadingPalettes() || this.loadingAgent());
   readonly userPermission = signal<'owner' | 'editor' | 'viewer'>('owner');
   /**
    * Whether {@link userPermission} reflects a value loaded from the server.
@@ -241,7 +250,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
     this.formSub = this.form.valueChanges.subscribe(() => this.syncFormToSignals());
 
     // Load the RBAC-filtered palettes in parallel; then hydrate an existing agent.
-    void this.loadPalettes();
+    void this.loadPalettes().finally(() => this.loadingPalettes.set(false));
 
     const id = this.route.snapshot.paramMap.get('id');
     this.agentId.set(id);
@@ -273,16 +282,23 @@ export class AgentFormPage implements OnInit, OnDestroy {
   }
 
   private async loadPalettes(): Promise<void> {
-    const [models, tools, skills, spaces] = await Promise.all([
-      this.agentService.loadBindable('model'),
-      this.agentService.loadBindable('tool'),
-      this.agentService.loadBindable('skill'),
-      this.agentService.loadBindable('memory_space'),
-    ]);
-    this.models.set(models);
-    this.tools.set(tools);
-    this.skills.set(skills);
-    this.spaces.set(spaces);
+    try {
+      const [models, tools, skills, spaces] = await Promise.all([
+        this.agentService.loadBindable('model'),
+        this.agentService.loadBindable('tool'),
+        this.agentService.loadBindable('skill'),
+        this.agentService.loadBindable('memory_space'),
+      ]);
+      this.models.set(models);
+      this.tools.set(tools);
+      this.skills.set(skills);
+      this.spaces.set(spaces);
+    } catch (err) {
+      // Don't let a palette failure strand the page on its skeleton — fall through
+      // to the form with empty pickers (the Model section renders its own empty state).
+      console.error('Error loading bindable palettes:', err);
+      this.toast.error('Could not load the available models, tools and skills.');
+    }
   }
 
   private async loadAgent(id: string): Promise<void> {

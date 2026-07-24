@@ -42,6 +42,16 @@ class StubKnowledgeBaseComponent {
   createDraft = input<unknown>(null);
 }
 
+/**
+ * Drain the microtask queue so the load promises' `.finally` handlers (which clear
+ * the loading flags) have run, then render. `whenStable()` alone can resolve ahead
+ * of them and leave the fixture showing its skeleton.
+ */
+async function settle(fixture: ComponentFixture<AgentFormPage>): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fixture.detectChanges();
+}
+
 describe('AgentFormPage — invalid submit feedback', () => {
   let component: AgentFormPage;
   let fixture: ComponentFixture<AgentFormPage>;
@@ -89,7 +99,7 @@ describe('AgentFormPage — invalid submit feedback', () => {
     component = fixture.componentInstance;
     fixture.detectChanges();
     await fixture.whenStable();
-    fixture.detectChanges();
+    await settle(fixture);
   });
 
   /** Fill every required control except the one named, so it is the first invalid. */
@@ -150,5 +160,88 @@ describe('AgentFormPage — invalid submit feedback', () => {
 
     expect(mockAgentService.createAgent).toHaveBeenCalled();
     expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('is done loading once the palettes resolve', () => {
+    expect(component.loading()).toBe(false);
+    expect(fixture.nativeElement.querySelector('form')).toBeTruthy();
+  });
+});
+
+describe('AgentFormPage — loading state', () => {
+  let fixture: ComponentFixture<AgentFormPage>;
+  let component: AgentFormPage;
+  /** Resolve to let the in-flight palette + agent fetches settle. */
+  let releasePalettes: () => void;
+  let releaseAgent: () => void;
+
+  const mockToast = { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() };
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    vi.clearAllMocks();
+
+    const palettes = new Promise<[]>((resolve) => {
+      releasePalettes = () => resolve([]);
+    });
+    const agent = new Promise<Record<string, unknown>>((resolve) => {
+      releaseAgent = () => resolve({ name: 'Loaded', userPermission: 'owner' });
+    });
+
+    TestBed.configureTestingModule({
+      imports: [ReactiveFormsModule],
+      providers: [
+        provideRouter([{ path: 'agents', children: [] }]),
+        {
+          provide: AgentService,
+          useValue: {
+            loadBindable: vi.fn().mockReturnValue(palettes),
+            getAgent: vi.fn().mockReturnValue(agent),
+          },
+        },
+        { provide: ToastService, useValue: mockToast },
+        { provide: SidenavService, useValue: { hide: vi.fn(), show: vi.fn() } },
+        { provide: ThemeService, useValue: { isDark: () => false } },
+        // Edit mode: an :id on the route, so the record fetch runs too.
+        { provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: () => 'agt-1' } } } },
+      ],
+    });
+
+    TestBed.overrideComponent(AgentFormPage, {
+      remove: { imports: [AgentPreviewComponent, KnowledgeBaseSectionComponent] },
+      add: { imports: [StubPreviewComponent, StubKnowledgeBaseComponent] },
+    });
+
+    fixture = TestBed.createComponent(AgentFormPage);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+  });
+
+  it('shows a skeleton instead of the form while the page loads', () => {
+    expect(component.loading()).toBe(true);
+    expect(fixture.nativeElement.querySelector('form')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.animate-pulse')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('[role="status"]')?.textContent).toContain(
+      'Loading agent',
+    );
+  });
+
+  it('disables Save while loading', () => {
+    const save: HTMLButtonElement | null = fixture.nativeElement.querySelector(
+      'header button[type="button"]:last-of-type',
+    );
+    expect(save?.disabled).toBe(true);
+  });
+
+  it('stays on the skeleton until BOTH the palettes and the record settle', async () => {
+    releasePalettes();
+    await settle(fixture);
+    expect(component.loading()).toBe(true);
+    expect(fixture.nativeElement.querySelector('form')).toBeNull();
+
+    releaseAgent();
+    await settle(fixture);
+    expect(component.loading()).toBe(false);
+    expect(fixture.nativeElement.querySelector('form')).toBeTruthy();
   });
 });
