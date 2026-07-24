@@ -334,6 +334,38 @@ describe('AssistantMessageComponent', () => {
       expect(blocks[2].type).toBe('tool_group');
       expect(blocks[2].group!.calls.length).toBe(1);
     });
+
+    it('should not render a reasoning block with empty text and no redaction', () => {
+      // Signature-only / empty thinking blocks (e.g. Sonnet 5) are kept in the
+      // message for API correctness but must not paint an empty "Thinking"
+      // collapsible.
+      fixture.componentRef.setInput('message', makeMessage([
+        {
+          type: 'reasoningContent',
+          reasoningContent: { reasoningText: { text: '', signature: 'abc123' } },
+        },
+        { type: 'text', text: 'Here is your answer.' },
+      ]));
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('text');
+    });
+
+    it('should render a reasoning block that has only redacted content', () => {
+      fixture.componentRef.setInput('message', makeMessage([
+        {
+          type: 'reasoningContent',
+          reasoningContent: { redactedContent: 'encrypted-blob' },
+        },
+      ]));
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('reasoningContent');
+    });
   });
 
   describe('tool call data mapping', () => {

@@ -351,8 +351,16 @@ export class AssistantMessageComponent {
     };
 
     for (const block of blocks) {
-      // Handle reasoning content
-      if (block.type === 'reasoningContent' && block.reasoningContent) {
+      // Handle reasoning content. Only render a "Thinking" block when it has
+      // something to show -- reasoning text or a redacted notice. A block with
+      // an empty `reasoningText.text` and no `redactedContent` (e.g. a
+      // signature-only thinking block that some models, like Sonnet 5, still
+      // emit/persist) would otherwise render an empty collapsible header. The
+      // block is kept in the persisted message for API correctness (the
+      // signature is required on subsequent Bedrock calls); we just don't paint
+      // it. This mirrors the live stream parser's `reasoningText` guard, which
+      // the history-rehydration path bypasses.
+      if (block.type === 'reasoningContent' && this.hasRenderableReasoning(block)) {
         flushToolGroup();
         result.push({ type: 'reasoningContent', data: block });
         continue;
@@ -466,6 +474,20 @@ export class AssistantMessageComponent {
    */
   private toResultData(toolUse: ToolUseData): ToolResultData {
     return toolUse.result ?? { content: [], status: 'success' };
+  }
+
+  /**
+   * Whether a reasoningContent block has anything worth rendering as a
+   * "Thinking" section: actual reasoning text or a redacted-content notice.
+   * Signature-only / empty-text blocks are kept in the message (the signature
+   * is required for subsequent Bedrock calls) but paint nothing, so they must
+   * not produce an empty collapsible. Mirrors ReasoningContentComponent's own
+   * `hasReasoningText || hasRedactedContent` visibility checks.
+   */
+  private hasRenderableReasoning(block: ContentBlock): boolean {
+    const data = block.reasoningContent;
+    if (!data) return false;
+    return !!data.reasoningText?.text || !!data.redactedContent;
   }
 
   /**
