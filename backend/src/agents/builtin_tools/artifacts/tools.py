@@ -32,6 +32,13 @@ def make_create_artifact_tool(session_id: str, user_id: str):
         will want to view, keep, or iterate on — an HTML page, a chart,
         an interactive widget, a formatted report, or a written document.
 
+        Choosing a mode: if the deliverable is prose — a report, an
+        article, notes, documentation, a recipe, any mostly-text
+        document — author it as Markdown (`content_type="text/markdown"`),
+        NOT HTML. Only reach for HTML when you genuinely need custom
+        layout, styling, charts, or interactivity. When the user asks for
+        "markdown", always use the Markdown mode.
+
         Two authoring modes:
 
         - HTML (default): `content` MUST be a complete standalone HTML
