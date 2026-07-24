@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.11.1] - 2026-07-24
+
+Patch release fixing Markdown artifact downloads that saved the HTML render wrapper instead of the authored `.md` source. Backend-only, no dependency changes, no CDK deploy — ships via `backend.yml` (artifact-render Lambda). Existing artifacts are fixed on download with no re-storage.
+
+### 🐛 Fixed
+
+- Downloading a Markdown artifact now saves the authored `.md` source instead of a `.html` file of the render scaffolding — Markdown records keep `content_type=text/markdown` but S3 holds the writer's HTML wrapper (raw Markdown base64-embedded in a `<script id="md-src">` block), and the download path served those wrapper bytes verbatim. On `?download=1` of a Markdown record, the embedded raw source is now recovered and served as `text/markdown` with a `.md` extension; if the embed marker is absent (older render / template drift) it falls back to the wrapper bytes as `.html` so the download never fails. Works for existing artifacts — source is already embedded, no re-storage. Preview-panel rendering is unchanged (#726)
+
 ## [1.11.0] - 2026-07-24
 
 Feature release adding **two new agent capabilities to chat**: a PowerPoint (`.pptx`) presentation toolset that mirrors the existing Excel/Word tools, and a generic **File Workspace** toolset that lets the agent list, read, and save text files in a conversation's workspace. Both ship as single catalog toggles, off by default. Also fixes Markdown artifacts that rendered as raw source when authored under the default HTML type, and empty "Thinking" blocks that appeared on conversation reload. No new AWS resources, no dependency changes, no CDK deploy required — ships via `backend.yml` + `frontend-deploy.yml`; two new tool catalog entries must be seeded per environment.
