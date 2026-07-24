@@ -11,7 +11,7 @@
         </h1>
       </div>
       <div class="flex items-center gap-2">
-        @if (mode() === 'edit' && userPermission() === 'owner') {
+        @if (!loading() && mode() === 'edit' && userPermission() === 'owner') {
           <button type="button" (click)="openShareDialog()" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
             <ng-icon name="heroShare" class="size-4" aria-hidden="true" />
             Share
@@ -20,7 +20,7 @@
         <button type="button" (click)="onCancel()" class="rounded-lg px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">
           Cancel
         </button>
-        <button type="button" (click)="onSubmit()" [disabled]="saving() || isViewer()" class="inline-flex items-center gap-1.5 rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white shadow-xs transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50">
+        <button type="button" (click)="onSubmit()" [disabled]="loading() || saving() || isViewer()" class="inline-flex items-center gap-1.5 rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white shadow-xs transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50">
           <ng-icon name="heroCheck" class="size-4" aria-hidden="true" />
           {{ saving() ? 'Saving…' : 'Save Agent' }}
         </button>
@@ -31,6 +31,63 @@
   <main class="flex min-h-0 flex-1">
     <!-- Left: the editor form (independently scrollable) -->
     <div class="min-w-0 flex-1 overflow-y-auto lg:border-r lg:border-gray-200/80 dark:lg:border-gray-700/60">
+  @if (loading()) {
+    <!-- Form skeleton: mirrors the section rhythm below so the real form lands in place -->
+    <div class="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6" role="status" aria-live="polite" aria-busy="true">
+      <span class="sr-only">Loading agent…</span>
+
+      <!-- Persona -->
+      <div class="animate-pulse rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+        <div class="h-4 w-24 rounded bg-gray-200 dark:bg-gray-700"></div>
+        <div class="mt-2 h-3 w-2/3 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+        <div class="mt-5 flex items-start gap-4">
+          <div class="size-10 shrink-0 rounded-2xl bg-gray-100 dark:bg-gray-700/50"></div>
+          <div class="h-10 flex-1 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
+        </div>
+        <div class="mt-4 h-10 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
+        <div class="mt-4 h-32 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
+        <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div class="h-10 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
+          <div class="h-10 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
+        </div>
+      </div>
+
+      <!-- Model -->
+      <div class="animate-pulse rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+        <div class="flex items-center gap-2">
+          <div class="size-5 rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-4 w-20 rounded bg-gray-200 dark:bg-gray-700"></div>
+        </div>
+        <div class="mt-2 h-3 w-3/5 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+        <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          @for (i of [1, 2, 3, 4]; track i) {
+            <div class="rounded-xl border border-gray-200 px-3 py-2.5 dark:border-gray-700">
+              <div class="h-3.5 w-1/3 rounded bg-gray-200 dark:bg-gray-700"></div>
+              <div class="mt-1.5 h-3 w-3/4 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+            </div>
+          }
+        </div>
+      </div>
+
+      <!-- Tools / skills (pill rows) -->
+      @for (section of [1, 2]; track section) {
+        <div class="animate-pulse rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+          <div class="flex items-center gap-2">
+            <div class="size-5 rounded bg-gray-200 dark:bg-gray-700"></div>
+            <div class="h-4 w-16 rounded bg-gray-200 dark:bg-gray-700"></div>
+          </div>
+          <div class="mt-2 h-3 w-1/2 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+          <div class="mt-4 flex flex-wrap gap-2">
+            <div class="h-8 w-24 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
+            <div class="h-8 w-32 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
+            <div class="h-8 w-20 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
+            <div class="h-8 w-28 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
+            <div class="h-8 w-24 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
+          </div>
+        </div>
+      }
+    </div>
+  } @else {
   <form [formGroup]="form" (ngSubmit)="onSubmit()" class="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6">
     @if (isViewer()) {
       <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
@@ -316,10 +373,33 @@
       [createDraft]="createDraftAgent"
     />
   </form>
+  }
     </div>
 
     <!-- Right: live preview (lg+, independently scrollable) -->
     <aside class="hidden shrink-0 flex-col bg-gray-50 p-4 lg:flex lg:w-[30rem] lg:min-h-0 xl:w-[34rem] dark:bg-gray-900">
+      @if (loading()) {
+        <!-- Hold the preview back too: it resolves from the saved record, and mounting
+             it against a half-hydrated form flashes an empty agent card. -->
+        <div class="flex h-full animate-pulse flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800" aria-hidden="true">
+          <div class="shrink-0 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+            <div class="h-4 w-20 rounded bg-gray-200 dark:bg-gray-700"></div>
+            <div class="mt-2 h-3 w-3/4 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+            <div class="mt-3 flex gap-1.5">
+              <div class="h-5 w-24 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
+              <div class="h-5 w-16 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
+            </div>
+          </div>
+          <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6">
+            <div class="size-14 rounded-2xl bg-gray-100 dark:bg-gray-700/50"></div>
+            <div class="h-4 w-40 rounded bg-gray-200 dark:bg-gray-700"></div>
+            <div class="h-3 w-56 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+          </div>
+          <div class="shrink-0 border-t border-gray-200 p-4 dark:border-gray-700">
+            <div class="h-12 rounded-xl bg-gray-100 dark:bg-gray-700/50"></div>
+          </div>
+        </div>
+      } @else {
       <app-agent-preview
         [agentId]="agentId()"
         [name]="liveFormName()"
@@ -337,6 +417,7 @@
         (save)="onPreviewSave()"
         (openFull)="testInChat()"
       />
+      }
     </aside>
   </main>
 </div>
