@@ -1,7 +1,26 @@
-# Release Notes — v1.11.0
+# Release Notes — v1.11.1
 
 **Release Date:** July 24, 2026
-**Previous Release:** v1.10.0 (July 21, 2026)
+**Previous Release:** v1.11.0 (July 24, 2026)
+
+---
+
+> 🚀 **No CDK deploy required this release** — backend-only, no new AWS resources, no dependency changes. Ship the artifact-render Lambda via `backend.yml`. No per-environment action and no data migration: existing Markdown artifacts are corrected at download time.
+
+---
+
+## Highlights
+
+v1.11.1 is a focused patch fixing **Markdown artifact downloads**. Saving a Markdown artifact previously produced a `.html` file containing the render scaffolding instead of the `.md` source the user authored. Downloads now recover the original Markdown and save it as a proper `.md` file. Preview-panel rendering is unchanged, and the fix applies to artifacts created before this release with no re-storage.
+
+## 🐛 Bug fix
+
+- **Markdown artifacts downloaded as HTML wrapper instead of `.md` source.** Markdown artifact records keep `content_type=text/markdown`, but S3 holds the writer's HTML render wrapper — the raw Markdown base64-embedded in a `<script id="md-src">` block. The download path served those wrapper bytes verbatim and mapped `text/markdown` → `html`, so "save" yielded a `.html` file of the render scaffolding rather than the authored document. On download (`?download=1`) of a Markdown record, `backend/src/lambdas/artifact_render/handler.py` now recovers the embedded raw Markdown and serves it as `text/markdown` with a `.md` extension. Because the source is already embedded in stored artifacts, this works for existing records with no re-storage. If the embed marker is ever absent (older render or template drift), the handler falls back to the wrapper bytes as `.html` so the download never fails. Rendering in the preview panel is untouched (#726)
+
+## 🚀 Deployment notes
+
+- **No CDK deploy needed** — no new AWS resources, no infrastructure changes, no dependency changes. Deploy the artifact-render image via `backend.yml`; the fix is entirely within the artifact-render Lambda.
+- **No per-environment action** — no catalog seeding, RBAC grants, or feature flags. Existing Markdown artifacts are corrected on download automatically.
 
 ---
 
