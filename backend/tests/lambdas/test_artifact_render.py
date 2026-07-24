@@ -432,9 +432,9 @@ def test_oversized_content_is_500(aws_env, monkeypatch: pytest.MonkeyPatch) -> N
     "stored,ext",
     [
         ("text/html; charset=utf-8", "html"),
-        ("text/markdown", "html"),  # S3 body is the HTML render wrapper
-        ("text/x-markdown", "html"),
-        ("TEXT/MARKDOWN; charset=utf-8", "html"),
+        ("text/markdown", "md"),  # download recovers the embedded source
+        ("text/x-markdown", "md"),
+        ("TEXT/MARKDOWN; charset=utf-8", "md"),
         ("image/svg+xml", "svg"),
         ("application/json", "json"),
         ("text/css", "css"),
@@ -492,7 +492,43 @@ def test_download_returns_attachment(aws_env) -> None:
     assert "content-security-policy" not in resp["headers"]
 
 
-def test_download_markdown_uses_html_extension(aws_env) -> None:
+def _markdown_wrapper(markdown: str) -> str:
+    """A minimal HTML render wrapper carrying the writer's base64 marker,
+    matching the `<script id="md-src">` block the writer emits."""
+    b64 = base64.b64encode(markdown.encode("utf-8")).decode("ascii")
+    return (
+        "<!doctype html><html><body>"
+        '<script type="application/x-markdown-base64" id="md-src">'
+        f"{b64}</script>"
+        "</body></html>"
+    )
+
+
+def test_download_markdown_recovers_source_as_md(aws_env) -> None:
+    # A Markdown record serves the HTML wrapper for rendering, but a
+    # download recovers the raw Markdown source embedded in it and saves
+    # it as a .md file — matching what the user authored.
+    source = "# Notes\n\nSome **markdown** body with a café.\n"
+    boto3.client("s3", region_name="us-east-1").put_object(
+        Bucket=BUCKET, Key=CONTENT_KEY, Body=_markdown_wrapper(source).encode()
+    )
+    _put_record(
+        aws_env["ddb"],
+        content_type="text/markdown; charset=utf-8",
+        title="Notes",
+    )
+    resp = handler.handler(
+        _event(_mint(_valid_claims()), download=True), None
+    )
+    assert resp["statusCode"] == 200
+    assert resp["body"] == source  # raw source, not the wrapper
+    assert resp["headers"]["content-type"] == "text/markdown; charset=utf-8"
+    assert 'filename="Notes.md"' in resp["headers"]["content-disposition"]
+
+
+def test_download_markdown_falls_back_to_html_when_marker_absent(aws_env) -> None:
+    # Older render / template drift: no embed marker. The download must
+    # still succeed, falling back to the wrapper bytes as .html.
     wrapper = "<!doctype html><html><body>rendered md</body></html>"
     boto3.client("s3", region_name="us-east-1").put_object(
         Bucket=BUCKET, Key=CONTENT_KEY, Body=wrapper.encode()
@@ -509,6 +545,26 @@ def test_download_markdown_uses_html_extension(aws_env) -> None:
     assert resp["body"] == wrapper
     assert resp["headers"]["content-type"] == "text/html; charset=utf-8"
     assert 'filename="Notes.html"' in resp["headers"]["content-disposition"]
+
+
+def test_head_download_markdown_omits_body_keeps_md_disposition(aws_env) -> None:
+    # HEAD still advertises the .md attachment even though the body is empty.
+    boto3.client("s3", region_name="us-east-1").put_object(
+        Bucket=BUCKET,
+        Key=CONTENT_KEY,
+        Body=_markdown_wrapper("# Hi\n").encode(),
+    )
+    _put_record(
+        aws_env["ddb"],
+        content_type="text/markdown; charset=utf-8",
+        title="Notes",
+    )
+    resp = handler.handler(
+        _event(_mint(_valid_claims()), method="HEAD", download=True), None
+    )
+    assert resp["statusCode"] == 200
+    assert resp["body"] == ""
+    assert 'filename="Notes.md"' in resp["headers"]["content-disposition"]
 
 
 def test_download_default_filename_when_title_missing(aws_env) -> None:
