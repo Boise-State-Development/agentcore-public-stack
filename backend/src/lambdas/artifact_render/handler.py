@@ -29,6 +29,14 @@ content type — still the exact S3 bytes, only the response header is
 mapped (header stamping, not templating). Must stay in sync with the
 writer (`agents/builtin_tools/artifacts/service.py`).
 
+Markdown download: rendering serves the HTML wrapper, but a *download*
+(`?download=1`) of a Markdown record recovers the raw Markdown source
+the writer base64-embedded inside that wrapper and saves it as a `.md`
+file — the user authored Markdown, so the download is Markdown, not the
+render scaffolding. The embed marker is part of the frozen writer
+contract; if it is ever absent (older render / template drift) the
+download falls back to the wrapper bytes as `.html`.
+
 No third-party dependencies: HS256 is HMAC-SHA256, verified with the
 standard library. boto3 is provided by the Lambda runtime.
 
@@ -128,7 +136,13 @@ def _csp_header() -> str:
 # service.py — this Lambda is standalone (no apis/* imports) so the small
 # duplication is by design; keep the two in sync.
 _HTML_CONTENT_TYPE = "text/html; charset=utf-8"
+_MARKDOWN_CONTENT_TYPE = "text/markdown; charset=utf-8"
 _MARKDOWN_MIME_TYPES = frozenset({"text/markdown", "text/x-markdown"})
+
+
+def _bare_type(content_type: str) -> str:
+    """MIME type with any `; charset=` suffix stripped, lowercased."""
+    return (content_type or "").split(";")[0].strip().lower()
 
 
 def _serve_content_type(stored: str) -> str:
@@ -136,10 +150,33 @@ def _serve_content_type(stored: str) -> str:
 
     Markdown records hold an HTML render wrapper in S3, so they are
     served as HTML; every other type is served exactly as stored."""
-    bare = (stored or "").split(";")[0].strip().lower()
-    if bare in _MARKDOWN_MIME_TYPES:
+    if _bare_type(stored) in _MARKDOWN_MIME_TYPES:
         return _HTML_CONTENT_TYPE
     return stored
+
+
+# Marker the writer wraps the raw Markdown source in — the base64 payload
+# of a Markdown record's HTML render wrapper. Mirrors the `<script>` block
+# in the writer's `_MARKDOWN_RENDER_TEMPLATE`; this Lambda is standalone
+# (no apis/* imports) so the coupling is by design — keep the two in sync.
+_MARKDOWN_SOURCE_RE = re.compile(
+    r'<script type="application/x-markdown-base64" id="md-src">'
+    r"(?P<b64>[^<]*)</script>"
+)
+
+
+def _extract_markdown_source(wrapper: str) -> str | None:
+    """Recover the raw Markdown source the writer base64-embedded in its
+    HTML render wrapper. Returns None when the marker is absent or the
+    payload can't be decoded, so the caller can fall back to the wrapper
+    bytes rather than fail the download."""
+    match = _MARKDOWN_SOURCE_RE.search(wrapper)
+    if not match:
+        return None
+    try:
+        return base64.b64decode(match.group("b64").strip()).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
 
 
 def _security_headers(content_type: str) -> dict[str, str]:
@@ -154,12 +191,13 @@ def _security_headers(content_type: str) -> dict[str, str]:
 
 # File extension to suggest when saving an artifact. Keyed by the bare
 # (parameter-stripped, lowercased) authored content type. Markdown rows
-# hold the writer's HTML render wrapper in S3 (see module docstring), so
-# the saved bytes are HTML — extension follows the bytes, not the label.
+# hold the writer's HTML render wrapper in S3, but a download recovers the
+# embedded raw Markdown source (see `_download_payload`) so the saved file
+# is `.md`, matching what the user authored.
 _DOWNLOAD_EXTENSIONS = {
     "text/html": "html",
-    "text/markdown": "html",
-    "text/x-markdown": "html",
+    "text/markdown": "md",
+    "text/x-markdown": "md",
     "image/svg+xml": "svg",
     "application/json": "json",
     "text/css": "css",
@@ -175,8 +213,28 @@ _MAX_FILENAME_BASE = 120
 
 
 def _download_extension(stored_content_type: str) -> str:
-    bare = (stored_content_type or "").split(";")[0].strip().lower()
-    return _DOWNLOAD_EXTENSIONS.get(bare, "bin")
+    return _DOWNLOAD_EXTENSIONS.get(_bare_type(stored_content_type), "bin")
+
+
+def _download_payload(
+    stored_content_type: str, serve_content_type: str, body: str
+) -> tuple[str, str, str]:
+    """Choose the bytes, HTTP content type, and file extension for a save.
+
+    Markdown records serve an HTML render wrapper but download as the raw
+    Markdown source the writer embedded in it, so the user saves the `.md`
+    they authored. If the source can't be recovered (marker absent), fall
+    back to the wrapper bytes as `.html`. Every other type downloads
+    exactly as served."""
+    if _bare_type(stored_content_type) in _MARKDOWN_MIME_TYPES:
+        source = _extract_markdown_source(body)
+        if source is not None:
+            return source, _MARKDOWN_CONTENT_TYPE, "md"
+        logger.warning(
+            "markdown download source marker missing; serving wrapper as html"
+        )
+        return body, serve_content_type, "html"
+    return body, serve_content_type, _download_extension(stored_content_type)
 
 
 def _content_disposition(title: str, ext: str) -> str:
@@ -486,14 +544,16 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         return _error_response(500, "The artifact service is misconfigured.")
 
     if _wants_download(event):
-        ext = _download_extension(stored_content_type)
+        download_body, download_type, ext = _download_payload(
+            stored_content_type, content_type, body
+        )
         headers = _download_headers(
-            content_type, _content_disposition(title, ext)
+            download_type, _content_disposition(title, ext)
         )
         return {
             "statusCode": 200,
             "headers": headers,
-            "body": "" if method == "HEAD" else body,
+            "body": "" if method == "HEAD" else download_body,
         }
 
     if method == "HEAD":
