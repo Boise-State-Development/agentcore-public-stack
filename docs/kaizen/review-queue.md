@@ -5,6 +5,44 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-07-24] Bump `bedrock-agentcore` 1.9.1 → 1.18.1 (closes #482 SSE deadlock + #571 Memory reorder; + security patches)
+- **Source**: research/2026-07-24.md ▸ Top 5 #1 — bedrock-agentcore 1.18.1 (Jul 17, security patch over 1.18.0's #571 fix; #482 fix in 1.17.0) — https://github.com/aws/bedrock-agentcore-sdk-python/releases
+- **Surface**: backend (`backend/pyproject.toml` + coupled `boto3`; inference-api chat router + `TurnBasedSessionManager` flush ordering; full local pytest suite)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — retires the queued [2026-05-22] hand-written #482 guard (library-native); the #571 ordering fix complements (not replaces) `_repair_tool_pairing`
+- **Status**: open — **highest priority; now SEVEN weeks queued while the release keeps advancing (1.18.1).** SUPERSEDES the [2026-07-17] "→ 1.18.0" item (retarget 1.18.1). We're on 1.9.1, exposed to #482 + #571 today. Validate ms event-flooring vs our flush ordering; #564 (eventual-consistency read gap) stays unfixed — keep agent-cache continuity primary. **Sequence AFTER Nightly is green (the [2026-07-24] nightly-stack item below) so the dep-bump gate can vouch for it.**
+
+### [2026-07-24] Add GPT-5.6 Terra + Luna to the model catalog via the existing Mantle Responses path
+- **Source**: research/2026-07-24.md ▸ Top 5 #2 — GPT-5.6 Sol/Terra/Luna GA on Bedrock via Mantle (confirms last week's flagged-for-verification item) — https://aws.amazon.com/about-aws/whats-new/2026/07/openai-gpt-sol-terra/
+- **Surface**: backend / cross-cutting (inference-api model config + admin catalog; `_create_mantle_model` / `ModelProvider.MANTLE`; per-model region routing — Terra/Luna→us-west-2, **Sol→us-east only, gate or omit**; `CountTokensBedrockModel` de-prefix; frontend model picker)
+- **Effort × Impact**: L–M × M–H
+- **Subtracts**: addition only — justified: rides the built gpt-5.4 `apiMode=responses` wiring (exercises the "dark scaffolding" non-Claude Mantle lane the [2026-07-06] watchlist flagged) + adds a cheaper non-Claude tier
+- **Unlocks**: Terra (½ GPT-5.5 cost) as a cheaper agent/default tier + Luna (fast/cheap); explicit-breakpoint Mantle prompt caching at a 90% cached-input discount
+- **Status**: open — **new capability story of the week; low-effort because the path exists.** Pair with the caching-audit item below so the discount is captured. Gate Sol on region availability; confirm reasoning/temperature-controls handling on the OpenAI path (don't apply Claude's controls).
+
+### [2026-07-24] Multi-provider prompt-caching audit — now doubly-motivated by GPT-5.6 explicit-breakpoint caching
+- **Source**: research/2026-07-24.md ▸ Top 5 #3 — internal issue #642; Strands #3144 (`strategy="auto"` never caches system prompt); **new**: GPT-5.6 on Mantle uses explicit cache breakpoints at a 90% discount
+- **Surface**: backend (`to_bedrock_config` cache-point injection; Mantle Responses builder `build_mantle_model`/`_create_mantle_model` — now the load-bearing case; the PR #697 `cacheStatus`+fingerprint observability that now *measures* this)
+- **Effort × Impact**: L–M × M–H
+- **Subtracts**: yes — consolidates per-provider cache logic; kills a silent full-input-token cost regression if a Mantle/OpenAI path caches nothing
+- **Unlocks**: captures GPT-5.6's 90% cached-input discount instead of leaving it on the table
+- **Status**: open — SUPERSEDES the [2026-07-17] caching-audit item (adds the GPT-5.6 explicit-breakpoint motivation). Instrument `cache_read`/`cache_write` per provider (1.9.0 observability surfaces them); wire explicit breakpoints on the Mantle leg; confirm the Bedrock manual cache-point still engages post-1.48; do NOT switch to `strategy="auto"`. Coupled to the GPT-5.6 item above.
+
+### [2026-07-24] Prep the MCP Apps host for the 2026-07-28 spec (`serverInfo` → `server/discover`; SEP-2575 handshake removal)
+- **Source**: research/2026-07-24.md ▸ Top 5 #4 — MCP 07-28 RC final in 4 days; SEP-2575 removes the `initialize`/`initialized` handshake + `Mcp-Session-Id`, adds `server/discover`; MCP Apps (SEP-1865) graduates to a first-class official extension — https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/
+- **Surface**: backend (inference-api MCP Apps host — the `initialize` `serverInfo` read that resolves App-frame `serverName`/`icon`; capability advertisement `experimental.ui` → `io.modelcontextprotocol/ui`; `ui_resource` SSE header path; existing `manifest.json`-fallback icon resolution)
+- **Effort × Impact**: M × M–H
+- **Subtracts**: yes — retires the pre-standard `initialize`-serverInfo dependency + the `experimental.ui` id
+- **Unlocks**: RC-conformant negotiation with spec-final MCP hosts/servers; readiness for SEP-2567 stateless transport + SEP-2322 multi-round-trip elicitation (the App user-input flow)
+- **Status**: open — **near-term (spec-final in 4 days); ABSORBS the [2026-05-29] "align MCP Apps capability advertisement" item and sharpens it with the SEP-2575 handshake-removal detail.** Migrate `serverName`/`icon` off `serverInfo` to `server/discover` (manifest.json fallback stays); confirm final-spec details next Friday before building (don't build against a moving RC).
+
+### [2026-07-24] Fix the nightly `DELETE_FAILED` stuck ephemeral stack + make teardown resilient
+- **Source**: research/2026-07-24.md ▸ Top 5 #5 — internal friction: Nightly red Jul 23–24 (run 30083857845), `nightly-develop-PlatformStack is in DELETE_FAILED state and can not be updated`; green Jul 14–17 before (a new teardown-idempotency failure class, distinct from the June exit-127 + July curl-pin clusters)
+- **Surface**: infra/CI (`.github/workflows/nightly-deploy-pipeline.yml` ephemeral deploy/teardown lane + PlatformStack `RemovalPolicy`/`autoDeleteObjects` in the nightly context — retained buckets/log-groups/custom resources are the usual `DELETE_FAILED` culprits)
+- **Effort × Impact**: L × M–H
+- **Subtracts**: yes — removes a recurring nightly-wedge class; restores the dep-bump safety gate
+- **Status**: open — **cheapest win with outsized leverage: unblocks the #1 keystone bump's safety net.** (1) immediate — manually force-delete the wedged stack (skip the un-deletable resource) so Nightly goes green; (2) durable — pre-deploy step that force-deletes a leftover `DELETE_FAILED`/`ROLLBACK_COMPLETE` stack of that name before re-creating + nightly-context removal policies.
+
 ### [2026-07-19] Track harness-sdk#3348 (rolling pair of message cachePoints) — local workaround gated on dashboard evidence
 - **Source**: Phil-initiated (PR #697 follow-up) — https://github.com/strands-agents/harness-sdk/issues/3348 (filed by philmerrell, open, no maintainer response yet); prod session aecd387d (18-way parallel tool fan-out → cacheRead=0 / cacheWrite=134k mid-turn, the ~20-block Anthropic lookback miss mode documented in `model_config.py:366`)
 - **Surface**: backend (`agents/main_agent/core/model_config.py` 3-cachePoint budget). If built locally: strands 1.48's `_inject_cache_point` **strips any pre-existing message-level cachePoints**, so a rolling pair requires dropping `CacheConfig(strategy="auto")` and hand-placing both points via a hook — the 4th Bedrock cachePoint slot is free. Position tests in `tests/agents/main_agent/core/test_bedrock_cache_points.py` are the safety net.
