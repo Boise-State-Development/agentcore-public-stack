@@ -488,6 +488,47 @@ def _build_word_document_tools(
 
 
 # ============================================================
+# Workspace Tool Injection
+# ============================================================
+
+WORKSPACE_TOOL_IDS = {"workspace_files"}
+
+
+def _build_workspace_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create context-bound workspace file tools if enabled by the user.
+
+    Identity is captured by closure (same pattern as the artifact and word
+    document tools). The "workspace_files" catalog entry is a single toggle
+    that provisions the full toolset (list/read/write).
+    """
+    from apis.shared.feature_flags import workspace_tools_enabled
+
+    if not workspace_tools_enabled():
+        return []
+    if not enabled_tools or not WORKSPACE_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    from agents.builtin_tools.workspace_tools import (
+        make_workspace_list_tool,
+        make_workspace_read_tool,
+        make_workspace_write_tool,
+    )
+
+    tools = [
+        make_workspace_list_tool(session_id, user_id),
+        make_workspace_read_tool(session_id, user_id),
+        make_workspace_write_tool(session_id, user_id),
+    ]
+
+    logger.info(f"Created {len(tools)} workspace tools")
+    return tools
+
+
+# ============================================================
 # Excel Spreadsheet Tool Injection
 # ============================================================
 
@@ -528,6 +569,50 @@ def _build_excel_spreadsheet_tools(
     ]
 
     logger.info(f"Created {len(tools)} excel spreadsheet tools")
+    return tools
+
+
+# ============================================================
+# PowerPoint Presentation Tool Injection
+# ============================================================
+
+POWERPOINT_PRESENTATION_TOOL_IDS = {"create_powerpoint_presentation"}
+
+
+def _build_powerpoint_presentation_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create context-bound PowerPoint presentation tools if enabled by the user.
+
+    Identity is captured by closure (same pattern as the Word document and Excel
+    spreadsheet tools) since the runtime does not populate ToolContext.
+    """
+    if not enabled_tools or not POWERPOINT_PRESENTATION_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    # The PowerPoint capability is a single toggle: enabling
+    # create_powerpoint_presentation provisions the full deck toolset
+    # (create/modify/list/read) so the model can round-trip on a presentation
+    # without extra admin catalog entries.
+    from agents.builtin_tools.powerpoint_presentation_tool import (
+        make_create_powerpoint_presentation_tool,
+        make_list_powerpoint_layouts_tool,
+        make_list_powerpoint_presentations_tool,
+        make_modify_powerpoint_presentation_tool,
+        make_read_powerpoint_presentation_tool,
+    )
+
+    tools = [
+        make_create_powerpoint_presentation_tool(session_id, user_id),
+        make_modify_powerpoint_presentation_tool(session_id, user_id),
+        make_list_powerpoint_presentations_tool(session_id, user_id),
+        make_read_powerpoint_presentation_tool(session_id, user_id),
+        make_list_powerpoint_layouts_tool(session_id, user_id),
+    ]
+
+    logger.info(f"Created {len(tools)} powerpoint presentation tools")
     return tools
 
 
@@ -1837,7 +1922,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,
+            ) + _build_workspace_tools(
+                enabled_tools=effective_enabled_tools,
+                session_id=input_data.session_id,
+                user_id=user_id,
             ) + _build_excel_spreadsheet_tools(
+                enabled_tools=effective_enabled_tools,
+                session_id=input_data.session_id,
+                user_id=user_id,
+            ) + _build_powerpoint_presentation_tools(
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,

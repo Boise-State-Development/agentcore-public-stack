@@ -443,6 +443,21 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        # Single catalog entry / toggle that provisions the whole workspace
+        # toolset. Enabling this one id injects list/read/write at runtime —
+        # see WORKSPACE_TOOL_IDS and _build_workspace_tools in
+        # apis/inference_api/chat/routes.py. Keep the toolId as
+        # "workspace_files": it is the gate key.
+        "toolId": "workspace_files",
+        "displayName": "File Workspace",
+        "description": "List, read, and save files in the conversation's workspace. Reads uploaded text files on demand and saves text deliverables (markdown, CSV, JSON) to the chat's Files with a download link.",
+        "category": "document",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": True,
+        "forwardAuthToken": False,
+    },
+    {
         # Single catalog entry / toggle that provisions the whole Excel
         # spreadsheet toolset. Enabling this one id injects create/modify/list/
         # read at runtime — see EXCEL_SPREADSHEET_TOOL_IDS and
@@ -453,6 +468,21 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "toolId": "create_excel_spreadsheet",
         "displayName": "Excel Spreadsheets",
         "description": "Create, edit, read, and list Excel (.xlsx) spreadsheets using openpyxl in a sandboxed environment. Generated files are saved to the chat's Files with a download link.",
+        "category": "document",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": True,
+        "forwardAuthToken": False,
+    },
+    {
+        # Single catalog entry / toggle that provisions the whole PowerPoint
+        # presentation toolset. Enabling this one id injects create/modify/list/
+        # read at runtime — see POWERPOINT_PRESENTATION_TOOL_IDS and
+        # _build_powerpoint_presentation_tools in apis/inference_api/chat/routes.py.
+        # Keep the toolId as "create_powerpoint_presentation": it is the gate key.
+        "toolId": "create_powerpoint_presentation",
+        "displayName": "PowerPoint Presentations",
+        "description": "Create, edit, read, and list PowerPoint (.pptx) presentations using python-pptx in a sandboxed environment. Generated files are saved to the chat's Files with a download link.",
         "category": "document",
         "protocol": "local",
         "enabledByDefault": False,

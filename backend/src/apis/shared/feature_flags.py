@@ -75,6 +75,23 @@ def memory_spaces_enabled() -> bool:
     return os.environ.get("MEMORY_SPACES_ENABLED", "false").lower() == "true"
 
 
+def workspace_tools_enabled() -> bool:
+    """Whether the workspace file tools are enabled for this environment.
+
+    Covers the ``workspace_list`` / ``workspace_read`` / ``workspace_write``
+    agent tools (the generic file surface over the user-files store — see
+    ``docs/specs/session-workspace-tools.md``). **Default ON with a kill
+    switch** (house style, mirroring ``scheduled_runs_enabled``): unset or
+    empty resolves to enabled; only the literal ``"false"``
+    (case-insensitive) disables.
+
+    Note this flag gates *feature existence* per environment; *who* may use
+    the tools is the ``workspace_files`` catalog entry granted via roles —
+    two independent controls.
+    """
+    return os.environ.get("WORKSPACE_TOOLS_ENABLED", "").strip().lower() != "false"
+
+
 def agents_enabled() -> bool:
     """Whether the Agent Designer surface is enabled for this environment.
 
