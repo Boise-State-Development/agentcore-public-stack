@@ -1,3 +1,61 @@
+# Release Notes — v1.11.0
+
+**Release Date:** July 24, 2026
+**Previous Release:** v1.10.0 (July 21, 2026)
+
+---
+
+> 🚀 **No CDK deploy required this release** — no new AWS resources, no dependency changes, no infrastructure edits. Ship backend code via `backend.yml` and the SPA via `frontend-deploy.yml`. **Per-environment action:** two new tool catalog entries ("PowerPoint Presentations", "File Workspace") must be seeded and granted via RBAC before users can enable them — see Deployment notes.
+
+---
+
+## Highlights
+
+v1.11.0 adds **two new agent capabilities to chat**. First, a **PowerPoint presentation toolset** — the agent can create, edit, read, and list real `.pptx` decks, built with python-pptx inside the sandboxed Code Interpreter and delivered through the chat Files panel with a download link — completing the office-document trio alongside the existing Excel and Word tools. Second, a generic **File Workspace toolset** that gives the agent a first-class way to list, read, and save text files (Markdown, CSV, JSON) in a conversation's workspace, over the same user-files store. Both ship as single catalog toggles, off by default. The release also fixes two rendering bugs: Markdown artifacts that came out as raw `#`/`**` source when authored under the default HTML type, and empty "Thinking" collapsibles that appeared on conversation reload for signature-only reasoning blocks.
+
+## PowerPoint presentations in chat
+
+Users can ask the agent to build or revise real PowerPoint decks mid-conversation — slide outlines, briefing decks, templated layouts — and get a downloadable `.pptx` back in the chat's Files panel. The capability mirrors the Excel and Word toolsets: one admin toggle provisions the whole round-trip.
+
+### Backend
+
+- `agents/builtin_tools/powerpoint_presentation_tool.py` (750+ lines) — five tool factories: `make_create_powerpoint_presentation_tool`, `make_modify_powerpoint_presentation_tool`, `make_list_powerpoint_presentations_tool`, `make_read_powerpoint_presentation_tool`, and `make_list_powerpoint_layouts_tool`. Generation and edits run python-pptx inside the sandboxed AgentCore Code Interpreter; nothing executes in the API container, and identity is captured by closure (same pattern as the Word/Excel tools, since the runtime does not populate `ToolContext`).
+- `apis/inference_api/chat/routes.py` — `_build_powerpoint_presentation_tools` injects the toolset at runtime when the catalog toggle is enabled. One catalog entry ("PowerPoint Presentations", gate key `create_powerpoint_presentation`, `enabledByDefault: false`) provisions all five tools.
+- Generated files persist to the user-files bucket (`S3_USER_FILES_BUCKET_NAME`) and surface in the session's Files panel.
+
+### Frontend
+
+- The generic `file-download-renderer` component (introduced in v1.10.0 for Word/Excel) now also handles `.pptx`, so generated presentations render through the same inline download card.
+
+## File Workspace toolset
+
+Gives the agent a durable, generic file surface over a conversation's workspace — distinct from the format-specific office tools. The model can enumerate what files exist, read uploaded text files on demand instead of front-loading them into context, and save text deliverables back to the conversation.
+
+### Backend
+
+- `agents/builtin_tools/workspace_tools.py` — three tools: `workspace_list`, `workspace_read`, `workspace_write`. Reads uploaded text files on demand and writes text deliverables (Markdown, CSV, JSON) to the user-files store, where they appear in the chat Files panel with a download link.
+- `apis/shared/files/workspace.py` (430+ lines) — new shared module implementing the workspace read/write surface over the user-files store.
+- `apis/shared/feature_flags.py` — `workspace_tools_enabled()` gates the feature per environment via `WORKSPACE_TOOLS_ENABLED` (**default ON, kill switch** — only the literal `false` disables). This is independent of the `workspace_files` catalog entry, which governs *who* may use the tools via RBAC.
+- `apis/shared/files/models.py` — file records gain a display-only `source` provenance field ("upload" or the id of the tool that produced the file); never part of an access decision.
+- `apis/inference_api/chat/routes.py` — `_build_workspace_tools` injects the set when the catalog toggle is enabled. One catalog entry ("File Workspace", gate key `workspace_files`, `enabledByDefault: false`).
+
+### Test Coverage
+
+430+ lines of new tests across `tests/agents/builtin_tools/test_workspace_tools.py` and `tests/shared/test_workspace.py` covering the tool surface and the workspace store. Design captured in `docs/specs/session-workspace-tools.md`.
+
+## 🐛 Bug fixes
+
+- **Markdown artifacts rendered as raw source.** `create_artifact`'s `content_type` defaults to `text/html`, so a request like "make a markdown recipe" easily produced raw Markdown stored under the HTML type — which then rendered as run-together `#`/`**` source instead of a formatted document. The service now reclassifies HTML-typed content that lacks a full HTML document shell (`<!doctype html>` / `<html>`) as Markdown, which the writer wraps into a proper render document; the tool guidance also now steers prose deliverables (reports, articles, notes, recipes) to Markdown mode. Non-HTML and genuine HTML-document content pass through untouched (#720)
+- **Empty "Thinking" blocks appeared on reload.** Some models (e.g. Sonnet 5) persist a signature-only `reasoningContent` block — empty `reasoningText.text`, no redacted content — which Bedrock requires kept in the message for follow-up calls. The live stream parser already guarded on this, but the history-rehydration path bypassed it and painted an empty "Thinking" collapsible on reload. A `hasRenderableReasoning()` guard now mirrors the component's own visibility logic and the parser's guard, so the block is only painted when it has reasoning text or redacted content. Display-only: the block is left untouched in the persisted message to preserve the signature/prompt-cache contract (#721)
+
+## 🚀 Deployment notes
+
+- **No CDK deploy needed** — no new AWS resources, no infrastructure changes, no dependency changes (python-pptx runs in the sandboxed Code Interpreter, like openpyxl for Excel). Run `backend.yml` (app-api / inference-api) and `frontend-deploy.yml` as usual.
+- **Seed and grant the two new tool catalog entries per environment** — "PowerPoint Presentations" (gate key `create_powerpoint_presentation`) and "File Workspace" (gate key `workspace_files`) ship in the bootstrap seed data with `enabledByDefault: false`. Environments seeded before this release won't have the rows: add them via the admin Tools page (or re-run the tools seeding) and grant them to the appropriate roles via RBAC.
+- **File Workspace kill switch** — `WORKSPACE_TOOLS_ENABLED` defaults ON; no configuration is required to enable the feature. Set it to `false` on the inference-api environment to disable the workspace tools entirely for an environment, independent of the catalog grant.
+
+---
+
 # Release Notes — v1.10.0
 
 **Release Date:** July 21, 2026
