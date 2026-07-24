@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.11.0] - 2026-07-24
+
+Feature release adding **two new agent capabilities to chat**: a PowerPoint (`.pptx`) presentation toolset that mirrors the existing Excel/Word tools, and a generic **File Workspace** toolset that lets the agent list, read, and save text files in a conversation's workspace. Both ship as single catalog toggles, off by default. Also fixes Markdown artifacts that rendered as raw source when authored under the default HTML type, and empty "Thinking" blocks that appeared on conversation reload. No new AWS resources, no dependency changes, no CDK deploy required — ships via `backend.yml` + `frontend-deploy.yml`; two new tool catalog entries must be seeded per environment.
+
+### 🚀 Added
+
+- PowerPoint presentation toolset — `create_powerpoint_presentation`, `modify_powerpoint_presentation`, `list_powerpoint_presentations`, `read_powerpoint_presentation`, and `list_powerpoint_layouts` build and edit `.pptx` decks via python-pptx in the sandboxed Code Interpreter; generated files persist to the user-files S3 bucket and appear in the chat Files panel with a download link. One catalog entry ("PowerPoint Presentations", gate key `create_powerpoint_presentation`, off by default) provisions the whole set (#713)
+- File Workspace toolset — `workspace_list`, `workspace_read`, `workspace_write` give the agent a generic file surface over the conversation's user-files store: read uploaded text files on demand and save text deliverables (Markdown, CSV, JSON) to the chat Files panel with a download link. One catalog entry ("File Workspace", gate key `workspace_files`, off by default) provisions the set, gated per environment by the `WORKSPACE_TOOLS_ENABLED` kill switch (default ON). Backed by a new `apis/shared/files/workspace.py` module; file records gain a display-only `source` provenance field (#716)
+
+### 🐛 Fixed
+
+- Markdown artifacts authored under the default `text/html` content type now render as formatted documents instead of run-together `#`/`**` source — HTML-typed content that lacks a full HTML document shell is reclassified as Markdown, and the `create_artifact` tool guidance now steers prose deliverables to Markdown mode (#720)
+- Empty "Thinking" blocks no longer appear on conversation reload — signature-only reasoning blocks (which some models, e.g. Sonnet 5, emit and persist for API correctness) are kept in the message for the Bedrock signature/prompt-cache contract but are no longer painted as an empty collapsible, matching the live stream parser's guard (#721)
+
 ## [1.10.0] - 2026-07-21
 
 Feature release adding **Excel spreadsheet creation and editing to chat** — a four-tool `.xlsx` toolset behind a single "Excel Spreadsheets" catalog toggle, built on a new shared office-document storage module — and fixing the CSP gap that **blocked every MCP App iframe on deployed environments**. Requires a CDK deploy (SPA CloudFront response-headers change); no data migration.
