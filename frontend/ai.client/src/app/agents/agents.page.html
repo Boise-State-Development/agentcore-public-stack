@@ -27,6 +27,15 @@
       </div>
     </div>
 
+    @if (listingError(); as message) {
+      <div
+        role="alert"
+        class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+      >
+        {{ message }}
+      </div>
+    }
+
     <!-- Content -->
     <main>
       @if (loading()) {
@@ -109,6 +118,49 @@
                   <span class="inline-flex items-center rounded-md bg-emerald-50 px-2 py-1 text-xs/5 font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">{{ n }} memory</span>
                 }
               </div>
+
+              <!-- Marketplace listing (D2) — state, the reviewer's note, the D13 edit trail -->
+              @if (agent.listing) {
+                <div class="mt-4">
+                  <app-listing-status [listing]="agent.listing" />
+                </div>
+              }
+
+              <!-- Publication controls. Owner-only, and hidden entirely when the
+                   marketplace routes are unmounted, so nothing offers a dead click. -->
+              @if (marketplaceAvailable() && isOwner(agent)) {
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  @if (canSubmit(agent)) {
+                    <button
+                      type="button"
+                      (click)="onSubmitListing(agent)"
+                      [disabled]="listingBusyId() === agent.agentId"
+                      class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    >
+                      {{ submitLabel(agent) }}
+                    </button>
+                  }
+                  @if (isPublished(agent)) {
+                    <button
+                      type="button"
+                      (click)="onViewInStore(agent)"
+                      class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    >
+                      View in store
+                    </button>
+                  }
+                  @if (canWithdraw(agent)) {
+                    <button
+                      type="button"
+                      (click)="onWithdrawListing(agent)"
+                      [disabled]="listingBusyId() === agent.agentId"
+                      class="rounded-lg px-2.5 py-1 text-xs/5 font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+                    >
+                      {{ listingBusyId() === agent.agentId ? 'Working…' : withdrawLabel(agent) }}
+                    </button>
+                  }
+                </div>
+              }
 
               <!-- Actions -->
               <div class="mt-4 flex items-center justify-between border-t border-gray-100 pt-3 dark:border-gray-700/60">

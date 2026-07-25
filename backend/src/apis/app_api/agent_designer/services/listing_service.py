@@ -150,16 +150,16 @@ async def _load_any(agent_id: str) -> Assistant:
 
 
 # ── D7 disclosure ────────────────────────────────────────────────────────────────────
-async def _memory_space_block(assistant: Assistant, user: User) -> None:
-    """Block submission on any ``memory_space`` binding, naming the space (D7.2).
+async def _memory_space_block_reason(assistant: Assistant, user: User) -> Optional[str]:
+    """The D7.2 blocking message for a ``memory_space`` binding, or ``None`` if clear.
 
-    Not a warning. A memory space is personal data; Designer D5's run-time re-resolve
-    already denies it to anyone who lacks access, so publishing an agent bound to one
-    ships a listing that cannot work for a single other person.
+    Split from the raising path so ``preflight_listing`` can *show* the block without
+    attempting the transition. One function decides, two callers present it — a second
+    copy of this rule in the SPA would be the thing that eventually disagrees.
     """
     bound = [b for b in effective_bindings(assistant) if b.kind == "memory_space"]
     if not bound:
-        return
+        return None
 
     # Resolve a human name for the message. The id alone tells the author nothing.
     label = bound[0].ref
@@ -170,12 +170,23 @@ async def _memory_space_block(assistant: Assistant, user: User) -> None:
     except Exception:
         logger.warning("Could not resolve memory space name for submission block", exc_info=True)
 
-    raise ListingError(
+    return (
         f"This agent can't be published while it's bound to the memory space “{label}”. "
         "A memory space is personal data — it won't resolve for anyone else, so the agent "
-        "would fail for every person who ran it. Remove the binding and submit again.",
-        status_code=400,
+        "would fail for every person who ran it. Remove the binding and submit again."
     )
+
+
+async def _memory_space_block(assistant: Assistant, user: User) -> None:
+    """Block submission on any ``memory_space`` binding, naming the space (D7.2).
+
+    Not a warning. A memory space is personal data; Designer D5's run-time re-resolve
+    already denies it to anyone who lacks access, so publishing an agent bound to one
+    ships a listing that cannot work for a single other person.
+    """
+    reason = await _memory_space_block_reason(assistant, user)
+    if reason:
+        raise ListingError(reason, status_code=400)
 
 
 async def _exposed_skills(assistant: Assistant) -> List[SkillExposure]:
@@ -229,6 +240,26 @@ async def _resolve_proposed_publisher(user: User, publisher_id: Optional[str]) -
 
 
 # ── author transitions ───────────────────────────────────────────────────────────────
+async def preflight_listing(agent_id: str, user: User) -> Tuple[List[SkillExposure], Optional[str]]:
+    """Run the D7 checks **without** transitioning, for the submit dialog.
+
+    D7.1 asks the dialog to enumerate the exposed skills *before* the author commits,
+    and D7.2's block is more useful as a disabled button with a reason than as an error
+    after the click. Both answers come from the same helpers ``submit_listing`` uses, so
+    what the author is shown and what the transition enforces cannot drift apart.
+
+    Owner-only, like every other author path: the skill exposure is a statement about
+    what the *owner's* publication would reveal, and it is not an editor's to see.
+    """
+    assistant = await _load_for_author(agent_id, user)
+    block_reason = await _memory_space_block_reason(assistant, user)
+    # Order mirrors submit_listing: an agent that cannot be published at all is not first
+    # walked through a skill-exposure confirmation.
+    if block_reason:
+        return [], block_reason
+    return await _exposed_skills(assistant), None
+
+
 async def submit_listing(
     agent_id: str, user: User, request: SubmitListingRequest
 ) -> Tuple[AgentListing, List[SkillExposure]]:

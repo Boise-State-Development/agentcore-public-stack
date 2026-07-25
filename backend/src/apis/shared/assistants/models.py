@@ -494,6 +494,30 @@ class ListingSubmissionResponse(BaseModel):
     )
 
 
+class ListingPreflightResponse(BaseModel):
+    """What the submit dialog shows before the author commits (D7).
+
+    The same two checks ``submit_listing`` runs, answered without a transition: the
+    skills publication would expose, and the memory-space block if there is one. A
+    ``blockReason`` means the Submit control is disabled and this text explains why —
+    the dialog never re-derives that rule for itself.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    exposed_skills: List[SkillExposure] = Field(
+        default_factory=list,
+        alias="exposedSkills",
+        description="Skills the author wrote that publication would make readable (D7.1)",
+    )
+    block_reason: Optional[str] = Field(
+        None,
+        alias="blockReason",
+        description="Why this agent cannot be submitted at all (D7.2); null when it can",
+    )
+
+
 class ReviewListingRequest(BaseModel):
     """Admin approves a submission or returns it with a reason (D2)."""
 

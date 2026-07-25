@@ -553,7 +553,10 @@ Phase 1  listing block + state machine + sparse GSI5 + submit/review/takedown AP
          + publisher profiles (D12) + admin Review queue & Listings
          + backfill (no listing block)                               ✅ shipped (PR #731)
 Phase 2  GET /agents/store + the Discover page + categories admin           ← in progress
-Phase 3  Detail page + runnability + the instructions gate
+Phase 3  Detail page + runnability + the instructions gate            ✅ shipped (PR #733)
+Phase 3.5 Author Submit UI: submit dialog (category, note, D7 disclosures),
+         listing-state badges + reviewer note + D13 edit trail on My Agents,
+         withdraw/unpublish, and GET /agents/{id}/listing/preflight
 Phase 4  Icons: upload, S3, generated fallback, all four render sizes
 Phase 5  Pins: user pin state + Pinned tab + store front admin
 Phase 6  Default pins by role (D9) + the assignment-time runnability check
@@ -569,6 +572,14 @@ otherwise independent of 4–7 and can run alongside them.
 Phase 1 is the smallest thing that is independently useful: authors can submit, admins can approve
 and take down, and nothing is user-visible until Phase 2. Phases 4–7 are independent of each other
 and parallelizable once 1–3 land.
+
+**Phase 3.5 is a gap this table originally left open.** Phases 1–3 shipped the submit and withdraw
+endpoints and the entire reviewer console, but no phase owned the *author's* half of the surface —
+so the SPA called `POST /agents/{id}/listing/submit` from nowhere and nothing could reach the store
+without a hand-rolled request. It also adds `GET /agents/{id}/listing/preflight`, because D7.1 asks
+the dialog to enumerate the exposed skills *before* the author commits and Phase 1's disclosures
+were only available in the submit response. The preflight reuses the submit path's own helpers
+rather than restating the checks.
 
 ## Non-goals (v1)
 

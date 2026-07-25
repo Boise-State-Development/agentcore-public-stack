@@ -1,5 +1,9 @@
 import { ShareEntry, UserPermission } from '../../assistants/models/assistant.model';
-import { ListingPublisher } from './store.model';
+import { AgentListingBlock, ListingPublisher } from './store.model';
+
+// `AgentListingBlock` lives with the other marketplace types in `store.model.ts` and is
+// re-exported here for the many callers that reach for it alongside `Agent`.
+export type { AgentListingBlock };
 
 /**
  * Agent Designer contract (Phase 4). Mirrors the backend `/agents` surface
@@ -101,14 +105,6 @@ export interface Agent {
   firstInteracted?: boolean;
   isSharedWithMe?: boolean;
   userPermission?: UserPermission;
-}
-
-/** The marketplace publication state carried on an Agent (D2). */
-export interface AgentListingBlock {
-  state: 'private' | 'in_review' | 'published' | 'changes_requested' | 'taken_down';
-  category: string;
-  publisherId: string;
-  reviewNote?: string;
 }
 
 /** D6's three-way answer to "will this run for me?". */

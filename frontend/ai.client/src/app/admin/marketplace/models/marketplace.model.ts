@@ -6,13 +6,21 @@
  * they read. Store front, categories and default pins arrive in later phases.
  */
 
-/** Publication state of an agent's listing. Absent listing = never submitted. */
-export type ListingState =
-  | 'private'
-  | 'in_review'
-  | 'published'
-  | 'changes_requested'
-  | 'taken_down';
+import {
+  AdminEdit,
+  ListingState,
+  LISTING_STATE_CLASSES,
+  LISTING_STATE_LABELS,
+} from '../../../agents/models/store.model';
+
+/**
+ * The listing-state vocabulary is shared with the author's own surface (My Agents) and
+ * is defined once, in the agents feature. Re-exported here so this file stays the one
+ * import the admin pages need — but never redefined, because a reviewer and an author
+ * looking at the same listing must read the same word for it.
+ */
+export type { AdminEdit, ListingState };
+export { LISTING_STATE_CLASSES, LISTING_STATE_LABELS };
 
 export type PublisherKind = 'institution' | 'department' | 'individual';
 
@@ -32,13 +40,6 @@ export interface PublisherProfile {
   enabled: boolean;
   createdAt?: string;
   updatedAt?: string;
-}
-
-/** One admin edit to a listing's presentation, surfaced back to the author. */
-export interface AdminEdit {
-  field: string;
-  at: string;
-  by: string;
 }
 
 /** A row in the Review queue or the Listings table. */
@@ -106,28 +107,3 @@ export interface AgentCategory {
   updatedAt?: string;
 }
 
-/** Display metadata for each listing state, used by the badge component. */
-export const LISTING_STATE_LABELS: Record<ListingState, string> = {
-  private: 'Private',
-  in_review: 'In review',
-  published: 'Published',
-  changes_requested: 'Changes requested',
-  taken_down: 'Taken down',
-};
-
-/**
- * Badge classes per state. Mirrors the mockup's palette: published reads as success,
- * in-review as pending, and both "needs attention" states as stop.
- */
-export const LISTING_STATE_CLASSES: Record<ListingState, string> = {
-  private:
-    'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
-  in_review:
-    'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
-  published:
-    'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
-  changes_requested:
-    'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
-  taken_down:
-    'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
-};

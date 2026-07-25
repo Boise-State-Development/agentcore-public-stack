@@ -329,3 +329,90 @@ class TestWithdraw:
             resp = TestClient(app).delete("/agents/ast-001/listing")
 
         assert resp.status_code == 404
+
+
+# ── D7 preflight — the same checks, without the transition ───────────────────────────
+class TestPreflight:
+    """The submit dialog's read.
+
+    The point of this route is that the author sees the D7 answers *before* committing,
+    and that what they see comes from the same helpers the transition enforces. Each
+    test below therefore pairs with one in TestMemorySpaceBlock / TestSkillDisclosure.
+    """
+
+    def test_enumerates_the_authors_own_skills_without_submitting(
+        self, app, make_user, _no_writes
+    ):
+        assistant = _make_assistant(
+            bindings=[
+                AgentBinding(kind="skill", ref="skill-a", config={}),
+                AgentBinding(kind="skill", ref="skill-b", config={}),
+            ]
+        )
+        skills = [
+            SimpleNamespace(skill_id="skill-a", display_name="Policy Citation Format", owner_id="user-001"),
+            SimpleNamespace(skill_id="skill-b", display_name="Someone Else's Skill", owner_id="user-999"),
+        ]
+
+        mock_auth_user(app, make_user())
+        with _owner(assistant), patch(f"{SERVICE_MODULE}.skills_enabled", return_value=True), patch(
+            f"{SERVICE_MODULE}.get_skill_catalog_repository"
+        ) as repo:
+            repo.return_value.batch_get_skills = AsyncMock(return_value=skills)
+            resp = TestClient(app).get("/agents/ast-001/listing/preflight")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [s["label"] for s in body["exposedSkills"]] == ["Policy Citation Format"]
+        assert body["blockReason"] is None
+        # A preflight must never move the listing — it is a rehearsal, not the act.
+        _no_writes.assert_not_called()
+
+    def test_memory_space_returns_a_block_reason_rather_than_an_error(
+        self, app, make_user, _no_writes
+    ):
+        """A disabled Submit with an explanation beats a 400 after the click."""
+        assistant = _make_assistant(
+            bindings=[AgentBinding(kind="memory_space", ref="mem-042", config={})]
+        )
+        space = SimpleNamespace(space_id="mem-042", name="Oliver", owner_id="user-001")
+
+        mock_auth_user(app, make_user())
+        with _owner(assistant), patch(f"{SERVICE_MODULE}.MemorySpaceService") as svc:
+            svc.return_value.list_spaces_for_user.return_value = [(space, "owner")]
+            resp = TestClient(app).get("/agents/ast-001/listing/preflight")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "Oliver" in body["blockReason"]
+        # Blocked agents disclose nothing: an author who cannot publish at all should not
+        # first be walked through a skill-exposure confirmation. Mirrors submit_listing.
+        assert body["exposedSkills"] == []
+
+    def test_editor_may_not_preflight(self, app, make_user, _no_writes):
+        """Skill exposure is a statement about the owner's publication, not an editor's."""
+        mock_auth_user(app, make_user())
+        with patch(
+            f"{SERVICE_MODULE}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=(_make_assistant(), "editor"),
+        ):
+            resp = TestClient(app).get("/agents/ast-001/listing/preflight")
+
+        assert resp.status_code == 403
+
+    def test_404_when_marketplace_flag_off(self, app, make_user, monkeypatch):
+        monkeypatch.setenv("AGENT_MARKETPLACE_ENABLED", "false")
+        mock_auth_user(app, make_user())
+        assert TestClient(app).get("/agents/ast-001/listing/preflight").status_code == 404
+
+    def test_preflight_is_not_captured_by_the_agent_id_path_param(
+        self, app, make_user, _no_writes
+    ):
+        """`/{agent_id}/listing/preflight` must not resolve as `GET /{agent_id}`."""
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(bindings=[])):
+            resp = TestClient(app).get("/agents/ast-001/listing/preflight")
+
+        assert resp.status_code == 200
+        assert "exposedSkills" in resp.json()

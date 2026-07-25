@@ -14,6 +14,12 @@ import {
   UpdateAgentRequest,
 } from '../models/agent.model';
 import {
+  AgentListingBlock,
+  ListingPreflight,
+  ListingSubmissionResponse,
+  SubmitListingRequest,
+} from '../models/store.model';
+import {
   ShareAssistantRequest,
   UnshareAssistantRequest,
   UpdateSharePermissionRequest,
@@ -90,5 +96,23 @@ export class AgentApiService {
 
   getAgentShares(id: string): Observable<AgentSharesResponse> {
     return this.http.get<AgentSharesResponse>(`${this.baseUrl()}/${id}/shares`);
+  }
+
+  // ── marketplace, the author's half (D2/D7) ─────────────────────────────────────
+  /** The D7 answers before the author commits: skill exposure and any block. */
+  getListingPreflight(id: string): Observable<ListingPreflight> {
+    return this.http.get<ListingPreflight>(`${this.baseUrl()}/${id}/listing/preflight`);
+  }
+
+  submitListing(id: string, request: SubmitListingRequest): Observable<ListingSubmissionResponse> {
+    return this.http.post<ListingSubmissionResponse>(
+      `${this.baseUrl()}/${id}/listing/submit`,
+      request,
+    );
+  }
+
+  /** Unpublish or withdraw. Returns the listing at `private`; revokes nothing (D7.3). */
+  withdrawListing(id: string): Observable<AgentListingBlock> {
+    return this.http.delete<AgentListingBlock>(`${this.baseUrl()}/${id}/listing`);
   }
 }

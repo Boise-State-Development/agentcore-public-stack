@@ -67,6 +67,7 @@ from apis.shared.assistants.service import (
 )
 from apis.app_api.agent_designer.services.listing_service import (
     ListingError,
+    preflight_listing,
     submit_listing,
     withdraw_listing,
 )
@@ -79,6 +80,7 @@ from apis.shared.assistants.models import (
     AgentListing,
     AgentStoreFrontResponse,
     AgentStoreResponse,
+    ListingPreflightResponse,
     ListingSubmissionResponse,
     SubmitListingRequest,
 )
@@ -496,8 +498,29 @@ async def get_agent_shares_endpoint(agent_id: str, current_user: User = Depends(
 
 # ------------------------------------------------------------------- marketplace (D2)
 # The author's half of the listing lifecycle. The reviewer's half lives under
-# /admin/agents/* behind require_admin. Nothing here is user-visible in Phase 1 — the
-# SPA surfaces that call these ship with the Discover page in Phase 2.
+# /admin/agents/* behind require_admin.
+@router.get("/{agent_id}/listing/preflight", response_model=ListingPreflightResponse)
+async def agent_listing_preflight_endpoint(
+    agent_id: str, current_user: User = Depends(require_marketplace_enabled)
+):
+    """What the submit dialog needs before the author commits (D7, owner only).
+
+    A read-only rehearsal of the submit checks: the skills publication would expose,
+    and the memory-space block if there is one. Declared before ``/listing/submit``
+    only for reading order — the paths are literal and do not collide.
+    """
+    try:
+        exposed, block_reason = await preflight_listing(agent_id, current_user)
+        return ListingPreflightResponse(
+            agent_id=agent_id, exposed_skills=exposed, block_reason=block_reason
+        )
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error preflighting agent listing: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to preflight agent listing: {str(e)}")
+
+
 @router.post("/{agent_id}/listing/submit", response_model=ListingSubmissionResponse)
 async def submit_agent_listing_endpoint(
     agent_id: str,
