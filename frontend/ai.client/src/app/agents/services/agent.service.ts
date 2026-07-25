@@ -88,6 +88,20 @@ export class AgentService {
   }
 
   /**
+   * Merge a partial update into one cached agent, in place.
+   *
+   * For changes that happen outside the Designer's own write path — a marketplace
+   * submission or withdrawal, which returns a listing rather than a whole Agent. The
+   * alternative is reloading the list to observe one field, which discards nothing
+   * useful but flickers every card.
+   */
+  patchAgent(id: string, patch: Partial<Agent>): void {
+    this.agents.update((current) =>
+      current.map((a) => (a.agentId === id ? { ...a, ...patch } : a)),
+    );
+  }
+
+  /**
    * Fetch (and memoise) the RBAC-filtered bindable palette for a kind. Returns
    * `[]` on failure so a picker degrades to "nothing available" rather than
    * breaking the form. Pass `force` to bypass the cache after a mutation elsewhere.
