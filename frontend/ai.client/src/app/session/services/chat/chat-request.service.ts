@@ -67,6 +67,7 @@ export class ChatRequestService implements OnDestroy {
     sessionId: string | null,
     fileUploadIds?: string[],
     assistantId?: string,
+    mentionAgentId?: string,
   ): Promise<void> {
     // Ensure conversation exists and get its ID
     // Update URL to reflect current conversation
@@ -124,6 +125,7 @@ export class ChatRequestService implements OnDestroy {
         sessionId,
         fileUploadIds,
         assistantId,
+        mentionAgentId,
       );
       await this.chatHttpService.sendChatRequest(requestObject);
     } catch (error) {
@@ -207,6 +209,7 @@ export class ChatRequestService implements OnDestroy {
     session_id: string,
     fileUploadIds?: string[],
     assistantId?: string,
+    mentionAgentId?: string,
   ) {
     const selectedModel = this.modelService.getSelectedModel();
 
@@ -255,7 +258,20 @@ export class ChatRequestService implements OnDestroy {
     // Add assistant ID if present
     // NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
     // AgentCore Runtime's internal 'assistant_id' field handling (causes 424 error)
-    if (assistantId) {
+    //
+    // Marketplace D11: an `@`-mention wins for this one turn and rides the SAME field,
+    // with `agent_mention` telling the backend not to treat it as a binding — it skips
+    // the "one assistant per session" validation and does not write session preferences.
+    // Sending it as a *different* field would have meant teaching every downstream step
+    // (RAG, binding resolution, memory injection, the resume snapshot) about a second
+    // way to name the agent running the turn; the flag keeps one.
+    //
+    // A mention beats the bound assistant deliberately: the user just named who they
+    // want, in the composer, for this message.
+    if (mentionAgentId) {
+      requestObject['rag_assistant_id'] = mentionAgentId;
+      requestObject['agent_mention'] = true;
+    } else if (assistantId) {
       requestObject['rag_assistant_id'] = assistantId;
     } else {
       // Forward the active conversation mode for non-assistant turns. The

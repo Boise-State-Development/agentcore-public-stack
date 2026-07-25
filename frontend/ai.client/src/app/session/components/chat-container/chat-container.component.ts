@@ -130,7 +130,10 @@ export class ChatContainerComponent {
   }));
 
   // Output events
-  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[] }>();
+  // `mentionAgentId` rides through untouched (Marketplace D11): the container is a
+  // layout shell, and dropping the field here would silently turn every `@`-mention
+  // back into a plain turn.
+  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string }>();
   continueRequested = output<void>();
   messageCancelled = output<void>();
   fileAttached = output<File>();
@@ -199,7 +202,7 @@ export class ChatContainerComponent {
   }
 
   // Event handlers
-  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[] }) {
+  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string }) {
     this.messageSubmitted.emit(event);
 
     // Wait for DOM to update (user message to be added) then scroll to it

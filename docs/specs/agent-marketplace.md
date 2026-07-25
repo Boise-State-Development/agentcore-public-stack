@@ -561,8 +561,9 @@ Phase 3.5 Author Submit UI: submit dialog (category, note, D7 disclosures),
          withdraw/unpublish, GET /agents/{id}/listing/preflight   ✅ shipped (PR #734)
 Phase 4  Icons: upload, S3, generated fallback, all four render sizes  ✅ shipped (PR #735)
 Phase 5  Pins: user pin state + Pinned tab + store front admin        ✅ shipped (PR #736)
-Phase 6  Default pins by role (D9) + the assignment-time runnability check  ← in progress
-Phase 7  @-mention in the composer
+Phase 6  Default pins by role (D9) + the assignment-time runnability check
+                                                                      ✅ shipped (PR #737)
+Phase 7  @-mention in the composer                                          ← in progress
 Phase 8  Problem reports (D15): report action + admin Reports queue   ← depends on 3
 Later    Ranking + full-corpus search via the Registry catalog (F6b)
 ```
@@ -618,6 +619,38 @@ is an ordered list, and a per-row toggle can express membership but not position
   D9.1 escape hatch — while `locked` still follows the role's flag. The removal warning lives on the
   console's **Save**, not on the row's `✕`: the editor is staged, and Save is the moment anything
   reaches other people.
+
+**Phase 7 notes (as built).** D11 said "hands **that turn** to the Agent … without leaving the
+thread" in one sentence, and that sentence turned out to be the whole phase:
+
+- **⚠️ The invocation path forbade it outright.** `chat/routes.py` 400s on both *"Cannot change
+  assistants mid-session"* and *"Assistants can only be attached to new sessions"*, and the SPA
+  treats the Agent as session-wide (URL query param → session preferences → self-heal on reload).
+  A mention is precisely the case both rules were written to reject. **Phil chose the per-turn
+  reading** over the two cheaper alternatives (mention opens a new thread; mention only on an
+  empty thread), because the store's other surfaces already cover those and neither is worth a
+  menu in the composer.
+- **One field, one flag.** The mention rides the existing `rag_assistant_id` with a new
+  `agent_mention: true` beside it, rather than a second id field — otherwise every downstream
+  step (RAG, binding resolution, memory injection, the resume snapshot) would need teaching about
+  a second way to name the Agent running the turn. The flag is a *binding* signal, never an
+  authorization one: `get_assistant_with_access_check` still gates the Agent, so a forged flag
+  buys nothing but a skipped write.
+- **Validation and persistence move together**, via `binds_conversation` in
+  `inference_api/chat/agent_binding_policy.py` (the `system_prompt_resolver` precedent — the rule
+  is three lines, the route is a thousand, so it lives where a test can reach it). Splitting them
+  gives two silent bugs: validate-only refuses the *second* mention in a thread; persist-only lets
+  one `@` annex the conversation.
+- **💰 A mention costs two prompt-cache prefix re-writes**, and this is a deliberate purchase. An
+  Agent turn swaps the system prompt and `toolConfig`, so the mention turn re-writes the cached
+  prefix and the next plain turn re-writes it back. At a 50k-token prefix and the $2.50/MTok
+  cache-write premium that is roughly $0.25 per mention round-trip. It is bounded (twice per
+  mention, never per turn) and it buys the thing the feature is for. If mentions ever become
+  common in long threads, the lever is to *bind* the conversation after a mention rather than to
+  make the swap cheaper.
+- **Known edge, pre-existing:** `continue_truncated` skips the whole assistant block, so a
+  "Continue" after a max_tokens truncation runs without the Agent — true for bound Agent
+  conversations before this phase, and unchanged by it.
 
 **Phase 3.5 is a gap this table originally left open.** Phases 1–3 shipped the submit and withdraw
 endpoints and the entire reviewer console, but no phase owned the *author's* half of the surface —

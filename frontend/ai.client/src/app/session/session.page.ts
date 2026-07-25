@@ -570,7 +570,7 @@ export class ConversationPage implements OnDestroy {
       });
   }
 
-  onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[] }) {
+  onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string }) {
     // Use the effective session ID (route sessionId or staged sessionId)
     const sessionIdToUse = this.effectiveSessionId();
 
@@ -587,12 +587,16 @@ export class ConversationPage implements OnDestroy {
     // Loading state is set inside submitChatRequest once the (possibly
     // freshly generated) session id is known — it's per-session now.
 
-    // Submit the chat request with file upload IDs and assistant ID if present
+    // Submit the chat request with file upload IDs and assistant ID if present.
+    // A `@`-mention (Marketplace D11) rides alongside rather than replacing the bound
+    // assistant: it runs this one turn, the URL keeps whatever the conversation is bound
+    // to, and the next unmentioned message goes back to that.
     this.chatRequestService.submitChatRequest(
       message.content,
       sessionIdToUse,
       message.fileUploadIds,
-      assistantIdToUse
+      assistantIdToUse,
+      message.mentionAgentId
     ).catch((error) => {
       console.error('Error sending chat request:', error);
     });

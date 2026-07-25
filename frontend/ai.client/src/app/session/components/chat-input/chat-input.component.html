@@ -46,6 +46,21 @@
       </div>
     }
 
+    <!--
+      Agent `@`-mention menu (Marketplace D11). Positioned against this container rather
+      than the caret: a composer is anchored to the bottom of the viewport, so "above the
+      input" is where the menu can always open without being clipped.
+    -->
+    @if (isMentionMenuOpen()) {
+      <app-agent-mention-menu
+        [items]="mentionResults()"
+        [activeIndex]="mentionActiveIndex()"
+        [query]="mentionQuery()"
+        (picked)="onMentionPicked($event)"
+        (browseAll)="onMentionBrowseAll()"
+      />
+    }
+
     <!-- Main Input Area -->
     <div class="relative">
       <label for="user-message" class="sr-only">How can I help you today?</label>
@@ -57,9 +72,18 @@
         [value]="userInput()"
         (input)="onTextareaInput($event)"
         (keydown)="onKeyDown($event)"
+        (keyup)="onTextareaCaretMove($event)"
+        (click)="onTextareaCaretMove($event)"
         (focus)="onFocus()"
         (blur)="onBlur()"
         placeholder="How can I help you today?"
+        role="combobox"
+        aria-autocomplete="list"
+        [attr.aria-expanded]="isMentionMenuOpen()"
+        [attr.aria-controls]="isMentionMenuOpen() ? 'agent-mention-listbox' : null"
+        [attr.aria-activedescendant]="
+          isMentionMenuOpen() ? 'agent-mention-option-' + mentionActiveIndex() : null
+        "
         class="block w-full resize-none bg-transparent px-6 py-4 text-base text-gray-900 placeholder:text-gray-500 dark:text-gray-100 dark:placeholder:text-gray-400 focus:outline-hidden overflow-y-auto"
         style="min-height: 60px; max-height: 200px;"
       ></textarea>
@@ -138,6 +162,29 @@
               <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
             }
           </button>
+          }
+
+          <!--
+            Mentioned-agent chip (D11). Says who is answering *this* message and gives
+            the only way back: the literal "@Name" in the text is what the user typed,
+            but the binding is this chip, so clearing it here is what un-mentions.
+          -->
+          @if (mentionedAgent(); as agent) {
+            <div
+              class="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 pl-2.5 pr-1 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+              role="status"
+              [attr.aria-label]="'This message goes to ' + agent.name"
+            >
+              <span class="max-w-32 truncate">{{ agent.name }} answers this one</span>
+              <button
+                type="button"
+                (click)="clearMention()"
+                class="flex size-4 shrink-0 items-center justify-center rounded-full text-emerald-500 transition-colors hover:bg-emerald-200 hover:text-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-500 dark:text-emerald-400 dark:hover:bg-emerald-700 dark:hover:text-emerald-200"
+                aria-label="Send this message to the assistant instead"
+              >
+                <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
+              </button>
+            </div>
           }
 
           <!-- Active Conversation Mode Chip -->
