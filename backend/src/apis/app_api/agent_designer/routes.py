@@ -20,7 +20,17 @@ Phase-4 concern when the Designer consumes it.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 
 from apis.app_api.agent_designer.services.bindable_catalog import (
     BINDABLE_KINDS,
@@ -65,6 +75,12 @@ from apis.shared.assistants.service import (
     update_assistant,
     update_share_permission,
 )
+from apis.app_api.agent_designer.services.icon_service import (
+    AgentIconError,
+    read_icon,
+    remove_icon,
+    upload_icon,
+)
 from apis.app_api.agent_designer.services.listing_service import (
     ListingError,
     preflight_listing,
@@ -77,6 +93,7 @@ from apis.app_api.agent_designer.services.store_service import (
     store_front,
 )
 from apis.shared.assistants.models import (
+    AgentIconResponse,
     AgentListing,
     AgentStoreFrontResponse,
     AgentStoreResponse,
@@ -559,3 +576,76 @@ async def withdraw_agent_listing_endpoint(
     except Exception as e:
         logger.error(f"Error withdrawing agent listing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to withdraw agent listing: {str(e)}")
+
+
+# ------------------------------------------------------------------------ icons (D5)
+# Bytes to S3, key on the record, and one route that serves them back. The serve route
+# is what makes ``iconUrl`` a stable path instead of a presigned URL that changes on
+# every read — see ``apis.shared.assistants.icons.icon_url``.
+@router.post("/{agent_id}/icon", response_model=AgentIconResponse, response_model_exclude_none=True)
+async def upload_agent_icon_endpoint(
+    agent_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_marketplace_enabled),
+):
+    """Upload the Agent's square icon (owner or editor).
+
+    512×512 PNG or JPEG, ≤ 400 KB (D5). The image is re-encoded server-side — that is
+    what normalizes the dimensions *and* strips EXIF, so an icon cropped from a phone
+    photo does not publish its GPS coordinates. Rejections carry the limit and the
+    supplied value, since "invalid image" sends an author back to the file picker with
+    nothing to change.
+    """
+    content = await file.read()
+    try:
+        return await upload_icon(agent_id, content, current_user)
+    except AgentIconError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error uploading agent icon: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to upload agent icon: {str(e)}")
+
+
+@router.delete("/{agent_id}/icon", response_model=AgentIconResponse, response_model_exclude_none=True)
+async def delete_agent_icon_endpoint(
+    agent_id: str, current_user: User = Depends(require_marketplace_enabled)
+):
+    """Clear the icon, returning the Agent to its generated gradient (owner or editor)."""
+    try:
+        return await remove_icon(agent_id, current_user)
+    except AgentIconError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error removing agent icon: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to remove agent icon: {str(e)}")
+
+
+@router.get("/{agent_id}/icon")
+async def get_agent_icon_endpoint(
+    agent_id: str,
+    request: Request,
+    current_user: User = Depends(require_marketplace_enabled),
+):
+    """Serve the icon bytes.
+
+    The object is immutable — its key *is* its content digest — so this answers with a
+    one-year ``immutable`` cache directive and the digest as the ETag. A replacement
+    changes ``iconUrl``'s ``?v=``, which is what busts the cache; the ``If-None-Match``
+    304 below is for the same URL being asked for twice.
+
+    A missing icon is a 404 and the SPA falls through to the generated gradient, so a key
+    that outlived its object degrades to the designed default rather than a broken tile.
+    """
+    try:
+        data, content_type, version = await read_icon(agent_id, current_user)
+    except AgentIconError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error reading agent icon: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to read agent icon: {str(e)}")
+
+    etag = f'"{version}"'
+    headers = {"Cache-Control": "public, max-age=31536000, immutable", "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=content_type, headers=headers)

@@ -23,6 +23,7 @@ must go to a child row (``AST#{id}/BINDING#…``), not inline here.
 
 from typing import List
 
+from apis.shared.assistants.icons import icon_url
 from apis.shared.assistants.models import AgentBinding, Assistant
 
 
@@ -79,5 +80,8 @@ def to_agent_view(assistant: Assistant) -> dict:
         # ``response_model_exclude_none``, so that payload is unchanged.
         "tagline": assistant.tagline,
         "iconKey": assistant.icon_key,
+        # Derived, never stored (Phase 4): the record holds the S3 key, the read shape
+        # holds where to fetch it from. ``None`` when unset → the SPA's generated gradient.
+        "iconUrl": icon_url(assistant.assistant_id, assistant.icon_key),
         "listing": assistant.listing.model_dump(by_alias=True) if assistant.listing else None,
     }

@@ -31,6 +31,7 @@ from typing import List, Optional, Tuple
 
 from apis.shared.assistants.compat import effective_bindings
 from apis.shared.assistants.categories import ensure_seeded
+from apis.shared.assistants.icons import icon_url
 from apis.shared.assistants.listing import ListingTransitionError, assert_transition
 from apis.shared.assistants.listing_repository import list_by_state, write_listing
 from apis.shared.assistants.models import (
@@ -501,6 +502,7 @@ def _to_row(assistant: Assistant, publisher: Optional[PublisherProfile]) -> Admi
         tagline=assistant.tagline,
         emoji=assistant.emoji,
         icon_key=assistant.icon_key,
+        icon_url=icon_url(assistant.assistant_id, assistant.icon_key),
         owner_name=assistant.owner_name,
         publisher=publisher,
         category=listing.category,

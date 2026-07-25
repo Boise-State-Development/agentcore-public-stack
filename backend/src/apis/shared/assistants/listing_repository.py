@@ -155,6 +155,48 @@ async def clear_listing(agent_id: str) -> None:
         raise
 
 
+async def write_icon_key(agent_id: str, icon_key: Optional[str], *, updated_at: str) -> None:
+    """Set — or clear — the Agent record's ``iconKey`` (D5, Phase 4).
+
+    A direct attribute write rather than a ``service.update_assistant`` call, for two
+    reasons:
+
+    1. **Clearing has to REMOVE.** ``_update_assistant_cloud`` builds a SET-only
+       expression from ``model_dump(exclude_none=True)``, so ``icon_key=None`` there
+       means "leave it alone", never "remove it" — an author could set an icon and never
+       get back to the generated fallback.
+    2. **An icon is not a listing.** ``write_listing`` can carry a D13 admin edit to
+       ``iconKey``, but it requires a listing block; an author may icon an agent that has
+       never been submitted.
+
+    Raises ``ValueError`` if the agent no longer exists.
+    """
+    from botocore.exceptions import ClientError
+
+    values: Dict[str, Any] = {":updated_at": updated_at}
+    if icon_key:
+        expression = "SET iconKey = :icon_key, updatedAt = :updated_at"
+        values[":icon_key"] = icon_key
+    else:
+        expression = "SET updatedAt = :updated_at REMOVE iconKey"
+
+    try:
+        _table().update_item(
+            Key=_key(agent_id),
+            UpdateExpression=expression,
+            ExpressionAttributeValues=values,
+            ConditionExpression="attribute_exists(PK)",
+            ReturnValues="NONE",
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            raise ValueError(f"Agent not found: {agent_id}") from e
+        logger.error(f"Failed to write iconKey for {agent_id}: {e}")
+        raise
+
+    logger.info(f"🖼️ iconKey for {agent_id} → {icon_key or 'cleared'}")
+
+
 async def query_store(
     category: str, *, limit: int = 50, cursor: Optional[str] = None
 ) -> Tuple[list, Optional[str]]:

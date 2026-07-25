@@ -19,6 +19,7 @@ import logging
 from typing import List, Optional, Tuple
 
 from apis.shared.assistants.categories import ensure_seeded, list_categories
+from apis.shared.assistants.icons import icon_url
 from apis.shared.assistants.listing_repository import query_store
 from apis.shared.assistants.models import (
     AgentCategory,
@@ -54,7 +55,9 @@ def _to_listing_response(
         name=assistant.name,
         tagline=assistant.tagline,
         emoji=assistant.emoji,
-        # icon_url stays absent until Phase 4; the SPA renders the generated fallback.
+        # Phase 4: the uploaded icon when there is one, the generated gradient when not —
+        # and the emoji above is what that gradient carries, so both always ship.
+        icon_url=icon_url(assistant.assistant_id, assistant.icon_key),
         publisher=(
             ListingPublisher(label=profile.label, kind=profile.kind, verified=profile.verified)
             if profile

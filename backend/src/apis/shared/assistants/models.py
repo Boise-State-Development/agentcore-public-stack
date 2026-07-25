@@ -362,6 +362,15 @@ class AgentResponse(BaseModel):
     # so an unsubmitted agent's payload is byte-identical to before this shipped.
     tagline: Optional[str] = Field(None, description="Shelf subtitle (D4)")
     icon_key: Optional[str] = Field(None, alias="iconKey", description="S3 object key for the square icon (D5)")
+    icon_url: Optional[str] = Field(
+        None,
+        alias="iconUrl",
+        description=(
+            "Where to render the icon from (Phase 4). Derived from ``iconKey``, never stored: a "
+            "relative app-api path carrying the key's digest as ``?v=``, so it caches immutably "
+            "and busts the moment a new icon is uploaded. Absent → the generated gradient (D5)."
+        ),
+    )
     listing: Optional[AgentListing] = Field(None, description="Publication state (D2); absent = never submitted")
 
     # Marketplace Phase 3 — the detail read. Both are populated only by GET /agents/{id};
@@ -590,6 +599,9 @@ class AdminListingRow(BaseModel):
     tagline: Optional[str] = Field(None, description="Shelf subtitle")
     emoji: Optional[str] = Field(None, description="Emoji, for the generated icon fallback (D5)")
     icon_key: Optional[str] = Field(None, alias="iconKey", description="S3 object key for the square icon")
+    icon_url: Optional[str] = Field(
+        None, alias="iconUrl", description="Where to render the icon from (Phase 4); absent → generated gradient"
+    )
     owner_name: str = Field(..., alias="ownerName", description="Author display name — who to talk to about behavior")
     publisher: Optional[PublisherProfile] = Field(None, description="Resolved attribution (D12), display only")
     category: str = Field(..., description="Category id")
@@ -753,10 +765,28 @@ class AgentListingResponse(BaseModel):
     icon_url: Optional[str] = Field(
         None,
         alias="iconUrl",
-        description="Square icon URL; absent until icons ship in Phase 4, then the SPA falls back to the generated gradient",
+        description="Square icon URL (D5); absent → the SPA renders the generated gradient",
     )
     publisher: Optional[ListingPublisher] = Field(None, description="Attribution (D12), display only")
     category: str = Field(..., description="Category id")
+
+
+class AgentIconResponse(BaseModel):
+    """The result of setting or clearing an Agent's square icon (D5, Phase 4).
+
+    Both fields are ``None`` after a remove, which is the signal the SPA needs to drop
+    back to the generated gradient without re-reading the agent.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    icon_key: Optional[str] = Field(
+        None, alias="iconKey", description="S3 object key now on the record; None after a remove"
+    )
+    icon_url: Optional[str] = Field(
+        None, alias="iconUrl", description="Where to render it from; None → the generated gradient"
+    )
 
 
 class AgentStoreResponse(BaseModel):
