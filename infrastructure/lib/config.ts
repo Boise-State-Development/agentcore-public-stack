@@ -53,6 +53,7 @@ export interface AppConfig {
   memorySpaces: MemorySpacesConfig;
   skills: SkillsConfig;
   agents: AgentsConfig;
+  agentMarketplace: AgentMarketplaceConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
@@ -199,6 +200,18 @@ export interface SkillsConfig {
  * Assistants are deprecated.
  */
 export interface AgentsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Agent Marketplace (docs/specs/agent-marketplace.md).
+ *
+ * Default ON with a kill switch: CDK_AGENT_MARKETPLACE_ENABLED=false (or an
+ * `agentMarketplace.enabled: false` cdk.json context) turns it off. Sets the
+ * AGENT_MARKETPLACE_ENABLED env var on **app-api only** — publication is a catalog
+ * concern and the marketplace adds no inference-api routes.
+ */
+export interface AgentMarketplaceConfig {
   enabled: boolean;
 }
 
@@ -418,6 +431,16 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_AGENTS_API_ENABLED
         ? process.env.CDK_AGENTS_API_ENABLED !== 'false'
         : scope.node.tryGetContext('agents')?.enabled ?? true,
+    },
+    agentMarketplace: {
+      // Default ON with a kill switch, same empty-string-safe ternary as `agents`
+      // above: the workflow forwards an EMPTY STRING when the variable is unset, so
+      // treat empty/unset as the default (on) and only the literal "false" as off.
+      // Phase 1 ships nothing user-visible — the author submit routes and the admin
+      // Review queue / Listings pages — so it is safe on everywhere from the start.
+      enabled: process.env.CDK_AGENT_MARKETPLACE_ENABLED
+        ? process.env.CDK_AGENT_MARKETPLACE_ENABLED !== 'false'
+        : scope.node.tryGetContext('agentMarketplace')?.enabled ?? true,
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,

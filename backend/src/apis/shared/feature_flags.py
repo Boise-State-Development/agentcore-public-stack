@@ -109,3 +109,28 @@ def agents_enabled() -> bool:
     nav is separately preview-gated (system-admin) until Assistants are deprecated.
     """
     return os.environ.get("AGENTS_API_ENABLED", "").strip().lower() != "false"
+
+
+def agent_marketplace_enabled() -> bool:
+    """Whether the Agent Marketplace surface is enabled for this environment.
+
+    Covers the listing lifecycle (submit / review / takedown), publisher profiles, and
+    the admin Review queue + Listings pages. **Default ON with a kill switch** (house
+    style, mirroring ``agents_enabled``): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables. The CDK side threads
+    ``config.agentMarketplace.enabled`` into this env var with the same empty-string-safe
+    ternary, so an unset GitHub Actions variable can never silently turn it off.
+
+    App-api only. The marketplace adds no inference-api routes — publication is a
+    catalog concern, and the inference API stays inference-only.
+
+    NOTE on the spec's D14: it also calls for an ``agent-marketplace`` RBAC *capability*
+    that 404s the routes for ungranted roles, "mirroring the ``skills`` gate from Skills
+    v2 PR-5". That gate no longer exists — it was removed because a capability id cannot
+    be granted from the admin roles UI (see ``skills_enabled`` above and
+    ``AppRoleService.resolve_user_permissions``), so copying it would ship a gate nobody
+    can open. Phase 1 is admin routes plus two author routes with no user-facing surface,
+    which ``require_admin`` and the per-agent ownership checks already cover. Revisit when
+    Phase 2 makes Discover user-visible and a real "who sees the store" control is needed.
+    """
+    return os.environ.get("AGENT_MARKETPLACE_ENABLED", "").strip().lower() != "false"

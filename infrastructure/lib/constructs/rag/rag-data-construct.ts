@@ -161,6 +161,21 @@ export class RagDataConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Sparse marketplace directory index (docs/specs/agent-marketplace.md).
+    // Same shape and same reasoning as DueSyncIndex above: GSI5 keys are written
+    // only while listing.state == "published", so unpublication is enforced by
+    // physics — no key, so the browse query cannot return the agent. Written
+    // exclusively by apis/shared/assistants/listing_repository.py; the generic
+    // assistant update lists GSI5_* as immutable so a routine author edit can
+    // never resurrect a directory key on a delisted agent.
+    //   GSI5_PK = LISTED#{category}   GSI5_SK = CREATED#{created_at}  (newest-first)
+    this.assistantsTable.addGlobalSecondaryIndex({
+      indexName: 'AgentDirectoryIndex',
+      partitionKey: { name: 'GSI5_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI5_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // ── SSM publications (consumed by restore tooling, app-api/inference-api runtime) ──
     new ssm.StringParameter(this, 'RagAssistantsTableNameParameter', {
       parameterName: `/${config.projectPrefix}/rag/assistants-table-name`,

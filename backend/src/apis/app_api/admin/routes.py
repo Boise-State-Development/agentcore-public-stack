@@ -884,6 +884,14 @@ if skills_enabled():
 
     router.include_router(skills_router)
 
+# ========== Include Agent Marketplace Admin Subrouter ==========
+# Mounted unconditionally; every route depends on ``require_marketplace_admin``, which
+# 404s while AGENT_MARKETPLACE_ENABLED is off (the ``/agents`` surface pattern) rather
+# than being unmounted at import time.
+from .agents.routes import router as agent_marketplace_admin_router
+
+router.include_router(agent_marketplace_admin_router)
+
 # ========== Include OAuth Admin Subrouter ==========
 from .oauth.routes import router as oauth_admin_router
 
