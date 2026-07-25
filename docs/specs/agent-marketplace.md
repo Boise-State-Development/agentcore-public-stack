@@ -111,7 +111,7 @@ between a summary and a subtitle matters.
 
 ## D5 — Agents get a square icon, with a generated fallback
 
-Authors upload a square icon (**512×512, PNG or JPG, ≤ 256 KB**, stored in the existing assistants
+Authors upload a square icon (**512×512, PNG or JPG, ≤ 400 KB**, stored in the existing assistants
 asset bucket with the object key on the record — **not** inline on the DynamoDB item, per the 400 KB
 item-limit lesson from MCP App icons).
 
