@@ -126,7 +126,12 @@ import {
                   <tr class="border-t border-gray-200 dark:border-gray-700">
                     <td class="px-4 py-3">
                       <div class="flex items-center gap-3">
-                        <app-agent-tile [emoji]="row.emoji" size="sm" />
+                        <app-agent-tile
+                          [agentId]="row.agentId"
+                          [iconUrl]="row.iconUrl"
+                          [emoji]="row.emoji"
+                          size="sm"
+                        />
                         <div class="min-w-0">
                           <p class="truncate font-medium text-gray-900 dark:text-white">
                             {{ row.name }}

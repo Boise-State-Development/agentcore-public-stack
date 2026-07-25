@@ -23,6 +23,12 @@ import {
 import { ShareAssistantDialogComponent, ShareAssistantDialogData } from '../assistants/components/share-assistant-dialog.component';
 import { TooltipDirective } from '../components/tooltip/tooltip.directive';
 import { AgentsTabsComponent } from './components/agents-tabs.component';
+import { AgentIconComponent } from './components/agent-icon.component';
+import {
+  AgentIconDialogComponent,
+  AgentIconDialogData,
+  AgentIconDialogResult,
+} from './components/agent-icon-dialog.component';
 import { ListingStatusComponent } from './components/listing-status.component';
 import {
   SubmitListingDialogComponent,
@@ -48,7 +54,13 @@ import {
   templateUrl: './agents.page.html',
   styleUrl: './agents.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, TooltipDirective, AgentsTabsComponent, ListingStatusComponent],
+  imports: [
+    NgIcon,
+    TooltipDirective,
+    AgentsTabsComponent,
+    AgentIconComponent,
+    ListingStatusComponent,
+  ],
   providers: [
     provideIcons({
       heroPlus,
@@ -144,6 +156,16 @@ export class AgentsPage implements OnInit {
     return (agent.userPermission ?? 'owner') === 'owner';
   }
 
+  /**
+   * The icon is presentation, not behavior (D13), so an editor may set it — the same
+   * line `PUT /agents/{id}` draws, and the same one the backend enforces. Publishing
+   * stays owner-only above.
+   */
+  canEditIcon(agent: Agent): boolean {
+    const permission = agent.userPermission ?? 'owner';
+    return permission === 'owner' || permission === 'editor';
+  }
+
   private listingState(agent: Agent): ListingState | undefined {
     return agent.listing?.state;
   }
@@ -185,6 +207,32 @@ export class AgentsPage implements OnInit {
 
   onViewInStore(agent: Agent): void {
     this.router.navigate(['/agents', agent.agentId]);
+  }
+
+  /**
+   * Set, replace or remove the agent's icon (D5).
+   *
+   * The dialog returns the record's new icon state, and the card is patched from it
+   * rather than re-listing every agent: the URL carries the new content digest, so a
+   * replacement repaints immediately instead of showing the cached previous icon.
+   */
+  async onEditIcon(agent: Agent): Promise<void> {
+    this.listingError.set(null);
+    const dialogRef = this.dialog.open<AgentIconDialogResult>(AgentIconDialogComponent, {
+      data: {
+        agentId: agent.agentId,
+        agentName: agent.name,
+        emoji: agent.emoji,
+        iconUrl: agent.iconUrl,
+      } satisfies AgentIconDialogData,
+    });
+    const result = await firstValueFrom(dialogRef.closed);
+    if (result) {
+      this.agentService.patchAgent(result.agentId, {
+        iconKey: result.iconKey,
+        iconUrl: result.iconUrl,
+      });
+    }
   }
 
   async onSubmitListing(agent: Agent): Promise<void> {

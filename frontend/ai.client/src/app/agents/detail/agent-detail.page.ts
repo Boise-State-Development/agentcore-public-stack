@@ -19,6 +19,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { AgentApiService } from '../services/agent-api.service';
 import { Agent, AgentRunnability } from '../models/agent.model';
+import { AgentIconComponent } from '../components/agent-icon.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 
 /**
@@ -33,15 +34,14 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
  * and settles into the sidebar when it arrives. Blocking the whole page on the slower
  * question would trade a fast page for a spinner.
  *
- * Not here yet, by phase: "Add to my agents" (pins, Phase 5), the uploaded icon and its
- * generated gradient fallback (Phase 4), and "Report a problem" (Phase 8). Rendering an
- * affordance whose backing lever does not exist is how a store starts lying, so the
- * header carries Start chat alone.
+ * Not here yet, by phase: "Add to my agents" (pins, Phase 5) and "Report a problem"
+ * (Phase 8). Rendering an affordance whose backing lever does not exist is how a store
+ * starts lying, so the header carries Start chat alone.
  */
 @Component({
   selector: 'app-agent-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, TooltipDirective],
+  imports: [AgentIconComponent, NgIcon, TooltipDirective],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -81,12 +81,12 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
         } @else if (agent(); as a) {
           <!-- Identity -->
           <div class="flex flex-wrap items-start gap-5">
-            <span
-              class="flex size-21 shrink-0 items-center justify-center rounded-3xl bg-gray-100 text-4xl dark:bg-gray-700"
-              aria-hidden="true"
-            >
-              {{ a.emoji || '✦' }}
-            </span>
+            <app-agent-icon
+              [agentId]="a.agentId"
+              [iconUrl]="a.iconUrl"
+              [emoji]="a.emoji"
+              [size]="84"
+            />
             <div class="min-w-0 flex-1">
               <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">{{ a.name }}</h1>
               @if (a.tagline) {

@@ -502,7 +502,9 @@ auth rule; admin routes `Depends(require_admin)` (= `require_app_roles("system_a
 | `GET /agents/store/front` | Featured order + categories for the browse header. |
 | `GET /agents/{id}` | Detail. Adds `listing`; gates `instructions`. |
 | `GET /agents/{id}/runnability` | Per-invoker capability preview (D6). |
-| `POST /agents/{id}/icon` | Upload a square icon (D5) → S3, returns `iconKey`. |
+| `POST /agents/{id}/icon` | Upload a square icon (D5) → S3, returns `iconKey` + `iconUrl`. Owner or editor. |
+| `DELETE /agents/{id}/icon` | Clear the icon, back to the generated gradient. Admin `PATCH` can only *replace* `iconKey`, so without this an author cannot undo an upload. |
+| `GET /agents/{id}/icon` | Serve the bytes, `immutable` + ETag. What makes `iconUrl` a stable path (`/agents/{id}/icon?v={digest}`) rather than a presigned URL that changes on every read and re-downloads every shelf icon. Readable by anyone when the listing is published — the shelf already shows that agent's name, tagline and emoji to every browsing user. |
 | `POST /agents/{id}/listing/submit` | Author submits. Runs D7 checks; 400 on a `memory_space` binding. |
 | `DELETE /agents/{id}/listing` | Author unpublishes. |
 | `GET /agents/pins` · `POST`/`DELETE /agents/{id}/pin` | The user's effective pin list; pin / dismiss (D9). |
@@ -552,12 +554,12 @@ Phase 0  This spec                                                          ✅ 
 Phase 1  listing block + state machine + sparse GSI5 + submit/review/takedown API
          + publisher profiles (D12) + admin Review queue & Listings
          + backfill (no listing block)                               ✅ shipped (PR #731)
-Phase 2  GET /agents/store + the Discover page + categories admin           ← in progress
+Phase 2  GET /agents/store + the Discover page + categories admin     ✅ shipped (PR #732)
 Phase 3  Detail page + runnability + the instructions gate            ✅ shipped (PR #733)
 Phase 3.5 Author Submit UI: submit dialog (category, note, D7 disclosures),
          listing-state badges + reviewer note + D13 edit trail on My Agents,
-         withdraw/unpublish, and GET /agents/{id}/listing/preflight
-Phase 4  Icons: upload, S3, generated fallback, all four render sizes
+         withdraw/unpublish, GET /agents/{id}/listing/preflight   ✅ shipped (PR #734)
+Phase 4  Icons: upload, S3, generated fallback, all four render sizes      ← in progress
 Phase 5  Pins: user pin state + Pinned tab + store front admin
 Phase 6  Default pins by role (D9) + the assignment-time runnability check
 Phase 7  @-mention in the composer

@@ -14,6 +14,7 @@ import {
   UpdateAgentRequest,
 } from '../models/agent.model';
 import {
+  AgentIconResponse,
   AgentListingBlock,
   ListingPreflight,
   ListingSubmissionResponse,
@@ -114,5 +115,23 @@ export class AgentApiService {
   /** Unpublish or withdraw. Returns the listing at `private`; revokes nothing (D7.3). */
   withdrawListing(id: string): Observable<AgentListingBlock> {
     return this.http.delete<AgentListingBlock>(`${this.baseUrl()}/${id}/listing`);
+  }
+
+  /**
+   * Upload the agent's square icon (D5). Multipart, because the server has to see the
+   * bytes: it validates the format and dimensions and re-encodes to strip metadata, none
+   * of which a presigned direct-to-S3 upload could do.
+   *
+   * No explicit `Content-Type` — the browser has to set the multipart boundary itself.
+   */
+  uploadIcon(id: string, file: File): Observable<AgentIconResponse> {
+    const form = new FormData();
+    form.append('file', file);
+    return this.http.post<AgentIconResponse>(`${this.baseUrl()}/${id}/icon`, form);
+  }
+
+  /** Clear the icon, returning the agent to its generated gradient. */
+  removeIcon(id: string): Observable<AgentIconResponse> {
+    return this.http.delete<AgentIconResponse>(`${this.baseUrl()}/${id}/icon`);
   }
 }
