@@ -20,6 +20,8 @@ import {
   heroFingerPrint,
   heroBars3,
   heroSparkles,
+  heroInbox,
+  heroRectangleStack,
 } from '@ng-icons/heroicons/outline';
 
 interface NavItem {
@@ -52,6 +54,8 @@ interface NavGroup {
       heroFingerPrint,
       heroBars3,
       heroSparkles,
+      heroInbox,
+      heroRectangleStack,
     }),
   ],
   host: { class: 'block' },
@@ -153,6 +157,15 @@ export class AdminLayout {
         { label: 'Tools', icon: 'heroWrenchScrewdriver', route: '/admin/tools' },
         { label: 'Skills', icon: 'heroSparkles', route: '/admin/skills' },
         { label: 'Connectors', icon: 'heroLink', route: '/admin/connectors' },
+      ],
+    },
+    {
+      // Agent Marketplace (Phase 1). Two of D10's six surfaces; store front, categories
+      // and default pins join this group as their phases land.
+      label: 'Agent Marketplace',
+      items: [
+        { label: 'Review Queue', icon: 'heroInbox', route: '/admin/marketplace/review' },
+        { label: 'Listings', icon: 'heroRectangleStack', route: '/admin/marketplace/listings' },
       ],
     },
     {

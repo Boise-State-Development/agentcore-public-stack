@@ -85,6 +85,21 @@ export const adminRoutes: Routes = [
     path: 'skills/edit/:skillId',
     loadComponent: () => import('./skills/pages/skill-form.page').then(m => m.SkillFormPage),
   },
+  // Agent Marketplace (docs/specs/agent-marketplace.md) — Phase 1 ships two of the six
+  // admin surfaces. Store front, categories and default pins arrive in later phases.
+  {
+    path: 'marketplace/review',
+    loadComponent: () => import('./marketplace/pages/review-queue.page').then(m => m.ReviewQueuePage),
+  },
+  {
+    path: 'marketplace/listings',
+    loadComponent: () => import('./marketplace/pages/listings.page').then(m => m.MarketplaceListingsPage),
+  },
+  {
+    path: 'marketplace',
+    redirectTo: 'marketplace/review',
+    pathMatch: 'full',
+  },
   {
     path: 'connectors',
     loadComponent: () => import('./connectors/pages/connector-list.page').then(m => m.ConnectorListPage),

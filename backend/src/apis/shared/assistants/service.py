@@ -91,6 +91,7 @@ async def create_assistant(
     emoji: Optional[str] = None,
     bindings: Optional[List[AgentBinding]] = None,
     model_settings: Optional[AgentModelConfig] = None,
+    tagline: Optional[str] = None,
 ) -> Assistant:
     """
     Create a complete assistant with all required fields
@@ -134,6 +135,7 @@ async def create_assistant(
         status="COMPLETE",
         bindings=bindings,
         model_settings=model_settings,
+        tagline=tagline,
     )
 
     # Store the assistant
@@ -466,6 +468,7 @@ async def update_assistant(
     image_url: Optional[str] = None,
     bindings: Optional[List[AgentBinding]] = None,
     model_settings: Optional[AgentModelConfig] = None,
+    tagline: Optional[str] = None,
 ) -> Optional[Assistant]:
     """
     Update assistant fields (deep merge)
@@ -520,6 +523,8 @@ async def update_assistant(
         updates["bindings"] = bindings
     if model_settings is not None:
         updates["model_settings"] = model_settings
+    if tagline is not None:
+        updates["tagline"] = tagline
 
     # Always update the updated_at timestamp
     updates["updated_at"] = _get_current_timestamp()
@@ -572,8 +577,21 @@ async def _update_assistant_cloud(assistant: Assistant, table_name: str) -> None
         expression_attribute_values = {}
         expression_attribute_names = {}
 
-        # Fields that should never be updated (immutable or composite keys)
-        immutable_fields = {"PK", "SK", "GSI_PK", "GSI_SK", "GSI2_PK", "GSI2_SK", "assistantId", "createdAt", "ownerId"}
+        # Fields that should never be updated (immutable or composite keys).
+        #
+        # GSI5_* and ``listing`` belong to the marketplace write path
+        # (``assistants.listing_repository``) and must NOT be rewritten from here.
+        # Reads hydrate ``Assistant`` (extra="allow") straight from the raw item, so the
+        # index keys round-trip as extra model fields; without this guard a routine author
+        # edit would re-write a stale GSI5 key onto a delisted agent and silently put it
+        # back in the store. ``listing`` is excluded for the same reason in the other
+        # direction: a stale in-memory copy must not clobber a concurrent review decision.
+        immutable_fields = {
+            "PK", "SK",
+            "GSI_PK", "GSI_SK", "GSI2_PK", "GSI2_SK", "GSI5_PK", "GSI5_SK",
+            "assistantId", "createdAt", "ownerId",
+            "listing",
+        }
 
         # Always update updatedAt
         update_parts.append("updatedAt = :updated_at")

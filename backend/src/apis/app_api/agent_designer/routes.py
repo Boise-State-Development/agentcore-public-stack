@@ -59,9 +59,19 @@ from apis.shared.assistants.service import (
     update_assistant,
     update_share_permission,
 )
+from apis.app_api.agent_designer.services.listing_service import (
+    ListingError,
+    submit_listing,
+    withdraw_listing,
+)
+from apis.shared.assistants.models import (
+    AgentListing,
+    ListingSubmissionResponse,
+    SubmitListingRequest,
+)
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.feature_flags import agents_enabled
+from apis.shared.feature_flags import agent_marketplace_enabled, agents_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +87,19 @@ async def require_agents_enabled(
     (mirrors the memory-spaces / schedules pattern).
     """
     if not agents_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return user
+
+
+async def require_marketplace_enabled(
+    user: User = Depends(require_agents_enabled),
+) -> User:
+    """Cookie auth + both kill switches, for the marketplace listing routes.
+
+    The marketplace is a surface over the Agent record, so it is off whenever the Agent
+    surface itself is off. 404 rather than 403 so the routes behave as if unmounted.
+    """
+    if not agent_marketplace_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return user
 
@@ -351,3 +374,47 @@ async def get_agent_shares_endpoint(agent_id: str, current_user: User = Depends(
     except Exception as e:
         logger.error(f"Error getting agent shares: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get agent shares: {str(e)}")
+
+
+# ------------------------------------------------------------------- marketplace (D2)
+# The author's half of the listing lifecycle. The reviewer's half lives under
+# /admin/agents/* behind require_admin. Nothing here is user-visible in Phase 1 — the
+# SPA surfaces that call these ship with the Discover page in Phase 2.
+@router.post("/{agent_id}/listing/submit", response_model=ListingSubmissionResponse)
+async def submit_agent_listing_endpoint(
+    agent_id: str,
+    request: SubmitListingRequest,
+    current_user: User = Depends(require_marketplace_enabled),
+):
+    """Submit an Agent for marketplace review (owner only).
+
+    Runs the D7 checks first: a ``memory_space`` binding rejects the submission with 400,
+    and the response enumerates the author's own skills that publication would make
+    readable to anyone who runs the Agent.
+    """
+    try:
+        listing, exposed = await submit_listing(agent_id, current_user, request)
+        return ListingSubmissionResponse(agent_id=agent_id, listing=listing, exposed_skills=exposed)
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error submitting agent listing: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to submit agent listing: {str(e)}")
+
+
+@router.delete("/{agent_id}/listing", response_model=AgentListing)
+async def withdraw_agent_listing_endpoint(
+    agent_id: str, current_user: User = Depends(require_marketplace_enabled)
+):
+    """Unpublish an Agent or withdraw a pending submission (owner only).
+
+    Returns the listing to ``private``. This revokes nothing retroactively — pins keep
+    working and conversations underway keep running; it is a delisting, not a recall.
+    """
+    try:
+        return await withdraw_listing(agent_id, current_user)
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error withdrawing agent listing: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to withdraw agent listing: {str(e)}")

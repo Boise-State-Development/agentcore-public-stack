@@ -2,13 +2,18 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Agent Designer Phase 1 (D3): the uniform binding kinds. Requests validate against
 # this set; storage tolerates unknown kinds on read so records written by newer code
 # survive a read/write round trip through older code (forward + rollback compat).
 KNOWN_BINDING_KINDS = ("knowledge_base", "tool", "skill", "memory_space")
 BindingKind = Literal["knowledge_base", "tool", "skill", "memory_space"]
+
+# Agent Marketplace Phase 1 (D2): the listing lifecycle. The transition table and the
+# sparse-index key derivation live in ``assistants.listing`` — this is only the wire type.
+ListingState = Literal["private", "in_review", "published", "changes_requested", "taken_down"]
+PublisherKind = Literal["institution", "department", "individual"]
 
 
 class AgentModelConfig(BaseModel):
@@ -44,6 +49,86 @@ class AgentBinding(BaseModel):
     kind: str = Field(..., description="Binding kind (see KNOWN_BINDING_KINDS)")
     ref: str = Field(..., description="Primitive identifier this binding points at")
     config: Dict[str, Any] = Field(default_factory=dict, description="Kind-specific configuration")
+
+
+class AdminEdit(BaseModel):
+    """One admin edit to a listing's presentation fields (D13).
+
+    Recorded so the author can be told what changed and when — "An admin updated the
+    category on Jul 24" on their My Agents card. Editing someone's listing quietly is
+    how you lose authors, so this list is append-only and never pruned on write.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    field: str = Field(..., description="Presentation field that was edited")
+    at: str = Field(..., description="ISO 8601 timestamp of the edit")
+    by: str = Field(..., description="Display name of the admin who made the edit")
+
+
+class AgentListing(BaseModel):
+    """The publication state of an Agent in the marketplace (D2).
+
+    **Absent means never submitted** — that is the D3 backfill default and the reason
+    this is optional on ``Assistant``. Publication is an explicit forward act; nothing
+    derives a listing from ``visibility``, which stays the independent access gate.
+
+    ``extra="allow"`` mirrors ``Assistant``: a block written by newer code (a state or
+    field this deployment does not know) survives a read/write round trip intact.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    state: ListingState = Field(..., description="Publication state (see assistants.listing)")
+    category: str = Field(..., description="Category id; the GSI5 partition while published")
+    publisher_id: str = Field(
+        ...,
+        alias="publisherId",
+        description=(
+            "PublisherProfile this listing is attributed to (D12). DISPLAY ONLY — never "
+            "consult this in an access check; ownerId governs edit rights and Skills v2 "
+            "invoke-through resolution."
+        ),
+    )
+    submitted_at: Optional[str] = Field(None, alias="submittedAt", description="ISO 8601 submission timestamp")
+    submitted_by: Optional[str] = Field(None, alias="submittedBy", description="User id of the submitting author")
+    reviewed_at: Optional[str] = Field(None, alias="reviewedAt", description="ISO 8601 timestamp of the last review")
+    reviewed_by: Optional[str] = Field(None, alias="reviewedBy", description="User id of the reviewing admin")
+    review_note: Optional[str] = Field(
+        None,
+        alias="reviewNote",
+        description="Reviewer's reason; rendered on the author's own card so they never have to ask",
+    )
+    admin_edits: List[AdminEdit] = Field(
+        default_factory=list, alias="adminEdits", description="Append-only log of admin presentation edits (D13)"
+    )
+
+
+class PublisherProfile(BaseModel):
+    """A display identity a listing can be attributed to (D12).
+
+    Separate from ``ownerId`` on purpose: an institutional store needs Agents that speak
+    as the institution rather than as whoever on staff built them. An individual profile
+    is auto-created from the author's display name on their first submission.
+
+    ⚠️ Publisher is display-only. ``verified`` drives a check mark, not a permission, and
+    eligibility (below) is a *proposal* allowlist — an admin may set any publisher on any
+    listing regardless of it. Neither ever appears in an access check.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(..., description="Publisher identifier")
+    label: str = Field(..., description="Display name shown on the shelf and detail page")
+    kind: PublisherKind = Field(..., description="institution | department | individual")
+    verified: bool = Field(
+        False, description="Admin-only check mark meaning 'a university team stands behind this'"
+    )
+    icon_key: Optional[str] = Field(None, alias="iconKey", description="S3 object key for the publisher icon")
+    order: int = Field(0, description="Sort order in admin pickers")
+    enabled: bool = Field(True, description="Whether this profile may be proposed or assigned")
+    created_at: Optional[str] = Field(None, alias="createdAt", description="ISO 8601 creation timestamp")
+    updated_at: Optional[str] = Field(None, alias="updatedAt", description="ISO 8601 update timestamp")
 
 
 class Assistant(BaseModel):
@@ -83,6 +168,18 @@ class Assistant(BaseModel):
         None, description="Uniform primitive bindings (D3); absent = synthesize legacy KB binding via compat"
     )
 
+    # Agent Marketplace Phase 1: additive, optional, absent on every existing row. There
+    # is no backfill — an absent ``listing`` IS the D3 default and means "never submitted".
+    tagline: Optional[str] = Field(
+        None, max_length=80, description="Shelf subtitle (D4); distinct from description, which is a summary"
+    )
+    icon_key: Optional[str] = Field(
+        None, alias="iconKey", description="S3 object key for the square icon (D5); absent → generated fallback"
+    )
+    listing: Optional[AgentListing] = Field(
+        None, description="Marketplace publication state (D2); absent = never submitted (D3)"
+    )
+
 
 class CreateAssistantDraftRequest(BaseModel):
     """Request body for creating a draft assistant (minimal fields)"""
@@ -108,6 +205,7 @@ class CreateAssistantRequest(BaseModel):
     # Agent Designer Phase 1 (D3): additive, optional. Validated by binding_validation.
     model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig", description="Governed single-select model")
     bindings: Optional[List[AgentBinding]] = Field(None, description="Uniform primitive bindings")
+    tagline: Optional[str] = Field(None, max_length=80, description="Shelf subtitle (D4)")
 
 
 class UpdateAssistantRequest(BaseModel):
@@ -127,6 +225,9 @@ class UpdateAssistantRequest(BaseModel):
     # Agent Designer Phase 1 (D3): additive, optional. Validated by binding_validation.
     model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig", description="Governed single-select model")
     bindings: Optional[List[AgentBinding]] = Field(None, description="Uniform primitive bindings")
+    # Marketplace: the author owns their own tagline. Admins may also edit it, but only
+    # through PATCH /admin/agents/{id}/listing, which records the edit (D13).
+    tagline: Optional[str] = Field(None, max_length=80, description="Shelf subtitle (D4)")
 
 
 class AssistantResponse(BaseModel):
@@ -196,6 +297,13 @@ class AgentResponse(BaseModel):
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 creation timestamp")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 update timestamp")
 
+    # Marketplace Phase 1. All three are ``None`` on an agent that has never been
+    # submitted, and the routes serve this model with ``response_model_exclude_none``,
+    # so an unsubmitted agent's payload is byte-identical to before this shipped.
+    tagline: Optional[str] = Field(None, description="Shelf subtitle (D4)")
+    icon_key: Optional[str] = Field(None, alias="iconKey", description="S3 object key for the square icon (D5)")
+    listing: Optional[AgentListing] = Field(None, description="Publication state (D2); absent = never submitted")
+
     # Share metadata (parity with AssistantResponse; set post-projection)
     first_interacted: Optional[bool] = Field(None, alias="firstInteracted")
     is_shared_with_me: Optional[bool] = Field(None, alias="isSharedWithMe")
@@ -247,6 +355,221 @@ class BindableListResponse(BaseModel):
 
     kind: str = Field(..., description="The requested primitive kind")
     items: List[BindableItem] = Field(default_factory=list, description="Primitives the caller may bind")
+
+
+# ─────────────────────────────────────────────────────── Agent Marketplace (Phase 1)
+# Behavior fields, named once so the D13 guard and its test agree on the list. An admin
+# may edit everything the store *renders*; an admin may never edit what the agent *does*
+# — that would make the reviewer responsible for behavior they did not write and cannot
+# test, and would silently break an Agent its author still maintains.
+BEHAVIOR_FIELDS = ("instructions", "bindings", "modelConfig", "model_settings", "starters", "visibility")
+
+# Presentation fields an admin may edit on someone else's listing (D13).
+ADMIN_EDITABLE_FIELDS = ("name", "tagline", "iconKey", "category", "publisherId")
+
+
+class SubmitListingRequest(BaseModel):
+    """Author submits an Agent for review (D2). Runs the D7 disclosure checks."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    category: str = Field(..., description="Category id; must be a known category")
+    publisher_id: Optional[str] = Field(
+        None,
+        alias="publisherId",
+        description=(
+            "Proposed PublisherProfile (D12). Omit to use the author's own individual "
+            "profile, which is auto-created on first submission."
+        ),
+    )
+    note: Optional[str] = Field(None, max_length=2000, description="Optional note to the reviewer")
+
+
+class SkillExposure(BaseModel):
+    """One skill that publication would make readable (D7.1)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    ref: str = Field(..., description="Skill identifier")
+    label: str = Field(..., description="Skill display name, for the submit dialog's enumeration")
+
+
+class ListingSubmissionResponse(BaseModel):
+    """The resulting listing plus the disclosures the author was shown (D7)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    listing: AgentListing = Field(..., description="The listing after the transition")
+    exposed_skills: List[SkillExposure] = Field(
+        default_factory=list,
+        alias="exposedSkills",
+        description="Skills the author wrote that become readable to anyone who runs this agent (D7.1)",
+    )
+
+
+class ReviewListingRequest(BaseModel):
+    """Admin approves a submission or returns it with a reason (D2)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    decision: Literal["approve", "request_changes"] = Field(..., description="Reviewer's decision")
+    note: Optional[str] = Field(
+        None, max_length=2000, description="Reason; required for request_changes, renders on the author's card"
+    )
+    category: Optional[str] = Field(None, description="Optionally recategorize at approval (D12/D13)")
+    publisher_id: Optional[str] = Field(
+        None, alias="publisherId", description="Optionally reattribute at approval — approval makes it authoritative (D12)"
+    )
+
+
+class TakedownRequest(BaseModel):
+    """Admin delists a published Agent (D2). A delisting, not a revocation."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    reason: str = Field(..., min_length=1, max_length=2000, description="Reason sent to the author")
+
+
+class AdminListingPatchRequest(BaseModel):
+    """Presentation-only edit to a listing (D13).
+
+    Every field the browse and detail pages render must be admin-editable without the
+    author's involvement — a typo in a tagline or an off-brand icon should not require a
+    round trip. Behavior stays with the author, and this model is where that line is
+    enforced: ``extra="forbid"`` rejects anything not listed here, and the validator
+    below turns the specific behavior-field case into a message that says *why*.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: Optional[str] = Field(None, min_length=1, description="Agent display name")
+    tagline: Optional[str] = Field(None, max_length=80, description="Shelf subtitle")
+    icon_key: Optional[str] = Field(None, alias="iconKey", description="S3 object key for the square icon")
+    category: Optional[str] = Field(None, description="Category id; rewrites the GSI5 partition while published")
+    publisher_id: Optional[str] = Field(
+        None, alias="publisherId", description="Attribution (D12) — display only, never an access grant"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_behavior_fields(cls, data: Any) -> Any:
+        """Name the behavior fields explicitly rather than leaving a bare 'extra inputs'.
+
+        ``extra="forbid"`` already blocks these; this exists so the reviewer is told the
+        rule instead of the symptom.
+        """
+        if isinstance(data, dict):
+            offending = [f for f in BEHAVIOR_FIELDS if f in data]
+            if offending:
+                raise ValueError(
+                    f"Cannot edit agent behavior from the listing surface: {', '.join(sorted(set(offending)))}. "
+                    "Admins may edit presentation only "
+                    f"({', '.join(ADMIN_EDITABLE_FIELDS)}); behavior belongs to the agent's author."
+                )
+        return data
+
+
+class AdminListingRow(BaseModel):
+    """One row in the admin Review queue or Listings table."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    name: str = Field(..., description="Agent display name")
+    tagline: Optional[str] = Field(None, description="Shelf subtitle")
+    emoji: Optional[str] = Field(None, description="Emoji, for the generated icon fallback (D5)")
+    icon_key: Optional[str] = Field(None, alias="iconKey", description="S3 object key for the square icon")
+    owner_name: str = Field(..., alias="ownerName", description="Author display name — who to talk to about behavior")
+    publisher: Optional[PublisherProfile] = Field(None, description="Resolved attribution (D12), display only")
+    category: str = Field(..., description="Category id")
+    state: ListingState = Field(..., description="Publication state")
+    usage_count: int = Field(0, alias="usageCount", description="Chats — admin reporting only, never shelf furniture (D4)")
+    submitted_at: Optional[str] = Field(None, alias="submittedAt", description="ISO 8601 submission timestamp")
+    reviewed_at: Optional[str] = Field(None, alias="reviewedAt", description="ISO 8601 timestamp of the last review")
+    review_note: Optional[str] = Field(None, alias="reviewNote", description="Most recent reviewer note")
+    updated_at: str = Field(..., alias="updatedAt", description="Audit trail for post-approval drift (D2)")
+    admin_edits: List[AdminEdit] = Field(default_factory=list, alias="adminEdits", description="Admin edit log (D13)")
+
+
+class AdminListingsResponse(BaseModel):
+    """Rows for the admin Review queue / Listings tables, plus the nav pending count."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    listings: List[AdminListingRow] = Field(default_factory=list, description="Matching listings")
+    pending_count: int = Field(
+        0, alias="pendingCount", description="Submissions awaiting review; badges the admin nav (D2)"
+    )
+
+
+class PublisherCreateRequest(BaseModel):
+    """Create an admin-managed publisher profile (D12)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str = Field(..., min_length=1, description="Display name")
+    kind: PublisherKind = Field("department", description="institution | department | individual")
+    verified: bool = Field(False, description="Admin-only check mark")
+    icon_key: Optional[str] = Field(None, alias="iconKey", description="S3 object key")
+    order: int = Field(0, description="Sort order")
+    enabled: bool = Field(True, description="Whether the profile may be proposed or assigned")
+
+
+class PublisherUpdateRequest(BaseModel):
+    """Update a publisher profile (D12). All fields optional."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: Optional[str] = Field(None, min_length=1, description="Display name")
+    kind: Optional[PublisherKind] = Field(None, description="institution | department | individual")
+    verified: Optional[bool] = Field(None, description="Admin-only check mark")
+    icon_key: Optional[str] = Field(None, alias="iconKey", description="S3 object key")
+    order: Optional[int] = Field(None, description="Sort order")
+    enabled: Optional[bool] = Field(None, description="Whether the profile may be proposed or assigned")
+
+
+class PublishersResponse(BaseModel):
+    """All publisher profiles, ordered."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    publishers: List[PublisherProfile] = Field(default_factory=list, description="Publisher profiles")
+
+
+class PublisherEligibilityRequest(BaseModel):
+    """Replace the set of users who may *propose* a publisher (D12).
+
+    An allowlist for the submit dialog only. An admin may set any publisher on any
+    listing regardless of eligibility, so this never appears in an access check.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_ids: List[str] = Field(
+        default_factory=list, alias="userIds", description="Users who may propose this publisher at submission"
+    )
+
+
+class PublisherEligibilityResponse(BaseModel):
+    """Who may currently propose a publisher (D12)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    publisher_id: str = Field(..., alias="publisherId", description="Publisher identifier")
+    user_ids: List[str] = Field(default_factory=list, alias="userIds", description="Eligible user ids")
+
+
+class AgentCategoriesResponse(BaseModel):
+    """The category set a listing may reference.
+
+    Phase 1 serves the ``DEFAULT_CATEGORIES`` constant; Phase 2 serves admin-managed
+    records from the same route with no shape change.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    categories: List[str] = Field(default_factory=list, description="Category ids in browse order")
 
 
 class AssistantTestChatRequest(BaseModel):

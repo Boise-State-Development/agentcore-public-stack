@@ -60,6 +60,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     agents: {
       enabled: false,
     },
+    agentMarketplace: {
+      enabled: false,
+    },
     fineTuning: {},
     artifacts: {
       retentionDays: 90,

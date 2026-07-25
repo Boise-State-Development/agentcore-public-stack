@@ -304,6 +304,11 @@ export function buildAppApiEnvironment(
     // Gates only whether the routes 404; the assistant store it reads is always
     // present, so no extra table/bucket wiring is needed here.
     AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',
+    // Kill switch for the Agent Marketplace (listing lifecycle, publisher profiles,
+    // admin Review queue + Listings). App-api only — the marketplace adds no
+    // inference-api routes. It reads and writes the same assistants table the Agent
+    // surface already uses, so there is no extra wiring beyond the flag.
+    AGENT_MARKETPLACE_ENABLED: config.agentMarketplace.enabled ? 'true' : 'false',
     VOICE_TICKET_REPLAY_TABLE_NAME: params.voiceTicketReplayTableName,
     VOICE_TICKET_SIGNING_SECRET_ARN: params.voiceTicketSigningSecretArn,
   };
