@@ -93,6 +93,7 @@ from apis.app_api.agent_designer.services.pin_service import (
     pin_agent,
     unpin_agent,
 )
+from apis.app_api.agent_designer.services.report_service import ReportError, file_report
 from apis.app_api.agent_designer.services.store_service import (
     browse_all,
     browse_category,
@@ -108,6 +109,8 @@ from apis.shared.assistants.models import (
     ListingSubmissionResponse,
     PinnedAgentResponse,
     SubmitListingRequest,
+    SubmitReportRequest,
+    SubmitReportResponse,
 )
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
@@ -643,6 +646,45 @@ async def unpin_agent_endpoint(
     except Exception as e:
         logger.error(f"Error unpinning agent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to unpin agent: {str(e)}")
+
+
+# ----------------------------------------------------------------- problem reports (D15)
+@router.post("/{agent_id}/report", response_model=SubmitReportResponse, status_code=201)
+async def report_agent_endpoint(
+    agent_id: str,
+    request: SubmitReportRequest,
+    current_user: User = Depends(require_marketplace_enabled),
+):
+    """Report a problem with a published Agent (D15).
+
+    **This is not a review, and the distinction is the whole design.** There are no stars,
+    no public comments and no visible counts: a report is a *private message to the
+    curator*, never shelf content, and nothing the reporter writes is ever rendered to
+    another browsing user. It is also never a ranking input — nothing here touches
+    ``usageCount`` or the store front, because the moment report volume influenced
+    placement, reporting would become a way to bury a competitor's Agent.
+
+    Reportable means **published** (D15.3): you may report what the store offered you.
+    A second report while the reporter's first is still open **updates** it rather than
+    stacking (D15.4), and the response says so — without that the queue is trivially
+    floodable and the count at the top of the nav stops meaning anything.
+    """
+    try:
+        report, replaced = await file_report(
+            agent_id, current_user, reason=request.reason, note=request.note
+        )
+        return SubmitReportResponse(
+            agent_id=agent_id,
+            reason=report.reason,
+            state=report.state,
+            created_at=report.created_at,
+            replaced_existing=replaced,
+        )
+    except ReportError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error reporting agent: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to report agent: {str(e)}")
 
 
 # ------------------------------------------------------------------------ icons (D5)

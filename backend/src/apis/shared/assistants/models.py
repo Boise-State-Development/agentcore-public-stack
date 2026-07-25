@@ -15,6 +15,24 @@ BindingKind = Literal["knowledge_base", "tool", "skill", "memory_space"]
 ListingState = Literal["private", "in_review", "published", "changes_requested", "taken_down"]
 PublisherKind = Literal["institution", "department", "individual"]
 
+# Agent Marketplace Phase 8 (D15): problem reports. A small fixed set so the queue can be
+# sorted by severity without reading every note — ``inappropriate`` is the one that should
+# page a human rather than wait for a sweep.
+ReportReason = Literal["inaccurate", "broken", "inappropriate", "other"]
+
+# Deliberately NOT a mirror of ``ListingState``: a report is a note *about* an Agent, not
+# a state *of* it. Resolving one never changes ``listing.state`` (D15.5) — if a report
+# warrants delisting, the admin takes the Agent down and that is a separate recorded act.
+ReportState = Literal["open", "resolved", "dismissed"]
+
+# Severity order for the queue sweep (D15). ``inappropriate`` first for the reason above.
+REPORT_REASON_SEVERITY: Dict[str, int] = {
+    "inappropriate": 0,
+    "broken": 1,
+    "inaccurate": 2,
+    "other": 3,
+}
+
 
 class AgentModelConfig(BaseModel):
     """Governed single-select model for an Agent (D3).
@@ -1024,6 +1042,173 @@ class AdminStoreFrontResponse(BaseModel):
             "Configured ids that are no longer published — surfaced rather than silently "
             "dropped, so an admin can see why the row is short and clear them"
         ),
+    )
+
+
+# ─────────────────────────────────────────────────────── Agent Marketplace (Phase 8)
+# Problem reports (D15). ⚠️ A report is a **private message to the curator**. Nothing in
+# this section is ever rendered to another browsing user, and no count derived from it may
+# reach ``usageCount``, the store front, or any ordering — the moment report volume
+# influences placement, reporting becomes a way to bury a competitor's Agent.
+class AgentReport(BaseModel):
+    """One problem report, stored as a child row of the Agent it concerns (D15).
+
+    ``extra="allow"`` mirrors ``AgentListing``: a field written by newer code survives a
+    read/write round trip through older code.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    report_id: str = Field(..., alias="reportId", description="Deterministic per (agent, reporter) — see reports.py")
+    agent_id: str = Field(..., alias="agentId", description="Agent this report concerns")
+    reporter_id: str = Field(
+        ...,
+        alias="reporterId",
+        description=(
+            "Who filed it. Visible to the admin and NEVER to the author (D15.2) — admins "
+            "need identity to spot a brigade or a grudge; authors need the substance."
+        ),
+    )
+    reporter_name: str = Field(..., alias="reporterName", description="Reporter display name, for the queue")
+    reason: ReportReason = Field(..., description="Fixed-set reason, so the queue sorts by severity")
+    note: Optional[str] = Field(None, description="The reporter's free text")
+    state: ReportState = Field("open", description="open → resolved | dismissed (D15.5)")
+    created_at: str = Field(..., alias="createdAt", description="ISO 8601; the GSI6 sort key while open")
+    updated_at: Optional[str] = Field(None, alias="updatedAt", description="ISO 8601 of the last write")
+    resolved_at: Optional[str] = Field(None, alias="resolvedAt", description="ISO 8601 of the triage decision")
+    resolved_by: Optional[str] = Field(None, alias="resolvedBy", description="Display name of the deciding admin")
+    resolution_note: Optional[str] = Field(
+        None,
+        alias="resolutionNote",
+        description=(
+            "The admin's own note. ⚠️ Never forwarded to the author (D15.1) — when a report "
+            "is actionable the admin uses request-changes or takedown, whose reason field is "
+            "the author-facing channel."
+        ),
+    )
+
+
+class SubmitReportRequest(BaseModel):
+    """A user reports a problem with a published Agent (D15)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    reason: ReportReason = Field(..., description="Why it is being reported")
+    note: Optional[str] = Field(
+        None, max_length=2000, description="What is wrong, in the reporter's words"
+    )
+
+
+class SubmitReportResponse(BaseModel):
+    """What the reporter is told back.
+
+    Deliberately thin. The reporter learns their report was recorded and whether it
+    *replaced* one they already had open (D15.4) — and nothing else. Queue position,
+    other reports, and every admin field are the curator's, not theirs.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent this report concerns")
+    reason: ReportReason = Field(..., description="The reason as recorded")
+    state: ReportState = Field(..., description="Always 'open' for a freshly filed report")
+    created_at: str = Field(..., alias="createdAt", description="When this report was filed")
+    replaced_existing: bool = Field(
+        False,
+        alias="replacedExisting",
+        description=(
+            "True when this updated the reporter's already-open report rather than adding "
+            "one (D15.4) — so the UI can say 'we updated your report' instead of implying a "
+            "second one is now queued."
+        ),
+    )
+
+
+class ResolveReportRequest(BaseModel):
+    """Admin triages a report: resolve it or dismiss it (D15.5)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    decision: Literal["resolve", "dismiss"] = Field(..., description="Triage outcome")
+    note: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="The admin's record of what they did. Never forwarded to the author (D15.1)",
+    )
+
+
+class AdminReportRow(BaseModel):
+    """One row in the admin Reports queue (D10/D15).
+
+    Carries the reporter (D15.2) and enough of the Agent to triage without a second
+    fetch. ``listingState`` is present but **never** written by this surface: resolving a
+    report does not change it (D15.5). It is here so an admin can see that the Agent they
+    are reading about has already been taken down by someone else.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    report_id: str = Field(..., alias="reportId", description="Report identifier, within its agent")
+    agent_id: str = Field(..., alias="agentId", description="Agent this report concerns")
+    agent_name: str = Field(..., alias="agentName", description="Agent display name at read time")
+    emoji: Optional[str] = Field(None, description="Emoji, for the generated icon fallback (D5)")
+    icon_url: Optional[str] = Field(None, alias="iconUrl", description="Where to render the icon from")
+    owner_name: Optional[str] = Field(
+        None, alias="ownerName", description="The author — who to talk to about behavior"
+    )
+    listing_state: Optional[ListingState] = Field(
+        None,
+        alias="listingState",
+        description="The Agent's publication state, read-only context; resolving never changes it (D15.5)",
+    )
+    agent_missing: bool = Field(
+        False,
+        alias="agentMissing",
+        description=(
+            "The Agent this report concerns no longer exists. Reports are deleted with "
+            "their Agent, so this is a repair affordance for a row orphaned by an older "
+            "delete path — the admin can still dismiss it."
+        ),
+    )
+    reporter_id: str = Field(..., alias="reporterId", description="Reporter user id (admin-only, D15.2)")
+    reporter_name: str = Field(..., alias="reporterName", description="Reporter display name (admin-only, D15.2)")
+    reason: ReportReason = Field(..., description="Fixed-set reason")
+    note: Optional[str] = Field(None, description="The reporter's free text")
+    state: ReportState = Field(..., description="open / resolved / dismissed")
+    created_at: str = Field(..., alias="createdAt", description="ISO 8601 when it was filed")
+    resolved_at: Optional[str] = Field(None, alias="resolvedAt", description="ISO 8601 of the decision")
+    resolved_by: Optional[str] = Field(None, alias="resolvedBy", description="Deciding admin's display name")
+    resolution_note: Optional[str] = Field(None, alias="resolutionNote", description="The admin's own note")
+
+
+class AdminReportsResponse(BaseModel):
+    """Rows for the admin Reports queue, plus the nav badge count (D10)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    reports: List[AdminReportRow] = Field(default_factory=list, description="Matching reports")
+    open_count: int = Field(
+        0,
+        alias="openCount",
+        description="Reports awaiting triage; badges the admin nav alongside submissions (D10)",
+    )
+
+
+class AdminQueueCountsResponse(BaseModel):
+    """The two numbers D10 puts on the admin nav, without loading either queue.
+
+    Exists because the badge has to be right on *every* admin page, and making the nav
+    fetch two full queues to render two integers would put a table scan behind every
+    click in the console.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pending_count: int = Field(
+        0, alias="pendingCount", description="Submissions awaiting review (D2)"
+    )
+    open_report_count: int = Field(
+        0, alias="openReportCount", description="Problem reports awaiting triage (D15)"
     )
 
 

@@ -902,6 +902,23 @@ async def _delete_assistant_cloud(assistant_id: str, table_name: str) -> bool:
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(table_name)
 
+        # Child rows first. Marketplace problem reports (D15) live under this same
+        # partition precisely so they never outlive what they concern — and an orphaned
+        # *open* report is worse than untidy: it keeps its sparse GSI6 key, so it would
+        # sit in the admin queue forever pointing at an Agent nobody can open. Best
+        # effort, because failing to tidy up must not make the Agent undeletable; the
+        # queue projection flags a row whose Agent is gone so an admin can still clear it.
+        try:
+            from .reports import delete_reports_for_agent
+
+            await delete_reports_for_agent(assistant_id)
+        except Exception:
+            logger.warning(
+                f"Failed to delete reports for assistant {assistant_id}; "
+                "the admin queue will show them as orphaned",
+                exc_info=True,
+            )
+
         table.delete_item(Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
 
         logger.info(f"🗑️ Deleted assistant {assistant_id} from DynamoDB table {table_name}")

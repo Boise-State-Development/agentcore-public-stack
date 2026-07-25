@@ -191,3 +191,37 @@ export interface CategoryShelf {
   category: AgentCategory;
   listings: AgentListing[];
 }
+
+// ── problem reports, the reporter's half (D15, Phase 8) ────────────────────────────
+/**
+ * Why an agent is being reported.
+ *
+ * A small fixed set so the admin queue can sort by severity without reading every note.
+ * `inappropriate` is the one meant to page a human rather than wait for a sweep.
+ */
+export type ReportReason = 'inaccurate' | 'broken' | 'inappropriate' | 'other';
+
+export interface SubmitReportRequest {
+  reason: ReportReason;
+  note?: string;
+}
+
+/**
+ * What the reporter is told back — deliberately thin.
+ *
+ * ⚠️ A report is a *private message to the curator*. It is never rendered to another
+ * browsing user and never feeds `usageCount`, the store front, or any ordering, so there
+ * is no count, no queue position and no admin field here to leak one.
+ */
+export interface SubmitReportResponse {
+  agentId: string;
+  reason: ReportReason;
+  state: 'open' | 'resolved' | 'dismissed';
+  createdAt: string;
+  /**
+   * True when this updated a report the user already had open (D15.4) rather than adding
+   * one — so the confirmation says "we updated your report" instead of implying a second
+   * one is now queued.
+   */
+  replacedExisting: boolean;
+}

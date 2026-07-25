@@ -7,6 +7,7 @@ import {
   signal,
 } from '@angular/core';
 import { Router } from '@angular/router';
+import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -16,6 +17,7 @@ import {
   heroCheckBadge,
   heroCheckCircle,
   heroExclamationTriangle,
+  heroFlag,
   heroLockClosed,
   heroNoSymbol,
   heroPlus,
@@ -24,6 +26,11 @@ import { AgentApiService } from '../services/agent-api.service';
 import { AgentPinService } from '../services/agent-pin.service';
 import { Agent, AgentRunnability } from '../models/agent.model';
 import { AgentIconComponent } from '../components/agent-icon.component';
+import {
+  ReportAgentDialogComponent,
+  ReportAgentDialogData,
+  ReportAgentDialogResult,
+} from '../components/report-agent-dialog.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 
 /**
@@ -44,8 +51,15 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
  * an Agent they cannot run today, and hiding the button would leave them nothing to do
  * with the page.
  *
- * Not here yet, by phase: "Report a problem" (Phase 8). Rendering an affordance whose
- * backing lever does not exist is how a store starts lying.
+ * "Report a problem" (D15, Phase 8) is at the foot of the page, not beside those two, and
+ * that placement is the design: it is the exit, not an action the page is inviting. It
+ * renders only for a **published** agent (D15.3) — you may report what the store offered
+ * you; a private or in-review agent nobody outside the author was invited to has no
+ * takedown available as a remedy either.
+ *
+ * ⚠️ Nothing about reports is ever shown *here* to anyone else. No count, no other user's
+ * text, no badge. A report is a private message to the curator; the moment this page
+ * rendered report volume, reporting would become a way to bury a competitor's agent.
  */
 @Component({
   selector: 'app-agent-detail',
@@ -59,6 +73,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
       heroCheckBadge,
       heroCheckCircle,
       heroExclamationTriangle,
+      heroFlag,
       heroLockClosed,
       heroNoSymbol,
       heroPlus,
@@ -303,6 +318,41 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
               </section>
             </div>
           </div>
+
+          <!--
+            D15. At the foot of the page and styled as a quiet link, because it is the
+            exit rather than something the page is inviting. Published only (D15.3).
+          -->
+          @if (canReport()) {
+            <div class="mt-10 border-t border-gray-200 pt-5 dark:border-gray-700">
+              @if (reportConfirmation()) {
+                <p
+                  role="status"
+                  class="flex items-start gap-2 text-sm/6 text-emerald-700 dark:text-emerald-400"
+                >
+                  <ng-icon name="heroCheckCircle" class="mt-1 size-4 shrink-0" aria-hidden="true" />
+                  <span>{{ reportConfirmation() }}</span>
+                </p>
+              } @else {
+                <button
+                  type="button"
+                  (click)="onReport()"
+                  [disabled]="reportBusy()"
+                  [appTooltip]="reportTooltip()"
+                  appTooltipPosition="top"
+                  class="inline-flex items-center gap-1.5 text-sm/6 font-medium text-gray-500 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:text-white"
+                >
+                  <ng-icon name="heroFlag" class="size-4" aria-hidden="true" />
+                  Report a problem
+                </button>
+              }
+              @if (reportError()) {
+                <p role="alert" class="mt-2 text-sm/6 text-rose-700 dark:text-rose-400">
+                  {{ reportError() }}
+                </p>
+              }
+            </div>
+          }
         }
       </div>
     </div>
@@ -312,6 +362,7 @@ export class AgentDetailPage {
   private api = inject(AgentApiService);
   private pinService = inject(AgentPinService);
   private router = inject(Router);
+  private dialog = inject(Dialog);
 
   /** Bound from the `agents/:id` route via `withComponentInputBinding`. */
   readonly id = input.required<string>();
@@ -327,6 +378,19 @@ export class AgentDetailPage {
    * complaint about an action the user did not take.
    */
   readonly pinError = signal<string | null>(null);
+
+  readonly reportBusy = signal(false);
+  readonly reportError = signal<string | null>(null);
+  /**
+   * The acknowledgement, which replaces the control rather than sitting beside it.
+   *
+   * Session-local on purpose: there is no read endpoint for "have I reported this", and
+   * there should not be — that would hand every user a way to probe the queue. So the
+   * page can only remember what it did itself, and the *server* is what actually enforces
+   * one open report per reporter (D15.4).
+   */
+  readonly reportConfirmation = signal<string | null>(null);
+  private readonly hasOpenReport = signal(false);
 
   constructor() {
     void this.load();
@@ -446,6 +510,50 @@ export class AgentDetailPage {
       this.pinError.set(this.pinService.error());
     } finally {
       this.pinBusy.set(false);
+    }
+  }
+
+  /**
+   * D15.3 — reportable means published.
+   *
+   * Read off the listing block the detail response already carries, so there is no second
+   * request and no second copy of the rule; the server refuses an unpublished agent
+   * regardless, and this only decides whether to render a control that would be refused.
+   */
+  readonly canReport = computed(() => this.agent()?.listing?.state === 'published');
+
+  reportTooltip(): string {
+    return `Tell the store's curators about a problem with ${this.agent()?.name ?? 'this agent'} — privately`;
+  }
+
+  async onReport(): Promise<void> {
+    const agent = this.agent();
+    if (!agent) return;
+
+    const ref = this.dialog.open<ReportAgentDialogResult, ReportAgentDialogData>(
+      ReportAgentDialogComponent,
+      { data: { agentName: agent.name, hasOpenReport: this.hasOpenReport() } },
+    );
+    const result = await firstValueFrom(ref.closed);
+    if (!result) return;
+
+    this.reportBusy.set(true);
+    this.reportError.set(null);
+    try {
+      const response = await firstValueFrom(this.api.reportAgent(this.id(), result));
+      this.hasOpenReport.set(true);
+      // The wording follows `replacedExisting` (D15.4) rather than assuming: telling
+      // someone their report was "sent" when it amended an earlier one would leave them
+      // expecting two things in the queue.
+      this.reportConfirmation.set(
+        response.replacedExisting
+          ? 'Thanks — we updated the report you already had open on this agent.'
+          : "Thanks — this went privately to the store's curators.",
+      );
+    } catch (err) {
+      this.reportError.set(this.messageFor(err, 'Failed to send this report.'));
+    } finally {
+      this.reportBusy.set(false);
     }
   }
 
