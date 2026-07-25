@@ -4,6 +4,7 @@ import {
   computed,
   inject,
   input,
+  OnInit,
   signal,
 } from '@angular/core';
 import { Router } from '@angular/router';
@@ -358,7 +359,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
     </div>
   `,
 })
-export class AgentDetailPage {
+export class AgentDetailPage implements OnInit {
   private api = inject(AgentApiService);
   private pinService = inject(AgentPinService);
   private router = inject(Router);
@@ -392,7 +393,14 @@ export class AgentDetailPage {
   readonly reportConfirmation = signal<string | null>(null);
   private readonly hasOpenReport = signal(false);
 
-  constructor() {
+  /**
+   * ``ngOnInit``, not the constructor: ``id`` is a required signal input bound by
+   * ``withComponentInputBinding()``, and the router sets it *after* construction.
+   * Reading it a moment too early throws NG0950, which ``load()``'s own try/catch
+   * then swallowed into "Failed to load this agent." — an error banner with no
+   * network request behind it, which is what this page did from phase 3 until now.
+   */
+  ngOnInit(): void {
     void this.load();
     // Cached across the session, so arriving from a shelf row costs nothing.
     void this.pinService.load();
