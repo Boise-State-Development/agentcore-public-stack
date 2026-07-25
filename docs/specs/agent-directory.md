@@ -1,6 +1,12 @@
 # Agent Directory — a browse-and-discover surface for published Agents
 
-**Status:** Draft / proposal (2026-07-18)
+> **⚠️ Superseded (2026-07-24) by [`agent-marketplace.md`](agent-marketplace.md).**
+> That spec carries forward D1 (one noun), D2 (sparse index), D3 (`listing` separate from
+> `visibility`) and D6 (pin, never fork), and **replaces** D4 (runnability placement) and D7
+> (self-service publication — publishing is now admin-gated). This document is kept for the
+> reasoning behind the carried-forward decisions; build from the marketplace spec.
+
+**Status:** Superseded — see above. Originally Draft / proposal (2026-07-18)
 **Author:** Phil Merrell (drafted with Claude)
 **Targets branch:** `develop`
 **Depends on:** [`agent-designer.md`](agent-designer.md) Phases 1–2 (the Agent record + the
