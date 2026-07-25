@@ -60,6 +60,14 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        // Marketplace Discover (spec phase 2). Sits under the same preview gate as the
+        // rest of /agents — the sidenav entry is system-admin only until Agents are
+        // unveiled, so this is not user-visible yet.
+        path: 'agents/discover',
+        loadComponent: () => import('./agents/discover/discover.page').then(m => m.AgentDiscoverPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'agents',
         loadComponent: () => import('./agents/agents.page').then(m => m.AgentsPage),
         canActivate: [authGuard],

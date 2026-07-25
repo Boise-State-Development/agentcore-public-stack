@@ -30,11 +30,8 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from apis.shared.assistants.compat import effective_bindings
-from apis.shared.assistants.listing import (
-    DEFAULT_CATEGORIES,
-    ListingTransitionError,
-    assert_transition,
-)
+from apis.shared.assistants.categories import ensure_seeded
+from apis.shared.assistants.listing import ListingTransitionError, assert_transition
 from apis.shared.assistants.listing_repository import list_by_state, write_listing
 from apis.shared.assistants.models import (
     AdminEdit,
@@ -94,11 +91,26 @@ def _current_state(assistant: Assistant) -> Optional[str]:
     return assistant.listing.state if assistant.listing else None
 
 
-def _validate_category(category: str) -> None:
-    if category not in DEFAULT_CATEGORIES:
+async def _validate_category(category: str) -> None:
+    """Check a category against the admin-managed set (D10, Phase 2).
+
+    Phase 1 checked a constant; the records are the source now. ``ensure_seeded`` makes
+    the first call in a fresh environment write the defaults rather than reject every
+    submission, so an unseeded environment is never an unusable one.
+
+    Disabled categories are refused for *new* submissions while listings already in them
+    keep working — that is the whole point of disable-instead-of-delete.
+    """
+    categories = await ensure_seeded()
+    match = next((c for c in categories if c.id == category), None)
+    if match is None:
+        available = ", ".join(c.id for c in categories if c.enabled)
         raise ListingError(
-            f"Unknown category '{category}'. Expected one of: {', '.join(DEFAULT_CATEGORIES)}.",
-            status_code=400,
+            f"Unknown category '{category}'. Expected one of: {available}.", status_code=400
+        )
+    if not match.enabled:
+        raise ListingError(
+            f"The category '{match.label}' is no longer accepting new listings.", status_code=400
         )
 
 
@@ -222,7 +234,7 @@ async def submit_listing(
 ) -> Tuple[AgentListing, List[SkillExposure]]:
     """Author submits an Agent for review (D2), after the D7 checks pass."""
     assistant = await _load_for_author(agent_id, user)
-    _validate_category(request.category)
+    await _validate_category(request.category)
 
     try:
         assert_transition(_current_state(assistant), "in_review")
@@ -311,7 +323,7 @@ async def review_listing(
         raise ListingError(str(e), status_code=400) from e
 
     if category is not None:
-        _validate_category(category)
+        await _validate_category(category)
     if publisher_id is not None:
         # No eligibility check: an admin may attribute any listing to any publisher (D12).
         # That is how the store gets its day-one set of official Agents without those
@@ -383,7 +395,7 @@ async def patch_listing_presentation(
     if not changes:
         raise ListingError("No presentation fields supplied.", status_code=400)
     if "category" in changes:
-        _validate_category(changes["category"])
+        await _validate_category(changes["category"])
     if "publisher_id" in changes and not await get_publisher(changes["publisher_id"]):
         raise ListingError(f"Unknown publisher '{changes['publisher_id']}'.", status_code=400)
 

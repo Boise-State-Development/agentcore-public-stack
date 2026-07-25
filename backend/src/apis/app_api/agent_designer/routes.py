@@ -20,7 +20,7 @@ Phase-4 concern when the Designer consumes it.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apis.app_api.agent_designer.services.bindable_catalog import (
     BINDABLE_KINDS,
@@ -64,8 +64,15 @@ from apis.app_api.agent_designer.services.listing_service import (
     submit_listing,
     withdraw_listing,
 )
+from apis.app_api.agent_designer.services.store_service import (
+    browse_all,
+    browse_category,
+    store_front,
+)
 from apis.shared.assistants.models import (
     AgentListing,
+    AgentStoreFrontResponse,
+    AgentStoreResponse,
     ListingSubmissionResponse,
     SubmitListingRequest,
 )
@@ -193,6 +200,50 @@ async def list_agents_endpoint(
     except Exception as e:
         logger.error(f"Error listing agents: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list agents: {str(e)}")
+
+
+# --------------------------------------------------------------------------- store (D4)
+# Declared BEFORE ``/{agent_id}`` so the literal paths are not captured by the path param.
+@router.get("/store/front", response_model=AgentStoreFrontResponse)
+async def agent_store_front_endpoint(current_user: User = Depends(require_marketplace_enabled)):
+    """The browse header: the featured row plus the categories to render (D10).
+
+    ``featured`` is empty until the store-front admin ships in Phase 5; the field is
+    present now so the SPA contract does not change when it fills in.
+    """
+    try:
+        featured, categories = await store_front()
+        return AgentStoreFrontResponse(featured=featured, categories=categories)
+    except Exception as e:
+        logger.error(f"Error loading agent store front: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to load store front: {str(e)}")
+
+
+@router.get("/store", response_model=AgentStoreResponse)
+async def agent_store_endpoint(
+    category: Optional[str] = None,
+    cursor: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=100),
+    current_user: User = Depends(require_marketplace_enabled),
+):
+    """Browse published Agents, newest-first (D4).
+
+    A pure sparse-GSI5 read: it cannot return an unpublished Agent because an unpublished
+    Agent has no key in the index. The response carries icon, name, tagline, publisher and
+    category — no ``instructions``, no binding refs, no owner id.
+
+    ``cursor`` paginates within a single ``category`` (one partition). Without a category
+    the whole store is merged newest-first and no cursor is returned — see
+    ``store_service.browse_all`` for why a half-cursor would be worse than none.
+    """
+    try:
+        if category:
+            listings, next_cursor = await browse_category(category, limit=limit, cursor=cursor)
+            return AgentStoreResponse(listings=listings, next_cursor=next_cursor)
+        return AgentStoreResponse(listings=await browse_all(limit=limit), next_cursor=None)
+    except Exception as e:
+        logger.error(f"Error browsing agent store: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to browse the store: {str(e)}")
 
 
 # --------------------------------------------------------------------------- palette

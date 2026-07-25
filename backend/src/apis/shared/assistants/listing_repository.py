@@ -19,9 +19,11 @@ two can never disagree — a published listing always has keys and an unpublishe
 does, with no window in between.
 """
 
+import base64
+import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from .listing import gsi5_keys
 from .models import AgentListing
@@ -151,6 +153,59 @@ async def clear_listing(agent_id: str) -> None:
             raise ValueError(f"Agent not found: {agent_id}") from e
         logger.error(f"Failed to clear listing for {agent_id}: {e}")
         raise
+
+
+async def query_store(
+    category: str, *, limit: int = 50, cursor: Optional[str] = None
+) -> Tuple[list, Optional[str]]:
+    """Browse one category's shelf, newest first (Phase 2).
+
+    The *only* user-facing read of the marketplace, and it is a pure GSI5 query — no
+    scan, no filter, and no state check. It cannot return an unpublished agent because
+    an unpublished agent has no key in this index; that is the whole point of keeping
+    the index sparse rather than filtering on ``listing.state`` after the fact.
+
+    ``ScanIndexForward=False`` gives newest-first, since ``GSI5_SK`` is
+    ``CREATED#{created_at}``. There is no popularity sort — the store front is the
+    manual ranking lever instead (see the spec's ranking caveat).
+    """
+    from boto3.dynamodb.conditions import Key
+
+    params: Dict[str, Any] = {
+        "IndexName": "AgentDirectoryIndex",
+        "KeyConditionExpression": Key("GSI5_PK").eq(f"LISTED#{category}"),
+        "ScanIndexForward": False,
+        "Limit": limit,
+    }
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        if decoded:
+            params["ExclusiveStartKey"] = decoded
+
+    response = _table().query(**params)
+    items = [from_ddb(item) for item in response.get("Items", [])]
+    next_cursor = _encode_cursor(response.get("LastEvaluatedKey"))
+    return items, next_cursor
+
+
+def _encode_cursor(key: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Opaque pagination cursor over a DynamoDB LastEvaluatedKey."""
+    if not key:
+        return None
+    return base64.urlsafe_b64encode(json.dumps(key, default=str).encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> Optional[Dict[str, Any]]:
+    """Decode a cursor, treating anything malformed as "start from the beginning".
+
+    A bad cursor is a client bug or a hand-edited URL, not something worth 500ing over —
+    the honest degradation is the first page.
+    """
+    try:
+        return json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+    except Exception:
+        logger.warning("Ignoring malformed store cursor")
+        return None
 
 
 async def list_by_state(state: Optional[str] = None) -> list:
