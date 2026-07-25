@@ -68,6 +68,15 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        // Marketplace detail (spec phase 3). Declared AFTER `agents/discover` so the
+        // literal path is not captured by `:id`, and after `agents/:id/edit` so the
+        // deeper route still wins. `id` binds to the page's `input.required` via
+        // `withComponentInputBinding()`.
+        path: 'agents/:id',
+        loadComponent: () => import('./agents/detail/agent-detail.page').then(m => m.AgentDetailPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'agents',
         loadComponent: () => import('./agents/agents.page').then(m => m.AgentsPage),
         canActivate: [authGuard],

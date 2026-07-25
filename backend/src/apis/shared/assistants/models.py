@@ -270,6 +270,59 @@ class AssistantsListResponse(BaseModel):
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for next page")
 
 
+class AgentCapability(BaseModel):
+    """One thing an Agent can reach, as the detail page names it (Phase 3, D4/D6).
+
+    ⚠️ **Names, never refs.** A capability is rendered to anyone who can see the Agent,
+    so it carries the primitive's display name and its kind — not the ``binding.ref``,
+    not a tool id, not a skill id. That is the same reasoning as the shelf projection in
+    ``AgentListingResponse``, one level less narrow.
+
+    Labels resolve against the **unfiltered** catalog rather than the viewer's, because
+    D6 has to be able to name a capability the viewer *lacks*. Availability is the
+    separate ``/runnability`` read; this list is what the Agent binds, full stop.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str = Field(..., description="Display name of the bound primitive")
+    kind: str = Field(..., description="Binding kind (tool | skill | memory_space)")
+
+
+RunnabilityState = Literal["ready", "limits", "blocked"]
+
+
+class MissingCapability(BaseModel):
+    """A capability the viewer cannot reach, named for the D6 availability line."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str = Field(..., description="Display name of the unavailable primitive")
+    kind: str = Field(..., description="'model' or a binding kind")
+    optional: bool = Field(
+        False,
+        description="Whether the binding was declared optional; only optional gaps degrade to 'limits'",
+    )
+
+
+class AgentRunnabilityResponse(BaseModel):
+    """Whether this Agent will run for the requesting user (D6).
+
+    Resolved by diffing the Agent's ``modelConfig`` + ``bindings`` against the viewer's
+    own RBAC-filtered ``list_bindable`` results — composing the five existing
+    per-primitive checks, never a sixth access service (Designer D4).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    state: RunnabilityState = Field(
+        ..., description="ready | limits | blocked — the D6 three-way outcome"
+    )
+    missing: List[MissingCapability] = Field(
+        default_factory=list, description="What the viewer cannot reach; empty when ready"
+    )
+
 class AgentResponse(BaseModel):
     """Agent read-shape (D3) — the projection served by the ``/agents/*`` surface.
 
@@ -284,7 +337,14 @@ class AgentResponse(BaseModel):
     owner_name: str = Field(..., alias="ownerName", description="Owner display name")
     name: str = Field(..., description="Agent display name")
     description: str = Field(..., description="Short summary")
-    instructions: str = Field(..., description="System prompt")
+    instructions: Optional[str] = Field(
+        None,
+        description=(
+            "System prompt. ⚠️ Marketplace Phase 3: gated to permission in ('owner', 'editor') "
+            "and omitted otherwise. Under link-sharing, exposing it to any PUBLIC viewer was "
+            "bounded; under a store it is not."
+        ),
+    )
     model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig", description="Governed single-select model")
     bindings: List[AgentBinding] = Field(default_factory=list, description="Resolved bindings (legacy KB synthesized)")
     visibility: Literal["PRIVATE", "PUBLIC", "SHARED"] = Field(..., description="Access control")
@@ -304,10 +364,36 @@ class AgentResponse(BaseModel):
     icon_key: Optional[str] = Field(None, alias="iconKey", description="S3 object key for the square icon (D5)")
     listing: Optional[AgentListing] = Field(None, description="Publication state (D2); absent = never submitted")
 
+    # Marketplace Phase 3 — the detail read. Both are populated only by GET /agents/{id};
+    # the list route leaves them None (and serves ``response_model_exclude_none``), so
+    # listing payloads are unchanged and no N-agent label fan-out happens on a list read.
+    capabilities: Optional[List[AgentCapability]] = Field(
+        None, description="What the Agent can reach, by display name (D4/D6)"
+    )
+    model_label: Optional[str] = Field(
+        None,
+        alias="modelLabel",
+        description="Display name of the pinned model, for the detail Details panel; absent when no model is pinned",
+    )
+    publisher: Optional["ListingPublisher"] = Field(
+        None,
+        description=(
+            "Attribution as the detail page renders it (D12), resolved from "
+            "``listing.publisherId``. DISPLAY ONLY — the id itself is never returned and "
+            "never gates access."
+        ),
+    )
+    category_label: Optional[str] = Field(
+        None,
+        alias="categoryLabel",
+        description="Human-readable category name; ``listing.category`` is an id an admin may have renamed",
+    )
+
     # Share metadata (parity with AssistantResponse; set post-projection)
     first_interacted: Optional[bool] = Field(None, alias="firstInteracted")
     is_shared_with_me: Optional[bool] = Field(None, alias="isSharedWithMe")
     user_permission: Optional[Literal["owner", "editor", "viewer"]] = Field(None, alias="userPermission")
+
 
 
 class AgentsListResponse(BaseModel):

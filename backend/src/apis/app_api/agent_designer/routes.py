@@ -26,6 +26,11 @@ from apis.app_api.agent_designer.services.bindable_catalog import (
     BINDABLE_KINDS,
     list_bindable,
 )
+from apis.app_api.agent_designer.services.agent_detail import (
+    resolve_capabilities,
+    resolve_listing_display,
+    resolve_runnability,
+)
 from apis.app_api.agent_designer.services.binding_validation import (
     BindingValidationError,
     validate_agent_write,
@@ -33,6 +38,7 @@ from apis.app_api.agent_designer.services.binding_validation import (
 from apis.shared.assistants.compat import to_agent_view
 from apis.shared.assistants.models import (
     AgentResponse,
+    AgentRunnabilityResponse,
     AgentSharesResponse,
     AgentsListResponse,
     BindableListResponse,
@@ -111,10 +117,22 @@ async def require_marketplace_enabled(
     return user
 
 
+# Permissions that may read an Agent's ``instructions`` (Marketplace Phase 3).
+# ⚠️ Behaviour change: this used to be returned to any PUBLIC viewer. Under link-sharing
+# that exposure was bounded by who had the link; under a store, "PUBLIC" means the whole
+# institution can browse to it, so the system prompt is gated to the people who may edit
+# it. Viewers get ``capabilities`` — names, not behaviour — instead.
+INSTRUCTIONS_PERMISSIONS = ("owner", "editor")
+
+
 def _agent_response(assistant, *, permission: Optional[str] = None,
                     is_shared_with_me: Optional[bool] = None) -> AgentResponse:
     """Project an Assistant into the Agent read-shape, layering share metadata."""
     view = to_agent_view(assistant)
+    if permission not in INSTRUCTIONS_PERMISSIONS:
+        # Dropped rather than blanked: every route here serves the model with
+        # ``response_model_exclude_none``, so the key is simply absent for a viewer.
+        view.pop("instructions", None)
     if permission is not None:
         view["userPermission"] = permission
     if is_shared_with_me is not None:
@@ -275,7 +293,17 @@ async def list_bindable_endpoint(
 
 @router.get("/{agent_id}", response_model=AgentResponse, response_model_exclude_none=True)
 async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require_agents_enabled)):
-    """Retrieve an Agent by id with visibility-based access control."""
+    """Retrieve an Agent by id with visibility-based access control.
+
+    This is the marketplace **detail read** (Phase 3). Two things beyond Phase 1:
+
+    * ``instructions`` is gated to owner/editor — see ``INSTRUCTIONS_PERMISSIONS``.
+    * ``capabilities`` + ``modelLabel`` are resolved, so the detail page can say what the
+      Agent reaches by *name* rather than making the SPA dereference binding refs.
+
+    Capability resolution is best-effort: it is presentation, and a catalog hiccup should
+    not turn a readable Agent into a 500. The list route does not resolve them at all.
+    """
     try:
         if not await assistant_exists(agent_id):
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
@@ -284,12 +312,51 @@ async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require
         )
         if not assistant:
             raise HTTPException(status_code=403, detail="Access denied: you do not have permission to access this agent")
-        return _agent_response(assistant, permission=permission)
+
+        response = _agent_response(assistant, permission=permission)
+        try:
+            capabilities, model_label = await resolve_capabilities(assistant, current_user)
+            response.capabilities = capabilities
+            response.model_label = model_label
+            response.publisher, response.category_label = await resolve_listing_display(assistant)
+        except Exception:
+            logger.warning(f"Failed to resolve capabilities for agent {agent_id}", exc_info=True)
+        return response
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error retrieving agent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to retrieve agent: {str(e)}")
+
+
+@router.get("/{agent_id}/runnability", response_model=AgentRunnabilityResponse)
+async def get_agent_runnability_endpoint(
+    agent_id: str, current_user: User = Depends(require_marketplace_enabled)
+):
+    """Will this Agent run for the requesting user? (D6)
+
+    Resolves the Agent's ``modelConfig`` + ``bindings`` against the **viewer's** own
+    RBAC-filtered ``/agents/bindable`` results and answers ``ready`` / ``limits`` /
+    ``blocked``, naming what is missing. Access-gated exactly like the detail read: you
+    can only ask about an Agent you can already see.
+
+    D6's stated cost: with no badge on the shelf (D4), a user only learns an Agent will
+    not run for them after tapping into it. This route is where that lands.
+    """
+    try:
+        if not await assistant_exists(agent_id):
+            raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+        assistant, permission = await get_assistant_with_access_check(
+            assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
+        )
+        if not assistant:
+            raise HTTPException(status_code=403, detail="Access denied: you do not have permission to access this agent")
+        return await resolve_runnability(assistant, current_user)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving agent runnability: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to resolve runnability: {str(e)}")
 
 
 @router.put("/{agent_id}", response_model=AgentResponse, response_model_exclude_none=True)

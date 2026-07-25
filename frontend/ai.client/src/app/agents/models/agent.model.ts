@@ -1,4 +1,5 @@
 import { ShareEntry, UserPermission } from '../../assistants/models/assistant.model';
+import { ListingPublisher } from './store.model';
 
 /**
  * Agent Designer contract (Phase 4). Mirrors the backend `/agents` surface
@@ -52,12 +53,27 @@ export interface AgentBinding {
   config?: Record<string, unknown>;
 }
 
+/**
+ * One thing an Agent can reach, as the detail page names it (Marketplace Phase 3).
+ * Names, never refs — the backend resolves binding refs to display names so this
+ * payload can be rendered to anyone who may see the Agent.
+ */
+export interface AgentCapability {
+  label: string;
+  kind: string;
+}
+
 export interface Agent {
   agentId: string;
   ownerName: string;
   name: string;
   description: string;
-  instructions: string;
+  /**
+   * The system prompt. **Absent unless you are the owner or an editor** (Marketplace
+   * Phase 3): under a store, a PUBLIC agent is browsable by the whole institution, so
+   * viewers get `capabilities` instead of behaviour.
+   */
+  instructions?: string;
   modelConfig?: AgentModelConfig;
   bindings: AgentBinding[];
   visibility: 'PRIVATE' | 'PUBLIC' | 'SHARED';
@@ -70,10 +86,44 @@ export interface Agent {
   createdAt: string;
   updatedAt: string;
 
+  // Marketplace listing (Phase 1) + the detail read (Phase 3). All are absent on the
+  // list route and on an agent that was never submitted.
+  tagline?: string;
+  listing?: AgentListingBlock;
+  /** Resolved on `GET /agents/{id}` only. */
+  capabilities?: AgentCapability[];
+  modelLabel?: string;
+  /** Attribution as the page renders it; `listing.publisherId` is an id and never shown. */
+  publisher?: ListingPublisher | null;
+  categoryLabel?: string;
+
   // Share metadata (present for shared agents)
   firstInteracted?: boolean;
   isSharedWithMe?: boolean;
   userPermission?: UserPermission;
+}
+
+/** The marketplace publication state carried on an Agent (D2). */
+export interface AgentListingBlock {
+  state: 'private' | 'in_review' | 'published' | 'changes_requested' | 'taken_down';
+  category: string;
+  publisherId: string;
+  reviewNote?: string;
+}
+
+/** D6's three-way answer to "will this run for me?". */
+export type RunnabilityState = 'ready' | 'limits' | 'blocked';
+
+export interface MissingCapability {
+  label: string;
+  kind: string;
+  optional: boolean;
+}
+
+export interface AgentRunnability {
+  agentId: string;
+  state: RunnabilityState;
+  missing: MissingCapability[];
 }
 
 export interface CreateAgentDraftRequest {
