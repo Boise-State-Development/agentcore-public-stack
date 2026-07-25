@@ -870,6 +870,16 @@ from .roles.routes import router as roles_router
 
 router.include_router(roles_router)
 
+# ========== Include Role Default-Pins Subrouter (Marketplace D9) ==========
+# Its own module, mounted on the same ``/roles`` prefix: the AppRole record is the source
+# of truth for a default pin, but a pin is NOT a permission — keeping it out of the role
+# CRUD routes is the same separation the storage keeps (see ``assistants/role_pins.py``).
+# Every route depends on ``require_marketplace_admin``, so the surface 404s while the
+# marketplace kill switch is off.
+from .roles.agent_pins import router as role_agent_pins_router
+
+router.include_router(role_agent_pins_router)
+
 # ========== Include Tools Admin Subrouter ==========
 from .tools.routes import router as tools_router
 

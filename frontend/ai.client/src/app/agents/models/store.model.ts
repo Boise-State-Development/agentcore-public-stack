@@ -159,9 +159,10 @@ export interface AgentStoreFrontResponse {
  * One row on the Pinned shelf (D8, D9).
  *
  * The shelf projection plus the two fields that say *why* it is pinned. `source` is
- * always `'user'` and `locked` always `false` in Phase 5 — role-seeded pins are Phase 6 —
- * and both are on the contract now so that phase adds rows rather than changing a shape
- * the SPA already renders.
+ * `'user'` whenever the viewer has their own pin — even when a role also seeds the same
+ * agent, because that own pin is what survives the role pin being removed. `locked`
+ * follows the *role's* seed regardless of source: a role that locks an agent has said its
+ * members keep it.
  */
 export interface PinnedAgent extends AgentListing {
   source: 'user' | 'role';

@@ -11,6 +11,8 @@ import {
   ListingState,
   PublisherProfile,
   ReviewListingRequest,
+  RoleAgentPinsResponse,
+  RoleAgentPinsUpdateRequest,
 } from '../models/marketplace.model';
 
 interface PublishersResponse {
@@ -152,6 +154,40 @@ export class AdminMarketplaceService {
   async saveStoreFront(agentIds: string[]): Promise<AdminStoreFrontResponse> {
     return firstValueFrom(
       this.http.put<AdminStoreFrontResponse>(`${this.baseUrl()}/storefront`, { agentIds }),
+    );
+  }
+
+  /**
+   * A role's default pins (D9).
+   *
+   * Under `/admin/roles/` because the AppRole record is the source of truth for a seed —
+   * the same rule that makes a role-side grant the only thing an access check reads. The
+   * response carries the D9.5 diff already applied, so nothing here re-derives it.
+   */
+  async loadRolePins(roleId: string): Promise<RoleAgentPinsResponse> {
+    return firstValueFrom(
+      this.http.get<RoleAgentPinsResponse>(
+        `${this.config.appApiUrl()}/admin/roles/${encodeURIComponent(roleId)}/agent-pins`,
+      ),
+    );
+  }
+
+  /**
+   * Replace a role's default pins, in order.
+   *
+   * Warnings on the returned rows do not block the save — an admin may seed an agent
+   * whose author is about to publish it. What the server refuses is a list that cannot
+   * mean what it says: past the ceiling, or the same agent twice.
+   */
+  async saveRolePins(
+    roleId: string,
+    request: RoleAgentPinsUpdateRequest,
+  ): Promise<RoleAgentPinsResponse> {
+    return firstValueFrom(
+      this.http.put<RoleAgentPinsResponse>(
+        `${this.config.appApiUrl()}/admin/roles/${encodeURIComponent(roleId)}/agent-pins`,
+        request,
+      ),
     );
   }
 

@@ -880,6 +880,122 @@ class AgentPinsResponse(BaseModel):
     pins: List[PinnedAgentResponse] = Field(default_factory=list, description="Resolved pins, in order")
 
 
+# ── role-seeded default pins (D9, Phase 6) ──────────────────────────────────────────
+# ⚠️ A pin is **not** a permission. These models never touch ``EffectivePermissions`` and
+# never enter ``_compute_effective_permissions``: role pins live in their own items, are
+# resolved by their own query, and do not inherit through ``inheritsFrom``. Folding them
+# into the permission payload would pollute a structure the model call path depends on.
+class RoleAgentPin(BaseModel):
+    """One default pin stored against an AppRole (``SK = AGENT_PIN#{agent_id}``)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    order: int = Field(0, description="Position within this role's seed list, ascending")
+    locked: bool = Field(
+        False,
+        description=(
+            "A locked seed cannot be dismissed (D9.4) — the remove control is hidden and "
+            "the dismissal endpoint no-ops. For the one Agent a role genuinely must keep."
+        ),
+    )
+    created_at: Optional[str] = Field(None, alias="createdAt", description="ISO 8601 timestamp")
+    created_by: Optional[str] = Field(None, alias="createdBy", description="Admin user id")
+
+
+class RoleAgentPinInput(BaseModel):
+    """One entry of a role's pin list as the admin console submits it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    locked: bool = Field(False, description="Members cannot dismiss this one (D9.4)")
+
+
+class RoleAgentPinsUpdateRequest(BaseModel):
+    """Replace a role's default pins, in order (D9).
+
+    A whole-list PUT for the same reason as the store front: ``order`` is a property of
+    the list, not of any one row, so a half-applied reorder is an order nobody chose.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pins: List[RoleAgentPinInput] = Field(
+        default_factory=list, alias="pins", description="Seeded agents, in shelf order"
+    )
+
+
+class RoleAgentPinRow(BaseModel):
+    """One default pin as the admin console sees it: the shelf projection plus the D9.5 diff."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    name: str = Field(..., description="Agent display name")
+    tagline: Optional[str] = Field(None, description="Shelf subtitle")
+    emoji: Optional[str] = Field(None, description="Emoji, for the generated icon fallback (D5)")
+    icon_url: Optional[str] = Field(None, alias="iconUrl", description="Square icon URL (D5)")
+    publisher: Optional[ListingPublisher] = Field(None, description="Attribution (D12), display only")
+    category: str = Field("", description="Category id; empty when the agent carries no listing")
+    order: int = Field(0, description="Position in the seed list")
+    locked: bool = Field(False, description="Members cannot dismiss this one (D9.4)")
+    listing_state: Optional[ListingState] = Field(
+        None, alias="listingState", description="Publication state; absent when never submitted"
+    )
+    reachable: bool = Field(
+        True,
+        description=(
+            "Whether an ordinary member of the role could open this Agent at all. False for "
+            "a PRIVATE agent (owner only) — the seed would silently resolve to nothing."
+        ),
+    )
+    visibility: str = Field("PUBLIC", description="PRIVATE | SHARED | PUBLIC — why ``reachable`` reads as it does")
+    state: str = Field(
+        "ready", description="D9.5 assignment-time check against the ROLE's permissions: ready | limits | blocked"
+    )
+    missing: List[MissingCapability] = Field(
+        default_factory=list, description="Capabilities this role does not grant (D9.5)"
+    )
+    notes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "What the role-level check could not decide — a memory-space binding resolves "
+            "per person, so 'ready' here never claims to have checked it"
+        ),
+    )
+
+
+class RoleAgentPinsResponse(BaseModel):
+    """A role's default pins, plus the two facts that decide whether they reach anyone."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    role_id: str = Field(..., alias="roleId", description="AppRole identifier")
+    role_label: str = Field("", alias="roleLabel", description="Display name of the role")
+    fallback_only: bool = Field(
+        False,
+        alias="fallbackOnly",
+        description=(
+            "⚠️ D9.6 — the ``default`` role is consulted ONLY for users who matched zero "
+            "AppRoles, and is never merged alongside a matched role. Pins seeded here "
+            "reach nobody who holds any other role."
+        ),
+    )
+    unmapped: bool = Field(
+        False,
+        description="The role carries no jwtRoleMappings, so no user matches it at all",
+    )
+    pins: List[RoleAgentPinRow] = Field(default_factory=list, description="Seeded agents, in order")
+    unavailable: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Configured ids that no longer resolve to an Agent — reported rather than "
+            "pruned on read, so a GET never rewrites an admin's curation as a side effect"
+        ),
+    )
+
+
 class StoreFrontUpdateRequest(BaseModel):
     """Replace the featured row, in order (D10).
 
