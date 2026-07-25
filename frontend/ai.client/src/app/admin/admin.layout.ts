@@ -3,8 +3,11 @@ import {
   ChangeDetectionStrategy,
   computed,
   inject,
+  OnInit,
+  Signal,
 } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { AdminMarketplaceService } from './marketplace/services/admin-marketplace.service';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -21,6 +24,7 @@ import {
   heroBars3,
   heroSparkles,
   heroInbox,
+  heroFlag,
   heroRectangleStack,
   heroStar,
   heroTag,
@@ -31,6 +35,12 @@ interface NavItem {
   label: string;
   icon: string;
   route: string;
+  /**
+   * A count that badges this entry (D10). A signal rather than a number so the badge is
+   * live — triaging the last report has to empty the badge without a reload, or the nav
+   * starts lying about work that is already done.
+   */
+  badge?: Signal<number>;
 }
 
 interface NavGroup {
@@ -58,6 +68,7 @@ interface NavGroup {
       heroBars3,
       heroSparkles,
       heroInbox,
+      heroFlag,
       heroRectangleStack,
       heroStar,
       heroTag,
@@ -100,7 +111,11 @@ interface NavGroup {
                 @for (group of navGroups(); track group.label) {
                   <optgroup [label]="group.label">
                     @for (item of group.items; track item.route) {
-                      <option [value]="item.route">{{ item.label }}</option>
+                      <!-- No badge element on mobile: an <option> renders text only, so
+                           the count goes inline or it is invisible here. -->
+                      <option [value]="item.route">
+                        {{ item.label }}{{ item.badge && item.badge() > 0 ? ' (' + item.badge() + ')' : '' }}
+                      </option>
                     }
                   </optgroup>
                 }
@@ -124,7 +139,17 @@ interface NavGroup {
                             class="group flex items-center gap-x-3 whitespace-nowrap rounded-md px-3 py-2 text-sm/6 font-medium text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
                           >
                             <ng-icon [name]="item.icon" class="size-5 shrink-0 text-gray-400 group-hover:text-gray-500 dark:text-gray-500 dark:group-hover:text-gray-300" />
-                            {{ item.label }}
+                            <span class="min-w-0 flex-1">{{ item.label }}</span>
+                            @if (item.badge; as badge) {
+                              @if (badge() > 0) {
+                                <span
+                                  class="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 px-1.5 text-xs/5 font-semibold text-white dark:bg-blue-500"
+                                  [attr.aria-label]="badge() + ' waiting'"
+                                >
+                                  {{ badge() }}
+                                </span>
+                              }
+                            }
                           </a>
                         </li>
                       }
@@ -144,8 +169,9 @@ interface NavGroup {
     </div>
   `,
 })
-export class AdminLayout {
+export class AdminLayout implements OnInit {
   private router = inject(Router);
+  private marketplace = inject(AdminMarketplaceService);
 
   private readonly allNavGroups: NavGroup[] = [
     {
@@ -166,11 +192,26 @@ export class AdminLayout {
       ],
     },
     {
-      // Agent Marketplace. Five of D10's seven surfaces; the reports queue joins this
-      // group with Phase 8.
+      // Agent Marketplace. Six of D10's seven surfaces; Default Pins is the seventh and
+      // is listed here even though its route lives under Roles, because the AppRole
+      // record is the source of truth for a seed.
+      //
+      // Two entries carry counts (D10): work waiting should be *visible* rather than
+      // discovered by clicking into a queue to see whether it is empty.
       label: 'Agent Marketplace',
       items: [
-        { label: 'Review Queue', icon: 'heroInbox', route: '/admin/marketplace/review' },
+        {
+          label: 'Review Queue',
+          icon: 'heroInbox',
+          route: '/admin/marketplace/review',
+          badge: this.marketplace.pendingCount,
+        },
+        {
+          label: 'Reports',
+          icon: 'heroFlag',
+          route: '/admin/marketplace/reports',
+          badge: this.marketplace.openReportCount,
+        },
         { label: 'Listings', icon: 'heroRectangleStack', route: '/admin/marketplace/listings' },
         { label: 'Store Front', icon: 'heroStar', route: '/admin/marketplace/store-front' },
         { label: 'Categories', icon: 'heroTag', route: '/admin/marketplace/categories' },
@@ -200,6 +241,19 @@ export class AdminLayout {
    * (SKILLS_ENABLED), so no client-side feature gate is needed here.
    */
   readonly navGroups = computed<NavGroup[]>(() => this.allNavGroups);
+
+  /**
+   * One small call for both badges, on every admin page.
+   *
+   * The counts have to be right wherever the admin is standing, not only once they open
+   * a queue — that is what makes the badge a prompt rather than a confirmation. It is a
+   * dedicated endpoint rather than two queue loads so this does not put a table scan and
+   * a full row projection behind every click in the console, and it swallows failures:
+   * a badge is orientation, and an unreachable count must not break the shell.
+   */
+  ngOnInit(): void {
+    void this.marketplace.refreshQueueCounts();
+  }
 
   onMobileNavChange(event: Event): void {
     const select = event.target as HTMLSelectElement;

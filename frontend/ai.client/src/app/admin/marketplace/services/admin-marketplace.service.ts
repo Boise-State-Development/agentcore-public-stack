@@ -4,12 +4,16 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import {
   AdminListingRow,
+  AdminQueueCounts,
+  AdminReportRow,
+  AdminReportsResponse,
   AdminStoreFrontResponse,
   AgentCategory,
   AdminListingsResponse,
   ListingPatchRequest,
   ListingState,
   PublisherProfile,
+  ResolveReportRequest,
   ReviewListingRequest,
   RoleAgentPinsResponse,
   RoleAgentPinsUpdateRequest,
@@ -39,12 +43,16 @@ export class AdminMarketplaceService {
   private _loading = signal(false);
   private _error = signal<string | null>(null);
   private _pendingCount = signal(0);
+  private _openReportCount = signal(0);
 
   readonly loading = this._loading.asReadonly();
   readonly error = this._error.asReadonly();
 
   /** Submissions awaiting review — badges the nav so the queue stays visible (D2). */
   readonly pendingCount = this._pendingCount.asReadonly();
+
+  /** Problem reports awaiting triage — badges the nav alongside submissions (D10). */
+  readonly openReportCount = this._openReportCount.asReadonly();
 
   /** The Review queue: everything currently awaiting a decision. */
   async loadSubmissions(): Promise<AdminListingRow[]> {
@@ -88,6 +96,82 @@ export class AdminMarketplaceService {
   /** Edit presentation only; the backend 422s any behavior field. */
   async patchListing(agentId: string, patch: ListingPatchRequest): Promise<void> {
     await firstValueFrom(this.http.patch(`${this.baseUrl()}/${agentId}/listing`, patch));
+  }
+
+  // ── problem reports (D15) ─────────────────────────────────────────────────────
+  /**
+   * The Reports queue.
+   *
+   * ⚠️ Rows carry the reporter (D15.2) and are admin-only. Nothing fetched here may be
+   * rendered on a user-facing surface, and no count derived from it may reach the store
+   * front or any ordering — report volume influencing placement would make reporting a
+   * way to bury a competitor's agent.
+   */
+  async loadReports(): Promise<AdminReportRow[]> {
+    this._loading.set(true);
+    this._error.set(null);
+    try {
+      const response = await firstValueFrom(
+        this.http.get<AdminReportsResponse>(`${this.baseUrl()}/reports`),
+      );
+      this._openReportCount.set(response.openCount ?? 0);
+      return response.reports ?? [];
+    } catch (err) {
+      this._error.set(this.messageFor(err, 'Failed to load reports'));
+      throw err;
+    } finally {
+      this._loading.set(false);
+    }
+  }
+
+  /** Every report ever filed on one agent — is this complaint a pattern? */
+  async loadAgentReports(agentId: string): Promise<AdminReportRow[]> {
+    const response = await firstValueFrom(
+      this.http.get<AdminReportsResponse>(
+        `${this.baseUrl()}/${encodeURIComponent(agentId)}/reports`,
+      ),
+    );
+    return response.reports ?? [];
+  }
+
+  /**
+   * Resolve or dismiss a report (D15.5).
+   *
+   * ⚠️ This never delists anything. A report is a note about an agent, not a state of it;
+   * if one warrants a takedown, that is `takedown()` above and a separately recorded act
+   * with its own author-facing reason.
+   */
+  async resolveReport(
+    agentId: string,
+    reportId: string,
+    request: ResolveReportRequest,
+  ): Promise<void> {
+    await firstValueFrom(
+      this.http.post(
+        `${this.baseUrl()}/${encodeURIComponent(agentId)}/reports/${encodeURIComponent(reportId)}/resolve`,
+        request,
+      ),
+    );
+  }
+
+  /**
+   * Refresh both nav badge counts (D10).
+   *
+   * Its own endpoint rather than two queue loads: the badges have to be right on every
+   * admin page, and fetching two full queues to render two integers would put a table
+   * scan behind every click in the console. Failures are swallowed — a badge is
+   * orientation, and an unreachable count must not error the shell around a working page.
+   */
+  async refreshQueueCounts(): Promise<void> {
+    try {
+      const counts = await firstValueFrom(
+        this.http.get<AdminQueueCounts>(`${this.baseUrl()}/queues`),
+      );
+      this._pendingCount.set(counts.pendingCount ?? 0);
+      this._openReportCount.set(counts.openReportCount ?? 0);
+    } catch {
+      // Leave whatever the last successful read said.
+    }
   }
 
   async loadPublishers(): Promise<PublisherProfile[]> {

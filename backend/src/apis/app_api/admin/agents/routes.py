@@ -5,9 +5,10 @@ Mounted under ``/admin/agents`` per the CLAUDE.md route convention — admin CRU
 (= ``require_app_roles("system_admin")``); D2 is explicit that a granular "marketplace
 curator" permission is a deliberate follow-up, so do not open a second permission axis here.
 
-Covers four of D10's seven surfaces — **Review queue**, **Listings**, **Categories** and
-**Store front** — plus the **Publishers** records they depend on. Default pins and the
-reports queue are Phases 6 and 8.
+Covers five of D10's seven surfaces — **Review queue**, **Reports**, **Listings**,
+**Categories** and **Store front** — plus the **Publishers** records they depend on.
+Default pins live under ``/admin/roles/`` because the AppRole record is the source of
+truth for a seed.
 """
 
 import logging
@@ -31,10 +32,20 @@ from apis.shared.assistants.categories import (
     get_category,
     put_category,
 )
+from apis.app_api.agent_designer.services.report_service import (
+    ReportError,
+    list_agent_report_history,
+    list_report_queue,
+    open_report_count,
+    triage_report,
+)
 from apis.app_api.agent_designer.services.store_service import resolve_featured
 from apis.shared.assistants.models import (
     AdminListingPatchRequest,
     AdminListingsResponse,
+    AdminQueueCountsResponse,
+    AdminReportRow,
+    AdminReportsResponse,
     AdminStoreFrontResponse,
     AgentCategoriesResponse,
     AgentCategory,
@@ -47,6 +58,7 @@ from apis.shared.assistants.models import (
     PublisherProfile,
     PublishersResponse,
     PublisherUpdateRequest,
+    ResolveReportRequest,
     ReviewListingRequest,
     StoreFrontUpdateRequest,
     TakedownRequest,
@@ -186,6 +198,103 @@ async def patch_agent_listing(
     except Exception as e:
         logger.error(f"Error patching agent listing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to patch listing: {str(e)}")
+
+
+# ── problem reports (D15) ────────────────────────────────────────────────────────────
+# The second work stream beside submissions. Everything here is admin-only for a reason
+# stated once: **the reporter is visible to the admin and never to the author** (D15.2).
+# Admins need identity to spot a brigade or a grudge; authors need the substance, not the
+# name. Nothing in this section is reachable from a user-facing route.
+@router.get("/reports", response_model=AdminReportsResponse)
+async def list_agent_reports(admin: User = Depends(require_marketplace_admin)):
+    """The Reports queue: every open report, oldest first within severity (D15).
+
+    Reports are **triaged, never auto-forwarded to the author** (D15.1). Piping raw user
+    text straight to the person who built the thing is how one bad message ends a
+    volunteer's willingness to publish — and the author cannot act on "this is stupid"
+    anyway. When a report is actionable the reviewer uses the existing **request changes**
+    or **takedown** path, whose reason field is already the author-facing channel. Reports
+    are the *evidence* for that reason, not a substitute for it.
+    """
+    try:
+        rows, open_count = await list_report_queue()
+        return AdminReportsResponse(reports=rows, open_count=open_count)
+    except Exception as e:
+        logger.error(f"Error listing agent reports: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list reports: {str(e)}")
+
+
+@router.get("/queues", response_model=AdminQueueCountsResponse)
+async def get_queue_counts(admin: User = Depends(require_marketplace_admin)):
+    """The two counts D10 puts on the admin nav, without loading either queue.
+
+    Its own route because the badges have to be right on *every* admin page: making the
+    nav call ``/submissions`` and ``/reports`` to render two integers would put a table
+    scan and a full row projection behind every click in the console.
+
+    Fail-soft per half. A badge is orientation, not data — an unreachable count should
+    show as zero rather than break the shell around a page that works.
+    """
+    pending = 0
+    open_reports = 0
+    try:
+        _rows, pending = await list_admin_listings(state="in_review")
+    except Exception:
+        logger.warning("Failed to count pending submissions for the nav badge", exc_info=True)
+    try:
+        open_reports = await open_report_count()
+    except Exception:
+        logger.warning("Failed to count open reports for the nav badge", exc_info=True)
+    return AdminQueueCountsResponse(pending_count=pending, open_report_count=open_reports)
+
+
+@router.get("/{agent_id}/reports", response_model=AdminReportsResponse)
+async def list_agent_report_history_endpoint(
+    agent_id: str, admin: User = Depends(require_marketplace_admin)
+):
+    """Every report ever filed on one Agent, newest first.
+
+    The context a reviewer wants before deciding whether one complaint is a pattern. Note
+    the count returned here is this Agent's, not the queue's — it badges nothing.
+    """
+    try:
+        rows = await list_agent_report_history(agent_id)
+        return AdminReportsResponse(
+            reports=rows, open_count=len([r for r in rows if r.state == "open"])
+        )
+    except Exception as e:
+        logger.error(f"Error listing reports for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list reports: {str(e)}")
+
+
+@router.post("/{agent_id}/reports/{report_id}/resolve", response_model=AdminReportRow)
+async def resolve_agent_report(
+    agent_id: str,
+    report_id: str,
+    request: ResolveReportRequest,
+    admin: User = Depends(require_marketplace_admin),
+):
+    """Resolve or dismiss a report (D15.5).
+
+    ⚠️ **This never changes ``listing.state``.** A report has its own tiny lifecycle —
+    ``open → resolved | dismissed`` — deliberately not a mirror of the listing state
+    machine, because a report is a note *about* an Agent, not a state *of* it. If one
+    warrants delisting, the admin uses ``POST /{agent_id}/takedown`` and that is a
+    separate, recorded act with its own author-facing reason.
+
+    The path carries ``agent_id`` because reports are child rows of the Agent — the spec's
+    ``/reports/{reportId}/resolve`` would need a second index to locate the parent, which
+    is exactly what D15's storage note declines to add.
+    """
+    try:
+        return await triage_report(
+            agent_id, report_id, admin, decision=request.decision, note=request.note
+        )
+    except ReportError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error resolving report {report_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to resolve report: {str(e)}")
 
 
 # ── store front (D10) ────────────────────────────────────────────────────────────────

@@ -400,10 +400,15 @@ Child rows under the Agent, so a report is deleted with the Agent it concerns an
 outlives it:
 
 ```
-PK = AST#{agent_id}, SK = "REPORT#{created_at}#{report_id}"
+PK = AST#{agent_id}, SK = "REPORT#{report_id}"
 { reporterId, reporterName, reason, note, state, createdAt,
   resolvedAt?, resolvedBy?, resolutionNote? }
 ```
+
+⚠️ **As built, the sort key carries no timestamp.** It was drafted as
+`REPORT#{created_at}#{report_id}`, which cannot satisfy the D15.4 rule two paragraphs
+below — see the Phase 8 notes. `report_id` is `sha256(agent_id:reporter_id)[:16]`, and
+the chronology lives in `GSI6_SK`, which is where it is actually read.
 
 **Sparse open-report index (GSI6 on `rag-assistants`)**, written only while
 `state == 'open'`, exactly as GSI5 is written only while published:
@@ -509,7 +514,7 @@ auth rule; admin routes `Depends(require_admin)` (= `require_app_roles("system_a
 | `DELETE /agents/{id}/listing` | Author unpublishes. |
 | `GET /agents/pins` · `POST`/`DELETE /agents/{id}/pin` | The user's effective pin list; pin / dismiss (D9). Pinning is gated on the caller being able to *reach* the Agent, not on it being published. |
 | `POST /agents/{id}/report` | Report a problem with a published Agent (D15). One open report per reporter. |
-| `GET /admin/agents/reports` · `POST /admin/agents/reports/{reportId}/resolve` | Report queue; resolve or dismiss, reporter visible (D15). |
+| `GET /admin/agents/reports` · `POST /admin/agents/{id}/reports/{reportId}/resolve` | Report queue; resolve or dismiss, reporter visible (D15). Also `GET /admin/agents/{id}/reports` for one Agent's history and `GET /admin/agents/queues` for the two nav counts. |
 | `GET /admin/agents/submissions` · `POST /admin/agents/{id}/review` | Review queue; approve / request changes (D2). |
 | `GET /admin/agents/listings` · `POST /admin/agents/{id}/takedown` | Listings table; delist with a reason. |
 | `PATCH /admin/agents/{id}/listing` | Edit presentation only — `name`, `tagline`, `iconKey`, `category`, `publisherId` (D13). Rejects any behavior field. |
@@ -563,8 +568,8 @@ Phase 4  Icons: upload, S3, generated fallback, all four render sizes  ✅ shipp
 Phase 5  Pins: user pin state + Pinned tab + store front admin        ✅ shipped (PR #736)
 Phase 6  Default pins by role (D9) + the assignment-time runnability check
                                                                       ✅ shipped (PR #737)
-Phase 7  @-mention in the composer                                          ← in progress
-Phase 8  Problem reports (D15): report action + admin Reports queue   ← depends on 3
+Phase 7  @-mention in the composer                                    ✅ shipped (PR #738)
+Phase 8  Problem reports (D15): report action + admin Reports queue         ← in progress
 Later    Ranking + full-corpus search via the Registry catalog (F6b)
 ```
 
@@ -651,6 +656,53 @@ thread" in one sentence, and that sentence turned out to be the whole phase:
 - **Known edge, pre-existing:** `continue_truncated` skips the whole assistant block, so a
   "Continue" after a max_tokens truncation runs without the Agent — true for bound Agent
   conversations before this phase, and unchanged by it.
+
+**Phase 8 notes (as built).** Six, the first of which is a contradiction inside this spec
+and the fourth of which was a live trap:
+
+- **⚠️ The report's sort key is deterministic, not chronological — the data model above
+  and D15.4 could not both be satisfied.** The sketch says
+  `SK = REPORT#{created_at}#{report_id}`; D15.4 says enforce one-open-report-per-reporter
+  "with a conditional write on a deterministic `report_id` … the write already knows both
+  halves of the key". It does not: a key containing `created_at` cannot be conditionally
+  updated without first *reading* the row to learn the timestamp — which is the extra
+  lookup D15.4 exists to avoid. So the key is `REPORT#{sha256(agent_id:reporter_id)[:16]}`
+  and the chronology moved to `GSI6_SK`, which is the only place anything reads it (the
+  queue never sorts by the table's sort key). The reporter is hashed rather than embedded
+  so the sort key is not itself an enumerable directory of who reported what — D15.2 puts
+  the reporter in the *item*, where an admin reads it, not in a key any partition query
+  returns.
+- **The rule is three conditional writes and no read**: create-if-absent → else
+  update-if-open → else overwrite-if-closed. Amending an open report preserves `createdAt`
+  and the index key, so re-submitting is not a way to jump the queue; filing again *after*
+  a resolution starts a genuinely new report and clears the old verdict. Two taps racing
+  cannot stack two reports or resurrect a resolved one.
+- **Per (agent, reporter), history is one deep.** A new report replaces the resolved one
+  at that key. An append-only archive was considered and declined: nothing would read it,
+  and D15.1 already puts the durable record elsewhere — a report is the *evidence* for a
+  request-changes or takedown, and that act is separately recorded on the listing.
+- **⚠️ `_delete_assistant_cloud` deleted only the `METADATA` item.** Reports are child rows
+  precisely so they never outlive the Agent, but nothing swept them — and an orphaned
+  *open* report keeps its sparse GSI6 key, so it would have sat in the admin queue forever
+  pointing at an Agent nobody can open. The sweep now runs inside the shared delete (so
+  every delete path is covered, not just the Agent router's) and is best-effort: failing
+  to tidy up must not make an Agent undeletable. The queue therefore also *flags* a row
+  whose Agent is gone rather than dropping it — a row that is invisible but still counted
+  is one an admin can neither see nor clear.
+- **The nav badge needed a counts route.** `AdminListingsResponse.pendingCount` existed
+  since Phase 1 but badged nothing: the layout never read it, and it is only populated
+  once a queue page has loaded — a badge that appears *after* you visit the queue is not a
+  badge. D10 wants both counts visible from anywhere in the console, so `GET
+  /admin/agents/queues` returns the two integers and the layout fetches it on init. The
+  alternative — having the nav load both queues — would have put a table scan and a full
+  row projection behind every click in the admin console. It fails soft per half: a badge
+  is orientation, and an unreachable count shows zero rather than breaking the shell.
+- **Queue order is `(severity, oldest-first)`, and the owner is not excluded.** The spec
+  asks for a chronological sweep and separately says `inappropriate` "should page a human
+  rather than wait for a sweep"; sorting severity-first is how both hold. And D15's gate
+  is exactly publication — an author can report their own published Agent, because adding
+  an owner exception would be a rule the spec does not have, for a case that is at worst
+  a redundant queue item.
 
 **Phase 3.5 is a gap this table originally left open.** Phases 1–3 shipped the submit and withdraw
 endpoints and the entire reviewer console, but no phase owned the *author's* half of the surface —

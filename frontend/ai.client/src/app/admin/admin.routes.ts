@@ -85,11 +85,15 @@ export const adminRoutes: Routes = [
     path: 'skills/edit/:skillId',
     loadComponent: () => import('./skills/pages/skill-form.page').then(m => m.SkillFormPage),
   },
-  // Agent Marketplace (docs/specs/agent-marketplace.md) — five of D10's seven admin
-  // surfaces. The reports queue arrives with Phase 8.
+  // Agent Marketplace (docs/specs/agent-marketplace.md) — six of D10's seven admin
+  // surfaces. Default pins live under Roles, because the AppRole record owns a seed.
   {
     path: 'marketplace/review',
     loadComponent: () => import('./marketplace/pages/review-queue.page').then(m => m.ReviewQueuePage),
+  },
+  {
+    path: 'marketplace/reports',
+    loadComponent: () => import('./marketplace/pages/reports.page').then(m => m.ReportsPage),
   },
   {
     path: 'marketplace/listings',

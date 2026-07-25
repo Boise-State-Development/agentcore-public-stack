@@ -19,6 +19,8 @@ import {
   ListingPreflight,
   ListingSubmissionResponse,
   SubmitListingRequest,
+  SubmitReportRequest,
+  SubmitReportResponse,
 } from '../models/store.model';
 import {
   ShareAssistantRequest,
@@ -115,6 +117,19 @@ export class AgentApiService {
   /** Unpublish or withdraw. Returns the listing at `private`; revokes nothing (D7.3). */
   withdrawListing(id: string): Observable<AgentListingBlock> {
     return this.http.delete<AgentListingBlock>(`${this.baseUrl()}/${id}/listing`);
+  }
+
+  /**
+   * Report a problem with a published agent (D15).
+   *
+   * ⚠️ Not a review. There are no stars, no public comments and no visible counts — this
+   * posts a private message to the curator, and nothing the reporter writes is ever
+   * rendered to another browsing user. The server refuses anything not published (D15.3)
+   * and *updates* the reporter's already-open report rather than stacking a second one
+   * (D15.4), which the response reports back as `replacedExisting`.
+   */
+  reportAgent(id: string, request: SubmitReportRequest): Observable<SubmitReportResponse> {
+    return this.http.post<SubmitReportResponse>(`${this.baseUrl()}/${id}/report`, request);
   }
 
   /**

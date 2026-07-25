@@ -185,3 +185,64 @@ export interface RoleAgentPinsUpdateRequest {
   pins: { agentId: string; locked: boolean }[];
 }
 
+
+// ── problem reports (D15, Phase 8) ─────────────────────────────────────────────────
+/**
+ * Why an agent was reported. A fixed set so the queue sorts by severity without anyone
+ * reading every note; `inappropriate` is the one that should page a human.
+ */
+export type ReportReason = 'inaccurate' | 'broken' | 'inappropriate' | 'other';
+
+/**
+ * A report's own tiny lifecycle. Deliberately **not** a mirror of `ListingState`: a
+ * report is a note *about* an agent, not a state *of* it, and resolving one never changes
+ * the listing (D15.5).
+ */
+export type ReportState = 'open' | 'resolved' | 'dismissed';
+
+/**
+ * One row in the admin Reports queue.
+ *
+ * ⚠️ `reporterId` / `reporterName` are **admin-only** (D15.2). Admins need identity to
+ * spot a brigade or a grudge; the author needs the substance and never the name. Nothing
+ * on this interface may be rendered on a user-facing surface.
+ */
+export interface AdminReportRow {
+  reportId: string;
+  agentId: string;
+  agentName: string;
+  emoji?: string;
+  iconUrl?: string;
+  ownerName?: string;
+  /** Context only — resolving a report never writes this (D15.5). */
+  listingState?: ListingState | null;
+  /** The agent is gone; the row is shown so the admin can still clear it. */
+  agentMissing: boolean;
+  reporterId: string;
+  reporterName: string;
+  reason: ReportReason;
+  note?: string;
+  state: ReportState;
+  createdAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  resolutionNote?: string;
+}
+
+export interface AdminReportsResponse {
+  reports: AdminReportRow[];
+  /** Awaiting triage — badges the admin nav alongside submissions (D10). */
+  openCount: number;
+}
+
+/** Resolve or dismiss. The note is the admin's record, never forwarded to the author. */
+export interface ResolveReportRequest {
+  decision: 'resolve' | 'dismiss';
+  note?: string;
+}
+
+/** The two integers D10 puts on the nav, fetched without loading either queue. */
+export interface AdminQueueCounts {
+  pendingCount: number;
+  openReportCount: number;
+}
