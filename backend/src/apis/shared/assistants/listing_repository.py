@@ -23,7 +23,7 @@ import base64
 import json
 import logging
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .listing import gsi5_keys
 from .models import AgentListing
@@ -248,6 +248,51 @@ def _decode_cursor(cursor: str) -> Optional[Dict[str, Any]]:
     except Exception:
         logger.warning("Ignoring malformed store cursor")
         return None
+
+
+async def batch_get_agents(agent_ids: List[str]) -> Dict[str, dict]:
+    """Fetch Agent records by id, keyed by id (Phase 5).
+
+    The read behind the curated store front, which is an arbitrary set of ids rather than
+    a category partition — so neither the GSI5 query nor a scan fits, and this is a
+    ``BatchGetItem`` over the exact keys.
+
+    **A missing id is simply absent from the result**: a featured Agent that was deleted
+    should drop off the shelf, not error the whole page. Ordering is the caller's —
+    DynamoDB returns batches unordered, and the store front's order is the admin's.
+
+    Not used by the pin read, deliberately: pins resolve through
+    ``get_assistant_with_access_check`` so that a pinned Agent is subject to exactly one
+    access decision (see ``pin_service``).
+    """
+    if not agent_ids:
+        return {}
+
+    import boto3
+
+    table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not table_name:
+        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
+
+    resource = boto3.resource("dynamodb")
+    found: Dict[str, dict] = {}
+
+    # De-duplicated because BatchGetItem rejects duplicate keys outright, and both callers
+    # can hold one (a re-pin race, an admin pasting an id twice).
+    unique_ids = list(dict.fromkeys(agent_ids))
+    for start in range(0, len(unique_ids), 100):  # BatchGetItem caps at 100 keys
+        keys = [_key(agent_id) for agent_id in unique_ids[start : start + 100]]
+        request = {table_name: {"Keys": keys}}
+        while request:
+            response = resource.batch_get_item(RequestItems=request)
+            for item in response.get("Responses", {}).get(table_name, []):
+                parsed = from_ddb(item)
+                agent_id = parsed.get("assistantId")
+                if agent_id:
+                    found[str(agent_id)] = parsed
+            request = response.get("UnprocessedKeys") or None
+
+    return found
 
 
 async def list_by_state(state: Optional[str] = None) -> list:

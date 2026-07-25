@@ -87,6 +87,12 @@ from apis.app_api.agent_designer.services.listing_service import (
     submit_listing,
     withdraw_listing,
 )
+from apis.app_api.agent_designer.services.pin_service import (
+    PinError,
+    list_pins,
+    pin_agent,
+    unpin_agent,
+)
 from apis.app_api.agent_designer.services.store_service import (
     browse_all,
     browse_category,
@@ -95,10 +101,12 @@ from apis.app_api.agent_designer.services.store_service import (
 from apis.shared.assistants.models import (
     AgentIconResponse,
     AgentListing,
+    AgentPinsResponse,
     AgentStoreFrontResponse,
     AgentStoreResponse,
     ListingPreflightResponse,
     ListingSubmissionResponse,
+    PinnedAgentResponse,
     SubmitListingRequest,
 )
 from apis.shared.auth.dependencies import get_current_user_from_session
@@ -245,8 +253,9 @@ async def list_agents_endpoint(
 async def agent_store_front_endpoint(current_user: User = Depends(require_marketplace_enabled)):
     """The browse header: the featured row plus the categories to render (D10).
 
-    ``featured`` is empty until the store-front admin ships in Phase 5; the field is
-    present now so the SPA contract does not change when it fills in.
+    ``featured`` is the admin's curated order — the store's only ranking lever, since
+    everything below it is newest-first (see the spec's ranking caveat). Entries whose
+    listing is no longer published are dropped here rather than rendered as dead tiles.
     """
     try:
         featured, categories = await store_front()
@@ -281,6 +290,26 @@ async def agent_store_endpoint(
     except Exception as e:
         logger.error(f"Error browsing agent store: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to browse the store: {str(e)}")
+
+
+# ----------------------------------------------------------------------- pins (D8/D9)
+# Declared BEFORE ``/{agent_id}`` so the literal path is not captured by the path param.
+@router.get("/pins", response_model=AgentPinsResponse)
+async def list_agent_pins_endpoint(current_user: User = Depends(require_marketplace_enabled)):
+    """The caller's effective pin list (D9).
+
+    Phase 5 resolves the user's own pins. Role-seeded pins union in here in Phase 6
+    without changing the shape — ``source`` and ``locked`` are already on every row.
+
+    Rows the caller can no longer reach (deleted, or visibility narrowed) are omitted from
+    the response while the stored pin is left untouched: both conditions are reversible,
+    and a read is not the place to garbage-collect someone's shelf.
+    """
+    try:
+        return AgentPinsResponse(pins=await list_pins(current_user))
+    except Exception as e:
+        logger.error(f"Error listing agent pins: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list pinned agents: {str(e)}")
 
 
 # --------------------------------------------------------------------------- palette
@@ -576,6 +605,44 @@ async def withdraw_agent_listing_endpoint(
     except Exception as e:
         logger.error(f"Error withdrawing agent listing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to withdraw agent listing: {str(e)}")
+
+
+@router.post("/{agent_id}/pin", response_model=PinnedAgentResponse, status_code=201)
+async def pin_agent_endpoint(
+    agent_id: str, current_user: User = Depends(require_marketplace_enabled)
+):
+    """Add an Agent to the caller's own set (D8).
+
+    A pointer, never a fork: nothing is copied, so the Agent the user reaches tomorrow is
+    the one its author maintains. Pinning something already pinned is a no-op that returns
+    the existing row, and it clears any earlier dismissal of that Agent (D9.3).
+    """
+    try:
+        return await pin_agent(current_user, agent_id)
+    except PinError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error pinning agent: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to pin agent: {str(e)}")
+
+
+@router.delete("/{agent_id}/pin", status_code=204)
+async def unpin_agent_endpoint(
+    agent_id: str, current_user: User = Depends(require_marketplace_enabled)
+):
+    """Remove an Agent from the caller's own set, and remember the dismissal (D9.3).
+
+    The tombstone is the point: role-seeded pins (Phase 6) are resolved live, so without a
+    remembered dismissal a seeded pin would re-appear on the next request and the user
+    could never remove it.
+    """
+    try:
+        await unpin_agent(current_user, agent_id)
+    except PinError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error unpinning agent: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to unpin agent: {str(e)}")
 
 
 # ------------------------------------------------------------------------ icons (D5)

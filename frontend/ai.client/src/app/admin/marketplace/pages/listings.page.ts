@@ -32,9 +32,13 @@ import {
  * state badge because until the Discover page ships (Phase 2) this is the *only* view of
  * the marketplace, and an admin needs to see the ones that are not live too.
  *
- * Two mockup columns are deliberately absent because their levers do not exist yet: the
- * store-front star (Phase 5) and the inline category `<select>` (Phase 2's category CRUD).
- * Category is shown as text here rather than rendered as a control that cannot be honored.
+ * The mockup's inline category `<select>` is deliberately absent; category is shown as
+ * text rather than rendered as a control that cannot be honored here.
+ *
+ * Promotion to the store front is **not** a star on this table (Phase 5). The featured row
+ * is an ordered list, and a per-row toggle can express membership but not position — an
+ * admin promoting three agents from here would have no way to say which comes first. It
+ * lives on the Store Front surface, where the order is the thing being edited.
  */
 @Component({
   selector: 'app-marketplace-listings',

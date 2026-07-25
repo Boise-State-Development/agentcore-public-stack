@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import {
   AdminListingRow,
+  AdminStoreFrontResponse,
   AgentCategory,
   AdminListingsResponse,
   ListingPatchRequest,
@@ -21,7 +22,7 @@ interface CategoriesResponse {
 }
 
 /**
- * Admin surface for the Agent Marketplace (Phase 1).
+ * Admin surface for the Agent Marketplace (Phases 1–2, 5).
  *
  * Mirrors `AdminSkillService`: signal-backed state plus explicit reload, so the two
  * pages can share the pending count without either owning the other's fetch.
@@ -131,6 +132,26 @@ export class AdminMarketplaceService {
   async deleteCategory(categoryId: string): Promise<void> {
     await firstValueFrom(
       this.http.delete(`${this.baseUrl()}/categories/${encodeURIComponent(categoryId)}`),
+    );
+  }
+
+  /** The featured row, resolved in its configured order (D10). */
+  async loadStoreFront(): Promise<AdminStoreFrontResponse> {
+    return firstValueFrom(
+      this.http.get<AdminStoreFrontResponse>(`${this.baseUrl()}/storefront`),
+    );
+  }
+
+  /**
+   * Replace the featured row.
+   *
+   * A whole-list PUT because reordering has to be atomic — the ordered array *is* the
+   * record. The server refuses any id that is not published and names it, so the caller
+   * surfaces the message rather than pre-validating a copy of that rule.
+   */
+  async saveStoreFront(agentIds: string[]): Promise<AdminStoreFrontResponse> {
+    return firstValueFrom(
+      this.http.put<AdminStoreFrontResponse>(`${this.baseUrl()}/storefront`, { agentIds }),
     );
   }
 

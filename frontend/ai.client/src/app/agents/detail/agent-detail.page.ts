@@ -12,12 +12,15 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
   heroArrowRight,
+  heroCheck,
   heroCheckBadge,
   heroCheckCircle,
   heroExclamationTriangle,
   heroNoSymbol,
+  heroPlus,
 } from '@ng-icons/heroicons/outline';
 import { AgentApiService } from '../services/agent-api.service';
+import { AgentPinService } from '../services/agent-pin.service';
 import { Agent, AgentRunnability } from '../models/agent.model';
 import { AgentIconComponent } from '../components/agent-icon.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
@@ -34,9 +37,14 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
  * and settles into the sidebar when it arrives. Blocking the whole page on the slower
  * question would trade a fast page for a spinner.
  *
- * Not here yet, by phase: "Add to my agents" (pins, Phase 5) and "Report a problem"
- * (Phase 8). Rendering an affordance whose backing lever does not exist is how a store
- * starts lying, so the header carries Start chat alone.
+ * "Add to my agents" (D8, Phase 5) sits beside Start chat and is a **pin, never a fork**:
+ * it stores a pointer, so the Agent the user opens tomorrow is the one its author
+ * maintains. It is deliberately *not* gated on runnability — a user may reasonably keep
+ * an Agent they cannot run today, and hiding the button would leave them nothing to do
+ * with the page.
+ *
+ * Not here yet, by phase: "Report a problem" (Phase 8). Rendering an affordance whose
+ * backing lever does not exist is how a store starts lying.
  */
 @Component({
   selector: 'app-agent-detail',
@@ -46,10 +54,12 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
     provideIcons({
       heroArrowLeft,
       heroArrowRight,
+      heroCheck,
       heroCheckBadge,
       heroCheckCircle,
       heroExclamationTriangle,
       heroNoSymbol,
+      heroPlus,
     }),
   ],
   template: `
@@ -113,17 +123,49 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
                 }
               </p>
             </div>
-            <button
-              type="button"
-              (click)="onStartChat()"
-              [disabled]="isBlocked()"
-              [appTooltip]="startChatTooltip()"
-              appTooltipPosition="top"
-              class="rounded-full bg-blue-600 px-4 py-2 text-sm/6 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45 dark:bg-blue-500 dark:hover:bg-blue-400"
-            >
-              Start chat
-            </button>
+            <div class="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                (click)="onTogglePin()"
+                [disabled]="pinBusy()"
+                [appTooltip]="pinTooltip()"
+                appTooltipPosition="top"
+                [attr.aria-pressed]="isPinned()"
+                class="inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm/6 font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+                [class]="
+                  isPinned()
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-300'
+                    : 'border-gray-300 bg-white text-gray-900 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700'
+                "
+              >
+                <ng-icon
+                  [name]="isPinned() ? 'heroCheck' : 'heroPlus'"
+                  class="size-4"
+                  aria-hidden="true"
+                />
+                {{ isPinned() ? 'Added' : 'Add' }}
+              </button>
+              <button
+                type="button"
+                (click)="onStartChat()"
+                [disabled]="isBlocked()"
+                [appTooltip]="startChatTooltip()"
+                appTooltipPosition="top"
+                class="rounded-full bg-blue-600 px-4 py-2 text-sm/6 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45 dark:bg-blue-500 dark:hover:bg-blue-400"
+              >
+                Start chat
+              </button>
+            </div>
           </div>
+
+          @if (pinError()) {
+            <p
+              role="alert"
+              class="mt-3 text-sm/6 text-rose-700 dark:text-rose-400"
+            >
+              {{ pinError() }}
+            </p>
+          }
 
           <!--
             Hero: the @-mention prompt this agent answers to. Display-only — the
@@ -251,6 +293,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 })
 export class AgentDetailPage {
   private api = inject(AgentApiService);
+  private pinService = inject(AgentPinService);
   private router = inject(Router);
 
   /** Bound from the `agents/:id` route via `withComponentInputBinding`. */
@@ -260,9 +303,18 @@ export class AgentDetailPage {
   readonly runnability = signal<AgentRunnability | null>(null);
   readonly loading = signal(true);
   readonly error = signal<string | null>(null);
+  readonly pinBusy = signal(false);
+  /**
+   * Local rather than the service's signal: that one also carries list-load failures,
+   * and "failed to load your pinned agents" under the Add button would read as a
+   * complaint about an action the user did not take.
+   */
+  readonly pinError = signal<string | null>(null);
 
   constructor() {
     void this.load();
+    // Cached across the session, so arriving from a shelf row costs nothing.
+    void this.pinService.load();
   }
 
   private async load(): Promise<void> {
@@ -345,6 +397,30 @@ export class AgentDetailPage {
     const lead = r.state === 'limits' ? 'Runs with limits for you' : 'Not available to you';
     return names ? `${lead} — ${names} ${verb} granted to your role.` : `${lead}.`;
   });
+
+  isPinned(): boolean {
+    return this.pinService.isPinned(this.id());
+  }
+
+  pinTooltip(): string {
+    const name = this.agent()?.name ?? 'this agent';
+    return this.isPinned()
+      ? `Remove ${name} from your agents`
+      : `Add ${name} to your agents — a pointer, not a copy`;
+  }
+
+  async onTogglePin(): Promise<void> {
+    this.pinBusy.set(true);
+    this.pinError.set(null);
+    try {
+      await this.pinService.toggle(this.id());
+    } catch {
+      // The service has already rolled the list back and holds the message.
+      this.pinError.set(this.pinService.error());
+    } finally {
+      this.pinBusy.set(false);
+    }
+  }
 
   startChatTooltip(): string {
     return this.isBlocked()

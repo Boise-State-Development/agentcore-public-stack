@@ -1,13 +1,13 @@
-"""Admin API routes for the Agent Marketplace (Phases 1-2).
+"""Admin API routes for the Agent Marketplace (Phases 1-2, 5).
 
 Mounted under ``/admin/agents`` per the CLAUDE.md route convention — admin CRUD lives at
 ``/admin/resource/``, never ``/resource/admin/``. Every route is ``Depends(require_admin)``
 (= ``require_app_roles("system_admin")``); D2 is explicit that a granular "marketplace
 curator" permission is a deliberate follow-up, so do not open a second permission axis here.
 
-Covers three of D10's seven surfaces — **Review queue**, **Listings** and **Categories**
-— plus the **Publishers** records they depend on. Store front, default pins and the
-reports queue are Phases 5, 6 and 8.
+Covers four of D10's seven surfaces — **Review queue**, **Listings**, **Categories** and
+**Store front** — plus the **Publishers** records they depend on. Default pins and the
+reports queue are Phases 6 and 8.
 """
 
 import logging
@@ -31,9 +31,11 @@ from apis.shared.assistants.categories import (
     get_category,
     put_category,
 )
+from apis.app_api.agent_designer.services.store_service import resolve_featured
 from apis.shared.assistants.models import (
     AdminListingPatchRequest,
     AdminListingsResponse,
+    AdminStoreFrontResponse,
     AgentCategoriesResponse,
     AgentCategory,
     AgentCategoryCreateRequest,
@@ -46,7 +48,13 @@ from apis.shared.assistants.models import (
     PublishersResponse,
     PublisherUpdateRequest,
     ReviewListingRequest,
+    StoreFrontUpdateRequest,
     TakedownRequest,
+)
+from apis.shared.assistants.storefront import (
+    MAX_FEATURED,
+    get_featured_ids,
+    put_featured_ids,
 )
 from apis.shared.assistants.publishers import (
     delete_publisher,
@@ -178,6 +186,67 @@ async def patch_agent_listing(
     except Exception as e:
         logger.error(f"Error patching agent listing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to patch listing: {str(e)}")
+
+
+# ── store front (D10) ────────────────────────────────────────────────────────────────
+# The featured row deserves its own surface because **it is the only ranking lever that
+# exists**: ``GSI5_SK`` is ``created_at``, so everything below Featured is newest-first and
+# there is no popularity sort. Promotion is how a good Agent gets found.
+@router.get("/storefront", response_model=AdminStoreFrontResponse)
+async def get_store_front(admin: User = Depends(require_marketplace_admin)):
+    """The featured row, resolved in its configured order.
+
+    ``unavailable`` names configured ids that no longer resolve as published listings —
+    a taken-down or deleted Agent. They are reported rather than pruned, because a GET
+    that silently rewrote an admin's curation would also make a reversed takedown
+    permanently cost the Agent its slot.
+    """
+    try:
+        featured, unavailable = await resolve_featured(await get_featured_ids())
+        return AdminStoreFrontResponse(featured=featured, unavailable=unavailable)
+    except Exception as e:
+        logger.error(f"Error loading admin store front: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to load store front: {str(e)}")
+
+
+@router.put("/storefront", response_model=AdminStoreFrontResponse)
+async def put_store_front(
+    request: StoreFrontUpdateRequest, admin: User = Depends(require_marketplace_admin)
+):
+    """Replace the featured row, in order (D10).
+
+    A whole-list PUT: the row is short and reordering must be atomic, so the ordered array
+    is the record. Every id must resolve to a **published** listing — promoting something
+    the store cannot show would put a tile at the top of Discover that nobody can open —
+    and the refusal names the offending ids rather than reporting a count.
+    """
+    try:
+        if len(request.agent_ids) > MAX_FEATURED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"The store front holds at most {MAX_FEATURED} agents.",
+            )
+
+        _rows, unavailable = await resolve_featured(request.agent_ids)
+        if unavailable:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Only published agents can be featured. These are not published: "
+                    + ", ".join(unavailable)
+                ),
+            )
+
+        saved = await put_featured_ids(request.agent_ids, updated_by=admin.user_id)
+        featured, still_unavailable = await resolve_featured(saved)
+        return AdminStoreFrontResponse(featured=featured, unavailable=still_unavailable)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error saving admin store front: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save store front: {str(e)}")
 
 
 # ── categories (D10) ─────────────────────────────────────────────────────────────────

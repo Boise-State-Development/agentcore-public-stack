@@ -507,7 +507,7 @@ auth rule; admin routes `Depends(require_admin)` (= `require_app_roles("system_a
 | `GET /agents/{id}/icon` | Serve the bytes, `immutable` + ETag. What makes `iconUrl` a stable path (`/agents/{id}/icon?v={digest}`) rather than a presigned URL that changes on every read and re-downloads every shelf icon. Readable by anyone when the listing is published — the shelf already shows that agent's name, tagline and emoji to every browsing user. |
 | `POST /agents/{id}/listing/submit` | Author submits. Runs D7 checks; 400 on a `memory_space` binding. |
 | `DELETE /agents/{id}/listing` | Author unpublishes. |
-| `GET /agents/pins` · `POST`/`DELETE /agents/{id}/pin` | The user's effective pin list; pin / dismiss (D9). |
+| `GET /agents/pins` · `POST`/`DELETE /agents/{id}/pin` | The user's effective pin list; pin / dismiss (D9). Pinning is gated on the caller being able to *reach* the Agent, not on it being published. |
 | `POST /agents/{id}/report` | Report a problem with a published Agent (D15). One open report per reporter. |
 | `GET /admin/agents/reports` · `POST /admin/agents/reports/{reportId}/resolve` | Report queue; resolve or dismiss, reporter visible (D15). |
 | `GET /admin/agents/submissions` · `POST /admin/agents/{id}/review` | Review queue; approve / request changes (D2). |
@@ -559,8 +559,8 @@ Phase 3  Detail page + runnability + the instructions gate            ✅ shippe
 Phase 3.5 Author Submit UI: submit dialog (category, note, D7 disclosures),
          listing-state badges + reviewer note + D13 edit trail on My Agents,
          withdraw/unpublish, GET /agents/{id}/listing/preflight   ✅ shipped (PR #734)
-Phase 4  Icons: upload, S3, generated fallback, all four render sizes      ← in progress
-Phase 5  Pins: user pin state + Pinned tab + store front admin
+Phase 4  Icons: upload, S3, generated fallback, all four render sizes  ✅ shipped (PR #735)
+Phase 5  Pins: user pin state + Pinned tab + store front admin              ← in progress
 Phase 6  Default pins by role (D9) + the assignment-time runnability check
 Phase 7  @-mention in the composer
 Phase 8  Problem reports (D15): report action + admin Reports queue   ← depends on 3
@@ -574,6 +574,22 @@ otherwise independent of 4–7 and can run alongside them.
 Phase 1 is the smallest thing that is independently useful: authors can submit, admins can approve
 and take down, and nothing is user-visible until Phase 2. Phases 4–7 are independent of each other
 and parallelizable once 1–3 land.
+
+**Phase 5 notes (as built).** Two decisions worth recording because the spec left them open:
+
+- **Pinning is gated on reachability, not on publication.** `POST /agents/{id}/pin` accepts anything
+  the caller could open (owner, editor, viewer), not only published listings. Publication decides
+  what the store *offers*; a pin is a bookmark, and D11 scopes the `@` menu to "your own and pinned
+  Agents", which presumes an author can pin their own unpublished work. The read applies the same
+  gate on every request, so a pin never becomes a grant.
+- **The featured row is not self-healing.** A taken-down Agent drops out of what the store and the
+  admin console *render*, but its id stays in `AGENT_STOREFRONT` until an admin saves the row. A GET
+  that pruned would rewrite an admin's curation as a side effect, and a reversed takedown would have
+  silently cost the Agent its slot. The admin surface names the stale ids instead
+  (`AdminStoreFrontResponse.unavailable`).
+
+Promotion lives on the **Store front** surface rather than as a star on the Listings table: the row
+is an ordered list, and a per-row toggle can express membership but not position.
 
 **Phase 3.5 is a gap this table originally left open.** Phases 1–3 shipped the submit and withdraw
 endpoints and the entire reviewer console, but no phase owned the *author's* half of the surface —
