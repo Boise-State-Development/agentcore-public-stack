@@ -68,6 +68,13 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        // Marketplace Pinned tab (spec phase 5). Declared with the other literal
+        // `agents/*` paths, above `agents/:id`, for the same reason.
+        path: 'agents/pinned',
+        loadComponent: () => import('./agents/pinned/pinned.page').then(m => m.AgentPinnedPage),
+        canActivate: [authGuard],
+    },
+    {
         // Marketplace detail (spec phase 3). Declared AFTER `agents/discover` so the
         // literal path is not captured by `:id`, and after `agents/:id/edit` so the
         // deeper route still wins. `id` binds to the page's `input.required` via

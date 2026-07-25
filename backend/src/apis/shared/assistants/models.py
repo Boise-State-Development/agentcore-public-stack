@@ -807,10 +807,107 @@ class AgentStoreFrontResponse(BaseModel):
 
     featured: List[AgentListingResponse] = Field(
         default_factory=list,
-        description="Curated store-front row; empty until the store-front admin ships in Phase 5",
+        description="Curated store-front row, in the admin's order (D10)",
     )
     categories: List[AgentCategory] = Field(
         default_factory=list, description="Enabled categories in browse order"
+    )
+
+
+# ─────────────────────────────────────────────────────── Agent Marketplace (Phase 5)
+class PinnedAgentRef(BaseModel):
+    """One entry in a user's own pin list — a pointer, never a copy (D8)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    order: int = Field(0, description="Position within the user's own pins, ascending")
+    pinned_at: Optional[str] = Field(None, alias="pinnedAt", description="ISO 8601 timestamp")
+
+
+class UserPinState(BaseModel):
+    """The whole per-user pin item (D9's user side).
+
+    ``dismissed`` is a tombstone list, and it is the single most important detail in the
+    pin design: role-seeded pins (Phase 6) are resolved live rather than materialized, so
+    without a tombstone a seed re-applies on the next resolution and the user can never
+    remove it. It is written from Phase 5 so the resolver that arrives with role pins has
+    a history to respect rather than starting from a blank slate.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pinned: List[PinnedAgentRef] = Field(default_factory=list, description="The user's own pins")
+    dismissed: List[str] = Field(
+        default_factory=list, description="Agent ids the user removed — the resolver MUST respect these (D9.3)"
+    )
+
+
+class PinnedAgentResponse(BaseModel):
+    """One row on the Pinned shelf.
+
+    The shelf projection (D4) plus the two fields that describe *why* it is pinned.
+    ``source`` and ``locked`` are always ``"user"``/``False`` in Phase 5 — role-seeded
+    pins are Phase 6 — and they are on the contract now so that phase adds rows rather
+    than changing the shape the SPA already renders.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    name: str = Field(..., description="Agent display name")
+    tagline: Optional[str] = Field(None, description="One-line subtitle (D4)")
+    emoji: Optional[str] = Field(None, description="Emoji, for the generated icon fallback (D5)")
+    icon_url: Optional[str] = Field(
+        None, alias="iconUrl", description="Square icon URL (D5); absent → the generated gradient"
+    )
+    publisher: Optional[ListingPublisher] = Field(None, description="Attribution (D12), display only")
+    category: str = Field("", description="Category id; empty when the agent carries no listing")
+    source: Literal["user", "role"] = Field(
+        "user", description="Whose pin this is — 'role' arrives with default pins (D9)"
+    )
+    locked: bool = Field(
+        False, description="A locked role pin cannot be dismissed (D9.4); always false in Phase 5"
+    )
+    pinned_at: Optional[str] = Field(None, alias="pinnedAt", description="ISO 8601 timestamp")
+
+
+class AgentPinsResponse(BaseModel):
+    """A user's effective pin list (D9)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pins: List[PinnedAgentResponse] = Field(default_factory=list, description="Resolved pins, in order")
+
+
+class StoreFrontUpdateRequest(BaseModel):
+    """Replace the featured row, in order (D10).
+
+    A whole-list PUT rather than per-item ``order`` fields: the row is short and
+    reordering has to be atomic, so the ordered array *is* the record.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_ids: List[str] = Field(
+        default_factory=list, alias="agentIds", description="Featured agent ids, in render order"
+    )
+
+
+class AdminStoreFrontResponse(BaseModel):
+    """The featured row as the admin console sees it (D10)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    featured: List[AgentListingResponse] = Field(
+        default_factory=list, description="Resolved featured rows, in the configured order"
+    )
+    unavailable: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Configured ids that are no longer published — surfaced rather than silently "
+            "dropped, so an admin can see why the row is short and clear them"
+        ),
     )
 
 

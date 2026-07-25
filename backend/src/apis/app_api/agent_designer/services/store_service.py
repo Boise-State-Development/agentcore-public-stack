@@ -20,7 +20,8 @@ from typing import List, Optional, Tuple
 
 from apis.shared.assistants.categories import ensure_seeded, list_categories
 from apis.shared.assistants.icons import icon_url
-from apis.shared.assistants.listing_repository import query_store
+from apis.shared.assistants.listing import is_published
+from apis.shared.assistants.listing_repository import batch_get_agents, query_store
 from apis.shared.assistants.models import (
     AgentCategory,
     AgentListingResponse,
@@ -29,6 +30,7 @@ from apis.shared.assistants.models import (
     PublisherProfile,
 )
 from apis.shared.assistants.publishers import list_publishers
+from apis.shared.assistants.storefront import get_featured_ids
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,7 @@ logger = logging.getLogger(__name__)
 _MAX_FANOUT_CATEGORIES = 12
 
 
-def _to_listing_response(
+def to_listing_response(
     assistant: Assistant, publishers: dict
 ) -> Optional[AgentListingResponse]:
     """Project a stored agent into the shelf shape, or ``None`` if it cannot render."""
@@ -75,7 +77,7 @@ def _project(items: list, publishers: dict) -> List[AgentListingResponse]:
         except Exception:
             logger.warning("Skipping unparseable store row", exc_info=True)
             continue
-        projected = _to_listing_response(assistant, publishers)
+        projected = to_listing_response(assistant, publishers)
         if projected:
             responses.append(projected)
     return responses
@@ -122,12 +124,60 @@ async def browse_all(*, limit: int = 50) -> List[AgentListingResponse]:
     return [response for _created, response in merged[:limit]]
 
 
-async def store_front() -> Tuple[List[AgentListingResponse], List[AgentCategory]]:
-    """The browse header: the featured row and the categories to render.
+async def resolve_featured(
+    agent_ids: List[str],
+) -> Tuple[List[AgentListingResponse], List[str]]:
+    """Project the configured store-front ids into shelf rows, in the admin's order.
 
-    ``featured`` is empty until the store-front admin ships in Phase 5. Returning the
-    field now — rather than adding it later — keeps the SPA contract stable across that
-    phase, and an empty list renders as "no featured row" rather than as a broken one.
+    Returns ``(rows, unavailable_ids)``. An id is *unavailable* when the Agent was deleted
+    or its listing is no longer ``published`` — a takedown must drop it off the shelf, and
+    the sparse-index physics that guarantee this for browse do not apply to a hand-curated
+    id list, so the state check has to be explicit here.
+
+    The unavailable ids are returned rather than swallowed so the admin console can show
+    an admin why their row is short. Nothing on this path *writes*: a takedown that is
+    later reversed restores the Agent to its slot (see ``storefront``).
+    """
+    if not agent_ids:
+        return [], []
+
+    records = await batch_get_agents(agent_ids)
+    publishers = {p.id: p for p in await list_publishers()}
+
+    rows: List[AgentListingResponse] = []
+    unavailable: List[str] = []
+    for agent_id in agent_ids:
+        item = records.get(agent_id)
+        if not item:
+            unavailable.append(agent_id)
+            continue
+        try:
+            assistant = Assistant.model_validate(item)
+        except Exception:
+            logger.warning(f"Skipping unparseable featured agent {agent_id}", exc_info=True)
+            unavailable.append(agent_id)
+            continue
+        listing = assistant.listing
+        if not listing or not is_published(listing.state):
+            unavailable.append(agent_id)
+            continue
+        projected = to_listing_response(assistant, publishers)
+        if projected:
+            rows.append(projected)
+        else:
+            unavailable.append(agent_id)
+
+    return rows, unavailable
+
+
+async def store_front() -> Tuple[List[AgentListingResponse], List[AgentCategory]]:
+    """The browse header: the featured row and the categories to render (D10).
+
+    The featured row is the store's **only ranking lever** — everything below it is
+    newest-first — so it is a hand-curated ordered list rather than anything derived.
+    Entries that are no longer published are dropped silently here; the admin console is
+    where that gap is named.
     """
     categories = await ensure_seeded()
-    return [], [c for c in categories if c.enabled]
+    featured, _unavailable = await resolve_featured(await get_featured_ids())
+    return featured, [c for c in categories if c.enabled]

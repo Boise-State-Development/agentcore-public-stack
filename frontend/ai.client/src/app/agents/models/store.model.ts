@@ -150,9 +150,39 @@ export interface AgentStoreResponse {
 }
 
 export interface AgentStoreFrontResponse {
-  /** Curated row; empty until the store-front admin ships in Phase 5. */
+  /** The admin's curated row — the store's only ranking lever (D10). */
   featured: AgentListing[];
   categories: AgentCategory[];
+}
+
+/**
+ * One row on the Pinned shelf (D8, D9).
+ *
+ * The shelf projection plus the two fields that say *why* it is pinned. `source` is
+ * always `'user'` and `locked` always `false` in Phase 5 — role-seeded pins are Phase 6 —
+ * and both are on the contract now so that phase adds rows rather than changing a shape
+ * the SPA already renders.
+ */
+export interface PinnedAgent extends AgentListing {
+  source: 'user' | 'role';
+  /** A locked role pin cannot be removed; the control is hidden rather than disabled. */
+  locked: boolean;
+  pinnedAt?: string;
+}
+
+export interface AgentPinsResponse {
+  pins: PinnedAgent[];
+}
+
+/** The featured row as the admin console sees it (D10). */
+export interface AdminStoreFrontResponse {
+  featured: AgentListing[];
+  /**
+   * Configured ids that no longer resolve as published listings. Reported rather than
+   * pruned on read, so an admin can see why the row is short instead of watching a
+   * curation silently rewrite itself.
+   */
+  unavailable: string[];
 }
 
 /** A category plus the listings currently on its shelf, for the Discover sections. */

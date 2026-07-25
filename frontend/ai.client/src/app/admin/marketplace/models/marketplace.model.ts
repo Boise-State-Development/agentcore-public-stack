@@ -1,13 +1,16 @@
 /**
- * Agent Marketplace admin types (Phase 1).
+ * Agent Marketplace admin types (Phases 1–2, 5).
  *
- * Mirrors the backend wire models in `apis/shared/assistants/models.py`. Phase 1 covers
- * two of the six admin surfaces — Review queue and Listings — plus the publisher profiles
- * they read. Store front, categories and default pins arrive in later phases.
+ * Mirrors the backend wire models in `apis/shared/assistants/models.py`. Four of D10's
+ * seven surfaces are covered — Review queue, Listings, Categories and Store front — plus
+ * the publisher profiles they read. Default pins and the reports queue arrive with their
+ * phases.
  */
 
 import {
   AdminEdit,
+  AdminStoreFrontResponse,
+  AgentListing,
   ListingState,
   LISTING_STATE_CLASSES,
   LISTING_STATE_LABELS,
@@ -21,6 +24,15 @@ import {
  */
 export type { AdminEdit, ListingState };
 export { LISTING_STATE_CLASSES, LISTING_STATE_LABELS };
+
+/**
+ * The store-front row is the *same* shelf shape Discover renders, deliberately: an admin
+ * curating the featured row should be looking at exactly the tile a user will see.
+ */
+export type { AdminStoreFrontResponse, AgentListing };
+
+/** The featured row holds at most this many agents — see `storefront.MAX_FEATURED`. */
+export const MAX_FEATURED = 10;
 
 export type PublisherKind = 'institution' | 'department' | 'individual';
 
