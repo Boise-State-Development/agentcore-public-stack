@@ -138,4 +138,41 @@ describe('AgentPinService', () => {
     await service.toggle('ast-001');
     expect(service.isPinned('ast-001')).toBe(false);
   });
+
+  // ── role-seeded pins (D9, Phase 6) ─────────────────────────────────────────────
+  it('reports a locked role pin as locked', async () => {
+    http.get.mockReturnValue(
+      of({ pins: [{ ...pin('ast-locked'), source: 'role', locked: true }, pin('ast-own')] }),
+    );
+
+    await service.load();
+
+    expect(service.isLocked('ast-locked')).toBe(true);
+    expect(service.isLocked('ast-own')).toBe(false);
+  });
+
+  it('refuses to toggle a locked role pin', async () => {
+    // The server no-ops the DELETE too (D9.4); refusing here keeps the row from
+    // flickering out and back on the next read.
+    http.get.mockReturnValue(
+      of({ pins: [{ ...pin('ast-locked'), source: 'role', locked: true }] }),
+    );
+    await service.load();
+
+    await service.toggle('ast-locked');
+
+    expect(http.delete).not.toHaveBeenCalled();
+    expect(service.isPinned('ast-locked')).toBe(true);
+  });
+
+  it('lets an unlocked role pin be dismissed like any other', async () => {
+    http.get.mockReturnValue(of({ pins: [{ ...pin('ast-seeded'), source: 'role' }] }));
+    await service.load();
+    http.delete.mockReturnValue(of(null));
+
+    await service.toggle('ast-seeded');
+
+    expect(http.delete).toHaveBeenCalledWith('/api/agents/ast-seeded/pin');
+    expect(service.isPinned('ast-seeded')).toBe(false);
+  });
 });

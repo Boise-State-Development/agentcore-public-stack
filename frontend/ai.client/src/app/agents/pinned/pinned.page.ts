@@ -13,16 +13,18 @@ import { AgentsTabsComponent } from '../components/agents-tabs.component';
 import { AgentListingRowComponent } from '../components/agent-listing-row.component';
 
 /**
- * Pinned — the Agents a user has added to their own set (D8, D9, Phase 5).
+ * Pinned — the Agents a user has added to their own set, plus the ones their role seeds
+ * (D8, D9, Phases 5–6).
  *
  * The rows are the same shelf rows Discover renders, and their `＋` has already become a
  * check, so removing one happens here without a second control to learn. That is the
  * whole reason the pin toggle lives on the row rather than on the page: one gesture,
- * everywhere it appears.
+ * everywhere it appears — including on a role-seeded row, which a user removes exactly
+ * like their own (the dismissal is remembered, so it stays gone).
  *
- * Phase 6 adds role-seeded pins to this same list. It needs no new page — a seeded pin is
- * a pin — but it does need this page to keep respecting `locked`, which is why the removal
- * control is driven by the row's own state rather than by "is this page the Pinned tab".
+ * The one exception is a **locked** seed (D9.4): the row hides the control rather than
+ * disabling it. That is driven by the row's own state rather than by "is this page the
+ * Pinned tab", so it holds on Discover too.
  *
  * A pin whose Agent was deleted, or whose visibility narrowed, is simply absent: the
  * server resolves the list against the viewer on every read, and it does not delete the
@@ -40,7 +42,8 @@ import { AgentListingRowComponent } from '../components/agent-listing-row.compon
         <div class="mt-6 mb-6">
           <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Pinned agents</h1>
           <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-            The agents you have added. Removing one here does not affect anyone else.
+            The agents you have added, plus any your role starts you with. Removing one
+            here does not affect anyone else.
           </p>
         </div>
 

@@ -122,6 +122,17 @@ class AppRoleService:
 
         return permissions
 
+    async def get_role(self, role_id: str) -> Optional[AppRole]:
+        """A role record, through the same cache the permission resolution uses.
+
+        Public because the Marketplace's default pins (D9) need a role's ``priority`` and
+        ``displayName`` to order and label a resolved shelf, and re-reading DynamoDB per
+        pin read would drop a cache the request path already warmed. It returns the record,
+        not a permission decision — pins are resolved by their own query and never enter
+        ``UserEffectivePermissions``.
+        """
+        return await self._get_role_with_cache(role_id)
+
     async def _get_role_with_cache(self, role_id: str) -> Optional[AppRole]:
         """Get role from cache or database."""
         cached = await self.cache.get_role(role_id)

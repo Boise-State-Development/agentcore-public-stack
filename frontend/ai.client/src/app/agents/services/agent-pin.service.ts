@@ -37,8 +37,22 @@ export class AgentPinService {
 
   readonly pinnedIds = computed(() => new Set(this._pins().map((pin) => pin.agentId)));
 
+  /**
+   * Pins a role has locked (D9.4) — the remove control is hidden for these, not disabled.
+   *
+   * A `Set` for the same reason as `pinnedIds`: every rendered shelf row asks.
+   */
+  readonly lockedIds = computed(
+    () => new Set(this._pins().filter((pin) => pin.locked).map((pin) => pin.agentId)),
+  );
+
   isPinned(agentId: string): boolean {
     return this.pinnedIds().has(agentId);
+  }
+
+  /** A locked role pin cannot be dismissed; the server no-ops the attempt as well. */
+  isLocked(agentId: string): boolean {
+    return this.lockedIds().has(agentId);
   }
 
   /**
@@ -104,6 +118,9 @@ export class AgentPinService {
 
   /** Toggle, for the single control that both surfaces render. */
   async toggle(agentId: string): Promise<void> {
+    // A locked seed has no un-pinned state to toggle to. The server ignores the call
+    // too; refusing here keeps the list from flickering out and back on the next read.
+    if (this.isLocked(agentId)) return;
     return this.isPinned(agentId) ? this.unpin(agentId) : this.pin(agentId);
   }
 

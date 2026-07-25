@@ -1,10 +1,10 @@
 /**
- * Agent Marketplace admin types (Phases 1–2, 5).
+ * Agent Marketplace admin types (Phases 1–2, 5–6).
  *
- * Mirrors the backend wire models in `apis/shared/assistants/models.py`. Four of D10's
- * seven surfaces are covered — Review queue, Listings, Categories and Store front — plus
- * the publisher profiles they read. Default pins and the reports queue arrive with their
- * phases.
+ * Mirrors the backend wire models in `apis/shared/assistants/models.py`. Five of D10's
+ * seven surfaces are covered — Review queue, Listings, Categories, Store front and
+ * Default pins — plus the publisher profiles they read. The reports queue arrives with
+ * Phase 8.
  */
 
 import {
@@ -119,5 +119,69 @@ export interface AgentCategory {
   enabled: boolean;
   createdAt?: string;
   updatedAt?: string;
+}
+
+// ── default pins by role (D9, Phase 6) ─────────────────────────────────────────────
+
+/** A role seeds at most this many agents — see `role_pins.MAX_ROLE_PINS`. */
+export const MAX_ROLE_PINS = 25;
+
+/** One capability the role does not grant, named rather than counted (D9.5). */
+export interface MissingCapability {
+  label: string;
+  kind: string;
+  /** Only an explicitly optional binding degrades to `limits` rather than blocking. */
+  optional: boolean;
+}
+
+/**
+ * One seeded agent as the admin console sees it: the shelf row plus the two checks that
+ * decide whether the seed will do anything for this role's members.
+ *
+ * `reachable` is about *visibility* — a PRIVATE agent resolves to nothing for everyone
+ * but its owner, because the user-side read access-checks every row. `state` is about
+ * *capability* — the agent's model and bindings diffed against this role's granted
+ * permissions. They fail for different reasons and have different people to fix them.
+ */
+export interface RoleAgentPinRow {
+  agentId: string;
+  name: string;
+  tagline?: string;
+  emoji?: string;
+  iconUrl?: string;
+  publisher?: { label: string; kind: PublisherKind; verified: boolean } | null;
+  category: string;
+  order: number;
+  /** A locked seed cannot be dismissed by a member (D9.4). */
+  locked: boolean;
+  listingState?: ListingState | null;
+  reachable: boolean;
+  visibility: string;
+  state: 'ready' | 'limits' | 'blocked';
+  missing: MissingCapability[];
+  /** What the role-level check could not decide — a memory space resolves per person. */
+  notes: string[];
+}
+
+export interface RoleAgentPinsResponse {
+  roleId: string;
+  roleLabel: string;
+  /**
+   * ⚠️ D9.6 — `default` is consulted only for users who matched *zero* AppRoles and is
+   * never merged alongside a matched role. Pins seeded there reach nobody who holds any
+   * other role, which is why the console labels the chip rather than letting an admin
+   * assume it means "everyone".
+   */
+  fallbackOnly: boolean;
+  /** The role has no JWT mappings, so no user matches it at all. */
+  unmapped: boolean;
+  pins: RoleAgentPinRow[];
+  /** Seeded ids whose agent no longer exists — reported, never pruned on read. */
+  unavailable: string[];
+}
+
+/** Replace a role's seed list, in order. `order` belongs to the list, not to a row. */
+export interface RoleAgentPinsUpdateRequest {
+  pins: { agentId: string; locked: boolean }[];
 }
 

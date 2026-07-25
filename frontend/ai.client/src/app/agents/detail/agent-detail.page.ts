@@ -16,6 +16,7 @@ import {
   heroCheckBadge,
   heroCheckCircle,
   heroExclamationTriangle,
+  heroLockClosed,
   heroNoSymbol,
   heroPlus,
 } from '@ng-icons/heroicons/outline';
@@ -58,6 +59,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
       heroCheckBadge,
       heroCheckCircle,
       heroExclamationTriangle,
+      heroLockClosed,
       heroNoSymbol,
       heroPlus,
     }),
@@ -124,6 +126,20 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
               </p>
             </div>
             <div class="flex shrink-0 items-center gap-2">
+              @if (isLocked()) {
+                <!--
+                  A locked role pin (D9.4): it stays on this user's shelf, so the control
+                  says who decided rather than offering an action that would be refused.
+                -->
+                <span
+                  class="inline-flex items-center gap-1.5 rounded-full border border-gray-300 bg-gray-50 px-4 py-2 text-sm/6 font-semibold text-gray-600 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300"
+                  [appTooltip]="lockTooltip()"
+                  appTooltipPosition="top"
+                >
+                  <ng-icon name="heroLockClosed" class="size-4" aria-hidden="true" />
+                  Added by your role
+                </span>
+              } @else {
               <button
                 type="button"
                 (click)="onTogglePin()"
@@ -145,6 +161,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
                 />
                 {{ isPinned() ? 'Added' : 'Add' }}
               </button>
+              }
               <button
                 type="button"
                 (click)="onStartChat()"
@@ -400,6 +417,16 @@ export class AgentDetailPage {
 
   isPinned(): boolean {
     return this.pinService.isPinned(this.id());
+  }
+
+  /** Pinned for the viewer's role and locked (D9.4) — there is no un-pinned state to offer. */
+  isLocked(): boolean {
+    return this.pinService.isLocked(this.id());
+  }
+
+  lockTooltip(): string {
+    const name = this.agent()?.name ?? 'This agent';
+    return `${name} is pinned for your role and can't be removed`;
   }
 
   pinTooltip(): string {

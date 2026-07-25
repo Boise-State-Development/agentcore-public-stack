@@ -560,8 +560,8 @@ Phase 3.5 Author Submit UI: submit dialog (category, note, D7 disclosures),
          listing-state badges + reviewer note + D13 edit trail on My Agents,
          withdraw/unpublish, GET /agents/{id}/listing/preflight   ✅ shipped (PR #734)
 Phase 4  Icons: upload, S3, generated fallback, all four render sizes  ✅ shipped (PR #735)
-Phase 5  Pins: user pin state + Pinned tab + store front admin              ← in progress
-Phase 6  Default pins by role (D9) + the assignment-time runnability check
+Phase 5  Pins: user pin state + Pinned tab + store front admin        ✅ shipped (PR #736)
+Phase 6  Default pins by role (D9) + the assignment-time runnability check  ← in progress
 Phase 7  @-mention in the composer
 Phase 8  Problem reports (D15): report action + admin Reports queue   ← depends on 3
 Later    Ranking + full-corpus search via the Registry catalog (F6b)
@@ -590,6 +590,34 @@ and parallelizable once 1–3 land.
 
 Promotion lives on the **Store front** surface rather than as a star on the Listings table: the row
 is an ordered list, and a per-row toggle can express membership but not position.
+
+**Phase 6 notes (as built).** Four, the first of which was a live trap:
+
+- **⚠️ `AppRoleRepository._delete_mapping_items` deleted every non-`DEFINITION` item under
+  `PK=ROLE#{id}`, and `update_role` calls it before rebuilding.** Pins are deliberately not part of
+  the `AppRole` record — a pin is not a permission — so nothing would have rewritten them: any edit
+  to a role's name, priority or grants would have silently emptied its seed list. It now deletes by
+  *prefix* (`JWT_MAPPING#`/`TOOL_GRANT#`/`MODEL_GRANT#`/`SKILL_GRANT#`), with `AGENT_PIN#` added only
+  for `delete_role`, where the role itself is going away. Any future per-role item that is not
+  reconstructible from `_build_role_items` needs the same protection.
+- **Role pins live in `assistants/role_pins.py`, not in `AppRoleRepository`.** The repository already
+  owns that table, and that is exactly the coupling worth refusing: keeping the pin read out of the
+  module that computes permissions makes "a pin is not a permission" structural rather than a comment.
+  The resolver reads `resolve_user_permissions` for its `app_roles` list *only* — the matched role
+  ids, including the `default` substitution — and queries the pins itself.
+- **Two separate checks on the admin row, because they have different owners.** *Reachability* is
+  visibility (`PRIVATE`/`SHARED` → the seed resolves to nothing for members; the author fixes it) and
+  *runnability* is the D9.5 diff against the role's `effective_permissions` (the admin fixes it).
+  Both **warn**; neither blocks the save, since an admin may legitimately seed something whose author
+  is mid-publish. `memory_space` is reported as a *note*, never as present or missing: a role does not
+  grant memory spaces, so "ready" must not claim to have checked one. `MAX_ROLE_PINS = 25` — stricter
+  than the user's own `MAX_PINS = 100`, because this shelf is somebody else's.
+- **Where a user's own pins sort.** The spec's `(locked desc, role priority desc, order asc, name asc)`
+  has no answer for a pin with no role, so own-only pins follow the seeded ones, ordered by their own
+  `order`. An own pin that a role *also* seeds sorts as the seed and reads as `source: "user"` — the
+  D9.1 escape hatch — while `locked` still follows the role's flag. The removal warning lives on the
+  console's **Save**, not on the row's `✕`: the editor is staged, and Save is the moment anything
+  reaches other people.
 
 **Phase 3.5 is a gap this table originally left open.** Phases 1–3 shipped the submit and withdraw
 endpoints and the entire reviewer console, but no phase owned the *author's* half of the surface —

@@ -1,7 +1,12 @@
 import { Component, ChangeDetectionStrategy, inject, input, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroCheck, heroCheckBadge, heroPlus } from '@ng-icons/heroicons/outline';
+import {
+  heroCheck,
+  heroCheckBadge,
+  heroLockClosed,
+  heroPlus,
+} from '@ng-icons/heroicons/outline';
 import { AgentListing } from '../models/store.model';
 import { AgentIconComponent } from './agent-icon.component';
 import { AgentPinService } from '../services/agent-pin.service';
@@ -26,7 +31,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
   selector: 'app-agent-listing-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [AgentIconComponent, NgIcon, RouterLink, TooltipDirective],
-  providers: [provideIcons({ heroCheck, heroCheckBadge, heroPlus })],
+  providers: [provideIcons({ heroCheck, heroCheckBadge, heroLockClosed, heroPlus })],
   template: `
     <div
       class="group flex w-full items-center gap-1 rounded-2xl pr-2 hover:bg-gray-50 dark:hover:bg-gray-800"
@@ -61,6 +66,20 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
         </div>
       </a>
 
+      @if (isLocked()) {
+        <!--
+          A locked role pin (D9.4): the control is *absent*, not disabled. A disabled
+          toggle invites a click and then refuses it; a lock says who decided.
+        -->
+        <span
+          class="grid size-8 shrink-0 place-items-center rounded-full text-gray-400 dark:text-gray-500"
+          [appTooltip]="lockTooltip()"
+          appTooltipPosition="top"
+        >
+          <ng-icon name="heroLockClosed" class="size-5" aria-hidden="true" />
+          <span class="sr-only">{{ lockTooltip() }}</span>
+        </span>
+      } @else {
       <button
         type="button"
         (click)="onTogglePin()"
@@ -78,6 +97,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
         <ng-icon [name]="isPinned() ? 'heroCheck' : 'heroPlus'" class="size-5" />
         <span class="sr-only">{{ pinTooltip() }}</span>
       </button>
+      }
     </div>
   `,
 })
@@ -95,6 +115,15 @@ export class AgentListingRowComponent {
 
   isPinned(): boolean {
     return this.pinService.isPinned(this.listing().agentId);
+  }
+
+  /** Locked by a role (D9.4) — the row keeps it and offers no way to remove it. */
+  isLocked(): boolean {
+    return this.pinService.isLocked(this.listing().agentId);
+  }
+
+  lockTooltip(): string {
+    return `${this.listing().name} is pinned for your role and can't be removed`;
   }
 
   /**
