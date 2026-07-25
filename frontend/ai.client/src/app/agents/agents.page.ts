@@ -20,6 +20,7 @@ import {
 } from '../components/confirmation-dialog/confirmation-dialog.component';
 import { ShareAssistantDialogComponent, ShareAssistantDialogData } from '../assistants/components/share-assistant-dialog.component';
 import { TooltipDirective } from '../components/tooltip/tooltip.directive';
+import { AgentsTabsComponent } from './components/agents-tabs.component';
 
 /**
  * Agent Designer — the list surface. A sibling of the Assistants list page but
@@ -32,7 +33,7 @@ import { TooltipDirective } from '../components/tooltip/tooltip.directive';
   templateUrl: './agents.page.html',
   styleUrl: './agents.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, TooltipDirective],
+  imports: [NgIcon, TooltipDirective, AgentsTabsComponent],
   providers: [
     provideIcons({
       heroPlus,

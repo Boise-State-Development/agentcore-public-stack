@@ -210,13 +210,14 @@ pins assigned to `default` therefore reach only users who match nothing else —
 nobody. The admin UI must label that chip *"fallback only — does not apply to users with any other
 role"* or admins will assume it means "everyone" and quietly seed no one.
 
-## D10 — Admin owns six levers, in one console
+## D10 — Admin owns seven levers, in one console
 
 Every store behavior needs a surface, or it becomes a code deploy:
 
 | Surface | Controls |
 |---|---|
 | **Review queue** | Approve / request changes, with a reason. Pending count badges the nav. |
+| **Reports** | User-submitted problem reports (D15): resolve or dismiss, with the reporter visible. Open count badges the nav alongside submissions. |
 | **Listings** | All published Agents: promote to store front, reassign category, take down. |
 | **Store front** | The Featured row as an explicitly ordered list, with slots. |
 | **Categories** | Fixed set in browse order: add, rename, reorder. Empty categories auto-hide. |
@@ -307,6 +308,51 @@ applies here too: granting the capability to `default` does **not** reach everyo
 
 ---
 
+## D15 — Users report problems; the report is private and lands in the admin queue
+
+A store with no way to say "this one is wrong" pushes that signal into email, or nowhere.
+Any user who can run a published Agent can **report a problem with it** from the detail
+page, and the report joins the admin console as a second work stream beside submissions.
+
+**This is not a review, and the distinction is the whole design.** The non-goal below
+still stands: no stars, no public comments, no visible counts. A report is a *private
+message to the curator*, never shelf content, and nothing a reporter writes is ever
+rendered to another browsing user. Ratings would make the store a popularity contest we
+have deliberately declined to run (see the ranking caveat); reports make it maintainable.
+Five decisions:
+
+**1. Reports are triaged, never auto-forwarded to the author.** The reviewer decides what
+reaches the person who built the thing. Piping raw user text straight to an author is how
+you get one bad message ending a volunteer's willingness to publish — and the author
+cannot act on "this is stupid" anyway. When a report is actionable the reviewer uses the
+existing **request changes** or **takedown** path, whose reason field is already the
+author-facing channel. Reports are the *evidence* for that reason, not a substitute for it.
+
+**2. The reporter is visible to the admin and never to the author.** Admins need identity
+to spot a brigade or a grudge; authors need the substance, not the name. This is the
+narrowest split that serves both.
+
+**3. Reportable means published.** You may report what the store offered you. Reporting a
+`private` or `in_review` Agent is not a thing — nobody outside the author was invited to
+it, and a takedown is not available as a remedy for something that was never listed.
+
+**4. A reporter gets one open report per Agent.** A second submission while the first is
+still open updates it rather than stacking. Without this the queue is trivially floodable
+and the count at the top of the nav stops meaning anything.
+
+**5. Reports have their own tiny lifecycle: `open → resolved | dismissed`.** Deliberately
+not a mirror of the listing state machine — the report is a note about an Agent, not a
+state of it. Resolving a report never changes `listing.state`; if a report warrants
+delisting, the admin takes the Agent down and that is a separate, recorded act.
+
+`reason` is a small fixed set (`inaccurate`, `broken`, `inappropriate`, `other`) plus free
+text. The set exists so the queue can be sorted by severity without reading every note;
+`inappropriate` is the one that should page a human rather than wait for a sweep.
+
+⚠️ **A report is not a permission signal and not a ranking input.** It must not feed
+`usageCount`, the store front, or any ordering. The moment report volume influences
+placement, reporting becomes a way to bury a competitor's Agent.
+
 ## Data model
 
 ### Agent record (additive — no new table, per Designer D2)
@@ -347,6 +393,34 @@ Unpublication is enforced by physics: no key, so the query cannot return it.
 **Ranking caveat, stated plainly:** `GSI5_SK` is `created_at`, so browse is **newest-first**. A
 popularity sort needs a mutable sort key (hot-item rewrite per use) or a periodic recompute; v1 does
 neither. The store front (D10) is the manual override. Deferred to F6b, not silently approximated.
+
+### Reports (D15)
+
+Child rows under the Agent, so a report is deleted with the Agent it concerns and never
+outlives it:
+
+```
+PK = AST#{agent_id}, SK = "REPORT#{created_at}#{report_id}"
+{ reporterId, reporterName, reason, note, state, createdAt,
+  resolvedAt?, resolvedBy?, resolutionNote? }
+```
+
+**Sparse open-report index (GSI6 on `rag-assistants`)**, written only while
+`state == 'open'`, exactly as GSI5 is written only while published:
+
+```
+GSI6_PK = "REPORTS#OPEN"
+GSI6_SK = CREATED#{created_at}
+```
+
+A single partition is correct here and would not be for the directory: the open queue is
+bounded by how fast admins work, it is read only by the admin console, and it wants one
+chronological sweep rather than per-category slices. If the queue ever outgrows a hot
+partition, that is a *product* signal (nobody is triaging) before it is a capacity one.
+
+D15.4's one-open-report-per-reporter rule needs a lookup by `(agent, reporter)`; do it
+with a conditional write on a deterministic `report_id` derived from the reporter id,
+not a second index — the write already knows both halves of the key.
 
 ### Store front, categories, publishers
 
@@ -432,6 +506,8 @@ auth rule; admin routes `Depends(require_admin)` (= `require_app_roles("system_a
 | `POST /agents/{id}/listing/submit` | Author submits. Runs D7 checks; 400 on a `memory_space` binding. |
 | `DELETE /agents/{id}/listing` | Author unpublishes. |
 | `GET /agents/pins` · `POST`/`DELETE /agents/{id}/pin` | The user's effective pin list; pin / dismiss (D9). |
+| `POST /agents/{id}/report` | Report a problem with a published Agent (D15). One open report per reporter. |
+| `GET /admin/agents/reports` · `POST /admin/agents/reports/{reportId}/resolve` | Report queue; resolve or dismiss, reporter visible (D15). |
 | `GET /admin/agents/submissions` · `POST /admin/agents/{id}/review` | Review queue; approve / request changes (D2). |
 | `GET /admin/agents/listings` · `POST /admin/agents/{id}/takedown` | Listings table; delist with a reason. |
 | `PATCH /admin/agents/{id}/listing` | Edit presentation only — `name`, `tagline`, `iconKey`, `category`, `publisherId` (D13). Rejects any behavior field. |
@@ -460,7 +536,7 @@ persisted on the Agent.
   access" with the D6 availability line.
 - **My Agents** — listing-state badge per card (`Draft` / `Private` / `In review` /
   `Changes requested` / `Published`), the reviewer's note inline, Icon and Submit actions.
-- **Admin** — left sub-nav over the five D10 surfaces.
+- **Admin** — left sub-nav over the seven D10 surfaces.
 - **`@` menu** — grouped "Your agents" / "Pinned", publisher as secondary text, "Browse all →" last.
 
 Reuse the list-page token idiom (`rounded-2xl`, `text-sm/6`, flat), `@angular/cdk/dialog` for every
@@ -472,18 +548,23 @@ Working mockup of all of the above: the `agent-marketplace` artifact (v2, admin 
 ## Phasing
 
 ```
-Phase 0  This spec
+Phase 0  This spec                                                          ✅ shipped
 Phase 1  listing block + state machine + sparse GSI5 + submit/review/takedown API
          + publisher profiles (D12) + admin Review queue & Listings
-         + backfill (no listing block)                                          ← first PR
-Phase 2  GET /agents/store + the Discover page + categories admin
+         + backfill (no listing block)                               ✅ shipped (PR #731)
+Phase 2  GET /agents/store + the Discover page + categories admin           ← in progress
 Phase 3  Detail page + runnability + the instructions gate
 Phase 4  Icons: upload, S3, generated fallback, all four render sizes
 Phase 5  Pins: user pin state + Pinned tab + store front admin
 Phase 6  Default pins by role (D9) + the assignment-time runnability check
 Phase 7  @-mention in the composer
+Phase 8  Problem reports (D15): report action + admin Reports queue   ← depends on 3
 Later    Ranking + full-corpus search via the Registry catalog (F6b)
 ```
+
+Phase 8 sits after the detail page because that is where the report action lives — there
+is no other surface a user is looking at when they decide something is wrong. It is
+otherwise independent of 4–7 and can run alongside them.
 
 Phase 1 is the smallest thing that is independently useful: authors can submit, admins can approve
 and take down, and nothing is user-visible until Phase 2. Phases 4–7 are independent of each other
@@ -496,6 +577,8 @@ and parallelizable once 1–3 land.
 - **No re-review on edit** (D2). The listing is reviewed, not every subsequent change.
 - **No pin fan-out job** (D9.1). Role pins resolve live.
 - **No ratings, reviews, or comments.** Social proof is the store front and the publisher.
+  D15's problem reports are the deliberate exception that proves this: they are private to
+  admins, never rendered to another browsing user, and never an input to ranking.
 - **No popularity ranking.** Newest-first plus a curated front, honestly labeled.
 - **No cross-tenant or external publishing.** The store is institution-scoped.
 - **No agent versioning or changelogs.** A published Agent is a live pointer; updates are immediate.

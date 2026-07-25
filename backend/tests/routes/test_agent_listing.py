@@ -52,6 +52,26 @@ def _flags_on(monkeypatch):
     monkeypatch.setenv("AGENT_MARKETPLACE_ENABLED", "true")
 
 
+def _default_categories():
+    """The seeded category set, as ``ensure_seeded`` would return it."""
+    from apis.shared.assistants.listing import DEFAULT_CATEGORIES
+    from apis.shared.assistants.models import AgentCategory
+
+    return [
+        AgentCategory(id=label, label=label, order=i * 10, enabled=True)
+        for i, label in enumerate(DEFAULT_CATEGORIES)
+    ]
+
+
+@pytest.fixture(autouse=True)
+def _categories():
+    """Category validation reads admin-managed records (Phase 2); stub the store."""
+    with patch(
+        f"{SERVICE_MODULE}.ensure_seeded", new_callable=AsyncMock, side_effect=_default_categories
+    ):
+        yield
+
+
 @pytest.fixture
 def _no_writes():
     """Stub the persistence + publisher resolution so tests exercise decisions, not I/O."""

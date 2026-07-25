@@ -560,16 +560,118 @@ class PublisherEligibilityResponse(BaseModel):
     user_ids: List[str] = Field(default_factory=list, alias="userIds", description="Eligible user ids")
 
 
-class AgentCategoriesResponse(BaseModel):
-    """The category set a listing may reference.
+class AgentCategory(BaseModel):
+    """An admin-managed store category (D10).
 
-    Phase 1 serves the ``DEFAULT_CATEGORIES`` constant; Phase 2 serves admin-managed
-    records from the same route with no shape change.
+    ⚠️ ``id`` is immutable — it is half of ``GSI5_PK = LISTED#{category}``, so renaming
+    it would strand every published listing in a partition browse no longer queries.
+    Renaming a category changes ``label`` only.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    categories: List[str] = Field(default_factory=list, description="Category ids in browse order")
+    id: str = Field(..., description="Immutable category id; the GSI5 partition suffix")
+    label: str = Field(..., description="Display name, renameable")
+    order: int = Field(0, description="Browse order")
+    enabled: bool = Field(True, description="Disabled categories hide from pickers and browse")
+    created_at: Optional[str] = Field(None, alias="createdAt", description="ISO 8601 creation timestamp")
+    updated_at: Optional[str] = Field(None, alias="updatedAt", description="ISO 8601 update timestamp")
+
+
+class AgentCategoryCreateRequest(BaseModel):
+    """Create a store category (D10)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str = Field(..., min_length=1, max_length=60, description="Display name")
+    id: Optional[str] = Field(
+        None, description="Optional explicit id; defaults to the label. Immutable once set."
+    )
+    order: int = Field(0, description="Browse order")
+    enabled: bool = Field(True, description="Whether the category is offered")
+
+
+class AgentCategoryUpdateRequest(BaseModel):
+    """Update a store category. ``id`` is deliberately absent — it cannot change."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: Optional[str] = Field(None, min_length=1, max_length=60, description="Display name")
+    order: Optional[int] = Field(None, description="Browse order")
+    enabled: Optional[bool] = Field(None, description="Whether the category is offered")
+
+
+class AgentCategoriesResponse(BaseModel):
+    """The category set a listing may reference (D10)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    categories: List[AgentCategory] = Field(default_factory=list, description="Categories in browse order")
+
+
+class ListingPublisher(BaseModel):
+    """The publisher as the store renders it — label, kind, and the verified mark.
+
+    A narrowed projection of ``PublisherProfile``: browse has no use for ``order``,
+    ``enabled`` or timestamps, and the less the store read carries the less there is to
+    leak.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str = Field(..., description="Display name")
+    kind: PublisherKind = Field(..., description="institution | department | individual")
+    verified: bool = Field(False, description="Check mark: a university team stands behind this")
+
+
+class AgentListingResponse(BaseModel):
+    """The shelf read-shape (D4).
+
+    ⚠️ Deliberately **not** ``AgentResponse``. This carries no ``instructions``, no
+    binding ``ref`` values, no binding ids, and no ``ownerId`` — a store row's job is to
+    make you tap, and everything else is an unnecessary disclosure to every browsing
+    user. The detail read (Phase 3) adds description, starters and capability *names*,
+    and gates ``instructions`` to owner/editor.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    name: str = Field(..., description="Agent display name")
+    tagline: Optional[str] = Field(None, description="One-line subtitle (D4)")
+    emoji: Optional[str] = Field(None, description="Emoji, for the generated icon fallback (D5)")
+    icon_url: Optional[str] = Field(
+        None,
+        alias="iconUrl",
+        description="Square icon URL; absent until icons ship in Phase 4, then the SPA falls back to the generated gradient",
+    )
+    publisher: Optional[ListingPublisher] = Field(None, description="Attribution (D12), display only")
+    category: str = Field(..., description="Category id")
+
+
+class AgentStoreResponse(BaseModel):
+    """One page of a category's shelf, newest-first."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    listings: List[AgentListingResponse] = Field(default_factory=list, description="Published agents")
+    next_cursor: Optional[str] = Field(
+        None, alias="nextCursor", description="Opaque pagination cursor; absent at the end of the shelf"
+    )
+
+
+class AgentStoreFrontResponse(BaseModel):
+    """The browse header: the featured row plus the categories to render (D10)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    featured: List[AgentListingResponse] = Field(
+        default_factory=list,
+        description="Curated store-front row; empty until the store-front admin ships in Phase 5",
+    )
+    categories: List[AgentCategory] = Field(
+        default_factory=list, description="Enabled categories in browse order"
+    )
 
 
 class AssistantTestChatRequest(BaseModel):

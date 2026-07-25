@@ -85,8 +85,8 @@ export const adminRoutes: Routes = [
     path: 'skills/edit/:skillId',
     loadComponent: () => import('./skills/pages/skill-form.page').then(m => m.SkillFormPage),
   },
-  // Agent Marketplace (docs/specs/agent-marketplace.md) — Phase 1 ships two of the six
-  // admin surfaces. Store front, categories and default pins arrive in later phases.
+  // Agent Marketplace (docs/specs/agent-marketplace.md) — three of D10's seven admin
+  // surfaces. Store front, default pins and the reports queue arrive in later phases.
   {
     path: 'marketplace/review',
     loadComponent: () => import('./marketplace/pages/review-queue.page').then(m => m.ReviewQueuePage),
@@ -94,6 +94,10 @@ export const adminRoutes: Routes = [
   {
     path: 'marketplace/listings',
     loadComponent: () => import('./marketplace/pages/listings.page').then(m => m.MarketplaceListingsPage),
+  },
+  {
+    path: 'marketplace/categories',
+    loadComponent: () => import('./marketplace/pages/categories.page').then(m => m.MarketplaceCategoriesPage),
   },
   {
     path: 'marketplace',

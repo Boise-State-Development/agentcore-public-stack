@@ -1,13 +1,13 @@
-"""Admin API routes for the Agent Marketplace (Phase 1).
+"""Admin API routes for the Agent Marketplace (Phases 1-2).
 
 Mounted under ``/admin/agents`` per the CLAUDE.md route convention — admin CRUD lives at
 ``/admin/resource/``, never ``/resource/admin/``. Every route is ``Depends(require_admin)``
 (= ``require_app_roles("system_admin")``); D2 is explicit that a granular "marketplace
 curator" permission is a deliberate follow-up, so do not open a second permission axis here.
 
-Phase 1 covers two of D10's six surfaces — **Review queue** and **Listings** — plus the
-**Publishers** records they depend on. Store front, categories and default pins are
-Phases 5, 2 and 6.
+Covers three of D10's seven surfaces — **Review queue**, **Listings** and **Categories**
+— plus the **Publishers** records they depend on. Store front, default pins and the
+reports queue are Phases 5, 6 and 8.
 """
 
 import logging
@@ -24,11 +24,20 @@ from apis.app_api.agent_designer.services.listing_service import (
     review_listing,
     takedown_listing,
 )
-from apis.shared.assistants.listing import DEFAULT_CATEGORIES
+from apis.shared.assistants.categories import (
+    category_in_use,
+    delete_category,
+    ensure_seeded,
+    get_category,
+    put_category,
+)
 from apis.shared.assistants.models import (
     AdminListingPatchRequest,
     AdminListingsResponse,
     AgentCategoriesResponse,
+    AgentCategory,
+    AgentCategoryCreateRequest,
+    AgentCategoryUpdateRequest,
     AgentListing,
     PublisherCreateRequest,
     PublisherEligibilityRequest,
@@ -171,14 +180,105 @@ async def patch_agent_listing(
         raise HTTPException(status_code=500, detail=f"Failed to patch listing: {str(e)}")
 
 
+# ── categories (D10) ─────────────────────────────────────────────────────────────────
+# Admin-managed records rather than a build-time constant: a category set that requires a
+# deploy to change will not be maintained. ``ensure_seeded`` writes the defaults on the
+# first read in a fresh environment so the store is never category-less.
 @router.get("/categories", response_model=AgentCategoriesResponse)
-async def list_categories(admin: User = Depends(require_marketplace_admin)):
-    """The category set a listing may reference.
+async def list_agent_categories(admin: User = Depends(require_marketplace_admin)):
+    """The category set a listing may reference, in browse order."""
+    try:
+        return AgentCategoriesResponse(categories=await ensure_seeded())
+    except Exception as e:
+        logger.error(f"Error listing agent categories: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list categories: {str(e)}")
 
-    Phase 1 serves the ``DEFAULT_CATEGORIES`` constant. Phase 2 replaces the source with
-    admin-managed records (D10) and serves the same shape from the same route.
+
+@router.post("/categories", response_model=AgentCategory, status_code=201)
+async def create_agent_category(
+    request: AgentCategoryCreateRequest, admin: User = Depends(require_marketplace_admin)
+):
+    """Create a category.
+
+    The id defaults to the label and is **immutable** thereafter — it is half of
+    ``GSI5_PK = LISTED#{category}``, so changing it would strand every listing in that
+    category in a partition browse no longer queries. Rename the label instead.
     """
-    return AgentCategoriesResponse(categories=list(DEFAULT_CATEGORIES))
+    try:
+        await ensure_seeded()
+        category_id = (request.id or request.label).strip()
+        if not category_id:
+            raise HTTPException(status_code=400, detail="Category id cannot be empty")
+        if await get_category(category_id):
+            raise HTTPException(status_code=409, detail=f"Category '{category_id}' already exists")
+
+        now = _now()
+        return await put_category(
+            AgentCategory(
+                id=category_id,
+                label=request.label,
+                order=request.order,
+                enabled=request.enabled,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating agent category: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create category: {str(e)}")
+
+
+@router.patch("/categories/{category_id}", response_model=AgentCategory)
+async def update_agent_category(
+    category_id: str,
+    request: AgentCategoryUpdateRequest,
+    admin: User = Depends(require_marketplace_admin),
+):
+    """Rename, reorder, or disable a category. The id cannot change (see create)."""
+    try:
+        existing = await get_category(category_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Category not found: {category_id}")
+        changes = request.model_dump(exclude_none=True)
+        return await put_category(existing.model_copy(update={**changes, "updated_at": _now()}))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating agent category: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update category: {str(e)}")
+
+
+@router.delete("/categories/{category_id}", status_code=204)
+async def delete_agent_category(
+    category_id: str, admin: User = Depends(require_marketplace_admin)
+):
+    """Delete a category, but only while nothing references it.
+
+    A referenced category cannot be deleted because its listings would point at a
+    partition with no label to render. Disable it instead: it leaves the pickers and the
+    browse header while its listings keep working — which is almost always what the admin
+    actually meant.
+    """
+    try:
+        if not await get_category(category_id):
+            raise HTTPException(status_code=404, detail=f"Category not found: {category_id}")
+        if await category_in_use(category_id):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"'{category_id}' still has listings in it. Disable it instead — that "
+                    "removes it from the pickers and the browse header while the agents "
+                    "already in it keep working."
+                ),
+            )
+        await delete_category(category_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting agent category: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete category: {str(e)}")
 
 
 # ── publishers (D12) ─────────────────────────────────────────────────────────────────

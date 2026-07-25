@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import {
   AdminListingRow,
+  AgentCategory,
   AdminListingsResponse,
   ListingPatchRequest,
   ListingState,
@@ -16,7 +17,7 @@ interface PublishersResponse {
 }
 
 interface CategoriesResponse {
-  categories: string[];
+  categories: AgentCategory[];
 }
 
 /**
@@ -93,11 +94,44 @@ export class AdminMarketplaceService {
     return response.publishers ?? [];
   }
 
-  async loadCategories(): Promise<string[]> {
+  async loadCategories(): Promise<AgentCategory[]> {
     const response = await firstValueFrom(
       this.http.get<CategoriesResponse>(`${this.baseUrl()}/categories`),
     );
     return response.categories ?? [];
+  }
+
+  /**
+   * Create a category. The id defaults to the label server-side and is immutable after —
+   * it is half of the directory partition key, so a rename changes the label only.
+   */
+  async createCategory(request: {
+    label: string;
+    order?: number;
+    enabled?: boolean;
+  }): Promise<AgentCategory> {
+    return firstValueFrom(
+      this.http.post<AgentCategory>(`${this.baseUrl()}/categories`, request),
+    );
+  }
+
+  async updateCategory(
+    categoryId: string,
+    changes: { label?: string; order?: number; enabled?: boolean },
+  ): Promise<AgentCategory> {
+    return firstValueFrom(
+      this.http.patch<AgentCategory>(
+        `${this.baseUrl()}/categories/${encodeURIComponent(categoryId)}`,
+        changes,
+      ),
+    );
+  }
+
+  /** Deleting is refused server-side (409) while listings still reference the category. */
+  async deleteCategory(categoryId: string): Promise<void> {
+    await firstValueFrom(
+      this.http.delete(`${this.baseUrl()}/categories/${encodeURIComponent(categoryId)}`),
+    );
   }
 
   private messageFor(err: unknown, fallback: string): string {

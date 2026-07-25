@@ -91,6 +91,21 @@ export interface ListingPatchRequest {
   publisherId?: string;
 }
 
+/**
+ * An admin-managed store category (D10).
+ *
+ * `id` is immutable — it is half of the directory partition key, so renaming a category
+ * changes `label` only. That is why the form offers no id field after creation.
+ */
+export interface AgentCategory {
+  id: string;
+  label: string;
+  order: number;
+  enabled: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 /** Display metadata for each listing state, used by the badge component. */
 export const LISTING_STATE_LABELS: Record<ListingState, string> = {
   private: 'Private',

@@ -61,6 +61,26 @@ def _flag_on(monkeypatch):
     monkeypatch.setenv("AGENT_MARKETPLACE_ENABLED", "true")
 
 
+def _default_categories():
+    """The seeded category set, as ``ensure_seeded`` would return it."""
+    from apis.shared.assistants.listing import DEFAULT_CATEGORIES
+    from apis.shared.assistants.models import AgentCategory
+
+    return [
+        AgentCategory(id=label, label=label, order=i * 10, enabled=True)
+        for i, label in enumerate(DEFAULT_CATEGORIES)
+    ]
+
+
+@pytest.fixture(autouse=True)
+def _categories():
+    """Category validation reads admin-managed records (Phase 2); stub the store."""
+    with patch(
+        f"{SERVICE_MODULE}.ensure_seeded", new_callable=AsyncMock, side_effect=_default_categories
+    ):
+        yield
+
+
 @pytest.fixture
 def _no_writes():
     with patch(f"{SERVICE_MODULE}.write_listing", new_callable=AsyncMock) as write:
@@ -382,6 +402,15 @@ class TestAdminTables:
         assert resp.json()["listings"][0]["publisher"] is None
 
     def test_categories_are_served_for_the_pickers(self, app):
-        resp = TestClient(app).get("/admin/agents/categories")
+        with patch(
+            f"{ADMIN_MODULE}.ensure_seeded",
+            new_callable=AsyncMock,
+            side_effect=_default_categories,
+        ):
+            resp = TestClient(app).get("/admin/agents/categories")
+
         assert resp.status_code == 200
-        assert "Administration" in resp.json()["categories"]
+        categories = resp.json()["categories"]
+        assert [c["id"] for c in categories][0] == "Administration"
+        # Ids double as the GSI5 partition suffix, so they must survive as written.
+        assert all(c["id"] == c["label"] for c in categories)

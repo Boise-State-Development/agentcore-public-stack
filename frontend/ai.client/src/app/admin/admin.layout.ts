@@ -22,6 +22,7 @@ import {
   heroSparkles,
   heroInbox,
   heroRectangleStack,
+  heroTag,
 } from '@ng-icons/heroicons/outline';
 
 interface NavItem {
@@ -56,6 +57,7 @@ interface NavGroup {
       heroSparkles,
       heroInbox,
       heroRectangleStack,
+      heroTag,
     }),
   ],
   host: { class: 'block' },
@@ -160,12 +162,13 @@ export class AdminLayout {
       ],
     },
     {
-      // Agent Marketplace (Phase 1). Two of D10's six surfaces; store front, categories
-      // and default pins join this group as their phases land.
+      // Agent Marketplace. Three of D10's seven surfaces; store front, default pins and
+      // the reports queue join this group as their phases land.
       label: 'Agent Marketplace',
       items: [
         { label: 'Review Queue', icon: 'heroInbox', route: '/admin/marketplace/review' },
         { label: 'Listings', icon: 'heroRectangleStack', route: '/admin/marketplace/listings' },
+        { label: 'Categories', icon: 'heroTag', route: '/admin/marketplace/categories' },
       ],
     },
     {
