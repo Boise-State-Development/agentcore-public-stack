@@ -308,7 +308,10 @@ export class AgentFormPage implements OnInit, OnDestroy {
       this.form.patchValue({
         name: agent.name,
         description: agent.description,
-        instructions: agent.instructions,
+        // Marketplace Phase 3 gates `instructions` to owner/editor. Reaching this form
+        // means one of those, so the fallback is defensive, not an expected path — the
+        // field's own `required` validator surfaces it if the gate ever changes.
+        instructions: agent.instructions ?? '',
         visibility: agent.visibility,
         tags: agent.tags ?? [],
         emoji: agent.emoji ?? '',

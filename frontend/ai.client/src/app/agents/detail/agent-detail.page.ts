@@ -1,0 +1,396 @@
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  inject,
+  input,
+  signal,
+} from '@angular/core';
+import { Router } from '@angular/router';
+import { firstValueFrom } from 'rxjs';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import {
+  heroArrowLeft,
+  heroArrowRight,
+  heroCheckBadge,
+  heroCheckCircle,
+  heroExclamationTriangle,
+  heroNoSymbol,
+} from '@ng-icons/heroicons/outline';
+import { AgentApiService } from '../services/agent-api.service';
+import { Agent, AgentRunnability } from '../models/agent.model';
+import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
+
+/**
+ * Agent detail — the page a shelf row taps through to (Marketplace Phase 3).
+ *
+ * The shelf deliberately carries icon, name and one line (D4), which means this page
+ * is where everything else has to land: what the Agent is, what it can reach, and —
+ * the one thing D4's shelf cannot tell you — whether it will run for *you* (D6).
+ *
+ * Two loads, deliberately not one: the identity half paints from `GET /agents/{id}`
+ * immediately, while runnability fans out across the viewer's model/tool/skill catalogs
+ * and settles into the sidebar when it arrives. Blocking the whole page on the slower
+ * question would trade a fast page for a spinner.
+ *
+ * Not here yet, by phase: "Add to my agents" (pins, Phase 5), the uploaded icon and its
+ * generated gradient fallback (Phase 4), and "Report a problem" (Phase 8). Rendering an
+ * affordance whose backing lever does not exist is how a store starts lying, so the
+ * header carries Start chat alone.
+ */
+@Component({
+  selector: 'app-agent-detail',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [NgIcon, TooltipDirective],
+  providers: [
+    provideIcons({
+      heroArrowLeft,
+      heroArrowRight,
+      heroCheckBadge,
+      heroCheckCircle,
+      heroExclamationTriangle,
+      heroNoSymbol,
+    }),
+  ],
+  template: `
+    <div class="min-h-dvh">
+      <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+        <button
+          type="button"
+          (click)="onBack()"
+          class="mb-6 inline-flex items-center gap-1.5 text-sm/6 font-semibold text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+        >
+          <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
+          Back
+        </button>
+
+        @if (error()) {
+          <div
+            role="alert"
+            class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+          >
+            {{ error() }}
+          </div>
+        } @else if (loading()) {
+          <div class="flex items-center justify-center py-16">
+            <div
+              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
+            ></div>
+            <span class="sr-only">Loading agent</span>
+          </div>
+        } @else if (agent(); as a) {
+          <!-- Identity -->
+          <div class="flex flex-wrap items-start gap-5">
+            <span
+              class="flex size-21 shrink-0 items-center justify-center rounded-3xl bg-gray-100 text-4xl dark:bg-gray-700"
+              aria-hidden="true"
+            >
+              {{ a.emoji || '✦' }}
+            </span>
+            <div class="min-w-0 flex-1">
+              <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">{{ a.name }}</h1>
+              @if (a.tagline) {
+                <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">{{ a.tagline }}</p>
+              }
+              <p
+                class="mt-2 flex flex-wrap items-center gap-2 text-sm/6 text-gray-500 dark:text-gray-400"
+              >
+                <span>{{ publisherLabel() }}</span>
+                @if (a.publisher?.verified) {
+                  <span class="inline-flex items-center gap-1 font-semibold text-blue-600 dark:text-blue-400">
+                    <ng-icon
+                      name="heroCheckBadge"
+                      class="size-4"
+                      [appTooltip]="verifiedTooltip()"
+                      appTooltipPosition="top"
+                    />
+                    University team
+                  </span>
+                }
+                @if (a.categoryLabel) {
+                  <span aria-hidden="true">·</span>
+                  <span>{{ a.categoryLabel }}</span>
+                }
+              </p>
+            </div>
+            <button
+              type="button"
+              (click)="onStartChat()"
+              [disabled]="isBlocked()"
+              [appTooltip]="startChatTooltip()"
+              appTooltipPosition="top"
+              class="rounded-full bg-blue-600 px-4 py-2 text-sm/6 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45 dark:bg-blue-500 dark:hover:bg-blue-400"
+            >
+              Start chat
+            </button>
+          </div>
+
+          <!--
+            Hero: the @-mention prompt this agent answers to. Display-only — the
+            composer has no prompt-prefill entry point, and @-mention itself is
+            Phase 7, so a clickable pill here would be an affordance with no lever
+            behind it. It shows the shape of the thing; Start chat performs it.
+          -->
+          <div
+            class="mt-6 grid place-items-center rounded-3xl bg-linear-to-br from-blue-700 to-sky-500 px-6 py-12 dark:from-blue-900 dark:to-sky-700"
+          >
+            <p
+              class="flex w-full max-w-xl items-center gap-4 rounded-full bg-white/95 px-5 py-3.5 text-sm/6 text-gray-900 shadow-md"
+            >
+              <span class="min-w-0 flex-1">
+                <span class="font-semibold text-blue-700">{{ mention() }}</span>
+                {{ heroSuffix() }}
+              </span>
+              <span
+                class="grid size-7 shrink-0 place-items-center rounded-full bg-gray-900 text-white"
+                aria-hidden="true"
+              >
+                <ng-icon name="heroArrowRight" class="size-3.5" />
+              </span>
+            </p>
+          </div>
+
+          <div class="mt-8 grid gap-8 lg:grid-cols-[1fr_300px]">
+            <div>
+              <section class="mb-8">
+                <h2 class="mb-3 text-base/7 font-semibold text-gray-900 dark:text-white">About</h2>
+                <p class="max-w-prose text-sm/6 text-gray-600 dark:text-gray-400">
+                  {{ a.description }}
+                </p>
+              </section>
+
+              @if (a.starters.length) {
+                <section class="mb-8">
+                  <h2 class="mb-3 text-base/7 font-semibold text-gray-900 dark:text-white">
+                    Try asking
+                  </h2>
+                  <!-- The author's starters, shown as examples. Not buttons: sending one
+                       needs composer prefill, which does not exist yet. -->
+                  <ul class="flex flex-col gap-2">
+                    @for (starter of a.starters; track starter) {
+                      <li
+                        class="rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm/6 text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                      >
+                        {{ starter }}
+                      </li>
+                    }
+                  </ul>
+                </section>
+              }
+            </div>
+
+            <div class="flex flex-col gap-3">
+              <section
+                class="rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800"
+              >
+                <h2
+                  class="mb-2.5 text-xs/5 font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                >
+                  Details
+                </h2>
+                <dl class="flex flex-col gap-1">
+                  @for (row of details(); track row.label) {
+                    <div class="flex items-baseline justify-between gap-3 py-1 text-sm/6">
+                      <dt class="text-gray-500 dark:text-gray-400">{{ row.label }}</dt>
+                      <dd class="text-right font-semibold text-gray-900 dark:text-white">
+                        {{ row.value }}
+                      </dd>
+                    </div>
+                  }
+                </dl>
+              </section>
+
+              <section
+                class="rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800"
+              >
+                <h2
+                  class="mb-2.5 text-xs/5 font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                >
+                  What it can access
+                </h2>
+                @if (a.capabilities?.length) {
+                  <ul class="flex flex-col gap-1">
+                    @for (capability of a.capabilities; track capability.label) {
+                      <li class="flex items-center gap-2 py-1 text-sm/6 text-gray-700 dark:text-gray-300">
+                        <span class="min-w-0 flex-1 truncate">{{ capability.label }}</span>
+                        <span class="shrink-0 text-xs/5 text-gray-500 dark:text-gray-400">
+                          {{ kindLabel(capability.kind) }}
+                        </span>
+                      </li>
+                    }
+                  </ul>
+                } @else {
+                  <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+                    Nothing beyond its own knowledge.
+                  </p>
+                }
+
+                <!-- D6: the one line the shelf deliberately does not carry. -->
+                @if (runnability(); as r) {
+                  <p
+                    class="mt-3 flex items-start gap-1.5 border-t border-gray-200 pt-3 text-sm/6 dark:border-gray-700"
+                    [class]="
+                      r.state === 'ready'
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : r.state === 'limits'
+                          ? 'text-amber-700 dark:text-amber-400'
+                          : 'text-rose-700 dark:text-rose-400'
+                    "
+                  >
+                    <ng-icon [name]="availabilityIcon()" class="mt-1 size-4 shrink-0" aria-hidden="true" />
+                    <span>{{ availabilityText() }}</span>
+                  </p>
+                }
+              </section>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+  `,
+})
+export class AgentDetailPage {
+  private api = inject(AgentApiService);
+  private router = inject(Router);
+
+  /** Bound from the `agents/:id` route via `withComponentInputBinding`. */
+  readonly id = input.required<string>();
+
+  readonly agent = signal<Agent | null>(null);
+  readonly runnability = signal<AgentRunnability | null>(null);
+  readonly loading = signal(true);
+  readonly error = signal<string | null>(null);
+
+  constructor() {
+    void this.load();
+  }
+
+  private async load(): Promise<void> {
+    this.loading.set(true);
+    this.error.set(null);
+    try {
+      this.agent.set(await firstValueFrom(this.api.getAgent(this.id())));
+    } catch (err) {
+      this.error.set(this.messageFor(err, 'Failed to load this agent.'));
+      return;
+    } finally {
+      this.loading.set(false);
+    }
+
+    // Runnability is advisory: the page is fully usable without it, so a failure here
+    // leaves the availability line absent rather than erroring the whole detail view.
+    try {
+      this.runnability.set(await firstValueFrom(this.api.getRunnability(this.id())));
+    } catch {
+      this.runnability.set(null);
+    }
+  }
+
+  private messageFor(err: unknown, fallback: string): string {
+    const detail = (err as { error?: { detail?: unknown } })?.error?.detail;
+    return typeof detail === 'string' ? detail : fallback;
+  }
+
+  readonly isBlocked = computed(() => this.runnability()?.state === 'blocked');
+
+  readonly publisherLabel = computed(
+    () => this.agent()?.publisher?.label || this.agent()?.ownerName || 'Unknown',
+  );
+
+  readonly mention = computed(() => `@${this.agent()?.name ?? ''}`);
+
+  /**
+   * The hero band carries the `@Agent` prompt an author's first starter suggests,
+   * lower-cased so it reads as one sentence after the mention.
+   */
+  readonly heroSuffix = computed(() => {
+    const starter = this.agent()?.starters?.[0];
+    if (!starter) return 'help me get started';
+    return starter.charAt(0).toLowerCase() + starter.slice(1);
+  });
+
+  readonly details = computed(() => {
+    const a = this.agent();
+    if (!a) return [];
+    return [
+      { label: 'Publisher', value: this.publisherLabel() },
+      { label: 'Category', value: a.categoryLabel || '—' },
+      { label: 'Model', value: a.modelLabel || '—' },
+      { label: 'Last updated', value: this.formatDate(a.updatedAt) },
+    ];
+  });
+
+  readonly availabilityIcon = computed(() => {
+    switch (this.runnability()?.state) {
+      case 'ready':
+        return 'heroCheckCircle';
+      case 'limits':
+        return 'heroExclamationTriangle';
+      default:
+        return 'heroNoSymbol';
+    }
+  });
+
+  /**
+   * D6's three lines, each naming what is unavailable rather than saying "something".
+   * A user who cannot act on the sentence has been told nothing useful.
+   */
+  readonly availabilityText = computed(() => {
+    const r = this.runnability();
+    if (!r) return '';
+    if (r.state === 'ready') return 'Ready to run for you.';
+
+    const names = r.missing.map((m) => `“${m.label}”`).join(', ');
+    const verb = r.missing.length === 1 ? "isn't" : "aren't";
+    const lead = r.state === 'limits' ? 'Runs with limits for you' : 'Not available to you';
+    return names ? `${lead} — ${names} ${verb} granted to your role.` : `${lead}.`;
+  });
+
+  startChatTooltip(): string {
+    return this.isBlocked()
+      ? 'This agent needs access your account does not have'
+      : `Start a chat with ${this.agent()?.name ?? 'this agent'}`;
+  }
+
+  verifiedTooltip(): string {
+    const label = this.agent()?.publisher?.label ?? 'a university team';
+    return `Published by ${label} — a verified university team`;
+  }
+
+  kindLabel(kind: string): string {
+    switch (kind) {
+      case 'tool':
+        return 'tool';
+      case 'skill':
+        return 'skill';
+      case 'memory_space':
+        return 'memory';
+      default:
+        return kind;
+    }
+  }
+
+  private formatDate(iso: string): string {
+    const parsed = new Date(iso);
+    if (Number.isNaN(parsed.getTime())) return '—';
+    return parsed.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+
+  onBack(): void {
+    void this.router.navigate(['/agents/discover']);
+  }
+
+  /**
+   * Reuses the existing chat entry point — `assistantId` on the root route — because
+   * `agentId === assistantId` and a store-launched run is an ordinary run (the invoker
+   * pays, per the existing per-user model).
+   */
+  onStartChat(): void {
+    if (this.isBlocked()) return;
+    void this.router.navigate(['/'], { queryParams: { assistantId: this.id() } });
+  }
+}

@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 import { ConfigService } from '../../services/config.service';
 import {
   Agent,
+  AgentRunnability,
   AgentsListResponse,
   AgentSharesResponse,
   BindableKind,
@@ -48,6 +49,17 @@ export class AgentApiService {
 
   getAgent(id: string): Observable<Agent> {
     return this.http.get<Agent>(`${this.baseUrl()}/${id}`);
+  }
+
+  /**
+   * Will this Agent run for the signed-in user? (D6)
+   *
+   * A separate call from `getAgent` on purpose: the detail page paints identity,
+   * description and starters immediately, and this answer — which fans out across the
+   * viewer's model/tool/skill catalogs — resolves into the sidebar when it arrives.
+   */
+  getRunnability(id: string): Observable<AgentRunnability> {
+    return this.http.get<AgentRunnability>(`${this.baseUrl()}/${id}/runnability`);
   }
 
   updateAgent(id: string, request: UpdateAgentRequest): Observable<Agent> {

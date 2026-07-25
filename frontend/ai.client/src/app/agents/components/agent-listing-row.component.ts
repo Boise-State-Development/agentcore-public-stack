@@ -1,4 +1,5 @@
 import { Component, ChangeDetectionStrategy, input } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroCheckBadge } from '@ng-icons/heroicons/outline';
 import { AgentListing } from '../models/store.model';
@@ -13,14 +14,20 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
  *
  * The icon is the emoji on a neutral tile for now — D5's uploaded icon and generated
  * gradient fallback are Phase 4.
+ *
+ * The whole row routes to the detail page (Phase 3). A `+` add affordance sits beside it
+ * in the mockup; that is Phase 5's pin, so the row has exactly one destination today.
  */
 @Component({
   selector: 'app-agent-listing-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, TooltipDirective],
+  imports: [NgIcon, RouterLink, TooltipDirective],
   providers: [provideIcons({ heroCheckBadge })],
   template: `
-    <div class="flex items-center gap-3 rounded-2xl px-3 py-2.5">
+    <a
+      [routerLink]="['/agents', listing().agentId]"
+      class="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:hover:bg-gray-800"
+    >
       <span
         class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-gray-100 text-xl dark:bg-gray-700"
         aria-hidden="true"
@@ -45,7 +52,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
           {{ subtitle() }}
         </p>
       </div>
-    </div>
+    </a>
   `,
 })
 export class AgentListingRowComponent {
