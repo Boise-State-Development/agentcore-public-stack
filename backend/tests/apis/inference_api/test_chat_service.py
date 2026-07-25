@@ -251,3 +251,92 @@ async def test_chat_path_unaffected_by_skills_hash(mock_create_agent, mock_fresh
     assert a is a_again
     assert mock_create_agent.call_count == 1
     assert mock_create_agent.call_args.kwargs.get("accessible_skill_ids") is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #741 — conversation continuity across cache keys
+# ---------------------------------------------------------------------------
+#
+# The cache key intentionally varies with the agent's *configuration* (system
+# prompt, tools, model, skills). The conversation is not configuration: one
+# session is one conversation, whichever agent ran a given turn.
+#
+# An `@`-mention (Marketplace D11) is the first path that changes agent identity
+# mid-thread, so it is the first to violate that: the mention turn misses the
+# cache and builds a second Agent, then the next plain turn reverts the key and
+# cache-HITs the original instance, whose in-memory `agent.messages` still ends
+# before the mention. `initialize()` never re-runs on a hit, so the stale list
+# wins silently and the model answers "NOT IN HISTORY" about a turn the user can
+# see on screen. Measured on dev session e5e8b259-1780-4179-8ebe-38c57d3709a5.
+
+
+def _fake_agent_with_messages(*, system_prompt=None, restored=None) -> MagicMock:
+    """Fake whose inner Strands agent carries a `messages` list, like the real one.
+
+    ``restored`` models what ``TurnBasedSessionManager.initialize()`` loads from
+    AgentCore Memory when a *fresh* instance is built — a copy, because each real
+    instance owns its own list. That detail is the whole bug: a cache **hit**
+    skips this entirely and keeps whatever the instance last saw.
+    """
+    inner = SimpleNamespace(
+        _interrupt_state=SimpleNamespace(activated=False),
+        messages=list(restored or []),
+    )
+    wrapper = MagicMock(spec=["agent", "_construction_snapshot"])
+    wrapper.agent = inner
+    wrapper._construction_snapshot = {"system_prompt": system_prompt}
+    return wrapper
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Issue #741: a second cache key for the same session forks the conversation. "
+        "Remove this marker with the fix — strict=True so it fails loudly once it passes."
+    ),
+)
+@pytest.mark.asyncio
+async def test_second_cache_key_for_a_session_shares_the_conversation(mock_freshness_hash):
+    """Turn 3 runs under a different config; turn 4 reverts and must still see turn 3.
+
+    Models the `@`-mention round trip: plain → plain → mention → plain, where the
+    mention swaps the system prompt (any cache-key component would do). ``store``
+    stands in for AgentCore Memory: every turn flushes into it, and every *freshly
+    built* agent restores from it. That is why the mention turn sees the earlier
+    history in production — it is a cache miss, so it restores. The plain turn
+    after it is a cache **hit**, restores nothing, and is therefore stale.
+
+    The assertion is deliberately about the *conversation*, not instance identity:
+    a fix may reuse one instance, hand the message list between instances, or
+    re-restore on a stale hit, and this test should pass either way.
+    """
+    store: list[dict] = []
+
+    def _turn(agent, *messages):
+        """Run a turn: the agent appends, and the session flushes to Memory."""
+        agent.agent.messages.extend(messages)
+        store.extend(messages)
+
+    with patch.object(service, "create_agent") as mock:
+        mock.side_effect = lambda **kwargs: _fake_agent_with_messages(
+            system_prompt=kwargs.get("system_prompt"), restored=store
+        )
+
+        plain = await service.get_agent(session_id="s", user_id="u")
+        _turn(plain, {"role": "user", "t": 1}, {"role": "assistant", "t": 2})
+
+        # The mention turn: same session, different configuration → cache miss,
+        # so it restores and legitimately sees the first exchange.
+        mentioned = await service.get_agent(
+            session_id="s", user_id="u", system_prompt="You are the mentioned Agent."
+        )
+        assert len(mentioned.agent.messages) == 2, "mention turn lost the prior history"
+        _turn(mentioned, {"role": "user", "t": 3}, {"role": "assistant", "t": 4})
+
+        # The next plain turn reverts the key → cache hit on the original
+        # instance, which never saw turns 3-4.
+        plain_again = await service.get_agent(session_id="s", user_id="u")
+
+    assert len(plain_again.agent.messages) == 4, (
+        "the plain turn cache-hit a stale instance and cannot see the mention exchange"
+    )
