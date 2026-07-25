@@ -65,6 +65,8 @@ import { AssistantCardComponent } from '../../components/assistant-card.componen
             </div>
             <!-- Chat input at bottom when showing card -->
             <div class="shrink-0 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+              <!-- No @-mention here (D11): the preview already runs the thing being
+                   edited, so handing its turn to another Agent would make it lie. -->
               <app-chat-input
                 [sessionId]="previewChatService.sessionId()"
                 [isChatLoading]="previewChatService.isLoading()"
@@ -72,6 +74,7 @@ import { AssistantCardComponent } from '../../components/assistant-card.componen
                 [showVoiceControl]="false"
                 [showSettingsControl]="false"
                 [autoFocus]="false"
+                [showAgentMentions]="false"
                 (messageSubmitted)="onMessageSubmitted($event)"
                 (messageCancelled)="onMessageCancelled()"
               />

@@ -134,6 +134,8 @@ import { ModelService } from '../../../session/services/model/model.service';
               />
             </div>
             <div class="shrink-0 border-t border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <!-- No @-mention here (D11): the preview already runs the thing being
+                   edited, so handing its turn to another Agent would make it lie. -->
               <app-chat-input
                 [sessionId]="previewChatService.sessionId()"
                 [isChatLoading]="previewChatService.isLoading()"
@@ -141,6 +143,7 @@ import { ModelService } from '../../../session/services/model/model.service';
                 [showVoiceControl]="false"
                 [showSettingsControl]="false"
                 [autoFocus]="false"
+                [showAgentMentions]="false"
                 (messageSubmitted)="onMessageSubmitted($event)"
                 (messageCancelled)="onMessageCancelled()"
               />

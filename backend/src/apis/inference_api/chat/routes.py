@@ -53,6 +53,7 @@ from .app_context_dispatch import (
     merge_and_clear_pending_context,
 )
 from .app_tool_dispatch import AppToolCallError, dispatch_app_tool_call
+from .agent_binding_policy import binds_conversation
 from .models import FileContent, InvocationRequest
 from .service import generate_conversation_title, get_agent
 from .system_prompt_resolver import (
@@ -1061,8 +1062,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # resume there is no interrupt to validate — the agent is rebuilt from the
     # resent params and re-entered with an empty prompt (assistant-prefill).
     is_continuation = bool(input_data.continue_truncated)
+    # Marketplace D11: the Agent was `@`-mentioned in the composer, so it runs
+    # this turn only — it does not bind the conversation. Only meaningful
+    # alongside `rag_assistant_id`; on its own it does nothing.
+    is_agent_mention = bool(input_data.agent_mention) and bool(input_data.rag_assistant_id)
     logger.info(
-        "Invocation request received (resume=%s, continue_truncated=%s)" % (is_resume, is_continuation)
+        "Invocation request received (resume=%s, continue_truncated=%s, agent_mention=%s)"
+        % (is_resume, is_continuation, is_agent_mention)
     )
     logger.info("Message received")
 
@@ -1406,7 +1412,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # If it does, verify it's the same assistant (can't change assistants mid-session)
         # If it doesn't, verify session has no messages (can only attach to new sessions)
         # Skip validation for preview sessions (they don't persist state)
-        if not is_preview_session(input_data.session_id):
+        #
+        # Marketplace D11: an `@`-mention turn skips BOTH rules on purpose. It
+        # borrows the Agent for one turn without binding the conversation, so
+        # "you already have a different Agent" and "this thread already has
+        # messages" are the normal case rather than the error case. The Agent's
+        # own access check below is untouched — skipping this block relaxes
+        # *binding* semantics, never authorization. Rule in
+        # ``agent_binding_policy`` so it is testable without this stack.
+        if binds_conversation(
+            is_agent_mention=is_agent_mention,
+            is_preview=is_preview_session(input_data.session_id),
+        ):
             try:
                 existing_metadata = await get_session_metadata(input_data.session_id, user_id)
                 existing_assistant_id = existing_metadata.preferences.assistant_id if existing_metadata and existing_metadata.preferences else None
@@ -1442,7 +1459,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 logger.error("Error checking session state", exc_info=True)
                 # Continue anyway - better to allow than block on error
         else:
-            logger.info("Preview session - skipping session state validation")
+            logger.info(
+                "Turn does not bind the conversation (mention=%s) - skipping session state validation"
+                % is_agent_mention
+            )
 
         # 2. Load assistant with access check
         logger.info("Loading assistant with access check...")
@@ -1610,7 +1630,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
         # 6. Save assistant_id to session preferences (persist for future loads)
         # Skip persistence for preview sessions
-        if not is_preview_session(input_data.session_id):
+        #
+        # Marketplace D11: a mention turn deliberately writes nothing. Persisting
+        # here would silently convert the whole conversation to the Agent — the
+        # SPA self-heals its `assistantId` query param from these preferences on
+        # reload — so one `@` would bind the thread forever, which is the exact
+        # behavior the per-turn design rejects. Same predicate as the validation
+        # above, deliberately: validating without persisting would refuse the
+        # second mention in a thread, and persisting without validating would let
+        # a mention annex the conversation.
+        if binds_conversation(
+            is_agent_mention=is_agent_mention,
+            is_preview=is_preview_session(input_data.session_id),
+        ):
             try:
                 existing_metadata = await get_session_metadata(input_data.session_id, user_id)
                 if existing_metadata:
@@ -1662,7 +1694,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 logger.error("Failed to save assistant_id to session preferences", exc_info=True)
                 # Continue - not critical if metadata save fails
         else:
-            logger.info("Preview session - skipping assistant_id persistence")
+            logger.info(
+                "Turn does not bind the conversation (mention=%s) - skipping assistant_id persistence"
+                % is_agent_mention
+            )
 
     # Append active custom system prompt (if any). Gating rules + lookup live
     # in `system_prompt_resolver.py` so they can be unit-tested independently

@@ -102,6 +102,21 @@ class InvocationRequest(BaseModel):
     # AgentCore Runtime returns 424 when it sees a non-empty 'assistant_id' field,
     # likely trying to resolve it as an AWS Bedrock Agent ID.
     rag_assistant_id: Optional[str] = None
+    # Marketplace D11: this turn was handed to the Agent by an `@`-mention in
+    # the composer, rather than the whole conversation being bound to it.
+    #
+    # A mention borrows the Agent for ONE turn: the route skips the
+    # bind-once-per-session validation (a mention is legitimate in a thread
+    # that already has messages, and in a thread bound to a different Agent),
+    # and skips writing `preferences.assistant_id`, so the next plain turn is
+    # plain again. Everything else — access check, RAG, binding resolution,
+    # memory injection — is identical to a bound turn, because the same Agent
+    # is running with the same governance.
+    #
+    # ⚠️ It is the *client's* claim about intent, never an access decision:
+    # `get_assistant_with_access_check` still gates the Agent itself, so the
+    # worst a forged flag can do is decline to persist a binding.
+    agent_mention: Optional[bool] = None
     # When set, the route resumes a paused agent turn instead of starting a
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.
