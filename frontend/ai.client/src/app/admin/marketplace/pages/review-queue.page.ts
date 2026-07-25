@@ -82,7 +82,7 @@ import {
               <li
                 class="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4 sm:flex-row sm:items-center dark:border-gray-700 dark:bg-gray-800"
               >
-                <app-agent-tile [emoji]="row.emoji" />
+                <app-agent-tile [agentId]="row.agentId" [iconUrl]="row.iconUrl" [emoji]="row.emoji" />
 
                 <div class="min-w-0 flex-1">
                   <h2 class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">

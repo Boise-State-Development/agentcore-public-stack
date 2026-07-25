@@ -3,6 +3,7 @@ import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroCheckBadge } from '@ng-icons/heroicons/outline';
 import { AgentListing } from '../models/store.model';
+import { AgentIconComponent } from './agent-icon.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 
 /**
@@ -12,8 +13,8 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
  * runnability badge. A row's job is to make you tap; everything else lives on the detail
  * page and in admin reporting.
  *
- * The icon is the emoji on a neutral tile for now — D5's uploaded icon and generated
- * gradient fallback are Phase 4.
+ * The icon is `app-agent-icon` at 40px: the author's uploaded square when there is one,
+ * the generated gradient carrying the emoji when there is not (D5).
  *
  * The whole row routes to the detail page (Phase 3). A `+` add affordance sits beside it
  * in the mockup; that is Phase 5's pin, so the row has exactly one destination today.
@@ -21,19 +22,19 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 @Component({
   selector: 'app-agent-listing-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, TooltipDirective],
+  imports: [AgentIconComponent, NgIcon, RouterLink, TooltipDirective],
   providers: [provideIcons({ heroCheckBadge })],
   template: `
     <a
       [routerLink]="['/agents', listing().agentId]"
       class="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:hover:bg-gray-800"
     >
-      <span
-        class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-gray-100 text-xl dark:bg-gray-700"
-        aria-hidden="true"
-      >
-        {{ listing().emoji || '✦' }}
-      </span>
+      <app-agent-icon
+        [agentId]="listing().agentId"
+        [iconUrl]="listing().iconUrl"
+        [emoji]="listing().emoji"
+        [size]="40"
+      />
       <div class="min-w-0 flex-1">
         <p
           class="flex items-center gap-1.5 truncate text-sm/6 font-semibold text-gray-900 dark:text-white"

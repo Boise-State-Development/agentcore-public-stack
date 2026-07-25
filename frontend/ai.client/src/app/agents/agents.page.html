@@ -86,9 +86,12 @@
             <div class="group flex flex-col overflow-hidden rounded-2xl border border-gray-200/80 bg-white p-5 shadow-xs transition-all duration-200 hover:border-gray-300 hover:shadow-sm dark:border-gray-700/60 dark:bg-gray-800/80 dark:hover:border-gray-600">
               <!-- Head -->
               <button type="button" (click)="onEdit(agent)" class="flex items-start gap-3 text-left">
-                <div class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500/15 to-secondary-500/15 text-xl">
-                  {{ agent.emoji || '🤖' }}
-                </div>
+                <app-agent-icon
+                  [agentId]="agent.agentId"
+                  [iconUrl]="agent.iconUrl"
+                  [emoji]="agent.emoji"
+                  [size]="52"
+                />
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2">
                     <h3 class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">{{ agent.name }}</h3>
@@ -126,11 +129,20 @@
                 </div>
               }
 
-              <!-- Publication controls. Owner-only, and hidden entirely when the
-                   marketplace routes are unmounted, so nothing offers a dead click. -->
-              @if (marketplaceAvailable() && isOwner(agent)) {
+              <!-- Presentation + publication controls, hidden entirely when the
+                   marketplace routes are unmounted so nothing offers a dead click.
+                   Icon is owner-or-editor (presentation, D13); publishing is owner-only. -->
+              @if (marketplaceAvailable() && canEditIcon(agent)) {
                 <div class="mt-3 flex flex-wrap items-center gap-2">
-                  @if (canSubmit(agent)) {
+                  <!-- Presentation (D13): an editor may set the icon; only the owner publishes. -->
+                  <button
+                    type="button"
+                    (click)="onEditIcon(agent)"
+                    class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                  >
+                    {{ agent.iconUrl ? 'Change icon' : 'Add icon' }}
+                  </button>
+                  @if (isOwner(agent) && canSubmit(agent)) {
                     <button
                       type="button"
                       (click)="onSubmitListing(agent)"
@@ -140,7 +152,7 @@
                       {{ submitLabel(agent) }}
                     </button>
                   }
-                  @if (isPublished(agent)) {
+                  @if (isOwner(agent) && isPublished(agent)) {
                     <button
                       type="button"
                       (click)="onViewInStore(agent)"
@@ -149,7 +161,7 @@
                       View in store
                     </button>
                   }
-                  @if (canWithdraw(agent)) {
+                  @if (isOwner(agent) && canWithdraw(agent)) {
                     <button
                       type="button"
                       (click)="onWithdrawListing(agent)"

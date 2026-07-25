@@ -123,6 +123,18 @@ export interface AgentListing {
   category: string;
 }
 
+/**
+ * The result of setting or clearing an agent's square icon (D5).
+ *
+ * Both fields are absent after a remove, which is the signal to fall back to the
+ * generated gradient without re-reading the agent.
+ */
+export interface AgentIconResponse {
+  agentId: string;
+  iconKey?: string;
+  iconUrl?: string;
+}
+
 /** An admin-managed store category. `id` is immutable; `label` is what renders. */
 export interface AgentCategory {
   id: string;

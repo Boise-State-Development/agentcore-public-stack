@@ -1,32 +1,36 @@
-import { Component, ChangeDetectionStrategy, input } from '@angular/core';
+import { Component, ChangeDetectionStrategy, input, computed } from '@angular/core';
+import {
+  AgentIconComponent,
+  AgentIconSize,
+} from '../../../agents/components/agent-icon.component';
 
 /**
  * The small square that identifies an agent in the admin tables.
  *
- * Phase 1 renders the agent's emoji on a neutral tile. D5's real identity work — an
- * uploaded 512×512 icon plus a *generated gradient* fallback derived from the agent id,
- * at four render sizes — is Phase 4. Deliberately not approximating that here: a
- * throwaway gradient would be one more thing Phase 4 has to unpick, and nothing in
- * Phase 1 is user-visible.
+ * A thin adapter over `app-agent-icon` (Phase 4): the reviewer sees the same tile a
+ * browsing user will — the uploaded icon, or the generated gradient derived from the
+ * agent id. That matters for the two admin jobs that involve an icon: catching an
+ * off-brand one in the review queue, and judging a D13 icon swap against what the shelf
+ * actually renders.
  */
 @Component({
   selector: 'app-agent-tile',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [AgentIconComponent],
   template: `
-    <span
-      class="flex shrink-0 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-700"
-      [class]="sizeClass()"
-      aria-hidden="true"
-    >
-      {{ emoji() || '✦' }}
-    </span>
+    <app-agent-icon
+      [agentId]="agentId()"
+      [iconUrl]="iconUrl()"
+      [emoji]="emoji()"
+      [size]="iconSize()"
+    />
   `,
 })
 export class AgentTileComponent {
+  readonly agentId = input.required<string>();
   readonly emoji = input<string | undefined>();
+  readonly iconUrl = input<string | undefined>();
   readonly size = input<'sm' | 'md'>('md');
 
-  sizeClass(): string {
-    return this.size() === 'sm' ? 'size-7 text-sm' : 'size-10 text-xl';
-  }
+  readonly iconSize = computed<AgentIconSize>(() => (this.size() === 'sm' ? 28 : 40));
 }

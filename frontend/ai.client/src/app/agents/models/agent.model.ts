@@ -93,6 +93,13 @@ export interface Agent {
   // Marketplace listing (Phase 1) + the detail read (Phase 3). All are absent on the
   // list route and on an agent that was never submitted.
   tagline?: string;
+  /** S3 object key for the uploaded square icon (D5); the bytes are never on the record. */
+  iconKey?: string;
+  /**
+   * Where to render the icon from (Phase 4) — a relative API path carrying the key's
+   * digest as `?v=`. Absent → `app-agent-icon` draws the generated gradient.
+   */
+  iconUrl?: string;
   listing?: AgentListingBlock;
   /** Resolved on `GET /agents/{id}` only. */
   capabilities?: AgentCapability[];

@@ -49,6 +49,8 @@ export interface AdminListingRow {
   tagline?: string;
   emoji?: string;
   iconKey?: string;
+  /** Where to render the icon from (Phase 4); absent → the generated gradient. */
+  iconUrl?: string;
   /** The author — who to talk to about behavior. Distinct from `publisher`. */
   ownerName: string;
   publisher?: PublisherProfile | null;
