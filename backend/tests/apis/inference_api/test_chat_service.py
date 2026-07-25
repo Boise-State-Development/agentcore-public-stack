@@ -288,13 +288,6 @@ def _fake_agent_with_messages(*, system_prompt=None, restored=None) -> MagicMock
     return wrapper
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Issue #741: a second cache key for the same session forks the conversation. "
-        "Remove this marker with the fix — strict=True so it fails loudly once it passes."
-    ),
-)
 @pytest.mark.asyncio
 async def test_second_cache_key_for_a_session_shares_the_conversation(mock_freshness_hash):
     """Turn 3 runs under a different config; turn 4 reverts and must still see turn 3.
@@ -340,3 +333,46 @@ async def test_second_cache_key_for_a_session_shares_the_conversation(mock_fresh
     assert len(plain_again.agent.messages) == 4, (
         "the plain turn cache-hit a stale instance and cannot see the mention exchange"
     )
+
+
+@pytest.mark.asyncio
+async def test_adoption_keeps_the_longer_history_when_the_live_instance_trails(
+    mock_freshness_hash,
+):
+    """A live instance behind what Memory restored must not drag the new agent back.
+
+    Separate runtime replicas share no cache, so this is not the mention case —
+    it is the guard against *losing* turns if a cached instance ever trails the
+    persisted conversation. Note the comparison only fires in this direction:
+    compaction legitimately makes a restored list shorter than the live one, so
+    "restored is shorter" is normal and must still adopt.
+    """
+    stale_live = [{"role": "user", "t": 1}]
+    restored = [{"role": "user", "t": 1}, {"role": "assistant", "t": 2}]
+
+    with patch.object(service, "create_agent") as mock:
+        mock.side_effect = lambda **kwargs: _fake_agent_with_messages(
+            system_prompt=kwargs.get("system_prompt"),
+            restored=stale_live if kwargs.get("system_prompt") is None else restored,
+        )
+        await service.get_agent(session_id="s", user_id="u")
+        ahead = await service.get_agent(
+            session_id="s", user_id="u", system_prompt="different config"
+        )
+
+    assert len(ahead.agent.messages) == 2, "adoption clobbered a longer restored history"
+
+
+@pytest.mark.asyncio
+async def test_adoption_does_not_reach_across_sessions(mock_freshness_hash):
+    """Sharing is scoped to one session id — never between two conversations."""
+    with patch.object(service, "create_agent") as mock:
+        mock.side_effect = lambda **kwargs: _fake_agent_with_messages(
+            system_prompt=kwargs.get("system_prompt")
+        )
+        a = await service.get_agent(session_id="s1", user_id="u")
+        a.agent.messages.extend([{"role": "user"}, {"role": "assistant"}])
+        b = await service.get_agent(session_id="s2", user_id="u")
+
+    assert b.agent.messages == [], "a different session adopted someone else's conversation"
+    assert a.agent.messages is not b.agent.messages
