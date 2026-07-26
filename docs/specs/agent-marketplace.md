@@ -253,6 +253,30 @@ pins assigned to `default` therefore reach only users who match nothing else —
 nobody. The admin UI must label that chip *"fallback only — does not apply to users with any other
 role"* or admins will assume it means "everyone" and quietly seed no one.
 
+**7. Locking is bounded by friction, not a cap.** (Resolves the former "locked-pin ceiling" open
+question, #748.) It asked whether to cap locked pins per role, say at two. **No cap.** The admin
+console shows the cost instead: a running locked count on the seed header, a warning past a
+threshold, and — the part an admin cannot work out for themselves — how many locked seeds *every
+other role* already holds.
+
+The concern was real and phase 6 sharpened it. A locked seed genuinely cannot be dismissed
+(verified on dev: a lock beats a user's own tombstone, which is the specced behavior and is right —
+a lock a user could dismiss would be pointless). So an admin choosing between "seed" and "seed
+locked" has no reason not to lock: locking guarantees the rollout lands and the cost falls on
+someone else's sidebar.
+
+**A cap does not work here, and the reason is structural.** Pins merge as a *union* across every
+role a user matches, and a lock from any one of them wins (D9.2). So a per-role cap of two does not
+mean a member sees at most two locked Agents — someone in five roles sees ten. Capping the union
+instead is not implementable: role membership resolves per user from Entra claims at request time,
+so which roles co-occur on one person is unknowable when an admin saves a seed list. Enforcing it at
+read time would be worse than no cap, because it would silently drop an admin's lock for some users
+— a rollout that appears to have landed and did not.
+
+Friction has none of those failure modes, nothing to migrate for roles already over any line, and a
+threshold that can move without breaking a saved list. If evidence of over-locking shows up, revisit
+with the counts this change makes visible.
+
 ## D10 — Admin owns seven levers, in one console
 
 Every store behavior needs a surface, or it becomes a code deploy:
@@ -831,8 +855,6 @@ rather than restating the checks.
   The owner is settled; the commitment is not.
 - **`tagline` backfill.** New required-ish field on existing agents. Derive from the first clause of
   `description` at submit time and let the author edit, or require it outright?
-- **Locked-pin ceiling.** Should the system cap locked pins per role (say, two)? Without a limit,
-  "locked" becomes the default choice and the sidebar becomes someone else's toolbar.
 - **Quota attribution.** Confirm the invoker pays for a store-launched run, not the author. The
   existing per-user model implies yes, but a published Agent is the first case where a stranger's
   usage is attributable to someone else's configuration.

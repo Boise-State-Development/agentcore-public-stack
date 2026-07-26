@@ -195,3 +195,89 @@ async def test_delete_role_pins_clears_the_list(table):
     await delete_role_pins("faculty")
 
     assert await list_role_pins("faculty") == []
+
+
+# ── #748 — locked-seed friction, not a cap ───────────────────────────────────────────
+class TestCountLockedOutside:
+    """What the admin console cannot work out for itself: what *other* roles lock.
+
+    Deliberately a count and not a limit. Pins merge as a union across every role a user
+    matches and a lock from any one of them wins, so a per-role cap would not bound what
+    an individual sees — and the union itself is uncappable, because role membership
+    resolves per user from Entra claims. Reporting is the honest thing this surface can do.
+    """
+
+    @staticmethod
+    def _roles(*role_ids):
+        """Patch the admin service's role listing to exactly these ids."""
+        from unittest.mock import AsyncMock, patch
+
+        from apis.shared.rbac.models import AppRole as _AppRole
+
+        service = AsyncMock()
+        service.list_roles = AsyncMock(
+            return_value=[
+                _AppRole(role_id=rid, display_name=rid, description="") for rid in role_ids
+            ]
+        )
+        return patch(
+            "apis.shared.rbac.admin_service.get_app_role_admin_service",
+            return_value=service,
+        )
+
+    @pytest.mark.asyncio
+    async def test_counts_locked_seeds_on_other_roles_only(self, table):
+        from apis.shared.assistants.role_pins import count_locked_outside
+
+        await put_role_pins("faculty", _inputs(("ast-1", True), ("ast-2", True)), ADMIN)
+        await put_role_pins("staff", _inputs(("ast-3", True), "ast-4"), ADMIN)
+
+        with self._roles("faculty", "staff"):
+            total, roles = await count_locked_outside("faculty")
+
+        # Only staff's single locked seed — faculty's own two are the caller's business.
+        assert (total, roles) == (1, 1)
+
+    @pytest.mark.asyncio
+    async def test_unlocked_seeds_elsewhere_do_not_count(self, table):
+        from apis.shared.assistants.role_pins import count_locked_outside
+
+        await put_role_pins("staff", _inputs("ast-3", "ast-4"), ADMIN)
+
+        with self._roles("faculty", "staff"):
+            assert await count_locked_outside("faculty") == (0, 0)
+
+    @pytest.mark.asyncio
+    async def test_reports_the_spread_across_roles(self, table):
+        """Two roles locking one each is a different shape from one locking two."""
+        from apis.shared.assistants.role_pins import count_locked_outside
+
+        await put_role_pins("staff", _inputs(("ast-1", True)), ADMIN)
+        await put_role_pins("student", _inputs(("ast-2", True), ("ast-3", True)), ADMIN)
+
+        with self._roles("faculty", "staff", "student"):
+            assert await count_locked_outside("faculty") == (3, 2)
+
+    @pytest.mark.asyncio
+    async def test_a_lone_role_has_nothing_outside_it(self, table):
+        from apis.shared.assistants.role_pins import count_locked_outside
+
+        await put_role_pins("faculty", _inputs(("ast-1", True)), ADMIN)
+
+        with self._roles("faculty"):
+            assert await count_locked_outside("faculty") == (0, 0)
+
+    @pytest.mark.asyncio
+    async def test_a_failure_to_list_roles_never_breaks_the_page(self, table):
+        """Friction copy is advisory — it must not take the pins surface down with it."""
+        from unittest.mock import AsyncMock, patch
+
+        from apis.shared.assistants.role_pins import count_locked_outside
+
+        service = AsyncMock()
+        service.list_roles = AsyncMock(side_effect=RuntimeError("dynamo is having a day"))
+        with patch(
+            "apis.shared.rbac.admin_service.get_app_role_admin_service",
+            return_value=service,
+        ):
+            assert await count_locked_outside("faculty") == (0, 0)

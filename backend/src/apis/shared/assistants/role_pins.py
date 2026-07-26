@@ -34,7 +34,7 @@ records when an Agent was *seeded*, not when the list was last dragged around.
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Tuple
 
 from boto3.dynamodb.conditions import Key
 
@@ -105,6 +105,50 @@ async def list_pins_for_roles(role_ids: Sequence[str]) -> Dict[str, List[RoleAge
             logger.warning(f"Failed to read default pins for role {role_id}", exc_info=True)
             result[role_id] = []
     return result
+
+
+async def count_locked_outside(role_id: str) -> Tuple[int, int]:
+    """``(locked seeds held by other roles, how many other roles lock at least one)``.
+
+    Feeds the admin console's locked-pin friction (D9 open question, #748). A locked seed
+    cannot be dismissed by the member who receives it, and an admin choosing between "seed"
+    and "seed locked" otherwise has no reason not to lock: locking guarantees the rollout
+    lands and the cost falls on someone else's sidebar.
+
+    ⚠️ **This is reported, never enforced, and that is not a shortcut.** Pins merge as a
+    union across every role a user holds and a lock from *any* of them wins
+    (``pin_service._role_seeds``), so a per-role cap would not bound what any individual
+    sees — the case the open question flags. Nor can the union be capped at write time:
+    role membership resolves per user from Entra claims, so which roles co-occur on one
+    person is not knowable here. Capping at *read* time would be worse still, silently
+    dropping an admin's lock for some users. What is knowable on this surface is the
+    institution-wide total, so that is what the console shows.
+
+    Costs one query per role. The admin console is low-traffic and an institution has a
+    handful of roles, which is the same trade ``list_pins_for_roles`` already makes.
+    """
+    from apis.shared.rbac.admin_service import get_app_role_admin_service
+
+    try:
+        roles = await get_app_role_admin_service().list_roles()
+    except Exception:
+        # Friction copy is advisory; failing to compute it must never fail the page.
+        logger.warning("Failed to list roles for the locked-pin count", exc_info=True)
+        return 0, 0
+
+    other_ids = [r.role_id for r in roles if r.role_id != role_id]
+    if not other_ids:
+        return 0, 0
+
+    by_role = await list_pins_for_roles(other_ids)
+    total = 0
+    roles_locking = 0
+    for pins in by_role.values():
+        locked = sum(1 for pin in pins if pin.locked)
+        if locked:
+            total += locked
+            roles_locking += 1
+    return total, roles_locking
 
 
 async def put_role_pins(

@@ -1039,6 +1039,22 @@ class RoleAgentPinsResponse(BaseModel):
         False,
         description="The role carries no jwtRoleMappings, so no user matches it at all",
     )
+    locked_elsewhere: int = Field(
+        0,
+        alias="lockedElsewhere",
+        description=(
+            "Locked seeds held by OTHER roles (D9 open question, #748). Pins merge as a "
+            "union across every role a user holds and a lock from any one of them wins, so "
+            "the shelf an individual actually gets is this plus whatever this role locks. "
+            "Reported rather than capped: role membership resolves per user from Entra "
+            "claims, so the union is not knowable at write time."
+        ),
+    )
+    locked_elsewhere_roles: int = Field(
+        0,
+        alias="lockedElsewhereRoles",
+        description="How many other roles lock at least one seed — the spread behind lockedElsewhere",
+    )
     pins: List[RoleAgentPinRow] = Field(default_factory=list, description="Seeded agents, in order")
     unavailable: List[str] = Field(
         default_factory=list,
