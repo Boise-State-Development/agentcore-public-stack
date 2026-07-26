@@ -47,6 +47,9 @@ describe('adminGuard', () => {
   });
 
   afterEach(() => {
+    // Releases the `console.warn` spy installed above — an unrestored spy on a
+    // global follows every spec that later shares this worker.
+    vi.restoreAllMocks();
     TestBed.resetTestingModule();
   });
 
