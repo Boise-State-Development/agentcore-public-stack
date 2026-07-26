@@ -722,7 +722,6 @@ class TestUpdateAfterTurn:
     async def test_below_threshold_saves_token_count(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
-        mgr._compaction_state_loaded = True  # opt out of lazy-load
         mgr._save_compaction_state = MagicMock()
         await mgr.update_after_turn(500)  # below 1000 threshold
         assert mgr.compaction_state.last_input_tokens == 500
@@ -732,7 +731,6 @@ class TestUpdateAfterTurn:
     async def test_above_threshold_creates_checkpoint(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=[])
 
@@ -751,7 +749,6 @@ class TestUpdateAfterTurn:
     async def test_not_enough_turns_keeps_all(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
 
         # Only 3 turns = protected_turns, so no compaction possible
@@ -764,7 +761,6 @@ class TestUpdateAfterTurn:
     async def test_empty_cutoff_indices_skips_checkpoint(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
 
         mgr._valid_cutoff_indices = []  # no valid cutoffs (e.g., new session)
@@ -777,7 +773,6 @@ class TestUpdateAfterTurn:
     async def test_checkpoint_unchanged_no_update(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState(checkpoint=4)
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
 
         # 5 turns — checkpoint would be at index 4 again, same as current
@@ -792,7 +787,6 @@ class TestUpdateAfterTurn:
         """New turns should advance the checkpoint."""
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState(checkpoint=4)
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=["Updated summary"])
 
@@ -807,7 +801,6 @@ class TestUpdateAfterTurn:
     async def test_uses_ltm_summaries_when_available(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=["LTM summary 1", "LTM summary 2"])
 
@@ -822,7 +815,6 @@ class TestUpdateAfterTurn:
     async def test_falls_back_to_generated_summary(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=[])
 
@@ -837,7 +829,6 @@ class TestUpdateAfterTurn:
     async def test_initializes_compaction_state_if_none(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = None
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
 
         await mgr.update_after_turn(500)
@@ -855,7 +846,6 @@ class TestUpdateAfterTurn:
         """First compaction returns a CompactionResult with the delta count."""
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=[])
 
@@ -883,7 +873,6 @@ class TestUpdateAfterTurn:
         """
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=[])
 
@@ -913,7 +902,6 @@ class TestUpdateAfterTurn:
         """A sub-threshold turn must not reset or increment the running total."""
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState(checkpoint=4, total_summarized_turns=7)
-        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
 
         result = await mgr.update_after_turn(500)  # below 1000 threshold
@@ -939,7 +927,6 @@ class TestUpdateAfterTurn:
         mgr = make_session_manager(compaction_config=compaction_config)
         # Simulate post-init state on the empty-messages path: defaults, no load.
         mgr.compaction_state = CompactionState()
-        assert mgr._compaction_state_loaded is False
 
         persisted = CompactionState(
             checkpoint=8,
@@ -953,7 +940,6 @@ class TestUpdateAfterTurn:
         await mgr.update_after_turn(500)  # below threshold — early-save path
 
         mgr._load_compaction_state.assert_called_once()
-        assert mgr._compaction_state_loaded is True
         # Persisted fields preserved through the save (and last_input_tokens updated).
         assert mgr.compaction_state.checkpoint == 8
         assert mgr.compaction_state.summary == "prior summary"
@@ -963,21 +949,143 @@ class TestUpdateAfterTurn:
         saved_state = mgr._save_compaction_state.call_args.args[0]
         assert saved_state.total_summarized_turns == 5
 
+    # -----------------------------------------------------------------------
+    # #751 — two session managers, one session row
+    # -----------------------------------------------------------------------
+
     @pytest.mark.asyncio
-    async def test_lazy_load_skipped_when_already_loaded(
+    async def test_reloads_persisted_state_even_when_already_loaded(
         self, make_session_manager, compaction_config
     ):
-        """When init loaded the state, `update_after_turn` must not re-load."""
+        """The re-read is unconditional — this is the #751 fix.
+
+        It deliberately inverts the old contract ("when init loaded the state,
+        don't re-load"). A cache-*hit* turn never re-runs `initialize()`, so an
+        instance that loaded once could sit on state a sibling manager has since
+        moved past, then save its stale copy over the newer one.
+        """
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState(checkpoint=2, total_summarized_turns=1)
-        mgr._compaction_state_loaded = True
-        mgr._load_compaction_state = MagicMock()
+        mgr._load_compaction_state = MagicMock(
+            return_value=CompactionState(checkpoint=2, total_summarized_turns=1)
+        )
         mgr._save_compaction_state = MagicMock()
 
         await mgr.update_after_turn(500)
 
-        mgr._load_compaction_state.assert_not_called()
-        assert mgr.compaction_state.total_summarized_turns == 1
+        mgr._load_compaction_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_adopts_a_siblings_advance(
+        self, make_session_manager, compaction_config
+    ):
+        """The mention-turn fork: another manager advanced this session's state."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.compaction_state = CompactionState(
+            checkpoint=2, truncation_anchor=2, total_summarized_turns=1
+        )
+        mgr._load_compaction_state = MagicMock(
+            return_value=CompactionState(
+                checkpoint=8,
+                truncation_anchor=8,
+                summary="sibling summary",
+                total_summarized_turns=5,
+            )
+        )
+        mgr._save_compaction_state = MagicMock()
+
+        await mgr.update_after_turn(500)
+
+        # Without the re-read this would have saved checkpoint=2 over the 8.
+        saved = mgr._save_compaction_state.call_args.args[0]
+        assert saved.checkpoint == 8
+        assert saved.truncation_anchor == 8
+        assert saved.total_summarized_turns == 5
+        assert saved.summary == "sibling summary"
+
+    @pytest.mark.asyncio
+    async def test_never_moves_backwards_when_the_load_returns_defaults(
+        self, make_session_manager, compaction_config
+    ):
+        """A failed load is indistinguishable from "nothing persisted".
+
+        `_load_compaction_state` swallows its exceptions and returns a default
+        `CompactionState`, so adopting the result unconditionally would let one
+        transient DynamoDB error zero a real checkpoint — the exact clobber the
+        re-read exists to prevent.
+        """
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.compaction_state = CompactionState(
+            checkpoint=8, truncation_anchor=8, total_summarized_turns=5
+        )
+        mgr._load_compaction_state = MagicMock(return_value=CompactionState())
+        mgr._save_compaction_state = MagicMock()
+
+        await mgr.update_after_turn(500)
+
+        saved = mgr._save_compaction_state.call_args.args[0]
+        assert saved.checkpoint == 8
+        assert saved.truncation_anchor == 8
+        assert saved.total_summarized_turns == 5
+
+    @pytest.mark.asyncio
+    async def test_carries_the_anchor_forward_at_an_equal_checkpoint(
+        self, make_session_manager, compaction_config
+    ):
+        """The anchor also moves on prompt-cache expiry, independently of the
+        checkpoint — so an equal checkpoint does not mean an equal anchor, and
+        letting it slip backwards re-truncates messages previously sent whole
+        (a full prefix re-write at the cache-write premium)."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.compaction_state = CompactionState(checkpoint=4, truncation_anchor=9)
+        mgr._load_compaction_state = MagicMock(
+            return_value=CompactionState(checkpoint=4, truncation_anchor=6)
+        )
+        mgr._save_compaction_state = MagicMock()
+
+        await mgr.update_after_turn(500)
+
+        assert mgr._save_compaction_state.call_args.args[0].truncation_anchor == 9
+
+    @pytest.mark.asyncio
+    async def test_two_managers_on_one_session_advance_monotonically(
+        self, make_session_manager, compaction_config
+    ):
+        """End-to-end shape of #751, against a shared fake session row.
+
+        Two managers stand in for the plain-turn agent and the `@`-mention agent.
+        They alternate turns against one persisted state, exactly as the agent
+        cache alternates instances. The persisted checkpoint must never regress.
+        """
+        row = {"state": CompactionState()}
+
+        def make():
+            mgr = make_session_manager(compaction_config=compaction_config)
+            mgr._load_compaction_state = MagicMock(
+                side_effect=lambda: CompactionState(**vars(row["state"]))
+            )
+            mgr._save_compaction_state = MagicMock(
+                side_effect=lambda st: row.__setitem__("state", CompactionState(**vars(st)))
+            )
+            return mgr
+
+        plain, mention = make(), make()
+
+        # The mention agent compacts; its advance is persisted.
+        mention.compaction_state = CompactionState(
+            checkpoint=8, truncation_anchor=8, total_summarized_turns=5
+        )
+        await mention.update_after_turn(500)
+        assert row["state"].checkpoint == 8
+
+        # The plain agent was built before that and still holds checkpoint 0.
+        # It must not write its stale view back over the 8.
+        plain.compaction_state = CompactionState()
+        await plain.update_after_turn(500)
+
+        assert row["state"].checkpoint == 8
+        assert row["state"].truncation_anchor == 8
+        assert row["state"].total_summarized_turns == 5
 
     @pytest.mark.asyncio
     async def test_lazy_load_preserves_total_across_threshold_crossing(
@@ -990,7 +1098,6 @@ class TestUpdateAfterTurn:
         """
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
-        assert mgr._compaction_state_loaded is False
 
         persisted = CompactionState(checkpoint=4, total_summarized_turns=2)
         mgr._load_compaction_state = MagicMock(return_value=persisted)
