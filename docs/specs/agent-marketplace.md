@@ -646,13 +646,38 @@ thread" in one sentence, and that sentence turned out to be the whole phase:
   is three lines, the route is a thousand, so it lives where a test can reach it). Splitting them
   gives two silent bugs: validate-only refuses the *second* mention in a thread; persist-only lets
   one `@` annex the conversation.
-- **💰 A mention costs two prompt-cache prefix re-writes**, and this is a deliberate purchase. An
-  Agent turn swaps the system prompt and `toolConfig`, so the mention turn re-writes the cached
-  prefix and the next plain turn re-writes it back. At a 50k-token prefix and the $2.50/MTok
-  cache-write premium that is roughly $0.25 per mention round-trip. It is bounded (twice per
-  mention, never per turn) and it buys the thing the feature is for. If mentions ever become
-  common in long threads, the lever is to *bind* the conversation after a mention rather than to
-  make the swap cheaper.
+- **💰 A mention costs ONE prompt-cache prefix re-write, not two** — measured, not predicted. The
+  Agent's bindings change `toolConfig`, which sits first in the prefix, so the mention turn
+  invalidates system and history behind it and genuinely re-writes the whole prefix. **The next
+  plain turn does not re-write it back**: the base `toolConfig` and system prompt revert
+  byte-identically and read from the still-live pre-mention entry, so the swap-back is a cache
+  *hit* that writes only the mention exchange as a delta.
+
+  Measured on dev (session `bf9481e7-62ec-4a14-817f-546a2953588d`, Sonnet 5, mention and
+  swap-back 28s apart):
+
+  | turn | status | cacheRead | cacheWrite |
+  |---|---|---|---|
+  | mention | `miss_avoidable` | 0 | 4301 |
+  | next plain turn | **`hit`** | 2720 | 138 |
+
+  At a 50k-token prefix and Sonnet 5's $2.30/MTok write premium (`$2.50` write less `$0.20`
+  read) that is roughly **$0.12 per mention**, about half what this section originally claimed.
+  Still bounded per mention rather than per turn, and it still buys the thing the feature is for.
+  If mentions ever become common in long threads, the lever is to *bind* the conversation after a
+  mention rather than to make the swap cheaper.
+
+  ⚠️ Two caveats worth keeping attached to the number. **The swap-back only hits inside the
+  ~5-minute cache TTL** — a slower reply re-writes the prefix regardless, and that cost is not
+  attributable to the mention. And **an Agent that pins its own model** (`modelConfig` →
+  `model_override`) is categorically more expensive: cache entries are per-model, so such a
+  mention can hit nothing and its write is never re-read.
+
+  The original estimate here was not merely conservative — it was measured once against a bug.
+  Before #741 was fixed the swap-back looked *cheaper* than this (write 71, not 138) because the
+  stale agent was silently omitting the mention exchange from the prefix. A cost number taken
+  from a broken run flattered us in one direction while the spec's prediction erred in the other.
+  Re-measure after any change to the invocation path rather than trusting either.
 - **Known edge, pre-existing:** `continue_truncated` skips the whole assistant block, so a
   "Continue" after a max_tokens truncation runs without the Agent — true for bound Agent
   conversations before this phase, and unchanged by it.
