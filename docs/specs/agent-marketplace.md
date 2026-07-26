@@ -299,12 +299,34 @@ would silently break an Agent its author still maintains.
 Admin edits to presentation are **recorded and shown to the author** on their My Agents card ("An
 admin updated the category on Jul 24"). Editing someone's listing quietly is how you lose authors.
 
-## D14 — Ship gated, GA by grant
+## D14 — Ship gated, GA by kill switch
 
-House pattern: kill switch `AGENT_MARKETPLACE_ENABLED` (**default on**, `=false` disables — per the
-feature-flag convention) plus an RBAC capability `agent-marketplace` that 404s the routes for
-ungranted roles, mirroring the `skills` gate from Skills v2 PR-5. Note D9's `default`-role trap
-applies here too: granting the capability to `default` does **not** reach everyone.
+**REVISED.** The kill switch `AGENT_MARKETPLACE_ENABLED` (**default on**, `=false` disables — per
+the feature-flag convention) is the **only** lever. There is no `agent-marketplace` RBAC capability,
+and the sidenav entry is gated on the API surface alone (`showAgents()`), not on `isAdmin()`.
+
+This decision originally called for the kill switch *plus* an RBAC capability that 404s the routes
+for ungranted roles, "mirroring the `skills` gate from Skills v2 PR-5". Two things were wrong with
+that:
+
+**The capability axis does not work.** The admin roles UI builds its `grantedTools` control from the
+tool catalog with no free-text entry, so a feature-capability id cannot be granted from the UI at
+all — only by hand-writing DynamoDB items. That is precisely why the `skills` gate was removed and
+why `scheduled-runs` 403'd in prod and was dropped (see `AppRoleService.resolve_user_permissions`).
+Building it a third time ships a gate nobody can open. Per-role rollout of a *feature surface* needs
+a grantable capability axis that does not exist yet; it is not in this epic's scope.
+
+**"Gated" was not true anyway.** Until this revision the de-facto gate was one template condition,
+`@if (showAgents() && isAdmin())`, on the nav entry. `/agents/discover`, `/agents/:id` and
+`/agents/pinned` carried `authGuard` only, the composer `@`-menu had no admin check at all, and a
+role-seeded pin (D9) pushed Agents into a member's **Pinned** tab unprompted — working as designed.
+The marketplace was reachable by any authenticated user through three doors while hidden behind the
+one door we controlled. Half-revealed is worse than either end state: nobody could answer "who can
+see this?" without reading four files, and the honest answer was "more people than the nav suggests".
+
+So the store is GA. D9's `default`-role trap still applies to everything that *is* role-scoped here
+(seeded pins): granting to `default` does **not** reach everyone, because that role is consulted
+only when a user matches zero AppRoles.
 
 ---
 

@@ -46,8 +46,23 @@
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Assistants</span>
         </a>
 
-        <!-- Agents (Agent Designer — preview: system-admin only, plus the accessibility probe) -->
-        @if (showAgents() && isAdmin()) {
+        <!--
+            Agents (Agent Designer + Marketplace).
+
+            Gated on the API surface alone (D14): `showAgents()` is "the /agents list call did
+            not 404", i.e. the AGENTS_API_ENABLED / AGENT_MARKETPLACE_ENABLED kill switches.
+            The former `&& isAdmin()` came off when the marketplace went GA — it hid the nav
+            entry while `/agents/discover`, `/agents/:id`, the composer `@`-menu and
+            role-seeded pins were all reachable by any authenticated user, so the one entry
+            point we controlled was the only one that was closed. There is deliberately no
+            RBAC capability behind this: a capability id cannot be granted from the admin
+            roles UI (see `AppRoleService.resolve_user_permissions`), which is what made the
+            `skills` and `scheduled-runs` gates inoperable.
+
+            The Preview badge stays until Assistant deprecation (#746) lands — until then the
+            sidenav ships both nouns, and the badge is what says which one is still moving.
+        -->
+        @if (showAgents()) {
             <a
                 routerLink="/agents"
                 routerLinkActive="bg-gray-200/80 dark:bg-white/10"
