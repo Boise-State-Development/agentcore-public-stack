@@ -45,7 +45,7 @@ import {
           (click)="toggleMenu()"
           class="assistant-pill"
           [class.open]="menuOpen()"
-          [attr.aria-label]="'Assistant: ' + name() + '. Click for options.'"
+          [attr.aria-label]="'Agent: ' + name() + '. Click for options.'"
           [attr.aria-expanded]="menuOpen()"
           aria-haspopup="menu"
         >
@@ -59,7 +59,7 @@ import {
           type="button"
           (click)="toggleMenu()"
           class="assistant-indicator"
-          [attr.aria-label]="'Assistant: ' + name() + '. Click for options.'"
+          [attr.aria-label]="'Agent: ' + name() + '. Click for options.'"
           [attr.aria-expanded]="menuOpen()"
           aria-haspopup="menu"
         >
@@ -96,7 +96,7 @@ import {
           class="indicator-menu"
           [class.placement-down]="menuPlacement() === 'down'"
           role="menu"
-          aria-label="Assistant actions"
+          aria-label="Agent actions"
         >
           <button
             type="button"
@@ -116,7 +116,7 @@ import {
               (click)="onEdit()"
             >
               <ng-icon name="heroPencilSquare" class="menu-icon" />
-              <span>Edit assistant</span>
+              <span>Edit agent</span>
             </button>
 
             <button

@@ -110,6 +110,14 @@ def agents_enabled() -> bool:
     admins until the marketplace went GA, and that condition came off with D14 (the nav
     entry is gated on this flag alone). See ``agent_marketplace_enabled`` for why there
     is no RBAC capability on this axis.
+
+    ⚠️ **The kill switch's meaning changed in Designer Phase 5.** While the SPA shipped
+    both nouns, turning this off degraded gracefully: the Agents nav disappeared and the
+    Assistants editor was still there. Phase 5 retired that editor and redirected
+    ``/assistants*`` onto the Agent surface, so there is nothing left to fall back to —
+    off now means *no authoring surface at all*, not *the previous one*. Treat it as an
+    outage switch, not a feature toggle. (The records are untouched either way; the
+    routes and the SPA pages are what disappear.)
     """
     return os.environ.get("AGENTS_API_ENABLED", "").strip().lower() != "false"
 

@@ -75,9 +75,9 @@ export class Sidenav {
     this.router.navigate(['']);
   }
 
-  navigateToAssistants() {
+  navigateToAgents() {
     this.sidenavService.close();
-    this.router.navigate(['/assistants']);
+    this.router.navigate(['/agents']);
   }
 
   toggleCollapse() {
