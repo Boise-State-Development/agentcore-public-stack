@@ -239,25 +239,6 @@ class TestRunnabilityRoute:
         assert resp.status_code == 200
         assert resp.json() == {"agentId": "ast-001", "state": "ready", "missing": []}
 
-    def test_limits_names_the_optional_binding(self, app, make_user, _flags_on):
-        mock_auth_user(app, make_user())
-        resp = self._call(
-            app,
-            result=AgentRunnabilityResponse(
-                agent_id="ast-001",
-                state="limits",
-                missing=[
-                    MissingCapability(label="Grants.gov Search", kind="tool", optional=True)
-                ],
-            ),
-        )
-
-        body = resp.json()
-        assert body["state"] == "limits"
-        assert body["missing"] == [
-            {"label": "Grants.gov Search", "kind": "tool", "optional": True}
-        ]
-
     def test_blocked_names_what_is_missing(self, app, make_user, _flags_on):
         mock_auth_user(app, make_user())
         resp = self._call(

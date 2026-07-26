@@ -53,7 +53,6 @@ from apis.app_api.agent_designer.services.agent_detail import (
     _binding_key,
     _fallback,
     _gated_bindings,
-    _is_optional,
     _labels_by_kind,
     _model_label,
 )
@@ -93,9 +92,6 @@ async def _diff_against_role(
                 MissingCapability(
                     label=await _model_label(model_id) or _fallback("model"),
                     kind="model",
-                    # The pinned model is never optional: the binding resolver blocks the
-                    # turn outright when the invoker cannot reach it.
-                    optional=False,
                 )
             )
 
@@ -116,16 +112,10 @@ async def _diff_against_role(
             label = labels.get(kind, {}).get(key) or _fallback(kind)
             if any(m.kind == kind and m.label == label for m in missing):
                 continue
-            missing.append(
-                MissingCapability(label=label, kind=kind, optional=_is_optional(binding))
-            )
+            missing.append(MissingCapability(label=label, kind=kind))
 
-    if not missing:
-        state = "ready"
-    elif all(item.optional for item in missing):
-        state = "limits"
-    else:
-        state = "blocked"
+    # Any gap blocks. See ``RunnabilityState`` for why there is no middle state.
+    state = "ready" if not missing else "blocked"
     return state, missing, notes
 
 

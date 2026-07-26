@@ -329,7 +329,16 @@ class AgentCapability(BaseModel):
     kind: str = Field(..., description="Binding kind (tool | skill | memory_space)")
 
 
-RunnabilityState = Literal["ready", "limits", "blocked"]
+# Two states, not three. The Marketplace spec's D6 sketched a middle "limits"
+# (degraded — runs, but something it declares is missing), and it was never
+# reachable: it required a binding to carry ``config.optional``, which no API
+# accepted and no Designer control set. It was also the wrong model to build
+# toward, because it contradicts the Designer spec's D5 — "No **downgrade** on
+# missing capability (block-only v1)" — which is the rule
+# ``agent_binding_resolver`` actually implements, raising for every kind. A
+# preview that offered a third outcome the runtime cannot produce would be a
+# preview that lies. Removed in #747; D6 records why.
+RunnabilityState = Literal["ready", "blocked"]
 
 
 class MissingCapability(BaseModel):
@@ -339,10 +348,6 @@ class MissingCapability(BaseModel):
 
     label: str = Field(..., description="Display name of the unavailable primitive")
     kind: str = Field(..., description="'model' or a binding kind")
-    optional: bool = Field(
-        False,
-        description="Whether the binding was declared optional; only optional gaps degrade to 'limits'",
-    )
 
 
 class AgentRunnabilityResponse(BaseModel):

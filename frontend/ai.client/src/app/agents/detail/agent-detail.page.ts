@@ -307,9 +307,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
                     [class]="
                       r.state === 'ready'
                         ? 'text-emerald-700 dark:text-emerald-400'
-                        : r.state === 'limits'
-                          ? 'text-amber-700 dark:text-amber-400'
-                          : 'text-rose-700 dark:text-rose-400'
+                        : 'text-rose-700 dark:text-rose-400'
                     "
                   >
                     <ng-icon [name]="availabilityIcon()" class="mt-1 size-4 shrink-0" aria-hidden="true" />
@@ -465,15 +463,13 @@ export class AgentDetailPage implements OnInit {
     switch (this.runnability()?.state) {
       case 'ready':
         return 'heroCheckCircle';
-      case 'limits':
-        return 'heroExclamationTriangle';
       default:
         return 'heroNoSymbol';
     }
   });
 
   /**
-   * D6's three lines, each naming what is unavailable rather than saying "something".
+   * D6's two lines, each naming what is unavailable rather than saying "something".
    * A user who cannot act on the sentence has been told nothing useful.
    */
   readonly availabilityText = computed(() => {
@@ -483,7 +479,7 @@ export class AgentDetailPage implements OnInit {
 
     const names = r.missing.map((m) => `“${m.label}”`).join(', ');
     const verb = r.missing.length === 1 ? "isn't" : "aren't";
-    const lead = r.state === 'limits' ? 'Runs with limits for you' : 'Not available to you';
+    const lead = 'Not available to you';
     return names ? `${lead} — ${names} ${verb} granted to your role.` : `${lead}.`;
   });
 

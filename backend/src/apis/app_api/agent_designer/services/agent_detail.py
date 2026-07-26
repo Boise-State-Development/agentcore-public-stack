@@ -21,13 +21,14 @@ empty list for that kind (the KB is welded to the Agent and is not user-configur
 A naive diff therefore marks every legacy Agent *blocked*. The KB is excluded from both
 reads instead — it is not a capability the viewer can lack.
 
-**2. ``limits`` requires an explicitly optional binding.** ``agent_binding_resolver`` is
-block-with-message for *every* kind it resolves — a missing model, tool, skill or memory
-space raises rather than degrading. So a gap only downgrades to "Runs with limits for
-you" when the binding declares ``config.optional == true``; anything else missing is
-``blocked``, because telling a user an Agent "runs with limits" when the next turn will
-raise would be a preview that lies. No surface writes ``optional`` yet — the flag is the
-seam for when the resolver grows a degrade path, not a live feature.
+**2. There are two states, not three.** ``agent_binding_resolver`` is block-with-message
+for *every* kind it resolves — a missing model, tool, skill or memory space raises rather
+than degrading — which is the Designer spec's D5 rule: "No **downgrade** on missing
+capability (block-only v1)". The Marketplace spec's D6 originally sketched a middle
+``limits`` state, gated on a binding declaring ``config.optional``; nothing ever wrote
+that flag, so it was unreachable, and building toward it would have contradicted D5. A
+preview offering an outcome the runtime cannot produce is a preview that lies. Removed in
+ #747. If downgrade is ever taken up as an opt-in, it starts at the resolver, not here.
 """
 
 import logging
@@ -71,11 +72,6 @@ _KIND_FALLBACK_LABELS = {
 
 def _fallback(kind: str) -> str:
     return _KIND_FALLBACK_LABELS.get(kind, "A capability")
-
-
-def _is_optional(binding) -> bool:
-    """Whether this binding degrades rather than blocks when the viewer lacks it."""
-    return (binding.config or {}).get("optional") is True
 
 
 def _binding_key(binding) -> str:
@@ -273,16 +269,16 @@ async def resolve_runnability(
 ) -> AgentRunnabilityResponse:
     """Diff the Agent's model + bindings against the viewer's own catalog (D6).
 
-    ``ready`` when nothing is missing, ``limits`` when only optional bindings are, and
-    ``blocked`` the moment something the run-time resolver would raise on is absent.
+    ``ready`` when nothing is missing, ``blocked`` the moment something the run-time
+    resolver would raise on is absent. There is no middle state — see note 2 above.
     """
     missing: List[MissingCapability] = []
     labels = await _labels_by_kind(
         assistant, user, tool_service=tool_service, memory_service=memory_service
     )
 
-    # The pinned model. Not a binding and never optional — ``agent_binding_resolver``
-    # blocks the turn outright when the invoker cannot access it.
+    # The pinned model. Not a binding — ``agent_binding_resolver`` blocks the turn
+    # outright when the invoker cannot access it, same as every other gated kind.
     if assistant.model_settings is not None:
         model_id = assistant.model_settings.model_id
         available_models = {item.ref for item in await list_bindable("model", user)}
@@ -291,7 +287,6 @@ async def resolve_runnability(
                 MissingCapability(
                     label=await _model_label(model_id) or _fallback("model"),
                     kind="model",
-                    optional=False,
                 )
             )
 
@@ -312,16 +307,10 @@ async def resolve_runnability(
             label = labels.get(kind, {}).get(key) or _fallback(kind)
             if any(m.kind == kind and m.label == label for m in missing):
                 continue
-            missing.append(
-                MissingCapability(label=label, kind=kind, optional=_is_optional(binding))
-            )
+            missing.append(MissingCapability(label=label, kind=kind))
 
-    if not missing:
-        state = "ready"
-    elif all(item.optional for item in missing):
-        state = "limits"
-    else:
-        state = "blocked"
+    # Any gap blocks. See ``RunnabilityState`` for why there is no middle state.
+    state = "ready" if not missing else "blocked"
 
     return AgentRunnabilityResponse(
         agent_id=assistant.assistant_id, state=state, missing=missing

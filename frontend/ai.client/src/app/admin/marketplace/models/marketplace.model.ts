@@ -179,8 +179,6 @@ export const MAX_ROLE_PINS = 25;
 export interface MissingCapability {
   label: string;
   kind: string;
-  /** Only an explicitly optional binding degrades to `limits` rather than blocking. */
-  optional: boolean;
 }
 
 /**
@@ -206,7 +204,8 @@ export interface RoleAgentPinRow {
   listingState?: ListingState | null;
   reachable: boolean;
   visibility: string;
-  state: 'ready' | 'limits' | 'blocked';
+  /** Two states, not three — see `RunnabilityState` in the agents feature (#747). */
+  state: 'ready' | 'blocked';
   missing: MissingCapability[];
   /** What the role-level check could not decide — a memory space resolves per person. */
   notes: string[];
