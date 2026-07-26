@@ -370,6 +370,7 @@ class AdminCostService:
             wasted_usd += row_wasted
 
             gap_raw = record.get("cacheGapSeconds")
+            prefix_gap_raw = record.get("cachePrefixGapSeconds")
             calls.append(SessionCallRow(
                 timestamp=record.get("timestamp", ""),
                 message_id=record.get("messageId"),
@@ -381,6 +382,9 @@ class AdminCostService:
                 cost=cost,
                 cache_status=cache_status,
                 cache_gap_seconds=int(gap_raw) if gap_raw is not None else None,
+                cache_prefix_gap_seconds=(
+                    int(prefix_gap_raw) if prefix_gap_raw is not None else None
+                ),
                 wasted_usd=row_wasted,
                 prefix_fingerprints=(
                     PrefixFingerprints(**fingerprints_raw)

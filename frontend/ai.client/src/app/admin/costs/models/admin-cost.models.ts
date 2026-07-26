@@ -126,6 +126,14 @@ export interface SessionCallRow {
   cost: number;
   cacheStatus?: CacheStatus | null;
   cacheGapSeconds?: number | null;
+  /**
+   * Seconds since the last call with the SAME prefix, present only when that
+   * was an older call than the immediately previous one. Absent means the two
+   * coincide; present explains a status that would otherwise look inconsistent
+   * with `cacheGapSeconds` — e.g. a `miss_ttl_expired` sitting next to a short
+   * gap, because an `@`-mention ran in between under a different prefix.
+   */
+  cachePrefixGapSeconds?: number | null;
   wastedUsd: number;
   prefixFingerprints?: PrefixFingerprints | null;
 }
