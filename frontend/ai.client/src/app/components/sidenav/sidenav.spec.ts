@@ -257,4 +257,19 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
     const fixture = await renderSidenav();
     expect(agentsNavLink(fixture)).toBeUndefined();
   });
+
+  // ── Assistant deprecation (Designer Phase 5, #746) ────────────────────────────────
+  it('ships one noun: there is no Assistants entry beside Agents', async () => {
+    const fixture = await renderSidenav();
+    const html = fixture.nativeElement as HTMLElement;
+
+    expect(html.querySelector('a[href="/assistants"]')).toBeNull();
+    expect(html.textContent).not.toContain('Assistants');
+    expect(agentsNavLink(fixture)).toBeDefined();
+  });
+
+  it('drops the Preview badge, which only existed to disambiguate two nouns', async () => {
+    const fixture = await renderSidenav();
+    expect(agentsNavLink(fixture)!.textContent).not.toContain('Preview');
+  });
 });

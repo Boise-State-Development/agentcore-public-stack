@@ -101,7 +101,7 @@ export type ShareAssistantDialogResult = {
               id="dialog-title"
               class="text-base/7 font-semibold text-gray-900 dark:text-white"
             >
-              Share assistant
+              Share agent
             </h3>
             <p
               id="dialog-description"
@@ -128,7 +128,7 @@ export type ShareAssistantDialogResult = {
             <!-- Public Assistant: Show shareable URL -->
             <section class="space-y-3">
               <p class="text-sm/6 text-gray-600 dark:text-gray-400">
-                This assistant is public and discoverable by everyone. Share this URL to let
+                This agent is public and discoverable by everyone. Share this URL to let
                 others start a conversation with it.
               </p>
               <div class="flex gap-2">

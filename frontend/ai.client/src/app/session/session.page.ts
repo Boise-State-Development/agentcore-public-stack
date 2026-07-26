@@ -857,12 +857,17 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
-   * Navigate to the assistant edit page.
+   * Navigate to the Designer for the Agent driving this session.
+   *
+   * The id is the same record either way — the compat mapping renders a legacy Assistant
+   * *as* an Agent, so `/agents/:id/edit` opens what `/assistants/:id/edit` used to. Routed
+   * directly rather than through the redirect so the address bar never shows the retired
+   * path.
    */
   editAssistant(): void {
     const assistantId = this.assistant()?.assistantId;
     if (assistantId) {
-      this.router.navigate(['/assistants', assistantId, 'edit']);
+      this.router.navigate(['/agents', assistantId, 'edit']);
     }
   }
 

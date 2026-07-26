@@ -34,20 +34,32 @@ export const routes: Routes = [
         canActivate: [adminGuard],
         loadChildren: () => import('./admin/admin.routes').then(m => m.adminRoutes),
     },
+    // ── Assistant deprecation (Designer Phase 5) ────────────────────────────────────
+    // There is one noun, and it is Agent (Marketplace D1). The Designer reached parity
+    // and then passed it — bindings, icons, listings, pins, `@`-mention and reports all
+    // exist only on the Agent surface — so the old editor had strictly less to offer for
+    // the same record.
+    //
+    // These stay as **redirects rather than deletions**: `/assistants/:id/edit` is in
+    // people's bookmarks, in old chat sessions' "edit" links and in links colleagues have
+    // shared with each other. The ids are identical on both sides (the compat mapping
+    // renders a legacy Assistant *as* an Agent — there was no data migration), so the
+    // redirect lands on the same record. Removing them would turn every one of those into
+    // a 404 for no gain.
     {
         path: 'assistants/new',
-        loadComponent: () => import('./assistants/assistant-form/assistant-form.page').then(m => m.AssistantFormPage),
-        canActivate: [authGuard],
+        redirectTo: 'agents/new',
+        pathMatch: 'full',
     },
     {
         path: 'assistants/:id/edit',
-        loadComponent: () => import('./assistants/assistant-form/assistant-form.page').then(m => m.AssistantFormPage),
-        canActivate: [authGuard],
+        redirectTo: 'agents/:id/edit',
+        pathMatch: 'full',
     },
     {
         path: 'assistants',
-        loadComponent: () => import('./assistants/assistants.page').then(m => m.AssistantsPage),
-        canActivate: [authGuard],
+        redirectTo: 'agents',
+        pathMatch: 'full',
     },
     {
         path: 'agents/new',
