@@ -97,14 +97,6 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # Compaction state (loaded during initialize)
         self.compaction_state: Optional[CompactionState] = None
 
-        # Whether compaction_state was loaded from DynamoDB. The
-        # AgentCoreMemory path leaves `agent.messages` empty during
-        # `initialize()`, so `_apply_compaction()` (and its load) is skipped
-        # for subsequent turns of an existing session. `update_after_turn`
-        # checks this flag and lazy-loads to avoid clobbering the persisted
-        # `checkpoint` / `total_summarized_turns` with default zeros.
-        self._compaction_state_loaded: bool = False
-
         # Cached data for checkpoint calculation
         self._valid_cutoff_indices: List[int] = []
         self._all_messages_for_summary: List[Dict] = []
@@ -244,10 +236,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             self._apply_compaction(agent)
         except Exception as e:
             logger.error(f"Compaction failed, using full history: {e}", exc_info=True)
+            # These defaults never reach DynamoDB: `update_after_turn` re-reads
+            # the persisted state and only adopts what is at least as advanced,
+            # so the real checkpoint/anchor survive a failed compaction.
             self.compaction_state = CompactionState()
-            # Force update_after_turn to re-load persisted state rather than
-            # saving these defaults over the real checkpoint/anchor.
-            self._compaction_state_loaded = False
             self._valid_cutoff_indices = []
             self._all_messages_for_summary = []
 
@@ -291,7 +283,6 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
         # Load compaction state from DynamoDB
         self.compaction_state = self._load_compaction_state()
-        self._compaction_state_loaded = True
 
         # Cache valid cutoff indices (user text messages, not tool results)
         self._valid_cutoff_indices = self._find_valid_cutoff_indices(all_messages)
@@ -478,6 +469,82 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             logger.warning(f"Error loading compaction state: {e}")
             return CompactionState()
 
+    def _adopt_persisted_compaction_state(self) -> None:
+        """Re-read persisted compaction state at the top of every turn (#751).
+
+        **One session can be served by more than one session manager.** The agent
+        cache keys on *configuration*, so an ``@``-mention turn (Marketplace D11)
+        builds a second ``Agent`` — and each ``Agent`` builds its own
+        ``TurnBasedSessionManager`` — for a session that already has one. Both
+        persist to the same DynamoDB row and neither knows the other exists.
+
+        This used to lazy-load only when ``initialize()`` had skipped the load,
+        which means a cache-*hit* turn kept whatever state its instance was built
+        with. ``initialize()`` never re-runs on a hit — the same property that
+        forked the conversation in #741 — so the stale instance would then
+        ``_save_compaction_state`` its old
+        ``checkpoint`` and ``truncation_anchor`` straight over the newer ones the
+        sibling had just written. Every exit path of ``update_after_turn`` saves,
+        including the "nothing to do" ones, so the clobber did not need compaction
+        to actually fire.
+
+        ⚠️ **This is a cost bug before it is a correctness bug.** The truncation
+        anchor is what keeps the restored prefix byte-stable (see the prompt-cache
+        contract in ``CLAUDE.md``). Moving it backwards re-truncates messages that
+        were previously sent whole, which rewrites the prefix — a full cache write
+        at the $2.50/MTok premium over a 35k–150k-token prefix, on a turn where
+        nothing about the conversation appeared to change.
+
+        Re-reading rather than sharing the state object: the sibling may live in
+        another replica, where object aliasing (#750's fix for the message list)
+        reaches nothing. The read is one GSI query, and ``_save_compaction_state``
+        already does an identical one immediately after, so this roughly doubles a
+        cost that is already noise next to a model call. Turns are serialized per
+        session by the single-flight lease, so read-modify-write is safe.
+
+        **State never moves backwards.** A load failure is indistinguishable from
+        "nothing persisted" — both return a default ``CompactionState`` — so
+        blindly adopting the result would let a transient DynamoDB error zero a
+        real checkpoint, which is the very clobber this exists to prevent. The
+        guards below mirror ``_adopt_session_conversation``'s "keep the longer
+        history" rule: adopt the persisted record only when it is at least as far
+        along, and carry the anchor forward either way.
+        """
+        persisted = self._load_compaction_state()
+        current = self.compaction_state
+
+        if current is None:
+            self.compaction_state = persisted
+            return
+
+        if persisted.checkpoint < current.checkpoint:
+            # Either a sibling has not caught up, or the load failed and handed
+            # back defaults. Keeping ours is correct in both cases: the checkpoint
+            # is monotonic within a session, so a lower one is never news.
+            logger.info(
+                "Compaction state: persisted checkpoint %d is behind the live one "
+                "%d; keeping the live state",
+                persisted.checkpoint, current.checkpoint,
+            )
+            return
+
+        if persisted.checkpoint > current.checkpoint:
+            logger.info(
+                "Compaction state: adopting a sibling's advance (checkpoint %d -> "
+                "%d, anchor %d -> %d)",
+                current.checkpoint, persisted.checkpoint,
+                current.truncation_anchor, persisted.truncation_anchor,
+            )
+
+        # Clamp forward even at an equal checkpoint: the anchor also advances on
+        # prompt-cache expiry (``_maybe_advance_truncation_anchor``), so this
+        # instance can hold a newer anchor under the same checkpoint. Taking the
+        # max keeps truncation monotonic, which is what the prefix depends on.
+        persisted.truncation_anchor = max(
+            persisted.truncation_anchor, current.truncation_anchor
+        )
+        self.compaction_state = persisted
+
     def _save_compaction_state(self, state: CompactionState) -> None:
         """Save compaction state to DynamoDB session metadata."""
         if not self.user_id or not self.compaction_config or not self.compaction_config.enabled:
@@ -647,18 +714,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         if not self.compaction_config or not self.compaction_config.enabled:
             return None
 
-        if self.compaction_state is None:
-            self.compaction_state = CompactionState()
-
-        # Lazy-load persisted state if `initialize()` skipped the load. This
-        # happens on the AgentCoreMemory path for existing sessions, where
-        # `agent.messages` is empty at init time (messages arrive via hooks
-        # after init). Without this, the first `_save_compaction_state` below
-        # would overwrite the persisted `checkpoint` and
-        # `total_summarized_turns` with default zeros.
-        if not self._compaction_state_loaded:
-            self.compaction_state = self._load_compaction_state()
-            self._compaction_state_loaded = True
+        # Re-read persisted state before touching it — on EVERY turn, not just
+        # the first. See ``_adopt_persisted_compaction_state`` (#751).
+        self._adopt_persisted_compaction_state()
 
         self.compaction_state.last_input_tokens = input_tokens
 
