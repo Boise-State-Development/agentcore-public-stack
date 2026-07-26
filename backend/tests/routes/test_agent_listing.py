@@ -222,6 +222,61 @@ class TestSubmit:
         assert listing["category"] == "Teaching"
         assert listing["reviewNote"] == "For the CTL team"
 
+    # ── #749 — the author sets the shelf subtitle at submission ──────────────────
+    def test_a_supplied_tagline_is_written_with_the_listing(
+        self, app, make_user, _no_writes
+    ):
+        """One write, not two — same reason the D13 patch path bundles presentation."""
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(bindings=[])):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit",
+                json={"category": "Teaching", "tagline": "Cites policy, with sources"},
+            )
+
+        assert resp.status_code == 200
+        assert _no_writes.call_args.kwargs["tagline"] == "Cites policy, with sources"
+
+    def test_an_omitted_tagline_leaves_the_existing_one_alone(
+        self, app, make_user, _no_writes
+    ):
+        """A resubmission that never touches the field must not blank the subtitle.
+
+        ``write_listing`` treats ``None`` as "don't set", so the omission has to reach it
+        as ``None`` rather than as an empty string.
+        """
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(bindings=[])):
+            TestClient(app).post(
+                "/agents/ast-001/listing/submit", json={"category": "Teaching"}
+            )
+
+        assert _no_writes.call_args.kwargs["tagline"] is None
+
+    def test_a_whitespace_only_tagline_is_treated_as_omitted(
+        self, app, make_user, _no_writes
+    ):
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(bindings=[])):
+            TestClient(app).post(
+                "/agents/ast-001/listing/submit",
+                json={"category": "Teaching", "tagline": "   "},
+            )
+
+        assert _no_writes.call_args.kwargs["tagline"] is None
+
+    def test_a_tagline_past_the_shelf_limit_is_rejected(self, app, make_user, _no_writes):
+        """80 chars is a layout constraint, not a suggestion — the row is one line."""
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(bindings=[])):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit",
+                json={"category": "Teaching", "tagline": "x" * 81},
+            )
+
+        assert resp.status_code == 422
+        _no_writes.assert_not_called()
+
     def test_unknown_category_is_rejected(self, app, make_user, _no_writes):
         mock_auth_user(app, make_user())
         with _owner(_make_assistant(bindings=[])):

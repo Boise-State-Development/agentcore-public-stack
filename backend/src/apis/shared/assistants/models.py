@@ -523,6 +523,17 @@ class SubmitListingRequest(BaseModel):
         ),
     )
     note: Optional[str] = Field(None, max_length=2000, description="Optional note to the reviewer")
+    tagline: Optional[str] = Field(
+        None,
+        max_length=80,
+        description=(
+            "Shelf subtitle (D4). Submission is where an author sets this, because it is "
+            "the moment the shelf row comes into existence and the only point they are "
+            "looking at what the store will say. Omit to leave the existing tagline "
+            "untouched; the SPA prefills it from the description's first clause so a "
+            "legacy Agent is not asked for a field it has never had."
+        ),
+    )
 
 
 class SkillExposure(BaseModel):

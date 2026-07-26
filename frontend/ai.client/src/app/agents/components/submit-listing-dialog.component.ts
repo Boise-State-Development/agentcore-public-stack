@@ -7,6 +7,8 @@ import {
   AgentCategory,
   AgentListingBlock,
   SkillExposure,
+  TAGLINE_MAX,
+  deriveTagline,
 } from '../models/store.model';
 
 export interface SubmitListingDialogData {
@@ -14,6 +16,10 @@ export interface SubmitListingDialogData {
   agentName: string;
   /** Present on a resubmission; its category preselects the picker. */
   listing?: AgentListingBlock;
+  /** The current shelf subtitle, if the Agent already has one. */
+  tagline?: string;
+  /** Only used to prefill an absent tagline — see `deriveTagline` (#749). */
+  description?: string;
 }
 
 /** The listing after submission, or `undefined` if cancelled. */
@@ -119,6 +125,32 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
               }
             </div>
 
+            <!--
+              Tagline (D4). Prefilled from the description's first clause for the many
+              Agents that predate the field — the author edits rather than invents, and
+              sees what the shelf will say at the one moment they are looking at it.
+            -->
+            <div class="mt-5">
+              <label for="listing-tagline" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                Tagline
+              </label>
+              <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                The one line under the name on the shelf. We started it from your
+                description — make it read like a subtitle.
+              </p>
+              <input
+                id="listing-tagline"
+                type="text"
+                [value]="tagline()"
+                (input)="onTaglineInput($event)"
+                [attr.maxlength]="taglineMax"
+                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+              />
+              <p class="mt-1 text-right text-xs/5 text-gray-400 dark:text-gray-500">
+                {{ tagline().length }}/{{ taglineMax }}
+              </p>
+            </div>
+
             <div class="mt-5">
               <label for="listing-note" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
                 Note to the reviewer <span class="font-normal text-gray-500 dark:text-gray-400">(optional)</span>
@@ -206,6 +238,8 @@ export class SubmitListingDialogComponent implements OnInit {
 
   readonly category = signal('');
   readonly note = signal('');
+  readonly tagline = signal('');
+  readonly taglineMax = TAGLINE_MAX;
 
   readonly isResubmission = computed(() => !!this.data.listing);
 
@@ -223,6 +257,11 @@ export class SubmitListingDialogComponent implements OnInit {
   async ngOnInit(): Promise<void> {
     // Preselect the category the listing already had, so a resubmission is one click.
     this.category.set(this.data.listing?.category ?? '');
+    // Keep an existing tagline; derive one only when the Agent has never had it, which
+    // is every Agent that predates the field (#749).
+    this.tagline.set(
+      (this.data.tagline ?? '').trim() || deriveTagline(this.data.description),
+    );
     try {
       const [categories, preflight] = await Promise.all([
         this.listings.loadCategories(),
@@ -250,6 +289,10 @@ export class SubmitListingDialogComponent implements OnInit {
     this.note.set((event.target as HTMLTextAreaElement).value);
   }
 
+  onTaglineInput(event: Event): void {
+    this.tagline.set((event.target as HTMLInputElement).value);
+  }
+
   async onSubmit(): Promise<void> {
     if (!this.canSubmit()) return;
     this.submitting.set(true);
@@ -258,6 +301,9 @@ export class SubmitListingDialogComponent implements OnInit {
       const response = await this.listings.submit(this.data.agentId, {
         category: this.category(),
         note: this.note().trim() || undefined,
+        // Omitted rather than blanked when empty — the backend reads `undefined` as
+        // "leave the existing tagline alone".
+        tagline: this.tagline().trim() || undefined,
       });
       this.dialogRef.close(response.listing);
     } catch (err) {
