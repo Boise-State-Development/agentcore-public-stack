@@ -185,7 +185,7 @@ definition.
 1. ✅ Evolve the store (D2) + ship the Agent contract with the compat mapping.
 2. ✅ Build the Designer to parity, then past it (tools/skills/memory binding old Assistants never had).
 3. ✅ Render legacy Assistants as Agents; redirect the Assistants editor to the Designer.
-4. 🔄 Deprecate the "Assistant" term across UI + docs; retire the old editor.
+4. ✅ Deprecate the "Assistant" term across UI + docs; retire the old editor.
 
 No big-bang: legacy ids and the compat mapping keep everything running throughout.
 
@@ -203,8 +203,22 @@ are untouched either way.
 
 **The term pass is deliberately not a find-and-replace.** `"You are a helpful assistant that…"`
 stays as the instructions placeholder: that is the conventional system-prompt idiom, and rewriting
-it to "agent" would be worse prompt guidance, not better terminology. What changed is the words
-naming *our product concept* — nav, the session indicator, the share dialog, settings copy.
+it to "agent" would be worse prompt guidance, not better terminology. Neither did the SSE
+`role: "assistant"` vocabulary change — that is the model's message role, not our product concept.
+What changed is the words naming *our* concept: nav, the session indicator, the share dialog,
+settings copy.
+
+**Step 4, as shipped.** Deleted: `assistants.page`, `assistant-form.page`, `assistant-list`,
+`assistant-preview`, and the `assistant-form` barrel. **`frontend/.../assistants/` is not gone**,
+and is not a feature any more — it is the set of pieces the Agent surface consumes: the share
+dialog, the assistant card, the knowledge-base dialogs and services, `PreviewChatService`, and the
+models. It keeps the name because the record is still an Assistant *on the wire*; renaming the
+folder would drag the API contract's vocabulary with it. Its `README.md` says so, with the
+consumer map. Anything new and user-facing goes under `agents/`.
+
+**The backend `/assistants/*` surface is unchanged and not deprecated.** `test-chat` and the
+document sub-routes deliberately live there and are called by the Designer's own preview pane and
+knowledge-base section.
 
 ---
 
@@ -216,7 +230,7 @@ Phase 1  Agent record + uniform binding model + compat mapping (back-compat)  �
 Phase 2  Bindable-primitives catalog API (Registry-lite, RBAC-composed)       ✅ done
 Phase 3  Harness resolution: memory index injection + memory_* tools + model  ✅ done
 Phase 4  Agent Designer page (Agent Harness Editor)                           ✅ done
-Phase 5  Assistant deprecation + migration                                    🔄 in progress (#746)
+Phase 5  Assistant deprecation + migration                                    ✅ done (#746)
 Later    Federate AgentCore Registry / managed Harness as catalog+run backends (D1)
 ```
 
