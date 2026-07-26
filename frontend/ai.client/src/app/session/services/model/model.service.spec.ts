@@ -54,6 +54,9 @@ describe('ModelService', () => {
 
   afterEach(() => {
     httpMock.match(() => true);
+    // `restoreAllMocks` does not undo `stubGlobal` — without this the fake
+    // sessionStorage leaks into every later spec in the same worker.
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     TestBed.resetTestingModule();
   });

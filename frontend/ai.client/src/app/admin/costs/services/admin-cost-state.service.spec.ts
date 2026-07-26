@@ -31,6 +31,11 @@ describe('AdminCostStateService', () => {
   });
 
   afterEach(() => {
+    // The export test spies on `document.createElement` and on
+    // `document.body.appendChild`/`removeChild`. Left in place they follow
+    // every spec that later shares this worker — `createElement` would hand
+    // back a plain object instead of an Element.
+    vi.restoreAllMocks();
     TestBed.resetTestingModule();
   });
 

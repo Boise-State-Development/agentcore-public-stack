@@ -15,6 +15,7 @@ describe('SidenavService', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     TestBed.resetTestingModule();
   });
 

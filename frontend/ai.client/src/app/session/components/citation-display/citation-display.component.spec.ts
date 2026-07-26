@@ -17,6 +17,15 @@ describe('CitationDisplayComponent', () => {
     fixture.detectChanges();
   });
 
+  // Several tests below install fake timers — some in a nested `beforeEach`,
+  // some inline inside an `it`. `vi.restoreAllMocks()` does not restore timers,
+  // so reset them here for every test in the file. The builder runs vitest with
+  // `isolate: false`; a frozen clock left behind here times out whichever
+  // unrelated spec lands next in the same worker.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('should create', () => {
     expect(component).toBeTruthy();
   });
@@ -117,6 +126,7 @@ describe('CitationDisplayComponent', () => {
 
     afterEach(() => {
     TestBed.resetTestingModule();
+      vi.useRealTimers();
       vi.restoreAllMocks();
     });
 

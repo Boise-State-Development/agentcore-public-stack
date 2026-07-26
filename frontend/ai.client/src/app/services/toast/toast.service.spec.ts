@@ -15,6 +15,7 @@ describe('ToastService', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     TestBed.resetTestingModule();
   });
 
