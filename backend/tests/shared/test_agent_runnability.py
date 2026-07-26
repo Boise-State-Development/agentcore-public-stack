@@ -246,14 +246,18 @@ async def test_blocked_when_a_required_tool_is_not_in_the_viewers_catalog():
         )
 
     assert result.state == "blocked"
-    assert [(m.label, m.kind, m.optional) for m in result.missing] == [
-        ("Workday Query", "tool", False)
-    ]
+    assert [(m.label, m.kind) for m in result.missing] == [("Workday Query", "tool")]
 
 
 @pytest.mark.asyncio
-async def test_limits_when_only_an_optional_binding_is_missing():
-    """The one gap that degrades instead of blocking — see the module docstring."""
+async def test_a_binding_marked_optional_still_blocks():
+    """``config.optional`` is inert — there is no degraded state (#747).
+
+    Nothing ever wrote this flag, but a hand-edited or future record could carry it, and
+    it must not resurrect a middle state the runtime cannot honour: ``agent_binding_resolver``
+    raises for every kind, per the Designer spec's D5 block-only rule. Previewing
+    "runs with limits" here would promise a turn that is going to fail.
+    """
     agent = _agent(
         bindings=[
             AgentBinding(kind="tool", ref="document_search"),
@@ -270,12 +274,12 @@ async def test_limits_when_only_an_optional_binding_is_missing():
             ),
         )
 
-    assert result.state == "limits"
-    assert [(m.label, m.optional) for m in result.missing] == [("Grants.gov Search", True)]
+    assert result.state == "blocked"
+    assert [m.label for m in result.missing] == ["Grants.gov Search"]
 
 
 @pytest.mark.asyncio
-async def test_one_required_gap_outranks_any_number_of_optional_ones():
+async def test_every_gap_is_named_whether_or_not_it_claims_to_be_optional():
     agent = _agent(
         bindings=[
             AgentBinding(kind="tool", ref="grants_gov", config={"optional": True}),
@@ -297,7 +301,7 @@ async def test_one_required_gap_outranks_any_number_of_optional_ones():
 
 @pytest.mark.asyncio
 async def test_a_model_the_viewer_cannot_access_blocks_and_is_named():
-    """The pinned model is never optional — the run-time resolver raises outright."""
+    """The pinned model blocks like everything else — the resolver raises outright."""
     agent = _agent(model_settings=AgentModelConfig(model_id="claude-opus"))
     with patch(f"{MODULE}.list_bindable", side_effect=_catalog(model={})), _models(
         ("claude-opus", "Claude Opus 4.5")

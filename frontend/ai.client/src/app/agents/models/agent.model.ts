@@ -114,8 +114,15 @@ export interface Agent {
   userPermission?: UserPermission;
 }
 
-/** D6's three-way answer to "will this run for me?". */
-export type RunnabilityState = 'ready' | 'limits' | 'blocked';
+/**
+ * D6's answer to "will this run for me?" — two states, not three.
+ *
+ * A middle `'limits'` (runs, but degraded) was specced and removed in #747: it required a
+ * binding to declare `config.optional`, which nothing ever wrote, and it contradicted the
+ * Designer spec's D5 — "No downgrade on missing capability (block-only v1)" — which is the
+ * rule the runtime resolver actually implements. Any gap blocks.
+ */
+export type RunnabilityState = 'ready' | 'blocked';
 
 export interface MissingCapability {
   label: string;

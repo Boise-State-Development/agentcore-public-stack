@@ -321,8 +321,8 @@ interface StagedPin {
                         class="mt-2 ml-9 text-xs text-rose-700 dark:text-rose-300"
                         role="status"
                       >
-                        {{ pin.row.state === 'limits' ? 'Runs with limits for' : "Won't run for" }}
-                        this role — it does not grant {{ missingLabels(pin.row) }}.
+                        Won't run for this role — it does not grant
+                        {{ missingLabels(pin.row) }}.
                       </p>
                     }
                     @for (note of pin.row?.notes ?? []; track note) {

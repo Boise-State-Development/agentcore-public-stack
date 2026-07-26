@@ -157,8 +157,23 @@ the Agent's `modelConfig` + `bindings` against the viewer's own RBAC-filtered
 `GET /agents/bindable` results and renders one line under "What it can access":
 
 - **Ready to run for you**
-- **Runs with limits for you** — names the unavailable optional binding
 - **Not available to you** — names what is missing; the Start chat button is disabled
+
+⚠️ **REVISED — there were originally three states.** A middle *"Runs with limits for you"* named
+an unavailable **optional** binding. It was never reachable and has been removed (#747).
+
+Two reasons, and the second is the one that matters. First, it degraded only when a binding declared
+`config.optional == true`, and nothing ever wrote that flag — no API accepted it and the Designer
+had no control for it, so every gap resolved to blocked and the model was really two states already.
+Second, and decisive: building toward it would have contradicted `agent-designer.md` D5, whose
+Non-goals say *"No **downgrade** on missing capability (block-only v1)"* and call downgrade "a later
+opt-in". Block-only is what `agent_binding_resolver` actually implements — it raises for model, tool,
+skill and memory_space alike. A preview that offers an outcome the runtime cannot produce is a
+preview that lies, which is the same standard that put runnability on the detail page instead of the
+shelf in the first place.
+
+If downgrade is ever taken up, it starts at the resolver and this line grows back with it. It is not
+a preview-layer decision.
 
 **The cost, stated plainly:** with no badge on the shelf, a user only learns an Agent will not run
 after tapping into it. That is the accepted price of D4. It is mitigated by the fact that most store
