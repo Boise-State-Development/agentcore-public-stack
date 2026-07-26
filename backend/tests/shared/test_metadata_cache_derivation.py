@@ -20,7 +20,7 @@ from apis.shared.sessions.models import (
 NOW = datetime(2026, 7, 19, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _metadata(input_t=100, output_t=50, cache_read=0, cache_write=0, with_pricing=True):
+def _metadata(input_t=100, output_t=50, cache_read=0, cache_write=0, with_pricing=True, prints=None):
     pricing = None
     if with_pricing:
         pricing = PricingSnapshot(
@@ -30,7 +30,14 @@ def _metadata(input_t=100, output_t=50, cache_read=0, cache_write=0, with_pricin
             cache_read_price_per_mtok=0.30,
             snapshot_at=NOW.isoformat(),
         )
+    extra = {}
+    if prints is not None:
+        extra["prefixFingerprints"] = {
+            "toolConfigHash": prints[0],
+            "systemPromptHash": prints[1],
+        }
     return MessageMetadata(
+        **extra,
         token_usage=TokenUsage(
             input_tokens=input_t,
             output_tokens=output_t,
@@ -63,15 +70,22 @@ class _FakeTable:
         return {}
 
 
-def _prev_row(seconds_ago, cache_read=0, cache_write=0):
+def _prev_row(seconds_ago, cache_read=0, cache_write=0, prints=None):
+    """A prior cost row. ``prints`` is (toolConfigHash, systemPromptHash)."""
     ts = (NOW - timedelta(seconds=seconds_ago)).isoformat()
-    return {
+    row = {
         "timestamp": ts,
         "tokenUsage": {
             "cacheReadInputTokens": Decimal(cache_read),
             "cacheWriteInputTokens": Decimal(cache_write),
         },
     }
+    if prints is not None:
+        row["prefixFingerprints"] = {
+            "toolConfigHash": prints[0],
+            "systemPromptHash": prints[1],
+        }
+    return row
 
 
 class TestDeriveCacheObservability:
@@ -132,12 +146,93 @@ class TestDeriveCacheObservability:
         assert result["wastedUsd"] == 0.0
         assert result["cacheGapSeconds"] == 30
 
-    def test_query_targets_previous_row_descending_limit_1(self):
+    def test_query_reads_a_descending_window_of_recent_rows(self):
+        """Newest-first, and wide enough to see past an interleaved mention turn.
+
+        Was ``Limit=1`` until #753: the predecessor that decides the TTL question
+        is the last call with the *same prefix*, which is not always the last
+        call, so one row is not enough to answer it.
+        """
         table = _FakeTable()
         self._derive(table, _metadata(cache_write=100))
         assert table.query_kwargs["IndexName"] == "SessionLookupIndex"
         assert table.query_kwargs["ScanIndexForward"] is False
-        assert table.query_kwargs["Limit"] == 1
+        assert table.query_kwargs["Limit"] == md._CACHE_PREDECESSOR_LOOKBACK
+        assert md._CACHE_PREDECESSOR_LOOKBACK > 1
+
+    # --- #753: the TTL clock runs from the same-prefix predecessor ---------
+
+    def test_interleaved_prefix_does_not_report_a_ttl_expiry_as_avoidable(self):
+        """The bug: an `@`-mention between two plain turns hid the real expiry.
+
+        Reproduces the measured dev case. The plain turn's own prefix was last
+        written 320s ago (expired); a mention ran 100s ago under a *different*
+        prefix. Classifying against "the previous call" saw 100s, called it
+        avoidable, and booked real dollars of waste that nothing could have
+        avoided.
+        """
+        table = _FakeTable([
+            _prev_row(seconds_ago=100, cache_write=4000, prints=("agentcfg", "agentsys")),
+            _prev_row(seconds_ago=320, cache_read=3000, cache_write=1000, prints=("basecfg", "basesys")),
+        ])
+        result = self._derive(
+            table, _metadata(cache_write=6000, prints=("basecfg", "basesys"))
+        )
+        assert result["cacheStatus"] == "miss_ttl_expired"
+        assert result["wastedUsd"] == 0.0
+        # The chronology stays honest: 100s since the previous call, but the
+        # entry that decided the verdict was 320s old.
+        assert result["cacheGapSeconds"] == 100
+        assert result["cachePrefixGapSeconds"] == 320
+
+    def test_same_prefix_within_ttl_is_still_avoidable(self):
+        """The fix must not suppress the bug class the metric exists for."""
+        table = _FakeTable([
+            _prev_row(seconds_ago=30, cache_write=4000, prints=("agentcfg", "agentsys")),
+            _prev_row(seconds_ago=60, cache_read=4000, cache_write=1000, prints=("basecfg", "basesys")),
+        ])
+        result = self._derive(
+            table, _metadata(cache_write=6000, prints=("basecfg", "basesys"))
+        )
+        assert result["cacheStatus"] == "miss_avoidable"
+        assert result["wastedUsd"] == round((5000 / 1_000_000) * 3.45, 6)
+        assert result["cachePrefixGapSeconds"] == 60
+
+    def test_no_same_prefix_predecessor_in_window_classifies_conservatively(self):
+        """An unseen predecessor is treated as expired, never as avoidable.
+
+        Under-reporting waste keeps the metric trustworthy; crying wolf is what
+        made it useless.
+        """
+        table = _FakeTable([
+            _prev_row(seconds_ago=10, cache_write=4000, prints=("othercfg", "othersys")),
+        ])
+        result = self._derive(
+            table, _metadata(cache_write=6000, prints=("basecfg", "basesys"))
+        )
+        assert result["cacheStatus"] == "miss_ttl_expired"
+        assert result["wastedUsd"] == 0.0
+
+    def test_prefix_gap_omitted_when_it_equals_the_previous_call_gap(self):
+        """No redundant field on the common path — same prefix, adjacent calls."""
+        table = _FakeTable([
+            _prev_row(seconds_ago=45, cache_read=4000, cache_write=1000, prints=("basecfg", "basesys")),
+        ])
+        result = self._derive(
+            table, _metadata(cache_write=6000, prints=("basecfg", "basesys"))
+        )
+        assert result["cacheStatus"] == "miss_avoidable"
+        assert result["cacheGapSeconds"] == 45
+        assert "cachePrefixGapSeconds" not in result
+
+    def test_calls_without_fingerprints_fall_back_to_previous_call(self):
+        """Hook disabled or a non-Bedrock provider: behave exactly as before #753."""
+        table = _FakeTable([
+            _prev_row(seconds_ago=60, cache_read=4000, cache_write=1000, prints=("basecfg", "basesys")),
+        ])
+        result = self._derive(table, _metadata(cache_write=6000))  # no prints
+        assert result["cacheStatus"] == "miss_avoidable"
+        assert result["cacheGapSeconds"] == 60
 
     def test_failure_returns_empty_never_raises(self):
         class _Boom:

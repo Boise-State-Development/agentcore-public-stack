@@ -234,6 +234,17 @@ import {
                     </td>
                     <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                       {{ formatGap(row.call.cacheGapSeconds) }}
+                      @if (row.call.cachePrefixGapSeconds; as prefixGap) {
+                        <!-- The gap that decided the verdict, when a call with a
+                             different prefix ran in between (e.g. an @-mention).
+                             Without it, a miss_ttl_expired beside a short gap
+                             reads as a bug rather than as the correct answer. -->
+                        <span
+                          class="ml-1 text-xs text-gray-500 dark:text-gray-400"
+                          [title]="'Last call with the same prefix was ' + formatGap(prefixGap) + ' ago — that is the entry this call could have hit'"
+                          >({{ formatGap(prefixGap) }})</span
+                        >
+                      }
                     </td>
                     <td
                       class="whitespace-nowrap px-3 py-2 text-right tabular-nums"

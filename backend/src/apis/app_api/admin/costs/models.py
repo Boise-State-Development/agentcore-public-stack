@@ -122,6 +122,13 @@ class SessionCallRow(BaseModel):
     cost: float = 0.0
     cache_status: Optional[str] = Field(None, alias="cacheStatus")
     cache_gap_seconds: Optional[int] = Field(None, alias="cacheGapSeconds")
+    # Seconds since the last call with the SAME prefix, present only when that
+    # was an older call than the immediately previous one (#753). Its absence
+    # means the two coincide; its presence explains a status that would
+    # otherwise look inconsistent with `cacheGapSeconds`.
+    cache_prefix_gap_seconds: Optional[int] = Field(
+        None, alias="cachePrefixGapSeconds"
+    )
     wasted_usd: float = Field(0.0, alias="wastedUsd")
     prefix_fingerprints: Optional[PrefixFingerprints] = Field(
         None, alias="prefixFingerprints"
