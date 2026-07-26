@@ -175,6 +175,24 @@ export interface AgentCategory {
 /** A role seeds at most this many agents — see `role_pins.MAX_ROLE_PINS`. */
 export const MAX_ROLE_PINS = 25;
 
+/**
+ * Warn past this many *locked* seeds on one role (#748).
+ *
+ * A threshold, not a limit, and the distinction is the whole decision. A locked seed
+ * cannot be dismissed by the member who receives it, so an admin choosing between "seed"
+ * and "seed locked" has no reason not to lock — locking guarantees the rollout lands and
+ * the cost falls on someone else's sidebar. Left unchecked the dominant strategy is to
+ * lock everything and Pinned stops being the user's shelf.
+ *
+ * A hard cap was considered and rejected: pins merge as a union across every role a user
+ * matches and a lock from any one wins, so a per-role cap would not bound what any
+ * individual sees, and the union itself is not cappable (membership resolves per user from
+ * Entra claims, so it is unknowable at write time; enforcing at read time would silently
+ * drop an admin's lock for some users). Friction has no such failure mode, and the number
+ * below can move without breaking anyone's saved list.
+ */
+export const LOCK_WARN_THRESHOLD = 3;
+
 /** One capability the role does not grant, named rather than counted (D9.5). */
 export interface MissingCapability {
   label: string;
@@ -223,6 +241,18 @@ export interface RoleAgentPinsResponse {
   fallbackOnly: boolean;
   /** The role has no JWT mappings, so no user matches it at all. */
   unmapped: boolean;
+  /**
+   * Locked seeds held by *other* roles (#748).
+   *
+   * A member's shelf is the union across every role they match, and a lock from any one
+   * of them wins — so this role's locked count is only part of what an individual gets.
+   * Reported, never enforced: role membership resolves per user from Entra claims, so the
+   * union is not knowable at write time, and capping it at read time would silently drop
+   * an admin's lock for some users.
+   */
+  lockedElsewhere: number;
+  /** How many other roles lock at least one seed — the spread behind `lockedElsewhere`. */
+  lockedElsewhereRoles: number;
   pins: RoleAgentPinRow[];
   /** Seeded ids whose agent no longer exists — reported, never pruned on read. */
   unavailable: string[];

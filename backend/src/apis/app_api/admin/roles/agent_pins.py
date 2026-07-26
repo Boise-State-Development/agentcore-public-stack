@@ -18,6 +18,14 @@ for any role that carries no ``jwtRoleMappings`` at all.
 **Removing a role pin unpins for everyone who had not pinned it themselves (D9.1).** Pins
 resolve live; there is no fan-out and no "new members only". The console's removal dialog
 has to say that plainly.
+
+**Locking is bounded by friction, not by a cap (#748).** A locked seed cannot be dismissed
+by the member who receives it, and an admin weighing "seed" against "seed locked" otherwise
+has no reason not to lock. ``lockedElsewhere`` on the response tells the console how many
+locked seeds other roles already hold, because a user's shelf is the *union* across every
+role they match and a lock from any one of them wins. That union cannot be capped: role
+membership resolves per user from Entra claims, so it is not knowable at write time, and
+enforcing it at read time would silently drop an admin's lock for some users.
 """
 
 import logging
@@ -30,7 +38,11 @@ from apis.shared.assistants.models import (
     RoleAgentPinsResponse,
     RoleAgentPinsUpdateRequest,
 )
-from apis.shared.assistants.role_pins import list_role_pins, put_role_pins
+from apis.shared.assistants.role_pins import (
+    count_locked_outside,
+    list_role_pins,
+    put_role_pins,
+)
 from apis.shared.auth import User
 from apis.shared.rbac.admin_service import get_app_role_admin_service
 
@@ -51,6 +63,9 @@ async def _load_role(role_id: str):
 async def _respond(role, admin: User) -> RoleAgentPinsResponse:
     pins = await list_role_pins(role.role_id)
     rows, unavailable = await resolve_role_pins(role, pins, admin)
+    # #748 — what other roles lock. Advisory context, not a limit; see
+    # ``count_locked_outside`` for why the union cannot be capped.
+    locked_elsewhere, locked_elsewhere_roles = await count_locked_outside(role.role_id)
     return RoleAgentPinsResponse(
         role_id=role.role_id,
         role_label=role.display_name or role.role_id,
@@ -58,6 +73,8 @@ async def _respond(role, admin: User) -> RoleAgentPinsResponse:
         # travels with the data to any other surface that renders it.
         fallback_only=role.role_id == "default",
         unmapped=not role.jwt_role_mappings,
+        locked_elsewhere=locked_elsewhere,
+        locked_elsewhere_roles=locked_elsewhere_roles,
         pins=rows,
         unavailable=unavailable,
     )

@@ -23,6 +23,7 @@ import { AppRole } from '../../roles/models/app-role.model';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import {
   AdminListingRow,
+  LOCK_WARN_THRESHOLD,
   MAX_ROLE_PINS,
   RoleAgentPinRow,
 } from '../models/marketplace.model';
@@ -146,6 +147,42 @@ interface StagedPin {
           </div>
         }
 
+        <!--
+          #748 — locking friction. Two separate facts, and the second is the one an admin
+          cannot work out for themselves: their own locked count, and what every other
+          role already locks. A member's shelf is the union across the roles they match.
+        -->
+        @if (lockWarning() || lockedElsewhere()) {
+          <div
+            role="status"
+            class="mb-4 rounded-2xl border px-4 py-3 text-sm/6"
+            [class]="
+              lockWarning()
+                ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200'
+                : 'border-gray-200 bg-gray-50 text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'
+            "
+          >
+            @if (lockWarning()) {
+              <span class="font-semibold">
+                {{ lockedCount() }} of {{ staged().length }} seeds are locked.
+              </span>
+              Members cannot remove a locked agent — it is in their sidebar for good. Lock
+              the ones that genuinely must be there and leave the rest removable, or Pinned
+              stops being the user's own shelf.
+            }
+            @if (lockedElsewhere()) {
+              <span [class]="lockWarning() ? 'mt-2 block' : ''">
+                {{ lockedElsewhereRoles() }}
+                other {{ lockedElsewhereRoles() === 1 ? 'role locks' : 'roles lock' }}
+                {{ lockedElsewhere() }} more.
+                A member who matches several roles gets the union of all of them, and a
+                lock from any one role wins — so the shelf an individual ends up with can
+                be larger than any single role's list.
+              </span>
+            }
+          </div>
+        }
+
         @if (unavailable().length) {
           <div
             role="status"
@@ -172,6 +209,11 @@ interface StagedPin {
             <div class="mb-3 flex items-center justify-between gap-4">
               <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">
                 Seeded for {{ roleLabel() }} ({{ staged().length }}/{{ maxPins }})
+                @if (lockedCount()) {
+                  <span class="ml-2 text-sm/6 font-normal text-gray-500 dark:text-gray-400">
+                    · {{ lockedCount() }} locked
+                  </span>
+                }
               </h2>
               <div class="flex items-center gap-2">
                 @if (dirty()) {
@@ -401,6 +443,7 @@ export class MarketplaceDefaultPinsPage implements OnInit {
   private dialog = inject(Dialog);
 
   readonly maxPins = MAX_ROLE_PINS;
+  readonly lockWarnThreshold = LOCK_WARN_THRESHOLD;
 
   readonly roles = signal<AppRole[]>([]);
   readonly roleId = signal('');
@@ -408,6 +451,8 @@ export class MarketplaceDefaultPinsPage implements OnInit {
   readonly fallbackOnly = signal(false);
   readonly unmapped = signal(false);
   readonly unavailable = signal<string[]>([]);
+  readonly lockedElsewhere = signal(0);
+  readonly lockedElsewhereRoles = signal(0);
   readonly staged = signal<StagedPin[]>([]);
   readonly listings = signal<AdminListingRow[]>([]);
   readonly loading = signal(true);
@@ -429,6 +474,17 @@ export class MarketplaceDefaultPinsPage implements OnInit {
   readonly dirty = computed(() => this.fingerprint() !== this.saved());
 
   readonly isFull = computed(() => this.staged().length >= MAX_ROLE_PINS);
+
+  /**
+   * Locked-seed friction (#748). There is deliberately **no cap** — see
+   * `count_locked_outside` in the backend for why the union across a user's roles cannot
+   * be bounded at write time. What the console can do is make the cost visible, because
+   * an admin weighing "seed" against "seed locked" otherwise has no reason not to lock:
+   * locking guarantees the rollout lands and the cost falls on someone else's sidebar.
+   */
+  readonly lockedCount = computed(() => this.staged().filter((pin) => pin.locked).length);
+
+  readonly lockWarning = computed(() => this.lockedCount() > LOCK_WARN_THRESHOLD);
 
   readonly candidates = computed(() => {
     const already = new Set(this.staged().map((pin) => pin.agentId));
@@ -474,6 +530,8 @@ export class MarketplaceDefaultPinsPage implements OnInit {
       this.fallbackOnly.set(response.fallbackOnly);
       this.unmapped.set(response.unmapped);
       this.unavailable.set(response.unavailable ?? []);
+      this.lockedElsewhere.set(response.lockedElsewhere ?? 0);
+      this.lockedElsewhereRoles.set(response.lockedElsewhereRoles ?? 0);
       this.savedPins.set(response.pins ?? []);
       this.staged.set(
         (response.pins ?? []).map((row) => ({
