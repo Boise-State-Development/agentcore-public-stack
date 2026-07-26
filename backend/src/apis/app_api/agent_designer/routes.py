@@ -163,6 +163,13 @@ def _agent_response(assistant, *, permission: Optional[str] = None,
         # Dropped rather than blanked: every route here serves the model with
         # ``response_model_exclude_none``, so the key is simply absent for a viewer.
         view.pop("instructions", None)
+        # The drift baseline (#744) is a hash *of* the instructions, so it rides the same
+        # gate. On its own it is not reversible, but it would confirm a guessed prompt for
+        # anyone who could produce one — which is exactly what dropping ``instructions``
+        # above exists to prevent. Admins read it through the admin listings projection,
+        # never through here.
+        if isinstance(view.get("listing"), dict):
+            view["listing"].pop("approvedInstructionsHash", None)
     if permission is not None:
         view["userPermission"] = permission
     if is_shared_with_me is not None:

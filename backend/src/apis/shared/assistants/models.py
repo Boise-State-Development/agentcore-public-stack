@@ -25,6 +25,19 @@ ReportReason = Literal["inaccurate", "broken", "inappropriate", "other"]
 # warrants delisting, the admin takes the Agent down and that is a separate recorded act.
 ReportState = Literal["open", "resolved", "dismissed"]
 
+# How much a published listing has drifted from what the reviewer approved. Absent (``None``)
+# means no drift detected, or the question does not apply because the listing is not published.
+#
+# **The two values are not the same claim, and the UI must not merge them.**
+# ``instructions`` is *measured*: the Agent's instructions hash differs from the one recorded
+# at approval, so behavior definitely changed. ``edited`` is *inferred*: the record was written
+# after the review timestamp, but we do not know what changed — it could be a rename, or an
+# admin's own D13 presentation edit, both harmless. Only listings approved before the hash
+# baseline shipped can report ``edited``; everything approved since resolves to ``instructions``
+# or nothing. Rendering the weak signal with the strong one's urgency is how a governance
+# marker gets learned-ignored.
+ListingDrift = Literal["instructions", "edited"]
+
 # Severity order for the queue sweep (D15). ``inappropriate`` first for the reason above.
 REPORT_REASON_SEVERITY: Dict[str, int] = {
     "inappropriate": 0,
@@ -116,6 +129,15 @@ class AgentListing(BaseModel):
         None,
         alias="reviewNote",
         description="Reviewer's reason; rendered on the author's own card so they never have to ask",
+    )
+    approved_instructions_hash: Optional[str] = Field(
+        None,
+        alias="approvedInstructionsHash",
+        description=(
+            "SHA-256 of the Agent's instructions as they read at approval — the baseline for "
+            "the post-approval drift marker. Absent on listings approved before the marker "
+            "shipped, which is why the read side falls back to a timestamp comparison."
+        ),
     )
     admin_edits: List[AdminEdit] = Field(
         default_factory=list, alias="adminEdits", description="Append-only log of admin presentation edits (D13)"
@@ -629,6 +651,14 @@ class AdminListingRow(BaseModel):
     reviewed_at: Optional[str] = Field(None, alias="reviewedAt", description="ISO 8601 timestamp of the last review")
     review_note: Optional[str] = Field(None, alias="reviewNote", description="Most recent reviewer note")
     updated_at: str = Field(..., alias="updatedAt", description="Audit trail for post-approval drift (D2)")
+    drift: Optional[ListingDrift] = Field(
+        None,
+        description=(
+            "Post-approval drift, derived server-side (see ``ListingDrift``): ``instructions`` "
+            "= measured behavior change, ``edited`` = record changed but cause unknown, absent "
+            "= no drift or not applicable. Derived rather than stored so it can never go stale."
+        ),
+    )
     admin_edits: List[AdminEdit] = Field(default_factory=list, alias="adminEdits", description="Admin edit log (D13)")
 
 

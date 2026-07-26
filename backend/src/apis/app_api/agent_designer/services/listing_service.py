@@ -24,6 +24,7 @@ Three rules are enforced here and nowhere else:
 the rest. Publisher is a name on a shelf.
 """
 
+import hashlib
 import logging
 import os
 from datetime import datetime, timezone
@@ -364,16 +365,21 @@ async def review_listing(
             raise ListingError(f"Unknown publisher '{publisher_id}'.", status_code=400)
 
     now = _now()
-    listing = assistant.listing.model_copy(
-        update={
-            "state": target,
-            "category": category or assistant.listing.category,
-            "publisher_id": publisher_id or assistant.listing.publisher_id,
-            "reviewed_at": now,
-            "reviewed_by": admin.user_id,
-            "review_note": note or None,
-        }
-    )
+    changes = {
+        "state": target,
+        "category": category or assistant.listing.category,
+        "publisher_id": publisher_id or assistant.listing.publisher_id,
+        "reviewed_at": now,
+        "reviewed_by": admin.user_id,
+        "review_note": note or None,
+    }
+    # Approval — and only approval — establishes the behavior baseline the drift marker
+    # compares against (#744). ``request_changes`` deliberately leaves any existing hash
+    # alone: it does not publish anything, so it has no baseline to set, and clearing the
+    # previous one would blind the marker on a listing that is still live in the store.
+    if target == "published":
+        changes["approved_instructions_hash"] = _instructions_hash(assistant)
+    listing = assistant.listing.model_copy(update=changes)
     await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
     logger.info(f"⚖️ Agent {agent_id} review by {admin.user_id}: {decision} → {target}")
     return listing
@@ -492,6 +498,50 @@ async def list_admin_listings(state: Optional[str] = None) -> Tuple[List[AdminLi
     return rows, pending
 
 
+def _instructions_hash(assistant: Assistant) -> str:
+    """SHA-256 of an Agent's instructions — the drift marker's behavior baseline (#744).
+
+    Hashed rather than stored verbatim: the listing block is read on every admin table
+    load, and instructions run to thousands of tokens. We only ever need to answer "same
+    or not", never "what changed" — a diff view would read the live record anyway.
+    """
+    return hashlib.sha256((assistant.instructions or "").encode("utf-8")).hexdigest()
+
+
+def _drift(assistant: Assistant, listing: AgentListing) -> Optional[str]:
+    """Whether a published listing has drifted from what the reviewer approved (#744).
+
+    D2 deliberately does not re-review edits, and there is no versioning — an approved
+    author may rewrite instructions and the new behavior is live immediately. That is
+    defensible for an Agent someone *chose* to pin; it reads differently once an admin has
+    **locked** it into a role's sidebar (D9), because then the affected user cannot opt out
+    either. This marker does not add a gate; it gives the curator a reason to look.
+
+    Only ``published`` listings can drift. A draft or an in-review submission has no
+    approved state to differ from, and a taken-down one is already off the shelf.
+
+    ⚠️ **The timestamp fallback is deliberately the weaker claim.** ``updated_at`` bumps on
+    *every* write to the record, including an admin's own D13 presentation edit (which does
+    not touch ``reviewed_at``) and a harmless author rename. Reporting that as "behavior
+    changed" would have admins chasing their own typo fixes. It is reported as ``edited``
+    and must render as the softer signal. Listings approved since the hash shipped never
+    reach the fallback — ``review_listing`` writes the baseline on the way in.
+    """
+    if listing.state != "published":
+        return None
+
+    if listing.approved_instructions_hash:
+        return "instructions" if _instructions_hash(assistant) != listing.approved_instructions_hash else None
+
+    # Legacy listing, approved before the baseline existed. ``review_listing`` writes
+    # ``updated_at`` from the same ``now`` as ``reviewed_at``, so a freshly approved record
+    # compares equal and only a later write can exceed it. Both are ISO 8601 UTC, so the
+    # string comparison is chronological.
+    if listing.reviewed_at and assistant.updated_at > listing.reviewed_at:
+        return "edited"
+    return None
+
+
 def _to_row(assistant: Assistant, publisher: Optional[PublisherProfile]) -> AdminListingRow:
     listing = assistant.listing
     if listing is None:  # callers filter; belt-and-braces rather than a stripped assert
@@ -512,5 +562,6 @@ def _to_row(assistant: Assistant, publisher: Optional[PublisherProfile]) -> Admi
         reviewed_at=listing.reviewed_at,
         review_note=listing.review_note,
         updated_at=assistant.updated_at,
+        drift=_drift(assistant, listing),
         admin_edits=listing.admin_edits,
     )
