@@ -82,8 +82,36 @@ pending count badges the admin nav so the work stays visible to the people who a
 
 **Review gates the listing, not subsequent edits.** An approved author can revise instructions
 freely afterward. Re-review on every edit would make iteration miserable; the accepted risk is that a
-listing can drift from what was approved. Mitigation is an audit trail (`updatedAt` surfaced in the
-admin listings table), not a gate. Revisit if it is ever abused.
+listing can drift from what was approved. Mitigation is visibility, not a gate.
+
+⚠️ **That risk got sharper when D9 added locked pins, and the mitigation had to get sharper with
+it.** "No re-review on edit" is entirely defensible for an Agent someone *chose* to pin. It reads
+differently once an admin has pinned it *for* them and removed the opt-out: the author rewrites the
+instructions, the new behavior is live immediately for every member of the role, and the affected
+user cannot even dismiss it. Each of these decisions was reasonable alone; none was evaluated against
+the others.
+
+So approval records a **SHA-256 of the instructions it approved** (`listing.approvedInstructionsHash`),
+and the admin Listings table marks any published listing whose current instructions no longer match.
+This is still not a gate — it is the curator's reason to look.
+
+The marker reports **two distinct claims and must never merge them**:
+
+| Value | Means | Basis |
+|---|---|---|
+| `instructions` | Behavior definitely changed after approval | Measured — hash mismatch |
+| `edited` | The record changed after review; cause unknown | Inferred — `updatedAt` > `reviewedAt` |
+
+The inferred value exists only for listings approved before the hash shipped — which is precisely the
+already-published, possibly-locked back catalogue this decision is about, so a hash-only marker would
+have been blind exactly where it mattered. It is deliberately the weaker signal: `updatedAt` bumps on
+every write, including an admin's own D13 presentation edit and a harmless author rename. Reporting
+those as "behavior changed" would have admins chasing their own typo fixes, and a governance marker
+that cries wolf is one that gets learned-ignored. Everything approved since resolves to `instructions`
+or to nothing.
+
+Still deliberately absent: versioning, changelogs, and re-queueing on edit. Revisit if the marker
+shows this is actually being abused rather than merely possible.
 
 ## D3 — `listing` is separate from `visibility`
 
@@ -771,6 +799,8 @@ rather than restating the checks.
 - **No popularity ranking.** Newest-first plus a curated front, honestly labeled.
 - **No cross-tenant or external publishing.** The store is institution-scoped.
 - **No agent versioning or changelogs.** A published Agent is a live pointer; updates are immediate.
+  This composes with "no re-review on edit" (D2) and locked pins (D9) into a real governance gap —
+  see D2 for the drift marker that closes most of it without building versioning.
 
 ## Resolved
 

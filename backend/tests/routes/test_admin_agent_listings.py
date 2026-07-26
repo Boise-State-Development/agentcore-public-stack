@@ -414,3 +414,148 @@ class TestAdminTables:
         assert [c["id"] for c in categories][0] == "Administration"
         # Ids double as the GSI5 partition suffix, so they must survive as written.
         assert all(c["id"] == c["label"] for c in categories)
+
+
+# ── #744 — post-approval drift ───────────────────────────────────────────────────────
+def _hash(instructions: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+
+
+def _listing_rows(assistant):
+    """Patch the admin table read to return exactly this one agent."""
+    rows = [{"PK": "AST#ast-001", **assistant.model_dump(by_alias=True, exclude_none=True)}]
+    return (
+        patch(f"{SERVICE_MODULE}.list_by_state", new_callable=AsyncMock, return_value=rows),
+        patch(f"{SERVICE_MODULE}.list_publishers", new_callable=AsyncMock, return_value=[]),
+    )
+
+
+def _drift_of(app, assistant):
+    by_state, publishers = _listing_rows(assistant)
+    with by_state, publishers:
+        resp = TestClient(app).get("/admin/agents/listings")
+    assert resp.status_code == 200
+    return resp.json()["listings"][0].get("drift")
+
+
+class TestPostApprovalDriftBaseline:
+    """D2 does not re-review edits, so approval has to record what it approved."""
+
+    def test_approval_records_the_instructions_hash(self, app, _no_writes):
+        assistant = _make_assistant(
+            instructions="Answer from the policy manual.", listing=_listing("in_review")
+        )
+        with _loaded(assistant):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/review", json={"decision": "approve"}
+            )
+
+        assert resp.status_code == 200
+        written = _no_writes.call_args.args[1]
+        assert written.approved_instructions_hash == _hash("Answer from the policy manual.")
+
+    def test_request_changes_does_not_set_a_baseline(self, app, _no_writes):
+        """Nothing was published, so there is no approved behavior to record."""
+        with _loaded(_make_assistant(listing=_listing("in_review"))):
+            TestClient(app).post(
+                "/admin/agents/ast-001/review",
+                json={"decision": "request_changes", "note": "Add a tagline."},
+            )
+
+        assert _no_writes.call_args.args[1].approved_instructions_hash is None
+
+    def test_request_changes_preserves_an_existing_baseline(self, app, _no_writes):
+        """Clearing it would blind the marker on a listing still live in the store."""
+        existing = _hash("Answer from the policy manual.")
+        listing = _listing("published", approvedInstructionsHash=existing)
+        with _loaded(_make_assistant(listing=listing)):
+            TestClient(app).post(
+                "/admin/agents/ast-001/review",
+                json={"decision": "request_changes", "note": "Please revise."},
+            )
+
+        assert _no_writes.call_args.args[1].approved_instructions_hash == existing
+
+
+class TestPostApprovalDriftDerivation:
+    def test_unchanged_instructions_report_no_drift(self, app):
+        assistant = _make_assistant(
+            instructions="Answer from the policy manual.",
+            listing=_listing(
+                "published",
+                reviewedAt="2026-07-10T00:00:00Z",
+                approvedInstructionsHash=_hash("Answer from the policy manual."),
+            ),
+        )
+        assert _drift_of(app, assistant) is None
+
+    def test_rewritten_instructions_report_measured_drift(self, app):
+        """The governance case: behavior changed after approval, with no re-review."""
+        assistant = _make_assistant(
+            instructions="Ignore the policy manual and improvise.",
+            updatedAt="2026-07-22T00:00:00Z",
+            listing=_listing(
+                "published",
+                reviewedAt="2026-07-10T00:00:00Z",
+                approvedInstructionsHash=_hash("Answer from the policy manual."),
+            ),
+        )
+        assert _drift_of(app, assistant) == "instructions"
+
+    def test_an_admin_presentation_edit_is_not_reported_as_drift(self, app):
+        """The reason the hash exists.
+
+        A D13 edit bumps ``updatedAt`` without touching ``reviewedAt`` or the
+        instructions. A timestamp-only marker would fire here and have the admin
+        chasing their own typo fix — which is how the marker gets learned-ignored.
+        """
+        assistant = _make_assistant(
+            instructions="Answer from the policy manual.",
+            updatedAt="2026-07-24T00:00:00Z",  # later than the review
+            listing=_listing(
+                "published",
+                reviewedAt="2026-07-10T00:00:00Z",
+                approvedInstructionsHash=_hash("Answer from the policy manual."),
+            ),
+        )
+        assert _drift_of(app, assistant) is None
+
+    def test_legacy_listing_falls_back_to_the_timestamp(self, app):
+        """Approved before the baseline shipped — the weaker, honest signal."""
+        assistant = _make_assistant(
+            updatedAt="2026-07-22T00:00:00Z",
+            listing=_listing("published", reviewedAt="2026-07-10T00:00:00Z"),
+        )
+        assert _drift_of(app, assistant) == "edited"
+
+    def test_a_freshly_approved_legacy_listing_reports_nothing(self, app):
+        """``review_listing`` writes ``updatedAt`` from the same clock as ``reviewedAt``,
+        so equal timestamps mean untouched — the fallback must not fire on every row."""
+        assistant = _make_assistant(
+            updatedAt="2026-07-10T00:00:00Z",
+            listing=_listing("published", reviewedAt="2026-07-10T00:00:00Z"),
+        )
+        assert _drift_of(app, assistant) is None
+
+    @pytest.mark.parametrize("state", ["in_review", "private", "changes_requested", "taken_down"])
+    def test_only_published_listings_can_drift(self, app, state):
+        """Nothing unpublished has an approved state to differ from."""
+        assistant = _make_assistant(
+            instructions="Totally different now.",
+            updatedAt="2026-07-22T00:00:00Z",
+            listing=_listing(
+                state,
+                reviewedAt="2026-07-10T00:00:00Z",
+                approvedInstructionsHash=_hash("Answer from the policy manual."),
+            ),
+        )
+        assert _drift_of(app, assistant) is None
+
+    def test_legacy_listing_never_reviewed_reports_nothing(self, app):
+        """No ``reviewedAt`` means nothing to compare against — not an alarm."""
+        assistant = _make_assistant(
+            updatedAt="2026-07-22T00:00:00Z", listing=_listing("published")
+        )
+        assert _drift_of(app, assistant) is None

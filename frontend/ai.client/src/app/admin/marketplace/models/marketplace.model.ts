@@ -26,6 +26,45 @@ export type { AdminEdit, ListingState };
 export { LISTING_STATE_CLASSES, LISTING_STATE_LABELS };
 
 /**
+ * How far a published listing has drifted from what the reviewer approved (#744).
+ *
+ * Unlike `ListingState` this is admin-only vocabulary — it answers a curator's question
+ * ("has this changed under me?"), not an author's, so it is defined here rather than in
+ * the shared store model.
+ *
+ * **These are two different claims and are styled differently on purpose.**
+ * `'instructions'` is measured: the instructions hash differs from the one recorded at
+ * approval, so behavior definitely changed — that is the governance signal D2's "no
+ * re-review on edit" non-goal leaves uncovered, and it is worth an admin's attention.
+ * `'edited'` is inferred from timestamps on listings approved before the hash baseline
+ * existed; the cause is unknown and is just as likely to be a rename or an admin's own
+ * D13 presentation edit. Rendering the weak one as urgently as the strong one is how the
+ * whole marker gets learned-ignored, so it stays visually quieter.
+ */
+export type ListingDrift = 'instructions' | 'edited';
+
+export const LISTING_DRIFT_LABELS: Record<ListingDrift, string> = {
+  instructions: 'Instructions changed',
+  edited: 'Edited since review',
+};
+
+export const LISTING_DRIFT_CLASSES: Record<ListingDrift, string> = {
+  instructions: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+  edited: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+};
+
+/** The hover explanation for each marker — the label alone does not say what to do. */
+export const LISTING_DRIFT_TOOLTIPS: Record<ListingDrift, string> = {
+  instructions:
+    "This agent's instructions differ from the version that was approved. Its behavior " +
+    'has changed since review, and any locked role pins cannot be opted out of.',
+  edited:
+    'This listing was edited after it was reviewed, but it predates change tracking, so ' +
+    'we cannot tell whether its behavior changed. It may only be a rename or a ' +
+    'presentation fix.',
+};
+
+/**
  * The store-front row is the *same* shelf shape Discover renders, deliberately: an admin
  * curating the featured row should be looking at exactly the tile a user will see.
  */
@@ -73,6 +112,16 @@ export interface AdminListingRow {
   reviewedAt?: string;
   reviewNote?: string;
   updatedAt: string;
+  /**
+   * Post-approval drift, derived server-side (#744). Only ever set on a published listing.
+   *
+   * The two values are different claims and must not render alike. `'instructions'` is
+   * *measured* — the instructions hash differs from the one recorded at approval, so
+   * behavior definitely changed. `'edited'` is *inferred* — the record was written after
+   * the review, but the cause is unknown and may be an admin's own presentation edit.
+   * Only listings approved before the hash baseline shipped can report `'edited'`.
+   */
+  drift?: ListingDrift;
   adminEdits: AdminEdit[];
 }
 

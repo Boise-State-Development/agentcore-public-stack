@@ -9,11 +9,18 @@ import {
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroRectangleStack, heroCheckBadge } from '@ng-icons/heroicons/outline';
+import {
+  heroRectangleStack,
+  heroCheckBadge,
+  heroExclamationTriangle,
+} from '@ng-icons/heroicons/outline';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import {
   AdminListingRow,
+  LISTING_DRIFT_CLASSES,
+  LISTING_DRIFT_LABELS,
+  LISTING_DRIFT_TOOLTIPS,
   LISTING_STATE_CLASSES,
   LISTING_STATE_LABELS,
   ListingState,
@@ -44,7 +51,9 @@ import {
   selector: 'app-marketplace-listings',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, AgentTileComponent, TooltipDirective],
-  providers: [provideIcons({ heroRectangleStack, heroCheckBadge })],
+  providers: [
+    provideIcons({ heroRectangleStack, heroCheckBadge, heroExclamationTriangle }),
+  ],
   template: `
     <div class="min-h-dvh">
       <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
@@ -165,12 +174,40 @@ import {
                     </td>
                     <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ row.category }}</td>
                     <td class="px-4 py-3">
-                      <span
-                        class="inline-flex rounded-lg px-2 py-0.5 text-xs font-semibold"
-                        [class]="stateClasses[row.state]"
-                      >
-                        {{ stateLabels[row.state] }}
-                      </span>
+                      <div class="flex flex-col items-start gap-1">
+                        <span
+                          class="inline-flex rounded-lg px-2 py-0.5 text-xs font-semibold"
+                          [class]="stateClasses[row.state]"
+                        >
+                          {{ stateLabels[row.state] }}
+                        </span>
+                        <!--
+                          Post-approval drift (#744). Sits under the state badge rather than
+                          in its own column: it only ever applies to published rows, so a
+                          column would be mostly empty and would push the table wider.
+                        -->
+                        @if (row.drift; as drift) {
+                          <span
+                            class="inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-xs font-medium"
+                            [class]="driftClasses[drift]"
+                            [appTooltip]="driftTooltips[drift]"
+                            appTooltipPosition="top"
+                          >
+                            <!--
+                              The icon is only on the measured signal. The inferred one is
+                              a maybe, and a warning triangle would overstate it.
+                            -->
+                            @if (drift === 'instructions') {
+                              <ng-icon
+                                name="heroExclamationTriangle"
+                                class="size-3.5"
+                                aria-hidden="true"
+                              />
+                            }
+                            {{ driftLabels[drift] }}
+                          </span>
+                        }
+                      </div>
                     </td>
                     <td class="px-4 py-3 text-right tabular-nums text-gray-600 dark:text-gray-300">
                       {{ row.usageCount.toLocaleString() }}
@@ -216,6 +253,9 @@ export class MarketplaceListingsPage implements OnInit {
   ];
   readonly stateLabels = LISTING_STATE_LABELS;
   readonly stateClasses = LISTING_STATE_CLASSES;
+  readonly driftLabels = LISTING_DRIFT_LABELS;
+  readonly driftClasses = LISTING_DRIFT_CLASSES;
+  readonly driftTooltips = LISTING_DRIFT_TOOLTIPS;
 
   ngOnInit(): void {
     void this.reload();

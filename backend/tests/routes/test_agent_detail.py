@@ -297,3 +297,51 @@ class TestRunnabilityRoute:
         mock_auth_user(app, make_user())
 
         assert self._call(app).status_code == 404
+
+
+# ── #744 — the drift baseline rides the instructions gate ────────────────────────────
+class TestApprovedInstructionsHashIsGated:
+    """A hash *of* the instructions is subject to the same gate as the instructions.
+
+    It is not reversible on its own, but it would confirm a guessed prompt for anyone who
+    could produce one — which is exactly what dropping ``instructions`` for a viewer
+    exists to prevent. Admins read the baseline through the admin listings projection.
+    """
+
+    def _published(self):
+        from apis.shared.assistants.models import AgentListing
+
+        listing = AgentListing.model_validate(
+            {
+                "state": "published",
+                "category": "Administration",
+                "publisherId": "pub-registrar",
+                "approvedInstructionsHash": "deadbeef",
+            }
+        )
+        return _make_assistant(listing=listing)
+
+    @pytest.mark.parametrize("permission", ["owner", "editor"])
+    def test_owner_and_editor_still_see_the_baseline(self, app, make_user, _flags_on, permission):
+        mock_auth_user(app, make_user())
+        body = _get_agent(app, permission, agent=self._published()).json()
+
+        assert body["listing"]["approvedInstructionsHash"] == "deadbeef"
+
+    def test_a_viewer_never_sees_the_baseline(self, app, make_user, _flags_on):
+        mock_auth_user(app, make_user())
+        body = _get_agent(app, "viewer", agent=self._published()).json()
+
+        # Guard premise: if this ever stops holding, the test below proves nothing.
+        assert "instructions" not in body
+        assert "approvedInstructionsHash" not in body["listing"]
+        # A gate, not a truncation — the rest of the listing is public shelf data.
+        assert body["listing"]["state"] == "published"
+        assert body["listing"]["category"] == "Administration"
+
+    def test_the_hash_appears_nowhere_in_a_viewers_payload(self, app, make_user, _flags_on):
+        """Guards the whole response, not one key — the same shape as the prompt guard."""
+        mock_auth_user(app, make_user())
+        resp = _get_agent(app, "viewer", agent=self._published())
+
+        assert "deadbeef" not in resp.text
