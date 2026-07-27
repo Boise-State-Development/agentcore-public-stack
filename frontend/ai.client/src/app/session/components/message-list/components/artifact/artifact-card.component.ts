@@ -16,6 +16,7 @@ import {
 import type { Artifact } from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
+import { parseIso } from '../../../../../utils/date';
 
 /** Visual treatment derived from an artifact's content type. */
 interface ArtifactKind {
@@ -479,7 +480,7 @@ function relativeTime(iso: string): string {
   const day = Math.floor(hr / 24);
   if (day < 7) return `${day}d ago`;
 
-  return new Date(then).toLocaleDateString(undefined, {
+  return parseIso(then).toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
   });

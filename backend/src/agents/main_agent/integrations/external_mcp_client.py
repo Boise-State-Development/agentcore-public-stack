@@ -35,6 +35,7 @@ from agents.main_agent.integrations.oauth_auth import (
     CompositeAuth,
     create_oauth_bearer_auth,
 )
+from apis.shared.timestamps import to_iso
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +373,7 @@ class ExternalMCPIntegration:
                 if allowed_tool_names is not None:
                     cache_key += "|allow:" + ",".join(sorted(allowed_tool_names))
                 tool_version = (
-                    tool.updated_at.isoformat() + "Z" if tool.updated_at else ""
+                    to_iso(tool.updated_at) if tool.updated_at else ""
                 )
 
                 if (

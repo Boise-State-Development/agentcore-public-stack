@@ -50,6 +50,7 @@ import {
 import { UserConnectorsService } from '../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../services/toast/toast.service';
+import { parseIso } from '../utils/date';
 
 /**
  * The reusable "Knowledge base" authoring section — device upload, web-crawl
@@ -685,7 +686,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
    */
   private isDocumentStale(doc: Document): boolean {
     try {
-      const updatedAt = new Date(doc.updatedAt).getTime();
+      const updatedAt = parseIso(doc.updatedAt).getTime();
       return Date.now() - updatedAt > STALE_DOCUMENT_THRESHOLD_MS;
     } catch {
       return true; // Can't parse timestamp — treat as stale

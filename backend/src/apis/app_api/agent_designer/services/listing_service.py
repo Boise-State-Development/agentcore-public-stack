@@ -27,7 +27,6 @@ the rest. Publisher is a name on a shelf.
 import hashlib
 import logging
 import os
-from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from apis.shared.assistants.compat import effective_bindings
@@ -59,6 +58,7 @@ from apis.shared.auth.models import User
 from apis.shared.feature_flags import skills_enabled
 from apis.shared.memory.service import MemorySpaceService
 from apis.shared.skills.repository import get_skill_catalog_repository
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ _EDIT_FIELD_LABELS = {
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 def _current_state(assistant: Assistant) -> Optional[str]:

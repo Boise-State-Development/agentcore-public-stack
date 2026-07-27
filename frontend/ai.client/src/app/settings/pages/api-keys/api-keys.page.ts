@@ -17,6 +17,7 @@ import { ToastService } from '../../../services/toast/toast.service';
 import { ConfigService } from '../../../services/config.service';
 import { ModelService } from '../../../session/services/model/model.service';
 import { ApiKeyService, ApiKey, CreateApiKeyResponse } from './api-key.service';
+import { parseIso } from '../../../utils/date';
 
 type ResponseType = 'non-streaming' | 'streaming';
 type ExampleFormat = 'simple' | 'conversation';
@@ -470,7 +471,7 @@ export class ApiKeysPage {
   readonly isExpired = computed(() => {
     const key = this.apiKey();
     if (!key) return false;
-    return new Date(key.expires_at).getTime() < Date.now();
+    return parseIso(key.expires_at).getTime() < Date.now();
   });
 
   constructor() {
@@ -616,13 +617,13 @@ export class ApiKeysPage {
   }
 
   daysUntil(dateStr: string): string {
-    const diff = Math.ceil((new Date(dateStr).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+    const diff = Math.ceil((parseIso(dateStr).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
     if (diff <= 0) return 'today';
     return `in ${diff} day${diff === 1 ? '' : 's'}`;
   }
 
   formatDate(dateStr: string): string {
-    return new Date(dateStr).toLocaleDateString(undefined, {
+    return parseIso(dateStr).toLocaleDateString(undefined, {
       month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
     });
   }

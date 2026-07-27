@@ -19,7 +19,6 @@ Two authorization rules, and they are deliberately different from each other:
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Tuple
 
 from apis.shared.assistants.icons import (
@@ -38,6 +37,7 @@ from apis.shared.assistants.service import (
     resolve_assistant_permission,
 )
 from apis.shared.auth.models import User
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class AgentIconError(Exception):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 async def _load_for_write(agent_id: str, user: User) -> Assistant:

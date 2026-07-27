@@ -18,6 +18,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { ShareService, ShareResponse } from '../../session/services/share/share.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { parseIso } from '../../utils/date';
 
 export interface ManageSharesDialogData {
   sessionId: string;
@@ -284,7 +285,7 @@ export class ManageSharesDialogComponent implements OnInit {
   protected formatDate(dateString: string): string {
     if (!dateString) return '';
     try {
-      const date = new Date(dateString);
+      const date = parseIso(dateString);
       return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
     } catch {
       return '';

@@ -9,6 +9,7 @@ from apis.shared.rbac.service import get_app_role_service
 from apis.shared.users.repository import UserRepository
 from apis.shared.users.models import UserProfile, UserStatus
 from .models import UserSearchResult, UserSearchResponse, UserPermissionsResponse, UserProfileSyncRequest
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +92,8 @@ async def sync_my_profile(
         )
 
     email_domain = email.split("@")[1] if "@" in email else ""
-    from datetime import datetime, timezone
 
-    now = datetime.now(timezone.utc).isoformat() + "Z"
+    now = utc_now_iso()
 
     profile = UserProfile(
         user_id=current_user.user_id,

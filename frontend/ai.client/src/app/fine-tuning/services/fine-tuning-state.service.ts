@@ -11,6 +11,7 @@ import {
   CreateInferenceJobRequest,
   DownloadResponse,
 } from '../models/fine-tuning.models';
+import { parseIso } from '../../utils/date';
 
 /**
  * State service for the user-facing fine-tuning feature.
@@ -341,6 +342,6 @@ export class FineTuningStateService {
 
   /** Sort jobs by created_at descending (newest first). */
   private sortByCreatedDesc<T extends { created_at: string }>(jobs: T[]): T[] {
-    return [...jobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    return [...jobs].sort((a, b) => parseIso(b.created_at).getTime() - parseIso(a.created_at).getTime());
   }
 }

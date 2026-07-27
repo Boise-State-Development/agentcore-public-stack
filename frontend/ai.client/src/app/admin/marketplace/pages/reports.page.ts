@@ -18,6 +18,7 @@ import {
   ResolveReportDialogData,
   ResolveReportDialogResult,
 } from '../components/resolve-report-dialog.component';
+import { parseIso } from '../../../utils/date';
 
 /**
  * The Reports queue — user-submitted problem reports (D10, D15).
@@ -288,7 +289,7 @@ export class ReportsPage implements OnInit {
   /** Matches the Review queue's subtitle wording, so the two streams read alike. */
   relativeTime(iso?: string): string {
     if (!iso) return 'recently';
-    const then = new Date(iso).getTime();
+    const then = parseIso(iso).getTime();
     if (Number.isNaN(then)) return 'recently';
 
     const days = Math.floor((Date.now() - then) / 86_400_000);

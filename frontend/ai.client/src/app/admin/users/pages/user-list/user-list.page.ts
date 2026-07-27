@@ -16,6 +16,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { UserStateService } from '../../services/user-state.service';
 import { UserListItem, UserStatus } from '../../models';
+import { parseIso } from '../../../../utils/date';
 
 @Component({
   selector: 'app-user-list',
@@ -221,7 +222,7 @@ export class UserListPage implements OnInit {
     if (!isoString) {
       return 'Never';
     }
-    const date = new Date(isoString);
+    const date = parseIso(isoString);
     if (isNaN(date.getTime())) {
       return 'Never';
     }

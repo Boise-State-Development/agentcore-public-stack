@@ -3,13 +3,13 @@
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from typing import List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
 
 from .models import AuthProvider, AuthProviderCreate, AuthProviderUpdate
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ class AuthProviderRepository:
             raise ValueError(f"Auth provider '{data.provider_id}' already exists")
 
         try:
-            now = datetime.now(timezone.utc).isoformat() + "Z"
+            now = utc_now_iso()
 
             provider = AuthProvider(
                 provider_id=data.provider_id,
@@ -213,7 +213,7 @@ class AuthProviderRepository:
                 if hasattr(existing, field_name):
                     setattr(existing, field_name, value)
 
-            existing.updated_at = datetime.now(timezone.utc).isoformat() + "Z"
+            existing.updated_at = utc_now_iso()
 
             # Store updated provider
             self._table.put_item(Item=existing.to_dynamo_item())

@@ -13,7 +13,6 @@ truth for a seed.
 
 import logging
 import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -78,6 +77,7 @@ from apis.shared.assistants.publishers import (
 )
 from apis.shared.auth import User, require_admin
 from apis.shared.feature_flags import agent_marketplace_enabled
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ router = APIRouter(prefix="/agents", tags=["admin-agent-marketplace"])
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 async def require_marketplace_admin(admin: User = Depends(require_admin)) -> User:

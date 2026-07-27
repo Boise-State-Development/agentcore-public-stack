@@ -11,6 +11,7 @@ from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, ConfigDict
+from apis.shared.timestamps import from_iso, to_iso
 
 
 class FileStatus(str, Enum):
@@ -202,8 +203,8 @@ class FileMetadata(BaseModel):
             "s3Uri": self.s3_uri,
             "source": self.source,
             "status": self.status if isinstance(self.status, str) else self.status.value,
-            "createdAt": self.created_at.isoformat() + "Z",
-            "updatedAt": self.updated_at.isoformat() + "Z",
+            "createdAt": to_iso(self.created_at),
+            "updatedAt": to_iso(self.updated_at),
             "ttl": ttl_value,
         }
 
@@ -224,8 +225,8 @@ class FileMetadata(BaseModel):
             s3_bucket=item.get("s3Bucket", ""),
             status=item.get("status", FileStatus.PENDING),
             source=item.get("source", "upload"),
-            created_at=datetime.fromisoformat(created_at.rstrip("Z")) if created_at else datetime.now(timezone.utc),
-            updated_at=datetime.fromisoformat(updated_at.rstrip("Z")) if updated_at else datetime.now(timezone.utc),
+            created_at=from_iso(created_at) if created_at else datetime.now(timezone.utc),
+            updated_at=from_iso(updated_at) if updated_at else datetime.now(timezone.utc),
             ttl=item.get("ttl"),
         )
 
@@ -252,7 +253,7 @@ class UserFileQuota(BaseModel):
             "userId": self.user_id,
             "totalBytes": self.total_bytes,
             "fileCount": self.file_count,
-            "updatedAt": self.updated_at.isoformat() + "Z",
+            "updatedAt": to_iso(self.updated_at),
         }
 
     @classmethod
@@ -263,7 +264,7 @@ class UserFileQuota(BaseModel):
             user_id=item.get("userId", ""),
             total_bytes=int(item.get("totalBytes", 0)),
             file_count=int(item.get("fileCount", 0)),
-            updated_at=datetime.fromisoformat(updated_at.rstrip("Z")) if updated_at else datetime.now(timezone.utc),
+            updated_at=from_iso(updated_at) if updated_at else datetime.now(timezone.utc),
         )
 
 
@@ -377,7 +378,7 @@ class FileResponse(BaseModel):
             session_id=meta.session_id,
             s3_uri=meta.s3_uri,
             status=meta.status if isinstance(meta.status, str) else meta.status.value,
-            created_at=meta.created_at.isoformat() + "Z",
+            created_at=to_iso(meta.created_at),
         )
 
 

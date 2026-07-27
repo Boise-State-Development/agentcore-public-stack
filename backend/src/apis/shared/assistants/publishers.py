@@ -22,10 +22,10 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .models import PublisherProfile
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ _PARTITION = "AGENT_PUBLISHERS"
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 def _table():

@@ -10,16 +10,16 @@ PK becomes ``USER_MENU_LINKS#<org_id>`` without touching the SK shape.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from apis.shared.timestamps import utc_now_iso
 
 LinkKind = Literal["external", "modal"]
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 def _validate_http_url(value: Optional[str]) -> Optional[str]:

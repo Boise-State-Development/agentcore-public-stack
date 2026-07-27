@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Any, List, Optional
 
 from apis.app_api.web_sources.models import CrawlJob, CrawlJobStatus, CrawlSettings
+from apis.shared.timestamps import from_iso
 
 logger = logging.getLogger(__name__)
 
@@ -187,8 +188,7 @@ def is_crawl_stale(job: CrawlJob) -> bool:
     removable or a zombie web source could never be cleared from the UI.
     """
     try:
-        started_str = job.started_at.rstrip("Z")
-        started = datetime.fromisoformat(started_str).replace(tzinfo=timezone.utc)
+        started = from_iso(job.started_at)
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         return elapsed > _STALE_RUNNING_SECONDS
     except (ValueError, AttributeError) as e:

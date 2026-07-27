@@ -12,6 +12,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { MemoryService } from './services/memory.service';
 import { MemoriesResponse } from './models/memory.model';
+import { parseIso } from '../utils/date';
 
 /**
  * Represents a parsed preference with structured display
@@ -685,7 +686,7 @@ export class MemoryDashboardPage {
     if (!dateString) return '';
 
     try {
-      const date = new Date(dateString);
+      const date = parseIso(dateString);
       const now = new Date();
       const diffMs = now.getTime() - date.getTime();
       const diffSecs = Math.floor(diffMs / 1000);

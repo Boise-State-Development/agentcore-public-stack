@@ -6,8 +6,8 @@ Centralized status update logic with error message formatting.
 import logging
 import os
 import traceback
-from datetime import datetime, timezone
 from typing import Optional, Tuple, Literal
+from apis.shared.timestamps import utc_now_iso
 
 # Type alias for document processing status (duplicated from models.py for standalone use)
 DocumentStatus = Literal['uploading', 'chunking', 'embedding', 'complete', 'failed']
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def _get_current_timestamp() -> str:
     """Get current timestamp in ISO 8601 format"""
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 async def update_document_status(
     assistant_id: str,
