@@ -252,11 +252,11 @@ Three notes:
   `require_marketplace_admin` (`admin/agents/routes.py:91`). It maps to
   `admin.marketplace`, *not* `admin.roles` — the one place the directory-boundary
   heuristic needs an explicit exception, so it gets an explicit test.
-- **No `:read`/`:write` split in v1.** `admin.costs` and `admin.users` are the
-  only areas where a read-only tier is obviously useful, and both are read-only
-  surfaces already. Adding a verb axis doubles the registry and the UI for one
-  speculative case; the registry is designed so `admin.costs:read` can be added
-  later without reshaping anything.
+- **No `:read`/`:write` split in v1** (decided 2026-07-27). `admin.costs` and
+  `admin.users` are the only areas where a read-only tier is obviously useful,
+  and both are read-only surfaces already. Adding a verb axis doubles the
+  registry and the UI for one speculative case; the registry is designed so
+  `admin.costs:read` can be added later without reshaping anything.
 
 ---
 
@@ -371,18 +371,29 @@ on the scope.
 
 ---
 
-## 8. Open items
+## 8. Resolved decisions (2026-07-27)
 
-- **Audit logging does not exist.** There is no audit trail on role or admin
-  mutations today (grep for `audit` across `shared/rbac/` and the roles router
-  returns nothing). With one superuser that was tolerable; with delegated admins,
-  "who changed this?" becomes a real question. Proposed as PR-5 below, scoped to
-  admin-surface mutations only. Flagging rather than assuming — it may be that
-  this belongs to a broader observability effort instead.
-- **Seeding.** Should the bootstrap seeder ship any example delegated role (e.g.
-  a `content_admin` with `admin.skills` + `admin.system_prompts`)? Leaning no —
-  an unused role that grants admin power is a liability, and the feature is inert
-  and safe with zero scoped roles.
+- **Audit logging is in scope** — PR-5, part of this epic rather than deferred to
+  a broader observability effort. There is no audit trail on role or admin
+  mutations today; with one superuser that was tolerable, with delegated admins
+  "who changed this?" becomes a real question.
+
+  Worth noting the foundation is already half-built: `admin_service` emits
+  structured log records on every mutation — `extra={"event": "app_role_created",
+  "role_id": …, "admin_user_id": …, "admin_email": …}` at `admin_service.py:99`,
+  `:174`, `:218`. That is a log line, not a queryable trail: no retention
+  guarantee, no before/after values, and nothing an admin can read from the
+  console. PR-5 turns the existing emission points into durable records rather
+  than inventing a new instrumentation pass.
+
+- **The ~5-minute scope-revocation lag is accepted** (§4.2). It is the same
+  window that already applies to removing someone from `system_admin`. Recorded
+  as a known property; no distributed-cache work in this epic.
+
+- **No `:read`/`:write` split in v1** — see §5.
+
+- **Seeding: no example delegated role.** An unused role that grants admin power
+  is a liability, and the feature is inert and safe with zero scoped roles.
 
 ---
 
@@ -390,11 +401,11 @@ on the scope.
 
 | PR | Content |
 |---|---|
-| **PR-1** | Data + registry: `granted_admin_scopes` on `AppRole`, `admin_scopes` through `EffectivePermissions`/`UserEffectivePermissions`/`_merge_permissions`, `admin_scopes.py` registry, non-delegable validation in `role_constraints.py` + `admin_service`. Unit tests. **Inert** — nothing reads it yet. |
+| **PR-1** | Data + registry: `granted_admin_scopes` on `AppRole`, `admin_scopes` through `EffectivePermissions`/`UserEffectivePermissions`/`_merge_permissions`, `admin_scopes.py` registry, non-delegable + unknown-scope validation in `role_constraints.py` wired into `admin_service`, `grantedAdminScopes` on the `AppRoleCreate`/`AppRoleUpdate` bodies so the axis round-trips end to end. Unit tests. **Inert** — the value is stored and resolved, but no authorization path reads it. |
 | **PR-2** | Enforcement: `require_admin_scope`, the 15-file alias migration, the I3 write-through guard on `set_roles_for_*`, the §6.3 architecture test. Behavior for `system_admin` unchanged. Also fix the two stale auth docs while the context is loaded — `apis/app_api/admin/README.md` and `apis/shared/auth/RBAC_QUICK_REFERENCE.md` both document helpers that do not exist (`require_roles`, `require_all_roles`, `has_any_role`, `require_faculty`, …) and both describe `require_admin` as "Admin or SuperAdmin". Anyone implementing delegated admin will read them first. |
-| **PR-3** | API surface: `adminScopes` on `/users/me/permissions`, `GET /admin/roles/admin-scopes` registry endpoint, `grantedAdminScopes` on role create/update. Watch the precedent bug here: `UserPermissionsResponse` (`app_api/users/routes.py:37-43`) still omits `skills` even though `UserEffectivePermissions` has carried it for months — a field added to the model and forgotten in the response shape. Add `skills` while in there. |
+| **PR-3** | API surface: `adminScopes` on `/users/me/permissions`, `GET /admin/roles/admin-scopes` registry endpoint. Watch the precedent bug here: `UserPermissionsResponse` (`app_api/users/routes.py:37-43`) still omits `skills` even though `UserEffectivePermissions` has carried it for months — a field added to the model and forgotten in the response shape. Add `skills` while in there. |
 | **PR-4** | SPA: `adminScopes` signal + `hasAdminScope`/`canAccessAdmin`, per-route `adminScopeGuard`, nav filtering, landing resolver, scoped badge refresh, admin-scopes control on the role form. |
-| **PR-5** | (pending the §8 decision) Audit log for admin-surface mutations. |
+| **PR-5** | Audit log for admin-surface mutations (decided in scope, §8). Promotes the existing structured-log emission points into durable, queryable records with before/after values. |
 
 **No feature flag.** The repo's convention is default-on-with-kill-switch, but a
 flag here would add risk rather than remove it: the mechanism is inert until a
