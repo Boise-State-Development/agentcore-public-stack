@@ -1,8 +1,9 @@
 import { Component, ChangeDetectionStrategy, OnInit, computed, inject, signal } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark, heroExclamationTriangle, heroEye } from '@ng-icons/heroicons/outline';
+import { heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash } from '@ng-icons/heroicons/outline';
 import { AgentListingService } from '../services/agent-listing.service';
+import { reachabilityAuthorMessage } from '../models/reachability';
 import {
   AgentCategory,
   AgentListingBlock,
@@ -42,7 +43,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
   selector: 'app-submit-listing-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon],
-  providers: [provideIcons({ heroXMark, heroExclamationTriangle, heroEye })],
+  providers: [provideIcons({ heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash })],
   host: {
     class: 'block',
     '(keydown.escape)': 'onCancel()',
@@ -99,6 +100,18 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
               <p>{{ reason }}</p>
             </div>
           } @else {
+            <!-- Reachability. Deliberately *below* the D7.2 block and *above* the form:
+                 it does not stop the submission, but an author who reads nothing else
+                 should still see that their tile would 404 for everyone else. -->
+            @if (reachabilityWarning(); as warning) {
+              <div
+                class="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-900 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+              >
+                <ng-icon name="heroEyeSlash" class="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+                <p>{{ warning }}</p>
+              </div>
+            }
+
             <div>
               <label for="listing-category" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
                 Category
@@ -232,6 +245,12 @@ export class SubmitListingDialogComponent implements OnInit {
   readonly categories = signal<AgentCategory[]>([]);
   readonly exposedSkills = signal<SkillExposure[]>([]);
   readonly blockReason = signal<string | null>(null);
+  /**
+   * Who will be able to open this once it is shelved. A *warning*, not a block — the
+   * author may legitimately publish a SHARED agent to their team, so this never disables
+   * Submit; it just makes sure "nobody can open my tile" is not discovered afterwards.
+   */
+  readonly reachabilityWarning = signal<string | null>(null);
   readonly loading = signal(true);
   readonly submitting = signal(false);
   readonly error = signal<string | null>(null);
@@ -270,6 +289,7 @@ export class SubmitListingDialogComponent implements OnInit {
       this.categories.set(categories);
       this.exposedSkills.set(preflight.exposedSkills ?? []);
       this.blockReason.set(preflight.blockReason ?? null);
+      this.reachabilityWarning.set(reachabilityAuthorMessage(preflight.reachability));
       // Only preselect a category that is still open for new listings.
       if (!categories.some((c) => c.id === this.category())) {
         this.category.set('');

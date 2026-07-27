@@ -566,9 +566,12 @@ async def agent_listing_preflight_endpoint(
     only for reading order — the paths are literal and do not collide.
     """
     try:
-        exposed, block_reason = await preflight_listing(agent_id, current_user)
+        exposed, block_reason, reachability = await preflight_listing(agent_id, current_user)
         return ListingPreflightResponse(
-            agent_id=agent_id, exposed_skills=exposed, block_reason=block_reason
+            agent_id=agent_id,
+            exposed_skills=exposed,
+            block_reason=block_reason,
+            reachability=reachability,
         )
     except ListingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)

@@ -242,7 +242,9 @@ async def _resolve_proposed_publisher(user: User, publisher_id: Optional[str]) -
 
 
 # ── author transitions ───────────────────────────────────────────────────────────────
-async def preflight_listing(agent_id: str, user: User) -> Tuple[List[SkillExposure], Optional[str]]:
+async def preflight_listing(
+    agent_id: str, user: User
+) -> Tuple[List[SkillExposure], Optional[str], str]:
     """Run the D7 checks **without** transitioning, for the submit dialog.
 
     D7.1 asks the dialog to enumerate the exposed skills *before* the author commits,
@@ -252,14 +254,21 @@ async def preflight_listing(agent_id: str, user: User) -> Tuple[List[SkillExposu
 
     Owner-only, like every other author path: the skill exposure is a statement about
     what the *owner's* publication would reveal, and it is not an editor's to see.
+
+    Also returns reachability, which is *not* a D7 check and deliberately not a block:
+    the author is told their store tile will 404 for people who cannot already reach the
+    Agent, and left to decide. Returned even alongside a ``block_reason`` — the two are
+    independent facts and suppressing one behind the other just hides work from the
+    author's next attempt.
     """
     assistant = await _load_for_author(agent_id, user)
+    reachability = _reachability(assistant)
     block_reason = await _memory_space_block_reason(assistant, user)
     # Order mirrors submit_listing: an agent that cannot be published at all is not first
     # walked through a skill-exposure confirmation.
     if block_reason:
-        return [], block_reason
-    return await _exposed_skills(assistant), None
+        return [], block_reason, reachability
+    return await _exposed_skills(assistant), None, reachability
 
 
 async def submit_listing(
@@ -548,6 +557,24 @@ def _drift(assistant: Assistant, listing: AgentListing) -> Optional[str]:
     return None
 
 
+def _reachability(assistant: Assistant) -> str:
+    """Who can actually open this Agent, projected from ``visibility`` (see ``ListingReachability``).
+
+    The store browse read applies no access check, so this is the only thing standing
+    between "approved" and a shelf tile that 404s for everyone but the author. Derived on
+    every read rather than stored — ``visibility`` can change at any time and a cached
+    copy would be wrong exactly when it mattered.
+
+    ⚠️ Advisory only. Publishing a SHARED Agent to a team is legitimate; the fix for the
+    bad case is the author widening visibility, not this function refusing.
+    """
+    if assistant.visibility == "PUBLIC":
+        return "everyone"
+    if assistant.visibility == "SHARED":
+        return "shared_only"
+    return "owner_only"
+
+
 def _to_row(assistant: Assistant, publisher: Optional[PublisherProfile]) -> AdminListingRow:
     listing = assistant.listing
     if listing is None:  # callers filter; belt-and-braces rather than a stripped assert
@@ -569,5 +596,6 @@ def _to_row(assistant: Assistant, publisher: Optional[PublisherProfile]) -> Admi
         review_note=listing.review_note,
         updated_at=assistant.updated_at,
         drift=_drift(assistant, listing),
+        reachability=_reachability(assistant),
         admin_edits=listing.admin_edits,
     )
