@@ -242,6 +242,9 @@ export class AgentsPage implements OnInit {
         agentId: agent.agentId,
         agentName: agent.name,
         listing: agent.listing,
+        tagline: agent.tagline,
+        // Only read to prefill an absent tagline (#749).
+        description: agent.description,
       } satisfies SubmitListingDialogData,
     });
     // The dialog writes through `AgentListingService`, which patches the card itself;

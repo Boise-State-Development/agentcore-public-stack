@@ -1,6 +1,9 @@
 # Agent Designer — a unified authoring surface for composed Agents
 
-**Status:** Draft / proposal (2026-07-07)
+**Status:** ✅ **Implemented** (phases 0–5; Phase 5, Assistant deprecation, closed 2026-07-26).
+Originally drafted 2026-07-07 as a proposal. There is one noun now, and it is Agent: `/assistants*`
+redirects to `/agents` and the old editor is gone. See the phasing table below for per-phase state.
+
 **Author:** (drafted with Claude)
 **Targets branch:** `develop`
 **Supersedes:** the "extend the Assistant editor to bind a Memory Space" assumption in

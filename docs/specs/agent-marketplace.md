@@ -1,6 +1,11 @@
 # Agent Marketplace — a browsable store for published Agents
 
-**Status:** Draft / proposal (2026-07-24)
+**Status:** ✅ **Implemented** (phases 0–8 shipped 2026-07-24 → 2026-07-26). Originally drafted
+2026-07-24 as a proposal. Every decision below describes code that exists; where a decision was
+later revised, the revision is recorded in place rather than by editing history away — see D6
+(runnability, two states not three), D9.7 (locked-pin friction) and D14 (GA). The only deferred item
+is the ranking / full-corpus search note under D10, which belongs to the Registry epic.
+
 **Author:** Phil Merrell (drafted with Claude)
 **Targets branch:** `develop`
 **Supersedes:** [`agent-directory.md`](agent-directory.md) — carries forward D1, D2, D3, D6 and D8;
@@ -54,8 +59,21 @@ across three or more Agents.
 
 **This replaces `agent-directory.md` D7,** which argued that a review queue makes publication stop.
 That argument is real and the mitigation is an operational commitment, not a technical one: a
-**stated review SLA (two business days)** and a pending-count badge on the admin nav so the queue is
-visible rather than discovered.
+**stated review SLA** and a pending-count badge on the admin nav so the queue is visible rather than
+discovered.
+
+**The SLA, committed (was an open question):**
+
+| Queue | Turnaround |
+|---|---|
+| Submissions | **Two business days** |
+| Reports — `inappropriate` | **Same day** |
+| Reports — everything else | **Weekly sweep** |
+
+Phase 8 added reports as a second queue, and they are deliberately not on the same clock. A
+submission is a person waiting to publish; a report is mostly maintenance signal, and `inappropriate`
+is the one that should page a human rather than wait (D15). One number covering both would either
+over-promise on reports or under-promise on submissions.
 
 The lifecycle is a state machine on the listing:
 
@@ -848,13 +866,27 @@ rather than restating the checks.
 - **Publisher identity** — its own admin-managed `PublisherProfile`, proposed by the author and
   owned by the admin, with institution publishing supported so official Agents don't carry a staff
   member's personal name (D12). Display-only, never an access gate.
+- **Quota attribution** — **the invoker pays**, confirmed in code, not inferred.
+  `quota_checker.check_quota(user=current_user, …)`
+  ([`chat/routes.py:1319`](../../backend/src/apis/inference_api/chat/routes.py)) resolves against the
+  caller, and there is no author-side lookup anywhere on the invocation path. Cost rows land on the
+  same person: `PK = USER#{user_id}`
+  ([`sessions/services/metadata.py:157`](../../backend/src/apis/app_api/sessions/services/metadata.py)).
+  So spend and quota agree, and a published Agent does not bill its author for a stranger's run.
+- **Review SLA** — committed, and split by queue. See the table in D2: two business days for
+  submissions, same day for an `inappropriate` report, weekly for the rest.
+- **`tagline` backfill** — **derive and let the author edit**, at submission. Requiring it outright
+  adds a blocking field to every legacy Agent's first submission with no starting point offered,
+  which is friction exactly where publication should be easy.
+
+  ⚠️ Implementing this exposed a second problem the question did not mention: `tagline` was
+  *author-owned on the wire and unsettable in the UI*. The API accepted it and the model said the
+  author owns it, but no Designer control ever wrote one — the same dormant-field shape as the
+  `limits` state (#747). So submission is now where an author sets it, prefilled from the
+  description's first clause (`deriveTagline`). Prefilling is the point rather than the derivation
+  itself: it puts the shelf row in front of the author at the one moment they are looking at what
+  the store will say, so a bad line is one edit away instead of a surprise after publication.
 
 ## Open questions
 
-- **Review SLA.** D2's defense against `agent-directory.md` D7 is operational: a stated turnaround.
-  The owner is settled; the commitment is not.
-- **`tagline` backfill.** New required-ish field on existing agents. Derive from the first clause of
-  `description` at submit time and let the author edit, or require it outright?
-- **Quota attribution.** Confirm the invoker pays for a store-launched run, not the author. The
-  existing per-user model implies yes, but a published Agent is the first case where a stranger's
-  usage is attributable to someone else's configuration.
+*(None outstanding. Everything previously here is resolved above or tracked as its own issue.)*

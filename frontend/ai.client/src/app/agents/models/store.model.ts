@@ -84,6 +84,11 @@ export interface SubmitListingRequest {
   /** Omit to publish under the author's own individual profile (D12). */
   publisherId?: string;
   note?: string;
+  /**
+   * Shelf subtitle (D4). Omit to leave any existing tagline untouched — a resubmission
+   * that does not touch the field must not blank it.
+   */
+  tagline?: string;
 }
 
 /** One skill that publication would make readable (D7.1). */
@@ -224,4 +229,44 @@ export interface SubmitReportResponse {
    * one is now queued.
    */
   replacedExisting: boolean;
+}
+
+/** The shelf subtitle's hard limit — mirrors `SubmitListingRequest.tagline` (D4). */
+export const TAGLINE_MAX = 80;
+
+/**
+ * A starting tagline derived from an Agent's description (D4 backfill, #749).
+ *
+ * `tagline` postdates every Agent that existed before the Marketplace, and the field is
+ * author-owned but was never author-settable — no Designer control wrote it. So a legacy
+ * Agent arrives at submission with nothing for the shelf, and the store falls back to a
+ * truncated `description`, which is exactly the mid-clause row D4 added `tagline` to avoid.
+ *
+ * Rather than requiring the author to invent one, submission prefills from the first
+ * clause of the description and lets them edit it. Deriving is not the point — *showing*
+ * it at the one moment the author is looking at what the shelf will say is. A bad
+ * derivation is then one edit away instead of a surprise after publication.
+ *
+ * "First clause" is the first sentence or clause boundary, whichever comes first, trimmed
+ * of its punctuation. Falls back to a hard truncation only when the text has no boundary
+ * inside the limit — the case a human should be looking at anyway.
+ */
+export function deriveTagline(description: string | undefined | null): string {
+  const text = (description ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= TAGLINE_MAX) return text.replace(/[.;,\s]+$/, '');
+
+  // Prefer a real boundary inside the limit; `.` `;` and `—` all end a clause.
+  const window = text.slice(0, TAGLINE_MAX + 1);
+  const boundary = Math.max(
+    window.lastIndexOf('. '),
+    window.lastIndexOf('; '),
+    window.lastIndexOf(' — '),
+  );
+  if (boundary > 20) return window.slice(0, boundary).replace(/[.;,\s]+$/, '');
+
+  // No boundary worth using — break on the last whole word instead of mid-token.
+  const space = window.lastIndexOf(' ');
+  const cut = space > 20 ? window.slice(0, space) : text.slice(0, TAGLINE_MAX);
+  return cut.replace(/[.;,\s]+$/, '');
 }

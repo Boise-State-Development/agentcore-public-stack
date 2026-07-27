@@ -295,7 +295,13 @@ async def submit_listing(
         review_note=request.note or (previous.review_note if previous else None),
         admin_edits=previous.admin_edits if previous else [],
     )
-    await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
+    # The tagline rides this write rather than a second one (same reason as the D13 patch
+    # path). ``None`` means "leave it alone" — an author resubmitting without touching the
+    # field must not have their existing subtitle blanked.
+    tagline = (request.tagline or "").strip() or None
+    await write_listing(
+        agent_id, listing, assistant.created_at, updated_at=now, tagline=tagline
+    )
     logger.info(f"📨 Agent {agent_id} submitted for review by {user.user_id}")
     return listing, exposed
 
