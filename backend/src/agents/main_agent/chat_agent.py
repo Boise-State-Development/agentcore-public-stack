@@ -88,6 +88,7 @@ class ChatAgent(BaseAgent):
         original_message: Optional[str] = None,
         interrupt_responses: Optional[List[Dict[str, Any]]] = None,
         continue_truncated: bool = False,
+        turn_agent_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -139,5 +140,6 @@ class ChatAgent(BaseAgent):
             main_agent_wrapper=self,
             citations=citations,
             original_message=original_message,
+            turn_agent_id=turn_agent_id,
         ):
             yield event

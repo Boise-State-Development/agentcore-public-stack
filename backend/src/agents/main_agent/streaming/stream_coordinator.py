@@ -943,6 +943,7 @@ class StreamCoordinator:
                             agent=main_agent_wrapper,  # Use wrapper instead of internal agent
                             citations=citations_for_message,  # Pass citations for persistence
                             call_index=idx,  # Nth model call of this turn (prefix fingerprint lookup)
+                            turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
                         )
                     )
 
@@ -2087,6 +2088,7 @@ class StreamCoordinator:
         agent: Any = None,
         citations: Optional[List] = None,
         call_index: Optional[int] = None,
+        turn_agent_id: Optional[str] = None,
     ) -> None:
         """
         Store message-level metadata (token usage, latency, model info, citations)
@@ -2247,6 +2249,16 @@ class StreamCoordinator:
                     prefix_fingerprint = get_prefix_fingerprint(strands_agent, call_index)
                     if prefix_fingerprint:
                         metadata_kwargs["prefixFingerprints"] = prefix_fingerprint
+
+                # Which Agent ran this turn (#756), as another extra field. An
+                # `@`-mention swaps the Agent for one turn, which genuinely re-writes
+                # the cache prefix; recording the id is what lets the cost surfaces tell
+                # that deliberate swap apart from the nondeterministic-ordering
+                # regression the fingerprints exist to catch. Both show
+                # `toolConfigHash` and `systemPromptHash` flipping together, and nothing
+                # else on the row distinguishes them.
+                if turn_agent_id:
+                    metadata_kwargs["turnAgentId"] = turn_agent_id
 
                 message_metadata = MessageMetadata(**metadata_kwargs)
 

@@ -515,6 +515,27 @@ def _derive_cache_observability(
             "cacheStatus": status.value,
             "wastedUsd": round(wasted_usd, 6),
         }
+
+        # #756 — was this prefix re-write *explained*?
+        #
+        # An `@`-mention hands one turn to a different Agent (Marketplace D11), which
+        # swaps the system prompt and toolConfig and so genuinely re-writes the cache
+        # prefix. That spend is real and stays in `wastedUsd` — hiding it would understate
+        # the cost of the mention feature, which is a thing worth measuring on purpose.
+        # What it must not do is look like the nondeterministic-ordering regression the
+        # fingerprints exist to catch: both present as `toolConfigHash` and
+        # `systemPromptHash` flipping together, and until now nothing on the row told them
+        # apart, so expected traffic diluted the signal.
+        #
+        # Recorded here rather than derived on read because this is the only place that
+        # already holds the predecessor row. Compared against the *previous call*, not the
+        # same-prefix match above: the question is "did the Agent change from one turn to
+        # the next", and the same-prefix row is by construction one that did not.
+        own_agent = getattr(message_metadata, "turnAgentId", None)
+        prev_agent = (prev_row or {}).get("turnAgentId")
+        if prev_row is not None and own_agent != prev_agent:
+            result["agentSwitched"] = True
+
         # `cacheGapSeconds` keeps its original meaning — seconds since the
         # previous call — because the anatomy page and its consumers read it as
         # a plain chronology. When the call that actually determined the verdict
@@ -577,6 +598,7 @@ def _emit_cache_metrics(
             model_id=message_metadata.model_info.model_id if message_metadata.model_info else None,
             session_id=session_id,
             cache_status=status,
+            agent_switched=bool(cache_observability.get("agentSwitched")),
         )
     except Exception as e:  # noqa: BLE001 - metrics must never break the write path
         logger.debug("Cache EMF emission skipped: %s", e)

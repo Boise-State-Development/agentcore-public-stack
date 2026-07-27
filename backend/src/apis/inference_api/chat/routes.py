@@ -2152,6 +2152,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 original_message=input_data.message if message_will_be_modified else None,
                 interrupt_responses=interrupt_responses_payload,
                 continue_truncated=is_continuation,
+                # Which Agent ran this turn (#756). Recorded on the cost row so a
+                # deliberate `@`-mention prefix swap is distinguishable from the
+                # nondeterministic-ordering regression the fingerprints exist to catch.
+                # Passed per turn rather than read off the agent: the agent instance is
+                # cached and shared across turns, so per-turn state must never live on it
+                # (see #741/#751).
+                turn_agent_id=input_data.rag_assistant_id,
             ):
                 yield event
                 # Interleave the finished title between agent events (same

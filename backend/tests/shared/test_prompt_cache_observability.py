@@ -216,6 +216,7 @@ class TestEmfEmission:
             "CacheReadTokens",
             "CacheWriteTokens",
             "AvoidableMiss",
+            "AgentSwitchMiss",
             "WastedUsd",
         }
         assert record["CacheReadTokens"] == 1000
@@ -224,6 +225,49 @@ class TestEmfEmission:
         assert record["WastedUsd"] == 0.012346  # rounded to 6 places
         assert record["modelId"].startswith("us.anthropic")
         assert record["cacheStatus"] == "miss_avoidable"
+
+    def test_an_unexplained_avoidable_miss_emits_no_agent_switch(self):
+        """The default. `AvoidableMiss` minus `AgentSwitchMiss` is unexplained waste."""
+        record = json.loads(
+            self._capture(
+                cache_read_tokens=0, cache_write_tokens=5000, avoidable_miss=True
+            )
+        )
+        assert record["AvoidableMiss"] == 1
+        assert record["AgentSwitchMiss"] == 0
+
+    def test_an_agent_switch_miss_is_counted_in_both(self):
+        """A subset, not a reclassification (#756).
+
+        The turn really did pay for a prefix re-write, so it stays in `AvoidableMiss`
+        and `WastedUsd`; `AgentSwitchMiss` is what lets a dashboard subtract the part an
+        `@`-mention explains rather than pretend it did not happen.
+        """
+        record = json.loads(
+            self._capture(
+                cache_read_tokens=0,
+                cache_write_tokens=5000,
+                avoidable_miss=True,
+                wasted_usd=0.01,
+                agent_switched=True,
+            )
+        )
+        assert record["AvoidableMiss"] == 1
+        assert record["AgentSwitchMiss"] == 1
+        assert record["WastedUsd"] == 0.01
+
+    def test_an_agent_switch_without_a_miss_counts_nothing(self):
+        """A switch that still hit the cache is not waste and must not read as any."""
+        record = json.loads(
+            self._capture(
+                cache_read_tokens=5000,
+                cache_write_tokens=0,
+                avoidable_miss=False,
+                agent_switched=True,
+            )
+        )
+        assert record["AvoidableMiss"] == 0
+        assert record["AgentSwitchMiss"] == 0
 
     def test_no_miss_and_defaults(self):
         line = self._capture(
