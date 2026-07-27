@@ -13,6 +13,9 @@ class EffectivePermissions:
     models: List[str] = field(default_factory=list)
     skills: List[str] = field(default_factory=list)
     quota_tier: Optional[str] = None
+    # Delegated admin feature areas. Unlike the three axes above, this one does
+    # NOT absorb grants from `inherits_from` — see `_compute_effective_permissions`.
+    admin_scopes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for DynamoDB storage."""
@@ -21,21 +24,23 @@ class EffectivePermissions:
             "models": self.models,
             "skills": self.skills,
             "quotaTier": self.quota_tier,
+            "adminScopes": self.admin_scopes,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "EffectivePermissions":
         """Create from dictionary (DynamoDB item).
 
-        `skills` defaults to [] for roles persisted before skills existed —
-        they pick up skill grants on their next save/sync (mirror of how a new
-        permission type rolls out for tools/models).
+        `skills` and `admin_scopes` default to [] for roles persisted before
+        those axes existed — they pick the new axis up on their next save/sync
+        (mirror of how a new permission type rolls out for tools/models).
         """
         return cls(
             tools=data.get("tools", []),
             models=data.get("models", []),
             skills=data.get("skills", []),
             quota_tier=data.get("quotaTier"),
+            admin_scopes=data.get("adminScopes", []),
         )
 
 
@@ -67,6 +72,11 @@ class AppRole:
     granted_tools: List[str] = field(default_factory=list)
     granted_models: List[str] = field(default_factory=list)
     granted_skills: List[str] = field(default_factory=list)
+    # Delegated admin feature areas (see `rbac/admin_scopes.py`). Stored as a
+    # plain attribute on the DEFINITION item rather than as `*_GRANT#` items
+    # with a GSI, because nothing needs the reverse lookup and every extra
+    # mapping prefix is another thing `_delete_mapping_items` must know about.
+    granted_admin_scopes: List[str] = field(default_factory=list)
 
     # Metadata
     priority: int = 0
@@ -90,6 +100,7 @@ class AppRole:
             "grantedTools": self.granted_tools,
             "grantedModels": self.granted_models,
             "grantedSkills": self.granted_skills,
+            "grantedAdminScopes": self.granted_admin_scopes,
             "priority": self.priority,
             "isSystemRole": self.is_system_role,
             "enabled": self.enabled,
@@ -112,6 +123,7 @@ class AppRole:
             granted_tools=data.get("grantedTools", []),
             granted_models=data.get("grantedModels", []),
             granted_skills=data.get("grantedSkills", []),
+            granted_admin_scopes=data.get("grantedAdminScopes", []),
             priority=data.get("priority", 0),
             is_system_role=data.get("isSystemRole", False),
             enabled=data.get("enabled", True),
@@ -135,9 +147,10 @@ class UserEffectivePermissions:
     models: List[str]
     quota_tier: Optional[str]
     resolved_at: str
-    # Trailing default so existing positional/kwargs construction sites that
-    # predate skills keep working (they resolve to no skills).
+    # Trailing defaults so existing positional/kwargs construction sites that
+    # predate these axes keep working (they resolve to none of them).
     skills: List[str] = field(default_factory=list)
+    admin_scopes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -147,6 +160,7 @@ class UserEffectivePermissions:
             "tools": self.tools,
             "models": self.models,
             "skills": self.skills,
+            "adminScopes": self.admin_scopes,
             "quotaTier": self.quota_tier,
             "resolvedAt": self.resolved_at,
         }
@@ -170,6 +184,9 @@ class AppRoleCreate(BaseModel):
     granted_tools: List[str] = Field(default_factory=list, alias="grantedTools")
     granted_models: List[str] = Field(default_factory=list, alias="grantedModels")
     granted_skills: List[str] = Field(default_factory=list, alias="grantedSkills")
+    granted_admin_scopes: List[str] = Field(
+        default_factory=list, alias="grantedAdminScopes"
+    )
     priority: int = Field(0, ge=0, le=999)
     enabled: bool = True
 
@@ -188,6 +205,9 @@ class AppRoleUpdate(BaseModel):
     granted_tools: Optional[List[str]] = Field(None, alias="grantedTools")
     granted_models: Optional[List[str]] = Field(None, alias="grantedModels")
     granted_skills: Optional[List[str]] = Field(None, alias="grantedSkills")
+    granted_admin_scopes: Optional[List[str]] = Field(
+        None, alias="grantedAdminScopes"
+    )
     priority: Optional[int] = Field(None, ge=0, le=999)
     enabled: Optional[bool] = None
 
@@ -200,6 +220,7 @@ class EffectivePermissionsResponse(BaseModel):
     tools: List[str]
     models: List[str]
     skills: List[str] = Field(default_factory=list)
+    admin_scopes: List[str] = Field(default_factory=list, alias="adminScopes")
     quota_tier: Optional[str] = Field(None, alias="quotaTier")
 
     model_config = {"populate_by_name": True}
@@ -216,6 +237,9 @@ class AppRoleResponse(BaseModel):
     granted_tools: List[str] = Field(..., alias="grantedTools")
     granted_models: List[str] = Field(..., alias="grantedModels")
     granted_skills: List[str] = Field(default_factory=list, alias="grantedSkills")
+    granted_admin_scopes: List[str] = Field(
+        default_factory=list, alias="grantedAdminScopes"
+    )
     effective_permissions: EffectivePermissionsResponse = Field(
         ..., alias="effectivePermissions"
     )
@@ -240,10 +264,12 @@ class AppRoleResponse(BaseModel):
             granted_tools=role.granted_tools,
             granted_models=role.granted_models,
             granted_skills=role.granted_skills,
+            granted_admin_scopes=role.granted_admin_scopes,
             effective_permissions=EffectivePermissionsResponse(
                 tools=role.effective_permissions.tools,
                 models=role.effective_permissions.models,
                 skills=role.effective_permissions.skills,
+                admin_scopes=role.effective_permissions.admin_scopes,
                 quota_tier=role.effective_permissions.quota_tier,
             ),
             priority=role.priority,

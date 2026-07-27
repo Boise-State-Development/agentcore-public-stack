@@ -153,6 +153,8 @@ class AppRoleService:
         Merge rules:
         - Tools: Union (user gets access to all tools from all roles)
         - Models: Union (user gets access to all models from all roles)
+        - Admin scopes: Union (but no ``"*"`` — there is no wildcard on this
+          axis; full admin is the ``system_admin`` role, not a scope)
         - Quota Tier: Highest priority role's tier wins
         """
         if not roles:
@@ -162,6 +164,7 @@ class AppRoleService:
                 tools=[],
                 models=[],
                 skills=[],
+                admin_scopes=[],
                 quota_tier=None,
                 resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
             )
@@ -170,6 +173,7 @@ class AppRoleService:
         all_tools: Set[str] = set()
         all_models: Set[str] = set()
         all_skills: Set[str] = set()
+        all_admin_scopes: Set[str] = set()
 
         for role in roles:
             if role.effective_permissions:
@@ -188,6 +192,11 @@ class AppRoleService:
                     all_skills.add("*")
                 else:
                     all_skills.update(role.effective_permissions.skills)
+
+                # No wildcard handling: `"*"` is not a valid admin scope, so a
+                # stray one is carried through as an unknown scope that matches
+                # nothing rather than silently granting every admin surface.
+                all_admin_scopes.update(role.effective_permissions.admin_scopes)
 
         # Determine quota tier (highest priority wins)
         sorted_roles = sorted(roles, key=lambda r: r.priority, reverse=True)
@@ -210,6 +219,7 @@ class AppRoleService:
             tools=sorted(all_tools),
             models=sorted(all_models),
             skills=sorted(all_skills),
+            admin_scopes=sorted(all_admin_scopes),
             quota_tier=quota_tier,
             resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
         )
