@@ -14,45 +14,63 @@ import { formatShortDate } from '../../shared/utils/iso-date';
  * Everything here exists so the author never has to ask what happened. "Changes
  * requested" without the reason is worse than no badge at all, and D13 is explicit
  * that admin edits to presentation are shown rather than made quietly.
+ *
+ * `part` splits the two halves for a layout that needs them in different places — My
+ * Agents' list view puts the badge inline beside the name and the note on its own line
+ * below. It is a *split*, never a filter: no caller may render `'badge'` and drop the
+ * note, because that turns a layout toggle into a way to hide the one sentence telling
+ * an author why their submission came back.
  */
+export type ListingStatusPart = 'all' | 'badge' | 'note';
+
 @Component({
   selector: 'app-listing-status',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (listing(); as l) {
-      <span
-        class="inline-flex items-center rounded-full px-2 py-0.5 text-xs/5 font-medium"
-        [class]="badgeClass()"
-      >
-        {{ badgeLabel() }}
-      </span>
-
-      @if (note(); as text) {
-        <div
-          class="mt-2 rounded-2xl border px-3 py-2 text-xs/5"
-          [class]="noteClass()"
+      @if (showBadge()) {
+        <span
+          class="inline-flex items-center rounded-full px-2 py-0.5 text-xs/5 font-medium"
+          [class]="badgeClass()"
         >
-          <p class="font-medium">{{ noteHeading() }}</p>
-          <p class="mt-0.5 whitespace-pre-line">{{ text }}</p>
-        </div>
+          {{ badgeLabel() }}
+        </span>
       }
 
-      @if (edits().length) {
-        <ul class="mt-2 space-y-0.5">
-          @for (edit of edits(); track edit.field + edit.at) {
-            <li class="text-xs/5 text-gray-500 dark:text-gray-400">
-              An admin updated the {{ edit.field }}@if (editedOn(edit); as on) {
-                <span> on {{ on }}</span>
-              }
-            </li>
-          }
-        </ul>
+      @if (showNote()) {
+        @if (note(); as text) {
+          <div
+            class="mt-2 rounded-2xl border px-3 py-2 text-xs/5"
+            [class]="noteClass()"
+          >
+            <p class="font-medium">{{ noteHeading() }}</p>
+            <p class="mt-0.5 whitespace-pre-line">{{ text }}</p>
+          </div>
+        }
+
+        @if (edits().length) {
+          <ul class="mt-2 space-y-0.5">
+            @for (edit of edits(); track edit.field + edit.at) {
+              <li class="text-xs/5 text-gray-500 dark:text-gray-400">
+                An admin updated the {{ edit.field }}@if (editedOn(edit); as on) {
+                  <span> on {{ on }}</span>
+                }
+              </li>
+            }
+          </ul>
+        }
       }
     }
   `,
 })
 export class ListingStatusComponent {
   readonly listing = input.required<AgentListingBlock | undefined>();
+
+  /** Which half to render. `'all'` — the default — is the stacked card treatment. */
+  readonly part = input<ListingStatusPart>('all');
+
+  readonly showBadge = computed(() => this.part() !== 'note');
+  readonly showNote = computed(() => this.part() !== 'badge');
 
   readonly badgeLabel = computed(() => {
     const state = this.listing()?.state;
