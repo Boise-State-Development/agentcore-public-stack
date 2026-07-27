@@ -129,6 +129,16 @@ async def get_session_cost_anatomy(
     re-writes: on a miss_avoidable row, diff its fingerprint hashes against
     the previous row's to see which prefix component changed.
 
+    ⚠️ **Check `agentSwitched` before treating a miss as a regression.** An
+    `@`-mention hands one turn to a different Agent, which genuinely re-writes
+    the prefix — it presents exactly like the nondeterministic-ordering bug the
+    fingerprints exist to catch (`toolConfigHash` and `systemPromptHash` flipping
+    together), so the row says which it was, and `turnAgentId` says which Agent
+    ran it. The session rollup splits the same way: `agentSwitchMissCount` /
+    `agentSwitchUsd` are a *subset* of `avoidableMissCount` / `wastedUsd`, never
+    deducted from them. Subtract to get unexplained waste — that difference is
+    what a prefix-stability regression moves.
+
     Args:
         session_id: Session identifier (any user's session — admin scope)
         admin_user: Authenticated admin user (injected)

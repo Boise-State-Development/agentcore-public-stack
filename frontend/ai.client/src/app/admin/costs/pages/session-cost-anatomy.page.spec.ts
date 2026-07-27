@@ -14,6 +14,8 @@ const MOCK_ANATOMY: SessionCostAnatomy = {
   totalCacheWriteTokens: 5_000,
   avoidableMissCount: 1,
   wastedUsd: 0.03,
+  agentSwitchMissCount: 0,
+  agentSwitchUsd: 0,
   cacheEfficiency: 0.8,
   calls: [
     {
@@ -156,5 +158,46 @@ describe('SessionCostAnatomyPage', () => {
     expect(page.getStatusClass('miss_ttl_expired')).toContain('bg-yellow-100');
     expect(page.getStatusClass('miss_avoidable')).toContain('bg-red-100');
     expect(page.getStatusClass('uncached')).toContain('bg-gray-100');
+  });
+
+  // ── #756 — explained vs unexplained avoidable misses ──────────────────────────
+  describe('agent-switch split', () => {
+    async function loadWith(overrides: Partial<SessionCostAnatomy>) {
+      const fixture = setup(
+        vi.fn().mockReturnValue(of({ ...MOCK_ANATOMY, ...overrides })),
+      );
+      const page = fixture.componentInstance;
+      await vi.waitFor(() => expect(page.anatomyResource.hasValue()).toBe(true));
+      return page;
+    }
+
+    it('counts every avoidable miss as unexplained when none is a switch', async () => {
+      const page = await loadWith({ avoidableMissCount: 3, agentSwitchMissCount: 0 });
+      expect(page.unexplainedMisses()).toBe(3);
+    });
+
+    it('subtracts the explained subset', async () => {
+      // The point of the split: the total stays whole because the money was really
+      // spent, and the remainder is what a regression would actually move.
+      const page = await loadWith({ avoidableMissCount: 3, agentSwitchMissCount: 2 });
+      expect(page.unexplainedMisses()).toBe(1);
+    });
+
+    it('reports zero when every miss is a switch', async () => {
+      const page = await loadWith({ avoidableMissCount: 2, agentSwitchMissCount: 2 });
+      expect(page.unexplainedMisses()).toBe(0);
+    });
+
+    it('never reports a negative remainder', async () => {
+      // Defensive: the two figures come from separate passes over the same rows, and
+      // a nonsense pair must not render as "-4 unexplained".
+      const page = await loadWith({ avoidableMissCount: 1, agentSwitchMissCount: 5 });
+      expect(page.unexplainedMisses()).toBe(0);
+    });
+
+    it('is zero before the resource resolves', async () => {
+      const page = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY))).componentInstance;
+      expect(page.unexplainedMisses()).toBe(0);
+    });
   });
 });

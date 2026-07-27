@@ -121,7 +121,7 @@ Do not reintroduce a Bearer-only `Depends(...)` on any user-facing route. If you
 - **Tool not appearing:** Check `__init__.py` export, RBAC permissions, `enabled_tools`, ToolRegistry
 - **Session not persisting:** Check AgentCore Memory config, session_id, TurnBasedSessionManager flush
 - **SSE stream disconnecting:** Check 600s timeout, client connection, quota exceeded events
-- **Cost spike / cache miss:** Check `cacheStatus` + `toolConfigHash`/`systemPromptHash`/`historyHash` on the session's `C#` rows in sessions-metadata (or `GET /admin/costs/sessions/{id}/calls`) — the hash that changed between consecutive calls names the cache-buster
+- **Cost spike / cache miss:** Check `cacheStatus` + `toolConfigHash`/`systemPromptHash`/`historyHash` on the session's `C#` rows in sessions-metadata (or `GET /admin/costs/sessions/{id}/calls`) — the hash that changed between consecutive calls names the cache-buster. Rule out the explained case first: `agentSwitched` on the row means an `@`-mention ran that turn on a different Agent, which re-writes the prefix on purpose and looks identical to the regression (`agentSwitchMissCount`/`agentSwitchUsd` are a subset of the totals — subtract for unexplained waste)
 
 ## Coding Standards
 

@@ -135,6 +135,16 @@ export interface SessionCallRow {
    */
   cachePrefixGapSeconds?: number | null;
   wastedUsd: number;
+  /**
+   * Which Agent ran this call, and whether that changed from the call before it (#756).
+   *
+   * An `@`-mention hands one turn to a different Agent, which genuinely re-writes the
+   * prefix. On the row that is indistinguishable from the nondeterministic-ordering
+   * regression the fingerprints exist to catch — both flip `toolConfigHash` and
+   * `systemPromptHash` together — so this is what tells them apart.
+   */
+  turnAgentId?: string | null;
+  agentSwitched?: boolean;
   prefixFingerprints?: PrefixFingerprints | null;
 }
 
@@ -148,6 +158,15 @@ export interface SessionCostAnatomy {
   totalCacheWriteTokens: number;
   avoidableMissCount: number;
   wastedUsd: number;
+  /**
+   * The subset of the two figures above that an Agent switch explains (#756).
+   *
+   * A *split*, never a deduction — the totals still carry every dollar spent, because
+   * hiding what `@`-mentions cost would understate a feature worth measuring. Subtract
+   * for unexplained waste, which is the number a prefix-stability regression moves.
+   */
+  agentSwitchMissCount: number;
+  agentSwitchUsd: number;
   /** cacheRead / (cacheRead + cacheWrite); null until any cache activity. */
   cacheEfficiency: number | null;
 }

@@ -193,6 +193,7 @@ class BaseAgent(ABC):
         original_message: Optional[str] = None,
         interrupt_responses: Optional[List[Dict[str, Any]]] = None,
         continue_truncated: bool = False,
+        turn_agent_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """Stream agent responses. Subclasses must implement.
 

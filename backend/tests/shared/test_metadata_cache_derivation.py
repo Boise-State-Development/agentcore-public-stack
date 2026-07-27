@@ -20,7 +20,7 @@ from apis.shared.sessions.models import (
 NOW = datetime(2026, 7, 19, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _metadata(input_t=100, output_t=50, cache_read=0, cache_write=0, with_pricing=True, prints=None):
+def _metadata(input_t=100, output_t=50, cache_read=0, cache_write=0, with_pricing=True, prints=None, agent_id=None):
     pricing = None
     if with_pricing:
         pricing = PricingSnapshot(
@@ -36,6 +36,8 @@ def _metadata(input_t=100, output_t=50, cache_read=0, cache_write=0, with_pricin
             "toolConfigHash": prints[0],
             "systemPromptHash": prints[1],
         }
+    if agent_id is not None:
+        extra["turnAgentId"] = agent_id
     return MessageMetadata(
         **extra,
         token_usage=TokenUsage(
@@ -70,7 +72,7 @@ class _FakeTable:
         return {}
 
 
-def _prev_row(seconds_ago, cache_read=0, cache_write=0, prints=None):
+def _prev_row(seconds_ago, cache_read=0, cache_write=0, prints=None, agent_id=None):
     """A prior cost row. ``prints`` is (toolConfigHash, systemPromptHash)."""
     ts = (NOW - timedelta(seconds=seconds_ago)).isoformat()
     row = {
@@ -85,6 +87,8 @@ def _prev_row(seconds_ago, cache_read=0, cache_write=0, prints=None):
             "toolConfigHash": prints[0],
             "systemPromptHash": prints[1],
         }
+    if agent_id is not None:
+        row["turnAgentId"] = agent_id
     return row
 
 
@@ -338,3 +342,69 @@ class TestKillSwitch:
             cache_observability={"cacheStatus": "miss_avoidable", "wastedUsd": 0.01},
         )
         assert capsys.readouterr().out == ""
+
+
+class TestAgentSwitchDimension:
+    """#756 — whether a prefix re-write is *explained*.
+
+    An `@`-mention hands one turn to a different Agent (Marketplace D11), swapping the
+    system prompt and toolConfig and so genuinely re-writing the prefix. That is
+    indistinguishable on the row from the nondeterministic-ordering regression the
+    fingerprints exist to catch — both flip `toolConfigHash` and `systemPromptHash`
+    together. The flag is what tells them apart.
+
+    It never changes `cacheStatus` or `wastedUsd`: the tokens really were spent, and
+    hiding them would understate the cost of mentions, which is worth measuring.
+    """
+
+    def _derive(self, table, meta):
+        return md._derive_cache_observability(
+            session_id="sess-1", table=table, timestamp=NOW.isoformat(),
+            message_metadata=meta,
+        )
+
+    def test_a_mention_turn_is_flagged_as_switched(self):
+        table = _FakeTable([_prev_row(30, cache_read=4000, agent_id=None)])
+        result = self._derive(table, _metadata(cache_write=5000, agent_id="ast-mention"))
+
+        assert result["agentSwitched"] is True
+        # …and the spend is still reported in full.
+        assert result["cacheStatus"] == "miss_avoidable"
+        assert result["wastedUsd"] > 0
+
+    def test_returning_to_plain_chat_is_also_a_switch(self):
+        """The turn *after* a mention pays a re-write too, and for the same reason."""
+        table = _FakeTable([_prev_row(30, cache_read=4000, agent_id="ast-mention")])
+        result = self._derive(table, _metadata(cache_write=5000, agent_id=None))
+
+        assert result["agentSwitched"] is True
+
+    def test_the_same_agent_twice_is_not_a_switch(self):
+        """A bound conversation: every turn runs the same Agent, so a miss is unexplained
+        and should stay that way — this is the case the metric exists to surface."""
+        table = _FakeTable([_prev_row(30, cache_read=4000, agent_id="ast-bound")])
+        result = self._derive(table, _metadata(cache_write=5000, agent_id="ast-bound"))
+
+        assert "agentSwitched" not in result
+
+    def test_plain_chat_throughout_is_not_a_switch(self):
+        table = _FakeTable([_prev_row(30, cache_read=4000)])
+        result = self._derive(table, _metadata(cache_write=5000))
+
+        assert "agentSwitched" not in result
+
+    def test_the_first_call_of_a_session_is_never_a_switch(self):
+        """Nothing to have switched *from*."""
+        result = self._derive(_FakeTable(), _metadata(cache_write=5000, agent_id="ast-1"))
+
+        assert "agentSwitched" not in result
+
+    def test_a_switch_that_still_hit_the_cache_is_flagged_but_costs_nothing(self):
+        """The flag describes the turn, not the verdict — the rollup only counts it
+        against a miss, so a hit contributes no explained waste."""
+        table = _FakeTable([_prev_row(30, cache_read=4000, agent_id="ast-a")])
+        result = self._derive(table, _metadata(cache_read=4000, agent_id="ast-b"))
+
+        assert result["agentSwitched"] is True
+        assert result["cacheStatus"] == "hit"
+        assert result["wastedUsd"] == 0.0
