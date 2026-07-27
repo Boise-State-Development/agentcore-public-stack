@@ -61,6 +61,7 @@ class StreamCoordinator:
         main_agent_wrapper: Any = None,
         citations: Optional[List] = None,
         original_message: Optional[str] = None,
+        turn_agent_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -77,6 +78,11 @@ class StreamCoordinator:
             main_agent_wrapper: MainAgent wrapper instance (has model_config, enabled_tools, etc.)
             citations: Optional list of citation dicts from RAG retrieval to persist with metadata
             original_message: Original user message before RAG augmentation (for clean UI display)
+            turn_agent_id: Which Agent ran this turn (#756), recorded on each cost row so a
+                deliberate `@`-mention prefix swap is distinguishable from the
+                nondeterministic-ordering regression the fingerprints exist to catch.
+                Passed per turn rather than read off the agent: the agent instance is cached
+                and shared across turns, so per-turn state must never live on it (#741/#751).
 
         Yields:
             str: SSE formatted events
