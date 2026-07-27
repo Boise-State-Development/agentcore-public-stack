@@ -44,7 +44,26 @@ export class UserService {
 
   readonly appRoles = signal<string[]>([]);
 
+  /**
+   * Delegated admin feature areas granted to this user.
+   *
+   * Empty for a full admin: `system_admin` satisfies every scope implicitly
+   * rather than enumerating them, so never test membership here to decide
+   * whether someone is an admin — use `hasAdminScope` or `isAdmin`.
+   */
+  readonly adminScopes = signal<string[]>([]);
+
   readonly isAdmin = computed(() => this.appRoles().includes('system_admin'));
+
+  /**
+   * May this user open the admin console at all?
+   *
+   * Distinct from `isAdmin`, which keeps its exact previous meaning and still
+   * gates genuinely superuser-only surfaces (roles, auth providers).
+   */
+  readonly canAccessAdmin = computed(
+    () => this.isAdmin() || this.adminScopes().length > 0
+  );
 
   private _permissionsPromise: Promise<void> | null = null;
 
@@ -58,6 +77,7 @@ export class UserService {
       } else {
         this._permissionsPromise = null;
         this.appRoles.set([]);
+        this.adminScopes.set([]);
       }
     });
   }
@@ -83,9 +103,15 @@ export class UserService {
         this.http.get<UserPermissions>(url, { withCredentials: true })
       );
       this.appRoles.set(permissions.appRoles);
+      // `?? []` rather than a bare read: an app-api still on a pre-PR-3 build
+      // omits the field entirely, and `undefined` here would make
+      // `adminScopes().length` throw inside `canAccessAdmin` and break the
+      // admin entry point for full admins too.
+      this.adminScopes.set(permissions.adminScopes ?? []);
     } catch (error) {
       console.error('Failed to fetch user permissions:', error);
       this.appRoles.set([]);
+      this.adminScopes.set([]);
     }
   }
 
@@ -102,6 +128,16 @@ export class UserService {
 
   hasAppRole(role: string): boolean {
     return this.appRoles().includes(role);
+  }
+
+  /**
+   * Does this user hold a given delegated admin scope?
+   *
+   * `system_admin` short-circuits to true — it satisfies every scope
+   * implicitly, exactly as `require_admin_scope` does on the server.
+   */
+  hasAdminScope(scope: string): boolean {
+    return this.isAdmin() || this.adminScopes().includes(scope);
   }
 
   refreshUser(): void {

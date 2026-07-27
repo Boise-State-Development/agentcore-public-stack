@@ -37,6 +37,7 @@ describe('Sidenav', () => {
       hasAnyRole: vi.fn().mockReturnValue(false),
       currentUser: signal(null),
       isAdmin: signal(false),
+      canAccessAdmin: signal(false),
     };
     mockMemorySpaceService = {
       accessible$: signal<boolean | null>(null),
@@ -181,6 +182,9 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
       hasAnyRole: vi.fn().mockReturnValue(false),
       currentUser: signal({ user_id: 'u1', email: 'u1@example.com' }),
       isAdmin: signal(false),
+      // The sidenav's admin entry point moved to `canAccessAdmin` so delegated
+      // admins (no system_admin role, but some admin scope) still get the link.
+      canAccessAdmin: signal(false),
     };
     mockAgentService = {
       accessible$: signal<boolean | null>(true),
@@ -239,6 +243,7 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
 
   it('renders the Agents nav entry for a NON-admin once the surface is reachable', async () => {
     mockUserService.isAdmin.set(false);
+    mockUserService.canAccessAdmin.set(false);
     const fixture = await renderSidenav();
 
     // Fails against the pre-GA `@if (showAgents() && isAdmin())`.
@@ -248,6 +253,7 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
 
   it('renders the Agents nav entry for an admin', async () => {
     mockUserService.isAdmin.set(true);
+    mockUserService.canAccessAdmin.set(true);
     const fixture = await renderSidenav();
     expect(agentsNavLink(fixture)).toBeDefined();
   });

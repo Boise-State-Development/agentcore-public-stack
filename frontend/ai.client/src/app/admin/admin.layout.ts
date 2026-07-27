@@ -8,6 +8,8 @@ import {
 } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AdminMarketplaceService } from './marketplace/services/admin-marketplace.service';
+import { UserService } from '../auth/user.service';
+import { AdminScopeId } from './admin-scope.model';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -35,6 +37,12 @@ interface NavItem {
   label: string;
   icon: string;
   route: string;
+  /**
+   * The admin scope that grants this entry. Must match the `data.scope` on the
+   * corresponding route in `admin.routes.ts` — an entry linking somewhere the
+   * scope guard will refuse is worse than no entry at all.
+   */
+  scope: AdminScopeId;
   /**
    * A count that badges this entry (D10). A signal rather than a number so the badge is
    * live — triaging the last report has to empty the badge without a reload, or the nav
@@ -172,23 +180,24 @@ interface NavGroup {
 export class AdminLayout implements OnInit {
   private router = inject(Router);
   private marketplace = inject(AdminMarketplaceService);
+  private userService = inject(UserService);
 
   private readonly allNavGroups: NavGroup[] = [
     {
       label: 'Usage & Spend',
       items: [
-        { label: 'Cost Analytics', icon: 'heroCurrencyDollar', route: '/admin/costs' },
-        { label: 'Quotas', icon: 'heroScale', route: '/admin/quota' },
-        { label: 'Fine-Tuning', icon: 'heroAcademicCap', route: '/admin/fine-tuning' },
+        { label: 'Cost Analytics', icon: 'heroCurrencyDollar', route: '/admin/costs', scope: 'admin.costs' },
+        { label: 'Quotas', icon: 'heroScale', route: '/admin/quota', scope: 'admin.quota' },
+        { label: 'Fine-Tuning', icon: 'heroAcademicCap', route: '/admin/fine-tuning', scope: 'admin.fine_tuning' },
       ],
     },
     {
       label: 'AI Configuration',
       items: [
-        { label: 'Models', icon: 'heroPencilSquare', route: '/admin/manage-models' },
-        { label: 'Tools', icon: 'heroWrenchScrewdriver', route: '/admin/tools' },
-        { label: 'Skills', icon: 'heroSparkles', route: '/admin/skills' },
-        { label: 'Connectors', icon: 'heroLink', route: '/admin/connectors' },
+        { label: 'Models', icon: 'heroPencilSquare', route: '/admin/manage-models', scope: 'admin.models' },
+        { label: 'Tools', icon: 'heroWrenchScrewdriver', route: '/admin/tools', scope: 'admin.tools' },
+        { label: 'Skills', icon: 'heroSparkles', route: '/admin/skills', scope: 'admin.skills' },
+        { label: 'Connectors', icon: 'heroLink', route: '/admin/connectors', scope: 'admin.connectors' },
       ],
     },
     {
@@ -204,43 +213,62 @@ export class AdminLayout implements OnInit {
           label: 'Review Queue',
           icon: 'heroInbox',
           route: '/admin/marketplace/review',
+          scope: 'admin.marketplace',
           badge: this.marketplace.pendingCount,
         },
         {
           label: 'Reports',
           icon: 'heroFlag',
           route: '/admin/marketplace/reports',
+          scope: 'admin.marketplace',
           badge: this.marketplace.openReportCount,
         },
-        { label: 'Listings', icon: 'heroRectangleStack', route: '/admin/marketplace/listings' },
-        { label: 'Store Front', icon: 'heroStar', route: '/admin/marketplace/store-front' },
-        { label: 'Categories', icon: 'heroTag', route: '/admin/marketplace/categories' },
-        { label: 'Default Pins', icon: 'heroBookmark', route: '/admin/marketplace/default-pins' },
+        { label: 'Listings', icon: 'heroRectangleStack', route: '/admin/marketplace/listings', scope: 'admin.marketplace' },
+        { label: 'Store Front', icon: 'heroStar', route: '/admin/marketplace/store-front', scope: 'admin.marketplace' },
+        { label: 'Categories', icon: 'heroTag', route: '/admin/marketplace/categories', scope: 'admin.marketplace' },
+        { label: 'Default Pins', icon: 'heroBookmark', route: '/admin/marketplace/default-pins', scope: 'admin.marketplace' },
       ],
     },
     {
       label: 'Identity & Access',
       items: [
-        { label: 'Users', icon: 'heroUsers', route: '/admin/users' },
-        { label: 'Roles', icon: 'heroKey', route: '/admin/roles' },
-        { label: 'Auth Providers', icon: 'heroFingerPrint', route: '/admin/auth-providers' },
+        { label: 'Users', icon: 'heroUsers', route: '/admin/users', scope: 'admin.users' },
+        { label: 'Roles', icon: 'heroKey', route: '/admin/roles', scope: 'admin.roles' },
+        { label: 'Auth Providers', icon: 'heroFingerPrint', route: '/admin/auth-providers', scope: 'admin.auth_providers' },
       ],
     },
     {
       label: 'Customization',
       items: [
-        { label: 'User Menu Links', icon: 'heroBars3', route: '/admin/manage-user-menu-links' },
-        { label: 'Conversation Modes', icon: 'heroSparkles', route: '/admin/system-prompts' },
+        { label: 'User Menu Links', icon: 'heroBars3', route: '/admin/manage-user-menu-links', scope: 'admin.user_menu_links' },
+        { label: 'Conversation Modes', icon: 'heroSparkles', route: '/admin/system-prompts', scope: 'admin.system_prompts' },
       ],
     },
   ];
 
   /**
-   * Nav groups. The Skills entry is always linked; access is governed by
-   * admin RBAC and the skills route only mounts when the feature is enabled
-   * (SKILLS_ENABLED), so no client-side feature gate is needed here.
+   * Nav groups the current admin can actually open.
+   *
+   * Filtered by delegated admin scope: `system_admin` sees everything (
+   * `hasAdminScope` short-circuits for it), so this is a no-op for a full
+   * admin. A group whose items are all filtered out is dropped entirely rather
+   * than left as an empty heading.
+   *
+   * Linking to a page the scope guard would bounce is worse than not linking
+   * it, which is why `NavItem.scope` is required rather than optional.
+   *
+   * Note this is presentation only. The guard is the client-side gate and the
+   * server is the actual boundary; hiding the link just means a delegated
+   * admin never clicks into a bounce.
    */
-  readonly navGroups = computed<NavGroup[]>(() => this.allNavGroups);
+  readonly navGroups = computed<NavGroup[]>(() =>
+    this.allNavGroups
+      .map(group => ({
+        ...group,
+        items: group.items.filter(item => this.userService.hasAdminScope(item.scope)),
+      }))
+      .filter(group => group.items.length > 0)
+  );
 
   /**
    * One small call for both badges, on every admin page.
@@ -252,7 +280,13 @@ export class AdminLayout implements OnInit {
    * a badge is orientation, and an unreachable count must not break the shell.
    */
   ngOnInit(): void {
-    void this.marketplace.refreshQueueCounts();
+    // Gated on the scope: the counts endpoint is guarded by `admin.marketplace`,
+    // so firing it unconditionally would mean a guaranteed 403 on every single
+    // navigation for an admin who does not hold that scope — a console full of
+    // console-errors for a badge they cannot see anyway.
+    if (this.userService.hasAdminScope('admin.marketplace')) {
+      void this.marketplace.refreshQueueCounts();
+    }
   }
 
   onMobileNavChange(event: Event): void {
