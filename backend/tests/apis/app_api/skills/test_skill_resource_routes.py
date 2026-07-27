@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from apis.shared.auth import require_admin
+from tests.conftest import override_admin_auth
 from apis.app_api.admin.skills import routes as skill_routes
 from apis.app_api.skills import service as skill_service_module
 
@@ -24,7 +25,7 @@ def client(skill_service, admin_user, monkeypatch):
     )
     app = FastAPI()
     app.include_router(skill_routes.router)
-    app.dependency_overrides[require_admin] = lambda: admin_user
+    override_admin_auth(app, lambda: admin_user)
     return TestClient(app)
 
 

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from apis.app_api.admin.agents.routes import router
 from apis.shared.assistants.models import AgentListing, Assistant, PublisherProfile
 from apis.shared.auth import require_admin
+from tests.conftest import override_admin_auth
 
 SERVICE_MODULE = "apis.app_api.agent_designer.services.listing_service"
 ADMIN_MODULE = "apis.app_api.admin.agents.routes"
@@ -50,8 +51,11 @@ def _listing(state="in_review", **overrides) -> AgentListing:
 def app(make_user):
     _app = FastAPI()
     _app.include_router(router, prefix="/admin")
-    _app.dependency_overrides[require_admin] = lambda: make_user(
-        user_id="admin-001", name="Sam Admin", roles=["system_admin"]
+    override_admin_auth(
+        _app,
+        lambda: make_user(
+            user_id="admin-001", name="Sam Admin", roles=["system_admin"]
+        ),
     )
     return _app
 

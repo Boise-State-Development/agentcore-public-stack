@@ -9,6 +9,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from apis.shared.auth import get_current_user_from_session, require_admin
+from tests.conftest import override_admin_auth
 from apis.shared.auth.models import User
 from apis.shared.system_prompts import repository as repo_module
 from apis.shared.system_prompts import service as service_module
@@ -80,7 +81,7 @@ _PAYLOAD = {
 def admin_client(system_prompts_table):
     app = _build_admin_app()
     admin = _make_user(roles=["system_admin"])
-    app.dependency_overrides[require_admin] = lambda: admin
+    override_admin_auth(app, lambda: admin)
     return TestClient(app)
 
 
@@ -170,8 +171,11 @@ class TestAdminRoutes:
         """Non-admin dependency raises 403 — verify route doesn't bypass it."""
         from fastapi import HTTPException
         app = _build_admin_app()
-        app.dependency_overrides[require_admin] = lambda: (_ for _ in ()).throw(
-            HTTPException(status_code=403, detail="Forbidden")
+        override_admin_auth(
+            app,
+            lambda: (_ for _ in ()).throw(
+                HTTPException(status_code=403, detail="Forbidden")
+            ),
         )
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/admin/system-prompts/")
@@ -184,7 +188,7 @@ class TestUserRoutes:
         # Seed via admin
         admin_app = _build_admin_app()
         admin = _make_user(roles=["system_admin"])
-        admin_app.dependency_overrides[require_admin] = lambda: admin
+        override_admin_auth(admin_app, lambda: admin)
         admin_client = TestClient(admin_app)
         admin_client.post("/admin/system-prompts/", json=_PAYLOAD)
         admin_client.post("/admin/system-prompts/", json={**_PAYLOAD, "name": "Hidden", "status": "disabled"})

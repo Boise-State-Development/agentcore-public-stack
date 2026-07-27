@@ -14,13 +14,18 @@ from typing import List
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 
 from apis.app_api.export_targets.registry import registry
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/export-target-adapters", tags=["admin-export-targets"])
+
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_export_targets_admin = require_admin_scope("admin.export_targets")
 
 
 class ExportTargetAdapterInfo(BaseModel):
@@ -54,7 +59,7 @@ class ExportTargetAdapterListResponse(BaseModel):
 
 @router.get("/", response_model=ExportTargetAdapterListResponse)
 async def list_export_target_adapters(
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_export_targets_admin),
 ) -> ExportTargetAdapterListResponse:
     """List every export-target adapter shipped in this release. Admin only."""
     logger.info("Admin listing export-target adapters")

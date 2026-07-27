@@ -205,8 +205,17 @@ async def test_create_role_rejects_non_delegable_scope(service, admin) -> None:
 async def test_update_role_rejects_non_delegable_scope(
     service, mock_app_role_repo, make_app_role, admin
 ) -> None:
-    role = make_app_role(role_id="content_admin", granted_admin_scopes=["admin.skills"])
-    mock_app_role_repo.get_role.return_value = role
+    # The target already carries scopes, so the write-through guard applies:
+    # wire the actor to resolve as system_admin, which is who actually edits
+    # roles. Otherwise the guard denies before content validation is reached.
+    roles = {
+        "content_admin": make_app_role(
+            role_id="content_admin", granted_admin_scopes=["admin.skills"]
+        ),
+        "system_admin": make_app_role(role_id="system_admin", is_system_role=True),
+    }
+    mock_app_role_repo.get_role.side_effect = lambda rid: roles.get(rid)
+    mock_app_role_repo.get_roles_for_jwt_role.side_effect = lambda jwt: ["system_admin"]
 
     with pytest.raises(RoleConstraintError):
         await service.update_role(

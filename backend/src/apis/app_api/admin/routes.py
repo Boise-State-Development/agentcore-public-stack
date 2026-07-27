@@ -29,7 +29,7 @@ from apis.shared.models.models import (
     ManagedModel,
     ModelRoleAssignment,
 )
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from apis.shared.feature_flags import skills_enabled
 from apis.shared.models.managed_models import (
     create_managed_model,
@@ -43,6 +43,11 @@ from .services.model_roles import get_model_role_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_models_admin = require_admin_scope("admin.models")
 
 
 
@@ -83,7 +88,7 @@ async def list_bedrock_models(
         ]
     ] = Query(None, description="Filter by customization type"),
     max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return (client-side limit)"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List available AWS Bedrock foundation models (admin only).
@@ -196,7 +201,7 @@ async def list_bedrock_models(
 @router.get("/gemini/models", response_model=GeminiModelsResponse)
 async def list_gemini_models(
     max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List available Google Gemini models (admin only).
@@ -308,7 +313,7 @@ async def list_gemini_models(
 @router.get("/openai/models", response_model=OpenAIModelsResponse)
 async def list_openai_models(
     max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List available OpenAI models (admin only).
@@ -404,7 +409,7 @@ async def list_openai_models(
 async def list_mantle_models(
     region: Optional[str] = Query(None, description="AWS region to query (defaults to the service region)"),
     max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List available Amazon Bedrock Mantle models (admin only).
@@ -507,7 +512,7 @@ async def list_mantle_models(
 
 @router.get("/managed-models", response_model=ManagedModelsListResponse)
 async def list_managed_models_endpoint(
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List all enabled models (admin only).
@@ -556,7 +561,7 @@ async def list_managed_models_endpoint(
 @router.post("/managed-models", response_model=ManagedModel, status_code=status.HTTP_201_CREATED)
 async def create_managed_model_endpoint(
     model_data: ManagedModelCreate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     Create a new enabled model (admin only).
@@ -612,7 +617,7 @@ async def create_managed_model_endpoint(
 @router.get("/managed-models/{model_id}", response_model=ManagedModel)
 async def get_managed_model_endpoint(
     model_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     Get a specific enabled model by ID (admin only).
@@ -662,7 +667,7 @@ async def get_managed_model_endpoint(
 async def update_managed_model_endpoint(
     model_id: str,
     updates: ManagedModelUpdate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     Update an enabled model (admin only).
@@ -748,7 +753,7 @@ async def update_managed_model_endpoint(
 @router.delete("/managed-models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_managed_model_endpoint(
     model_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     Delete an enabled model (admin only).
@@ -801,7 +806,7 @@ async def delete_managed_model_endpoint(
 @router.get("/managed-models/{model_id}/roles", response_model=List[ModelRoleAssignment])
 async def get_managed_model_roles(
     model_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List every AppRole that grants access to a model, and how.

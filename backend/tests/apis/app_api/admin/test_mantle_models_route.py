@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from apis.shared.auth import require_admin
+from tests.conftest import override_admin_auth
 from apis.shared.auth.models import User
 
 from apis.app_api.admin import routes as admin_routes
@@ -29,7 +30,7 @@ def _admin() -> User:
 def client() -> TestClient:
     app = FastAPI()
     app.include_router(admin_routes.router)
-    app.dependency_overrides[require_admin] = _admin
+    override_admin_auth(app, _admin)
     return TestClient(app)
 
 

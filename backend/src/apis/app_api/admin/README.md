@@ -1,314 +1,134 @@
 # Admin API Module
 
-This module provides role-based access control (RBAC) for administrative endpoints.
+> Rewritten 2026-07-27. The previous version documented RBAC helpers that do not
+> exist (`require_roles`, `require_all_roles`, `has_any_role`, `require_faculty`,
+> …), five endpoints that are not in this module (`/admin/me`,
+> `/admin/sessions/all`, `/admin/stats`, `/admin/conditional-example`,
+> `/admin/require-multiple-roles-example`), and an `ENABLE_AUTHENTICATION=false`
+> switch that no longer exists (it is `SKIP_AUTH` now). Treat any surviving
+> reference to those as stale.
 
-## Overview
+Privileged endpoints, mounted under `/admin`. `routes.py` owns the root router
+and includes every sub-router; each sub-package is one admin feature area.
 
-The admin module demonstrates how to use the shared authentication RBAC utilities to create protected endpoints that require specific roles from JWT tokens.
+## Authorization model
 
-## Architecture
-
-### JWT Role Extraction
-
-Roles are automatically extracted from the JWT token by `CognitoJWTValidator` (`apis/shared/auth/cognito_jwt_validator.py`) and populated in the `User` model (`apis/shared/auth/models.py`).
-
-### RBAC Dependencies
-
-The shared auth module provides FastAPI dependencies for role checking:
-
-- `require_roles(*roles)` - User must have at least ONE of the specified roles (OR logic)
-- `require_all_roles(*roles)` - User must have ALL of the specified roles (AND logic)
-- `has_any_role(user, *roles)` - Helper function for conditional logic
-- `has_all_roles(user, *roles)` - Helper function for conditional logic
-
-### Predefined Role Checkers
-
-For convenience, common role checkers are available:
-
-- `require_admin` - Requires "Admin" or "SuperAdmin" role
-- `require_faculty` - Requires "Faculty" role
-- `require_staff` - Requires "Staff" role
-- `require_developer` - Requires "DotNetDevelopers" role
-- `require_aws_ai_access` - Requires "AWS-BoiseStateAI" role
-
-## Usage Examples
-
-### Basic Admin Endpoint
+Admin access is **not** a single bit. Each router package is governed by one
+*admin scope* that a system admin can delegate to another role.
 
 ```python
-from fastapi import APIRouter, Depends
-from apis.shared.auth import User, require_admin
+# tools/routes.py
+from apis.shared.auth import User, require_admin_scope
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/tools", tags=["admin-tools"])
 
-@router.get("/stats")
-async def get_stats(admin_user: User = Depends(require_admin)):
-    """Admin-only endpoint. Requires Admin or SuperAdmin role."""
-    return {"stats": "..."}
+require_tools_admin = require_admin_scope("admin.tools")
+
+@router.get("")
+async def list_tools(admin: User = Depends(require_tools_admin)):
+    ...
 ```
 
-### Custom Role Requirements
+`system_admin` satisfies every scope implicitly, so a full admin sees no change.
+Scope ids come from the closed registry in `apis/shared/rbac/admin_scopes.py`.
+
+**Two packages are non-delegable and keep bare `require_admin`:**
+
+| Package | Why |
+|---|---|
+| `roles/` | Editing a role is how admin power is handed out — anyone who can PATCH a role can grant themselves anything. |
+| `auth_providers/` | Role resolution starts from JWT claims, so controlling IdP attribute mapping controls which AppRoles resolve. Role administration by another route. |
+
+## Feature areas
+
+| Package | Prefix | Scope |
+|---|---|---|
+| `routes.py` (root) | `/admin` | `admin.models` |
+| `quota/` | `/admin/quota` | `admin.quota` |
+| `costs/` | `/admin/costs` | `admin.costs` |
+| `users/` | `/admin/users` | `admin.users` |
+| `tools/` | `/admin/tools` | `admin.tools` |
+| `skills/` | `/admin/skills` | `admin.skills` |
+| `agents/` | `/admin/agents` | `admin.marketplace` |
+| `roles/agent_pins.py` | `/admin/roles/{id}/agent-pins` | `admin.marketplace` ¹ |
+| `oauth/` | `/admin/oauth-providers` | `admin.connectors` |
+| `file_sources/` | `/admin/file-source-adapters` | `admin.file_sources` |
+| `export_targets/` | `/admin/export-target-adapters` | `admin.export_targets` |
+| `system_prompts/` | `/admin/system-prompts` | `admin.system_prompts` |
+| `user_menu_links/` | `/admin/user-menu-links` | `admin.user_menu_links` |
+| `fine_tuning/` | `/admin/fine-tuning` | `admin.fine_tuning` |
+| `roles/` | `/admin/roles` | **non-delegable** |
+| `auth_providers/` | `/admin/auth-providers` | **non-delegable** |
+
+¹ The one place the "scope = package" rule doesn't hold. `agent_pins.py` mounts
+under the `/roles` prefix but is marketplace functionality; it inherits
+`admin.marketplace` through `require_marketplace_admin`. Covered by an explicit
+test so it can't drift.
+
+**Conditionally mounted:** `skills/` (`SKILLS_ENABLED`), `fine_tuning/`
+(`FINE_TUNING_ENABLED`), and `agents/` (always mounted but 404s through
+`require_marketplace_admin` when `AGENT_MARKETPLACE_ENABLED` is off).
+
+## Adding an admin endpoint
+
+**To an existing package** — add the route and use the package's existing
+`require_<area>_admin` dependency:
 
 ```python
-from apis.shared.auth import require_roles
-
-@router.post("/faculty-portal")
-async def faculty_endpoint(user: User = Depends(require_roles("Faculty", "Staff"))):
-    """Requires Faculty OR Staff role."""
-    return {"message": "Access granted"}
+@router.post("/{tool_id}/archive")
+async def archive_tool(tool_id: str, admin: User = Depends(require_tools_admin)):
+    ...
 ```
 
-### Multiple Required Roles
+**A new feature area** — four steps, and the tests will tell you if you miss one:
 
-```python
-from apis.shared.auth import require_all_roles
+1. Add an `AdminScope` to `apis/shared/rbac/admin_scopes.py`.
+2. Create the package with `require_<area>_admin = require_admin_scope("admin.<area>")`
+   — named after the area, mirroring `require_marketplace_admin`, so tests have
+   a stable public handle to override.
+3. Include the router in `routes.py`.
+4. Register the module → scope mapping in
+   `tests/architecture/test_admin_scope_coverage.py`.
 
-@router.post("/critical-operation")
-async def critical_endpoint(user: User = Depends(require_all_roles("Admin", "Security"))):
-    """Requires BOTH Admin AND Security roles."""
-    return {"message": "Access granted"}
-```
+That test walks every mounted admin route and fails if one has no authorization
+dependency, if a package uses bare `require_admin` without being on the
+non-delegable list, or if a registry scope governs nothing. The regression it
+exists to catch is a new admin route added with no scope — silently reachable by
+every delegated admin.
 
-### Conditional Admin Features
+## RBAC gotcha: write-through
 
-```python
-from apis.shared.auth import get_current_user, has_any_role
+The tool, model, and skill pages each offer a "which roles can use this?" picker
+that writes *through* into role records (`set_roles_for_tool` and siblings), all
+of which land in `AppRoleAdminService.update_role`. That is intended — granting a
+tool is a tool admin's job.
 
-@router.get("/dashboard")
-async def dashboard(user: User = Depends(get_current_user)):
-    """Available to all authenticated users, with extra data for admins."""
-    response = {"user": user.email}
+What is guarded: if the target role is protected or carries `grantedAdminScopes`,
+the actor must hold `system_admin`. Otherwise a delegated `admin.tools` holder
+could add grants to an admin-bearing role from a surface never meant to
+administer roles. The check lives in `update_role` rather than the three callers,
+so any future resource surface that grows a role picker inherits it. It raises
+`RoleMutationForbidden` → 403 (not `ValueError` → 400, which would misreport a
+denied escalation as a bad request).
 
-    # Add admin-specific data conditionally
-    if has_any_role(user, "Admin", "SuperAdmin"):
-        response["admin_data"] = {"debug_info": "..."}
+## Errors
 
-    return response
-```
+| Status | Meaning |
+|---|---|
+| 401 | No valid session cookie. |
+| 403 | Authenticated but lacks the scope, or a blocked role mutation. |
+| 404 | Feature area disabled by its kill switch (reads as unmounted). |
 
-## Available Endpoints
+## Local development
 
-### `GET /admin/me`
-Get information about the current admin user.
+`SKIP_AUTH=true` returns a fake user whose roles come from `SKIP_AUTH_ROLES`
+(default `admin`). Those roles still resolve through the AppRole table, so the
+mapped role must reach `system_admin` for admin routes to open. `app_api/main.py`
+refuses to boot when `SKIP_AUTH` is combined with deployed-environment
+indicators.
 
-**Required Role:** Admin or SuperAdmin
+## See also
 
-**Response:**
-```json
-{
-  "email": "admin@example.com",
-  "user_id": "123456789",
-  "name": "Admin User",
-  "roles": ["Admin", "Faculty"],
-  "picture": "https://..."
-}
-```
-
-### `GET /admin/sessions/all`
-List all sessions across all users (for monitoring/support).
-
-**Required Role:** Admin or SuperAdmin
-
-**Query Parameters:**
-- `limit` (optional): Maximum sessions to return (1-1000, default 100)
-- `next_token` (optional): Pagination token
-
-**Response:**
-```json
-{
-  "sessions": [...],
-  "total_count": 42,
-  "next_token": "..."
-}
-```
-
-### `DELETE /admin/sessions/{session_id}`
-Delete any user's session (for abuse handling, privacy requests).
-
-**Required Role:** Admin or SuperAdmin
-
-**Response:**
-```json
-{
-  "success": true,
-  "session_id": "abc123",
-  "message": "Session deleted by admin user@example.com"
-}
-```
-
-### `GET /admin/stats`
-Get system-wide statistics.
-
-**Required Role:** Admin or SuperAdmin
-
-**Response:**
-```json
-{
-  "total_users": 150,
-  "total_sessions": 450,
-  "active_sessions": 23,
-  "total_messages": 12000,
-  "stats_as_of": "2025-12-10T12:00:00Z"
-}
-```
-
-### `GET /admin/users/{user_id}/sessions`
-Get all sessions for a specific user (for support).
-
-**Required Role:** Admin or SuperAdmin
-
-**Query Parameters:**
-- `limit` (optional): Maximum sessions to return (1-1000, default 100)
-- `next_token` (optional): Pagination token
-
-**Response:**
-```json
-{
-  "sessions": [...],
-  "next_token": "..."
-}
-```
-
-### `GET /admin/conditional-example`
-Example showing conditional admin features.
-
-**Required Role:** Any authenticated user
-
-**Response for regular users:**
-```json
-{
-  "message": "Welcome!",
-  "user_email": "user@example.com",
-  "user_roles": ["Faculty"]
-}
-```
-
-**Response for admins:**
-```json
-{
-  "message": "Welcome!",
-  "user_email": "admin@example.com",
-  "user_roles": ["Admin", "Faculty"],
-  "admin_data": {
-    "debug_info": "Additional admin information",
-    "system_health": "All systems operational"
-  }
-}
-```
-
-### `POST /admin/require-multiple-roles-example`
-Example requiring one of multiple specific roles.
-
-**Required Role:** Admin, SuperAdmin, or DotNetDevelopers
-
-**Response:**
-```json
-{
-  "message": "Access granted",
-  "user": "dev@example.com",
-  "matched_roles": ["DotNetDevelopers"]
-}
-```
-
-## Error Responses
-
-### 401 Unauthorized
-Returned when no JWT token is provided or token is invalid.
-
-```json
-{
-  "detail": "Authentication required. Please provide a valid Bearer token in the Authorization header."
-}
-```
-
-### 403 Forbidden
-Returned when user is authenticated but lacks required role(s).
-
-```json
-{
-  "detail": "Access denied. Required roles: Admin, SuperAdmin"
-}
-```
-
-## Testing
-
-### With Authentication Enabled (Production)
-
-Test with a valid JWT token in the Authorization header:
-
-```bash
-curl -H "Authorization: Bearer <your-jwt-token>" \
-  http://localhost:8000/admin/me
-```
-
-### With Authentication Disabled (Development)
-
-Set `ENABLE_AUTHENTICATION=false` in your `.env` file:
-
-```bash
-# .env
-ENABLE_AUTHENTICATION=false
-```
-
-This bypasses authentication and returns an anonymous user:
-- Email: `anonymous@local.dev`
-- User ID: `anonymous`
-- Name: `Anonymous User`
-- Roles: `[]` (empty - will fail role checks)
-
-**Note:** With authentication disabled and no roles, you'll still get 403 errors from role-protected endpoints. To test admin endpoints without authentication, you would need to modify the role checker or use mock data.
-
-## Adding New Admin Endpoints
-
-1. **Import dependencies:**
-```python
-from apis.shared.auth import User, require_admin, require_roles
-```
-
-2. **Add route with role dependency:**
-```python
-@router.post("/my-admin-feature")
-async def my_admin_feature(admin_user: User = Depends(require_admin)):
-    logger.info(f"Admin {admin_user.email} accessed feature")
-    return {"message": "Success"}
-```
-
-3. **Access user information:**
-```python
-admin_user.email      # Email address
-admin_user.user_id    # 9-digit employee number
-admin_user.name       # Full name
-admin_user.roles      # List of roles
-admin_user.picture    # Profile picture URL (optional)
-```
-
-## Security Considerations
-
-1. **Always validate roles server-side** - Never trust client-side role checks
-2. **Log admin actions** - All admin operations should be logged for audit trails
-3. **Use specific roles** - Prefer `require_admin` over `get_current_user` for sensitive operations
-4. **Disable auth only in development** - Never set `ENABLE_AUTHENTICATION=false` in production
-5. **Review JWT claims** - Ensure your Entra ID app registration includes role claims
-
-## Role Configuration
-
-Roles are configured in Entra ID (Azure AD) app registration:
-1. Define app roles in the app manifest
-2. Assign roles to users/groups
-3. Roles appear in the JWT token's `roles` claim
-4. Backend validates and extracts roles automatically
-
-See `apis/shared/auth/cognito_jwt_validator.py` for role extraction logic.
-
-## Future Enhancements
-
-Potential additions to the admin module:
-
-- User management (list, create, update, disable users)
-- Audit log viewing
-- System configuration management
-- Usage analytics and reporting
-- Session management (force logout, view active sessions)
-- Cost tracking and budgeting
-- Tool usage monitoring
-- Rate limiting configuration
+- `apis/shared/auth/RBAC_QUICK_REFERENCE.md` — the dependency surface.
+- `docs/specs/granular-admin-permissions.md` — why the scope model is shaped this
+  way, including the escalation analysis.

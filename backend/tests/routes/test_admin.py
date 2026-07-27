@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from apis.app_api.admin.routes import router
 from apis.shared.auth.rbac import require_admin
+from tests.conftest import override_admin_auth
 from apis.shared.models.models import ManagedModel
 from tests.routes.conftest import mock_auth_user, mock_no_auth
 
@@ -66,7 +67,7 @@ def app():
 
 def _override_require_admin(app: FastAPI, user):
     """Override the require_admin dependency to return the given user."""
-    app.dependency_overrides[require_admin] = lambda: user
+    override_admin_auth(app, lambda: user)
 
 
 def _override_require_admin_403(app: FastAPI):
@@ -79,7 +80,7 @@ def _override_require_admin_403(app: FastAPI):
             detail="Access denied.",
         )
 
-    app.dependency_overrides[require_admin] = _raise
+    override_admin_auth(app, _raise)
 
 
 @pytest.fixture(autouse=True)

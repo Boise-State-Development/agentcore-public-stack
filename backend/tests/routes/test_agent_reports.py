@@ -23,6 +23,7 @@ from apis.app_api.admin.agents.routes import router as admin_router
 from apis.app_api.agent_designer.routes import router as agents_router
 from apis.shared.assistants.models import AgentListing, AgentReport, Assistant
 from apis.shared.auth import require_admin
+from tests.conftest import override_admin_auth
 from tests.routes.conftest import mock_auth_user
 
 REPORT_SERVICE = "apis.app_api.agent_designer.services.report_service"
@@ -88,8 +89,9 @@ def _flags_on(monkeypatch):
 @pytest.fixture
 def client(app, make_user):
     mock_auth_user(app, make_user(user_id="user-001", email="pat@example.edu"))
-    app.dependency_overrides[require_admin] = lambda: make_user(
-        user_id="admin-1", email="admin@example.edu"
+    override_admin_auth(
+        app,
+        lambda: make_user(user_id="admin-1", email="admin@example.edu"),
     )
     return TestClient(app)
 

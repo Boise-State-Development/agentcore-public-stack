@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from apis.app_api.admin.routes import router
 from apis.shared.auth.rbac import require_admin
+from tests.conftest import override_admin_auth
 from apis.shared.security import (
     register_aws_client_error_handler,
     register_validation_error_handler,
@@ -47,7 +48,7 @@ def app() -> FastAPI:
 
 def _admin_client(app: FastAPI, make_user) -> TestClient:
     user = make_user(roles=["system_admin"])
-    app.dependency_overrides[require_admin] = lambda: user
+    override_admin_auth(app, lambda: user)
     return TestClient(app)
 
 

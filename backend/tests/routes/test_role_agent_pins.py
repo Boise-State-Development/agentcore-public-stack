@@ -30,6 +30,7 @@ from apis.shared.assistants.models import (
     UserPinState,
 )
 from apis.shared.auth import require_admin
+from tests.conftest import override_admin_auth
 from apis.shared.rbac.models import AppRole, EffectivePermissions, UserEffectivePermissions
 from tests.routes.conftest import mock_auth_user
 
@@ -137,7 +138,7 @@ def _flags_on(monkeypatch):
 @pytest.fixture
 def client(app, make_user):
     mock_auth_user(app, make_user(user_id="user-001", email="pat@example.edu"))
-    app.dependency_overrides[require_admin] = lambda: make_user(user_id="admin-1")
+    override_admin_auth(app, lambda: make_user(user_id="admin-1"))
     return TestClient(app)
 
 

@@ -9,7 +9,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from apis.shared.user_menu_links.models import (
     UserMenuLinkCreate,
     UserMenuLinkListResponse,
@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/user-menu-links", tags=["admin-user-menu-links"])
 
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_user_menu_links_admin = require_admin_scope("admin.user_menu_links")
+
 
 @router.get(
     "/",
@@ -30,7 +35,7 @@ router = APIRouter(prefix="/user-menu-links", tags=["admin-user-menu-links"])
 )
 async def list_user_menu_links(
     enabled_only: bool = Query(False, description="Filter to enabled links only"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_user_menu_links_admin),
 ) -> UserMenuLinkListResponse:
     """List all user-menu links (admin sees disabled ones too)."""
     service = get_user_menu_links_service()
@@ -48,7 +53,7 @@ async def list_user_menu_links(
 )
 async def get_user_menu_link(
     link_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_user_menu_links_admin),
 ) -> UserMenuLinkResponse:
     service = get_user_menu_links_service()
     link = await service.get_link(link_id)
@@ -68,7 +73,7 @@ async def get_user_menu_link(
 )
 async def create_user_menu_link(
     data: UserMenuLinkCreate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_user_menu_links_admin),
 ) -> UserMenuLinkResponse:
     try:
         service = get_user_menu_links_service()
@@ -89,7 +94,7 @@ async def create_user_menu_link(
 async def update_user_menu_link(
     link_id: str,
     updates: UserMenuLinkUpdate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_user_menu_links_admin),
 ) -> UserMenuLinkResponse:
     try:
         service = get_user_menu_links_service()
@@ -114,7 +119,7 @@ async def update_user_menu_link(
 )
 async def delete_user_menu_link(
     link_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_user_menu_links_admin),
 ) -> None:
     service = get_user_menu_links_service()
     deleted = await service.delete_link(link_id)

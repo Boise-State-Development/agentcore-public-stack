@@ -1,4 +1,12 @@
-"""Admin API routes for AppRole management."""
+"""Admin API routes for AppRole management.
+
+**Non-delegable — these routes keep bare ``require_admin`` on purpose.**
+Editing a role is how admin power is handed out: anyone who can PATCH a role
+can add ``grantedAdminScopes`` (or ``grantedTools: ["*"]``) to a role they
+themselves hold. Delegating this surface would make every other scope
+meaningless. The matching registry entry is ``admin.roles``, marked
+``delegable=False`` in ``apis/shared/rbac/admin_scopes.py``.
+"""
 
 import logging
 

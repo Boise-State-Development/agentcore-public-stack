@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apis.app_api.export_targets.registry import registry as export_target_registry
 from apis.app_api.file_sources.registry import registry
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from apis.shared.oauth.agentcore_registrar import (
     AgentCoreRegistrar,
     CredentialProviderConflictError,
@@ -43,6 +43,11 @@ from apis.shared.timestamps import utc_now_iso
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/oauth-providers", tags=["admin-oauth"])
+
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_connectors_admin = require_admin_scope("admin.connectors")
 
 # Rollback backoff schedule. Two retries after the initial attempt, ~2.5s
 # total worst case — short enough to keep the create request responsive,
@@ -139,7 +144,7 @@ def _emit_orphan_metric(provider_id: str) -> None:
 @router.get("/", response_model=OAuthProviderListResponse)
 async def list_providers(
     enabled_only: bool = Query(False, description="Only return enabled providers"),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_connectors_admin),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
 ):
     """List all OAuth providers. Admin only."""
@@ -154,7 +159,7 @@ async def list_providers(
 @router.get("/{provider_id}", response_model=OAuthProviderResponse)
 async def get_provider(
     provider_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_connectors_admin),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
 ):
     """Get a provider by ID. Admin only."""
@@ -172,7 +177,7 @@ async def get_provider(
 )
 async def create_provider(
     provider_data: OAuthProviderCreate,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_connectors_admin),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     registrar: AgentCoreRegistrar = Depends(get_agentcore_registrar),
 ):
@@ -252,7 +257,7 @@ async def create_provider(
 async def update_provider(
     provider_id: str,
     updates: OAuthProviderUpdate,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_connectors_admin),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     registrar: AgentCoreRegistrar = Depends(get_agentcore_registrar),
 ):
@@ -347,7 +352,7 @@ async def update_provider(
 @router.delete("/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_provider(
     provider_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_connectors_admin),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     registrar: AgentCoreRegistrar = Depends(get_agentcore_registrar),
 ):
