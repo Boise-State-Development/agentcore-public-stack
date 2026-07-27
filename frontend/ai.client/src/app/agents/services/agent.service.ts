@@ -3,6 +3,7 @@ import { firstValueFrom } from 'rxjs';
 import { AgentApiService } from './agent-api.service';
 import {
   Agent,
+  AgentRunnability,
   BindableItem,
   BindableKind,
   CreateAgentDraftRequest,
@@ -61,6 +62,13 @@ export class AgentService {
 
   getAgent(id: string): Promise<Agent> {
     return firstValueFrom(this.api.getAgent(id));
+  }
+
+  /** D6 — will this Agent run for the signed-in user? Rendered by the detail page and
+   * the chat launch card; advisory on both, so every caller treats a failure as "unknown"
+   * rather than as an error worth showing. */
+  getRunnability(id: string): Promise<AgentRunnability> {
+    return firstValueFrom(this.api.getRunnability(id));
   }
 
   createDraft(request: CreateAgentDraftRequest = {}): Promise<Agent> {

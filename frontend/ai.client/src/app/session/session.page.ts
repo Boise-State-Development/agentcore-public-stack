@@ -27,7 +27,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
 import { AgentService } from '../agents/services/agent.service';
-import { Agent } from '../agents/models/agent.model';
+import { Agent, AgentRunnability } from '../agents/models/agent.model';
 import { ToolService } from '../services/tool/tool.service';
 import { SkillService } from '../services/skill/skill.service';
 import { ChatContainerComponent, ChatContainerConfig } from './components/chat-container/chat-container.component';
@@ -106,6 +106,13 @@ export class ConversationPage implements OnDestroy {
   // assistantId), when the /agents surface is enabled and it resolves. Drives
   // the per-primitive picker locks; null for plain chat or a legacy assistant.
   agent = signal<Agent | null>(null);
+  /**
+   * D6 for the launch card, when it resolves. Deliberately a third signal rather than a
+   * field on `agent`: it fans out across the viewer's model/tool/skill catalogs, so it
+   * settles in after the card has already painted — the same two-load split the store's
+   * detail page uses.
+   */
+  runnability = signal<AgentRunnability | null>(null);
   isLoadingAssistant = signal(false);
   isSettingsOpen = signal(false);
 
@@ -345,6 +352,7 @@ export class ConversationPage implements OnDestroy {
         this.assistant.set(null);
         this.assistantError.set(null);
         this.agent.set(null);
+        this.runnability.set(null);
       }
       // Always release the picker locks. They live in root singleton services
       // that OUTLIVE this component, so a freshly-created "new chat" component
@@ -779,7 +787,18 @@ export class ConversationPage implements OnDestroy {
       this.applyAgentBindingLocks(agent);
     } catch {
       this.agent.set(null);
+      this.runnability.set(null);
       this.clearAgentBindingLocks();
+      return;
+    }
+
+    // D6 for the launch card's run line. Not awaited by anything the conversation needs,
+    // and a failure leaves the line absent rather than erroring — "will this run for you?"
+    // is advisory here exactly as it is on the store's detail page.
+    try {
+      this.runnability.set(await this.agentService.getRunnability(assistantId));
+    } catch {
+      this.runnability.set(null);
     }
   }
 

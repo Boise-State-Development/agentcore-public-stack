@@ -19,7 +19,6 @@ larger change than the UI deprecation was.
 | Path | Consumed by |
 |---|---|
 | `components/share-assistant-dialog.component.ts` | `agents/agents.page`, `agents/agent-form`, `session/session.page` |
-| `components/assistant-card.component.ts` | `agents/agent-form/components/agent-preview`, `session/components/chat-container` |
 | `components/file-source-browser-dialog`, `web-source-dialog`, `sync-policy-control` | `knowledge-base/knowledge-base-section` |
 | `assistant-form/services/preview-chat.service.ts` | `agents/agent-form/components/agent-preview` |
 | `services/assistant.service.ts`, `assistant-api.service.ts` | the share dialog, `session/session.page` |
@@ -28,6 +27,12 @@ larger change than the UI deprecation was.
 
 `assistant-form/` now contains **only** `services/preview-chat.service.ts`. The page it was
 named for is gone; the service stayed because the Designer's preview pane uses it.
+
+`components/assistant-card.component.ts` is **gone** — replaced by
+`agents/components/agent-launch-card.component.ts`. It was the last pre-Marketplace surface
+and it drew its own avatar from a 26-entry, first-letter-keyed gradient map, so the same
+Agent had one tile in the store and a different one in chat. The replacement renders
+`app-agent-icon` like every other surface. Don't reintroduce a per-surface identity hash.
 
 ## The one behavioral difference worth knowing
 

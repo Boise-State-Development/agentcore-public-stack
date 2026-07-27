@@ -20,7 +20,10 @@ import {
 import { ChatContainerComponent, ChatContainerConfig } from '../../../session/components/chat-container/chat-container.component';
 import { ChatInputComponent } from '../../../session/components/chat-input/chat-input.component';
 import { PreviewChatService } from '../../../assistants/assistant-form/services/preview-chat.service';
-import { AssistantCardComponent } from '../../../assistants/components/assistant-card.component';
+import {
+  AgentLaunchCardComponent,
+  AgentLaunchCardView,
+} from '../../components/agent-launch-card.component';
 import { ModelService } from '../../../session/services/model/model.service';
 
 /**
@@ -44,7 +47,7 @@ import { ModelService } from '../../../session/services/model/model.service';
 @Component({
   selector: 'app-agent-preview',
   standalone: true,
-  imports: [NgIcon, ChatContainerComponent, ChatInputComponent, AssistantCardComponent],
+  imports: [NgIcon, ChatContainerComponent, ChatInputComponent, AgentLaunchCardComponent],
   providers: [
     PreviewChatService,
     provideIcons({
@@ -125,11 +128,8 @@ import { ModelService } from '../../../session/services/model/model.service';
         <div class="relative flex min-h-0 flex-1 flex-col">
           @if (!hasMessages()) {
             <div class="flex flex-1 items-center justify-center overflow-y-auto bg-white p-6 dark:bg-gray-800">
-              <app-assistant-card
-                [name]="name()"
-                [description]="description()"
-                [emoji]="emoji()"
-                [starters]="starters()"
+              <app-agent-launch-card
+                [view]="cardView()"
                 (starterSelected)="onStarterSelected($event)"
               />
             </div>
@@ -213,6 +213,24 @@ export class AgentPreviewComponent implements OnDestroy {
   readonly greetingMessage = computed(() =>
     this.name() ? `Chat with ${this.name()}` : 'Start a conversation',
   );
+
+  /**
+   * The launch card as the author's own agent sees it — built from the live form rather
+   * than a fetched record, so a name typed a second ago is already on the tile.
+   *
+   * `listed: false` regardless of the real listing state: the store affordances are Add
+   * and Agent details, and neither means anything on the page where you are editing the
+   * thing. Capabilities are likewise omitted — the header's capability strip already
+   * names what this agent runs with, from the live selections rather than the saved ones.
+   */
+  readonly cardView = computed<AgentLaunchCardView>(() => ({
+    agentId: this.agentId() ?? '',
+    name: this.name(),
+    description: this.description(),
+    emoji: this.emoji(),
+    starters: this.starters(),
+    listed: false,
+  }));
 
   readonly chatConfigMessagesOnly: Partial<ChatContainerConfig> = {
     embeddedMode: true,

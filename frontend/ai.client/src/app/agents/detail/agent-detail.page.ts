@@ -26,6 +26,7 @@ import {
 import { AgentApiService } from '../services/agent-api.service';
 import { AgentPinService } from '../services/agent-pin.service';
 import { Agent, AgentRunnability } from '../models/agent.model';
+import { runnabilityIcon, runnabilityMessage } from '../models/runnability';
 import { AgentIconComponent } from '../components/agent-icon.component';
 import {
   ReportAgentDialogComponent,
@@ -459,28 +460,18 @@ export class AgentDetailPage implements OnInit {
     ];
   });
 
+  /**
+   * D6's two lines live in `models/runnability` because the chat launch card renders the
+   * same answer — two copies would eventually be two different sentences for one state.
+   */
   readonly availabilityIcon = computed(() => {
-    switch (this.runnability()?.state) {
-      case 'ready':
-        return 'heroCheckCircle';
-      default:
-        return 'heroNoSymbol';
-    }
+    const r = this.runnability();
+    return r ? runnabilityIcon(r) : 'heroNoSymbol';
   });
 
-  /**
-   * D6's two lines, each naming what is unavailable rather than saying "something".
-   * A user who cannot act on the sentence has been told nothing useful.
-   */
   readonly availabilityText = computed(() => {
     const r = this.runnability();
-    if (!r) return '';
-    if (r.state === 'ready') return 'Ready to run for you.';
-
-    const names = r.missing.map((m) => `“${m.label}”`).join(', ');
-    const verb = r.missing.length === 1 ? "isn't" : "aren't";
-    const lead = 'Not available to you';
-    return names ? `${lead} — ${names} ${verb} granted to your role.` : `${lead}.`;
+    return r ? runnabilityMessage(r) : '';
   });
 
   isPinned(): boolean {
