@@ -288,6 +288,32 @@ class AppRoleListResponse(BaseModel):
     total: int
 
 
+class AdminScopeResponse(BaseModel):
+    """One entry from the delegated admin scope registry."""
+
+    id: str
+    label: str
+    group: str
+    description: str
+    delegable: bool
+
+    model_config = {"populate_by_name": True}
+
+
+class AdminScopeListResponse(BaseModel):
+    """The admin scope registry, for building the role form's scope picker.
+
+    Non-delegable scopes are included rather than filtered out: the picker
+    should *show* that `admin.roles` and `admin.auth_providers` exist and
+    explain that they cannot be granted, instead of leaving an admin wondering
+    why those two areas are missing. The client renders them disabled; the
+    server rejects them regardless (`validate_admin_scopes`).
+    """
+
+    scopes: List[AdminScopeResponse]
+    total: int
+
+
 class CacheStatsResponse(BaseModel):
     """Cache statistics response."""
 

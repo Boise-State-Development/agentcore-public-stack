@@ -295,13 +295,16 @@ module level and the handlers reference the alias:
 
 ```python
 # apis/app_api/admin/tools/routes.py
-_require = require_admin_scope("admin.tools")
+require_tools_admin = require_admin_scope("admin.tools")
 
 @router.get("")
-async def list_tools(admin: User = Depends(_require)):
+async def list_tools(admin: User = Depends(require_tools_admin)):
 ```
 
-One mechanical substitution per file, 15 files. `admin/roles/routes.py` and
+**As built (PR-2):** one mechanical substitution per file, **13 packages**.
+The dependency is named after its area rather than a private `_require` —
+mirroring the pre-existing `require_marketplace_admin`, and giving tests a
+stable public handle to override. `admin/roles/routes.py` and
 `admin/auth_providers/routes.py` keep bare `require_admin` (I1).
 
 The migration is fully contained: `require_admin` is *invoked* nowhere outside
@@ -402,8 +405,8 @@ on the scope.
 | PR | Content |
 |---|---|
 | **PR-1** | Data + registry: `granted_admin_scopes` on `AppRole`, `admin_scopes` through `EffectivePermissions`/`UserEffectivePermissions`/`_merge_permissions`, `admin_scopes.py` registry, non-delegable + unknown-scope validation in `role_constraints.py` wired into `admin_service`, `grantedAdminScopes` on the `AppRoleCreate`/`AppRoleUpdate` bodies so the axis round-trips end to end. Unit tests. **Inert** — the value is stored and resolved, but no authorization path reads it. |
-| **PR-2** | Enforcement: `require_admin_scope`, the 15-file alias migration, the I3 write-through guard on `set_roles_for_*`, the §6.3 architecture test. Behavior for `system_admin` unchanged. Also fix the two stale auth docs while the context is loaded — `apis/app_api/admin/README.md` and `apis/shared/auth/RBAC_QUICK_REFERENCE.md` both document helpers that do not exist (`require_roles`, `require_all_roles`, `has_any_role`, `require_faculty`, …) and both describe `require_admin` as "Admin or SuperAdmin". Anyone implementing delegated admin will read them first. |
-| **PR-3** | API surface: `adminScopes` on `/users/me/permissions`, `GET /admin/roles/admin-scopes` registry endpoint. Watch the precedent bug here: `UserPermissionsResponse` (`app_api/users/routes.py:37-43`) still omits `skills` even though `UserEffectivePermissions` has carried it for months — a field added to the model and forgotten in the response shape. Add `skills` while in there. |
+| **PR-2** ✅ #774 | Enforcement: `require_admin_scope`, the 13-package alias migration, the I3 write-through guard on `set_roles_for_*`, the §6.3 architecture test. Behavior for `system_admin` unchanged. Also fix the two stale auth docs while the context is loaded — `apis/app_api/admin/README.md` and `apis/shared/auth/RBAC_QUICK_REFERENCE.md` both document helpers that do not exist (`require_roles`, `require_all_roles`, `has_any_role`, `require_faculty`, …) and both describe `require_admin` as "Admin or SuperAdmin". Anyone implementing delegated admin will read them first. **As built**, two things were added beyond the plan: the write-through guard raises `RoleMutationForbidden` → 403 through a new app-level handler (the resource routes catch `ValueError` → 400, which would misreport a denied escalation as a bad request), and a `override_admin_auth` test helper reads dependencies off the app rather than importing them — `test_skills_feature_flag.py` reloads the admin routes module, which rebuilds every dependency object and silently breaks an import-based override list. |
+| **PR-3** ✅ | API surface: `adminScopes` on `/users/me/permissions`, `GET /admin/roles/admin-scopes` registry endpoint. Watch the precedent bug here: `UserPermissionsResponse` (`app_api/users/routes.py:37-43`) still omits `skills` even though `UserEffectivePermissions` has carried it for months — a field added to the model and forgotten in the response shape. Add `skills` while in there. **As built**, the registry endpoint must be declared *above* `/{role_id}` — a single-segment literal loses to a single-segment path parameter declared first, and the symptom is a 404 rather than an import-time error. Guarded by a declaration-order test. |
 | **PR-4** | SPA: `adminScopes` signal + `hasAdminScope`/`canAccessAdmin`, per-route `adminScopeGuard`, nav filtering, landing resolver, scoped badge refresh, admin-scopes control on the role form. |
 | **PR-5** | Audit log for admin-surface mutations (decided in scope, §8). Promotes the existing structured-log emission points into durable, queryable records with before/after values. |
 

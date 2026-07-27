@@ -39,6 +39,8 @@ async def get_my_permissions(
             app_roles=permissions.app_roles,
             tools=permissions.tools,
             models=permissions.models,
+            skills=permissions.skills,
+            admin_scopes=permissions.admin_scopes,
             quota_tier=permissions.quota_tier,
             resolved_at=permissions.resolved_at,
         )
