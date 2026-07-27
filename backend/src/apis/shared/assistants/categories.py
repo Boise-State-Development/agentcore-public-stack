@@ -20,11 +20,11 @@ and the browse header while its listings keep their partition intact.
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .listing import DEFAULT_CATEGORIES
 from .models import AgentCategory
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ _PARTITION = "AGENT_CATEGORIES"
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 def _table():

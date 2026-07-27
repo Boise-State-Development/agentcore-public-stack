@@ -3,12 +3,12 @@
 import os
 import logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone
 
 import boto3
 from botocore.exceptions import ClientError
 
 from .models import AppRole
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,7 @@ class AppRoleRepository:
                 raise ValueError(f"Role '{role.role_id}' already exists")
 
             # Set timestamps
-            now = datetime.now(timezone.utc).isoformat() + "Z"
+            now = utc_now_iso()
             role.created_at = now
             role.updated_at = now
 
@@ -152,7 +152,7 @@ class AppRoleRepository:
                 raise ValueError(f"Role '{role.role_id}' not found")
 
             # Update timestamp
-            role.updated_at = datetime.now(timezone.utc).isoformat() + "Z"
+            role.updated_at = utc_now_iso()
             role.created_at = existing.created_at  # Preserve original
 
             # Delete old mapping items and create new ones

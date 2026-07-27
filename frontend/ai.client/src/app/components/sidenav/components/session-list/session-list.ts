@@ -16,6 +16,7 @@ import { SessionMetadata } from '../../../../session/services/models/session-met
 import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../confirmation-dialog';
+import { parseIso } from '../../../../utils/date';
 
 @Component({
   selector: 'app-session-list',
@@ -224,7 +225,7 @@ export class SessionList {
    * @returns Formatted time string
    */
   protected formatTime(timestamp: string): string {
-    const date = new Date(timestamp);
+    const date = parseIso(timestamp);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / 60000);

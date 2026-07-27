@@ -9,6 +9,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowPath, heroChevronDown } from '@ng-icons/heroicons/outline';
 
 import { SyncInterval, SyncPolicy } from '../models/sync-policy.model';
+import { parseIso } from '../../utils/date';
 
 /** The select's "no policy / turn sync off" sentinel. */
 export type SyncIntervalSelection = SyncInterval | 'manual';

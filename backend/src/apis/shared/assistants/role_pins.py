@@ -33,12 +33,12 @@ records when an Agent was *seeded*, not when the list was last dragged around.
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Dict, List, Sequence, Tuple
 
 from boto3.dynamodb.conditions import Key
 
 from .models import RoleAgentPin, RoleAgentPinInput
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ MAX_ROLE_PINS = 25
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 def _table():

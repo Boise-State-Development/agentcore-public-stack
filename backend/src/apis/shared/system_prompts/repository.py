@@ -3,13 +3,13 @@
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
 from typing import List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
 
 from .models import SystemPrompt, SystemPromptCreate, SystemPromptUpdate
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ class SystemPromptsRepository:
         if not self._enabled:
             raise RuntimeError("System prompts repository is not enabled")
 
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = utc_now_iso()
         prompt = SystemPrompt(
             prompt_id=str(uuid.uuid4()),
             name=data.name,
@@ -141,7 +141,7 @@ class SystemPromptsRepository:
         update_fields = updates.model_dump(exclude_none=True)
         for field_name, value in update_fields.items():
             setattr(existing, field_name, value)
-        existing.updated_at = datetime.now(timezone.utc).isoformat() + "Z"
+        existing.updated_at = utc_now_iso()
 
         try:
             self._table.put_item(

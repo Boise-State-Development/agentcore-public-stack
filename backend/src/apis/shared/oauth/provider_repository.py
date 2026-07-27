@@ -7,13 +7,13 @@ registered directly with AgentCore Identity by the admin route.
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
 
 from .models import OAuthProvider, OAuthProviderUpdate
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ class OAuthProviderRepository:
             # adapter key sets it. `None` leaves the existing value alone.
             existing.export_target_adapter_id = updates.export_target_adapter_id or None
 
-        existing.updated_at = datetime.now(timezone.utc).isoformat() + "Z"
+        existing.updated_at = utc_now_iso()
         self._table.put_item(Item=existing.to_dynamo_item())
         logger.info("Updated OAuth provider metadata: %s", provider_id)
         return existing

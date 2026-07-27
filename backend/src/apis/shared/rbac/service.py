@@ -2,7 +2,6 @@
 
 import logging
 from typing import List, Set, Optional
-from datetime import datetime, timezone
 
 from apis.shared.auth.models import User
 from apis.shared.tools.scoped_ids import base_tool_id
@@ -10,6 +9,7 @@ from apis.shared.tools.scoped_ids import base_tool_id
 from .models import AppRole, UserEffectivePermissions
 from .repository import AppRoleRepository
 from .cache import AppRoleCache, get_app_role_cache
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ class AppRoleService:
                 skills=[],
                 admin_scopes=[],
                 quota_tier=None,
-                resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
+                resolved_at=utc_now_iso(),
             )
 
         # Collect all tools, models and skills (union)
@@ -221,7 +221,7 @@ class AppRoleService:
             skills=sorted(all_skills),
             admin_scopes=sorted(all_admin_scopes),
             quota_tier=quota_tier,
-            resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
+            resolved_at=utc_now_iso(),
         )
 
     async def can_access_tool(self, user: User, tool_id: str) -> bool:

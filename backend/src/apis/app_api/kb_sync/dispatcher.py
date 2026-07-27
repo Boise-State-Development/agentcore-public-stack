@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from apis.shared.sync_policies.models import SyncPolicy
+from apis.shared.timestamps import from_iso
 from apis.shared.sync_policies.service import (
     INTERVAL_DELTAS,
     delete_sync_policy,
@@ -69,7 +70,7 @@ def _parse_timestamp(value: str) -> Optional[datetime]:
     'Z' and the legacy '+00:00Z' (offset AND Z). Always returns a UTC-aware
     datetime so comparisons with :func:`_now` never mix naive and aware."""
     try:
-        dt = datetime.fromisoformat(value.rstrip("Z"))
+        dt = from_iso(value)
     except (ValueError, AttributeError):
         return None
     if dt.tzinfo is None:

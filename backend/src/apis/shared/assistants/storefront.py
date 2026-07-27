@@ -21,8 +21,8 @@ is later reversed would have silently cost the Agent its slot.
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import List
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ MAX_FEATURED = 10
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 def _table():

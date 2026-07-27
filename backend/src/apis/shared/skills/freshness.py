@@ -28,6 +28,7 @@ import hashlib
 import logging
 import time
 from typing import Dict, FrozenSet, List, Optional, Tuple
+from apis.shared.timestamps import to_iso
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ async def _fetch_updated_at(skill_id: str) -> Optional[str]:
     skill = await repo.get_skill(skill_id)
     if skill is None or skill.updated_at is None:
         return None
-    return skill.updated_at.isoformat() + "Z"
+    return to_iso(skill.updated_at)
 
 
 async def get_skill_updated_at(skill_id: str) -> Optional[str]:

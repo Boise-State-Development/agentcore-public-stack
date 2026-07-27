@@ -16,6 +16,7 @@ from typing import List, Optional, Tuple
 
 from .models import AgentBinding, AgentModelConfig, Assistant
 from .serialization import from_ddb, to_ddb_safe
+from apis.shared.timestamps import to_iso, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def _generate_assistant_id() -> str:
 
 def _get_current_timestamp() -> str:
     """Get current timestamp in ISO 8601 format"""
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 async def create_assistant_draft(owner_id: str, owner_name: str, name: Optional[str] = None) -> Assistant:
@@ -321,12 +322,12 @@ async def bump_last_used_at(assistant_id: str, throttle_hours: int = 24) -> bool
         from botocore.exceptions import ClientError
 
         now_dt = datetime.now(timezone.utc)
-        floor = (now_dt - timedelta(hours=throttle_hours)).isoformat() + "Z"
+        floor = to_iso(now_dt - timedelta(hours=throttle_hours))
         table = boto3.resource("dynamodb").Table(assistants_table)
         table.update_item(
             Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"},
             UpdateExpression="SET lastUsedAt = :now",
-            ExpressionAttributeValues={":now": now_dt.isoformat() + "Z", ":floor": floor},
+            ExpressionAttributeValues={":now": to_iso(now_dt), ":floor": floor},
             ConditionExpression=(
                 "attribute_exists(PK) AND (attribute_not_exists(lastUsedAt) OR lastUsedAt < :floor)"
             ),

@@ -33,9 +33,9 @@ sorts and renders by.
 
 import logging
 import os
-from datetime import datetime, timezone
 
 from .models import PinnedAgentRef, UserPinState
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ MAX_PINS = 100
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 def _table():

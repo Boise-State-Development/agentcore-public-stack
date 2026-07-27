@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set
 
 from pydantic import BaseModel, Field, model_validator
+from apis.shared.timestamps import from_iso, to_iso
 
 
 class ToolCategory(str, Enum):
@@ -723,8 +724,8 @@ class ToolDefinition(BaseModel):
             "forwardAuthToken": self.forward_auth_token,
             "isPublic": self.is_public,
             "enabledByDefault": self.enabled_by_default,
-            "createdAt": self.created_at.isoformat() + "Z" if self.created_at else None,
-            "updatedAt": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+            "createdAt": to_iso(self.created_at) if self.created_at else None,
+            "updatedAt": to_iso(self.updated_at) if self.updated_at else None,
             "createdBy": self.created_by,
             "updatedBy": self.updated_by,
         }
@@ -789,8 +790,8 @@ class ToolDefinition(BaseModel):
             mcp_config=mcp_config,
             a2a_config=a2a_config,
             mcp_gateway_config=mcp_gateway_config,
-            created_at=datetime.fromisoformat(created_at.rstrip("Z")) if created_at else datetime.now(timezone.utc),
-            updated_at=datetime.fromisoformat(updated_at.rstrip("Z")) if updated_at else datetime.now(timezone.utc),
+            created_at=from_iso(created_at) if created_at else datetime.now(timezone.utc),
+            updated_at=from_iso(updated_at) if updated_at else datetime.now(timezone.utc),
             created_by=item.get("createdBy"),
             updated_by=item.get("updatedBy"),
         )
@@ -816,7 +817,7 @@ class UserToolPreference(BaseModel):
             "SK": "TOOL_PREFERENCES",
             "userId": self.user_id,
             "toolPreferences": self.tool_preferences,
-            "updatedAt": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+            "updatedAt": to_iso(self.updated_at) if self.updated_at else None,
         }
 
     @classmethod
@@ -826,7 +827,7 @@ class UserToolPreference(BaseModel):
         return cls(
             user_id=item.get("userId", ""),
             tool_preferences=item.get("toolPreferences", {}),
-            updated_at=datetime.fromisoformat(updated_at.rstrip("Z")) if updated_at else datetime.now(timezone.utc),
+            updated_at=from_iso(updated_at) if updated_at else datetime.now(timezone.utc),
         )
 
 
@@ -1333,8 +1334,8 @@ class AdminToolResponse(BaseModel):
             is_public=tool.is_public,
             allowed_app_roles=allowed_roles or tool.allowed_app_roles,
             enabled_by_default=tool.enabled_by_default,
-            created_at=tool.created_at.isoformat() + "Z" if tool.created_at else "",
-            updated_at=tool.updated_at.isoformat() + "Z" if tool.updated_at else "",
+            created_at=to_iso(tool.created_at) if tool.created_at else "",
+            updated_at=to_iso(tool.updated_at) if tool.updated_at else "",
             created_by=tool.created_by,
             updated_by=tool.updated_by,
             mcp_config=mcp_config_response,

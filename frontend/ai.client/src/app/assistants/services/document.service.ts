@@ -10,6 +10,7 @@ import {
   DownloadUrlResponse,
   STALE_DOCUMENT_THRESHOLD_MS,
 } from '../models/document.model';
+import { parseIso } from '../../utils/date';
 
 /**
  * Error class for document upload operations
@@ -329,7 +330,7 @@ export class DocumentService {
         // should already be marked 'failed'. If for some reason it isn't
         // (clock skew, etc.), bail out and return what we have.
         try {
-          const updatedAt = new Date(document.updatedAt).getTime();
+          const updatedAt = parseIso(document.updatedAt).getTime();
           if (Date.now() - updatedAt > STALE_THRESHOLD_MS) {
             return document;
           }

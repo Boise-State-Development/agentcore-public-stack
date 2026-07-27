@@ -47,10 +47,10 @@ for a request-changes or takedown, and that act is separately recorded on the li
 import hashlib
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .models import AgentReport, ReportReason
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ _NAMES = {"#st": "state", "#reason": "reason", "#note": "note"}
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 def _table():

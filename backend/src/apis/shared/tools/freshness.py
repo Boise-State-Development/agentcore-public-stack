@@ -29,6 +29,7 @@ import hashlib
 import logging
 import time
 from typing import Dict, FrozenSet, List, Optional, Tuple
+from apis.shared.timestamps import to_iso
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ async def _fetch_updated_at(tool_id: str) -> Optional[str]:
     tool = await repo.get_tool(tool_id)
     if tool is None or tool.updated_at is None:
         return None
-    return tool.updated_at.isoformat() + "Z"
+    return to_iso(tool.updated_at)
 
 
 async def get_tool_updated_at(tool_id: str) -> Optional[str]:

@@ -6,7 +6,6 @@ DynamoDB operations for file metadata and user quota tracking.
 
 import os
 import logging
-from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
@@ -14,6 +13,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from .models import FileMetadata, UserFileQuota, FileStatus
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ class FileUploadRepository:
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues={
                     ":status": status.value if isinstance(status, FileStatus) else status,
-                    ":now": datetime.now(timezone.utc).isoformat() + "Z",
+                    ":now": utc_now_iso(),
                 },
                 ConditionExpression="attribute_exists(PK)",
                 ReturnValues="ALL_NEW",
@@ -333,7 +333,7 @@ class FileUploadRepository:
                 ),
                 ExpressionAttributeValues={
                     ":userId": user_id,
-                    ":now": datetime.now(timezone.utc).isoformat() + "Z",
+                    ":now": utc_now_iso(),
                     ":size": size_bytes,
                     ":one": 1,
                 },
@@ -364,7 +364,7 @@ class FileUploadRepository:
                 ),
                 ExpressionAttributeValues={
                     ":userId": user_id,
-                    ":now": datetime.now(timezone.utc).isoformat() + "Z",
+                    ":now": utc_now_iso(),
                     ":negSize": -size_bytes,
                     ":negOne": -1,
                 },

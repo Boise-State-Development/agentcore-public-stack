@@ -34,6 +34,7 @@ import {
   ReportAgentDialogResult,
 } from '../components/report-agent-dialog.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
+import { parseIso } from '../../utils/date';
 
 /**
  * Agent detail — the page a shelf row taps through to (Marketplace Phase 3).
@@ -577,7 +578,7 @@ export class AgentDetailPage implements OnInit {
   }
 
   private formatDate(iso: string): string {
-    const parsed = new Date(iso);
+    const parsed = parseIso(iso);
     if (Number.isNaN(parsed.getTime())) return '—';
     return parsed.toLocaleDateString(undefined, {
       year: 'numeric',

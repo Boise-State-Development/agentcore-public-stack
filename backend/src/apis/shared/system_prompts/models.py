@@ -13,10 +13,10 @@ convention. The frontend admin page consumes the response shape directly.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
+from apis.shared.timestamps import utc_now_iso
 
 MAX_PROMPT_TEXT_LENGTH = 8_000
 
@@ -24,7 +24,7 @@ PromptStatus = Literal["enabled", "disabled"]
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return utc_now_iso()
 
 
 @dataclass

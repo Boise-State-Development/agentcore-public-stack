@@ -9,7 +9,6 @@ the callback URL that the admin must register with the vendor.
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Optional
 
@@ -39,6 +38,7 @@ from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
     get_provider_repository,
 )
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -338,7 +338,7 @@ async def update_provider(
     if credential_info is not None:
         provider.credential_provider_arn = credential_info.credential_provider_arn
         provider.callback_url = credential_info.callback_url
-        provider.updated_at = datetime.now(timezone.utc).isoformat() + "Z"
+        provider.updated_at = utc_now_iso()
         await provider_repo.put_provider(provider)
 
     return OAuthProviderResponse.from_provider(provider)
@@ -434,7 +434,7 @@ def _validate_export_target_adapter(
 def _build_provider_from_create(
     data: OAuthProviderCreate, credential_info: CredentialProviderInfo
 ) -> OAuthProvider:
-    now = datetime.now(timezone.utc).isoformat() + "Z"
+    now = utc_now_iso()
     return OAuthProvider(
         provider_id=data.provider_id,
         display_name=data.display_name,

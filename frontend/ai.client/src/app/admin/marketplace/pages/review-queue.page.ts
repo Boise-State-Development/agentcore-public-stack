@@ -17,6 +17,7 @@ import {
   RequestChangesDialogData,
   RequestChangesDialogResult,
 } from '../components/request-changes-dialog.component';
+import { parseIso } from '../../../utils/date';
 
 /**
  * The Review queue — every submission awaiting a decision (D2).
@@ -189,7 +190,7 @@ export class ReviewQueuePage implements OnInit {
   /** "yesterday" / "3 days ago", matching the mockup's queue subtitle. */
   relativeTime(iso?: string): string {
     if (!iso) return 'recently';
-    const then = new Date(iso).getTime();
+    const then = parseIso(iso).getTime();
     if (Number.isNaN(then)) return 'recently';
 
     const days = Math.floor((Date.now() - then) / 86_400_000);

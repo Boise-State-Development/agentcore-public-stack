@@ -18,6 +18,7 @@ import { FineTuningStateService } from '../../services/fine-tuning-state.service
 import { StatusBadgeComponent } from '../../components/status-badge.component';
 import { QuotaCardComponent } from '../../components/quota-card.component';
 import type { JobResponse, InferenceJobResponse } from '../../models/fine-tuning.models';
+import { parseIso } from '../../../utils/date';
 
 @Component({
   selector: 'app-fine-tuning-dashboard',
@@ -181,7 +182,7 @@ export class FineTuningDashboardPage implements OnInit {
   /** Calculate elapsed time from a start timestamp to now. */
   private getElapsed(startTime: string | null, fallback: string): string {
     const start = startTime ?? fallback;
-    const ms = this.now() - new Date(start).getTime();
+    const ms = this.now() - parseIso(start).getTime();
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
     return this.formatDuration(totalSeconds);
   }
@@ -211,7 +212,7 @@ export class FineTuningDashboardPage implements OnInit {
 
   /** Get days remaining before S3 artifacts expire for a job. */
   getRetentionDaysRemaining(createdAt: string): number {
-    const created = new Date(createdAt).getTime();
+    const created = parseIso(createdAt).getTime();
     const expiresAt = created + this.RETENTION_DAYS * 24 * 60 * 60 * 1000;
     return Math.max(0, Math.ceil((expiresAt - Date.now()) / (24 * 60 * 60 * 1000)));
   }
