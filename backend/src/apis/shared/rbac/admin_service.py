@@ -8,7 +8,8 @@ from apis.shared.auth.models import User
 from .models import AppRole, EffectivePermissions, AppRoleCreate, AppRoleUpdate
 from .repository import AppRoleRepository
 from .cache import AppRoleCache, get_app_role_cache
-from .role_constraints import validate_jwt_role_mappings
+from .admin_scopes import normalize_scopes
+from .role_constraints import validate_admin_scopes, validate_jwt_role_mappings
 from .version import bump_roles_version
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,9 @@ class AppRoleAdminService:
         # malformed entries, regardless of role.
         validate_jwt_role_mappings(role_data.role_id, role_data.jwt_role_mappings)
 
+        # Reject unknown or non-delegable admin scopes.
+        validate_admin_scopes(role_data.granted_admin_scopes)
+
         # Build the AppRole object
         role = AppRole(
             role_id=role_data.role_id,
@@ -76,6 +80,7 @@ class AppRoleAdminService:
             granted_tools=role_data.granted_tools,
             granted_models=role_data.granted_models,
             granted_skills=role_data.granted_skills,
+            granted_admin_scopes=normalize_scopes(role_data.granted_admin_scopes),
             priority=role_data.priority,
             enabled=role_data.enabled,
             is_system_role=False,
@@ -150,11 +155,23 @@ class AppRoleAdminService:
         if updates.jwt_role_mappings is not None:
             validate_jwt_role_mappings(role_id, updates.jwt_role_mappings)
 
+        # Reject unknown or non-delegable admin scopes. Note that for
+        # `system_admin` this never fires: the field is not in `allowed_fields`
+        # above, so it has already been stripped — which is correct, since
+        # system_admin holds every scope implicitly.
+        if updates.granted_admin_scopes is not None:
+            validate_admin_scopes(updates.granted_admin_scopes)
+
         # Apply updates
         update_dict = updates.model_dump(exclude_unset=True, by_alias=False)
         for field, value in update_dict.items():
             if hasattr(existing, field):
                 setattr(existing, field, value)
+
+        if updates.granted_admin_scopes is not None:
+            existing.granted_admin_scopes = normalize_scopes(
+                existing.granted_admin_scopes
+            )
 
         # Validate inheritance if changed
         if updates.inherits_from is not None:
@@ -280,6 +297,14 @@ class AppRoleAdminService:
         Compute effective permissions for a role, including inheritance.
 
         This resolves single-level inheritance and merges permissions.
+
+        **Admin scopes deliberately do not inherit.** Tools, models, and skills
+        absorb a parent's grants because that is the convenience `inheritsFrom`
+        exists to provide. Administrative power is different: a role acquiring
+        the ability to manage the tool catalog as a side effect of someone
+        setting `inheritsFrom` is exactly the surprise delegated admin exists to
+        prevent. `effective_permissions.admin_scopes` is always the role's own
+        `granted_admin_scopes`, verbatim.
         """
         all_tools: Set[str] = set(role.granted_tools)
         all_models: Set[str] = set(role.granted_models)
@@ -292,12 +317,14 @@ class AppRoleAdminService:
                 all_tools.update(parent.granted_tools)
                 all_models.update(parent.granted_models)
                 all_skills.update(parent.granted_skills)
+                # NOT parent.granted_admin_scopes — see docstring.
 
         return EffectivePermissions(
             tools=list(all_tools),
             models=list(all_models),
             skills=list(all_skills),
             quota_tier=None,  # Quota tier comes from direct configuration
+            admin_scopes=normalize_scopes(role.granted_admin_scopes),
         )
 
     async def _validate_inheritance(self, inherits_from: List[str]):
