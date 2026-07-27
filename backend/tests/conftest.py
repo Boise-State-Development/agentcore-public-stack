@@ -118,3 +118,83 @@ def _clear_env_config_bleed():
         for k, v in saved.items():
             os.environ[k] = v
 
+
+
+# ---------------------------------------------------------------------------
+# Admin authorization overrides
+# ---------------------------------------------------------------------------
+#
+# Admin routes are no longer guarded by a single `require_admin`: each admin
+# router package declares its own `require_admin_scope(...)` dependency
+# (delegated admin scopes, docs/specs/granular-admin-permissions.md). A test
+# that mounts the root admin router therefore has several distinct dependency
+# objects to satisfy, and overriding `require_admin` alone silently 401s.
+#
+# `override_admin_auth` overrides all of them at once, so a new admin area is
+# covered automatically instead of breaking every route test that mounts the
+# root router.
+
+
+# The closures returned by the dependency factories in
+# `apis/shared/auth/rbac.py`. Matching on qualname rather than importing the
+# module-level names is deliberate: `test_skills_feature_flag.py` reloads
+# `apis.app_api.admin.routes`, which rebuilds every `require_*_admin` object in
+# it. A test app built before that reload still holds the *old* dependency
+# objects, so an import-based override list silently stops matching and every
+# request 401s. Reading the dependencies off the app can't go stale.
+_AUTH_CHECKER_QUALNAMES = frozenset(
+    {
+        "require_app_roles.<locals>.checker",   # includes require_admin
+        "require_admin_scope.<locals>.checker",
+    }
+)
+
+
+def _walk_dependants(dependant):
+    """Yield a route's dependency tree, sub-dependencies included."""
+    for dep in dependant.dependencies:
+        yield dep
+        yield from _walk_dependants(dep)
+
+
+def override_admin_auth(app, impl) -> None:
+    """Point every admin authorization dependency on ``app`` at ``impl``.
+
+    Walks the app's own routes, so it covers whichever admin areas the test
+    mounted and picks up new ones for free.
+
+    Note it targets only the *authorization closures*, not wrappers built on
+    them. `require_marketplace_admin` is a wrapper that also enforces the
+    AGENT_MARKETPLACE_ENABLED kill switch (404 when off); overriding it would
+    authorize the caller *and* silently disable the kill switch, so a test
+    asserting the disabled behavior would sail straight past it. Overriding the
+    scope check it wraps leaves the wrapper running.
+
+    Args:
+        app: The FastAPI app under test.
+        impl: A zero-arg callable returning the User to inject — or one that
+            raises, to exercise the denied path.
+
+    Raises:
+        AssertionError: if the app exposes no authorization dependency at all,
+            which means the test would have 401'd for a non-obvious reason.
+    """
+    matched = 0
+
+    for route in app.routes:
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for dep in _walk_dependants(dependant):
+            call = dep.call
+            if call is None:
+                continue
+            if getattr(call, "__qualname__", "") in _AUTH_CHECKER_QUALNAMES:
+                app.dependency_overrides[call] = impl
+                matched += 1
+
+    assert matched, (
+        "override_admin_auth found no authorization dependency on this app — "
+        "did the router fail to mount, or was the app built before a module "
+        "reload replaced its dependencies?"
+    )

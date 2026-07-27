@@ -14,7 +14,7 @@ import csv
 import io
 import json
 
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from .models import (
     TopUserCost,
     SystemCostSummary,
@@ -29,6 +29,11 @@ from .service import AdminCostService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/costs", tags=["admin-costs"])
+
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_costs_admin = require_admin_scope("admin.costs")
 
 
 # ========== Dependencies ==========
@@ -59,7 +64,7 @@ async def get_cost_dashboard(
         alias="includeTrends",
         description="Include daily trends for the period"
     ),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_costs_admin),
     service: AdminCostService = Depends(get_cost_service)
 ):
     """
@@ -113,7 +118,7 @@ async def get_cost_dashboard(
 @router.get("/sessions/{session_id}/calls", response_model=SessionCostAnatomy)
 async def get_session_cost_anatomy(
     session_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_costs_admin),
     service: AdminCostService = Depends(get_cost_service)
 ):
     """
@@ -193,7 +198,7 @@ async def get_top_users(
         alias="tierId",
         description="Filter by quota tier (not yet implemented)"
     ),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_costs_admin),
     service: AdminCostService = Depends(get_cost_service)
 ):
     """
@@ -250,7 +255,7 @@ async def get_system_summary(
         pattern=r"^(daily|monthly)$",
         description="Period type: 'daily' or 'monthly'"
     ),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_costs_admin),
     service: AdminCostService = Depends(get_cost_service)
 ):
     """
@@ -300,7 +305,7 @@ async def get_usage_by_model(
         description="Period (YYYY-MM), defaults to current month",
         pattern=r"^\d{4}-\d{2}$"
     ),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_costs_admin),
     service: AdminCostService = Depends(get_cost_service)
 ):
     """
@@ -343,7 +348,7 @@ async def get_usage_by_tier(
         description="Period (YYYY-MM), defaults to current month",
         pattern=r"^\d{4}-\d{2}$"
     ),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_costs_admin),
     service: AdminCostService = Depends(get_cost_service)
 ):
     """
@@ -394,7 +399,7 @@ async def get_cost_trends(
         description="End date (YYYY-MM-DD)",
         pattern=r"^\d{4}-\d{2}-\d{2}$"
     ),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_costs_admin),
     service: AdminCostService = Depends(get_cost_service)
 ):
     """
@@ -450,7 +455,7 @@ async def export_cost_data(
         pattern=r"^(csv|json)$",
         description="Export format: 'csv' or 'json'"
     ),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_costs_admin),
     service: AdminCostService = Depends(get_cost_service)
 ):
     """

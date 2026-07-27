@@ -65,6 +65,18 @@ class RoleConstraintError(ValueError):
     """Raised when a role mutation violates a security constraint."""
 
 
+class RoleMutationForbidden(Exception):
+    """Raised when the *actor* is not permitted to mutate a particular role.
+
+    Distinct from :class:`RoleConstraintError` (which is about the *content* of
+    a mutation) because this one is an authorization failure and must surface
+    as a 403, not a 400. Deliberately not a ``ValueError``: the resource admin
+    routes that can trigger a write-through catch ``ValueError`` and map it to
+    400, which would misreport a denied privilege escalation as a bad request.
+    ``app_api.main`` registers a handler that maps this to 403.
+    """
+
+
 def _is_forbidden_for_protected(value: str) -> bool:
     return value.strip().lower() in _FORBIDDEN_PROTECTED_MAPPINGS
 

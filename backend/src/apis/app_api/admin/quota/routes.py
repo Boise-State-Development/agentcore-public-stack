@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List, Optional
 import logging
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from apis.shared.costs.aggregator import CostAggregator
 from agents.main_agent.quota.repository import QuotaRepository
 from agents.main_agent.quota.resolver import QuotaResolver
@@ -22,6 +22,11 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/quota", tags=["admin-quota"])
+
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_quota_admin = require_admin_scope("admin.quota")
 
 
 # ========== Dependencies ==========
@@ -61,7 +66,7 @@ def get_quota_service(
 @router.post("/tiers", response_model=QuotaTier, status_code=status.HTTP_201_CREATED)
 async def create_tier(
     tier_data: QuotaTierCreate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -96,7 +101,7 @@ async def create_tier(
 @router.get("/tiers", response_model=List[QuotaTier])
 async def list_tiers(
     enabled_only: bool = False,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -123,7 +128,7 @@ async def list_tiers(
 @router.get("/tiers/{tier_id}", response_model=QuotaTier)
 async def get_tier(
     tier_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -154,7 +159,7 @@ async def get_tier(
 async def update_tier(
     tier_id: str,
     updates: QuotaTierUpdate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -190,7 +195,7 @@ async def update_tier(
 @router.delete("/tiers/{tier_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_tier(
     tier_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -226,7 +231,7 @@ async def delete_tier(
 @router.post("/assignments", response_model=QuotaAssignment, status_code=status.HTTP_201_CREATED)
 async def create_assignment(
     assignment_data: QuotaAssignmentCreate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -262,7 +267,7 @@ async def create_assignment(
 async def list_assignments(
     assignment_type: Optional[str] = None,
     enabled_only: bool = False,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -293,7 +298,7 @@ async def list_assignments(
 @router.get("/assignments/{assignment_id}", response_model=QuotaAssignment)
 async def get_assignment(
     assignment_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -324,7 +329,7 @@ async def get_assignment(
 async def update_assignment(
     assignment_id: str,
     updates: QuotaAssignmentUpdate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -361,7 +366,7 @@ async def update_assignment(
 @router.delete("/assignments/{assignment_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_assignment(
     assignment_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -394,7 +399,7 @@ async def get_user_quota_info(
     user_id: str,
     email: str = "",
     roles: str = "",
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -434,7 +439,7 @@ async def get_user_quota_info(
 @router.post("/overrides", response_model=QuotaOverride, status_code=status.HTTP_201_CREATED)
 async def create_override(
     override_data: QuotaOverrideCreate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -473,7 +478,7 @@ async def create_override(
 async def list_overrides(
     user_id: Optional[str] = None,
     active_only: bool = False,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -504,7 +509,7 @@ async def list_overrides(
 @router.get("/overrides/{override_id}", response_model=QuotaOverride)
 async def get_override(
     override_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -539,7 +544,7 @@ async def get_override(
 async def update_override(
     override_id: str,
     updates: QuotaOverrideUpdate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -574,7 +579,7 @@ async def update_override(
 @router.delete("/overrides/{override_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_override(
     override_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """
@@ -609,7 +614,7 @@ async def get_events(
     tier_id: Optional[str] = None,
     event_type: Optional[str] = None,
     limit: int = 50,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_quota_admin),
     service: QuotaAdminService = Depends(get_quota_service)
 ):
     """

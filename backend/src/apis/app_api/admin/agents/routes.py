@@ -1,7 +1,7 @@
 """Admin API routes for the Agent Marketplace (Phases 1-2, 5).
 
 Mounted under ``/admin/agents`` per the CLAUDE.md route convention — admin CRUD lives at
-``/admin/resource/``, never ``/resource/admin/``. Every route is ``Depends(require_admin)``
+``/admin/resource/``, never ``/resource/admin/``. Every route is ``Depends(require_marketplace_scope)``
 (= ``require_app_roles("system_admin")``); D2 is explicit that a granular "marketplace
 curator" permission is a deliberate follow-up, so do not open a second permission axis here.
 
@@ -75,7 +75,7 @@ from apis.shared.assistants.publishers import (
     put_publisher,
     set_eligibility,
 )
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from apis.shared.feature_flags import agent_marketplace_enabled
 from apis.shared.timestamps import utc_now_iso
 
@@ -83,12 +83,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["admin-agent-marketplace"])
 
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_marketplace_scope = require_admin_scope("admin.marketplace")
+
 
 def _now() -> str:
     return utc_now_iso()
 
 
-async def require_marketplace_admin(admin: User = Depends(require_admin)) -> User:
+async def require_marketplace_admin(admin: User = Depends(require_marketplace_scope)) -> User:
     """Admin auth + the environment kill switch (404 when off, so it reads as unmounted)."""
     if not agent_marketplace_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")

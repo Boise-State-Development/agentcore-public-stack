@@ -9,7 +9,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from apis.shared.system_prompts.models import (
     SystemPromptAdminListResponse,
     SystemPromptAdminResponse,
@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/system-prompts", tags=["admin-system-prompts"])
 
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_system_prompts_admin = require_admin_scope("admin.system_prompts")
+
 
 @router.get(
     "/",
@@ -30,7 +35,7 @@ router = APIRouter(prefix="/system-prompts", tags=["admin-system-prompts"])
 )
 async def list_system_prompts(
     enabled_only: bool = Query(False, description="Filter to enabled prompts only"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_system_prompts_admin),
 ) -> SystemPromptAdminListResponse:
     """List all system prompts. Admin sees both enabled and disabled."""
     service = get_system_prompts_service()
@@ -48,7 +53,7 @@ async def list_system_prompts(
 )
 async def get_system_prompt(
     prompt_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_system_prompts_admin),
 ) -> SystemPromptAdminResponse:
     service = get_system_prompts_service()
     prompt = await service.get_prompt(prompt_id)
@@ -68,7 +73,7 @@ async def get_system_prompt(
 )
 async def create_system_prompt(
     data: SystemPromptCreate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_system_prompts_admin),
 ) -> SystemPromptAdminResponse:
     try:
         service = get_system_prompts_service()
@@ -89,7 +94,7 @@ async def create_system_prompt(
 async def update_system_prompt(
     prompt_id: str,
     updates: SystemPromptUpdate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_system_prompts_admin),
 ) -> SystemPromptAdminResponse:
     try:
         service = get_system_prompts_service()
@@ -114,7 +119,7 @@ async def update_system_prompt(
 )
 async def delete_system_prompt(
     prompt_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_system_prompts_admin),
 ) -> None:
     service = get_system_prompts_service()
     deleted = await service.delete_prompt(prompt_id)

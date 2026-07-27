@@ -9,7 +9,12 @@ from .models import AppRole, EffectivePermissions, AppRoleCreate, AppRoleUpdate
 from .repository import AppRoleRepository
 from .cache import AppRoleCache, get_app_role_cache
 from .admin_scopes import normalize_scopes
-from .role_constraints import validate_admin_scopes, validate_jwt_role_mappings
+from .role_constraints import (
+    RoleMutationForbidden,
+    is_protected_role,
+    validate_admin_scopes,
+    validate_jwt_role_mappings,
+)
 from .version import bump_roles_version
 
 logger = logging.getLogger(__name__)
@@ -34,6 +39,23 @@ class AppRoleAdminService:
         """Initialize admin service with repository and cache."""
         self.repository = repository or AppRoleRepository()
         self.cache = cache or get_app_role_cache()
+        self._perm_service = None
+
+    def _permission_service(self):
+        """A resolver sharing *this* service's repository and cache.
+
+        Deliberately not ``get_app_role_service()``: that global singleton
+        builds its own repository, which would bypass this instance's injected
+        one — real DynamoDB traffic from a unit test, and two different views of
+        the same data in any caller that injects a repository on purpose.
+        """
+        if self._perm_service is None:
+            from .service import AppRoleService
+
+            self._perm_service = AppRoleService(
+                repository=self.repository, cache=self.cache
+            )
+        return self._perm_service
 
     # =========================================================================
     # CRUD Operations
@@ -133,6 +155,9 @@ class AppRoleAdminService:
         existing = await self.repository.get_role(role_id)
         if not existing:
             return None
+
+        # Who may touch *this* role at all — see the method docstring.
+        await self._assert_actor_may_mutate(existing, admin)
 
         # System role protection
         if existing.is_system_role and role_id == "system_admin":
@@ -325,6 +350,70 @@ class AppRoleAdminService:
             skills=list(all_skills),
             quota_tier=None,  # Quota tier comes from direct configuration
             admin_scopes=normalize_scopes(role.granted_admin_scopes),
+        )
+
+    async def _assert_actor_may_mutate(self, role: AppRole, actor: User) -> None:
+        """Gate mutation of admin-bearing roles to ``system_admin``.
+
+        ``update_role`` is not only reached from the roles admin. The tool,
+        model, and skill admin pages each offer a "which roles can use this?"
+        picker that writes *through* into role records — ``set_roles_for_tool``,
+        ``set_roles_for_model``, ``set_roles_for_skill`` all land here. That is
+        by design: granting a tool is a tool-admin's job.
+
+        What is not their job is touching a role that carries administrative
+        power. Without this guard a delegated ``admin.tools`` holder could add a
+        tool grant to ``system_admin`` — or to any role carrying
+        ``grantedAdminScopes`` — from a surface that was never meant to
+        administer roles.
+
+        So: if the target role is protected or scope-bearing, the actor must
+        hold ``system_admin``. Everything else is untouched, which keeps the
+        legitimate case (a tools admin granting a tool to ``faculty``) working.
+
+        This sits in ``update_role`` rather than in the three write-through
+        callers so that any *future* resource surface that grows a role picker
+        inherits the guard instead of having to remember it.
+
+        Fails closed: if permission resolution raises, the mutation is denied.
+
+        Raises:
+            RoleMutationForbidden: if the actor lacks ``system_admin`` and the
+                target role is protected or carries admin scopes.
+        """
+        sensitive = is_protected_role(role.role_id) or bool(role.granted_admin_scopes)
+        if not sensitive:
+            return
+
+        try:
+            permissions = await self._permission_service().resolve_user_permissions(
+                actor
+            )
+            if "system_admin" in permissions.app_roles:
+                return
+        except Exception:
+            logger.exception(
+                "Failed to resolve permissions for %s while gating a mutation of "
+                "role %s, denying",
+                actor.user_id,
+                role.role_id,
+            )
+            raise RoleMutationForbidden(
+                "Unable to verify permissions for this change."
+            )
+
+        logger.warning(
+            "Blocked non-system_admin mutation of admin-bearing role %s",
+            role.role_id,
+            extra={
+                "event": "role_mutation_blocked",
+                "role_id": role.role_id,
+                "actor_user_id": actor.user_id,
+            },
+        )
+        raise RoleMutationForbidden(
+            f"Role '{role.role_id}' grants administrative access and can only "
+            "be modified by a system administrator."
         )
 
     async def _validate_inheritance(self, inherits_from: List[str]):

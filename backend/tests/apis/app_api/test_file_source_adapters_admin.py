@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from apis.shared.auth import require_admin
+from tests.conftest import override_admin_auth
 from apis.shared.auth.models import User
 from apis.shared.oauth.models import OAuthProvider, OAuthProviderType
 
@@ -92,7 +93,7 @@ class TestListFileSourceAdaptersEndpoint:
     def client(self) -> TestClient:
         app = FastAPI()
         app.include_router(adapter_routes.router)
-        app.dependency_overrides[require_admin] = _admin
+        override_admin_auth(app, _admin)
         return TestClient(app)
 
     def test_lists_shipped_adapters(self, client: TestClient):

@@ -12,13 +12,18 @@ from typing import List
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 
 from apis.app_api.file_sources.registry import registry
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/file-source-adapters", tags=["admin-file-sources"])
+
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_file_sources_admin = require_admin_scope("admin.file_sources")
 
 
 class FileSourceAdapterInfo(BaseModel):
@@ -47,7 +52,7 @@ class FileSourceAdapterListResponse(BaseModel):
 
 @router.get("/", response_model=FileSourceAdapterListResponse)
 async def list_file_source_adapters(
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_file_sources_admin),
 ) -> FileSourceAdapterListResponse:
     """List every file-source adapter shipped in this release. Admin only."""
     logger.info("Admin listing file-source adapters")

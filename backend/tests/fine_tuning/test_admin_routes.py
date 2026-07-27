@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from apis.shared.auth.models import User
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.rbac import require_admin
+from tests.conftest import override_admin_auth
 from apis.app_api.fine_tuning.repository import FineTuningAccessRepository
 
 
@@ -28,7 +29,7 @@ def _create_app():
 
 def _override_auth(app: FastAPI, user: User):
     app.dependency_overrides[get_current_user_from_session] = lambda: user
-    app.dependency_overrides[require_admin] = lambda: user
+    override_admin_auth(app, lambda: user)
 
 
 def _override_repo(app: FastAPI, repo: MagicMock):
@@ -80,7 +81,7 @@ class TestListAccess:
 
         def _raise_403():
             raise HTTPException(status_code=403, detail="Forbidden")
-        app.dependency_overrides[require_admin] = _raise_403
+        override_admin_auth(app, _raise_403)
 
         client = TestClient(app)
         resp = client.get("/admin/fine-tuning/access")
@@ -130,7 +131,7 @@ class TestGrantAccess:
 
         def _raise_403():
             raise HTTPException(status_code=403, detail="Forbidden")
-        app.dependency_overrides[require_admin] = _raise_403
+        override_admin_auth(app, _raise_403)
 
         client = TestClient(app)
         resp = client.post(
@@ -305,7 +306,7 @@ class TestListAllJobs:
 
         def _raise_403():
             raise HTTPException(status_code=403, detail="Forbidden")
-        app.dependency_overrides[require_admin] = _raise_403
+        override_admin_auth(app, _raise_403)
 
         client = TestClient(app)
         resp = client.get("/admin/fine-tuning/jobs")
@@ -377,7 +378,7 @@ class TestListAllInferenceJobs:
 
         def _raise_403():
             raise HTTPException(status_code=403, detail="Forbidden")
-        app.dependency_overrides[require_admin] = _raise_403
+        override_admin_auth(app, _raise_403)
 
         client = TestClient(app)
         resp = client.get("/admin/fine-tuning/inference-jobs")

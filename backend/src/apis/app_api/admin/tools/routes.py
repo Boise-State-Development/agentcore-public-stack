@@ -8,7 +8,7 @@ import httpx
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from apis.shared.oauth.agentcore_identity import (
     CallbackUrlUnavailableError,
     WorkloadTokenUnavailableError,
@@ -46,6 +46,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tools", tags=["admin-tools"])
 
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_tools_admin = require_admin_scope("admin.tools")
+
 
 def _raise_gateway_http(err: Exception) -> "HTTPException":
     """Map a Gateway target lifecycle failure to an HTTPException.
@@ -72,7 +77,7 @@ def _raise_gateway_http(err: Exception) -> "HTTPException":
 @router.get("/", response_model=AdminToolListResponse)
 async def admin_list_all_tools(
     status: Optional[str] = Query(None, description="Filter by status (active, deprecated, disabled)"),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """
     List all tools in the catalog with their role assignments.
@@ -100,7 +105,7 @@ async def admin_list_all_tools(
 @router.get("/{tool_id}", response_model=AdminToolResponse)
 async def admin_get_tool(
     tool_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """
     Get a specific tool by ID.
@@ -132,7 +137,7 @@ async def admin_get_tool(
 @router.post("/", response_model=AdminToolResponse)
 async def admin_create_tool(
     request: ToolCreateRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """
     Create a new tool catalog entry.
@@ -200,7 +205,7 @@ async def admin_create_tool(
 async def admin_update_tool(
     tool_id: str,
     request: ToolUpdateRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """
     Update tool metadata.
@@ -260,7 +265,7 @@ async def admin_update_tool(
 async def admin_delete_tool(
     tool_id: str,
     hard: bool = Query(False, description="If true, permanently delete instead of soft delete"),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """
     Delete a tool from the catalog.
@@ -367,7 +372,7 @@ def _discovery_failure_detail(status: int) -> str:
 @router.post("/discover", response_model=MCPDiscoverResponse)
 async def admin_discover_mcp_tools(
     request: MCPDiscoverRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
 ):
     """Connect to an MCP server with the given config and return its tool list.
@@ -514,7 +519,7 @@ async def admin_discover_mcp_tools(
 @router.post("/{tool_id}/discover", response_model=MCPDiscoverResponse)
 async def admin_discover_saved_tool_tools(
     tool_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """List the individual tools a *saved* catalog tool exposes.
 
@@ -540,7 +545,7 @@ async def admin_discover_saved_tool_tools(
 @router.get("/{tool_id}/gateway-status", response_model=GatewayTargetStatusResponse)
 async def admin_gateway_target_status(
     tool_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """Return the live AgentCore Gateway health for a protocol='mcp' tool.
 
@@ -607,7 +612,7 @@ async def admin_gateway_target_status(
 @router.get("/{tool_id}/roles", response_model=ToolRolesResponse)
 async def get_tool_roles(
     tool_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """
     Get AppRoles that grant access to this tool.
@@ -639,7 +644,7 @@ async def get_tool_roles(
 async def set_tool_roles(
     tool_id: str,
     request: SetToolRolesRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """
     Set which AppRoles grant access to this tool.
@@ -672,7 +677,7 @@ async def set_tool_roles(
 async def add_roles_to_tool(
     tool_id: str,
     request: AddRemoveRolesRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """
     Add AppRoles to tool access (preserves existing).
@@ -702,7 +707,7 @@ async def add_roles_to_tool(
 async def remove_roles_from_tool(
     tool_id: str,
     request: AddRemoveRolesRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_tools_admin),
 ):
     """
     Remove AppRoles from tool access.
