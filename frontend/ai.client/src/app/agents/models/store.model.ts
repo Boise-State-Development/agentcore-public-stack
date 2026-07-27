@@ -1,3 +1,4 @@
+import { ListingReachability } from './reachability';
 /**
  * Agent Marketplace store types (Phase 2).
  *
@@ -107,6 +108,11 @@ export interface ListingPreflight {
   agentId: string;
   exposedSkills: SkillExposure[];
   blockReason?: string | null;
+  /**
+   * Who would be able to open this agent once shelved. Advisory — publishing a
+   * PRIVATE/SHARED agent is allowed, but the tile 404s for everyone it is not shared with.
+   */
+  reachability: ListingReachability;
 }
 
 /** The listing after a submission, plus the disclosures the author was shown (D7). */

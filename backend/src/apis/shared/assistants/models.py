@@ -38,6 +38,27 @@ ReportState = Literal["open", "resolved", "dismissed"]
 # marker gets learned-ignored.
 ListingDrift = Literal["instructions", "edited"]
 
+# Who can actually *open* a listed Agent — `visibility` projected onto the question the
+# store never asks.
+#
+# **Publication and reachability are separate axes, and the store only guards one of them.**
+# `GET /agents/store` is a pure sparse-GSI5 read with no access check, while
+# `GET /agents/{id}` enforces `get_assistant_with_access_check`. Nothing in the listing
+# lifecycle touches `visibility` — deliberately, since approving a store listing is not
+# consent to widen access — so a PRIVATE or SHARED Agent can be approved and shelved, and
+# every user who is not the owner (or on the share list) gets a tile that 404s when tapped.
+#
+# Both live dev listings were in exactly this state when this was found: one PRIVATE, one
+# SHARED. The admin copy half-knew ("members can only open one they could reach on their
+# own"), but every guard was on listing *state*, never on visibility, and neither the
+# author at submit nor the reviewer at approve was told.
+#
+# ⚠️ **This is a warning, not a gate.** SHARED-to-a-team is a legitimate thing to publish,
+# and blocking it — or silently flipping visibility on approve — would be the
+# `allowedAppRoles` trap again: a store decision quietly rewriting an access decision.
+# Derived on read, never stored, so it cannot go stale against `visibility`.
+ListingReachability = Literal["everyone", "shared_only", "owner_only"]
+
 # Severity order for the queue sweep (D15). ``inappropriate`` first for the reason above.
 REPORT_REASON_SEVERITY: Dict[str, int] = {
     "inappropriate": 0,
@@ -581,6 +602,14 @@ class ListingPreflightResponse(BaseModel):
         alias="blockReason",
         description="Why this agent cannot be submitted at all (D7.2); null when it can",
     )
+    reachability: ListingReachability = Field(
+        ...,
+        description=(
+            "Who would be able to open this Agent once shelved (see ``ListingReachability``). "
+            "Advisory: publishing a PRIVATE/SHARED Agent is allowed, but the author should "
+            "know the tile will 404 for everyone it is not shared with."
+        ),
+    )
 
 
 class ReviewListingRequest(BaseModel):
@@ -673,6 +702,14 @@ class AdminListingRow(BaseModel):
             "Post-approval drift, derived server-side (see ``ListingDrift``): ``instructions`` "
             "= measured behavior change, ``edited`` = record changed but cause unknown, absent "
             "= no drift or not applicable. Derived rather than stored so it can never go stale."
+        ),
+    )
+    reachability: ListingReachability = Field(
+        ...,
+        description=(
+            "Who can open this Agent if it is shelved (see ``ListingReachability``). "
+            "``everyone`` = PUBLIC; ``shared_only`` / ``owner_only`` mean the store tile "
+            "will 404 for most users. Advisory — never a gate."
         ),
     )
     admin_edits: List[AdminEdit] = Field(default_factory=list, alias="adminEdits", description="Admin edit log (D13)")

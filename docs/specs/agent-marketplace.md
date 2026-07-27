@@ -142,6 +142,27 @@ retroactively publish every existing PUBLIC agent to the whole institution with 
 `visibility` stays the access gate. `listing.state` is the publication state. **Backfill every
 existing record to no `listing` block at all** — publication is an explicit forward act.
 
+### D3.1 — the cost of the split, and why it is disclosed rather than closed
+
+Keeping the axes separate has a consequence D3 did not state, found on dev with both live
+listings in exactly this shape (one `PRIVATE`, one `SHARED`): `GET /agents/store` is a pure
+sparse-GSI5 read with **no** access check, while `GET /agents/{id}` enforces
+`get_assistant_with_access_check`. So an approved `PRIVATE`/`SHARED` Agent gets a shelf tile
+that every other user can see and nobody else can open. `submit_listing` does not check
+`status` either, so a `DRAFT` named "Untitled Agent" can reach the shelf.
+
+**Resolved as disclosure, not enforcement.** `AdminListingRow.reachability` and
+`ListingPreflightResponse.reachability` project `visibility` onto "who can open this", and
+the review queue and submit dialog each render it in their own voice from one shared
+helper. Advisory throughout.
+
+⚠️ **Three fixes were considered and rejected; do not re-propose them without new
+information.** Blocking submission on non-`PUBLIC` visibility forbids the legitimate case of
+a team publishing a `SHARED` Agent. Filtering at browse turns the deliberately-pure GSI5 read
+into N access checks per page view. Auto-setting `PUBLIC` on approve is D3's own prohibition
+re-entering through the back door — a store decision silently rewriting an access decision,
+which is the `allowedAppRoles` trap exactly.
+
 ## D4 — The shelf carries an icon, a name, and one line
 
 Browse rows and store-front tiles show **icon, name, one-line tagline** and nothing else. No model

@@ -26,6 +26,9 @@ describe('MarketplaceListingsPage — post-approval drift marker', () => {
       state: 'published',
       usageCount: 12,
       updatedAt: '2026-07-22T00:00:00Z',
+      // The default is the uninteresting case on purpose: these tests are about drift, and
+      // a fixture that was also unreachable would mix two independent warnings in one row.
+      reachability: 'everyone',
       adminEdits: [],
       ...overrides,
     };

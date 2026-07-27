@@ -8,10 +8,11 @@ import {
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroInbox, heroCheck, heroArrowUturnLeft } from '@ng-icons/heroicons/outline';
+import { heroInbox, heroCheck, heroArrowUturnLeft, heroEyeSlash } from '@ng-icons/heroicons/outline';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import { AdminListingRow } from '../models/marketplace.model';
 import { AgentTileComponent } from '../components/agent-tile.component';
+import { reachabilityReviewerMessage } from '../../../agents/models/reachability';
 import {
   RequestChangesDialogComponent,
   RequestChangesDialogData,
@@ -33,7 +34,7 @@ import { parseIso } from '../../../utils/date';
   selector: 'app-review-queue',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, AgentTileComponent],
-  providers: [provideIcons({ heroInbox, heroCheck, heroArrowUturnLeft })],
+  providers: [provideIcons({ heroInbox, heroCheck, heroArrowUturnLeft, heroEyeSlash })],
   template: `
     <div class="min-h-dvh">
       <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
@@ -96,6 +97,23 @@ import { parseIso } from '../../../utils/date';
                   @if (row.tagline) {
                     <p class="truncate text-sm/6 text-gray-500 dark:text-gray-400">
                       {{ row.tagline }}
+                    </p>
+                  }
+
+                  <!-- Reachability. Never collapsed away and never a blocker: approving a
+                       PRIVATE agent shelves a tile that 404s for everyone but its author,
+                       and that is the one fact the reviewer cannot get from anywhere else
+                       on this row. -->
+                  @if (reachabilityWarning(row); as warning) {
+                    <p
+                      class="mt-1 flex items-start gap-1.5 text-sm/6 text-amber-700 dark:text-amber-400"
+                    >
+                      <ng-icon
+                        name="heroEyeSlash"
+                        class="mt-1 size-4 shrink-0"
+                        aria-hidden="true"
+                      />
+                      <span>{{ warning }}</span>
                     </p>
                   }
                 </div>
@@ -188,6 +206,14 @@ export class ReviewQueuePage implements OnInit {
   }
 
   /** "yesterday" / "3 days ago", matching the mockup's queue subtitle. */
+  /**
+   * The reviewer-facing half of the shared wording. Kept as a one-line delegation so the
+   * author's dialog and this queue can never describe the same state differently.
+   */
+  reachabilityWarning(row: AdminListingRow): string | null {
+    return reachabilityReviewerMessage(row.reachability);
+  }
+
   relativeTime(iso?: string): string {
     if (!iso) return 'recently';
     const then = parseIso(iso).getTime();

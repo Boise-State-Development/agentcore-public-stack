@@ -7,6 +7,7 @@
  * Phase 8.
  */
 
+import { ListingReachability } from '../../../agents/models/reachability';
 import {
   AdminEdit,
   AdminStoreFrontResponse,
@@ -122,6 +123,13 @@ export interface AdminListingRow {
    * Only listings approved before the hash baseline shipped can report `'edited'`.
    */
   drift?: ListingDrift;
+
+  /**
+   * Who can open this agent if it is shelved, derived from `visibility` server-side.
+   * `everyone` = PUBLIC; the other two mean the store tile will 404 for most users.
+   * Advisory — the reviewer is told, never blocked.
+   */
+  reachability: ListingReachability;
   adminEdits: AdminEdit[];
 }
 
