@@ -40,25 +40,14 @@
             </div>
           }
 
-          <!-- Assistant Card (if loaded) -->
-          @if (assistant()) {
-            <div class="mb-6 relative">
-              @if (canCloseAssistant()) {
-                <button
-                  type="button"
-                  (click)="onAssistantClosed()"
-                  class="absolute top-2 right-2 z-10 rounded-sm p-1 text-white/70 hover:text-white hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-                  aria-label="Remove assistant">
-                  <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
-                </button>
-              }
-              <app-assistant-card
-                [name]="assistant()!.name"
-                [description]="assistant()!.description"
-                [ownerName]="assistant()!.ownerName"
-                [starters]="assistant()!.starters"
-                [emoji]="assistant()!.emoji ?? ''"
-                [imageUrl]="assistant()!.imageUrl ?? null"
+          <!-- Agent launch card (if loaded) -->
+          @if (launchCardView(); as view) {
+            <div class="mb-6">
+              <app-agent-launch-card
+                [view]="view"
+                [runnability]="runnability()"
+                [closable]="canCloseAssistant()"
+                (closed)="onAssistantClosed()"
                 (starterSelected)="onStarterSelected($event)" />
             </div>
           }
@@ -91,27 +80,37 @@
   } @else {
     <!-- Full-page mode: original layout -->
     @if (isLoadingAssistant()) {
-      <!-- Assistant is loading: show skeleton card -->
+      <!-- Agent is loading: skeleton in the launch card's own shape, so the real card
+           lands in place rather than re-flowing a centered layout into a left-aligned one. -->
       <div
         class="chat-container-empty full-page"
         [class.sidenav-expanded]="!isSidenavCollapsed()"
       [class.artifact-pane-open]="artifactPanelOpen()">
-        <div class="w-full max-w-sm px-4 -mt-20">
-          <div class="animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden">
-            <!-- Skeleton gradient header -->
-            <div class="h-20 bg-gray-200 dark:bg-gray-700"></div>
-            <div class="px-6 pb-6 pt-4 flex flex-col items-center">
-              <!-- Skeleton avatar -->
-              <div class="size-11 rounded-xl bg-gray-200 dark:bg-gray-700 -mt-10 ring-4 ring-gray-100 dark:ring-gray-800"></div>
-              <!-- Skeleton name -->
-              <div class="mt-3 h-4 w-36 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
-              <!-- Skeleton description -->
-              <div class="mt-2 h-3 w-48 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
-              <!-- Skeleton starters -->
-              <div class="mt-5 w-full space-y-2">
-                <div class="h-10 w-full rounded-lg bg-gray-200 dark:bg-gray-700"></div>
-                <div class="h-10 w-full rounded-lg bg-gray-200 dark:bg-gray-700"></div>
+        <div class="w-full max-w-lg px-4 -mt-20">
+          <div class="animate-pulse overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+            <div class="p-5">
+              <!-- Skeleton identity row -->
+              <div class="flex items-start gap-3.5">
+                <div class="size-13 shrink-0 rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
+                <div class="min-w-0 flex-1">
+                  <div class="h-4 w-36 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
+                  <div class="mt-2.5 h-3 w-52 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
+                  <div class="mt-2 h-3 w-28 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
+                </div>
               </div>
+              <!-- Skeleton capability chips -->
+              <div class="mt-4 flex gap-1.5">
+                <div class="h-6 w-28 rounded-full bg-gray-200 dark:bg-gray-700"></div>
+                <div class="h-6 w-20 rounded-full bg-gray-200 dark:bg-gray-700"></div>
+              </div>
+              <!-- Skeleton starters -->
+              <div class="mt-5 space-y-1.5">
+                <div class="h-11 w-full rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
+                <div class="h-11 w-full rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
+              </div>
+            </div>
+            <div class="border-t border-gray-200 bg-gray-50 px-5 py-2.5 dark:border-gray-700 dark:bg-gray-900/40">
+              <div class="h-4 w-32 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
             </div>
           </div>
         </div>
@@ -144,26 +143,17 @@
         [class.sidenav-expanded]="!isSidenavCollapsed()"
       [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="w-full max-w-[720px] animate-fade-in px-4 -mt-20 relative">
-          <!-- Assistant Card -->
-          <div class="mb-6 relative">
-            @if (canCloseAssistant()) {
-              <button
-                type="button"
-                (click)="onAssistantClosed()"
-                class="absolute top-2 right-2 z-10 rounded-sm p-1 text-white/70 hover:text-white hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-                aria-label="Remove assistant">
-                <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
-              </button>
-            }
-            <app-assistant-card
-              [name]="assistant()!.name"
-              [description]="assistant()!.description"
-              [ownerName]="assistant()!.ownerName"
-              [starters]="assistant()!.starters"
-              [emoji]="assistant()!.emoji ?? ''"
-              [imageUrl]="assistant()!.imageUrl ?? null"
-              (starterSelected)="onStarterSelected($event)" />
-          </div>
+          <!-- Agent launch card -->
+          @if (launchCardView(); as view) {
+            <div class="mb-6">
+              <app-agent-launch-card
+                [view]="view"
+                [runnability]="runnability()"
+                [closable]="canCloseAssistant()"
+                (closed)="onAssistantClosed()"
+                (starterSelected)="onStarterSelected($event)" />
+            </div>
+          }
 
           <!-- Assistant Error Message -->
           @if (assistantError()) {

@@ -11,6 +11,8 @@ import {
   heroTrash,
   heroCpuChip,
   heroSparkles,
+  heroSquares2x2,
+  heroBars3,
 } from '@ng-icons/heroicons/outline';
 import { AgentService } from './services/agent.service';
 import { AgentListingService } from './services/agent-listing.service';
@@ -24,6 +26,7 @@ import { ShareAssistantDialogComponent, ShareAssistantDialogData } from '../assi
 import { TooltipDirective } from '../components/tooltip/tooltip.directive';
 import { AgentsTabsComponent } from './components/agents-tabs.component';
 import { AgentIconComponent } from './components/agent-icon.component';
+import { AgentsViewMode, LocalSettingsService } from '../services/local-settings.service';
 import {
   AgentIconDialogComponent,
   AgentIconDialogData,
@@ -70,6 +73,8 @@ import {
       heroTrash,
       heroCpuChip,
       heroSparkles,
+      heroSquares2x2,
+      heroBars3,
     }),
   ],
 })
@@ -77,11 +82,22 @@ export class AgentsPage implements OnInit {
   private router = inject(Router);
   private agentService = inject(AgentService);
   private listingService = inject(AgentListingService);
+  private localSettings = inject(LocalSettingsService);
   private dialog = inject(Dialog);
 
   readonly agents = this.agentService.agents$;
   readonly loading = this.agentService.loading$;
   readonly error = this.agentService.error$;
+
+  /**
+   * Grid or list, remembered per device (`LocalSettingsService`).
+   *
+   * Both views render the same agents with the same controls — the toggle changes
+   * density, never what is available. A view that quietly dropped the publication
+   * controls would make "which view am I in?" a question an author has to answer before
+   * they can find out why their submission was returned.
+   */
+  readonly viewMode = this.localSettings.agentsViewMode;
 
   /**
    * Whether the marketplace is reachable at all. `null` until the probe resolves, so
@@ -106,6 +122,10 @@ export class AgentsPage implements OnInit {
     } catch (err) {
       console.error('Error loading agents:', err);
     }
+  }
+
+  setViewMode(mode: AgentsViewMode): void {
+    this.localSettings.setAgentsViewMode(mode);
   }
 
   /** Count bindings by kind for the card summary (KB is welded, shown separately). */

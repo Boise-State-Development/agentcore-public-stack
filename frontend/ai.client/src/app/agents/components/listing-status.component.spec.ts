@@ -11,9 +11,10 @@ describe('ListingStatusComponent', () => {
 
   afterEach(() => TestBed.resetTestingModule());
 
-  function create(listing: AgentListingBlock | undefined) {
+  function create(listing: AgentListingBlock | undefined, part?: 'all' | 'badge' | 'note') {
     const fixture = TestBed.createComponent(ListingStatusComponent);
     fixture.componentRef.setInput('listing', listing);
+    if (part) fixture.componentRef.setInput('part', part);
     fixture.detectChanges();
     return fixture;
   }
@@ -100,5 +101,35 @@ describe('ListingStatusComponent', () => {
 
     expect(component.edits().map((e) => e.field)).toEqual(['category', 'tagline']);
     expect(component.edits()[1].at).toBe('2026-07-22T10:00:00Z');
+  });
+
+  // ── `part`, for a layout that needs the two halves in different places ──────────
+  describe('part', () => {
+    const returned = () =>
+      block({ state: 'changes_requested', reviewNote: 'Tighten the tagline.' });
+
+    it('renders both halves by default', () => {
+      const text = create(returned()).nativeElement.textContent;
+      expect(text).toContain('Changes requested');
+      expect(text).toContain('Tighten the tagline.');
+    });
+
+    it('splits into a badge and a note that reassemble into the whole', () => {
+      // My Agents' list view puts the badge inline beside the name and the note on its
+      // own line below. Between them they must lose nothing.
+      const badge = create(returned(), 'badge').nativeElement.textContent;
+      expect(badge).toContain('Changes requested');
+      expect(badge).not.toContain('Tighten the tagline.');
+
+      const note = create(returned(), 'note').nativeElement.textContent;
+      expect(note).not.toContain('Changes requested');
+      expect(note).toContain('The reviewer asked for changes');
+      expect(note).toContain('Tighten the tagline.');
+    });
+
+    it('renders nothing for a note part with no note, so a row gains no empty gap', () => {
+      const fixture = create(block({ state: 'published' }), 'note');
+      expect(fixture.nativeElement.textContent.trim()).toBe('');
+    });
   });
 });
