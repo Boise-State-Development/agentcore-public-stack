@@ -78,7 +78,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       },
     },
     gateway: {
-      inboundAuth: 'jwt',
+      // Mirror the production default. JWT tests opt in explicitly via
+      // createMockConfig({ gateway: { inboundAuth: 'jwt' } }).
+      inboundAuth: 'iam',
     },
     cognito: {
       domainPrefix: MOCK_PREFIX,

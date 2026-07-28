@@ -145,6 +145,10 @@ build_cdk_context_params() {
     if [ -n "${CDK_DOMAIN_NAME:-}" ]; then
         context_params="${context_params} --context domainName=\"${CDK_DOMAIN_NAME}\""
     fi
+    # AgentCore Gateway inbound authorizer ('iam' | 'jwt')
+    if [ -n "${CDK_GATEWAY_INBOUND_AUTH:-}" ]; then
+        context_params="${context_params} --context gateway.inboundAuth=\"${CDK_GATEWAY_INBOUND_AUTH}\""
+    fi
     if [ -n "${CDK_FRONTEND_CERTIFICATE_ARN:-}" ]; then
         context_params="${context_params} --context frontend.certificateArn=\"${CDK_FRONTEND_CERTIFICATE_ARN}\""
     fi
@@ -233,6 +237,13 @@ export CDK_CERTIFICATE_ARN="${CDK_CERTIFICATE_ARN:-$(get_json_value "certificate
 export CDK_RETAIN_DATA_ON_DELETE="${CDK_RETAIN_DATA_ON_DELETE:-$(get_json_value "retainDataOnDelete" "${CONTEXT_FILE}")}"
 export CDK_MANAGE_DNS_RECORDS="${CDK_MANAGE_DNS_RECORDS:-$(get_json_value "manageDnsRecords" "${CONTEXT_FILE}")}"
 
+# AgentCore Gateway inbound authorizer: "iam" (default) or "jwt".
+# Empty is safe — config.ts falls back to 'iam'. NOTE: the authorizer is
+# immutable after Gateway creation, so setting this to 'jwt' against an
+# existing AWS_IAM Gateway makes the deploy fail. It applies to a newly
+# created Gateway.
+export CDK_GATEWAY_INBOUND_AUTH="${CDK_GATEWAY_INBOUND_AUTH:-$(get_json_value "gateway.inboundAuth" "${CONTEXT_FILE}")}"
+
 # Shared CORS origins — env var > context file (no hardcoded defaults)
 export CDK_CORS_ORIGINS="${CDK_CORS_ORIGINS:-$(get_json_value "corsOrigins" "${CONTEXT_FILE}")}"
 
@@ -289,6 +300,14 @@ validate_config() {
     if [ -n "${CDK_MANAGE_DNS_RECORDS}" ] && ! [[ "${CDK_MANAGE_DNS_RECORDS}" =~ ^(true|false|1|0)$ ]]; then
         log_error "Invalid CDK_MANAGE_DNS_RECORDS value: '${CDK_MANAGE_DNS_RECORDS}'"
         log_error "  Expected 'true', 'false', '1', or '0'"
+        errors=$((errors + 1))
+    fi
+
+    # Validate the Gateway inbound authorizer selection. A typo would otherwise
+    # fall through to the 'iam' default and silently not apply.
+    if [ -n "${CDK_GATEWAY_INBOUND_AUTH:-}" ] && ! [[ "${CDK_GATEWAY_INBOUND_AUTH}" =~ ^(iam|jwt)$ ]]; then
+        log_error "Invalid CDK_GATEWAY_INBOUND_AUTH value: '${CDK_GATEWAY_INBOUND_AUTH}'"
+        log_error "  Expected 'iam' or 'jwt'"
         errors=$((errors + 1))
     fi
     

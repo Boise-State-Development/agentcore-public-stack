@@ -71,6 +71,12 @@ jobs:
       # a different AWS account (records are then created manually from the
       # deploy's CfnOutputs). Defaults to true.
       CDK_MANAGE_DNS_RECORDS: ${{ vars.CDK_MANAGE_DNS_RECORDS }}
+      # AgentCore Gateway inbound authorizer: "iam" (default) or "jwt".
+      # The authorizer is IMMUTABLE after Gateway creation — the AgentCore
+      # control plane rejects a change on an existing Gateway. Leave unset (or
+      # "iam") for any environment whose Gateway already exists; "jwt" only
+      # applies to a newly created Gateway.
+      CDK_GATEWAY_INBOUND_AUTH: ${{ vars.CDK_GATEWAY_INBOUND_AUTH }}
       CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
       CDK_COGNITO_DOMAIN_PREFIX: ${{ vars.CDK_COGNITO_DOMAIN_PREFIX }}
       CDK_COGNITO_CALLBACK_URLS: ${{ vars.CDK_COGNITO_CALLBACK_URLS }}

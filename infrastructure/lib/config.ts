@@ -265,15 +265,31 @@ export interface McpIdentityConfig {
  * Gateway still serves both IAM-invoked Lambda targets and OAuth/token-exchange
  * targets.
  *
- * Defaults to `jwt` (Cognito access tokens), which is required for outbound
- * on-behalf-of token exchange: AgentCore can only exchange a *user* subject
- * token, and an IAM-authorized Gateway has no user token to exchange.
- * See docs/specs/AGENTCORE_GATEWAY_TOKEN_EXCHANGE_PLAN.md.
+ * ## The authorizer is immutable after creation
  *
- * Set to `iam` to roll back to SigV4 inbound auth without a code change. Both
- * `AuthorizerType` and `AuthorizerConfiguration` are CloudFormation
- * "no interruption" updates, so flipping this does not replace the Gateway and
- * does not orphan registered targets.
+ * Changing this value on an **existing** Gateway does not work. The AgentCore
+ * control plane rejects it:
+ *
+ * ```
+ * Authorizer type cannot be updated for an existing gateway
+ * (Service: BedrockAgentCoreControl, Status Code: 400)
+ * ```
+ *
+ * This is *not* visible from CloudFormation: the resource schema documents both
+ * `AuthorizerType` and `AuthorizerConfiguration` as "Update requires: No
+ * interruption", and `cdk diff` — even via a real change set — reports an
+ * in-place `[~]` modify. Both reflect CFN's model, not the service's validation.
+ * The failure only surfaces at deploy time, mid-update.
+ *
+ * So `inboundAuth` effectively sets the authorizer **at Gateway creation**.
+ * Moving an existing deployment from AWS_IAM to CUSTOM_JWT requires a *new*
+ * Gateway plus target re-registration and a cutover — not a config flip. See
+ * docs/specs/AGENTCORE_GATEWAY_TOKEN_EXCHANGE_PLAN.md.
+ *
+ * Defaults to `iam`, matching every Gateway already deployed. Do not change the
+ * default to `jwt`: it would make `PlatformStack` fail on every existing
+ * deployment (this repo's included) and — because the agent reads the same
+ * value — point the agent at an auth mode its Gateway does not accept.
  */
 export interface GatewayConfig {
   inboundAuth: 'jwt' | 'iam';
@@ -507,14 +523,15 @@ export function loadConfig(scope: cdk.App): AppConfig {
       },
     },
     gateway: {
-      // Inbound authorizer selection. Defaults to 'jwt' (Cognito access
-      // tokens) — required for outbound OBO token exchange. Set to 'iam' to
-      // roll back to SigV4 without a code change; the authorizer swap is a
-      // CFN "no interruption" update either way, so registered targets survive.
+      // Inbound authorizer selection. Defaults to 'iam' — the authorizer is
+      // immutable after Gateway creation (the AgentCore control plane rejects
+      // an authorizerType change), so every already-deployed Gateway is
+      // AWS_IAM and the default must match that. 'jwt' applies to a *newly
+      // created* Gateway. See GatewayConfig.
       inboundAuth:
         (process.env.CDK_GATEWAY_INBOUND_AUTH as 'jwt' | 'iam' | undefined)
         || scope.node.tryGetContext('gateway')?.inboundAuth
-        || 'jwt',
+        || 'iam',
     },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),

@@ -36,14 +36,18 @@ export interface AgentCoreGatewayConstructProps {
  * AgentCoreGatewayConstruct — AWS Bedrock AgentCore Gateway with MCP
  * protocol and configurable inbound authorization.
  *
- * Inbound auth (`config.gateway.inboundAuth`, default `jwt`):
+ * Inbound auth (`config.gateway.inboundAuth`, default `iam`):
+ *   - `iam` — AWS_IAM (SigV4). The default, and what every already-deployed
+ *     Gateway uses, because the authorizer cannot be changed after creation.
  *   - `jwt` — CUSTOM_JWT trusting the platform Cognito user pool. Required for
  *     outbound on-behalf-of (OBO) token exchange, because AgentCore can only
  *     exchange a *user* subject token and an IAM-authorized Gateway has none.
  *     The agent calls the Gateway with the signed-in user's Cognito access
- *     token as a bearer token.
- *   - `iam` — the legacy AWS_IAM (SigV4) posture, retained as a code-free
- *     rollback path.
+ *     token as a bearer token. Only takes effect on a *newly created* Gateway.
+ *
+ * The authorizer is immutable: changing it on an existing Gateway fails with
+ * "Authorizer type cannot be updated for an existing gateway" — see the inline
+ * WARNING below and docs/specs/AGENTCORE_GATEWAY_TOKEN_EXCHANGE_PLAN.md.
  *
  * AgentCore permits exactly one inbound authorizer per Gateway
  * (`authorizerType` is a scalar), but outbound credentials are *per target* —
@@ -134,11 +138,17 @@ export class AgentCoreGatewayConstruct extends Construct {
     );
 
     // Inbound authorizer. AgentCore takes exactly one type per Gateway, so this
-    // is an either/or — not additive. Both `AuthorizerType` and
-    // `AuthorizerConfiguration` are CloudFormation "no interruption" updates,
-    // so flipping between them updates the Gateway in place and does NOT
-    // replace it (a replacement would mint a new Gateway id/URL and orphan
-    // every registered target).
+    // is an either/or — not additive.
+    //
+    // WARNING: the authorizer is immutable after creation. The AgentCore
+    // control plane rejects a change on an existing Gateway with
+    // "Authorizer type cannot be updated for an existing gateway" (400), even
+    // though CloudFormation models both AuthorizerType and
+    // AuthorizerConfiguration as "no interruption" updates and `cdk diff`
+    // reports an in-place `[~]` modify. The CFN schema and the change set both
+    // describe CFN's intent, not the service's validation — the failure only
+    // appears at deploy time. Switching an existing deployment therefore needs
+    // a new Gateway + target re-registration, not a config flip.
     const useJwtInboundAuth = config.gateway.inboundAuth === 'jwt';
 
     if (useJwtInboundAuth && (!props.userPool || !props.bffAppClient)) {
