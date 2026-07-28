@@ -10,6 +10,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
 from agents.main_agent.config.constants import EnvVars, Defaults
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth, get_gateway_region_from_url
+from agents.main_agent.integrations.oauth_auth import create_oauth_bearer_auth
 from apis.shared.tools.gateway_identity import resolve_gateway_id, gateway_url_from_id
 from agents.main_agent.integrations.mcp_apps import (
     UICapableMCPClient,
@@ -18,6 +19,65 @@ from agents.main_agent.integrations.mcp_apps import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class GatewayAuthError(Exception):
+    """Raised when the Gateway needs a user token and none is available.
+
+    The JWT-authorized Gateway has no machine-identity fallback: without the
+    signed-in user's access token there is nothing to send and nothing for
+    AgentCore to exchange on the user's behalf. Fail loudly rather than
+    silently building a client that 401s on every tool call.
+    """
+
+
+def _gateway_inbound_auth_mode() -> str:
+    """Return the Gateway's inbound auth mode: 'jwt' (default) or 'iam'.
+
+    Set by CDK from `config.gateway.inboundAuth`, so the agent and the deployed
+    Gateway authorizer cannot drift. Unrecognized values fall back to 'jwt'
+    (the deployed default) with a warning.
+    """
+    mode = os.environ.get(
+        EnvVars.GATEWAY_INBOUND_AUTH, Defaults.GATEWAY_INBOUND_AUTH
+    ).strip().lower()
+    if mode not in ("jwt", "iam"):
+        logger.warning(
+            "Unrecognized %s=%r; falling back to '%s'",
+            EnvVars.GATEWAY_INBOUND_AUTH,
+            mode,
+            Defaults.GATEWAY_INBOUND_AUTH,
+        )
+        return Defaults.GATEWAY_INBOUND_AUTH
+    return mode
+
+
+def _build_gateway_auth(region: str, auth_token: Optional[str]):
+    """Build the httpx auth for a Gateway data-plane connection.
+
+    - `jwt` mode: bearer auth carrying *this user's* Cognito access token.
+      The token is bound per client instance (never module-level or shared), so
+      one user's credential can't leak into another user's Gateway client.
+    - `iam` mode: SigV4 signing with the task's IAM identity (legacy/rollback).
+
+    Raises:
+        GatewayAuthError: JWT mode with no user token.
+    """
+    if _gateway_inbound_auth_mode() == "iam":
+        return get_sigv4_auth(region=region)
+
+    if not auth_token:
+        raise GatewayAuthError(
+            "Gateway inbound auth is 'jwt' but no user access token was "
+            "supplied. Gateway tools require a signed-in user; there is no "
+            "machine-identity fallback. (Headless/scheduled runs mint a token "
+            "via CognitoRefreshBearerAuth — check that the run has an active "
+            "headless grant.)"
+        )
+
+    # Static token: an agent instance serves exactly one user for one
+    # invocation, and the BFF has already refreshed it for this request.
+    return create_oauth_bearer_auth(token=auth_token)
 
 
 class FilteredMCPClient(MCPClient):
@@ -124,36 +184,30 @@ def create_gateway_mcp_client(
     gateway_url: Optional[str] = None,
     prefix: str = "gateway",
     tool_filters: Optional[dict] = None,
-    region: Optional[str] = None
+    region: Optional[str] = None,
+    auth_token: Optional[str] = None,
 ) -> Optional[MCPClient]:
     """
-    Create MCP client for AgentCore Gateway with SigV4 authentication.
+    Create MCP client for AgentCore Gateway.
+
+    Auth depends on the deployed Gateway's inbound authorizer
+    (``AGENTCORE_GATEWAY_INBOUND_AUTH``, set by CDK):
+      - ``jwt`` (default): bearer auth with ``auth_token`` (the signed-in
+        user's Cognito access token). Required — raises GatewayAuthError if absent.
+      - ``iam``: SigV4 signing (legacy/rollback path).
 
     Args:
         gateway_url: Gateway URL. If None, retrieves from SSM Parameter Store.
         prefix: Prefix for tool names (default: 'gateway')
         tool_filters: Tool filtering configuration (allowed/rejected lists)
         region: AWS region. If None, extracts from gateway_url or uses default.
+        auth_token: The current user's Cognito access token. Required in jwt mode.
 
     Returns:
         MCPClient instance or None if Gateway URL not available
 
-    Example:
-        >>> # Create client with all tools
-        >>> client = create_gateway_mcp_client()
-        >>>
-        >>> # Create client with tool filtering
-        >>> client = create_gateway_mcp_client(
-        ...     tool_filters={"allowed": ["wikipedia_search", "arxiv_search"]}
-        ... )
-        >>>
-        >>> # Use with Strands Agent (Managed approach - Experimental)
-        >>> agent = Agent(tools=[client])
-        >>>
-        >>> # Or manual approach
-        >>> with client:
-        ...     tools = client.list_tools_sync()
-        ...     agent = Agent(tools=tools)
+    Raises:
+        GatewayAuthError: jwt mode with no ``auth_token``.
     """
     # Get Gateway URL from SSM if not provided
     if not gateway_url:
@@ -166,8 +220,7 @@ def create_gateway_mcp_client(
     if not region:
         region = get_gateway_region_from_url(gateway_url)
 
-    # Create SigV4 auth for Gateway
-    auth = get_sigv4_auth(region=region)
+    auth = _build_gateway_auth(region, auth_token)
 
     # Create MCP client with streamable HTTP transport
     # Note: prefix and tool_filters are no longer supported in MCPClient constructor
@@ -177,12 +230,13 @@ def create_gateway_mcp_client(
     mcp_client = UICapableMCPClient(
         lambda: streamablehttp_client(
             gateway_url,
-            auth=auth  # httpx Auth class for automatic SigV4 signing
+            auth=auth  # httpx Auth: bearer (jwt mode) or SigV4 (iam mode)
         )
     )
 
     logger.info(f"✅ Gateway MCP client created: {gateway_url}")
     logger.info(f"   Region: {region}")
+    logger.info(f"   Inbound auth: {_gateway_inbound_auth_mode()}")
     logger.info(f"   Note: Prefix '{prefix}' will be applied manually")
     if tool_filters:
         logger.info(f"   Note: Filters {tool_filters} will be applied manually")
@@ -192,7 +246,8 @@ def create_gateway_mcp_client(
 
 def create_filtered_gateway_client(
     enabled_tool_ids: List[str],
-    prefix: str = "gateway"
+    prefix: str = "gateway",
+    auth_token: Optional[str] = None,
 ) -> Optional[FilteredMCPClient]:
     """
     Create Gateway MCP client with tool filtering based on enabled tool IDs.
@@ -202,19 +257,16 @@ def create_filtered_gateway_client(
 
     Args:
         enabled_tool_ids: List of tool IDs that are enabled by user
-                         e.g., ["gateway_wikipedia-search___wikipedia_search", "gateway_arxiv-search___arxiv_search"]
+                         e.g., ["gateway_wikipedia-search___wikipedia_search"]
         prefix: Prefix used for Gateway tools (default: 'gateway')
+        auth_token: The current user's Cognito access token. Required when the
+            Gateway uses JWT inbound auth (the default).
 
     Returns:
         FilteredMCPClient with filtered tools or None if no Gateway tools enabled
 
-    Example:
-        >>> # User enabled only Wikipedia tools
-        >>> enabled = ["gateway_wikipedia-search___wikipedia_search", "gateway_wikipedia-get-article___wikipedia_get_article"]
-        >>> client = create_filtered_gateway_client(enabled)
-        >>>
-        >>> # Use with Agent (Managed Integration)
-        >>> agent = Agent(tools=[client])
+    Raises:
+        GatewayAuthError: jwt mode with no ``auth_token``.
     """
     # Filter to only Gateway tool IDs
     gateway_tool_ids = [tid for tid in enabled_tool_ids if tid.startswith(f"{prefix}_")]
@@ -232,8 +284,7 @@ def create_filtered_gateway_client(
     # Extract region from URL
     region = get_gateway_region_from_url(gateway_url)
 
-    # Create SigV4 auth for Gateway
-    auth = get_sigv4_auth(region=region)
+    auth = _build_gateway_auth(region, auth_token)
 
     # Create FilteredMCPClient with tool filtering
     logger.info(f"Creating FilteredMCPClient with {len(gateway_tool_ids)} enabled tool IDs")
@@ -241,7 +292,7 @@ def create_filtered_gateway_client(
     mcp_client = FilteredMCPClient(
         lambda: streamablehttp_client(
             gateway_url,
-            auth=auth  # httpx Auth class for automatic SigV4 signing
+            auth=auth  # httpx Auth: bearer (jwt mode) or SigV4 (iam mode)
         ),
         enabled_tool_ids=gateway_tool_ids,
         prefix=prefix
@@ -249,6 +300,7 @@ def create_filtered_gateway_client(
 
     logger.info(f"✅ FilteredMCPClient created: {gateway_url}")
     logger.info(f"   Region: {region}")
+    logger.info(f"   Inbound auth: {_gateway_inbound_auth_mode()}")
     logger.info(f"   Enabled tool IDs: {gateway_tool_ids}")
 
     return mcp_client
@@ -258,22 +310,28 @@ def create_filtered_gateway_client(
 GATEWAY_ENABLED = os.environ.get(EnvVars.GATEWAY_MCP_ENABLED, str(Defaults.GATEWAY_MCP_ENABLED).lower()).lower() == 'true'
 
 def get_gateway_client_if_enabled(
-    enabled_tool_ids: Optional[List[str]] = None
+    enabled_tool_ids: Optional[List[str]] = None,
+    auth_token: Optional[str] = None,
 ) -> Optional[MCPClient]:
     """
     Get Gateway MCP client if enabled via environment variable.
 
     Args:
         enabled_tool_ids: List of enabled tool IDs for filtering
+        auth_token: The current user's Cognito access token. Required when the
+            Gateway uses JWT inbound auth (the default).
 
     Returns:
         MCPClient or None if disabled or no tools enabled
+
+    Raises:
+        GatewayAuthError: jwt mode with no ``auth_token``.
     """
     if not GATEWAY_ENABLED:
         logger.info("Gateway MCP is disabled via AGENTCORE_GATEWAY_MCP_ENABLED=false")
         return None
 
     if enabled_tool_ids:
-        return create_filtered_gateway_client(enabled_tool_ids)
+        return create_filtered_gateway_client(enabled_tool_ids, auth_token=auth_token)
     else:
-        return create_gateway_mcp_client()
+        return create_gateway_mcp_client(auth_token=auth_token)

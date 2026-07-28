@@ -55,6 +55,12 @@ class EnvVars:
 
     # --- Gateway ---
     GATEWAY_MCP_ENABLED = "AGENTCORE_GATEWAY_MCP_ENABLED"
+    # Gateway inbound authorizer mode: "jwt" (default) or "iam".
+    # MUST match the deployed Gateway's authorizerType — CDK sets this from
+    # `config.gateway.inboundAuth` so the two cannot drift. With "jwt" the agent
+    # sends the signed-in user's Cognito access token as a Bearer token; with
+    # "iam" it falls back to SigV4 signing.
+    GATEWAY_INBOUND_AUTH = "AGENTCORE_GATEWAY_INBOUND_AUTH"
 
     # --- MCP Apps (host renderer initiative) ---
     MCP_APPS_HOST_ENABLED = "AGENTCORE_MCP_APPS_HOST_ENABLED"
@@ -120,6 +126,8 @@ class Defaults:
 
     # --- Gateway ---
     GATEWAY_MCP_ENABLED = True
+    # Matches the CDK default (`config.gateway.inboundAuth`).
+    GATEWAY_INBOUND_AUTH = "jwt"
 
     # --- MCP Apps (host renderer initiative) ---
     # Gates the entire MCP Apps host surface. Flipped on in PR #7 of
