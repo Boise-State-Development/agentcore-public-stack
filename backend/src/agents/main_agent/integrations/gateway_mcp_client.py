@@ -32,11 +32,15 @@ class GatewayAuthError(Exception):
 
 
 def _gateway_inbound_auth_mode() -> str:
-    """Return the Gateway's inbound auth mode: 'jwt' (default) or 'iam'.
+    """Return the Gateway's inbound auth mode: 'iam' (default) or 'jwt'.
 
     Set by CDK from `config.gateway.inboundAuth`, so the agent and the deployed
-    Gateway authorizer cannot drift. Unrecognized values fall back to 'jwt'
-    (the deployed default) with a warning.
+    Gateway authorizer cannot drift. The default is 'iam' on purpose: AgentCore
+    refuses to change a Gateway's authorizerType after creation, so an
+    already-deployed Gateway is AWS_IAM, and an absent env var must mean "match
+    what is deployed" rather than "assume the migration happened".
+
+    Unrecognized values fall back to the same conservative default.
     """
     mode = os.environ.get(
         EnvVars.GATEWAY_INBOUND_AUTH, Defaults.GATEWAY_INBOUND_AUTH

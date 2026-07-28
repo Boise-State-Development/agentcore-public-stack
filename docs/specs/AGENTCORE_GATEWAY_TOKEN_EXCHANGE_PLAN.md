@@ -197,6 +197,56 @@ The only Gateway *data-plane* caller is the agent's `gateway_mcp_client.py`.
 `bedrock-agentcore-control` and is unaffected by inbound auth.
 `external_mcp_client.py` is the separate direct-forwarding path.
 
+#### The authorizer is immutable — confirmed the hard way
+
+**An existing Gateway's `authorizerType` cannot be changed.** The first attempt
+to deploy this migration failed mid-update:
+
+```
+Resource handler returned message: "Authorizer type cannot be updated for an
+existing gateway (Service: BedrockAgentCoreControl, Status Code: 400)"
+HandlerErrorCode: InvalidRequest
+```
+
+The stack rolled back cleanly (`UPDATE_ROLLBACK_COMPLETE`); the Gateway kept
+`AWS_IAM`, `READY` status, and both registered targets.
+
+**Why pre-deploy checks did not catch it.** Two sources said the change was
+safe, and both were describing CloudFormation's model rather than the service's
+validation:
+
+| Signal | What it said | Why it was wrong |
+|---|---|---|
+| CFN resource reference | `AuthorizerType` → *"Update requires: No interruption"* | Describes CFN's update *mode*, not whether the service accepts the call |
+| `cdk diff` (real change set) | `[~]` modify-in-place, no replacement | A change set predicts CFN's plan; it does not invoke service-side validation |
+
+Treat this as the general lesson for AgentCore resources: **a change set is not a
+deploy test.** For a young service, verify a mutation against a throwaway
+resource before trusting either signal.
+
+#### What this means for the migration
+
+`gateway.inboundAuth` effectively sets the authorizer **at Gateway creation
+time**. Moving an existing deployment from `AWS_IAM` to `CUSTOM_JWT` requires
+creating a **new Gateway** and cutting over:
+
+1. Create a second Gateway with `CUSTOM_JWT` (the existing one keeps serving).
+2. Re-register every target on it. Targets are managed out-of-band — by app-api's
+   `GatewayTargetService` (admin-registered) and by the `mcp-servers` repo — so
+   this is not a CDK-only step and needs its own design.
+3. Point the agent at the new Gateway (`/{prefix}/gateway/id`).
+4. Verify, then delete the old Gateway.
+
+So the plan's original "option B" (a second Gateway) is not a preference — it is
+the **only available mechanism**. The single-Gateway *endstate* still holds: you
+end with one Gateway, because the old one is deleted after cutover. What changes
+is that getting there is a create-and-cutover, not a config flip.
+
+Defaults were set accordingly: `gateway.inboundAuth` defaults to `iam` (matching
+every deployed Gateway) and the agent's `AGENTCORE_GATEWAY_INBOUND_AUTH` defaults
+to `iam` too, so a partial deploy cannot leave the agent presenting a credential
+its Gateway rejects.
+
 #### Critical authorizer-config gotcha
 
 **Cognito *access* tokens carry `client_id`, not `aud`.** The
@@ -241,7 +291,7 @@ Required config values (both already published to SSM):
 - `/{prefix}/auth/cognito/user-pool-id`
 - `/{prefix}/auth/cognito/bff-app-client-id`
 
-Treat an authorizer change as a migration with a rollback plan; verify whether CloudFormation updates the Gateway in place or replaces it. **Check this before deploying** — a Gateway replacement would issue a new Gateway ID/URL and orphan every registered target, which would need re-registration.
+This applies to a **newly created** Gateway only. An existing Gateway's authorizer cannot be changed — see "The authorizer is immutable" in Phase 0. For an environment whose Gateway already exists, leave `inboundAuth` at `iam` and follow the create-and-cutover path instead.
 
 ### 1B. Agent Gateway client — bearer token
 
@@ -751,7 +801,7 @@ The current admin UI stores per-tool approval flags but does not manage Cedar po
 
 ## Open decisions
 
-1. ~~Migrate the existing IAM Gateway or add a second delegated JWT Gateway?~~ **Decided: one Gateway, migrate inbound to `CUSTOM_JWT` (option A).** Splitting by backend type would split along the wrong seam — backend differences are handled entirely by per-target *outbound* credentials. See "Gateway decision" in Phase 0.
+1. ~~Migrate the existing IAM Gateway or add a second delegated JWT Gateway?~~ **Resolved by constraint: a second (new) Gateway, because option A is impossible.** The authorizer is immutable after creation, so an existing Gateway cannot be flipped — the first deploy attempt failed with "Authorizer type cannot be updated for an existing gateway". The single-Gateway *endstate* still holds (the old Gateway is deleted after cutover); the mechanism is create-and-cutover, not a config flip. See "The authorizer is immutable" in Phase 0.
 2. Use OAuth discovery from token-service or explicit AgentCore authorization-server metadata?
 3. Exact confidential-client authentication and secret-rotation process?
 4. ~~Pilot MCP server and legacy audience?~~ **Decided: Campus Directory API.** Audience = the Directory application's registered token-service audience. See Phase 0 for rationale.

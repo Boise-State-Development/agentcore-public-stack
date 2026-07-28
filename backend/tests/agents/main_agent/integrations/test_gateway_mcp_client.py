@@ -92,8 +92,19 @@ class TestCreateFilteredGatewayClient:
 class TestGatewayInboundAuthMode:
     """Auth-mode resolution from the CDK-managed env var."""
 
-    def test_defaults_to_jwt(self, monkeypatch):
+    def test_defaults_to_iam(self, monkeypatch):
+        """Absent env var must mean SigV4 — the deployed reality.
+
+        AgentCore refuses to change a Gateway's authorizerType after creation,
+        so any Gateway that already exists is AWS_IAM. Defaulting to 'jwt' made
+        a partial deploy (infra rolled back, backend shipped) send bearer
+        tokens to an IAM Gateway and 401 every tool call.
+        """
         monkeypatch.delenv("AGENTCORE_GATEWAY_INBOUND_AUTH", raising=False)
+        assert _gateway_inbound_auth_mode() == "iam"
+
+    def test_reads_jwt(self, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_GATEWAY_INBOUND_AUTH", "jwt")
         assert _gateway_inbound_auth_mode() == "jwt"
 
     def test_reads_iam(self, monkeypatch):
@@ -101,13 +112,13 @@ class TestGatewayInboundAuthMode:
         assert _gateway_inbound_auth_mode() == "iam"
 
     def test_is_case_insensitive_and_trims(self, monkeypatch):
-        monkeypatch.setenv("AGENTCORE_GATEWAY_INBOUND_AUTH", "  IAM  ")
-        assert _gateway_inbound_auth_mode() == "iam"
-
-    def test_unknown_value_falls_back_to_jwt(self, monkeypatch):
-        """An unrecognized value must not silently disable user auth."""
-        monkeypatch.setenv("AGENTCORE_GATEWAY_INBOUND_AUTH", "banana")
+        monkeypatch.setenv("AGENTCORE_GATEWAY_INBOUND_AUTH", "  JWT  ")
         assert _gateway_inbound_auth_mode() == "jwt"
+
+    def test_unknown_value_falls_back_to_iam(self, monkeypatch):
+        """An unrecognized value must land on the conservative default."""
+        monkeypatch.setenv("AGENTCORE_GATEWAY_INBOUND_AUTH", "banana")
+        assert _gateway_inbound_auth_mode() == "iam"
 
 
 class TestBuildGatewayAuth:
