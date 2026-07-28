@@ -434,7 +434,12 @@ class BaseAgent(ABC):
             # gateway's runtime per-tool ids (`gateway_<target>___<tool>`)
             # before the FilteredMCPClient can match them.
             gateway_tool_ids = self._expand_gateway_tool_ids(gateway_tool_ids)
-            gateway_client = self.gateway_integration.get_client(gateway_tool_ids)
+            # The JWT-authorized Gateway needs *this user's* access token per
+            # invocation — there is no machine-identity fallback. Passed
+            # explicitly (never cached globally) so tokens can't cross users.
+            gateway_client = self.gateway_integration.get_client(
+                gateway_tool_ids, auth_token=self.auth_token
+            )
             if gateway_client:
                 local_tools = self.gateway_integration.add_to_tool_list(local_tools)
 

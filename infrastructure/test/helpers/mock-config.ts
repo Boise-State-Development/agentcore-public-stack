@@ -77,6 +77,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
         accessTokenClaims: {},
       },
     },
+    gateway: {
+      inboundAuth: 'jwt',
+    },
     cognito: {
       domainPrefix: MOCK_PREFIX,
       passwordMinLength: 8,

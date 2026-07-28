@@ -101,12 +101,47 @@ differ between a dev and a prod stack:
 | **Frame ancestors** | `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS`, `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` — leave unset in production |
 | **Networking** | `CDK_VPC_CIDR` |
 | **Retention** | `CDK_RETAIN_DATA_ON_DELETE`, `CDK_ARTIFACTS_RETENTION_DAYS` |
+| **Gateway inbound auth** | `CDK_GATEWAY_INBOUND_AUTH` (`jwt` default, or `iam` to keep SigV4) |
 
 :::caution[Extra frame ancestors are a real loosening]
 `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS` and `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS`
 let additional origins embed your users' artifacts and MCP Apps. They're handy
 for pointing a local SPA at a shared dev stack, but every listed origin can frame
 that content — leave them unset on production.
+:::
+
+## Gateway inbound authentication
+
+The AgentCore Gateway accepts **one** inbound authorizer, and it defaults to
+`jwt` — the Gateway validates a Cognito access token presented as a bearer
+token, and the agent sends the signed-in user's token on every call.
+
+That default is deliberate: on-behalf-of token exchange can only exchange a
+*user* subject token, so an IAM-authorized Gateway has nothing to exchange. Set
+`CDK_GATEWAY_INBOUND_AUTH=iam` to keep the older SigV4 posture.
+
+Outbound credentials are unaffected either way. They're configured **per target**,
+so one Gateway still fronts IAM-invoked Lambda targets and OAuth/token-exchange
+targets side by side.
+
+:::caution[Upgrading a fork: check for SigV4 Gateway callers first]
+Switching to `jwt` means the Gateway **stops accepting SigV4**. In this
+repository the agent is the only thing that calls the Gateway data plane, so the
+migration is self-contained. If your fork added anything else that invokes the
+Gateway with SigV4 — a Lambda, a scheduled job, another service — it will start
+getting `401`s.
+
+Before upgrading, either move those callers onto a user bearer token or set
+`CDK_GATEWAY_INBOUND_AUTH=iam` to stay on SigV4.
+
+Two things that are *not* affected: registered Gateway targets keep working
+(their outbound credentials are per-target), and flipping this value never
+replaces the Gateway — both `AuthorizerType` and `AuthorizerConfiguration` are
+CloudFormation "no interruption" updates, so the Gateway keeps its ID, URL, and
+targets.
+
+The change spans infrastructure and backend code, so **deploy both together**.
+Whichever lands second leaves a short window where Gateway tool calls fail.
 :::
 
 ## Data retention on teardown

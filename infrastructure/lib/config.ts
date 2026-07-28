@@ -58,6 +58,7 @@ export interface AppConfig {
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
   mcpIdentity: McpIdentityConfig;
+  gateway: GatewayConfig;
   appVersion: string;
   tags: { [key: string]: string };
 }
@@ -252,6 +253,30 @@ export interface McpIdentityConfig {
     // reserved access-token claims.
     accessTokenClaims?: { [claimName: string]: string };
   };
+}
+
+/**
+ * AgentCore Gateway configuration.
+ *
+ * `inboundAuth` selects the Gateway's single inbound authorizer. AgentCore
+ * allows exactly one authorizer type per Gateway (`authorizerType` is a scalar:
+ * CUSTOM_JWT | AWS_IAM | NONE | AUTHENTICATE_ONLY) — there is no "accept either
+ * SigV4 or JWT" mode. Outbound credentials remain per-target, so a single
+ * Gateway still serves both IAM-invoked Lambda targets and OAuth/token-exchange
+ * targets.
+ *
+ * Defaults to `jwt` (Cognito access tokens), which is required for outbound
+ * on-behalf-of token exchange: AgentCore can only exchange a *user* subject
+ * token, and an IAM-authorized Gateway has no user token to exchange.
+ * See docs/specs/AGENTCORE_GATEWAY_TOKEN_EXCHANGE_PLAN.md.
+ *
+ * Set to `iam` to roll back to SigV4 inbound auth without a code change. Both
+ * `AuthorizerType` and `AuthorizerConfiguration` are CloudFormation
+ * "no interruption" updates, so flipping this does not replace the Gateway and
+ * does not orphan registered targets.
+ */
+export interface GatewayConfig {
+  inboundAuth: 'jwt' | 'iam';
 }
 
 /**
@@ -481,6 +506,16 @@ export function loadConfig(scope: cdk.App): AppConfig {
           ?? {},
       },
     },
+    gateway: {
+      // Inbound authorizer selection. Defaults to 'jwt' (Cognito access
+      // tokens) — required for outbound OBO token exchange. Set to 'iam' to
+      // roll back to SigV4 without a code change; the authorizer swap is a
+      // CFN "no interruption" update either way, so registered targets survive.
+      inboundAuth:
+        (process.env.CDK_GATEWAY_INBOUND_AUTH as 'jwt' | 'iam' | undefined)
+        || scope.node.tryGetContext('gateway')?.inboundAuth
+        || 'jwt',
+    },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
     },
@@ -662,6 +697,15 @@ function validateConfig(config: AppConfig): void {
   const cidrPattern = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
   if (!cidrPattern.test(config.vpcCidr)) {
     throw new Error(`Invalid VPC CIDR format: ${config.vpcCidr}`);
+  }
+
+  // Validate Gateway inbound auth selection. A typo here would otherwise
+  // silently fall through to an unintended authorizer and 401 every Gateway
+  // call, so fail fast at synth instead.
+  if (!['jwt', 'iam'].includes(config.gateway.inboundAuth)) {
+    throw new Error(
+      `gateway.inboundAuth must be 'jwt' or 'iam'. Got: ${config.gateway.inboundAuth}`
+    );
   }
 
   // Validate RAG Ingestion configuration (always provisioned).
