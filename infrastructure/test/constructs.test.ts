@@ -8,6 +8,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Template } from 'aws-cdk-lib/assertions';
 import { createMockConfig, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
+import { mockCognitoRefs } from './helpers/mock-cognito';
 
 import { NetworkConstruct } from '../lib/constructs/network/network-construct';
 import { AlbConstruct } from '../lib/constructs/network/alb-construct';
@@ -306,7 +307,10 @@ describe('SpaBucketConstruct', () => {
 describe('AgentCoreGatewayConstruct', () => {
   it('creates Gateway + IAM role', () => {
     const stack = testStack();
-    new AgentCoreGatewayConstruct(stack, 'GW', { config: createMockConfig() });
+    new AgentCoreGatewayConstruct(stack, 'GW', {
+      config: createMockConfig(),
+      ...mockCognitoRefs(stack),
+    });
     const t = Template.fromStack(stack);
     t.resourceCountIs('AWS::BedrockAgentCore::Gateway', 1);
     t.resourceCountIs('AWS::IAM::Role', 1);
@@ -314,7 +318,10 @@ describe('AgentCoreGatewayConstruct', () => {
 
   it('publishes the gateway id SSM parameter for app-api (issue #419)', () => {
     const stack = testStack();
-    new AgentCoreGatewayConstruct(stack, 'GW', { config: createMockConfig() });
+    new AgentCoreGatewayConstruct(stack, 'GW', {
+      config: createMockConfig(),
+      ...mockCognitoRefs(stack),
+    });
     const t = Template.fromStack(stack);
     t.hasResourceProperties('AWS::SSM::Parameter', {
       Name: '/test-project/gateway/id',

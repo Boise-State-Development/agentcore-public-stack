@@ -568,7 +568,13 @@ export class PlatformStack extends cdk.Stack {
     // /^${prefix}-mcp-/ Lambda naming convention used by the
     // external mcp-servers repo). No code lives here — Gateway
     // Targets are managed out-of-band by mcp-servers' own deploy.
-    new AgentCoreGatewayConstruct(this, 'AgentCoreGateway', { config });
+    // Cognito refs are passed explicitly (not via SSM) because the pool is a
+    // sibling in this same stack — see AgentCoreGatewayConstructProps.
+    new AgentCoreGatewayConstruct(this, 'AgentCoreGateway', {
+      config,
+      userPool: cognitoConstruct.userPool,
+      bffAppClient: cognitoConstruct.bffAppClient,
+    });
 
     // ============================================================
     // MCP sandbox edge (always-on; bucket+dist; everything is wired

@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
@@ -8,11 +9,47 @@ import { AppConfig, getResourceName } from '../../config';
 
 export interface AgentCoreGatewayConstructProps {
   config: AppConfig;
+
+  /**
+   * Cognito user pool whose access tokens the Gateway trusts for inbound auth.
+   *
+   * Passed as a construct ref rather than read from SSM: the pool lives in this
+   * same stack, and CloudFormation resolves
+   * `AWS::SSM::Parameter::Value<String>` template parameters *before* any of the
+   * stack's resources are created — so reading a parameter this stack publishes
+   * is unsatisfiable on first deploy.
+   *
+   * Required when `config.gateway.inboundAuth === 'jwt'`.
+   */
+  userPool?: cognito.IUserPool;
+
+  /**
+   * BFF app client. Its client ID is the only value allowed in the inbound
+   * token's `client_id` claim.
+   *
+   * Required when `config.gateway.inboundAuth === 'jwt'`.
+   */
+  bffAppClient?: cognito.IUserPoolClient;
 }
 
 /**
  * AgentCoreGatewayConstruct — AWS Bedrock AgentCore Gateway with MCP
- * protocol and AWS_IAM (SigV4) authorization.
+ * protocol and configurable inbound authorization.
+ *
+ * Inbound auth (`config.gateway.inboundAuth`, default `jwt`):
+ *   - `jwt` — CUSTOM_JWT trusting the platform Cognito user pool. Required for
+ *     outbound on-behalf-of (OBO) token exchange, because AgentCore can only
+ *     exchange a *user* subject token and an IAM-authorized Gateway has none.
+ *     The agent calls the Gateway with the signed-in user's Cognito access
+ *     token as a bearer token.
+ *   - `iam` — the legacy AWS_IAM (SigV4) posture, retained as a code-free
+ *     rollback path.
+ *
+ * AgentCore permits exactly one inbound authorizer per Gateway
+ * (`authorizerType` is a scalar), but outbound credentials are *per target* —
+ * so this single Gateway still fronts both IAM-invoked Lambda targets
+ * (Wikipedia, ArXiv, policy-search) and OAuth/token-exchange targets (campus
+ * token-service APIs). One front desk, many doors, different keys.
  *
  * Provides:
  *   - Gateway IAM execution role with NO standing Lambda-invoke grant. The
@@ -24,8 +61,7 @@ export interface AgentCoreGatewayConstructProps {
  *     only the functions explicitly registered (no naming-convention wildcard).
  *     See `apis/shared/tools/gateway_lambda_grant.py`.
  *   - CloudWatch Logs publish rights for gateway-scoped log groups
- *   - `agentcore.CfnGateway` configured for MCP protocol with AWS_IAM
- *     authorizer and SEMANTIC search type
+ *   - `agentcore.CfnGateway` configured for MCP protocol with SEMANTIC search
  *
  * SSM publications:
  *   /{prefix}/gateway/id    — gateway identifier, read at runtime by app-api's
@@ -97,11 +133,51 @@ export class AgentCoreGatewayConstruct extends Construct {
       }),
     );
 
+    // Inbound authorizer. AgentCore takes exactly one type per Gateway, so this
+    // is an either/or — not additive. Both `AuthorizerType` and
+    // `AuthorizerConfiguration` are CloudFormation "no interruption" updates,
+    // so flipping between them updates the Gateway in place and does NOT
+    // replace it (a replacement would mint a new Gateway id/URL and orphan
+    // every registered target).
+    const useJwtInboundAuth = config.gateway.inboundAuth === 'jwt';
+
+    if (useJwtInboundAuth && (!props.userPool || !props.bffAppClient)) {
+      throw new Error(
+        "AgentCoreGatewayConstruct: config.gateway.inboundAuth is 'jwt' but " +
+        'userPool and/or bffAppClient were not supplied. Both are required to ' +
+        'build the CUSTOM_JWT authorizer. Pass them from PlatformStack, or set ' +
+        "gateway.inboundAuth='iam' to keep SigV4 inbound auth.",
+      );
+    }
+
+    const authorizerProps = useJwtInboundAuth
+      ? {
+          authorizerType: 'CUSTOM_JWT',
+          authorizerConfiguration: {
+            customJwtAuthorizer: {
+              // Cognito's OIDC discovery document. Built from region + pool id
+              // rather than `userPoolProviderUrl` (which is only on the concrete
+              // UserPool, not IUserPool). Token-safe: userPoolId may be an
+              // unresolved CFN token and interpolates fine.
+              discoveryUrl:
+                `https://cognito-idp.${stack.region}.amazonaws.com/` +
+                `${props.userPool!.userPoolId}/.well-known/openid-configuration`,
+              // MUST be allowedClients, NOT allowedAudience. Cognito *access*
+              // tokens carry a `client_id` claim and no `aud` claim, so an
+              // audience check can never match and would 401 every call. (The
+              // travel-auth MCP server documents the same trap for its PyJWT
+              // check, where JWT_AUDIENCE is deliberately left unset.)
+              allowedClients: [props.bffAppClient!.userPoolClientId],
+            },
+          },
+        }
+      : { authorizerType: 'AWS_IAM' };
+
     this.gateway = new agentcore.CfnGateway(this, 'MCPGateway', {
       name: getResourceName(config, 'mcp-gateway'),
       description: 'MCP Gateway for external tools',
       roleArn: this.gatewayRole.roleArn,
-      authorizerType: 'AWS_IAM',
+      ...authorizerProps,
       protocolType: 'MCP',
       exceptionLevel: 'DEBUG', // Only DEBUG is supported
       protocolConfiguration: {
@@ -135,7 +211,9 @@ export class AgentCoreGatewayConstruct extends Construct {
 
     new cdk.CfnOutput(this, 'GatewayUrl', {
       value: gatewayUrl,
-      description: 'AgentCore Gateway URL (requires SigV4 authentication)',
+      description: useJwtInboundAuth
+        ? 'AgentCore Gateway URL (requires a Cognito access token as a Bearer token)'
+        : 'AgentCore Gateway URL (requires SigV4 authentication)',
       exportName: getResourceName(config, 'gateway-url'),
     });
 
@@ -150,8 +228,24 @@ export class AgentCoreGatewayConstruct extends Construct {
       description: 'Gateway Status',
     });
 
+    new cdk.CfnOutput(this, 'GatewayInboundAuth', {
+      value: useJwtInboundAuth ? 'CUSTOM_JWT' : 'AWS_IAM',
+      description: 'Gateway inbound authorizer type (config.gateway.inboundAuth)',
+    });
+
     new cdk.CfnOutput(this, 'UsageInstructions', {
-      value: `
+      value: useJwtInboundAuth
+        ? `
+Gateway URL: ${gatewayUrl}
+Authentication: CUSTOM_JWT (Cognito access token as Bearer)
+
+The agent sends the signed-in user's Cognito access token per invocation:
+  Authorization: Bearer <cognito-access-token>
+
+Accepted only when the token's client_id matches the BFF app client.
+Note: Cognito access tokens have no 'aud' claim — validation is on client_id.
+        `.trim()
+        : `
 Gateway URL: ${gatewayUrl}
 Authentication: AWS_IAM (SigV4)
 
@@ -159,7 +253,7 @@ To test Gateway connectivity:
   aws bedrock-agentcore invoke-gateway \\
     --gateway-identifier ${gatewayId} \\
     --region ${stack.region}
-      `.trim(),
+        `.trim(),
       description: 'Usage instructions for Gateway',
     });
   }

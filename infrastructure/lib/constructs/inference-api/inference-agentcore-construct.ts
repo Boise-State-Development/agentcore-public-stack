@@ -332,6 +332,12 @@ export class InferenceAgentCoreConstruct extends Construct {
         AGENTCORE_CODE_INTERPRETER_ID: props.codeInterpreterId,
         BROWSER_ID: props.browserId,
 
+        // Gateway inbound auth mode. Sourced from the SAME config value that
+        // builds the Gateway's authorizer, so the agent's data-plane auth and
+        // the deployed authorizerType cannot drift: 'jwt' → the agent sends the
+        // user's Cognito access token as a Bearer token; 'iam' → SigV4.
+        AGENTCORE_GATEWAY_INBOUND_AUTH: config.gateway.inboundAuth,
+
         // S3 storage
         S3_ASSISTANTS_VECTOR_STORE_BUCKET_NAME: vectorBucketName,
         S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME: vectorIndexName,
