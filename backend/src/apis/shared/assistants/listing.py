@@ -15,6 +15,12 @@ Two invariants live here, and both are load-bearing:
 2. **The directory index is written only while published** (spec Data model). ``gsi5_keys``
    returns keys for exactly one state, so unpublication is enforced by physics rather
    than by a filter someone can forget: no key, so the browse query cannot return it.
+
+   Version snapshots extend that physics one level. The keys are now written on the
+   published ``VERSION#`` row rather than on the Agent row, so the index cannot return
+   *draft content* either — not because a reader checks, but because the draft has no row
+   in the index. ``gsi5_keys`` is unchanged and still the single derivation; only its
+   caller moved (``version_repository.set_version_index``).
 """
 
 from typing import Dict, Optional, Set, Tuple

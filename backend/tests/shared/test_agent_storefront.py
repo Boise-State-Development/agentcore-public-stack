@@ -16,7 +16,9 @@ import pytest
 from moto import mock_aws
 
 from apis.app_api.agent_designer.services.store_service import resolve_featured, store_front
-from apis.shared.assistants.listing_repository import batch_get_agents, write_listing
+from apis.shared.assistants.listing_repository import batch_get_agents
+
+from .conftest import publish_agent_version, unpublish_agent_version
 from apis.shared.assistants.models import AgentListing, PublisherProfile
 from apis.shared.assistants.publishers import put_publisher
 from apis.shared.assistants.storefront import (
@@ -89,19 +91,18 @@ def _seed_agent(table, agent_id: str, *, name: str, created_at="2026-07-01T00:00
 
 
 async def _publish(agent_id: str, category="Administration", created_at="2026-07-01T00:00:00Z"):
-    await write_listing(
-        agent_id,
-        AgentListing(state="published", category=category, publisher_id="pub-registrar"),
-        created_at,
-    )
+    """Cut a snapshot and shelve it — see ``conftest.publish_agent_version``.
+
+    The featured row resolves through the snapshot too, and it takes two reads to get
+    there (the Agent row names the version, the version renders). That is the point of
+    keeping this helper honest rather than writing the keys by hand: a curated shelf that
+    silently fell back to the live record would be the least noticed place for it to happen.
+    """
+    await publish_agent_version(agent_id, category, created_at)
 
 
 async def _unpublish(agent_id: str, state="taken_down", created_at="2026-07-01T00:00:00Z"):
-    await write_listing(
-        agent_id,
-        AgentListing(state=state, category="Administration", publisher_id="pub-registrar"),
-        created_at,
-    )
+    await unpublish_agent_version(agent_id, "Administration", created_at, state=state)
 
 
 # ── the config item ──────────────────────────────────────────────────────────────────

@@ -40,7 +40,7 @@ rather than a data layer plus a behavior change at once.
 
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .models import AgentVersion
 from .serialization import from_ddb, to_ddb_safe
@@ -53,6 +53,10 @@ logger = logging.getLogger(__name__)
 # to survive a genuine collision, not a stampede — and exhausting it is a real error rather
 # than something to paper over with an unbounded loop.
 MAX_ALLOCATION_ATTEMPTS = 5
+
+# The sparse store-index attributes. They live on the *published version* row rather than
+# on the Agent row — see ``set_version_index``. Nothing else writes them.
+_GSI5_ATTRS = ("GSI5_PK", "GSI5_SK")
 
 
 class AgentVersionExistsError(ValueError):
@@ -167,6 +171,59 @@ async def create_version(agent_id: str, snapshot: AgentVersion) -> AgentVersion:
     )
 
 
+async def set_version_index(
+    agent_id: str, number: int, keys: Optional[Dict[str, str]]
+) -> None:
+    """Write — or clear — the sparse store keys on one version item.
+
+    ⚠️ **The only mutable thing on an otherwise immutable row, and the exception is the
+    point.** A version's *content* is write-once (``put_version``'s condition). Which
+    version is *published* is a fact about now, not about the snapshot, so it has to be
+    able to change — promotion, takedown and unpublication all move it. Keeping the pointer
+    as an index key on the row rather than as content is what lets both be true at once.
+
+    This is the physics that ``listing.py`` prizes, extended one level: the store index is
+    written only on the published version, so the browse query cannot return draft content
+    because draft content has no key in it. Previously the keys lived on the Agent row —
+    the very row the author edits — which is why an approved listing could serve rewritten
+    instructions.
+
+    ``keys`` is ``gsi5_keys(...)`` output: a mapping to write, or ``None`` to REMOVE both.
+    Raises ``ValueError`` if the version does not exist, so a promotion can never point at
+    a row that is not there.
+    """
+    from botocore.exceptions import ClientError
+
+    if keys:
+        expression = "SET " + ", ".join(f"{attr} = :{attr.lower()}" for attr in keys)
+        values = {f":{attr.lower()}": value for attr, value in keys.items()}
+    else:
+        expression = "REMOVE " + ", ".join(_GSI5_ATTRS)
+        values = None
+
+    params: Dict[str, Any] = {
+        "Key": {"PK": _pk(agent_id), "SK": version_sk(number)},
+        "UpdateExpression": expression,
+        "ConditionExpression": "attribute_exists(PK)",
+        "ReturnValues": "NONE",
+    }
+    if values:
+        params["ExpressionAttributeValues"] = values
+
+    try:
+        _table().update_item(**params)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            raise ValueError(f"Version {number} of agent {agent_id} does not exist.") from e
+        logger.error(f"Failed to set store index on version {number} of {agent_id}: {e}")
+        raise
+
+    logger.info(
+        f"📇 Version {number} of {agent_id} → "
+        f"{'indexed ' + keys['GSI5_PK'] if keys else 'not indexed'}"
+    )
+
+
 async def get_version(agent_id: str, number: int) -> Optional[AgentVersion]:
     """One snapshot by number, or ``None`` if it does not exist."""
     response = _table().get_item(Key={"PK": _pk(agent_id), "SK": version_sk(number)})
@@ -194,6 +251,48 @@ async def get_latest_version(agent_id: str) -> Optional[AgentVersion]:
     )
     items = response.get("Items", [])
     return _from_item(items[0]) if items else None
+
+
+async def batch_get_versions(refs: List[Tuple[str, int]]) -> Dict[str, AgentVersion]:
+    """Fetch specific versions by ``(agent_id, number)``, keyed by agent id.
+
+    The read behind the curated store front, which is an arbitrary set of ids rather than a
+    category partition — so the GSI5 query does not fit and this is a ``BatchGetItem`` over
+    exact keys, mirroring ``listing_repository.batch_get_agents``.
+
+    **A missing version is simply absent from the result**, for the same reason a missing
+    Agent is there: a featured entry whose version was never written should drop off the
+    shelf, not error the whole page.
+    """
+    if not refs:
+        return {}
+
+    import boto3
+
+    table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not table_name:
+        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
+
+    resource = boto3.resource("dynamodb")
+    found: Dict[str, AgentVersion] = {}
+
+    # De-duplicated because BatchGetItem rejects duplicate keys outright.
+    unique = list(dict.fromkeys(refs))
+    for start in range(0, len(unique), 100):  # BatchGetItem caps at 100 keys
+        keys = [
+            {"PK": _pk(agent_id), "SK": version_sk(number)}
+            for agent_id, number in unique[start : start + 100]
+        ]
+        request = {table_name: {"Keys": keys}}
+        while request:
+            response = resource.batch_get_item(RequestItems=request)
+            for item in response.get("Responses", {}).get(table_name, []):
+                version = _from_item(item)
+                if version.agent_id:
+                    found[version.agent_id] = version
+            request = response.get("UnprocessedKeys") or None
+
+    return found
 
 
 async def list_versions(agent_id: str, *, limit: Optional[int] = None) -> List[AgentVersion]:

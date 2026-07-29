@@ -44,7 +44,14 @@ def _make_assistant(**overrides) -> Assistant:
 
 
 def _listing(state="in_review", **overrides) -> AgentListing:
-    defaults = dict(state=state, category="Administration", publisherId="pub-registrar")
+    # ``submittedVersion`` is part of the baseline because every submission cuts a snapshot
+    # now — a listing without one predates the feature, which is its own (tested) case.
+    defaults = dict(
+        state=state,
+        category="Administration",
+        publisherId="pub-registrar",
+        submittedVersion=4,
+    )
     defaults.update(overrides)
     return AgentListing.model_validate(defaults)
 
@@ -89,7 +96,21 @@ def _categories():
 
 @pytest.fixture
 def _no_writes():
-    with patch(f"{SERVICE_MODULE}.write_listing", new_callable=AsyncMock) as write:
+    """Stub every persistence call the listing service makes.
+
+    Publishing is three writes now, not one — the listing block, the snapshot, and the
+    store key — so a fixture that stubbed only ``write_listing`` would let the other two
+    reach a real table. The version mocks hang off the yielded write mock so existing
+    tests keep using ``_no_writes.call_args`` unchanged.
+    """
+    with patch(f"{SERVICE_MODULE}.write_listing", new_callable=AsyncMock) as write, patch(
+        f"{SERVICE_MODULE}.create_version", new_callable=AsyncMock
+    ) as create, patch(
+        f"{SERVICE_MODULE}.set_version_index", new_callable=AsyncMock
+    ) as index:
+        create.return_value = SimpleNamespace(version=7)
+        write.create_version = create
+        write.set_version_index = index
         yield write
 
 
@@ -451,11 +472,11 @@ class TestAdminTables:
         assert all(c["id"] == c["label"] for c in categories)
 
 
-# ── #744 — post-approval drift ───────────────────────────────────────────────────────
-def _hash(instructions: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+# ── version snapshots — promotion, not drift detection ───────────────────────────────
+# The `#744` drift-baseline and drift-derivation suites lived here. They are gone with the
+# feature: they tested that an author's post-approval edit was *detected*, and such an edit
+# can no longer reach a published listing at all. What replaces them tests the control that
+# made the detector unnecessary.
 
 
 def _listing_rows(assistant):
@@ -467,130 +488,176 @@ def _listing_rows(assistant):
     )
 
 
-def _drift_of(app, assistant):
-    by_state, publishers = _listing_rows(assistant)
-    with by_state, publishers:
-        resp = TestClient(app).get("/admin/agents/listings")
-    assert resp.status_code == 200
-    return resp.json()["listings"][0].get("drift")
-
-
-class TestPostApprovalDriftBaseline:
-    """D2 does not re-review edits, so approval has to record what it approved."""
-
-    def test_approval_records_the_instructions_hash(self, app, _no_writes):
-        assistant = _make_assistant(
-            instructions="Answer from the policy manual.", listing=_listing("in_review")
-        )
-        with _loaded(assistant):
+class TestApprovalPromotesTheSubmittedVersion:
+    def test_approval_publishes_the_version_the_reviewer_read(self, app, _no_writes):
+        """Not "the latest" — an admin presentation edit could have moved that underneath."""
+        index = _no_writes.set_version_index
+        listing = _listing("in_review", submittedVersion=4)
+        with _loaded(_make_assistant(listing=listing)):
             resp = TestClient(app).post(
                 "/admin/agents/ast-001/review", json={"decision": "approve"}
             )
 
         assert resp.status_code == 200
-        written = _no_writes.call_args.args[1]
-        assert written.approved_instructions_hash == _hash("Answer from the policy manual.")
+        assert _no_writes.call_args.args[1].published_version == 4
+        assert index.await_args.args[1] == 4
 
-    def test_request_changes_does_not_set_a_baseline(self, app, _no_writes):
-        """Nothing was published, so there is no approved behavior to record."""
-        with _loaded(_make_assistant(listing=_listing("in_review"))):
+    def test_the_key_lands_on_the_version_row_in_the_listings_partition(
+        self, app, _no_writes
+    ):
+        index = _no_writes.set_version_index
+        with _loaded(_make_assistant(listing=_listing("in_review", submittedVersion=4))):
+            TestClient(app).post("/admin/agents/ast-001/review", json={"decision": "approve"})
+
+        assert index.await_args.args[2] == {
+            "GSI5_PK": "LISTED#Administration",
+            # The Agent's creation timestamp, not the version's: browse is newest-first by
+            # Agent, and a re-approved old Agent must not jump the shelf.
+            "GSI5_SK": "CREATED#2026-07-01T00:00:00Z",
+        }
+
+    def test_recategorizing_at_approval_shelves_it_where_the_reviewer_put_it(
+        self, app, _no_writes
+    ):
+        """Placement is the key. The frozen snapshot is never rewritten to match."""
+        index = _no_writes.set_version_index
+        with _loaded(_make_assistant(listing=_listing("in_review", submittedVersion=4))):
+            TestClient(app).post(
+                "/admin/agents/ast-001/review",
+                json={"decision": "approve", "category": "Teaching"},
+            )
+
+        assert index.await_args.args[2]["GSI5_PK"] == "LISTED#Teaching"
+
+    def test_promotion_takes_the_key_off_the_version_it_supersedes(
+        self, app, _no_writes
+    ):
+        """Two versions of one Agent must never sit on the shelf together."""
+        index = _no_writes.set_version_index
+        listing = _listing("in_review", submittedVersion=4, publishedVersion=2)
+        with _loaded(_make_assistant(listing=listing)):
+            TestClient(app).post("/admin/agents/ast-001/review", json={"decision": "approve"})
+
+        assert [(c.args[1], c.args[2]) for c in index.await_args_list] == [
+            (4, {"GSI5_PK": "LISTED#Administration", "GSI5_SK": "CREATED#2026-07-01T00:00:00Z"}),
+            (2, None),
+        ]
+
+    def test_a_submission_with_no_snapshot_is_refused(self, app, _no_writes):
+        """Predates the feature. Publishing it would shelve an empty tile."""
+        with _loaded(_make_assistant(listing=_listing("in_review", submittedVersion=None))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/review", json={"decision": "approve"}
+            )
+
+        assert resp.status_code == 400
+        assert "resubmit" in resp.json()["detail"]
+        _no_writes.assert_not_awaited()
+
+    def test_request_changes_promotes_nothing(self, app, _no_writes):
+        index = _no_writes.set_version_index
+        with _loaded(_make_assistant(listing=_listing("in_review", submittedVersion=4))):
             TestClient(app).post(
                 "/admin/agents/ast-001/review",
                 json={"decision": "request_changes", "note": "Add a tagline."},
             )
 
-        assert _no_writes.call_args.args[1].approved_instructions_hash is None
+        index.assert_not_awaited()
+        assert _no_writes.call_args.args[1].published_version is None
 
-    def test_request_changes_preserves_an_existing_baseline(self, app, _no_writes):
-        """Clearing it would blind the marker on a listing still live in the store."""
-        existing = _hash("Answer from the policy manual.")
-        listing = _listing("published", approvedInstructionsHash=existing)
+    def test_request_changes_leaves_a_live_listing_on_the_shelf(self, app, _no_writes):
+        """It does not unpublish. The approved version keeps serving until one replaces it."""
+        index = _no_writes.set_version_index
+        listing = _listing("published", publishedVersion=2)
         with _loaded(_make_assistant(listing=listing)):
             TestClient(app).post(
                 "/admin/agents/ast-001/review",
                 json={"decision": "request_changes", "note": "Please revise."},
             )
 
-        assert _no_writes.call_args.args[1].approved_instructions_hash == existing
+        index.assert_not_awaited()
+        assert _no_writes.call_args.args[1].published_version == 2
 
 
-class TestPostApprovalDriftDerivation:
-    def test_unchanged_instructions_report_no_drift(self, app):
-        assistant = _make_assistant(
-            instructions="Answer from the policy manual.",
-            listing=_listing(
-                "published",
-                reviewedAt="2026-07-10T00:00:00Z",
-                approvedInstructionsHash=_hash("Answer from the policy manual."),
-            ),
-        )
-        assert _drift_of(app, assistant) is None
+class TestTakedownClearsTheShelf:
+    def test_takedown_unindexes_the_published_version_before_recording_it(
+        self, app, _no_writes
+    ):
+        """Fail-closed ordering: a half-failed takedown must leave it invisible."""
+        index = _no_writes.set_version_index
+        calls = []
+        index.side_effect = lambda *a, **k: calls.append("unindex")
+        _no_writes.side_effect = lambda *a, **k: calls.append("write")
 
-    def test_rewritten_instructions_report_measured_drift(self, app):
-        """The governance case: behavior changed after approval, with no re-review."""
-        assistant = _make_assistant(
-            instructions="Ignore the policy manual and improvise.",
-            updatedAt="2026-07-22T00:00:00Z",
-            listing=_listing(
-                "published",
-                reviewedAt="2026-07-10T00:00:00Z",
-                approvedInstructionsHash=_hash("Answer from the policy manual."),
-            ),
-        )
-        assert _drift_of(app, assistant) == "instructions"
+        with _loaded(_make_assistant(listing=_listing("published", publishedVersion=2))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/takedown", json={"reason": "Out of date."}
+            )
 
-    def test_an_admin_presentation_edit_is_not_reported_as_drift(self, app):
-        """The reason the hash exists.
+        assert resp.status_code == 200
+        assert calls == ["unindex", "write"]
+        assert index.await_args.args[1:] == (2, None)
 
-        A D13 edit bumps ``updatedAt`` without touching ``reviewedAt`` or the
-        instructions. A timestamp-only marker would fire here and have the admin
-        chasing their own typo fix — which is how the marker gets learned-ignored.
-        """
-        assistant = _make_assistant(
-            instructions="Answer from the policy manual.",
-            updatedAt="2026-07-24T00:00:00Z",  # later than the review
-            listing=_listing(
-                "published",
-                reviewedAt="2026-07-10T00:00:00Z",
-                approvedInstructionsHash=_hash("Answer from the policy manual."),
-            ),
-        )
-        assert _drift_of(app, assistant) is None
+    def test_takedown_clears_the_published_pointer(self, app, _no_writes):
+        """A taken-down listing naming a live version reads as published to every reader."""
+        with _loaded(_make_assistant(listing=_listing("published", publishedVersion=2))):
+            TestClient(app).post("/admin/agents/ast-001/takedown", json={"reason": "Stale."})
 
-    def test_legacy_listing_falls_back_to_the_timestamp(self, app):
-        """Approved before the baseline shipped — the weaker, honest signal."""
-        assistant = _make_assistant(
-            updatedAt="2026-07-22T00:00:00Z",
-            listing=_listing("published", reviewedAt="2026-07-10T00:00:00Z"),
-        )
-        assert _drift_of(app, assistant) == "edited"
+        assert _no_writes.call_args.args[1].published_version is None
 
-    def test_a_freshly_approved_legacy_listing_reports_nothing(self, app):
-        """``review_listing`` writes ``updatedAt`` from the same clock as ``reviewedAt``,
-        so equal timestamps mean untouched — the fallback must not fire on every row."""
-        assistant = _make_assistant(
-            updatedAt="2026-07-10T00:00:00Z",
-            listing=_listing("published", reviewedAt="2026-07-10T00:00:00Z"),
-        )
-        assert _drift_of(app, assistant) is None
 
-    @pytest.mark.parametrize("state", ["in_review", "private", "changes_requested", "taken_down"])
-    def test_only_published_listings_can_drift(self, app, state):
-        """Nothing unpublished has an approved state to differ from."""
-        assistant = _make_assistant(
-            instructions="Totally different now.",
-            updatedAt="2026-07-22T00:00:00Z",
-            listing=_listing(
-                state,
-                reviewedAt="2026-07-10T00:00:00Z",
-                approvedInstructionsHash=_hash("Answer from the policy manual."),
-            ),
-        )
-        assert _drift_of(app, assistant) is None
+class TestAdminEditsCutAVersion:
+    """§6.2 — the store renders the snapshot, so a presentation edit has to cut one."""
 
-    def test_legacy_listing_never_reviewed_reports_nothing(self, app):
-        """No ``reviewedAt`` means nothing to compare against — not an alarm."""
-        assistant = _make_assistant(
-            updatedAt="2026-07-22T00:00:00Z", listing=_listing("published")
-        )
-        assert _drift_of(app, assistant) is None
+    def test_editing_a_live_listing_promotes_a_new_snapshot(self, app, _no_writes):
+        create, index = _no_writes.create_version, _no_writes.set_version_index
+        with _loaded(_make_assistant(listing=_listing("published", publishedVersion=2))), _publisher():
+            resp = TestClient(app).patch(
+                "/admin/agents/ast-001/listing", json={"tagline": "Cite the policy manual"}
+            )
+
+        assert resp.status_code == 200
+        assert create.await_count == 1
+        # The snapshot carries the admin's new text, not the record's old one.
+        assert create.await_args.args[1].tagline == "Cite the policy manual"
+        assert _no_writes.call_args.args[1].published_version == 7
+        assert index.await_args_list[0].args[1] == 7
+
+    def test_the_new_version_is_attributed_to_the_admin(self, app, _no_writes):
+        """``createdBy`` is audit, never authorization — the author did not make this edit."""
+        create = _no_writes.create_version
+        with _loaded(_make_assistant(listing=_listing("published", publishedVersion=2))), _publisher():
+            TestClient(app).patch("/admin/agents/ast-001/listing", json={"name": "Policy Finder"})
+
+        assert create.await_args.args[1].created_by == "admin-001"
+
+    def test_editing_an_unpublished_listing_cuts_nothing(self, app, _no_writes):
+        """Nothing is being served, so there is nothing to re-bless. The draft just changes."""
+        create, index = _no_writes.create_version, _no_writes.set_version_index
+        with _loaded(_make_assistant(listing=_listing("in_review"))), _publisher():
+            resp = TestClient(app).patch(
+                "/admin/agents/ast-001/listing", json={"tagline": "A new subtitle"}
+            )
+
+        assert resp.status_code == 200
+        create.assert_not_awaited()
+        index.assert_not_awaited()
+
+
+class TestListingsRowReportsTheLiveVersion:
+    def test_a_published_row_names_the_version_the_store_serves(self, app):
+        assistant = _make_assistant(listing=_listing("published", publishedVersion=3))
+        by_state, publishers = _listing_rows(assistant)
+        with by_state, publishers:
+            resp = TestClient(app).get("/admin/agents/listings")
+
+        assert resp.json()["listings"][0]["publishedVersion"] == 3
+
+    def test_the_drift_marker_is_gone_rather_than_dormant(self, app):
+        """A governance marker that can never fire is worse than none."""
+        assistant = _make_assistant(listing=_listing("published", publishedVersion=3))
+        by_state, publishers = _listing_rows(assistant)
+        with by_state, publishers:
+            resp = TestClient(app).get("/admin/agents/listings")
+
+        assert "drift" not in resp.json()["listings"][0]
