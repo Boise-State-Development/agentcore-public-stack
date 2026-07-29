@@ -163,6 +163,106 @@ class AgentListing(BaseModel):
     admin_edits: List[AdminEdit] = Field(
         default_factory=list, alias="adminEdits", description="Append-only log of admin presentation edits (D13)"
     )
+    published_version: Optional[int] = Field(
+        None,
+        alias="publishedVersion",
+        description=(
+            "The ``AgentVersion`` number this listing serves — the snapshot approval blessed. "
+            "``None`` means nothing is published, which is the state of every listing that has "
+            "not yet been through a version-cutting submission. Nothing reads this yet: the "
+            "field lands ahead of the behavior so the write path (PR-2) and the invocation swap "
+            "(PR-3) do not also have to migrate the record shape."
+        ),
+    )
+
+
+class AgentVersion(BaseModel):
+    """An immutable snapshot of an Agent's reviewable surface (version-snapshots §3.1).
+
+    Cut at **submission**, not at approval: taking it at approval leaves a window where
+    the author edits between the reviewer reading and the reviewer approving, which is a
+    narrower instance of the very bug versioning exists to close. Approval then promotes
+    an existing version rather than capturing a new one.
+
+    **What is in here is exactly what determines behavior or presentation.** Instructions
+    are the obvious one, but swapping a bound tool or skill changes behavior just as much,
+    and the model choice changes cost and answer quality — so ``bindings`` and
+    ``modelSettings`` are frozen alongside. ``name``/``description``/``tagline``/``emoji``/
+    ``iconKey``/``starters`` are what the reviewer actually read on the shelf, and
+    ``category``/``publisherId`` are the placement and attribution they approved.
+
+    ⚠️ **Deliberately absent: ``ownerId``, ``visibility``, ``status``.** Ownership governs
+    edit rights and ``visibility`` is the independent access gate the marketplace spec is
+    emphatic about keeping separate from ``listing.state``. Freezing either into a version
+    would fuse two axes this codebase has worked to keep apart — a snapshot could then
+    out-vote a later access decision, which is precisely the ``allowedAppRoles`` trap.
+    ``status`` is a draft/complete lifecycle flag on the author's record, not a property
+    of a reviewed artifact.
+
+    Every optional field mirrors ``Assistant``'s own optionality rather than defaulting to
+    an empty container, because absent and empty are different claims there: absent
+    ``bindings`` means "synthesize the legacy KB binding via compat", ``[]`` means "binds
+    nothing". Collapsing them would silently change what a legacy Agent resolves to on the
+    round trip back out (see ``assistants.versions``).
+
+    ``extra="allow"`` mirrors ``AgentListing``: a field written by newer code survives a
+    read/write round trip through older code.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    agent_id: str = Field(..., alias="agentId", description="Agent this version snapshots")
+    version: Optional[int] = Field(
+        None,
+        description=(
+            "Monotonic version number within the agent, 1-based. ``None`` means the "
+            "snapshot has not been persisted yet — the repository allocates the number at "
+            "write time, because only the conditional write can settle a race between two "
+            "concurrent submissions."
+        ),
+    )
+    created_at: Optional[str] = Field(
+        None, alias="createdAt", description="ISO 8601 timestamp of when this version was cut"
+    )
+    created_by: Optional[str] = Field(
+        None,
+        alias="createdBy",
+        description=(
+            "User id of whoever cut it. Audit attribution, never authorization — an admin "
+            "presentation edit cuts a version attributed to the admin (§6.2), and that must "
+            "not read as a transfer of ownership."
+        ),
+    )
+
+    # ── the frozen surface ───────────────────────────────────────────────────────────
+    name: str = Field(..., description="Agent display name as reviewed")
+    description: str = Field(..., description="Short summary as reviewed")
+    instructions: str = Field(..., description="System prompt as reviewed")
+    tagline: Optional[str] = Field(None, description="Shelf subtitle (D4) as reviewed")
+    emoji: Optional[str] = Field(None, description="Emoji avatar as reviewed")
+    icon_key: Optional[str] = Field(
+        None, alias="iconKey", description="S3 object key for the square icon (D5) as reviewed"
+    )
+    starters: Optional[List[str]] = Field(
+        None, description="Conversation starters shown on the launch card; part of the reviewed presentation"
+    )
+    model_settings: Optional[AgentModelConfig] = Field(
+        None, alias="modelConfig", description="Governed single-select model (D3) as reviewed"
+    )
+    bindings: Optional[List[AgentBinding]] = Field(
+        None, description="Uniform primitive bindings (D3) as reviewed; absent ≠ empty (see class docstring)"
+    )
+    category: Optional[str] = Field(
+        None, description="Category id the reviewer approved this into; absent when the Agent carried no listing"
+    )
+    publisher_id: Optional[str] = Field(
+        None,
+        alias="publisherId",
+        description=(
+            "PublisherProfile the reviewer approved this attribution to (D12). DISPLAY ONLY, "
+            "exactly as on ``AgentListing`` — freezing it never makes it an access grant."
+        ),
+    )
 
 
 class PublisherProfile(BaseModel):
