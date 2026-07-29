@@ -1,10 +1,17 @@
 # Agent Version Snapshots — Immutable Approved Listings
 
-**Status:** Design / Proposal
+**Status:** Partially implemented — PR-1 (#784) and PR-2 (#787) merged; PR-3 (#789) open
 **Author:** (drafted with Claude)
-**Date:** 2026-07-29
+**Date:** 2026-07-29 · revised 2026-07-29 against what shipped
 **Targets branch:** `develop`
 **Supersedes:** the post-approval *drift detection* portion of `agent-marketplace.md` (D14)
+
+> **This document has been reconciled with the implementation.** Where building it proved
+> the design wrong, the section says so inline rather than being silently rewritten — a spec
+> that quietly agrees with the code teaches nobody why. The substantive corrections are
+> **§4.2** (the agent cache key does *not* need the version, and adding it breaks resume)
+> and **§3.3** (the real DynamoDB key prefixes, plus the fail-closed ordering that replaced
+> the lost atomicity). §7 carries per-PR status.
 
 ---
 
@@ -99,15 +106,47 @@ Same assistants table, alongside the Agent item:
 
 | Item | PK | SK |
 |---|---|---|
-| Agent (draft) | `AGENT#{agentId}` | `PROFILE` (existing) |
-| Version | `AGENT#{agentId}` | `VERSION#{n:08d}` |
+| Agent (draft) | `AST#{agentId}` | `METADATA` (existing) |
+| Version | `AST#{agentId}` | `VERSION#{n:08d}` |
+
+> **Corrected during PR-1 (#784).** This table originally read `AGENT#{agentId}` /
+> `PROFILE`. The assistants table has always keyed Agents `AST#{id}` / `METADATA` (see
+> `listing_repository._key`), and co-location requires the *same* partition key, so the
+> real prefix is what shipped. Only the literal strings were wrong; the design — version
+> rows beside the Agent row, sorted — is unchanged.
 
 Zero-padded so `SK` sorts lexically. Versions are written once and never updated —
 an immutable record that an admin edit (D13) must not silently rewrite either; see
-§6.2.
+§6.2. The write is conditional on `attribute_not_exists(PK)`, which does double duty:
+it is the immutability guarantee *and* the concurrency guard, since the version
+allocator picks its number from a read and a racing submission that already took it
+loses the conditional write and re-picks.
 
 `listing.publishedVersion` on the Agent item points at the live version. `None` means
-nothing is published.
+nothing is published. `listing.submittedVersion` points at the version cut at
+submission — **added during PR-2 (#787)**, because approval must promote the artifact
+the reviewer actually read, and inferring "the latest" breaks the moment anything else
+cuts a version mid-review (§6.2 introduces exactly that).
+
+**Placement is the index key, not the snapshot.** An admin may recategorize a live
+listing (D13), so the GSI5 partition is derived from `listing.category` and the frozen
+`version.category` is never rewritten. Content is immutable; *where it sits* is a fact
+about now.
+
+⚠️ **Delisting is no longer atomic, and the invariant is bought with ordering.** The
+listing block and its index keys used to be one `update_item`, and that atomicity is
+what made "an unpublished agent cannot be in the store" a fact rather than a hope.
+Moving the index onto the version row splits it across two items:
+
+```
+publish   → write the listing, then write the key   (partial ⇒ recorded, not shelved)
+unpublish → clear the key, then write the listing   (partial ⇒ not shelved, recorded live)
+```
+
+Both partial outcomes leave the Agent **off** the shelf. The reverse orders leave it
+visible while the record says otherwise, which is the single failure the sparse index
+exists to prevent. A DynamoDB transaction would restore true atomicity and is the
+honest upgrade if fail-closed is ever not enough (see §8).
 
 **The store index moves to the version item.** GSI5 keys are written on the
 `VERSION#` row rather than the Agent row, sparse on "this version is the published
@@ -149,12 +188,51 @@ are running an unpublished draft.
 
 ### 4.2 Prompt-cache interaction
 
-`CLAUDE.md` makes prompt-cache stability a contract, and the agent cache keys on
-*configuration*. Draft and published are now two distinct configurations for the same
-`agentId`, which is correct — but the cache key must include the resolved version, or
-promoting a new version will keep serving the old system prompt from a warm agent.
-Getting this wrong is a correctness bug that presents as "my approved change didn't
-take effect."
+> ⚠️ **This section was wrong and is corrected here (PR-3, #789).** It originally said the
+> agent cache key "must include the resolved version, or promoting a new version will keep
+> serving the old system prompt from a warm agent." That is not true in this codebase, and
+> acting on it introduces a real bug. The original claim is preserved in this note so the
+> reasoning below is legible; **do not re-implement it.**
+
+Two different caches get conflated here, and they need separating.
+
+**The in-process agent cache does not need the version.** `_agent_cache`
+(`inference_api/chat/service.py`) holds `BaseAgent` objects keyed on a tuple of
+construction **values**, not on row pointers. A version is snapshot *values*; resolution
+reads one row instead of another and feeds those values into the same pipeline. Everything
+a version changes about behavior already reaches the key:
+
+| Version field | Already in the key as |
+|---|---|
+| `instructions` | `system_prompt` → `prompt_hash` |
+| `bindings` (tool) | `effective_enabled_tools` → `tools_hash` |
+| `bindings` (skill) | `effective_skill_ids` → `skills_hash` + `agent_type` |
+| `modelSettings` | `effective_model_id` + inference-params hash |
+| `bindings` (memory\_space) | becomes `extra_tools` → cache skipped entirely |
+| `name`, `tagline`, `emoji`, `starters` | never reach the agent at all |
+
+So a promotion already misses. Adding the version number buys no discrimination.
+
+**And it costs safety.** The resume path rebuilds its cache key from `PausedTurnSnapshot`
+— the frozen params of the paused turn — so any new key element the snapshot does not
+carry orphans the paused agent under the original key. An OAuth-consent or tool-approval
+pause on a published Agent then fails to resume with *"must resume from interrupt"*.
+`service.py` warns about precisely this desync. PR-3 added the element, hit that bug, and
+threaded `agent_version` through the snapshot, `_construction_snapshot` and
+`stream_coordinator` to fix it — five files and a durable schema change to mitigate a
+problem created by an element that discriminates nothing. It was reverted; the reasoning
+now lives inline at the `resolved_version` declaration in `chat/routes.py`.
+
+**Bedrock prompt caching gets *better*, not worse.** This is the opposite of the risk the
+original text implied. Prefix stability depends on the system prompt not changing between
+turns of a conversation. Before snapshots, an author saving an edit mid-conversation broke
+the prefix for every user mid-turn; now a published Agent's prompt changes only at
+approval. Given prod cache write:read is running ~1:2, that is a modest cost win.
+
+What remains true from the original section: promoting a version mid-conversation *does*
+break the prefix and force a full re-write for that session. That is inherent — new
+instructions are a new prompt — and it is the correct behavior, not something to cache
+around.
 
 ---
 
@@ -242,17 +320,27 @@ finished backend, not a design problem. It needs the `admin.marketplace` scope
 
 ## 7. Phasing
 
-| PR | Content |
-|---|---|
-| **PR-1** | `AgentVersion` model + repository (write-once `VERSION#` items), version numbering, snapshot serialization round-trip to `Assistant`. Inert — nothing reads versions yet. |
-| **PR-2** | Cut a version on submission; approval promotes it; move GSI5 keys to the version item so the store reads snapshots. Remove `approvedInstructionsHash` / `ListingDrift`. |
-| **PR-3** | Invocation resolution: published version for everyone but the owner, draft for the owner, version in the agent cache key. The one seam at `chat/routes.py:1469`. |
-| **PR-4** | Lifecycle: `withdrawal_requested` state, delete refusal, admin queue entry for withdrawal requests. |
-| **PR-5** | Review diff view (pending vs published). |
-| **PR-6** | Publisher management admin page — independent of the rest; can land any time. |
+| PR | Content | Status |
+|---|---|---|
+| **PR-1** | `AgentVersion` model + repository (write-once `VERSION#` items), version numbering, snapshot serialization round-trip to `Assistant`. Inert — nothing reads versions yet. | ✅ #784 |
+| **PR-2** | Cut a version on submission; approval promotes it; move GSI5 keys to the version item so the store reads snapshots. Remove `approvedInstructionsHash` / `ListingDrift`. | ✅ #787 |
+| **PR-3** | Invocation resolution: published version for everyone but the owner, draft for the owner. ~~version in the agent cache key~~ (see §4.2 — deliberately not implemented). The one seam at `chat/routes.py`. | #789 |
+| **PR-4** | Lifecycle: `withdrawal_requested` state, delete refusal, admin queue entry for withdrawal requests. | |
+| **PR-5** | Review diff view (pending vs published). | |
+| **PR-6** | Publisher management admin page — independent of the rest; can land any time. | |
 
 PR-2 and PR-3 must ship in the same release: PR-2 alone makes the store show
 snapshots while pinned users still run the draft, which is the confusing half-state.
+
+⚠️ **This is live on `develop` as of #787 merging.** PR-2 is in, PR-3 (#789) is not, so
+`develop` — and therefore dev — is currently in exactly that half-state: the store serves
+snapshots while pinned users run the draft. It resolves when #789 merges, and nothing
+should be promoted to prod until it does.
+
+**One thing PR-2 had to decide that the phasing did not anticipate**: once the store
+renders the snapshot, a D13 admin presentation edit lands nowhere unless it cuts a version.
+§6.2's first option was therefore not optional, and it shipped — admin edits cut a new
+version attributed to the admin.
 
 ---
 
@@ -267,6 +355,18 @@ snapshots while pinned users still run the draft, which is the confusing half-st
   versions are immutable and numbered (repoint `publishedVersion`), and it is the
   obvious answer to "the approved version turned out to be wrong." Not in the phasing
   above; say if it should be.
+- **Transaction vs fail-closed ordering.** Publishing and delisting are now two writes on
+  two items (§3.3), and the "an unpublished agent cannot be in the store" invariant is held
+  by call order rather than by atomicity. Ordering is enforced in one place
+  (`listing_service._unindex_version`) and asserted by test, but it lives in a docstring
+  rather than in the type system: a future delisting path that writes the record before
+  clearing the key breaks it quietly. `TransactWriteItems` over the two items would make it
+  structural.
+- **Agent-bound MCP-app dispatch builds its own agent.** Two call sites in `chat/routes.py`
+  construct agents from `input_data` rather than from the resolved assistant, so their cache
+  keys already diverge from the main turn's on an agent-bound session. Pre-existing, not
+  caused by this spec, and the same desync family as the resume case in §4.2 — but nobody
+  owns it.
 - **KB / RAG bindings.** A bound knowledge base is referenced by id, and its *content*
   is not snapshottable — re-indexing a KB changes behavior without touching the Agent.
   This spec freezes the binding, not the corpus. Worth stating plainly so the guarantee
