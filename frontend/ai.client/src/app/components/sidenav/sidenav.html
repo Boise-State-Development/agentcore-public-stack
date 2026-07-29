@@ -35,12 +35,6 @@
         <!--
             Agents (Agent Designer + Marketplace) — the ONE noun (Marketplace D1).
 
-            The "Assistants" entry that used to sit above this was removed in Designer
-            Phase 5. `/assistants*` now redirects here; the ids are the same record, so
-            nothing was migrated and no link broke. The Preview badge came off with it —
-            it existed only to say which of two competing nouns was still moving, and
-            there is no longer a second one.
-
             Gated on the API surface alone (D14): `showAgents()` is "the /agents list call did
             not 404", i.e. the AGENTS_API_ENABLED / AGENT_MARKETPLACE_ENABLED kill switches.
             The former `&& isAdmin()` came off when the marketplace went GA — it hid the nav
@@ -68,6 +62,46 @@
                     </svg>
                 </div>
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Agents</span>
+                <!--
+                    "New" rather than the amber "Preview" badge the preview surfaces wore:
+                    this is not unstable, it is unfamiliar. Primary blue for the same
+                    reason — amber in this nav has meant "not finished yet", and reusing
+                    it here would say the opposite of what is true.
+
+                    Remove this once the rename has stopped being news, together with the
+                    Assistants signpost below.
+                -->
+                <span class="ml-auto rounded-full bg-primary-50 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-primary-700 dark:bg-primary-400/15 dark:text-primary-200">New</span>
+            </a>
+
+            <!--
+                Assistants — a **signpost, not a feature**. The entry was removed in
+                Designer Phase 5 on the grounds that there is one noun; it comes back
+                because removing the word from the nav is exactly what makes someone who
+                built an assistant think theirs is gone. It does not lead to an Assistants
+                page (there is none): `/assistants` renders the migration explainer, whose
+                every route out lands on `/agents`.
+
+                Deliberately inside the `showAgents()` block. With the agent surface off,
+                every call to action on that page is dead, and a nav entry leading to a
+                page of dead links is worse than no entry.
+
+                Muted on purpose — this is the door someone leaves through once, not one of
+                the app's destinations. Retire it, and the "New" badge above, once the
+                rename has landed with users.
+            -->
+            <a
+                routerLink="/assistants"
+                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                (click)="sidenavService.close()"
+                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                <div class="flex size-7 shrink-0 items-center justify-center text-gray-400 dark:text-gray-500">
+                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 0 0 .75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 0 0-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0 1 12 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 0 1-.673-.38m0 0A2.18 2.18 0 0 1 3 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 0 1 3.413-.387m7.5 0V5.25A2.25 2.25 0 0 0 13.5 3h-3a2.25 2.25 0 0 0-2.25 2.25v.894m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                    </svg>
+                </div>
+                <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Assistants</span>
+                <span class="ml-auto text-[10px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">Moved</span>
             </a>
         }
 

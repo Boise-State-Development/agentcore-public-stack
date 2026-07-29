@@ -265,17 +265,40 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
   });
 
   // ── Assistant deprecation (Designer Phase 5, #746) ────────────────────────────────
-  it('ships one noun: there is no Assistants entry beside Agents', async () => {
+  //
+  // The Assistants entry is back, but as a **signpost onto the migration explainer**, not
+  // as a second authoring surface. The distinction is the whole point, so it is what these
+  // assert: the link exists, and it does NOT go anywhere an assistant can be built.
+  function assistantsNavLink(fixture: ComponentFixture<unknown>): HTMLAnchorElement | null {
+    return fixture.nativeElement.querySelector('a[href="/assistants"]');
+  }
+
+  it('keeps an Assistants signpost so the old name is still findable', async () => {
+    const fixture = await renderSidenav();
+
+    expect(assistantsNavLink(fixture)).not.toBeNull();
+    expect(assistantsNavLink(fixture)!.textContent).toContain('Assistants');
+  });
+
+  it('still ships one authoring noun — no /assistants/new or editor entry', async () => {
     const fixture = await renderSidenav();
     const html = fixture.nativeElement as HTMLElement;
 
-    expect(html.querySelector('a[href="/assistants"]')).toBeNull();
-    expect(html.textContent).not.toContain('Assistants');
-    expect(agentsNavLink(fixture)).toBeDefined();
+    expect(html.querySelector('a[href="/assistants/new"]')).toBeNull();
+    expect(html.querySelector('a[href^="/assistants/"]')).toBeNull();
   });
 
-  it('drops the Preview badge, which only existed to disambiguate two nouns', async () => {
+  it('hides the Assistants signpost when the agent surface 404s', async () => {
+    // Every route out of the explainer lands on /agents. With the surface off, the
+    // signpost points at a page of dead links, so it must go with it.
+    mockAgentService.accessible$.set(false);
     const fixture = await renderSidenav();
+    expect(assistantsNavLink(fixture)).toBeNull();
+  });
+
+  it('badges Agents as New, not as Preview — unfamiliar is not unstable', async () => {
+    const fixture = await renderSidenav();
+    expect(agentsNavLink(fixture)!.textContent).toContain('New');
     expect(agentsNavLink(fixture)!.textContent).not.toContain('Preview');
   });
 });
