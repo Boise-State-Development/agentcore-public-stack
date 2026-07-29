@@ -378,14 +378,38 @@ This intel directly informs the token-service v2 endpoint implementation in Phas
 
 ### Phase 1 acceptance criteria
 
-- A signed-in user's agent can invoke `directory_search` through the JWT-authenticated Gateway.
-- The Gateway accepts the Cognito access token as a bearer token.
-- `directory_search` returns employee contact results.
-- Existing Gateway tools (Wikipedia, ArXiv, and every other registered target) still work after the inbound-auth migration — their outbound credentials are unchanged.
-- The agent correctly passes per-user bearer tokens (no cross-user leakage).
-- (Optional) The OBO request format has been captured and documented for Phase 2.
+Originally written assuming the Gateway would be migrated to JWT first. The
+authorizer turned out to be immutable (see Phase 0), so Phase 1 was delivered on
+the **existing AWS_IAM Gateway** instead — which met the phase's actual goal
+without the migration.
 
-**At this point you have a working Directory search tool in the agent, the Gateway JWT path is proven, and you know exactly what token-service needs to accept.**
+**Delivered ✅ (2026-07-29):**
+
+- `directory_search` is registered on the centralized Gateway as target
+  `campus-directory`, discovered via DEFAULT listing mode, and invocable from the
+  agent by a signed-in user.
+- It returns real employee contact results from the dev Directory API
+  (`https://directory-api.dev.boisestate.edu`).
+- Existing Gateway tools (`arxiv`, `policy-search`) are unaffected.
+- The MCP wrapper lives in the `mcp-servers` repo as `packages/directory`, behind
+  a Function URL with `AuthType: NONE` and `credential_type: NONE` on the target
+  — **no outbound credential, no token exchange.**
+
+**Why no JWT was needed:** `GET /directory/search` is `[AllowAnonymous]` on the
+Directory API, so the tool carries no user identity. That is precisely what made
+it a good first target — it proves Gateway → MCP wrapper → campus API
+connectivity independently of any auth work.
+
+**Deferred to Phase 4** (they need a user token, hence a JWT Gateway):
+
+- The agent presenting a per-user bearer token to the Gateway. The code for this
+  is written, tested, and merged — it is dormant behind `inboundAuth: 'iam'`.
+- `directory_get_me` and `directory_get_pending`.
+- Capturing the OBO request format.
+
+**Net result: the pilot is unblocked and the token-service work in Phase 2 can
+proceed against a proven transport path.** What remains gated on the Gateway
+migration is only the *authenticated* Directory endpoints.
 
 ## Phase 2 — Add the isolated token-service v2 exchange endpoint
 
