@@ -11,12 +11,12 @@
  *
  * ⚠️ This used to describe publishing a SHARED Agent to a team as legitimate. It is not:
  * the marketplace is public-only, sharing with named coworkers is a separate mechanism,
- * and the backend now refuses anything short of PUBLIC at submit and at approve. So the
- * *author* message below is a version-skew guard rather than the normal path — the submit
- * dialog renders the backend's block instead, and the two are mutually exclusive there.
+ * and the backend now refuses anything short of PUBLIC at submit and at approve.
  *
- * The reviewer message and label still carry their original weight: an Agent published as
- * PUBLIC can be narrowed afterwards, and no submit-time gate can catch that.
+ * So this file is now **reviewer-facing only**. The author never sees these strings: the
+ * submit dialog asks them to consent to going public and does it for them. What survives
+ * here is the case no submit-time gate can catch — an Agent published as PUBLIC and
+ * narrowed afterwards, which is what the reviewer and the admin table need to know about.
  */
 
 /** Mirrors the backend `ListingReachability`. */
@@ -27,26 +27,12 @@ export function reachabilityIsLimited(value: ListingReachability): boolean {
   return value !== 'everyone';
 }
 
-/**
- * What the **author** is told before submitting — second person, and it names the fix.
- * Returns null when there is nothing to say.
+/*
+ * There was a `reachabilityAuthorMessage` here. It told the author to go "set Visibility
+ * to Public first" — advice that is now wrong, because the submit dialog widens
+ * visibility itself via its consent checkbox. The author-facing copy lives with that
+ * control (`makePublicHelp`), where it can say what going public changes *from*.
  */
-export function reachabilityAuthorMessage(value: ListingReachability): string | null {
-  if (value === 'owner_only') {
-    return (
-      'Only you can open this agent. If it is published, people will see it in the store ' +
-      'but get an error when they open it — set Visibility to Public first.'
-    );
-  }
-  if (value === 'shared_only') {
-    return (
-      'Only people this agent is shared with can open it. Anyone else will see it in the ' +
-      'store but get an error when they open it — set Visibility to Public to reach the ' +
-      'whole university.'
-    );
-  }
-  return null;
-}
 
 /**
  * What the **reviewer** is told before approving — third person, and it does not tell them

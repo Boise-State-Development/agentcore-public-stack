@@ -220,13 +220,21 @@ def _visibility_block_reason(assistant: Assistant) -> Optional[str]:
     )
 
 
-def _visibility_block(assistant: Assistant) -> None:
-    """Block submission unless the Agent is ``PUBLIC``.
+def _visibility_block(assistant: Assistant, *, consented: bool) -> None:
+    """Refuse an Agent that is not ``PUBLIC`` and whose author has not consented to it.
 
-    Deliberately a refusal rather than a silent widening: publication must not be a side
-    door that changes who can reach an Agent. The author says "make this public" in the one
-    place that means it, and the store trusts ``visibility`` rather than overwriting it.
+    Not a silent widening — publication must never be a side door that changes who can
+    reach an Agent. But the refusal alone made the *common* path a dead end: every Agent
+    starts PRIVATE, so a first-time author was told to go set visibility on another screen
+    and come back. ``consented`` is the submit dialog's checkbox: the author is looking at
+    what the store will say about their Agent and ticks a box that says it becomes public.
+    That is consent captured where it means something, and it is why the widening is
+    allowed to ride the same write.
+
+    An omitted flag still refuses, so a direct API caller cannot widen an Agent by accident.
     """
+    if consented:
+        return
     reason = _visibility_block_reason(assistant)
     if reason:
         raise ListingError(reason, status_code=400)
@@ -285,7 +293,7 @@ async def _resolve_proposed_publisher(user: User, publisher_id: Optional[str]) -
 # ── author transitions ───────────────────────────────────────────────────────────────
 async def preflight_listing(
     agent_id: str, user: User
-) -> Tuple[List[SkillExposure], Optional[str], str]:
+) -> Tuple[List[SkillExposure], Optional[str], str, bool]:
     """Run the D7 checks **without** transitioning, for the submit dialog.
 
     D7.1 asks the dialog to enumerate the exposed skills *before* the author commits,
@@ -296,25 +304,23 @@ async def preflight_listing(
     Owner-only, like every other author path: the skill exposure is a statement about
     what the *owner's* publication would reveal, and it is not an editor's to see.
 
-    Also returns reachability, which is now a *consequence* of the visibility block rather
-    than an independent warning: anything short of ``everyone`` is refused below, so the
-    author sees the block's actionable wording instead. It stays on the response because
-    the reviewer's surface still needs it — an Agent published as PUBLIC can be narrowed
-    afterwards, which no submit-time gate can catch.
+    ``requires_public`` is deliberately **not** folded into ``block_reason``. A block sends
+    the author out of the dialog; needing to go public is something the dialog itself can
+    resolve, with the consent checkbox that sets ``make_public``. Returning them as one
+    field is what made the ordinary path a dead end.
+
+    Reachability still rides along for the same reason it always did — an Agent published
+    as PUBLIC can be narrowed afterwards, which no submit-time gate can catch.
     """
     assistant = await _load_for_author(agent_id, user)
     reachability = _reachability(assistant)
-    # Order mirrors submit_listing. Visibility is last because it is the cheapest to fix:
-    # an author told to widen access, who then hits the memory-space block, has been sent
-    # round twice for one submission.
-    block_reason = await _memory_space_block_reason(assistant, user) or _visibility_block_reason(
-        assistant
-    )
+    requires_public = _visibility_block_reason(assistant) is not None
+    block_reason = await _memory_space_block_reason(assistant, user)
     # An agent that cannot be published at all is not first walked through a
     # skill-exposure confirmation.
     if block_reason:
-        return [], block_reason, reachability
-    return await _exposed_skills(assistant), None, reachability
+        return [], block_reason, reachability, requires_public
+    return await _exposed_skills(assistant), None, reachability, requires_public
 
 
 async def submit_listing(
@@ -332,7 +338,7 @@ async def submit_listing(
     # Order matters: block before disclosing. An author whose agent cannot be published
     # at all should not first be walked through a skill-exposure confirmation.
     await _memory_space_block(assistant, user)
-    _visibility_block(assistant)
+    _visibility_block(assistant, consented=request.make_public)
     exposed = await _exposed_skills(assistant)
     publisher_id = await _resolve_proposed_publisher(user, request.publisher_id)
 
@@ -355,9 +361,23 @@ async def submit_listing(
     # path). ``None`` means "leave it alone" — an author resubmitting without touching the
     # field must not have their existing subtitle blanked.
     tagline = (request.tagline or "").strip() or None
+    # Only widen when it actually needs widening: an Agent that is already PUBLIC must not
+    # have ``visibility`` rewritten just because the box was ticked, and a no-op write is
+    # a lie in the audit trail.
+    widen_to = "PUBLIC" if (request.make_public and assistant.visibility != "PUBLIC") else None
     await write_listing(
-        agent_id, listing, assistant.created_at, updated_at=now, tagline=tagline
+        agent_id,
+        listing,
+        assistant.created_at,
+        updated_at=now,
+        tagline=tagline,
+        visibility=widen_to,
     )
+    if widen_to:
+        logger.info(
+            f"🌐 Agent {agent_id} widened {assistant.visibility} → PUBLIC on submission "
+            f"by {user.user_id}"
+        )
     logger.info(f"📨 Agent {agent_id} submitted for review by {user.user_id}")
     return listing, exposed
 

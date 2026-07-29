@@ -544,6 +544,19 @@ class SubmitListingRequest(BaseModel):
         ),
     )
     note: Optional[str] = Field(None, max_length=2000, description="Optional note to the reviewer")
+    make_public: bool = Field(
+        False,
+        alias="makePublic",
+        description=(
+            "The author's explicit consent to widen this Agent's visibility to PUBLIC as "
+            "part of publishing it. The marketplace is public-only, and every new Agent "
+            "starts PRIVATE, so without this the common path is a dead end: the author is "
+            "told to go set visibility on a different screen and come back. Defaulting to "
+            "``False`` is what keeps this consent rather than a side door — an omitted "
+            "flag is refused exactly as before, so a direct API caller cannot widen an "
+            "Agent's access by accident."
+        ),
+    )
     tagline: Optional[str] = Field(
         None,
         max_length=80,
@@ -583,10 +596,15 @@ class ListingSubmissionResponse(BaseModel):
 class ListingPreflightResponse(BaseModel):
     """What the submit dialog shows before the author commits (D7).
 
-    The same two checks ``submit_listing`` runs, answered without a transition: the
-    skills publication would expose, and the memory-space block if there is one. A
-    ``blockReason`` means the Submit control is disabled and this text explains why —
-    the dialog never re-derives that rule for itself.
+    The same checks ``submit_listing`` runs, answered without a transition: the skills
+    publication would expose, the memory-space block if there is one, and whether the
+    author has to consent to going public.
+
+    ⚠️ ``blockReason`` and ``requiresPublic`` are deliberately **separate signals**, not
+    one field. A block is "leave this dialog and go fix something"; ``requiresPublic`` is
+    "tick the box and I will handle it". Folding the second into the first is what made
+    the common path a dead end — every new Agent starts PRIVATE, so the author was being
+    bounced to another screen on their very first submission.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -600,7 +618,18 @@ class ListingPreflightResponse(BaseModel):
     block_reason: Optional[str] = Field(
         None,
         alias="blockReason",
-        description="Why this agent cannot be submitted at all (D7.2); null when it can",
+        description=(
+            "Why this agent cannot be submitted at all (D7.2), and cannot be fixed from "
+            "the dialog; null when it can. Submit is hidden, not merely disabled."
+        ),
+    )
+    requires_public: bool = Field(
+        False,
+        alias="requiresPublic",
+        description=(
+            "This Agent is not PUBLIC yet, so submitting must widen it. The dialog shows "
+            "the consent control and sends ``makePublic``; it is not a block."
+        ),
     )
     reachability: ListingReachability = Field(
         ...,

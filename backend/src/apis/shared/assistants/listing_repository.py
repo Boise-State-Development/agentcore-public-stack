@@ -58,12 +58,18 @@ async def write_listing(
     icon_key: Optional[str] = None,
     name: Optional[str] = None,
     updated_at: Optional[str] = None,
+    visibility: Optional[str] = None,
 ) -> None:
     """Persist a listing block and reconcile the sparse directory keys in one write.
 
     ``created_at`` is the Agent's own creation timestamp — it is the GSI5 sort key, which
     is why browse is newest-first. The optional presentation fields let an admin D13 edit
     ride along in the same call rather than racing a second update.
+
+    ``visibility`` rides along for the same reason, and for one more: publishing an Agent
+    the author has just consented to make public must not be able to half-happen. Two
+    writes could leave it listed but unreachable — precisely the state this whole gate
+    exists to prevent — so the widening and the listing land together or not at all.
 
     Raises ``ValueError`` (via the conditional check) if the agent no longer exists.
     """
@@ -93,6 +99,9 @@ async def write_listing(
         set_parts.append("#name = :name")
         names["#name"] = "name"
         values[":name"] = name
+    if visibility is not None:
+        set_parts.append("visibility = :visibility")
+        values[":visibility"] = visibility
 
     if keys:
         for attr, value in keys.items():

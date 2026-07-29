@@ -86,6 +86,13 @@ export interface SubmitListingRequest {
   publisherId?: string;
   note?: string;
   /**
+   * The author's explicit consent to make this agent PUBLIC as part of publishing it.
+   * The marketplace is public-only and every agent starts PRIVATE, so this is the normal
+   * path, not an edge case. Omitting it is refused by the backend — the widening is
+   * consent, never a side effect of submitting.
+   */
+  makePublic?: boolean;
+  /**
    * Shelf subtitle (D4). Omit to leave any existing tagline untouched — a resubmission
    * that does not touch the field must not blank it.
    */
@@ -101,16 +108,25 @@ export interface SkillExposure {
 /**
  * The D7 answers, before the author commits.
  *
- * `blockReason` non-null means submission is impossible (a `memory_space` binding,
- * D7.2) and the text explains why. The dialog renders it; it never re-derives it.
+ * ⚠️ `blockReason` and `requiresPublic` are separate on purpose. A block is "leave this
+ * dialog and go fix something" — the form is hidden, because nothing below it would help.
+ * `requiresPublic` is "tick the box and submitting handles it". They were briefly one
+ * field, and that made the *common* path a dead end: every agent starts PRIVATE, so a
+ * first-time author was bounced to another screen to set visibility and come back.
  */
 export interface ListingPreflight {
   agentId: string;
   exposedSkills: SkillExposure[];
   blockReason?: string | null;
   /**
-   * Who would be able to open this agent once shelved. Advisory — publishing a
-   * PRIVATE/SHARED agent is allowed, but the tile 404s for everyone it is not shared with.
+   * This agent is not PUBLIC yet, so submitting must widen it. Drives the consent
+   * checkbox — never disables Submit on its own.
+   */
+  requiresPublic?: boolean;
+  /**
+   * Who would be able to open this agent once shelved. At submit time this is now a
+   * consequence of `requiresPublic`; it still matters to the reviewer, because an agent
+   * published as PUBLIC can be narrowed afterwards.
    */
   reachability: ListingReachability;
 }
