@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 describe('adminGuard', () => {
   let sessionService: { isAuthenticated: ReturnType<typeof vi.fn> };
   let userService: {
-    isAdmin: ReturnType<typeof vi.fn>;
+    canAccessAdmin: ReturnType<typeof vi.fn>;
     ensurePermissionsLoaded: ReturnType<typeof vi.fn>;
     getUser: ReturnType<typeof vi.fn>;
   };
@@ -23,7 +23,7 @@ describe('adminGuard', () => {
     };
 
     userService = {
-      isAdmin: vi.fn(),
+      canAccessAdmin: vi.fn(),
       ensurePermissionsLoaded: vi.fn().mockResolvedValue(undefined),
       getUser: vi.fn().mockReturnValue({ roles: [] }),
     };
@@ -53,9 +53,9 @@ describe('adminGuard', () => {
     TestBed.resetTestingModule();
   });
 
-  it('should return true when authenticated and user has system_admin AppRole', async () => {
+  it('should return true when authenticated and user can access admin', async () => {
     sessionService.isAuthenticated.mockReturnValue(true);
-    userService.isAdmin.mockReturnValue(true);
+    userService.canAccessAdmin.mockReturnValue(true);
 
     const result = await TestBed.runInInjectionContext(() => adminGuard(route, state));
 
@@ -64,15 +64,28 @@ describe('adminGuard', () => {
     expect(router.navigate).not.toHaveBeenCalled();
   });
 
-  it('should redirect to / when authenticated but lacks system_admin AppRole', async () => {
+  it('should redirect to / when authenticated but has no admin access at all', async () => {
     sessionService.isAuthenticated.mockReturnValue(true);
-    userService.isAdmin.mockReturnValue(false);
+    userService.canAccessAdmin.mockReturnValue(false);
 
     const result = await TestBed.runInInjectionContext(() => adminGuard(route, state));
 
     expect(result).toBe(false);
     expect(userService.ensurePermissionsLoaded).toHaveBeenCalled();
     expect(router.navigate).toHaveBeenCalledWith(['/']);
+  });
+
+  it('should admit a delegated admin who holds no system_admin role', async () => {
+    // The point of the feature: someone with only `admin.skills` gets into the
+    // console. Which pages they see inside it is adminScopeGuard's job.
+    sessionService.isAuthenticated.mockReturnValue(true);
+    userService.canAccessAdmin.mockReturnValue(true);
+    userService.getUser.mockReturnValue({ roles: ['faculty'] });
+
+    const result = await TestBed.runInInjectionContext(() => adminGuard(route, state));
+
+    expect(result).toBe(true);
+    expect(router.navigate).not.toHaveBeenCalled();
   });
 
   it('should redirect to /auth/login when no BFF session', async () => {

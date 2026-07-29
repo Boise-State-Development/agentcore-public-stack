@@ -38,8 +38,14 @@ export class Sidenav {
     return session.title || 'Untitled Session';
   });
 
-  // Check if user has system_admin AppRole (resolved from backend RBAC)
-  protected isAdmin = this.userService.isAdmin;
+  /**
+   * Whether to offer the "Admin Dashboard" entry point.
+   *
+   * `canAccessAdmin`, not `isAdmin`: a delegated admin holds no `system_admin`
+   * AppRole but does have somewhere to go inside the console, and hiding the
+   * link would leave them typing `/admin` by hand.
+   */
+  protected isAdmin = this.userService.canAccessAdmin;
 
   /**
    * Whether to show the "Memory Spaces" nav entry. Rides the spaces list
