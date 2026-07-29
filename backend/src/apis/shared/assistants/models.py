@@ -25,18 +25,12 @@ ReportReason = Literal["inaccurate", "broken", "inappropriate", "other"]
 # warrants delisting, the admin takes the Agent down and that is a separate recorded act.
 ReportState = Literal["open", "resolved", "dismissed"]
 
-# How much a published listing has drifted from what the reviewer approved. Absent (``None``)
-# means no drift detected, or the question does not apply because the listing is not published.
-#
-# **The two values are not the same claim, and the UI must not merge them.**
-# ``instructions`` is *measured*: the Agent's instructions hash differs from the one recorded
-# at approval, so behavior definitely changed. ``edited`` is *inferred*: the record was written
-# after the review timestamp, but we do not know what changed — it could be a rename, or an
-# admin's own D13 presentation edit, both harmless. Only listings approved before the hash
-# baseline shipped can report ``edited``; everything approved since resolves to ``instructions``
-# or nothing. Rendering the weak signal with the strong one's urgency is how a governance
-# marker gets learned-ignored.
-ListingDrift = Literal["instructions", "edited"]
+# ``ListingDrift`` lived here: a marker for a published listing whose instructions no longer
+# matched the hash recorded at approval. It is **gone rather than dormant**, because the
+# condition it detected is now structurally impossible — the store serves an immutable
+# ``AgentVersion``, so an author's post-approval edit cannot reach a published listing at all
+# (see ``assistants.versions``). A governance marker that can never fire is worse than none:
+# the next reader assumes it is doing something. Removed with `approvedInstructionsHash`.
 
 # Who can actually *open* a listed Agent — `visibility` projected onto the question the
 # store never asks.
@@ -151,27 +145,27 @@ class AgentListing(BaseModel):
         alias="reviewNote",
         description="Reviewer's reason; rendered on the author's own card so they never have to ask",
     )
-    approved_instructions_hash: Optional[str] = Field(
-        None,
-        alias="approvedInstructionsHash",
-        description=(
-            "SHA-256 of the Agent's instructions as they read at approval — the baseline for "
-            "the post-approval drift marker. Absent on listings approved before the marker "
-            "shipped, which is why the read side falls back to a timestamp comparison."
-        ),
-    )
     admin_edits: List[AdminEdit] = Field(
         default_factory=list, alias="adminEdits", description="Append-only log of admin presentation edits (D13)"
+    )
+    submitted_version: Optional[int] = Field(
+        None,
+        alias="submittedVersion",
+        description=(
+            "The ``AgentVersion`` cut at submission — what the reviewer is looking at. "
+            "Approval promotes exactly this number, rather than inferring 'the latest', so "
+            "any other write that cuts a version (an admin presentation edit, §6.2) cannot "
+            "change what a pending review resolves to."
+        ),
     )
     published_version: Optional[int] = Field(
         None,
         alias="publishedVersion",
         description=(
             "The ``AgentVersion`` number this listing serves — the snapshot approval blessed. "
-            "``None`` means nothing is published, which is the state of every listing that has "
-            "not yet been through a version-cutting submission. Nothing reads this yet: the "
-            "field lands ahead of the behavior so the write path (PR-2) and the invocation swap "
-            "(PR-3) do not also have to migrate the record shape."
+            "``None`` means nothing is published. This is the pointer, but not the gate: the "
+            "store index lives on the version row itself (``set_version_index``), so a listing "
+            "whose pointer went stale still cannot serve draft content."
         ),
     )
 
@@ -824,13 +818,15 @@ class AdminListingRow(BaseModel):
     submitted_at: Optional[str] = Field(None, alias="submittedAt", description="ISO 8601 submission timestamp")
     reviewed_at: Optional[str] = Field(None, alias="reviewedAt", description="ISO 8601 timestamp of the last review")
     review_note: Optional[str] = Field(None, alias="reviewNote", description="Most recent reviewer note")
-    updated_at: str = Field(..., alias="updatedAt", description="Audit trail for post-approval drift (D2)")
-    drift: Optional[ListingDrift] = Field(
+    updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 of the last write to the Agent record")
+    published_version: Optional[int] = Field(
         None,
+        alias="publishedVersion",
         description=(
-            "Post-approval drift, derived server-side (see ``ListingDrift``): ``instructions`` "
-            "= measured behavior change, ``edited`` = record changed but cause unknown, absent "
-            "= no drift or not applicable. Derived rather than stored so it can never go stale."
+            "Which snapshot the store is serving. Replaces the old ``drift`` marker: the "
+            "reviewer's question was 'has this changed since I approved it?', and the honest "
+            "answer is now a version number rather than a heuristic — the author's edits live "
+            "on the draft and reach nobody until a new version is approved."
         ),
     )
     reachability: ListingReachability = Field(

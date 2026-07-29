@@ -4,17 +4,23 @@ import { Dialog } from '@angular/cdk/dialog';
 import { signal } from '@angular/core';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import { MarketplaceListingsPage } from './listings.page';
-import { AdminListingRow, ListingDrift } from '../models/marketplace.model';
+import { AdminListingRow } from '../models/marketplace.model';
 
 /**
- * The post-approval drift marker (#744).
+ * The published-version marker.
  *
- * `drift` is derived server-side and covered there; what these assert is the part the
- * backend cannot enforce — that the **two signals stay visually distinct**. `'instructions'`
- * is measured and `'edited'` is a guess, and if a later edit renders them alike the marker
- * stops carrying the distinction it exists to carry.
+ * Replaced the post-approval drift badge (#744). These tests deliberately kept the drift
+ * suite's *shape* rather than being written fresh, because the thing worth guarding did not
+ * change: the badge is the reviewer's only on-page answer to "is what I approved still what
+ * is live?", and a silent template regression that dropped it would read as "nothing to see
+ * here" rather than as a missing control.
+ *
+ * What did change is that there is now one signal instead of two. The old suite's central
+ * assertion — that a measured change and an inferred one stay visually distinct — is gone
+ * because the inferred signal is gone: the store serves an immutable snapshot, so there is
+ * nothing left to guess about.
  */
-describe('MarketplaceListingsPage — post-approval drift marker', () => {
+describe('MarketplaceListingsPage — published-version marker', () => {
   let mockService: any;
 
   function row(overrides: Partial<AdminListingRow> = {}): AdminListingRow {
@@ -26,8 +32,8 @@ describe('MarketplaceListingsPage — post-approval drift marker', () => {
       state: 'published',
       usageCount: 12,
       updatedAt: '2026-07-22T00:00:00Z',
-      // The default is the uninteresting case on purpose: these tests are about drift, and
-      // a fixture that was also unreachable would mix two independent warnings in one row.
+      // The default is the uninteresting case on purpose: a fixture that was also
+      // unreachable would mix two independent warnings into one row.
       reachability: 'everyone',
       adminEdits: [],
       ...overrides,
@@ -54,7 +60,9 @@ describe('MarketplaceListingsPage — post-approval drift marker', () => {
     TestBed.resetTestingModule();
   });
 
-  async function renderWith(rows: AdminListingRow[]): Promise<ComponentFixture<MarketplaceListingsPage>> {
+  async function renderWith(
+    rows: AdminListingRow[],
+  ): Promise<ComponentFixture<MarketplaceListingsPage>> {
     mockService.loadListings.mockResolvedValue(rows);
     const fixture = TestBed.createComponent(MarketplaceListingsPage);
     fixture.detectChanges();
@@ -63,62 +71,35 @@ describe('MarketplaceListingsPage — post-approval drift marker', () => {
     return fixture;
   }
 
-  function badgeText(fixture: ComponentFixture<unknown>): string {
-    return (fixture.nativeElement as HTMLElement).textContent ?? '';
-  }
-
-  function driftBadge(fixture: ComponentFixture<unknown>, label: string): HTMLElement | undefined {
+  function versionBadge(fixture: ComponentFixture<unknown>, label: string): HTMLElement | undefined {
     const spans = Array.from(
       (fixture.nativeElement as HTMLElement).querySelectorAll('span'),
     ) as HTMLElement[];
     return spans.find((s) => s.textContent?.trim() === label);
   }
 
-  it('renders no drift badge on a listing that has not drifted', async () => {
-    const fixture = await renderWith([row()]);
-    expect(badgeText(fixture)).not.toContain('Instructions changed');
-    expect(badgeText(fixture)).not.toContain('Edited since review');
+  it('names the version the store is serving', async () => {
+    const fixture = await renderWith([row({ publishedVersion: 3 })]);
+    expect(versionBadge(fixture, 'v3')).toBeDefined();
   });
 
-  it('names a measured instructions change', async () => {
-    const fixture = await renderWith([row({ drift: 'instructions' })]);
-    expect(driftBadge(fixture, 'Instructions changed')).toBeDefined();
+  it('renders no marker on a listing that has never been published', async () => {
+    const fixture = await renderWith([row({ state: 'in_review', publishedVersion: undefined })]);
+    expect(versionBadge(fixture, 'v1')).toBeUndefined();
+    expect((fixture.nativeElement as HTMLElement).textContent).not.toMatch(/\bv\d+\b/);
   });
 
-  it('names an inferred edit differently from a measured change', async () => {
-    const fixture = await renderWith([row({ drift: 'edited' })]);
-    expect(driftBadge(fixture, 'Edited since review')).toBeDefined();
-    expect(badgeText(fixture)).not.toContain('Instructions changed');
+  it('explains the marker on hover, since a bare number does not say what to do', async () => {
+    // The reviewer's question is "can the author have changed this since I approved it?",
+    // and "v3" alone does not answer it — the tooltip is where the guarantee is stated.
+    const fixture = await renderWith([row({ publishedVersion: 3 })]);
+    expect(versionBadge(fixture, 'v3')).toBeDefined();
   });
 
-  it('styles the measured signal more urgently than the inferred one', async () => {
-    // The whole point of keeping two values: if these ever render identically, the weak
-    // signal inherits the strong one's urgency and admins learn to ignore both.
-    const measured = await renderWith([row({ drift: 'instructions' })]);
-    const measuredClass = driftBadge(measured, 'Instructions changed')!.className;
-
-    const inferred = await renderWith([row({ drift: 'edited' })]);
-    const inferredClass = driftBadge(inferred, 'Edited since review')!.className;
-
-    expect(measuredClass).not.toBe(inferredClass);
-    expect(measuredClass).toContain('amber');
-    expect(inferredClass).not.toContain('amber');
-  });
-
-  it('carries an icon only on the measured signal', async () => {
-    const measured = await renderWith([row({ drift: 'instructions' })]);
-    expect(driftBadge(measured, 'Instructions changed')!.querySelector('ng-icon')).toBeTruthy();
-
-    const inferred = await renderWith([row({ drift: 'edited' })]);
-    expect(driftBadge(inferred, 'Edited since review')!.querySelector('ng-icon')).toBeNull();
-  });
-
-  it('explains each marker on hover, since the label alone does not say what to do', async () => {
-    for (const drift of ['instructions', 'edited'] as ListingDrift[]) {
-      const fixture = await renderWith([row({ drift })]);
-      const label = drift === 'instructions' ? 'Instructions changed' : 'Edited since review';
-      // The tooltip directive is bound; its text lives on the component's lookup table.
-      expect(driftBadge(fixture, label)).toBeDefined();
-    }
+  it('stays visually quiet — it is orientation, not an alarm', async () => {
+    // The badge it replaced had to compete for attention because it meant something was
+    // wrong. This one means the system is working, and amber would misreport that.
+    const fixture = await renderWith([row({ publishedVersion: 3 })]);
+    expect(versionBadge(fixture, 'v3')!.className).not.toContain('amber');
   });
 });

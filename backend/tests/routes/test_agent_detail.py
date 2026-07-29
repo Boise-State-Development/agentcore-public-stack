@@ -286,12 +286,20 @@ class TestApprovedInstructionsHashIsGated:
 
     It is not reversible on its own, but it would confirm a guessed prompt for anyone who
     could produce one — which is exactly what dropping ``instructions`` for a viewer
-    exists to prevent. Admins read the baseline through the admin listings projection.
+    exists to prevent.
+
+    ⚠️ **The field is gone; this guard is not.** Version snapshots replaced drift detection
+    and nothing writes ``approvedInstructionsHash`` any more — but ``AgentListing`` is
+    ``extra="allow"``, so a listing approved *before* the removal still carries the
+    attribute in storage and would round-trip through the read path untouched. The strip is
+    transitional and these tests are what say so; both can go once no stored listing has it.
     """
 
     def _published(self):
         from apis.shared.assistants.models import AgentListing
 
+        # Written the only way it can be now: as a leftover extra attribute on a listing
+        # from before the field was removed.
         listing = AgentListing.model_validate(
             {
                 "state": "published",
@@ -301,13 +309,6 @@ class TestApprovedInstructionsHashIsGated:
             }
         )
         return _make_assistant(listing=listing)
-
-    @pytest.mark.parametrize("permission", ["owner", "editor"])
-    def test_owner_and_editor_still_see_the_baseline(self, app, make_user, _flags_on, permission):
-        mock_auth_user(app, make_user())
-        body = _get_agent(app, permission, agent=self._published()).json()
-
-        assert body["listing"]["approvedInstructionsHash"] == "deadbeef"
 
     def test_a_viewer_never_sees_the_baseline(self, app, make_user, _flags_on):
         mock_auth_user(app, make_user())

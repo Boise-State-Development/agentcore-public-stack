@@ -25,7 +25,9 @@ from apis.shared.assistants.categories import (
     put_category,
 )
 from apis.shared.assistants.listing import DEFAULT_CATEGORIES
-from apis.shared.assistants.listing_repository import query_store, write_listing
+from apis.shared.assistants.listing_repository import query_store
+
+from .conftest import publish_agent_version, unpublish_agent_version
 from apis.shared.assistants.models import AgentCategory, AgentListing, PublisherProfile
 from apis.shared.assistants.publishers import put_publisher
 
@@ -94,11 +96,14 @@ def _seed_agent(table, agent_id: str, *, created_at: str, name: str = "An Agent"
 
 
 async def _publish(agent_id: str, category: str, created_at: str, publisher_id="pub-registrar"):
-    await write_listing(
-        agent_id,
-        AgentListing(state="published", category=category, publisher_id=publisher_id),
-        created_at,
-    )
+    """Cut a snapshot and shelve it — see ``conftest.publish_agent_version``.
+
+    Note what the shelf now renders from: the version, not the Agent row. The seeded row's
+    ``instructions`` ("SECRET SYSTEM PROMPT") is captured into the snapshot too, which is
+    why ``test_the_shelf_never_carries_behavior`` still means something — the projection has
+    to drop it, not merely fail to fetch it.
+    """
+    await publish_agent_version(agent_id, category, created_at, publisher_id=publisher_id)
 
 
 # ── the structural guarantee ─────────────────────────────────────────────────────────
@@ -119,10 +124,8 @@ async def test_browse_cannot_see_an_unpublished_agent(table, state):
     """Not filtered out — never indexed. The safety property is structural."""
     _seed_agent(table, "ast-001", created_at="2026-07-01T00:00:00Z")
     await _publish("ast-001", "Administration", "2026-07-01T00:00:00Z")
-    await write_listing(
-        "ast-001",
-        AgentListing(state=state, category="Administration", publisher_id="pub-registrar"),
-        "2026-07-01T00:00:00Z",
+    await unpublish_agent_version(
+        "ast-001", "Administration", "2026-07-01T00:00:00Z", state=state
     )
 
     listings, _ = await browse_category("Administration")

@@ -77,12 +77,24 @@ def _categories():
 
 @pytest.fixture
 def _no_writes():
-    """Stub the persistence + publisher resolution so tests exercise decisions, not I/O."""
+    """Stub the persistence + publisher resolution so tests exercise decisions, not I/O.
+
+    Submitting cuts a snapshot as well as writing the listing, so both have to be stubbed
+    or the version write reaches a real table. The version mocks hang off the yielded write
+    mock, leaving every existing ``_no_writes.call_args`` assertion untouched.
+    """
     with patch(f"{SERVICE_MODULE}.write_listing", new_callable=AsyncMock) as write, patch(
+        f"{SERVICE_MODULE}.create_version", new_callable=AsyncMock
+    ) as create, patch(
+        f"{SERVICE_MODULE}.set_version_index", new_callable=AsyncMock
+    ) as index, patch(
         f"{SERVICE_MODULE}.ensure_individual_profile",
         new_callable=AsyncMock,
         return_value=SimpleNamespace(id="user-user-001"),
     ):
+        create.return_value = SimpleNamespace(version=1)
+        write.create_version = create
+        write.set_version_index = index
         yield write
 
 
@@ -617,3 +629,71 @@ class TestPreflight:
 
         assert resp.status_code == 200
         assert "exposedSkills" in resp.json()
+
+
+class TestSubmissionCutsTheSnapshot:
+    """version-snapshots §3.2 — the version is cut at submit, not at approve.
+
+    Taking it at approval leaves a window the author can edit through: submit, admin reads,
+    author edits, admin approves — and what publishes is not what was read. That is the same
+    class of bug the epic exists to close, so it gets asserted rather than assumed.
+    """
+
+    def test_submitting_cuts_a_version_and_records_its_number(self, app, make_user, _no_writes):
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(bindings=[])):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit", json={"category": "Administration"}
+            )
+
+        assert resp.status_code == 200
+        _no_writes.create_version.assert_awaited_once()
+        assert _no_writes.call_args.args[1].submitted_version == 1
+
+    def test_the_snapshot_carries_the_submission_as_composed(self, app, make_user, _no_writes):
+        """Category, publisher and tagline are the author's choices *in this act*.
+
+        Snapshotting the record as it stood a moment earlier would freeze the previous
+        category — and the reviewer would be looking at a shelf placement nobody chose.
+        """
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(bindings=[], tagline="Old subtitle")):
+            TestClient(app).post(
+                "/agents/ast-001/listing/submit",
+                json={"category": "Teaching", "tagline": "Cite the policy manual"},
+            )
+
+        snapshot = _no_writes.create_version.await_args.args[1]
+        assert snapshot.category == "Teaching"
+        assert snapshot.tagline == "Cite the policy manual"
+
+    def test_submitting_indexes_nothing(self, app, make_user, _no_writes):
+        """A pending submission is not in the store. Only approval writes the key."""
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(bindings=[])):
+            TestClient(app).post("/agents/ast-001/listing/submit", json={"category": "Administration"})
+
+        _no_writes.set_version_index.assert_not_awaited()
+
+    def test_resubmitting_leaves_the_live_version_serving(self, app, make_user, _no_writes):
+        """The shelf must not go blank while a review is pending.
+
+        A resubmission cuts a *new* version and points ``submittedVersion`` at it, but the
+        previously approved one keeps its key until an admin promotes the replacement.
+        """
+        mock_auth_user(app, make_user())
+        listing = AgentListing.model_validate(
+            {
+                "state": "changes_requested",
+                "category": "Administration",
+                "publisherId": "pub-registrar",
+                "publishedVersion": 2,
+            }
+        )
+        with _owner(_make_assistant(bindings=[], listing=listing)):
+            TestClient(app).post("/agents/ast-001/listing/submit", json={"category": "Administration"})
+
+        written = _no_writes.call_args.args[1]
+        assert written.published_version == 2, "a resubmission must not unpublish"
+        assert written.submitted_version == 1
+        _no_writes.set_version_index.assert_not_awaited()

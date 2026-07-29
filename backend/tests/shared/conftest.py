@@ -359,3 +359,82 @@ def role_repository(roles_table):
 def skill_repository(roles_table):
     from apis.shared.skills.repository import SkillCatalogRepository
     return SkillCatalogRepository(table_name="test-app-roles")
+
+
+async def publish_agent_version(
+    agent_id: str,
+    category: str,
+    created_at: str,
+    *,
+    publisher_id: str = "pub-registrar",
+) -> int:
+    """Publish a seeded Agent the way production does, and return the version number.
+
+    Shared by every marketplace test that needs something *on the shelf*, because getting
+    onto the shelf is no longer a single write. A published listing is three facts that have
+    to agree: an immutable ``VERSION#`` snapshot, a ``listing`` block pointing at it, and the
+    GSI5 key on that snapshot row.
+
+    ⚠️ **Deliberately not a shortcut.** The obvious test helper — put the GSI5 keys straight
+    onto the Agent row — is exactly the shape this feature removed, and a test that seeded
+    it that way would keep passing while the store served the author's draft. Going through
+    ``create_version`` / ``set_version_index`` means these tests break if the real publish
+    path stops writing what browse reads, which is the whole reason they run against a real
+    (moto) table instead of a mock.
+    """
+    from apis.shared.assistants.listing import gsi5_keys
+    from apis.shared.assistants.listing_repository import write_listing
+    from apis.shared.assistants.models import AgentListing, Assistant
+    from apis.shared.assistants.serialization import from_ddb
+    from apis.shared.assistants.version_repository import create_version, set_version_index
+    from apis.shared.assistants.versions import snapshot_of
+
+    table = boto3.resource("dynamodb", region_name=AWS_REGION).Table(
+        os.environ["DYNAMODB_ASSISTANTS_TABLE_NAME"]
+    )
+    item = table.get_item(Key={"PK": f"AST#{agent_id}", "SK": "METADATA"})["Item"]
+    assistant = Assistant.model_validate(from_ddb(item))
+
+    listing = AgentListing(state="published", category=category, publisher_id=publisher_id)
+    version = await create_version(
+        agent_id,
+        snapshot_of(assistant.model_copy(update={"listing": listing}), created_at=created_at),
+    )
+    await write_listing(
+        agent_id,
+        listing.model_copy(
+            update={"published_version": version.version, "submitted_version": version.version}
+        ),
+        created_at,
+    )
+    await set_version_index(agent_id, version.version, gsi5_keys("published", category, created_at))
+    return version.version
+
+
+async def unpublish_agent_version(
+    agent_id: str,
+    category: str,
+    created_at: str,
+    *,
+    state: str = "taken_down",
+    publisher_id: str = "pub-registrar",
+) -> None:
+    """Take a published Agent off the shelf the way production does.
+
+    Clears the key **before** rewriting the listing block, which is the ordering
+    ``listing_service._unindex_version`` documents: with the index on a different item than
+    the listing, a half-failed delisting has to leave the Agent invisible rather than
+    visible-but-recorded-down.
+    """
+    from apis.shared.assistants.listing_repository import write_listing
+    from apis.shared.assistants.models import AgentListing
+    from apis.shared.assistants.version_repository import get_latest_version, set_version_index
+
+    latest = await get_latest_version(agent_id)
+    if latest and latest.version is not None:
+        await set_version_index(agent_id, latest.version, None)
+    await write_listing(
+        agent_id,
+        AgentListing(state=state, category=category, publisher_id=publisher_id),
+        created_at,
+    )

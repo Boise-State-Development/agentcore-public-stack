@@ -9,18 +9,13 @@ import {
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import {
-  heroRectangleStack,
-  heroCheckBadge,
-  heroExclamationTriangle,
-} from '@ng-icons/heroicons/outline';
+import { heroRectangleStack, heroCheckBadge } from '@ng-icons/heroicons/outline';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import {
   AdminListingRow,
-  LISTING_DRIFT_CLASSES,
-  LISTING_DRIFT_LABELS,
-  LISTING_DRIFT_TOOLTIPS,
+  PUBLISHED_VERSION_CLASSES,
+  PUBLISHED_VERSION_TOOLTIP,
   LISTING_STATE_CLASSES,
   LISTING_STATE_LABELS,
   ListingState,
@@ -52,7 +47,7 @@ import {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, AgentTileComponent, TooltipDirective],
   providers: [
-    provideIcons({ heroRectangleStack, heroCheckBadge, heroExclamationTriangle }),
+    provideIcons({ heroRectangleStack, heroCheckBadge }),
   ],
   template: `
     <div class="min-h-dvh">
@@ -182,29 +177,19 @@ import {
                           {{ stateLabels[row.state] }}
                         </span>
                         <!--
-                          Post-approval drift (#744). Sits under the state badge rather than
-                          in its own column: it only ever applies to published rows, so a
+                          Which snapshot is live. Sits under the state badge rather than in
+                          its own column: it only ever applies to published rows, so a
                           column would be mostly empty and would push the table wider.
+                          (This replaced the post-approval drift marker — see the model.)
                         -->
-                        @if (row.drift; as drift) {
+                        @if (row.publishedVersion; as version) {
                           <span
-                            class="inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-xs font-medium"
-                            [class]="driftClasses[drift]"
-                            [appTooltip]="driftTooltips[drift]"
+                            class="inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-xs font-medium tabular-nums"
+                            [class]="publishedVersionClasses"
+                            [appTooltip]="publishedVersionTooltip"
                             appTooltipPosition="top"
                           >
-                            <!--
-                              The icon is only on the measured signal. The inferred one is
-                              a maybe, and a warning triangle would overstate it.
-                            -->
-                            @if (drift === 'instructions') {
-                              <ng-icon
-                                name="heroExclamationTriangle"
-                                class="size-3.5"
-                                aria-hidden="true"
-                              />
-                            }
-                            {{ driftLabels[drift] }}
+                            v{{ version }}
                           </span>
                         }
                       </div>
@@ -253,9 +238,8 @@ export class MarketplaceListingsPage implements OnInit {
   ];
   readonly stateLabels = LISTING_STATE_LABELS;
   readonly stateClasses = LISTING_STATE_CLASSES;
-  readonly driftLabels = LISTING_DRIFT_LABELS;
-  readonly driftClasses = LISTING_DRIFT_CLASSES;
-  readonly driftTooltips = LISTING_DRIFT_TOOLTIPS;
+  readonly publishedVersionClasses = PUBLISHED_VERSION_CLASSES;
+  readonly publishedVersionTooltip = PUBLISHED_VERSION_TOOLTIP;
 
   ngOnInit(): void {
     void this.reload();
