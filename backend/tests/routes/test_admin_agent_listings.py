@@ -31,7 +31,9 @@ def _make_assistant(**overrides) -> Assistant:
         description="Find and cite university policy",
         instructions="Answer from the policy manual.",
         vectorIndexId="idx-001",
-        visibility="PRIVATE",
+        # PUBLIC by default: approval now refuses anything else, so a publishable agent is
+        # the baseline. Tests of the narrowed-after-submit case override this explicitly.
+        visibility="PUBLIC",
         usageCount=12,
         createdAt="2026-07-01T00:00:00Z",
         updatedAt="2026-07-01T00:00:00Z",
@@ -306,6 +308,35 @@ class TestReview:
             )
 
         assert resp.json()["category"] == "Teaching"
+
+    @pytest.mark.parametrize("visibility", ["PRIVATE", "SHARED"])
+    def test_cannot_approve_an_agent_narrowed_since_submission(
+        self, app, _no_writes, visibility
+    ):
+        """``visibility`` is an independent axis — the submit-time gate says nothing about now.
+
+        The author can narrow access between submitting and being reviewed, and approving
+        anyway shelves a tile that 404s for everyone who taps it.
+        """
+        with _loaded(_make_assistant(visibility=visibility, listing=_listing("in_review"))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/review", json={"decision": "approve"}
+            )
+
+        assert resp.status_code == 400
+        assert visibility.title() in resp.json()["detail"]
+        _no_writes.assert_not_called()
+
+    def test_changes_may_still_be_requested_on_a_narrowed_agent(self, app, _no_writes):
+        """The gate is on publishing, not on reviewing — sending it back must still work."""
+        with _loaded(_make_assistant(visibility="PRIVATE", listing=_listing("in_review"))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/review",
+                json={"decision": "request_changes", "note": "Set visibility to Public."},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "changes_requested"
 
     def test_cannot_approve_something_not_in_review(self, app, _no_writes):
         """Approval is the only door into the store, and in_review is the only way to it."""

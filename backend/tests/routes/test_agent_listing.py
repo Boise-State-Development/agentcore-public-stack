@@ -29,7 +29,10 @@ def _make_assistant(**overrides) -> Assistant:
         description="Find and cite university policy",
         instructions="Answer from the policy manual.",
         vectorIndexId="idx-001",
-        visibility="PRIVATE",
+        # PUBLIC by default because publication now requires it: the marketplace is
+        # public-only, so an agent that cannot be published is the special case, not the
+        # baseline. Tests that exercise the block pass ``visibility=`` explicitly.
+        visibility="PUBLIC",
         usageCount=0,
         createdAt="2026-07-01T00:00:00Z",
         updatedAt="2026-07-01T00:00:00Z",
@@ -162,6 +165,149 @@ class TestMemorySpaceBlock:
                 "/agents/ast-001/listing/submit", json={"category": "Administration"}
             )
 
+        _no_writes.assert_not_called()
+
+
+# ── the marketplace is public-only ───────────────────────────────────────────────────
+class TestVisibilityBlock:
+    """Publication requires PUBLIC.
+
+    Sharing an agent with named coworkers is a *separate* mechanism, and a listing carries
+    no audience of its own — so a published SHARED or PRIVATE agent is a tile everyone sees
+    and nobody but the author can open. That was a live incident: two demo users tapped Add
+    on a published-but-SHARED agent and got a bare 404.
+    """
+
+    @pytest.mark.parametrize(
+        "visibility,expected",
+        [("PRIVATE", "private"), ("SHARED", "shared with specific people")],
+    )
+    def test_a_non_public_agent_cannot_be_submitted(
+        self, app, make_user, _no_writes, visibility, expected
+    ):
+        assistant = _make_assistant(visibility=visibility)
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit", json={"category": "Administration"}
+            )
+
+        assert resp.status_code == 400
+        assert expected in resp.json()["detail"]
+        _no_writes.assert_not_called()
+
+    def test_a_public_agent_submits_normally(self, app, make_user, _no_writes):
+        """The gate must not be so eager it blocks the ordinary path."""
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(visibility="PUBLIC")):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit", json={"category": "Administration"}
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["listing"]["state"] == "in_review"
+
+    def test_preflight_asks_for_consent_rather_than_blocking(
+        self, app, make_user, _no_writes
+    ):
+        """Needing to go public is fixable *in the dialog*, so it is not a block.
+
+        Folding it into ``blockReason`` sent the author to another screen on their very
+        first submission — every agent starts PRIVATE.
+        """
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(visibility="SHARED")):
+            resp = TestClient(app).get("/agents/ast-001/listing/preflight")
+
+        body = resp.json()
+        assert resp.status_code == 200
+        assert body["requiresPublic"] is True
+        assert body["blockReason"] is None, "not a block — the checkbox resolves it"
+        assert body["reachability"] == "shared_only"
+
+    def test_preflight_asks_nothing_of_an_already_public_agent(
+        self, app, make_user, _no_writes
+    ):
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(visibility="PUBLIC")):
+            body = TestClient(app).get("/agents/ast-001/listing/preflight").json()
+
+        assert body["requiresPublic"] is False
+        assert body["blockReason"] is None
+
+    def test_the_memory_space_block_is_still_a_block(self, app, make_user, _no_writes):
+        """A real dead end stays one — nothing in the dialog can resolve it."""
+        assistant = _make_assistant(
+            visibility="PRIVATE",
+            bindings=[AgentBinding(kind="memory_space", ref="mem-042", config={})],
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant), patch(f"{SERVICE_MODULE}.MemorySpaceService") as svc:
+            svc.return_value.list_spaces_for_user.return_value = []
+            body = TestClient(app).get("/agents/ast-001/listing/preflight").json()
+
+        assert "memory space" in body["blockReason"].lower()
+        assert body["requiresPublic"] is True, "still true — it just is not what stops them"
+
+
+class TestGoingPublicOnSubmission:
+    """The consent checkbox: the author widens visibility from the submit dialog."""
+
+    @pytest.mark.parametrize("visibility", ["PRIVATE", "SHARED"])
+    def test_consent_widens_visibility_in_the_same_write(
+        self, app, make_user, _no_writes, visibility
+    ):
+        """One write, or an agent could end up listed but unreachable — the whole bug."""
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(visibility=visibility)):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit",
+                json={"category": "Administration", "makePublic": True},
+            )
+
+        assert resp.status_code == 200
+        assert _no_writes.call_args.kwargs["visibility"] == "PUBLIC"
+
+    def test_an_already_public_agent_is_not_rewritten(self, app, make_user, _no_writes):
+        """A no-op write would be a lie in the audit trail."""
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(visibility="PUBLIC")):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit",
+                json={"category": "Administration", "makePublic": True},
+            )
+
+        assert resp.status_code == 200
+        assert _no_writes.call_args.kwargs["visibility"] is None
+
+    def test_consent_does_not_bypass_the_memory_space_block(
+        self, app, make_user, _no_writes
+    ):
+        """Ticking a visibility box must not wave through an unrelated, real block."""
+        assistant = _make_assistant(
+            visibility="PRIVATE",
+            bindings=[AgentBinding(kind="memory_space", ref="mem-042", config={})],
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant), patch(f"{SERVICE_MODULE}.MemorySpaceService") as svc:
+            svc.return_value.list_spaces_for_user.return_value = []
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit",
+                json={"category": "Administration", "makePublic": True},
+            )
+
+        assert resp.status_code == 400
+        _no_writes.assert_not_called()
+
+    def test_an_omitted_flag_still_refuses(self, app, make_user, _no_writes):
+        """Consent defaults off, so a direct API caller cannot widen an agent by accident."""
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(visibility="PRIVATE")):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit", json={"category": "Administration"}
+            )
+
+        assert resp.status_code == 400
         _no_writes.assert_not_called()
 
 

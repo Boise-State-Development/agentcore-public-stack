@@ -194,12 +194,79 @@ def test_pinning_an_agent_you_cannot_reach_is_a_404(client):
         patch(
             f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))
         ),
+        patch(
+            f"{PIN_SERVICE}.resolve_assistant_permission", AsyncMock(return_value=(None, None))
+        ),
         patch(f"{PIN_SERVICE}.add_pin", add),
     ):
         response = client.post("/agents/ast-secret/pin")
 
     assert response.status_code == 404
     add.assert_not_awaited()
+
+
+def test_pinning_a_published_agent_you_cannot_open_is_a_legible_403(client):
+    """A tile the store already advertised is not a secret — say what went wrong.
+
+    This is the shape that hit two users during the marketplace demo: a published agent
+    whose visibility denies them. Publication now requires PUBLIC, so it should only be
+    reachable via a listing narrowed after approval — the case no submit gate can catch.
+    """
+    unreachable = _make_assistant(
+        visibility="SHARED",
+        listing={"state": "published", "category": "Administration", "publisherId": "pub-1"},
+    )
+    add = AsyncMock()
+    with (
+        patch(
+            f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))
+        ),
+        patch(
+            f"{PIN_SERVICE}.resolve_assistant_permission",
+            AsyncMock(return_value=(unreachable, None)),
+        ),
+        patch(f"{PIN_SERVICE}.add_pin", add),
+    ):
+        response = client.post("/agents/ast-001/pin")
+
+    assert response.status_code == 403
+    assert "restricted who can" in response.json()["detail"]
+    add.assert_not_awaited()
+
+
+def test_an_unpublished_agent_still_collapses_to_404(client):
+    """The disclosure rule only relaxes for ids the store itself handed out."""
+    private = _make_assistant(visibility="PRIVATE", listing=None)
+    with (
+        patch(
+            f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))
+        ),
+        patch(
+            f"{PIN_SERVICE}.resolve_assistant_permission",
+            AsyncMock(return_value=(private, None)),
+        ),
+        patch(f"{PIN_SERVICE}.add_pin", AsyncMock()),
+    ):
+        response = client.post("/agents/ast-001/pin")
+
+    assert response.status_code == 404
+
+
+def test_a_failure_classifying_the_denial_falls_back_to_404(client):
+    """The nicety must never escalate a clean 404 into a 500."""
+    with (
+        patch(
+            f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))
+        ),
+        patch(
+            f"{PIN_SERVICE}.resolve_assistant_permission",
+            AsyncMock(side_effect=RuntimeError("dynamo is having a day")),
+        ),
+        patch(f"{PIN_SERVICE}.add_pin", AsyncMock()),
+    ):
+        response = client.post("/agents/ast-001/pin")
+
+    assert response.status_code == 404
 
 
 def test_pinning_past_the_ceiling_is_a_409(client):

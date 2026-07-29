@@ -561,17 +561,21 @@ async def agent_listing_preflight_endpoint(
 ):
     """What the submit dialog needs before the author commits (D7, owner only).
 
-    A read-only rehearsal of the submit checks: the skills publication would expose,
-    and the memory-space block if there is one. Declared before ``/listing/submit``
-    only for reading order — the paths are literal and do not collide.
+    A read-only rehearsal of the submit checks: the skills publication would expose, the
+    memory-space block if there is one, and whether the author still has to consent to
+    going public. Declared before ``/listing/submit`` only for reading order — the paths
+    are literal and do not collide.
     """
     try:
-        exposed, block_reason, reachability = await preflight_listing(agent_id, current_user)
+        exposed, block_reason, reachability, requires_public = await preflight_listing(
+            agent_id, current_user
+        )
         return ListingPreflightResponse(
             agent_id=agent_id,
             exposed_skills=exposed,
             block_reason=block_reason,
             reachability=reachability,
+            requires_public=requires_public,
         )
     except ListingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
