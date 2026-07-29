@@ -29,7 +29,10 @@ def _make_assistant(**overrides) -> Assistant:
         description="Find and cite university policy",
         instructions="Answer from the policy manual.",
         vectorIndexId="idx-001",
-        visibility="PRIVATE",
+        # PUBLIC by default because publication now requires it: the marketplace is
+        # public-only, so an agent that cannot be published is the special case, not the
+        # baseline. Tests that exercise the block pass ``visibility=`` explicitly.
+        visibility="PUBLIC",
         usageCount=0,
         createdAt="2026-07-01T00:00:00Z",
         updatedAt="2026-07-01T00:00:00Z",
@@ -163,6 +166,75 @@ class TestMemorySpaceBlock:
             )
 
         _no_writes.assert_not_called()
+
+
+# ── the marketplace is public-only ───────────────────────────────────────────────────
+class TestVisibilityBlock:
+    """Publication requires PUBLIC.
+
+    Sharing an agent with named coworkers is a *separate* mechanism, and a listing carries
+    no audience of its own — so a published SHARED or PRIVATE agent is a tile everyone sees
+    and nobody but the author can open. That was a live incident: two demo users tapped Add
+    on a published-but-SHARED agent and got a bare 404.
+    """
+
+    @pytest.mark.parametrize(
+        "visibility,expected",
+        [("PRIVATE", "private"), ("SHARED", "shared with specific people")],
+    )
+    def test_a_non_public_agent_cannot_be_submitted(
+        self, app, make_user, _no_writes, visibility, expected
+    ):
+        assistant = _make_assistant(visibility=visibility)
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit", json={"category": "Administration"}
+            )
+
+        assert resp.status_code == 400
+        assert expected in resp.json()["detail"]
+        _no_writes.assert_not_called()
+
+    def test_a_public_agent_submits_normally(self, app, make_user, _no_writes):
+        """The gate must not be so eager it blocks the ordinary path."""
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(visibility="PUBLIC")):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit", json={"category": "Administration"}
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["listing"]["state"] == "in_review"
+
+    def test_preflight_shows_the_block_so_the_dialog_can_disable_submit(
+        self, app, make_user, _no_writes
+    ):
+        """Shown and enforced by one function — the dialog and the transition cannot drift."""
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(visibility="SHARED")):
+            resp = TestClient(app).get("/agents/ast-001/listing/preflight")
+
+        body = resp.json()
+        assert resp.status_code == 200
+        assert body["blockReason"] is not None
+        assert "shared with specific people" in body["blockReason"]
+        assert body["reachability"] == "shared_only"
+
+    def test_the_memory_space_block_still_wins_when_both_apply(
+        self, app, make_user, _no_writes
+    ):
+        """Ordering is deliberate: the harder problem is named first, not the cheaper one."""
+        assistant = _make_assistant(
+            visibility="PRIVATE",
+            bindings=[AgentBinding(kind="memory_space", ref="mem-042", config={})],
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant), patch(f"{SERVICE_MODULE}.MemorySpaceService") as svc:
+            svc.return_value.list_spaces_for_user.return_value = []
+            resp = TestClient(app).get("/agents/ast-001/listing/preflight")
+
+        assert "memory space" in resp.json()["blockReason"].lower()
 
 
 # ── D7.1 — skill exposure is enumerated ──────────────────────────────────────────────

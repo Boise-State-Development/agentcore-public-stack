@@ -191,6 +191,47 @@ async def _memory_space_block(assistant: Assistant, user: User) -> None:
         raise ListingError(reason, status_code=400)
 
 
+def _visibility_block_reason(assistant: Assistant) -> Optional[str]:
+    """The blocking message for an Agent that is not ``PUBLIC``, or ``None`` if clear.
+
+    **The marketplace is public-only.** Sharing an Agent with named coworkers is a separate
+    mechanism with its own control on the agent tile, and a listing carries no audience of
+    its own — ``AgentListing`` has no scope field, and the store is one global shelf. So a
+    published SHARED or PRIVATE Agent is not a "team listing"; it is a tile shown to
+    everyone that nobody but the author can open, and every pin against it 404s.
+
+    Split from the raising path for the same reason as ``_memory_space_block_reason``:
+    ``preflight_listing`` shows it, ``submit_listing`` enforces it, and one function
+    decides so the dialog and the transition cannot drift apart.
+    """
+    if assistant.visibility == "PUBLIC":
+        return None
+    if assistant.visibility == "SHARED":
+        return (
+            "This agent can't be published while it's shared with specific people. The "
+            "store is public — everyone would see it, but only the people it's shared "
+            "with could open it. Set Visibility to Public to publish it, or keep sharing "
+            "it directly instead."
+        )
+    return (
+        "This agent can't be published while it's private. The store is public, so people "
+        "would see it and get an error when they opened it. Set Visibility to Public and "
+        "submit again."
+    )
+
+
+def _visibility_block(assistant: Assistant) -> None:
+    """Block submission unless the Agent is ``PUBLIC``.
+
+    Deliberately a refusal rather than a silent widening: publication must not be a side
+    door that changes who can reach an Agent. The author says "make this public" in the one
+    place that means it, and the store trusts ``visibility`` rather than overwriting it.
+    """
+    reason = _visibility_block_reason(assistant)
+    if reason:
+        raise ListingError(reason, status_code=400)
+
+
 async def _exposed_skills(assistant: Assistant) -> List[SkillExposure]:
     """Skills the author wrote that publication makes readable (D7.1).
 
@@ -255,17 +296,22 @@ async def preflight_listing(
     Owner-only, like every other author path: the skill exposure is a statement about
     what the *owner's* publication would reveal, and it is not an editor's to see.
 
-    Also returns reachability, which is *not* a D7 check and deliberately not a block:
-    the author is told their store tile will 404 for people who cannot already reach the
-    Agent, and left to decide. Returned even alongside a ``block_reason`` — the two are
-    independent facts and suppressing one behind the other just hides work from the
-    author's next attempt.
+    Also returns reachability, which is now a *consequence* of the visibility block rather
+    than an independent warning: anything short of ``everyone`` is refused below, so the
+    author sees the block's actionable wording instead. It stays on the response because
+    the reviewer's surface still needs it — an Agent published as PUBLIC can be narrowed
+    afterwards, which no submit-time gate can catch.
     """
     assistant = await _load_for_author(agent_id, user)
     reachability = _reachability(assistant)
-    block_reason = await _memory_space_block_reason(assistant, user)
-    # Order mirrors submit_listing: an agent that cannot be published at all is not first
-    # walked through a skill-exposure confirmation.
+    # Order mirrors submit_listing. Visibility is last because it is the cheapest to fix:
+    # an author told to widen access, who then hits the memory-space block, has been sent
+    # round twice for one submission.
+    block_reason = await _memory_space_block_reason(assistant, user) or _visibility_block_reason(
+        assistant
+    )
+    # An agent that cannot be published at all is not first walked through a
+    # skill-exposure confirmation.
     if block_reason:
         return [], block_reason, reachability
     return await _exposed_skills(assistant), None, reachability
@@ -286,6 +332,7 @@ async def submit_listing(
     # Order matters: block before disclosing. An author whose agent cannot be published
     # at all should not first be walked through a skill-exposure confirmation.
     await _memory_space_block(assistant, user)
+    _visibility_block(assistant)
     exposed = await _exposed_skills(assistant)
     publisher_id = await _resolve_proposed_publisher(user, request.publisher_id)
 
@@ -369,6 +416,18 @@ async def review_listing(
         assert_transition(assistant.listing.state, target)
     except ListingTransitionError as e:
         raise ListingError(str(e), status_code=400) from e
+
+    # Re-checked here, not just at submit: ``visibility`` is an independent axis the author
+    # can narrow at any point after submitting, so the gate that ran then says nothing about
+    # now. Approving anyway would shelve a tile that 404s for every person who taps it.
+    # Reviewer-facing wording — it is not this admin's job to widen someone else's access.
+    if target == "published" and assistant.visibility != "PUBLIC":
+        raise ListingError(
+            f"This agent's visibility is now {assistant.visibility.title()}, so it can't be "
+            "published — the store is public, and everyone but the author would get an "
+            "error opening it. Request changes and ask the author to set it to Public.",
+            status_code=400,
+        )
 
     if category is not None:
         await _validate_category(category)
@@ -560,13 +619,19 @@ def _drift(assistant: Assistant, listing: AgentListing) -> Optional[str]:
 def _reachability(assistant: Assistant) -> str:
     """Who can actually open this Agent, projected from ``visibility`` (see ``ListingReachability``).
 
-    The store browse read applies no access check, so this is the only thing standing
-    between "approved" and a shelf tile that 404s for everyone but the author. Derived on
-    every read rather than stored — ``visibility`` can change at any time and a cached
-    copy would be wrong exactly when it mattered.
+    Derived on every read rather than stored — ``visibility`` can change at any time and a
+    cached copy would be wrong exactly when it mattered.
 
-    ⚠️ Advisory only. Publishing a SHARED Agent to a team is legitimate; the fix for the
-    bad case is the author widening visibility, not this function refusing.
+    ⚠️ This used to say publishing a SHARED Agent to a team was legitimate, and that it was
+    the *only* thing standing between "approved" and a tile that 404s for everyone but the
+    author. Both were wrong. The marketplace is public-only — sharing with named coworkers
+    is a separate mechanism, and a listing has no audience of its own — so anything short
+    of PUBLIC is now refused outright at submit and again at approve
+    (``_visibility_block_reason``).
+
+    What survives is the case no gate can catch: an Agent published as PUBLIC and narrowed
+    afterwards. This is what tells a reviewer, and the admin listings table, that an
+    already-published row has gone unreachable.
     """
     if assistant.visibility == "PUBLIC":
         return "everyone"
