@@ -7,7 +7,6 @@ import {
   heroChatBubbleLeftRight,
   heroCheck,
   heroCircleStack,
-  heroClock,
   heroCpuChip,
   heroDocumentText,
   heroLink,
@@ -47,13 +46,26 @@ interface OpensUp {
  * would be hostile. Only the list URL, which is the one people browse to, explains itself.
  *
  * The copy commits to three things, in this order, because that is the order the questions
- * actually arrive in: **where did my work go** (nowhere — same records, same ids), **why**
- * (one noun, and the old editor was strictly the smaller half of it), and **what it buys
- * me** (the bindings, the store, `@`-mention, scheduled runs).
+ * actually arrive in: **where did my work go** (nowhere — the same agents, under a new
+ * heading), **why** (because "agent" is the industry's word for this and "assistant" was
+ * only ever ours), and **what it buys me** (the model/tools/skills/memory it can now hold,
+ * the store, `@`-mention).
+ *
+ * The "why" is deliberately *not* argued as "we outgrew the old word". That framing asks the
+ * reader to care about our vocabulary history, which is our problem and not theirs. Standard
+ * naming is a benefit they can actually collect: it makes everything they read and learn
+ * elsewhere transfer, in both directions. The capability list stays, but as evidence that
+ * the standard word fits — not as the reason for the change.
+ *
+ * **Written for someone who has never used the platform**, not for someone who knows the
+ * old surface: whoever clicks "Assistants" in the sidebar may be doing it to find out what
+ * the word means. So the hero says what an agent *is* before it explains what changed, and
+ * the copy avoids house vocabulary — no "records", no "knowledge base", no "system prompt",
+ * no "bindings". If a term needs the platform explained first, it does not belong here.
  *
  * Everything claimed here is a surface that ships today. If a capability is removed or
  * gated, the claim on this page goes with it — an explainer that oversells is worse than
- * the redirect it replaced.
+ * the redirect it replaced. (This is why scheduled runs are not mentioned; see `opensUp`.)
  */
 @Component({
   selector: 'app-agents-migration',
@@ -68,7 +80,6 @@ interface OpensUp {
       heroChatBubbleLeftRight,
       heroCheck,
       heroCircleStack,
-      heroClock,
       heroCpuChip,
       heroDocumentText,
       heroLink,
@@ -89,22 +100,22 @@ export class AgentsMigrationPage {
   readonly carriedOver: readonly { label: string; detail: string; icon: string }[] = [
     {
       label: 'Every assistant you built',
-      detail: 'Same name, same instructions, same conversation starters.',
+      detail: 'The same name, the same instructions, the same opening questions.',
       icon: 'heroSparkles',
     },
     {
-      label: 'Your knowledge bases',
-      detail: 'Documents, web sources and sync policies — still indexed, still answering.',
+      label: 'Everything you gave it to read',
+      detail: 'Your files and web pages are still there, and still used to answer.',
       icon: 'heroDocumentText',
     },
     {
-      label: 'Who you shared with',
-      detail: 'Viewers and editors kept exactly the access you gave them.',
+      label: 'The people you shared with',
+      detail: 'Anyone you shared with still has it, and can still do what you allowed.',
       icon: 'heroUserGroup',
     },
     {
       label: 'Your old links',
-      detail: 'Bookmarks and shared links still work, and open the same record.',
+      detail: 'Bookmarks and links you sent people still work, and open the same thing.',
       icon: 'heroLink',
     },
   ];
@@ -116,73 +127,75 @@ export class AgentsMigrationPage {
   readonly ledger: readonly LedgerRow[] = [
     {
       label: 'Instructions',
-      detail: 'The system prompt that gives it a job and a manner.',
+      detail: 'What you write to tell it its job, and how you want it to answer.',
       icon: 'heroDocumentText',
       assistant: 'yes',
     },
     {
-      label: 'Knowledge base',
-      detail: 'Your documents and web sources, indexed and searchable.',
+      label: 'Things to read',
+      detail: 'Files and web pages you hand it, so it answers from your material.',
       icon: 'heroCircleStack',
       assistant: 'yes',
     },
     {
       label: 'Sharing',
-      detail: 'Private, shared with named people, or open to the institution.',
+      detail: 'Keep it to yourself, share it with certain people, or open it to everyone.',
       icon: 'heroUserGroup',
       assistant: 'yes',
     },
     {
       label: 'A model you choose',
-      detail: 'Pick the model and tune its settings, within the bounds your role allows.',
+      detail: 'Pick which AI model answers for it, from the ones you have been given.',
       icon: 'heroCpuChip',
       assistant: 'no',
     },
     {
       label: 'Tools',
-      detail: 'Give it the ability to act — search, run code, reach a connected system.',
+      detail: 'Let it do things, not just talk — look something up, work with a file, use a system you have connected.',
       icon: 'heroWrenchScrewdriver',
       assistant: 'no',
     },
     {
       label: 'Skills',
-      detail: 'Bundled know-how it loads on demand, so the instructions stay short.',
+      detail: 'Ready-made know-how for a particular job, which it picks up only when that job comes up.',
       icon: 'heroPuzzlePiece',
       assistant: 'no',
     },
     {
-      label: 'Memory spaces',
-      detail: 'A durable notebook it can read from, and write to when you allow it.',
+      label: 'Memory',
+      detail: 'Notes it keeps between conversations, so you are not starting from scratch each time.',
       icon: 'heroSparkles',
       assistant: 'no',
     },
   ];
 
-  /** Downstream surfaces the single noun unlocked. All of these ship today. */
+  /**
+   * Downstream surfaces the single noun unlocked. **Every card here must be a surface a
+   * reader can go and use today** — an explainer that advertises something they cannot find
+   * is worse than the silent redirect this page replaced.
+   *
+   * A "Run on a schedule" card sat here and has been pulled: scheduled runs work, but they
+   * have no navigation of their own yet, so the card promised a feature with nowhere to go.
+   * Put it back (with `heroClock`) when that surface is rolled out.
+   */
   readonly opensUp: readonly OpensUp[] = [
     {
-      title: 'A store to publish to',
+      title: 'Share it with everyone',
       body:
-        'Submit an agent for review and it appears in Discover, where anyone at the institution can find it — instead of you emailing a link to one person at a time.',
+        'Put an agent up for review and it appears in Discover, where anyone here can find it and use it — instead of you sending a link to one person at a time.',
       icon: 'heroSquares2x2',
     },
     {
-      title: 'Pin what you use',
+      title: 'Keep the ones you like',
       body:
-        "Add someone else's agent to your own set and it is one click away from every chat. Your role may start you with a few already pinned.",
+        "Found an agent someone else built? Pin it, and it sits one click away in every chat. You may find a few already pinned for you.",
       icon: 'heroBookmark',
     },
     {
-      title: 'Reach one mid-conversation',
+      title: 'Bring one into a chat',
       body:
-        'Type @ in any chat to hand the current thread to a specialist agent, then carry on. No switching pages, no starting over.',
+        'Type @ in any conversation to hand what you are working on to a different agent, then carry on. Nothing to close, nothing to start over.',
       icon: 'heroChatBubbleLeftRight',
-    },
-    {
-      title: 'Run on a schedule',
-      body:
-        'Point a scheduled run at an agent and it works while you are not watching — a Monday digest, a nightly check, a weekly report.',
-      icon: 'heroClock',
     },
   ];
 }
