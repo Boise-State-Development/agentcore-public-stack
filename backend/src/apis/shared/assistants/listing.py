@@ -51,6 +51,7 @@ LISTING_STATES: Tuple[str, ...] = (
     "published",
     "changes_requested",
     "taken_down",
+    "withdrawal_requested",
 )
 
 # The transition table. ``None`` is the pre-state of a record that has never been
@@ -70,21 +71,56 @@ LISTING_STATES: Tuple[str, ...] = (
 #   taken_down        → changes_requested  admin annotates an already-delisted listing
 #   in_review         → private            author withdraws a pending submission
 #   changes_requested → private            author withdraws
-#   published         → private            author unpublishes (DELETE /agents/{id}/listing)
+#   published         → withdrawal_requested author ASKS to pull a live listing
+#   withdrawal_requested → private          admin grants the withdrawal
+#   withdrawal_requested → published        admin declines; the listing stays live
+#   withdrawal_requested → taken_down       admin pulls it outright instead
 #
-# Deliberately absent: anything → published other than from in_review. Approval is the
-# only door into the store, so a bug elsewhere cannot publish by accident.
+# Deliberately absent: anything → published other than from in_review or
+# withdrawal_requested. Approval is the only door *into* the store, so a bug elsewhere
+# cannot publish by accident; declining a withdrawal is not a new publication, it is a
+# refusal to unpublish.
+#
+# ⚠️ ``published → private`` is deliberately GONE. An author could previously pull a live
+# listing unilaterally, with no admin ever seeing it — the D2 review queue makes
+# publication stop for a human, and unpublication should not be a side door around that.
+# Withdrawal is now a request an admin acts on (see §5.1 of the version-snapshots spec).
+# The edges an author still owns alone are the pre-publication ones: ``private → in_review``
+# and withdrawing a *pending* submission (``in_review``/``changes_requested`` → ``private``).
 ALLOWED_TRANSITIONS: Dict[Optional[str], Set[str]] = {
     None: {"in_review"},
     "private": {"in_review"},
     "in_review": {"published", "changes_requested", "private"},
     "changes_requested": {"in_review", "private"},
-    "published": {"taken_down", "changes_requested", "private"},
+    "published": {"taken_down", "changes_requested", "withdrawal_requested"},
     "taken_down": {"in_review", "changes_requested"},
+    "withdrawal_requested": {"private", "published", "taken_down"},
 }
 
 # States an author may drive. Everything else is the reviewer's (``require_admin``).
-AUTHOR_TARGET_STATES: Set[str] = {"in_review", "private"}
+#
+# ⚠️ This set was **dead** until the withdrawal work — declared and never read, so the
+# comment above was aspirational rather than enforced. ``assert_author_target`` now uses it,
+# because "an author cannot pull a live listing" deserves a real gate and not just an absent
+# edge in the table. Both checks run on the author path: the table says the move is legal at
+# all, this says the author is allowed to be the one making it.
+AUTHOR_TARGET_STATES: Set[str] = {"in_review", "private", "withdrawal_requested"}
+
+# Listing states whose Agent is live in the store.
+#
+# **Not the same question as ``state == "published"``, and the difference is the point of
+# ``withdrawal_requested``.** A pending withdrawal request leaves the listing serving: the
+# author has *asked* to pull it, an admin has not yet agreed, and dropping it off the shelf
+# the moment they asked would hand the author exactly the unilateral delisting this state
+# exists to prevent. So the store index stays written, and a declined request needs no
+# repair.
+LISTED_STATES: Set[str] = {"published", "withdrawal_requested"}
+
+# Listing states waiting on an admin decision — what the Review queue shows and what the
+# nav badge counts. §5.1 puts withdrawal requests in the *existing* queue rather than a
+# second surface, on the grounds that a queue an admin has to remember to check is a queue
+# that grows.
+PENDING_DECISION_STATES: Set[str] = {"in_review", "withdrawal_requested"}
 
 
 class ListingTransitionError(ValueError):
@@ -135,16 +171,51 @@ def assert_transition(current: Optional[str], target: str) -> None:
         raise ListingTransitionError(current, target)
 
 
+class ListingAuthorityError(ValueError):
+    """An author attempted a transition that belongs to a reviewer."""
+
+
+def assert_author_target(target: str) -> None:
+    """Raise unless ``target`` is a state an author may drive themselves.
+
+    Separate from ``assert_transition`` because they answer different questions, and
+    collapsing them would lose the useful error. The table says whether the move is legal at
+    all; this says whether the *author* gets to make it. ``published → private`` is now
+    illegal for everyone (it is not in the table), while ``withdrawal_requested → private``
+    is legal but an admin's alone.
+    """
+    if target not in AUTHOR_TARGET_STATES:
+        raise ListingAuthorityError(
+            f"Moving a listing to '{target}' is a reviewer's decision, not the author's."
+        )
+
+
 def is_published(state: Optional[str]) -> bool:
-    """Whether a listing state means "visible in the store"."""
+    """Whether a listing state is exactly ``published``.
+
+    ⚠️ Usually **not** the question you want — see ``is_listed``. This is the narrow test
+    for "approved and not under any pending request", and the only callers that should use
+    it are ones deciding something about the approval itself.
+    """
     return state == "published"
+
+
+def is_listed(state: Optional[str]) -> bool:
+    """Whether a listing state means "live in the store" (see ``LISTED_STATES``).
+
+    This is the predicate almost everything wants: the store index, the featured row, and
+    "does an admin edit need to cut a new version". It is true for ``withdrawal_requested``
+    as well as ``published``, because a requested withdrawal is not a granted one.
+    """
+    return state in LISTED_STATES
 
 
 def gsi5_keys(state: Optional[str], category: Optional[str], created_at: str) -> Optional[Dict[str, str]]:
     """The sparse ``AgentDirectoryIndex`` (GSI5) key pair, or ``None`` when unlisted.
 
     ``GSI5_PK = LISTED#{category}`` / ``GSI5_SK = CREATED#{created_at}``, written **only**
-    while ``state == "published"`` — the ``DueSyncIndex`` precedent on this same table.
+    while the listing is live (``is_listed`` — ``published`` or ``withdrawal_requested``) —
+    the ``DueSyncIndex`` precedent on this same table.
 
     Returning ``None`` is the caller's signal to REMOVE both attributes, not to skip the
     write: leaving a stale key behind would keep a delisted agent queryable in the store,
@@ -154,13 +225,13 @@ def gsi5_keys(state: Optional[str], category: Optional[str], created_at: str) ->
     key (a hot-item rewrite per use) and is deferred, not approximated — the store front
     is the manual ranking lever instead.
     """
-    if not is_published(state):
+    if not is_listed(state):
         return None
     if not category:
-        # Defensive: a published listing with no category has no shelf to sit on. The
-        # service validates category at submit and at admin PATCH, so this is a
-        # can't-happen that we refuse to paper over with a "LISTED#None" partition.
-        raise ValueError("A published listing must carry a category.")
+        # Defensive: a listed agent with no category has no shelf to sit on. The service
+        # validates category at submit and at admin PATCH, so this is a can't-happen that
+        # we refuse to paper over with a "LISTED#None" partition.
+        raise ValueError("A listed agent must carry a category.")
     return {
         "GSI5_PK": f"LISTED#{category}",
         "GSI5_SK": f"CREATED#{created_at}",

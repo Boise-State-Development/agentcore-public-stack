@@ -661,3 +661,101 @@ class TestListingsRowReportsTheLiveVersion:
             resp = TestClient(app).get("/admin/agents/listings")
 
         assert "drift" not in resp.json()["listings"][0]
+
+
+class TestWithdrawalDecision:
+    """§5.1 — withdrawal is a request an admin acts on, in the existing queue."""
+
+    def test_granting_takes_it_private_and_off_the_shelf(self, app, _no_writes):
+        with _loaded(
+            _make_assistant(listing=_listing("withdrawal_requested", publishedVersion=2))
+        ):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/withdrawal", json={"decision": "grant"}
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "private"
+        written = _no_writes.call_args.args[1]
+        assert written.published_version is None
+        assert _no_writes.set_version_index.await_args.args[1:] == (2, None)
+
+    def test_declining_restores_nothing_because_nothing_was_undone(self, app, _no_writes):
+        """The payoff of leaving the index alone while the request was pending.
+
+        A decline is a plain state change: no key to re-write, no version to re-promote. If
+        this ever needs to restore something, ``withdrawal_requested`` has stopped being a
+        live state and the guarantee in §5.1 has quietly broken.
+        """
+        with _loaded(
+            _make_assistant(listing=_listing("withdrawal_requested", publishedVersion=2))
+        ):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/withdrawal",
+                json={"decision": "decline", "note": "Still needed by Advising."},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "published"
+        assert _no_writes.call_args.args[1].published_version == 2
+        _no_writes.set_version_index.assert_not_awaited()
+
+    def test_the_decline_reason_reaches_the_author(self, app, _no_writes):
+        with _loaded(_make_assistant(listing=_listing("withdrawal_requested", publishedVersion=2))):
+            TestClient(app).post(
+                "/admin/agents/ast-001/withdrawal",
+                json={"decision": "decline", "note": "Still needed by Advising."},
+            )
+
+        assert _no_writes.call_args.args[1].review_note == "Still needed by Advising."
+
+    @pytest.mark.parametrize("state", ["published", "in_review", "private", "taken_down"])
+    def test_deciding_without_a_pending_request_is_refused(self, app, _no_writes, state):
+        with _loaded(_make_assistant(listing=_listing(state))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/withdrawal", json={"decision": "grant"}
+            )
+
+        assert resp.status_code == 400
+        assert "no pending withdrawal" in resp.json()["detail"].lower()
+        _no_writes.assert_not_awaited()
+
+    def test_an_unknown_decision_is_rejected_at_the_boundary(self, app, _no_writes):
+        """``grant``/``decline``, not ``approve`` — "approve" means "publish" everywhere else."""
+        with _loaded(_make_assistant(listing=_listing("withdrawal_requested"))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/withdrawal", json={"decision": "approve"}
+            )
+
+        assert resp.status_code == 422
+
+
+class TestReviewQueueIncludesWithdrawalRequests:
+    """One queue, not two (§5.1) — a second surface is one an admin forgets exists."""
+
+    def _rows(self, app, *states):
+        rows = [
+            {
+                "PK": f"AST#ast-{i}",
+                **_make_assistant(
+                    assistantId=f"ast-{i}", listing=_listing(state)
+                ).model_dump(by_alias=True, exclude_none=True),
+            }
+            for i, state in enumerate(states)
+        ]
+        with patch(
+            f"{SERVICE_MODULE}.list_by_state", new_callable=AsyncMock, return_value=rows
+        ), patch(f"{SERVICE_MODULE}.list_publishers", new_callable=AsyncMock, return_value=[]):
+            return TestClient(app).get("/admin/agents/submissions").json()
+
+    def test_the_queue_shows_submissions_and_withdrawal_requests(self, app):
+        body = self._rows(app, "in_review", "withdrawal_requested", "published")
+        assert sorted(r["state"] for r in body["listings"]) == [
+            "in_review",
+            "withdrawal_requested",
+        ]
+
+    def test_the_nav_badge_counts_both(self, app):
+        """An admin who only sees submissions in the badge never learns a request is waiting."""
+        body = self._rows(app, "in_review", "withdrawal_requested", "published", "private")
+        assert body["pendingCount"] == 2

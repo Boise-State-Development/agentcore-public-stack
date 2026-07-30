@@ -861,22 +861,84 @@ async def _list_user_assistants_cloud(
         return [], None
 
 
+class AssistantListedError(Exception):
+    """A hard delete refused because the Agent carries a marketplace listing (§5.2).
+
+    Separate from returning ``False`` (which means "not found / not yours") because the
+    caller has to tell these apart: one is a 404, the other is a 409 whose message names the
+    way forward.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+async def assert_deletable(assistant_id: str, owner_id: str) -> None:
+    """Raise ``AssistantListedError`` if this Agent's listing forbids deletion (§5.2).
+
+    Exists so a caller that does destructive work *before* the record delete can refuse
+    up front. ``/assistants/{id}`` soft-deletes documents and removes sync policies first,
+    so discovering the refusal at the record write would leave the Agent gutted and still
+    in the store — worse than either outcome on its own.
+
+    Silent when the Agent is missing or not the caller's: that is the delete path's own 404,
+    and pre-empting it here would turn "not found" into "not deletable".
+    """
+    existing = await get_assistant(assistant_id, owner_id)
+    if existing:
+        _assert_listing_allows_delete(existing)
+
+
+def _assert_listing_allows_delete(existing) -> None:
+    """The §5.2 rule itself, so the guard and the delete cannot disagree."""
+    listing = getattr(existing, "listing", None)
+    state = getattr(listing, "state", None) if listing else None
+    if state is None or state == "private":
+        return
+    # The message names the path forward rather than just refusing — an author who is told
+    # "no" without being told "do this instead" files a ticket.
+    nudge = (
+        "Request withdrawal first, then delete it once an admin has removed it from the store."
+        if state in ("published", "withdrawal_requested")
+        else "Take it back to private first, then delete it."
+    )
+    raise AssistantListedError(
+        f"This agent can't be deleted while it has a marketplace listing ({state}). {nudge}"
+    )
+
+
 async def delete_assistant(assistant_id: str, owner_id: str) -> bool:
     """
     Delete an assistant permanently (hard delete)
+
+    ⚠️ **Refused while a listing exists** (version-snapshots §5.2). Ownership alone used to
+    be enough, so an author could hard-delete an approved Agent straight out of the store —
+    the same unilateral removal that ``withdrawal_requested`` exists to stop, except
+    irreversible and taking the review history with it.
+
+    ``taken_down`` is covered deliberately: an author must not be able to delete their way
+    out of a takedown record. So is ``withdrawal_requested`` — a pending request is not a
+    granted one. Only ``private`` (or no listing at all) may be deleted, which is reachable
+    from every other state through the normal paths.
 
     Args:
         assistant_id: Assistant identifier
         owner_id: User identifier (for ownership verification)
 
     Returns:
-        True if deleted successfully, False otherwise
+        True if deleted successfully, False if not found or not owned
+
+    Raises:
+        AssistantListedError: the Agent has a listing that is not ``private``
     """
     # Verify ownership first
     existing = await get_assistant(assistant_id, owner_id)
 
     if not existing:
         return False
+
+    _assert_listing_allows_delete(existing)
 
     assistants_table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
     if not assistants_table:

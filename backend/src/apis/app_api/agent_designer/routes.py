@@ -64,6 +64,7 @@ from apis.shared.assistants.service import (
     assistant_exists,
     create_assistant,
     create_assistant_draft,
+    AssistantListedError,
     delete_assistant,
     get_assistant_with_access_check,
     list_assistant_shares,
@@ -478,6 +479,10 @@ async def delete_agent_endpoint(agent_id: str, current_user: User = Depends(requ
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
     except HTTPException:
         raise
+    except AssistantListedError as e:
+        # 409, not 400: the request is well-formed and the caller is allowed — the Agent is
+        # simply in a state that forbids it, and the message says how to change that.
+        raise HTTPException(status_code=409, detail=e.message)
     except Exception as e:
         logger.error(f"Error deleting agent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete agent: {str(e)}")

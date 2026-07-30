@@ -523,10 +523,21 @@ class TestSubmit:
 
 # ── withdraw ─────────────────────────────────────────────────────────────────────────
 class TestWithdraw:
-    def test_owner_unpublishes_back_to_private(self, app, make_user, _no_writes):
+    """One endpoint, two acts — the listing state decides which (§5.1)."""
+
+    def test_withdrawing_a_live_listing_becomes_a_request(self, app, make_user, _no_writes):
+        """The author asks; an admin decides. This used to go straight to ``private``.
+
+        That was the side door around the review queue: D2 makes publication stop for a
+        human, and un-publication did not — so an author could pull an approved Agent out
+        from under everyone who pinned it, with no admin ever seeing it.
+        """
         assistant = _make_assistant(
             listing=AgentListing(
-                state="published", category="Teaching", publisherId="user-user-001"
+                state="published",
+                category="Teaching",
+                publisherId="user-user-001",
+                publishedVersion=3,
             )
         )
         mock_auth_user(app, make_user())
@@ -534,7 +545,60 @@ class TestWithdraw:
             resp = TestClient(app).delete("/agents/ast-001/listing")
 
         assert resp.status_code == 200
+        assert resp.json()["state"] == "withdrawal_requested"
+        assert resp.json()["withdrawalRequestedAt"]
+
+    def test_a_pending_request_stays_on_the_shelf(self, app, make_user, _no_writes):
+        """⚠️ The load-bearing half. Asking must not itself unpublish anything.
+
+        If the request cleared the index or the pointer, the author would have unilaterally
+        delisted it just by asking — and a declined request would need the shelf rebuilt.
+        """
+        assistant = _make_assistant(
+            listing=AgentListing(
+                state="published",
+                category="Teaching",
+                publisherId="user-user-001",
+                publishedVersion=3,
+            )
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            TestClient(app).delete("/agents/ast-001/listing")
+
+        written = _no_writes.call_args.args[1]
+        assert written.published_version == 3, "asking to withdraw must not unpublish"
+        _no_writes.set_version_index.assert_not_awaited()
+
+    @pytest.mark.parametrize("state", ["in_review", "changes_requested"])
+    def test_withdrawing_a_pending_submission_is_immediate(
+        self, app, make_user, _no_writes, state
+    ):
+        """Nothing is on the shelf yet, so this stays the author's own call."""
+        assistant = _make_assistant(
+            listing=AgentListing(state=state, category="Teaching", publisherId="user-user-001")
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).delete("/agents/ast-001/listing")
+
+        assert resp.status_code == 200
         assert resp.json()["state"] == "private"
+
+    def test_a_second_request_on_an_already_requested_listing_is_refused(
+        self, app, make_user, _no_writes
+    ):
+        """``withdrawal_requested → withdrawal_requested`` is not an edge; nothing self-loops."""
+        assistant = _make_assistant(
+            listing=AgentListing(
+                state="withdrawal_requested", category="Teaching", publisherId="user-user-001"
+            )
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).delete("/agents/ast-001/listing")
+
+        assert resp.status_code == 400
 
     def test_withdrawing_an_unsubmitted_agent_is_404(self, app, make_user, _no_writes):
         mock_auth_user(app, make_user())

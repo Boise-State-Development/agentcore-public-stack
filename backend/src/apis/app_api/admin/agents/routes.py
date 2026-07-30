@@ -22,6 +22,7 @@ from apis.app_api.agent_designer.services.listing_service import (
     list_admin_listings,
     patch_listing_presentation,
     review_listing,
+    decide_withdrawal,
     takedown_listing,
 )
 from apis.shared.assistants.categories import (
@@ -61,6 +62,7 @@ from apis.shared.assistants.models import (
     ReviewListingRequest,
     StoreFrontUpdateRequest,
     TakedownRequest,
+    WithdrawalDecisionRequest,
 )
 from apis.shared.assistants.storefront import (
     MAX_FEATURED,
@@ -103,9 +105,13 @@ async def require_marketplace_admin(admin: User = Depends(require_marketplace_sc
 # ── review queue + listings (D10) ────────────────────────────────────────────────────
 @router.get("/submissions", response_model=AdminListingsResponse)
 async def list_submissions(admin: User = Depends(require_marketplace_admin)):
-    """The Review queue: every submission awaiting a decision (D2)."""
+    """The Review queue: everything awaiting an admin decision (D2, §5.1).
+
+    Submissions *and* withdrawal requests. One queue rather than two surfaces — §5.1 is
+    explicit about that, and a second queue is one an admin has to remember exists.
+    """
     try:
-        rows, pending = await list_admin_listings(state="in_review")
+        rows, pending = await list_admin_listings(state="pending")
         return AdminListingsResponse(listings=rows, pending_count=pending)
     except Exception as e:
         logger.error(f"Error listing agent submissions: {e}", exc_info=True)
@@ -178,6 +184,34 @@ async def takedown_agent_listing(
     except Exception as e:
         logger.error(f"Error taking down agent listing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to take down listing: {str(e)}")
+
+
+@router.post("/{agent_id}/withdrawal", response_model=AgentListing)
+async def decide_agent_withdrawal(
+    agent_id: str,
+    request: WithdrawalDecisionRequest,
+    admin: User = Depends(require_marketplace_admin),
+):
+    """Grant or decline an author's request to pull a live listing (§5.1).
+
+    Deliberately **not** folded into ``POST /{agent_id}/review``. That endpoint answers "may
+    this go into the store?"; this one answers "may this come out?", and the two decisions
+    have different inputs, different notes and opposite defaults. One endpoint with four
+    decision values would make an accidental unpublication a one-character mistake.
+
+    ``grant`` → ``private`` and off the shelf. ``decline`` → back to ``published``, which
+    restores nothing because the listing never stopped being live while the request was
+    pending — that is the point of leaving the store index alone in ``withdrawal_requested``.
+    """
+    try:
+        return await decide_withdrawal(
+            agent_id, admin, decision=request.decision, note=request.note
+        )
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error deciding agent withdrawal: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to decide withdrawal: {str(e)}")
 
 
 @router.patch("/{agent_id}/listing", response_model=AgentListing)

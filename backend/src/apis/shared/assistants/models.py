@@ -12,7 +12,16 @@ BindingKind = Literal["knowledge_base", "tool", "skill", "memory_space"]
 
 # Agent Marketplace Phase 1 (D2): the listing lifecycle. The transition table and the
 # sparse-index key derivation live in ``assistants.listing`` — this is only the wire type.
-ListingState = Literal["private", "in_review", "published", "changes_requested", "taken_down"]
+# ``withdrawal_requested`` is a *live* state: the author has asked to pull the listing and an
+# admin has not yet agreed, so it is still on the shelf (see ``listing.LISTED_STATES``).
+ListingState = Literal[
+    "private",
+    "in_review",
+    "published",
+    "changes_requested",
+    "taken_down",
+    "withdrawal_requested",
+]
 PublisherKind = Literal["institution", "department", "individual"]
 
 # Agent Marketplace Phase 8 (D15): problem reports. A small fixed set so the queue can be
@@ -147,6 +156,15 @@ class AgentListing(BaseModel):
     )
     admin_edits: List[AdminEdit] = Field(
         default_factory=list, alias="adminEdits", description="Append-only log of admin presentation edits (D13)"
+    )
+    withdrawal_requested_at: Optional[str] = Field(
+        None,
+        alias="withdrawalRequestedAt",
+        description=(
+            "ISO 8601 when the author asked to pull a live listing (§5.1). Kept after the "
+            "decision rather than cleared, so the author's card can say what happened and "
+            "when — a request that vanishes on decline reads as though it was never made."
+        ),
     )
     submitted_version: Optional[int] = Field(
         None,
@@ -747,6 +765,27 @@ class ReviewListingRequest(BaseModel):
     category: Optional[str] = Field(None, description="Optionally recategorize at approval (D12/D13)")
     publisher_id: Optional[str] = Field(
         None, alias="publisherId", description="Optionally reattribute at approval — approval makes it authoritative (D12)"
+    )
+
+
+class WithdrawalDecisionRequest(BaseModel):
+    """Admin grants or declines an author's withdrawal request (§5.1).
+
+    ``grant``/``decline`` rather than ``approve``/``reject``: "approve" already means
+    "publish this" everywhere else in this surface, and an admin approving a *withdrawal*
+    reads dangerously like approving the listing.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    decision: Literal["grant", "decline"] = Field(..., description="Grant the withdrawal, or decline it")
+    note: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description=(
+            "Reason, rendered on the author's card. They asked for something — a decline "
+            "without a reason is the thing that generates a follow-up email."
+        ),
     )
 
 

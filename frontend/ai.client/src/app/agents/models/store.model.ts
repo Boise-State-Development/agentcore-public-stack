@@ -27,7 +27,15 @@ export type ListingState =
   | 'in_review'
   | 'published'
   | 'changes_requested'
-  | 'taken_down';
+  | 'taken_down'
+  /**
+   * The author has asked to pull a live listing and an admin has not yet decided (§5.1).
+   *
+   * ⚠️ Still **live in the store**. Dropping it off the shelf the moment the author asked
+   * would hand them the unilateral delisting this state exists to prevent, so it reads as a
+   * pending request rather than as a removal.
+   */
+  | 'withdrawal_requested';
 
 /** One admin edit to a listing's presentation, surfaced back to the author (D13). */
 export interface AdminEdit {
@@ -44,6 +52,7 @@ export const LISTING_STATE_LABELS: Record<ListingState, string> = {
   published: 'Published',
   changes_requested: 'Changes requested',
   taken_down: 'Taken down',
+  withdrawal_requested: 'Withdrawal requested',
 };
 
 /**
@@ -56,6 +65,9 @@ export const LISTING_STATE_CLASSES: Record<ListingState, string> = {
   published: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
   changes_requested: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
   taken_down: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
+  // Amber like in_review, not rose: this is work waiting on an admin, not a problem with
+  // the listing — and it is still published while it waits.
+  withdrawal_requested: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
 };
 
 /**
