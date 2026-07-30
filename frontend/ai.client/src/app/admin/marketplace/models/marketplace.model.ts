@@ -90,6 +90,15 @@ export interface AdminListingRow {
   state: ListingState;
   usageCount: number;
   submittedAt?: string;
+  /**
+   * Set only while a withdrawal request is pending.
+   *
+   * The queue shows submissions and withdrawal requests together (§5.1), and this is what
+   * tells them apart. Without it a request renders as "submitted <the original date>" and
+   * reads as an ordinary submission — so the admin answers "should this be published?"
+   * about a listing whose author asked to take it down.
+   */
+  withdrawalRequestedAt?: string;
   reviewedAt?: string;
   reviewNote?: string;
   updatedAt: string;
@@ -126,6 +135,19 @@ export interface ReviewListingRequest {
 
 export interface TakedownRequest {
   reason: string;
+}
+
+/**
+ * An admin's answer to an author's request to pull a live listing (§5.1).
+ *
+ * `grant`/`decline`, never `approve`/`reject`: "approve" means "publish this" everywhere
+ * else on this surface, and approving a *withdrawal* reads dangerously like approving the
+ * listing. Its own endpoint for the same reason — one endpoint with four decision values
+ * would make an accidental unpublication a one-character mistake.
+ */
+export interface WithdrawalDecisionRequest {
+  decision: 'grant' | 'decline';
+  note?: string;
 }
 
 /**

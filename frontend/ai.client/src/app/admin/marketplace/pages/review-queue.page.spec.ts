@@ -5,6 +5,7 @@ import { signal } from '@angular/core';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import { ReviewQueuePage } from './review-queue.page';
 import { AdminListingRow } from '../models/marketplace.model';
+import { of } from 'rxjs';
 import { ListingReachability } from '../../../agents/models/reachability';
 
 /**
@@ -91,5 +92,129 @@ describe('ReviewQueuePage — reachability warning', () => {
     const approveBtn = Array.from(approve).find((b) => b.textContent?.includes('Approve'));
     expect(approveBtn).toBeTruthy();
     expect(approveBtn!.hasAttribute('disabled')).toBe(false);
+  });
+});
+
+/**
+ * Withdrawal requests in the review queue (§5.1).
+ *
+ * They share the queue with submissions, and before this they shared its *controls* too —
+ * so an author asking for their listing to come down was answered with Approve/Request
+ * changes. "Approve" then routed to `review`, which walks `withdrawal_requested →
+ * published`: the request was silently declined and the admin was told nothing.
+ *
+ * These assert the row is legible as a different question and that it reaches the endpoint
+ * built for it.
+ */
+describe('ReviewQueuePage — withdrawal requests', () => {
+  let mockService: any;
+  let mockDialog: { open: ReturnType<typeof vi.fn> };
+
+  function withdrawalRow(overrides: Partial<AdminListingRow> = {}): AdminListingRow {
+    return {
+      agentId: 'ast-002',
+      name: 'Policy Lookup',
+      ownerName: 'Ada Author',
+      category: 'Administration',
+      state: 'withdrawal_requested',
+      usageCount: 4,
+      submittedAt: '2026-07-01T00:00:00Z',
+      withdrawalRequestedAt: '2026-07-22T00:00:00Z',
+      updatedAt: '2026-07-22T00:00:00Z',
+      reachability: 'everyone',
+      adminEdits: [],
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    mockService = {
+      error: signal<string | null>(null),
+      loadSubmissions: vi.fn().mockResolvedValue([withdrawalRow()]),
+      review: vi.fn().mockResolvedValue(undefined),
+      decideWithdrawal: vi.fn().mockResolvedValue(undefined),
+    };
+    mockDialog = { open: vi.fn().mockReturnValue({ closed: of('') }) };
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: AdminMarketplaceService, useValue: mockService },
+        { provide: Dialog, useValue: mockDialog },
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(): Promise<ComponentFixture<ReviewQueuePage>> {
+    const fixture = TestBed.createComponent(ReviewQueuePage);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  function button(fixture: ComponentFixture<unknown>, label: string): HTMLButtonElement {
+    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button')).find(
+      (b) => b.textContent?.includes(label),
+    ) as HTMLButtonElement;
+  }
+
+  it('labels the row as a withdrawal request rather than a submission', async () => {
+    const fixture = await render();
+    const rendered = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(rendered).toContain('Withdrawal requested');
+    expect(rendered).toMatch(/asked to pull it/i);
+    // The submission framing must be gone, or the admin answers the wrong question.
+    expect(rendered).not.toMatch(/· submitted/i);
+  });
+
+  it('offers grant and decline, never the submission verbs', async () => {
+    const fixture = await render();
+    expect(button(fixture, 'Take it down')).toBeTruthy();
+    expect(button(fixture, 'Keep published')).toBeTruthy();
+    expect(button(fixture, 'Approve')).toBeFalsy();
+    expect(button(fixture, 'Request changes')).toBeFalsy();
+  });
+
+  it('grants through the withdrawal endpoint, not through review', async () => {
+    const fixture = await render();
+    button(fixture, 'Take it down').click();
+    await fixture.whenStable();
+
+    expect(mockService.decideWithdrawal).toHaveBeenCalledWith('ast-002', {
+      decision: 'grant',
+      note: undefined,
+    });
+    // The bug this replaced: `review` with `approve` re-published over the request.
+    expect(mockService.review).not.toHaveBeenCalled();
+  });
+
+  it('declines with the admin note attached', async () => {
+    mockDialog.open.mockReturnValue({ closed: of('Still needed for fall registration.') });
+    const fixture = await render();
+    button(fixture, 'Keep published').click();
+    await fixture.whenStable();
+
+    expect(mockService.decideWithdrawal).toHaveBeenCalledWith('ast-002', {
+      decision: 'decline',
+      note: 'Still needed for fall registration.',
+    });
+  });
+
+  it('does nothing when the confirmation is dismissed', async () => {
+    mockDialog.open.mockReturnValue({ closed: of(undefined) });
+    const fixture = await render();
+    button(fixture, 'Take it down').click();
+    await fixture.whenStable();
+
+    expect(mockService.decideWithdrawal).not.toHaveBeenCalled();
+  });
+
+  it('tells the admin the listing is still live while they decide', async () => {
+    // The one fact that makes the decision make sense: a request is not a removal, so
+    // declining restores nothing and granting is what actually takes it down.
+    const fixture = await render();
+    expect((fixture.nativeElement as HTMLElement).textContent).toMatch(/still live in the store/i);
   });
 });

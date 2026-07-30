@@ -76,6 +76,7 @@ from apis.shared.assistants.publishers import (
     get_publisher,
     list_eligibility,
     list_publishers,
+    publisher_in_use,
     put_publisher,
     set_eligibility,
 )
@@ -588,15 +589,32 @@ async def update_publisher_profile(
 async def delete_publisher_profile(
     publisher_id: str, admin: User = Depends(require_marketplace_admin)
 ):
-    """Delete a publisher profile and its eligibility items.
+    """Delete a publisher profile, but only while nothing is attributed to it.
 
-    Listings already attributed to it keep the id; the admin Listings table renders them
-    without a resolved publisher so the gap is visible and can be reassigned. Deleting an
-    attribution must never change who can run an Agent (D12).
+    Same rule and same wording as categories: a referenced profile cannot be deleted,
+    because listings store the *id* and would be left pointing at nothing. The admin
+    Listings table renders those as "Unattributed", and there is no surface for putting the
+    attribution back — so the delete is not a visible gap to repair, it is silent data loss
+    across every listing that named it, live ones included.
+
+    Disable instead. That drops it from the submit picker while existing attributions keep
+    rendering, which is nearly always what was meant.
+
+    Deleting an attribution never changes who can run an Agent — publisher is display only
+    (D12). This guard is about not stranding the display, not about access.
     """
     try:
         if not await get_publisher(publisher_id):
             raise HTTPException(status_code=404, detail=f"Publisher not found: {publisher_id}")
+        if await publisher_in_use(publisher_id):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Listings are still attributed to this publisher. Disable it instead — "
+                    "that removes it from the submit picker while the listings already "
+                    "credited to it keep rendering."
+                ),
+            )
         await delete_publisher(publisher_id)
     except HTTPException:
         raise

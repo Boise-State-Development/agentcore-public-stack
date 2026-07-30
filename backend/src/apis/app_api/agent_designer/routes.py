@@ -60,6 +60,10 @@ from apis.shared.assistants.models import (
     UpdateAssistantRequest,
     UpdateSharePermissionRequest,
 )
+from apis.shared.assistants.version_resolution import (
+    AgentVersionUnavailableError,
+    resolve_display_agent,
+)
 from apis.shared.assistants.service import (
     assistant_exists,
     create_assistant,
@@ -358,11 +362,16 @@ async def list_bindable_endpoint(
 async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require_agents_enabled)):
     """Retrieve an Agent by id with visibility-based access control.
 
-    This is the marketplace **detail read** (Phase 3). Two things beyond Phase 1:
+    This is the marketplace **detail read** (Phase 3). Three things beyond Phase 1:
 
     * ``instructions`` is gated to owner/editor — see ``INSTRUCTIONS_PERMISSIONS``.
     * ``capabilities`` + ``modelLabel`` are resolved, so the detail page can say what the
       Agent reaches by *name* rather than making the SPA dereference binding refs.
+    * A published Agent is served from its **approved snapshot** to everyone who cannot edit
+      it (§4). This is the page a store user reads before deciding to open something, so it
+      has to describe the configuration that will actually run — otherwise the author's
+      unreviewed draft supplies the name, the summary and, through ``bindings``, the
+      capability list, while invocation quietly runs the approved version instead.
 
     Capability resolution is best-effort: it is presentation, and a catalog hiccup should
     not turn a readable Agent into a 500. The list route does not resolve them at all.
@@ -375,6 +384,24 @@ async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require
         )
         if not assistant:
             raise HTTPException(status_code=403, detail="Access denied: you do not have permission to access this agent")
+
+        # Snapshot before anything reads ``assistant``, so ``capabilities`` and the listing
+        # display below resolve against the same configuration the response describes.
+        # ``can_edit`` is the instructions gate: whoever may edit the draft must be shown the
+        # draft, because this endpoint is also what loads the Agent Designer's form.
+        try:
+            assistant, _ = await resolve_display_agent(
+                assistant, can_edit=permission in INSTRUCTIONS_PERMISSIONS
+            )
+        except AgentVersionUnavailableError as unavailable:
+            logger.error(f"Published version unavailable for detail read: {unavailable}")
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "This agent's published version could not be loaded. Please try again, "
+                    "or contact an administrator if it persists."
+                ),
+            ) from unavailable
 
         response = _agent_response(assistant, permission=permission)
         try:

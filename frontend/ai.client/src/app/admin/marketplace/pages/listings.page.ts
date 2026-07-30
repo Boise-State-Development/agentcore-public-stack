@@ -26,6 +26,11 @@ import {
   TakedownDialogData,
   TakedownDialogResult,
 } from '../components/takedown-dialog.component';
+import {
+  RequestChangesDialogComponent,
+  RequestChangesDialogData,
+  RequestChangesDialogResult,
+} from '../components/request-changes-dialog.component';
 
 /**
  * Listings — every agent that has ever been submitted (D10).
@@ -199,14 +204,29 @@ import {
                     </td>
                     <td class="px-4 py-3 text-right">
                       @if (row.state === 'published') {
-                        <button
-                          type="button"
-                          [disabled]="busyId() === row.agentId"
-                          (click)="takedown(row)"
-                          class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-rose-700 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-rose-400 dark:hover:bg-gray-700"
-                        >
-                          Take down
-                        </button>
+                        <div class="flex justify-end gap-2">
+                          <!-- The gentler half of the pair, and the only route to a
+                               resubmission that still has a published version to diff
+                               against: every other way back (take down, granted withdrawal)
+                               clears the published-version pointer first, so the review
+                               diff has nothing to compare against without this. -->
+                          <button
+                            type="button"
+                            [disabled]="busyId() === row.agentId"
+                            (click)="requestChanges(row)"
+                            class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                          >
+                            Request changes
+                          </button>
+                          <button
+                            type="button"
+                            [disabled]="busyId() === row.agentId"
+                            (click)="takedown(row)"
+                            class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-rose-700 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-rose-400 dark:hover:bg-gray-700"
+                          >
+                            Take down
+                          </button>
+                        </div>
                       }
                     </td>
                   </tr>
@@ -260,6 +280,38 @@ export class MarketplaceListingsPage implements OnInit {
       this.error.set(this.service.error() ?? 'Failed to load listings.');
     } finally {
       this.loading.set(false);
+    }
+  }
+
+  /**
+   * Send a *live* listing back to its author with a note, without taking it down.
+   *
+   * The listing keeps serving its approved version while the author revises — this is
+   * feedback, not a delisting, and `takedown` is the button for the other intent.
+   *
+   * It is also the only transition that leaves `publishedVersion` intact, which makes it
+   * the only way a resubmission ever arrives with something to diff against. Without this
+   * control the review diff renders "first submission" on every submission an agent ever
+   * makes, however many versions it has.
+   */
+  async requestChanges(row: AdminListingRow): Promise<void> {
+    const ref = this.dialog.open<RequestChangesDialogResult, RequestChangesDialogData>(
+      RequestChangesDialogComponent,
+      { data: { listing: row } },
+    );
+    const note = await firstValueFrom(ref.closed);
+    if (!note) return;
+
+    this.busyId.set(row.agentId);
+    this.error.set(null);
+    try {
+      await this.service.review(row.agentId, { decision: 'request_changes', note });
+      await this.reload();
+    } catch (err) {
+      const detail = (err as { error?: { detail?: unknown } })?.error?.detail;
+      this.error.set(typeof detail === 'string' ? detail : 'Failed to record the decision.');
+    } finally {
+      this.busyId.set(null);
     }
   }
 

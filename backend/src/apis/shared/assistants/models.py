@@ -928,6 +928,16 @@ class AdminListingRow(BaseModel):
     state: ListingState = Field(..., description="Publication state")
     usage_count: int = Field(0, alias="usageCount", description="Chats — admin reporting only, never shelf furniture (D4)")
     submitted_at: Optional[str] = Field(None, alias="submittedAt", description="ISO 8601 submission timestamp")
+    withdrawal_requested_at: Optional[str] = Field(
+        None,
+        alias="withdrawalRequestedAt",
+        description=(
+            "ISO 8601 timestamp of a pending withdrawal request. The queue shows submissions "
+            "and withdrawal requests together (§5.1), and without this the two are "
+            "indistinguishable: a request would read as 'submitted <the original date>' and "
+            "an admin would answer the wrong question about it."
+        ),
+    )
     reviewed_at: Optional[str] = Field(None, alias="reviewedAt", description="ISO 8601 timestamp of the last review")
     review_note: Optional[str] = Field(None, alias="reviewNote", description="Most recent reviewer note")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 of the last write to the Agent record")

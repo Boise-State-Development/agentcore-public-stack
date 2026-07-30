@@ -327,3 +327,123 @@ class TestApprovedInstructionsHashIsGated:
         resp = _get_agent(app, "viewer", agent=self._published())
 
         assert "deadbeef" not in resp.text
+
+
+# ── the detail read serves the approved snapshot (§4) ────────────────────────────────
+class TestDetailReadServesTheSnapshot:
+    """The store detail page must describe the Agent that will actually run.
+
+    Before this, ``GET /agents/{id}`` served the live record to everyone. A published Agent
+    whose author kept editing therefore had a store tile rendered from the approved snapshot
+    and a detail page rendered from the unreviewed draft — different name, different summary,
+    and ``capabilities`` resolved from the draft's bindings, so the page could advertise a
+    tool the published version does not have. Invocation ran the snapshot regardless, which
+    is what made it a lie rather than a preview.
+    """
+
+    def _published(self, **overrides):
+        listing = {
+            "state": "published",
+            "category": "Administration",
+            "publisherId": "pub-registrar",
+            "submittedVersion": 1,
+            "publishedVersion": 1,
+        }
+        listing.update(overrides.pop("listing", {}))
+        return _make_assistant(listing=listing, **overrides)
+
+    def _version(self):
+        from apis.shared.assistants.models import AgentVersion
+
+        return AgentVersion.model_validate(
+            {
+                "agentId": "ast-001",
+                "version": 1,
+                "name": "Approved Name",
+                "description": "Approved summary",
+                "instructions": "APPROVED PROMPT",
+                "tagline": "Approved tagline",
+                "bindings": [{"kind": "tool", "ref": "calculator"}],
+                "category": "Administration",
+                "publisherId": "pub-registrar",
+            }
+        )
+
+    def _get(self, app, permission, version):
+        with patch(
+            f"{ROUTES_MODULE}.assistant_exists", new_callable=AsyncMock, return_value=True
+        ), patch(
+            f"{ROUTES_MODULE}.get_assistant_with_access_check",
+            new_callable=AsyncMock,
+            return_value=(self._published(name="DRAFT NAME"), permission),
+        ), patch(
+            "apis.shared.assistants.version_resolution.get_version",
+            new_callable=AsyncMock,
+            return_value=version,
+        ), patch(
+            f"{ROUTES_MODULE}.resolve_capabilities",
+            new_callable=AsyncMock,
+            return_value=([], None),
+        ):
+            return TestClient(app).get("/agents/ast-001")
+
+    def test_a_viewer_sees_the_approved_snapshot_not_the_draft(self, app, make_user, _flags_on):
+        mock_auth_user(app, make_user())
+        resp = self._get(app, "viewer", self._version())
+
+        body = resp.json()
+        assert resp.status_code == 200
+        assert body["name"] == "Approved Name"
+        assert body["description"] == "Approved summary"
+        assert body["tagline"] == "Approved tagline"
+        # The snapshot's bindings, which is what `capabilities` is resolved from.
+        assert body["bindings"] == [{"kind": "tool", "ref": "calculator", "config": {}}]
+
+    @pytest.mark.parametrize("permission", ["owner", "editor"])
+    def test_whoever_may_edit_still_gets_the_draft(self, app, make_user, _flags_on, permission):
+        """⚠️ Editors too, unlike invocation.
+
+        The Agent Designer loads its form from this endpoint. Serving an editor the approved
+        snapshot would populate the form with someone else's published copy, and their next
+        save would silently revert the owner's draft. Invocation is owner-only for the
+        opposite reason — an editor *running* the draft would bypass review.
+        """
+        mock_auth_user(app, make_user())
+        resp = self._get(app, permission, self._version())
+
+        body = resp.json()
+        assert resp.status_code == 200
+        assert body["name"] == "DRAFT NAME"
+        assert body["instructions"] == "SECRET SYSTEM PROMPT"
+
+    def test_an_unpublished_agent_is_unaffected(self, app, make_user, _flags_on):
+        """The common case, and the one that must not change."""
+        mock_auth_user(app, make_user())
+        with patch(
+            f"{ROUTES_MODULE}.assistant_exists", new_callable=AsyncMock, return_value=True
+        ), patch(
+            f"{ROUTES_MODULE}.get_assistant_with_access_check",
+            new_callable=AsyncMock,
+            return_value=(_make_assistant(name="DRAFT NAME"), "viewer"),
+        ), patch(
+            f"{ROUTES_MODULE}.resolve_capabilities",
+            new_callable=AsyncMock,
+            return_value=([], None),
+        ):
+            resp = TestClient(app).get("/agents/ast-001")
+
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "DRAFT NAME"
+
+    def test_a_missing_snapshot_refuses_rather_than_falling_back(self, app, make_user, _flags_on):
+        """Same refusal as invocation, for the same reason.
+
+        Degrading to the draft would show unreviewed content precisely when something is
+        already wrong — and such an Agent has no store tile either, since the index is
+        sparse on the version row, so this is only reachable by direct link.
+        """
+        mock_auth_user(app, make_user())
+        resp = self._get(app, "viewer", None)
+
+        assert resp.status_code == 503
+        assert "published version could not be loaded" in resp.json()["detail"]

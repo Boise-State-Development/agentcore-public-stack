@@ -99,8 +99,32 @@ async def put_publisher(profile: PublisherProfile) -> PublisherProfile:
     return profile
 
 
+async def publisher_in_use(publisher_id: str) -> bool:
+    """Whether any agent's listing is still attributed to this publisher.
+
+    Guards delete, mirroring ``categories.category_in_use`` — same shape, same reason, and
+    a scan is right here for the same reason it is there: a human clicking a button, and
+    the alternative is a stranded reference nothing can render.
+
+    Listings store the publisher *id*, so deleting a profile that is still referenced does
+    not fail loudly — it silently unattributes every listing pointing at it, including live
+    published ones, which then render as "Unattributed" with no admin surface to repair
+    them. Disabling is the operation that was almost always meant.
+    """
+    from .listing_repository import list_by_state
+
+    return any(
+        (item.get("listing") or {}).get("publisherId") == publisher_id
+        for item in await list_by_state()
+    )
+
+
 async def delete_publisher(publisher_id: str) -> None:
-    """Delete a publisher profile and every eligibility item pointing at it."""
+    """Delete a publisher profile and every eligibility item pointing at it.
+
+    Callers must check ``publisher_in_use`` first; this does not re-check, so that the
+    refusal reads as one HTTP concern in the route rather than an exception type here.
+    """
     table = _table()
     table.delete_item(Key={"PK": _PARTITION, "SK": f"PUB#{publisher_id}"})
     for user_id in await list_eligibility(publisher_id):

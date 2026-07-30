@@ -222,7 +222,7 @@
                       {{ submitLabel(agent) }}
                     </button>
                   }
-                  @if (isOwner(agent) && isPublished(agent)) {
+                  @if (isOwner(agent) && isInStore(agent)) {
                     <button
                       type="button"
                       (click)="onViewInStore(agent)"
@@ -318,7 +318,7 @@
                       {{ submitLabel(agent) }}
                     </button>
                   }
-                  @if (isOwner(agent) && isPublished(agent)) {
+                  @if (isOwner(agent) && isInStore(agent)) {
                     <button
                       type="button"
                       (click)="onViewInStore(agent)"

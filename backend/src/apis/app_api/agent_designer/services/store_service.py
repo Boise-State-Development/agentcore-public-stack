@@ -22,7 +22,7 @@ from typing import List, Optional, Tuple
 
 from apis.shared.assistants.categories import ensure_seeded, list_categories
 from apis.shared.assistants.icons import icon_url
-from apis.shared.assistants.listing import is_listed
+from apis.shared.assistants.listing import is_on_shelf
 from apis.shared.assistants.listing_repository import batch_get_agents, query_store
 from apis.shared.assistants.models import (
     AgentCategory,
@@ -182,7 +182,11 @@ async def resolve_featured(
             unavailable.append(agent_id)
             continue
         listing = assistant.listing
-        if not listing or not is_listed(listing.state) or listing.published_version is None:
+        # ``is_on_shelf``, not ``is_listed``: the featured row must agree with browse about
+        # what is in the store. A published listing an admin sent back for changes keeps
+        # serving, and asking by state alone would drop it from the featured row while the
+        # category shelf still carried it — the same Agent present and absent on one page.
+        if not listing or not is_on_shelf(listing.state, listing.published_version):
             unavailable.append(agent_id)
             continue
         published.append((agent_id, listing.published_version))

@@ -21,6 +21,7 @@ import {
   ReviewListingRequest,
   RoleAgentPinsResponse,
   RoleAgentPinsUpdateRequest,
+  WithdrawalDecisionRequest,
 } from '../models/marketplace.model';
 
 interface PublishersResponse {
@@ -100,6 +101,18 @@ export class AdminMarketplaceService {
   /** Approve a submission, or return it to the author with a reason. */
   async review(agentId: string, request: ReviewListingRequest): Promise<void> {
     await firstValueFrom(this.http.post(`${this.baseUrl()}/${agentId}/review`, request));
+  }
+
+  /**
+   * Grant or decline an author's request to pull a live listing (§5.1).
+   *
+   * Deliberately not folded into `review`. That call answers "may this go into the store?";
+   * this one answers "may this come out?", and the two have opposite defaults — a
+   * withdrawal request routed through `review` with `approve` reads as agreeing with the
+   * author while actually re-publishing over their request.
+   */
+  async decideWithdrawal(agentId: string, request: WithdrawalDecisionRequest): Promise<void> {
+    await firstValueFrom(this.http.post(`${this.baseUrl()}/${agentId}/withdrawal`, request));
   }
 
   /**
