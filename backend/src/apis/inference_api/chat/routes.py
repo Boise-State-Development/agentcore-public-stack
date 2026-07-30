@@ -45,6 +45,14 @@ from apis.inference_api.chat.agent_binding_resolver import (
     resolve_agent_invocation,
 )
 from apis.shared.sessions.metadata import ensure_session_metadata_exists
+from apis.shared.tools.injected import (
+    ARTIFACT_TOOL_IDS,
+    EXCEL_SPREADSHEET_TOOL_IDS,
+    POWERPOINT_PRESENTATION_TOOL_IDS,
+    SPREADSHEET_TOOL_IDS,
+    WORD_DOCUMENT_TOOL_IDS,
+    WORKSPACE_TOOL_IDS,
+)
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 from .app_context_dispatch import (
@@ -383,9 +391,6 @@ async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enable
 # Spreadsheet Analysis Tool Injection
 # ============================================================
 
-SPREADSHEET_TOOL_IDS = {"list_spreadsheets", "analyze_spreadsheet"}
-
-
 def _build_spreadsheet_tools(
     enabled_tools: list | None,
     assistant_id: str | None,
@@ -415,9 +420,6 @@ def _build_spreadsheet_tools(
 # ============================================================
 # Artifact Authoring Tool Injection
 # ============================================================
-
-ARTIFACT_TOOL_IDS = {"create_artifact"}
-
 
 def _build_artifact_tools(
     enabled_tools: list | None,
@@ -450,9 +452,6 @@ def _build_artifact_tools(
 # ============================================================
 # Word Document Tool Injection
 # ============================================================
-
-WORD_DOCUMENT_TOOL_IDS = {"create_word_document"}
-
 
 def _build_word_document_tools(
     enabled_tools: list | None,
@@ -492,9 +491,6 @@ def _build_word_document_tools(
 # Workspace Tool Injection
 # ============================================================
 
-WORKSPACE_TOOL_IDS = {"workspace_files"}
-
-
 def _build_workspace_tools(
     enabled_tools: list | None,
     session_id: str,
@@ -532,9 +528,6 @@ def _build_workspace_tools(
 # ============================================================
 # Excel Spreadsheet Tool Injection
 # ============================================================
-
-EXCEL_SPREADSHEET_TOOL_IDS = {"create_excel_spreadsheet"}
-
 
 def _build_excel_spreadsheet_tools(
     enabled_tools: list | None,
@@ -576,9 +569,6 @@ def _build_excel_spreadsheet_tools(
 # ============================================================
 # PowerPoint Presentation Tool Injection
 # ============================================================
-
-POWERPOINT_PRESENTATION_TOOL_IDS = {"create_powerpoint_presentation"}
-
 
 def _build_powerpoint_presentation_tools(
     enabled_tools: list | None,

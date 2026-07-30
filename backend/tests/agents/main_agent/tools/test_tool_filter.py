@@ -4,9 +4,20 @@ Tests for ToolFilter — tool categorisation into local, gateway, and external M
 Requirements: 6.1–6.6
 """
 
+import logging
+
 import pytest
 
 from agents.main_agent.tools.tool_filter import ToolFilter, ToolFilterResult
+from apis.shared.tools.injected import (
+    ARTIFACT_TOOL_IDS,
+    EXCEL_SPREADSHEET_TOOL_IDS,
+    INJECTED_TOOL_IDS,
+    POWERPOINT_PRESENTATION_TOOL_IDS,
+    SPREADSHEET_TOOL_IDS,
+    WORD_DOCUMENT_TOOL_IDS,
+    WORKSPACE_TOOL_IDS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +183,7 @@ class TestGetStatistics:
             "local_tools": 0,
             "gateway_tools": 0,
             "external_mcp_tools": 0,
+            "injected_tools": 0,
             "unknown_tools": 0,
         }
 
@@ -201,3 +213,77 @@ class TestGetStatistics:
         assert stats["total_requested"] == 2
         assert stats["gateway_tools"] == 2
         assert stats["local_tools"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Context-bound (injected) tools — built per request by inference_api and
+# appended via extra_tools, so they are never in the registry. They are a
+# known tool class, not unknown ids: classifying them keeps the "unknown
+# tool" warning meaningful instead of firing thousands of times a day.
+# ---------------------------------------------------------------------------
+class TestInjectedTools:
+    """Ids owned by a per-request factory are recognised, not warned about."""
+
+    def test_injected_ids_are_not_local_or_gateway(self, tool_filter: ToolFilter):
+        result = tool_filter.filter_tools_extended(
+            ["analyze_spreadsheet", "list_spreadsheets", "create_artifact"]
+        )
+        # They are appended later, by BaseAgent, from extra_tools — the filter
+        # must neither resolve them nor route them to another source.
+        assert result.local_tools == []
+        assert result.gateway_tool_ids == []
+        assert result.external_mcp_tool_ids == []
+
+    def test_injected_ids_do_not_warn(self, tool_filter: ToolFilter, caplog):
+        with caplog.at_level(logging.WARNING, logger="agents.main_agent.tools.tool_filter"):
+            tool_filter.filter_tools_extended(sorted(INJECTED_TOOL_IDS))
+        assert caplog.records == []
+
+    def test_injected_ids_do_not_warn_in_filter_tools(self, tool_filter: ToolFilter, caplog):
+        with caplog.at_level(logging.WARNING, logger="agents.main_agent.tools.tool_filter"):
+            local_tools, gateway_ids = tool_filter.filter_tools(sorted(INJECTED_TOOL_IDS))
+        assert caplog.records == []
+        assert local_tools == []
+        assert gateway_ids == []
+
+    def test_genuinely_unknown_id_still_warns(self, tool_filter: ToolFilter, caplog):
+        """The signal this warning exists for: a stale id pinned in a saved
+        session's enabledTools must still surface."""
+        with caplog.at_level(logging.WARNING, logger="agents.main_agent.tools.tool_filter"):
+            tool_filter.filter_tools_extended(["analyze_spreadsheet", "deleted_tool_x"])
+        assert len(caplog.records) == 1
+        assert "deleted_tool_x" in caplog.records[0].getMessage()
+
+    def test_statistics_count_injected_separately(self, tool_filter: ToolFilter):
+        stats = tool_filter.get_statistics(
+            ["calculator", "analyze_spreadsheet", "workspace_files", "unknown_x"]
+        )
+        assert stats["local_tools"] == 1
+        assert stats["injected_tools"] == 2
+        assert stats["unknown_tools"] == 1
+
+    def test_registry_wins_over_injected_set(self, tool_filter: ToolFilter):
+        """A registered tool resolves from the registry even if some future
+        change also lists its id as injected — registry lookup comes first."""
+        result = tool_filter.filter_tools_extended(["calculator"])
+        assert len(result.local_tools) == 1
+
+
+class TestInjectedToolIdsContract:
+    """INJECTED_TOOL_IDS is the union of the per-family gate sets that
+    inference_api's _build_*_tools factories switch on."""
+
+    def test_union_of_families(self):
+        assert INJECTED_TOOL_IDS == (
+            SPREADSHEET_TOOL_IDS
+            | ARTIFACT_TOOL_IDS
+            | WORD_DOCUMENT_TOOL_IDS
+            | EXCEL_SPREADSHEET_TOOL_IDS
+            | POWERPOINT_PRESENTATION_TOOL_IDS
+            | WORKSPACE_TOOL_IDS
+        )
+
+    def test_ids_are_gate_keys_not_tool_names(self):
+        """workspace_files provisions list/read/write, so the set cannot be
+        derived from the names of the objects the factories return."""
+        assert "workspace_files" in INJECTED_TOOL_IDS
