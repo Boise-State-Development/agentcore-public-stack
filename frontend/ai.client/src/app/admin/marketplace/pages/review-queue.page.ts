@@ -12,6 +12,7 @@ import { heroInbox, heroCheck, heroArrowUturnLeft, heroEyeSlash } from '@ng-icon
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import { AdminListingRow } from '../models/marketplace.model';
 import { AgentTileComponent } from '../components/agent-tile.component';
+import { ReviewDiffComponent } from '../components/review-diff.component';
 import { reachabilityReviewerMessage } from '../../../agents/models/reachability';
 import {
   RequestChangesDialogComponent,
@@ -33,7 +34,7 @@ import { parseIso } from '../../../utils/date';
 @Component({
   selector: 'app-review-queue',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, AgentTileComponent],
+  imports: [NgIcon, AgentTileComponent, ReviewDiffComponent],
   providers: [provideIcons({ heroInbox, heroCheck, heroArrowUturnLeft, heroEyeSlash })],
   template: `
     <div class="min-h-dvh">
@@ -104,6 +105,12 @@ import { parseIso } from '../../../utils/date';
                        PRIVATE agent shelves a tile that 404s for everyone but its author,
                        and that is the one fact the reviewer cannot get from anywhere else
                        on this row. -->
+                  <!-- §6.1 — what this submission changes against what is published.
+                       Collapsed by default and fetched on expand: the queue is a list of
+                       decisions, and pre-loading a diff per row would pull every pending
+                       agent's full instructions down to render a control nobody opened. -->
+                  <app-review-diff [agentId]="row.agentId" />
+
                   @if (reachabilityWarning(row); as warning) {
                     <p
                       class="mt-1 flex items-start gap-1.5 text-sm/6 text-amber-700 dark:text-amber-400"

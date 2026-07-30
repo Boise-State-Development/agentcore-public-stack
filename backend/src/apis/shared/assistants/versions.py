@@ -59,6 +59,34 @@ SNAPSHOT_FIELDS: Tuple[str, ...] = (
 LISTING_SNAPSHOT_FIELDS: Tuple[str, ...] = ("category", "publisher_id")
 
 
+# Fields the review diff reports on, in the order a reviewer reads them (§6.1). Behavior
+# first, because that is what a review is *for*: a resubmission that only fixes a tagline
+# should be approvable in seconds, and one that rewrites the instructions should be the
+# first thing on the page.
+#
+# Derived from the snapshot lists rather than re-typed, so a field added to a version can
+# never be silently absent from the diff — which would be the worst possible failure here:
+# a reviewer told "nothing changed" about something that did.
+DIFF_FIELD_ORDER: Tuple[str, ...] = (
+    "instructions",
+    "bindings",
+    "model_settings",
+    "name",
+    "description",
+    "tagline",
+    "starters",
+    "emoji",
+    "icon_key",
+    "category",
+    "publisher_id",
+)
+
+assert set(DIFF_FIELD_ORDER) == set(SNAPSHOT_FIELDS) | set(LISTING_SNAPSHOT_FIELDS), (
+    "DIFF_FIELD_ORDER must cover exactly the snapshot fields — a field missing here is a "
+    "change a reviewer would never be shown."
+)
+
+
 def version_sk(number: int) -> str:
     """The DynamoDB sort key for version ``number``.
 

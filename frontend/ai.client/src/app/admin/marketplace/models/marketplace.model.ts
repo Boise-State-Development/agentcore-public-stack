@@ -310,3 +310,48 @@ export interface AdminQueueCounts {
   pendingCount: number;
   openReportCount: number;
 }
+
+/**
+ * One field that differs between the approved snapshot and the pending one (§6.1).
+ *
+ * `before`/`after` are raw snapshot values, rendered per field by the diff component —
+ * a tagline as text, `bindings` as kinds and refs. The backend deliberately does not
+ * pre-render them into strings, which would put presentation on the wrong side of the wire.
+ */
+export interface VersionFieldChange {
+  /** Snapshot field name, camelCase as the rest of the Agent surface names it. */
+  field: string;
+  /** Value in the published version; absent on a first submission. */
+  before?: unknown;
+  after?: unknown;
+  /**
+   * Whether this changes what the Agent *does* (instructions, bindings, model) rather
+   * than how it presents. Drives the reviewer's at-a-glance triage.
+   */
+  behavior: boolean;
+}
+
+/**
+ * The pending version against the currently published one (§6.1).
+ *
+ * Answers the reviewer's real question — "what changed since I approved this?" — which the
+ * queue could not answer before: a submission arrived with no reference to what it
+ * replaces, so a typo fix and a full rewrite looked identical.
+ */
+export interface AgentVersionDiff {
+  agentId: string;
+  /** The live snapshot; absent on a first submission. */
+  publishedVersion?: number;
+  /** The snapshot under review. */
+  pendingVersion?: number;
+  /**
+   * Nothing is published yet, so there is nothing to diff against. A distinct signal
+   * rather than an empty `changes` list, which would read as "nothing changed".
+   */
+  firstSubmission: boolean;
+  /** Instructions, bindings or model differ — a careful read rather than a glance. */
+  behaviorChanged: boolean;
+  changes: VersionFieldChange[];
+  /** Unified line diff of the instructions; empty when unchanged or on a first submission. */
+  instructionsDiff: string[];
+}

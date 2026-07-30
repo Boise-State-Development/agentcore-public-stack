@@ -23,6 +23,7 @@ from apis.app_api.agent_designer.services.listing_service import (
     patch_listing_presentation,
     review_listing,
     decide_withdrawal,
+    diff_pending_version,
     takedown_listing,
 )
 from apis.shared.assistants.categories import (
@@ -52,6 +53,7 @@ from apis.shared.assistants.models import (
     AgentCategoryCreateRequest,
     AgentCategoryUpdateRequest,
     AgentListing,
+    AgentVersionDiffResponse,
     PublisherCreateRequest,
     PublisherEligibilityRequest,
     PublisherEligibilityResponse,
@@ -135,6 +137,29 @@ async def list_listings(
     except Exception as e:
         logger.error(f"Error listing agent listings: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list listings: {str(e)}")
+
+
+@router.get("/{agent_id}/diff", response_model=AgentVersionDiffResponse)
+async def get_agent_review_diff(
+    agent_id: str,
+    admin: User = Depends(require_marketplace_admin),
+):
+    """What the pending submission changes against what is published (§6.1).
+
+    The reviewer's actual question — "what changed since I approved this?" — which the queue
+    could not answer before: a submission arrived with no reference to what it replaces, so
+    a typo fix and a full rewrite looked identical and both got the same careful read.
+
+    Admin-only for the same reason the review queue is: this returns ``instructions``, which
+    the user-facing Agent read gates to owner/editor.
+    """
+    try:
+        return await diff_pending_version(agent_id)
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error building agent review diff: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to build review diff: {str(e)}")
 
 
 @router.post("/{agent_id}/review", response_model=AgentListing)
