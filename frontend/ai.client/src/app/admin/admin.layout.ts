@@ -29,6 +29,7 @@ import {
   heroFlag,
   heroRectangleStack,
   heroStar,
+  heroBuildingLibrary,
   heroTag,
   heroBookmark,
 } from '@ng-icons/heroicons/outline';
@@ -79,6 +80,7 @@ interface NavGroup {
       heroFlag,
       heroRectangleStack,
       heroStar,
+      heroBuildingLibrary,
       heroTag,
       heroBookmark,
     }),
@@ -226,6 +228,7 @@ export class AdminLayout implements OnInit {
         { label: 'Listings', icon: 'heroRectangleStack', route: '/admin/marketplace/listings', scope: 'admin.marketplace' },
         { label: 'Store Front', icon: 'heroStar', route: '/admin/marketplace/store-front', scope: 'admin.marketplace' },
         { label: 'Categories', icon: 'heroTag', route: '/admin/marketplace/categories', scope: 'admin.marketplace' },
+        { label: 'Publishers', icon: 'heroBuildingLibrary', route: '/admin/marketplace/publishers', scope: 'admin.marketplace' },
         { label: 'Default Pins', icon: 'heroBookmark', route: '/admin/marketplace/default-pins', scope: 'admin.marketplace' },
       ],
     },

@@ -162,6 +162,13 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./marketplace/pages/listings.page').then(m => m.MarketplaceListingsPage),
   },
   {
+    path: 'marketplace/publishers',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.marketplace' } satisfies AdminScopeRouteData,
+    loadComponent: () =>
+      import('./marketplace/pages/publishers.page').then(m => m.MarketplacePublishersPage),
+  },
+  {
     path: 'marketplace/categories',
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.marketplace' } satisfies AdminScopeRouteData,
