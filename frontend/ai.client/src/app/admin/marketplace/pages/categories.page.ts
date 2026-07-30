@@ -223,8 +223,12 @@ export class MarketplaceCategoriesPage implements OnInit {
     } catch (err) {
       // The in-use delete refusal (409) explains itself and suggests disabling instead,
       // so surface the server's message rather than a generic one.
-      this.error.set(this.messageFor(err, 'That change could not be saved.'));
+      //
+      // ⚠️ Set *after* the reload, not before: ``reload`` clears the error banner on entry,
+      // so the obvious order silently swallows every message this branch exists to show.
+      const message = this.messageFor(err, 'That change could not be saved.');
       await this.reload();
+      this.error.set(message);
     } finally {
       this.busy.set(false);
     }

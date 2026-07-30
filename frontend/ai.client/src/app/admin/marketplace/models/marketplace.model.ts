@@ -355,3 +355,48 @@ export interface AgentVersionDiff {
   /** Unified line diff of the instructions; empty when unchanged or on a first submission. */
   instructionsDiff: string[];
 }
+// ── publisher management (D12, PR-6) ───────────────────────────────────────────────
+
+/**
+ * Create a publisher profile.
+ *
+ * No `id` field: the backend derives it from the label and it is immutable thereafter,
+ * because listings store the id. Renaming a publisher changes `label` only — the same rule
+ * categories follow, and for the same reason.
+ */
+export interface PublisherCreateRequest {
+  label: string;
+  kind: PublisherKind;
+  verified?: boolean;
+  iconKey?: string;
+  order?: number;
+  enabled?: boolean;
+}
+
+/** Update a publisher. All fields optional; `id` is absent because it cannot change. */
+export interface PublisherUpdateRequest {
+  label?: string;
+  kind?: PublisherKind;
+  verified?: boolean;
+  iconKey?: string;
+  order?: number;
+  enabled?: boolean;
+}
+
+export interface PublisherEligibilityResponse {
+  publisherId: string;
+  userIds: string[];
+}
+
+/** Display copy for each publisher kind — the picker needs to say what it means. */
+export const PUBLISHER_KIND_LABELS: Record<PublisherKind, string> = {
+  institution: 'Institution',
+  department: 'Department',
+  individual: 'Individual',
+};
+
+export const PUBLISHER_KIND_HINTS: Record<PublisherKind, string> = {
+  institution: 'The university itself — for agents that speak for Boise State.',
+  department: 'A team or office, e.g. the Registrar or Communications & Marketing.',
+  individual: 'A person. Auto-created from an author\'s display name on first submission.',
+};

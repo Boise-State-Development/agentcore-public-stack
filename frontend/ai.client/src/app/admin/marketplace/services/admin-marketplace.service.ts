@@ -4,6 +4,9 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import {
   AgentVersionDiff,
+  PublisherCreateRequest,
+  PublisherEligibilityResponse,
+  PublisherUpdateRequest,
   AdminListingRow,
   AdminQueueCounts,
   AdminReportRow,
@@ -193,6 +196,59 @@ export class AdminMarketplaceService {
       this.http.get<PublishersResponse>(`${this.baseUrl()}/publishers`),
     );
     return response.publishers ?? [];
+  }
+
+  /**
+   * Create a publisher profile (D12).
+   *
+   * The id is server-generated from the label, and immutable — it is what listings store,
+   * so renaming a publisher must never strand the attributions pointing at it.
+   */
+  async createPublisher(request: PublisherCreateRequest): Promise<PublisherProfile> {
+    return firstValueFrom(
+      this.http.post<PublisherProfile>(`${this.baseUrl()}/publishers`, request),
+    );
+  }
+
+  async updatePublisher(
+    publisherId: string,
+    request: PublisherUpdateRequest,
+  ): Promise<PublisherProfile> {
+    return firstValueFrom(
+      this.http.patch<PublisherProfile>(`${this.baseUrl()}/publishers/${publisherId}`, request),
+    );
+  }
+
+  /** Refused (409) while listings are attributed to it — disable instead. */
+  async deletePublisher(publisherId: string): Promise<void> {
+    await firstValueFrom(this.http.delete(`${this.baseUrl()}/publishers/${publisherId}`));
+  }
+
+  /**
+   * Who may *propose* this publisher at submission (D12).
+   *
+   * ⚠️ An allowlist for the author's submit dialog only. An admin may attribute any listing
+   * to any publisher regardless of it — that is how the store gets its day-one set of
+   * official Agents without a staff member's personal name on them. It never appears in an
+   * access check.
+   */
+  async loadPublisherEligibility(publisherId: string): Promise<string[]> {
+    const response = await firstValueFrom(
+      this.http.get<PublisherEligibilityResponse>(
+        `${this.baseUrl()}/publishers/${publisherId}/eligibility`,
+      ),
+    );
+    return response.userIds ?? [];
+  }
+
+  async savePublisherEligibility(publisherId: string, userIds: string[]): Promise<string[]> {
+    const response = await firstValueFrom(
+      this.http.put<PublisherEligibilityResponse>(
+        `${this.baseUrl()}/publishers/${publisherId}/eligibility`,
+        { userIds },
+      ),
+    );
+    return response.userIds ?? [];
   }
 
   async loadCategories(): Promise<AgentCategory[]> {
