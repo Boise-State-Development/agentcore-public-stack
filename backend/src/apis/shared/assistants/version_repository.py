@@ -253,6 +253,45 @@ async def get_latest_version(agent_id: str) -> Optional[AgentVersion]:
     return _from_item(items[0]) if items else None
 
 
+async def delete_versions_for_agent(agent_id: str) -> int:
+    """Delete every snapshot for an Agent. Called when the Agent itself is deleted.
+
+    Versions are child rows under the Agent's partition for the reason the reports module
+    states: child rows must never outlive what they concern. Without this they do — a
+    deleted Agent's snapshots sit in the table forever, invisible (a deletable Agent's
+    listing is ``private``, so its versions carry no store key) but permanent.
+
+    Immutability is about *rewriting*, not about retention: a version may never be changed,
+    and it is meaningless once the Agent it snapshots is gone. Nothing audits it either —
+    §8 flags "versions referenced by an audit record should survive" as a question for a
+    retention policy that does not exist yet, and there is no such reference today.
+    """
+    from boto3.dynamodb.conditions import Key
+
+    table = _table()
+    condition = Key("PK").eq(_pk(agent_id)) & Key("SK").begins_with(VERSION_SK_PREFIX)
+
+    response = table.query(KeyConditionExpression=condition, ProjectionExpression="PK, SK")
+    items = response.get("Items", [])
+    while "LastEvaluatedKey" in response:
+        response = table.query(
+            KeyConditionExpression=condition,
+            ProjectionExpression="PK, SK",
+            ExclusiveStartKey=response["LastEvaluatedKey"],
+        )
+        items.extend(response.get("Items", []))
+
+    if not items:
+        return 0
+
+    with table.batch_writer() as batch:
+        for item in items:
+            batch.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
+
+    logger.info(f"🗑️ Deleted {len(items)} version(s) with agent {agent_id}")
+    return len(items)
+
+
 async def batch_get_versions(refs: List[Tuple[str, int]]) -> Dict[str, AgentVersion]:
     """Fetch specific versions by ``(agent_id, number)``, keyed by agent id.
 

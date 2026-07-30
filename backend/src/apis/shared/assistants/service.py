@@ -982,6 +982,22 @@ async def _delete_assistant_cloud(assistant_id: str, table_name: str) -> bool:
                 exc_info=True,
             )
 
+        # Version snapshots are child rows for the same reason, and were missed when they
+        # shipped: without this a deleted Agent leaves its whole version history behind,
+        # invisible but permanent. Invisible because a deletable Agent's listing is
+        # ``private``, so its versions carry no store key — which is exactly why nothing
+        # would ever surface the leak.
+        try:
+            from .version_repository import delete_versions_for_agent
+
+            await delete_versions_for_agent(assistant_id)
+        except Exception:
+            logger.warning(
+                f"Failed to delete versions for assistant {assistant_id}; "
+                "the snapshots will be orphaned in the table",
+                exc_info=True,
+            )
+
         table.delete_item(Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
 
         logger.info(f"🗑️ Deleted assistant {assistant_id} from DynamoDB table {table_name}")

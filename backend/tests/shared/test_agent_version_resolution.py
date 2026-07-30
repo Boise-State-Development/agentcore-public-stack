@@ -163,6 +163,43 @@ def test_an_unpublished_listing_runs_the_live_record(table, state):
     assert version is None
 
 
+def test_a_pending_withdrawal_still_runs_the_approved_snapshot(table):
+    """The seam between PR-3 (invocation) and PR-4 (withdrawal), which shipped separately.
+
+    ``withdrawal_requested`` is a *live* state: the author has asked to pull the listing and
+    an admin has not yet agreed, so the listing keeps its shelf key **and** its
+    ``publishedVersion``. Everyone but the owner must therefore still run the approved
+    snapshot — a request is not a removal, and serving the draft the moment the author asked
+    would be the unilateral change the whole epic exists to prevent, arriving through the
+    back door.
+
+    Neither PR could have caught this: they were developed in parallel and merged
+    independently, so nothing exercised the combination until now.
+    """
+    number = publish()
+    live = make_agent(
+        instructions=DRAFT_INSTRUCTIONS,
+        listing=listing(state="withdrawal_requested", publishedVersion=number),
+    )
+
+    resolved, version = asyncio.run(resolve_invocation_agent(live, OTHER))
+    assert resolved.instructions == APPROVED_INSTRUCTIONS
+    assert version == number
+
+
+def test_a_granted_withdrawal_returns_everyone_to_the_live_record(table):
+    """Granting clears ``publishedVersion``, so there is no snapshot left to serve."""
+    publish()
+    live = make_agent(
+        instructions=DRAFT_INSTRUCTIONS,
+        listing=listing(state="private", publishedVersion=None),
+    )
+
+    resolved, version = asyncio.run(resolve_invocation_agent(live, OTHER))
+    assert resolved.instructions == DRAFT_INSTRUCTIONS
+    assert version is None
+
+
 def test_a_taken_down_agent_runs_the_live_record(table):
     """Takedown clears ``publishedVersion``, so a direct-link visitor is back on the draft.
 

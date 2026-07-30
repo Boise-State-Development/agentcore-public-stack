@@ -180,3 +180,42 @@ def test_the_guard_is_silent_for_a_non_owner(table):
     seed(table, listing_of("published"))
     asyncio.run(assert_deletable(AGENT_ID, "user-someone-else"))
     assert asyncio.run(delete_assistant(AGENT_ID, "user-someone-else")) is False
+
+
+# ── child rows must not outlive the Agent ────────────────────────────────────────────
+def test_deleting_an_agent_takes_its_version_snapshots_with_it(table):
+    """Versions are child rows, and child rows must never outlive what they concern.
+
+    Missed when snapshots shipped: nothing deleted ``VERSION#`` rows, so a deleted Agent
+    left its whole history behind. Invisible rather than harmful — a deletable Agent's
+    listing is ``private``, so its versions carry no store key — which is precisely why the
+    leak would never have surfaced on its own.
+    """
+    from apis.shared.assistants.version_repository import create_version, list_versions
+    from apis.shared.assistants.versions import snapshot_of
+    from apis.shared.assistants.service import get_assistant
+
+    seed(table, listing_of("private"))
+    agent = asyncio.run(get_assistant(AGENT_ID, OWNER))
+    for _ in range(3):
+        asyncio.run(create_version(AGENT_ID, snapshot_of(agent)))
+    assert len(asyncio.run(list_versions(AGENT_ID))) == 3
+
+    assert asyncio.run(delete_assistant(AGENT_ID, OWNER)) is True
+    assert asyncio.run(list_versions(AGENT_ID)) == []
+
+
+def test_a_refused_delete_leaves_the_versions_alone(table):
+    """The cleanup rides the delete, so a refusal must not take the history with it."""
+    from apis.shared.assistants.version_repository import create_version, list_versions
+    from apis.shared.assistants.versions import snapshot_of
+    from apis.shared.assistants.service import get_assistant
+
+    seed(table, listing_of("published", publishedVersion=1))
+    agent = asyncio.run(get_assistant(AGENT_ID, OWNER))
+    asyncio.run(create_version(AGENT_ID, snapshot_of(agent)))
+
+    with pytest.raises(AssistantListedError):
+        asyncio.run(delete_assistant(AGENT_ID, OWNER))
+
+    assert len(asyncio.run(list_versions(AGENT_ID))) == 1
