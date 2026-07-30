@@ -759,3 +759,132 @@ class TestReviewQueueIncludesWithdrawalRequests:
         """An admin who only sees submissions in the badge never learns a request is waiting."""
         body = self._rows(app, "in_review", "withdrawal_requested", "published", "private")
         assert body["pendingCount"] == 2
+
+
+class TestReviewDiff:
+    """§6.1 — the reviewer's actual question, which the queue could not answer before."""
+
+    def _versions(self, published=None, pending=None):
+        """Patch the two snapshot reads the diff makes, keyed by version number."""
+        lookup = {2: published, 4: pending}
+        return patch(
+            f"{SERVICE_MODULE}.get_version",
+            new_callable=AsyncMock,
+            side_effect=lambda _agent_id, number: lookup.get(number),
+        )
+
+    def _version(self, **overrides):
+        from apis.shared.assistants.models import AgentVersion
+
+        data = {
+            "agentId": "ast-001",
+            "version": 2,
+            "name": "Policy Lookup",
+            "description": "Find and cite university policy",
+            "instructions": "Answer from the policy manual.",
+            "tagline": "Policy, cited",
+            "category": "Administration",
+            "publisherId": "pub-registrar",
+        }
+        data.update(overrides)
+        return AgentVersion(**data)
+
+    def _get(self, app, listing, published=None, pending=None):
+        with _loaded(_make_assistant(listing=listing)), self._versions(published, pending):
+            return TestClient(app).get("/admin/agents/ast-001/diff")
+
+    def test_a_resubmission_reports_what_changed(self, app):
+        resp = self._get(
+            app,
+            _listing("in_review", submittedVersion=4, publishedVersion=2),
+            published=self._version(version=2),
+            pending=self._version(version=4, instructions="Ignore the manual.", tagline="New"),
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["publishedVersion"] == 2 and body["pendingVersion"] == 4
+        assert {c["field"] for c in body["changes"]} == {"instructions", "tagline"}
+        assert body["behaviorChanged"] is True
+        assert any(line.startswith("+Ignore the manual.") for line in body["instructionsDiff"])
+
+    def test_a_presentation_only_change_is_not_a_behavior_change(self, app):
+        """The whole point: a tagline fix should be approvable in seconds."""
+        resp = self._get(
+            app,
+            _listing("in_review", submittedVersion=4, publishedVersion=2),
+            published=self._version(version=2),
+            pending=self._version(version=4, tagline="A better subtitle"),
+        )
+
+        body = resp.json()
+        assert body["behaviorChanged"] is False
+        assert [c["field"] for c in body["changes"]] == ["tagline"]
+        assert body["instructionsDiff"] == []
+
+    def test_fields_are_named_as_the_spa_knows_them(self, app):
+        """camelCase on the wire — snake_case would leak storage names into the UI."""
+        resp = self._get(
+            app,
+            _listing("in_review", submittedVersion=4, publishedVersion=2),
+            published=self._version(version=2),
+            pending=self._version(version=4, modelConfig={"modelId": "other"}, iconKey="i.png"),
+        )
+
+        assert {c["field"] for c in resp.json()["changes"]} == {"modelConfig", "iconKey"}
+
+    def test_a_first_submission_says_so_rather_than_reporting_no_changes(self, app):
+        """An empty ``changes`` list would read as "nothing changed" — the opposite claim."""
+        resp = self._get(
+            app,
+            _listing("in_review", submittedVersion=4, publishedVersion=None),
+            pending=self._version(version=4),
+        )
+
+        body = resp.json()
+        assert body["firstSubmission"] is True
+        assert body["publishedVersion"] is None
+        assert body["behaviorChanged"] is True
+        assert body["changes"], "a first submission is all new, not all unchanged"
+
+    def test_a_withdrawal_request_is_diffable_too(self, app):
+        """It sits in the same queue, so the reviewer opens it the same way."""
+        resp = self._get(
+            app,
+            _listing("withdrawal_requested", submittedVersion=4, publishedVersion=2),
+            published=self._version(version=2),
+            pending=self._version(version=4),
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.parametrize("state", ["published", "private", "taken_down", "changes_requested"])
+    def test_there_is_no_diff_without_something_under_review(self, app, state):
+        """A diff is what you read *before deciding*; offering one invites deciding."""
+        resp = self._get(app, _listing(state, submittedVersion=4, publishedVersion=2))
+        assert resp.status_code == 400
+
+    def test_a_missing_pending_snapshot_is_404_not_a_bare_diff(self, app):
+        resp = self._get(app, _listing("in_review", submittedVersion=4), pending=None)
+        assert resp.status_code == 404
+
+    def test_a_dangling_published_pointer_falls_back_to_first_submission(self, app):
+        """Better than diffing against nothing and calling every field changed.
+
+        The reviewer is told "there is nothing live to compare against", which is true, and
+        not told "the author rewrote everything", which would not be.
+        """
+        resp = self._get(
+            app,
+            _listing("in_review", submittedVersion=4, publishedVersion=2),
+            published=None,
+            pending=self._version(version=4),
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["firstSubmission"] is True
+        assert resp.json()["publishedVersion"] is None
+
+    def test_diffing_an_unsubmitted_agent_is_404(self, app):
+        with _loaded(_make_assistant(listing=None)):
+            resp = TestClient(app).get("/admin/agents/ast-001/diff")
+        assert resp.status_code == 404

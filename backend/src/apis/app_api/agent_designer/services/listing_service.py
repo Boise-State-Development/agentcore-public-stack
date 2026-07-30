@@ -41,14 +41,25 @@ from apis.shared.assistants.listing import (
     is_listed,
 )
 from apis.shared.assistants.listing_repository import list_by_state, write_listing
-from apis.shared.assistants.version_repository import create_version, set_version_index
+from apis.shared.assistants.version_diff import (
+    behavior_changed,
+    changed_fields,
+    instructions_diff,
+)
+from apis.shared.assistants.version_repository import (
+    create_version,
+    get_version,
+    set_version_index,
+)
 from apis.shared.assistants.versions import snapshot_of
 from apis.shared.assistants.models import (
     AdminEdit,
     AdminListingPatchRequest,
     AdminListingRow,
     AgentListing,
+    AgentVersionDiffResponse,
     Assistant,
+    VersionFieldChange,
     PublisherProfile,
     SkillExposure,
     SubmitListingRequest,
@@ -819,6 +830,83 @@ async def patch_listing_presentation(
 
 
 # ── admin reads ──────────────────────────────────────────────────────────────────────
+# camelCase for the wire, so the SPA reads the same field names it already knows from
+# ``AgentResponse``. Snake_case would leak the storage attribute names into the UI.
+_DIFF_FIELD_ALIASES = {
+    "model_settings": "modelConfig",
+    "icon_key": "iconKey",
+    "publisher_id": "publisherId",
+}
+
+
+def _wire_value(value):
+    """Serialize a snapshot value for the diff payload, keeping ``None`` distinct from ``[]``."""
+    if isinstance(value, list):
+        return [_wire_value(item) for item in value]
+    dump = getattr(value, "model_dump", None)
+    return dump(by_alias=True) if dump else value
+
+
+async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
+    """What the pending submission changes against what is published (§6.1).
+
+    Reads the two snapshots the listing points at — ``submittedVersion`` and
+    ``publishedVersion`` — rather than "the latest two". An admin presentation edit (§6.2)
+    cuts a version too, so ordinal arithmetic would sooner or later diff the wrong pair.
+
+    Raises ``ListingError`` when there is nothing under review: a diff is a thing you read
+    *before deciding*, and offering one for a listing with no pending submission would
+    invite deciding on it.
+    """
+    assistant = await _load_any(agent_id)
+    listing = assistant.listing
+    if not listing:
+        raise ListingError("This agent has no marketplace listing.", status_code=404)
+
+    pending_number = listing.submitted_version
+    if pending_number is None or listing.state not in PENDING_DECISION_STATES:
+        raise ListingError(
+            "This agent has nothing awaiting review, so there is no diff to show.",
+            status_code=400,
+        )
+
+    pending = await get_version(agent_id, pending_number)
+    if pending is None:
+        raise ListingError(
+            f"Version {pending_number} of this agent could not be loaded.", status_code=404
+        )
+
+    published_number = listing.published_version
+    published = (
+        await get_version(agent_id, published_number) if published_number is not None else None
+    )
+    # A pointer to a version that is gone is not the same as never having published: say so
+    # by falling back to the first-submission rendering rather than diffing against nothing
+    # and reporting every field as changed.
+    first_submission = published is None
+
+    changes = [
+        VersionFieldChange(
+            field=_DIFF_FIELD_ALIASES.get(field, field),
+            before=_wire_value(before),
+            after=_wire_value(after),
+            behavior=field in ("instructions", "bindings", "model_settings"),
+        )
+        for field, before, after in changed_fields(published, pending)
+    ]
+
+    return AgentVersionDiffResponse(
+        agent_id=agent_id,
+        published_version=published.version if published else None,
+        pending_version=pending_number,
+        first_submission=first_submission,
+        behavior_changed=behavior_changed(published, pending),
+        changes=changes,
+        instructions_diff=instructions_diff(published, pending),
+    )
+
+
+
 async def list_admin_listings(state: Optional[str] = None) -> Tuple[List[AdminListingRow], int]:
     """Rows for the Review queue / Listings tables, plus the pending-decision count.
 

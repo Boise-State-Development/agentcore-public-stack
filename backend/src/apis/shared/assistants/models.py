@@ -768,6 +768,79 @@ class ReviewListingRequest(BaseModel):
     )
 
 
+class VersionFieldChange(BaseModel):
+    """One field that differs between the approved snapshot and the pending one (§6.1).
+
+    ``before``/``after`` are the raw snapshot values, JSON-serialized as stored. The SPA
+    renders them per field — a tagline as text, ``bindings`` as a list of kinds and refs —
+    so this stays a transport shape rather than a pre-rendered string, which would put
+    presentation decisions on the wrong side of the wire.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    field: str = Field(..., description="Snapshot field name (camelCase, as the SPA knows it)")
+    before: Optional[Any] = Field(
+        None, description="Value in the published version; absent on a first submission"
+    )
+    after: Optional[Any] = Field(None, description="Value in the pending version")
+    behavior: bool = Field(
+        False,
+        description=(
+            "Whether this field changes what the Agent *does* (instructions, bindings, "
+            "model) rather than how it presents. Drives the reviewer's at-a-glance triage."
+        ),
+    )
+
+
+class AgentVersionDiffResponse(BaseModel):
+    """The pending version against the currently published one (§6.1).
+
+    Answers the reviewer's real question — "what changed since I approved this?" — which
+    the queue could not answer before: a submission arrived with no reference to what it
+    replaces, so a typo fix and a full rewrite looked identical.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    published_version: Optional[int] = Field(
+        None, alias="publishedVersion", description="The live snapshot; absent on a first submission"
+    )
+    pending_version: Optional[int] = Field(
+        None, alias="pendingVersion", description="The snapshot under review"
+    )
+    first_submission: bool = Field(
+        False,
+        alias="firstSubmission",
+        description=(
+            "Nothing is published yet, so there is nothing to diff against and the reviewer "
+            "is reading the whole thing rather than a change. A distinct signal rather than "
+            "an empty ``changes`` list, which would read as 'nothing changed'."
+        ),
+    )
+    behavior_changed: bool = Field(
+        False,
+        alias="behaviorChanged",
+        description=(
+            "Whether instructions, bindings or the model differ — the one line that decides "
+            "whether this is a seconds-long approval or a careful read."
+        ),
+    )
+    changes: List[VersionFieldChange] = Field(
+        default_factory=list, description="Differing fields, behavior first"
+    )
+    instructions_diff: List[str] = Field(
+        default_factory=list,
+        alias="instructionsDiff",
+        description=(
+            "Unified line diff of the instructions; empty when unchanged or on a first "
+            "submission. Computed server-side so the field-level answer and the line-level "
+            "one can never disagree."
+        ),
+    )
+
+
 class WithdrawalDecisionRequest(BaseModel):
     """Admin grants or declines an author's withdrawal request (§5.1).
 

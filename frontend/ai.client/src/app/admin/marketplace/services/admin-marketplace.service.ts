@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import {
+  AgentVersionDiff,
   AdminListingRow,
   AdminQueueCounts,
   AdminReportRow,
@@ -57,6 +58,19 @@ export class AdminMarketplaceService {
   /** The Review queue: everything currently awaiting a decision. */
   async loadSubmissions(): Promise<AdminListingRow[]> {
     return this.fetchListings(`${this.baseUrl()}/submissions`);
+  }
+
+  /**
+   * What a pending submission changes against what is published (§6.1).
+   *
+   * Fetched per row on demand rather than with the queue: the queue is a list of decisions
+   * to make, and pre-loading a diff for every row would pull every pending Agent's full
+   * instructions down to render badges nobody has opened yet.
+   */
+  async loadDiff(agentId: string): Promise<AgentVersionDiff> {
+    return firstValueFrom(
+      this.http.get<AgentVersionDiff>(`${this.baseUrl()}/${agentId}/diff`),
+    );
   }
 
   /** The Listings table: every agent that has ever been submitted. */
