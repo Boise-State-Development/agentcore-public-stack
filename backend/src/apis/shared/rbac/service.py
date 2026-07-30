@@ -8,7 +8,7 @@ from apis.shared.tools.scoped_ids import base_tool_id
 
 from .models import AppRole, UserEffectivePermissions
 from .repository import AppRoleRepository
-from .cache import AppRoleCache, get_app_role_cache
+from .cache import AppRoleCache, get_app_role_cache, roles_fingerprint
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -70,8 +70,11 @@ class AppRoleService:
         Returns:
             UserEffectivePermissions with merged permissions
         """
-        # Step 1: Check cache
-        cached = await self.cache.get_user_permissions(user.user_id)
+        # Step 1: Check cache. Keyed on the role set as well as the subject —
+        # two callers can share a user_id but carry different roles (see
+        # ``roles_fingerprint``), and they must not read each other's entry.
+        fingerprint = roles_fingerprint(user.roles)
+        cached = await self.cache.get_user_permissions(user.user_id, fingerprint)
         if cached:
             logger.debug(f"Cache hit for user permissions: {user.user_id}")
             return cached
@@ -111,7 +114,7 @@ class AppRoleService:
         permissions = self._merge_permissions(user.user_id, matching_roles)
 
         # Step 5: Cache and return
-        await self.cache.set_user_permissions(user.user_id, permissions)
+        await self.cache.set_user_permissions(user.user_id, fingerprint, permissions)
 
         logger.debug(
             f"Resolved permissions for {user.name}: "

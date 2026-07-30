@@ -86,8 +86,8 @@ def cache() -> AppRoleCache:
 async def test_cache_hit_before_ttl(cache: AppRoleCache):
     """Cached user permissions are returned when TTL has not expired (Req 7.2)."""
     perms = _make_permissions("alice")
-    await cache.set_user_permissions("alice", perms, ttl=timedelta(minutes=10))
-    result = await cache.get_user_permissions("alice")
+    await cache.set_user_permissions("alice", "fp", perms, ttl=timedelta(minutes=10))
+    result = await cache.get_user_permissions("alice", "fp")
     assert result is not None
     assert result.user_id == "alice"
     assert result.tools == ["tool_1"]
@@ -119,10 +119,10 @@ async def test_jwt_mapping_cache_hit_before_ttl(cache: AppRoleCache):
 async def test_cache_miss_after_ttl(cache: AppRoleCache):
     """Expired user permissions return None (Req 7.3)."""
     perms = _make_permissions("bob")
-    await cache.set_user_permissions("bob", perms, ttl=timedelta(minutes=10))
+    await cache.set_user_permissions("bob", "fp", perms, ttl=timedelta(minutes=10))
     # Simulate time passing beyond TTL
-    _expire_entry(cache, "user", "user:bob")
-    result = await cache.get_user_permissions("bob")
+    _expire_entry(cache, "user", "user:bob:fp")
+    result = await cache.get_user_permissions("bob", "fp")
     assert result is None
 
 
@@ -154,16 +154,16 @@ async def test_invalidate_role_clears_role_and_user_caches(cache: AppRoleCache):
     """invalidate_role removes the role entry and clears ALL user caches (Req 7.4)."""
     role = _make_role("editor")
     await cache.set_role(role, ttl=timedelta(minutes=10))
-    await cache.set_user_permissions("alice", _make_permissions("alice"), ttl=timedelta(minutes=10))
-    await cache.set_user_permissions("bob", _make_permissions("bob"), ttl=timedelta(minutes=10))
+    await cache.set_user_permissions("alice", "fp", _make_permissions("alice"), ttl=timedelta(minutes=10))
+    await cache.set_user_permissions("bob", "fp", _make_permissions("bob"), ttl=timedelta(minutes=10))
     # JWT mapping should NOT be affected
     await cache.set_jwt_mapping("Admin", ["admin_role"], ttl=timedelta(minutes=10))
 
     await cache.invalidate_role("editor")
 
     assert await cache.get_role("editor") is None
-    assert await cache.get_user_permissions("alice") is None
-    assert await cache.get_user_permissions("bob") is None
+    assert await cache.get_user_permissions("alice", "fp") is None
+    assert await cache.get_user_permissions("bob", "fp") is None
     # JWT mapping untouched
     assert await cache.get_jwt_mapping("Admin") == ["admin_role"]
 
@@ -176,7 +176,7 @@ async def test_invalidate_role_clears_role_and_user_caches(cache: AppRoleCache):
 async def test_invalidate_jwt_mapping_clears_mapping_and_user_caches(cache: AppRoleCache):
     """invalidate_jwt_mapping removes the mapping and clears ALL user caches (Req 7.5)."""
     await cache.set_jwt_mapping("Editor", ["editor_role"], ttl=timedelta(minutes=10))
-    await cache.set_user_permissions("alice", _make_permissions("alice"), ttl=timedelta(minutes=10))
+    await cache.set_user_permissions("alice", "fp", _make_permissions("alice"), ttl=timedelta(minutes=10))
     # Role cache should NOT be affected
     role = _make_role("admin")
     await cache.set_role(role, ttl=timedelta(minutes=10))
@@ -184,7 +184,7 @@ async def test_invalidate_jwt_mapping_clears_mapping_and_user_caches(cache: AppR
     await cache.invalidate_jwt_mapping("Editor")
 
     assert await cache.get_jwt_mapping("Editor") is None
-    assert await cache.get_user_permissions("alice") is None
+    assert await cache.get_user_permissions("alice", "fp") is None
     # Role cache untouched
     assert await cache.get_role("admin") is not None
 
@@ -196,13 +196,13 @@ async def test_invalidate_jwt_mapping_clears_mapping_and_user_caches(cache: AppR
 @pytest.mark.asyncio
 async def test_invalidate_all_clears_everything(cache: AppRoleCache):
     """invalidate_all clears user, role, and JWT mapping caches (Req 7.6)."""
-    await cache.set_user_permissions("alice", _make_permissions("alice"), ttl=timedelta(minutes=10))
+    await cache.set_user_permissions("alice", "fp", _make_permissions("alice"), ttl=timedelta(minutes=10))
     await cache.set_role(_make_role("editor"), ttl=timedelta(minutes=10))
     await cache.set_jwt_mapping("Admin", ["admin_role"], ttl=timedelta(minutes=10))
 
     await cache.invalidate_all()
 
-    assert await cache.get_user_permissions("alice") is None
+    assert await cache.get_user_permissions("alice", "fp") is None
     assert await cache.get_role("editor") is None
     assert await cache.get_jwt_mapping("Admin") is None
 
@@ -215,24 +215,24 @@ async def test_invalidate_all_clears_everything(cache: AppRoleCache):
 async def test_cleanup_expired_removes_only_expired(cache: AppRoleCache):
     """cleanup_expired removes expired entries but keeps valid ones (Req 7.7)."""
     # Valid entries (long TTL)
-    await cache.set_user_permissions("alice", _make_permissions("alice"), ttl=timedelta(minutes=10))
+    await cache.set_user_permissions("alice", "fp", _make_permissions("alice"), ttl=timedelta(minutes=10))
     await cache.set_role(_make_role("editor"), ttl=timedelta(minutes=10))
     await cache.set_jwt_mapping("Admin", ["admin_role"], ttl=timedelta(minutes=10))
 
     # Entries that will be expired
-    await cache.set_user_permissions("expired_user", _make_permissions("expired_user"), ttl=timedelta(minutes=10))
+    await cache.set_user_permissions("expired_user", "fp", _make_permissions("expired_user"), ttl=timedelta(minutes=10))
     await cache.set_role(_make_role("expired_role"), ttl=timedelta(minutes=10))
     await cache.set_jwt_mapping("ExpiredMapping", ["x"], ttl=timedelta(minutes=10))
 
     # Force-expire only the second batch
-    _expire_entry(cache, "user", "user:expired_user")
+    _expire_entry(cache, "user", "user:expired_user:fp")
     _expire_entry(cache, "role", "role:expired_role")
     _expire_entry(cache, "jwt_mapping", "jwt:ExpiredMapping")
 
     await cache.cleanup_expired()
 
     # Valid entries still present
-    assert await cache.get_user_permissions("alice") is not None
+    assert await cache.get_user_permissions("alice", "fp") is not None
     assert await cache.get_role("editor") is not None
     assert await cache.get_jwt_mapping("Admin") == ["admin_role"]
 
@@ -251,9 +251,9 @@ async def test_cleanup_expired_removes_only_expired(cache: AppRoleCache):
 async def test_get_stats_accuracy(cache: AppRoleCache):
     """get_stats returns accurate total and expired counts per layer (Req 7.8)."""
     # Add 2 user entries: 1 valid, 1 will be expired
-    await cache.set_user_permissions("alice", _make_permissions("alice"), ttl=timedelta(minutes=10))
-    await cache.set_user_permissions("bob", _make_permissions("bob"), ttl=timedelta(minutes=10))
-    _expire_entry(cache, "user", "user:bob")
+    await cache.set_user_permissions("alice", "fp", _make_permissions("alice"), ttl=timedelta(minutes=10))
+    await cache.set_user_permissions("bob", "fp", _make_permissions("bob"), ttl=timedelta(minutes=10))
+    _expire_entry(cache, "user", "user:bob:fp")
 
     # Add 2 role entries: 1 valid, 1 will be expired
     await cache.set_role(_make_role("editor"), ttl=timedelta(minutes=10))
