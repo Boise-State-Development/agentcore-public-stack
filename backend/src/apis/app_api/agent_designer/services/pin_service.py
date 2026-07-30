@@ -55,7 +55,7 @@ from apis.shared.assistants.pins import (
     get_pin_state,
     remove_pin,
 )
-from apis.shared.assistants.listing import is_published
+from apis.shared.assistants.listing import is_listed
 from apis.shared.assistants.publishers import list_publishers
 from apis.shared.assistants.role_pins import list_pins_for_roles
 from apis.shared.assistants.service import (
@@ -284,7 +284,7 @@ async def pin_agent(user: User, agent_id: str) -> PinnedAgentResponse:
                 exc_info=True,
             )
             existing = None
-        if existing is not None and existing.listing and is_published(existing.listing.state):
+        if existing is not None and existing.listing and is_listed(existing.listing.state):
             logger.warning(
                 f"Pin denied on published agent {agent_id} for {user.user_id}: "
                 f"visibility is {existing.visibility}"

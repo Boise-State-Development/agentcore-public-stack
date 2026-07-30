@@ -203,12 +203,52 @@ class TestAssistantDeleteEndpoint:
 
     ROUTES_MODULE = "apis.app_api.assistants.routes"
 
+    @pytest.fixture(autouse=True)
+    def _deletable(self):
+        """Stub the §5.2 listing guard, which runs before any of the work these test.
+
+        The guard reads the Agent to check its listing state, so without this every test
+        below would hit a real table. It is stubbed rather than fed a fixture because these
+        tests are about delete *orchestration* — what gets cleaned up, in what order — and
+        the guard's own rules have a dedicated suite in
+        ``tests/shared/test_assistant_delete_listing_guard.py``.
+        """
+        with patch(
+            f"{self.ROUTES_MODULE}.assert_deletable", new_callable=AsyncMock
+        ) as guard:
+            yield guard
+
     @pytest.fixture
     def app(self):
         _app = FastAPI()
         _app.include_router(assistants_router)
         _app.dependency_overrides[get_current_user_from_session] = _make_user
         return _app
+
+    def test_a_listed_agent_is_refused_before_anything_is_cleaned_up(self, app, _deletable):
+        """⚠️ Ordering, not just refusal.
+
+        Steps 2 and 3 of this handler are destructive. If the guard fired after them, a
+        refused delete would leave the Agent gutted *and* still in the store — worse than
+        either outcome alone, and exactly what the refusal exists to prevent.
+        """
+        from apis.shared.assistants.service import AssistantListedError
+
+        _deletable.side_effect = AssistantListedError("still listed")
+
+        with patch(
+            f"{self.ROUTES_MODULE}.list_assistant_documents", new_callable=AsyncMock
+        ) as docs, patch(
+            f"{DOC_SERVICE}.batch_soft_delete_documents", new_callable=AsyncMock
+        ) as soft_delete, patch(
+            f"{self.ROUTES_MODULE}.delete_assistant", new_callable=AsyncMock
+        ) as hard_delete:
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 409
+        docs.assert_not_awaited()
+        soft_delete.assert_not_awaited()
+        hard_delete.assert_not_awaited()
 
     def test_delete_soft_deletes_all_docs(self, app):
         """Req 8.1: All documents are batch soft-deleted before assistant is removed."""

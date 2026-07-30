@@ -22,7 +22,7 @@ from typing import List, Optional, Tuple
 
 from apis.shared.assistants.categories import ensure_seeded, list_categories
 from apis.shared.assistants.icons import icon_url
-from apis.shared.assistants.listing import is_published
+from apis.shared.assistants.listing import is_listed
 from apis.shared.assistants.listing_repository import batch_get_agents, query_store
 from apis.shared.assistants.models import (
     AgentCategory,
@@ -182,7 +182,7 @@ async def resolve_featured(
             unavailable.append(agent_id)
             continue
         listing = assistant.listing
-        if not listing or not is_published(listing.state) or listing.published_version is None:
+        if not listing or not is_listed(listing.state) or listing.published_version is None:
             unavailable.append(agent_id)
             continue
         published.append((agent_id, listing.published_version))

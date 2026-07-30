@@ -26,16 +26,19 @@ the rest. Publisher is a name on a shelf.
 
 import logging
 import os
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 from apis.shared.assistants.compat import effective_bindings
 from apis.shared.assistants.categories import ensure_seeded
 from apis.shared.assistants.icons import icon_url
 from apis.shared.assistants.listing import (
+    PENDING_DECISION_STATES,
+    ListingAuthorityError,
     ListingTransitionError,
+    assert_author_target,
     assert_transition,
     gsi5_keys,
-    is_published,
+    is_listed,
 )
 from apis.shared.assistants.listing_repository import list_by_state, write_listing
 from apis.shared.assistants.version_repository import create_version, set_version_index
@@ -88,6 +91,11 @@ _EDIT_FIELD_LABELS = {
     "icon_key": "icon",
     "publisher_id": "publisher",
 }
+
+
+# What the Review queue asks for: "everything needing a decision", spelled as a state so the
+# route keeps one query parameter instead of growing a second one.
+_PENDING_QUERY = "pending"
 
 
 def _now() -> str:
@@ -419,9 +427,18 @@ async def submit_listing(
 
 
 async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
-    """Author unpublishes or withdraws a submission — back to ``private`` (D2).
+    """Author withdraws — immediately if nothing is live, as a *request* if something is.
 
-    Unpublishing revokes nothing retroactively: people who pinned it keep their pin,
+    **The same endpoint, two different acts, and the listing state decides which.** Before
+    publication, withdrawing is the author's alone: a pending submission is their own work
+    and pulling it costs nobody anything. Once a listing is live, other people have pinned
+    it, so removal becomes something an admin sees — the same reasoning that makes
+    publication go through a queue in the first place (D2). Splitting these across two
+    endpoints was the alternative and is worse: the author's intent is identical either way
+    ("take this down"), and making them pick the right verb for their listing's state is
+    asking them to know the state machine.
+
+    Neither act revokes anything retroactively: people who pinned it keep their pin,
     conversations underway keep running, and the agent stays reachable by direct link
     because ``visibility`` is a separate axis. It is a delisting, not a recall.
     """
@@ -429,18 +446,83 @@ async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
     if not assistant.listing:
         raise ListingError("This agent has no marketplace listing.", status_code=404)
 
+    # A live listing can only be *requested* down; anything else goes straight to private.
+    target = "withdrawal_requested" if is_listed(assistant.listing.state) else "private"
+
     try:
-        assert_transition(assistant.listing.state, "private")
+        assert_transition(assistant.listing.state, target)
+        assert_author_target(target)
+    except ListingTransitionError as e:
+        raise ListingError(str(e), status_code=400) from e
+    except ListingAuthorityError as e:  # pragma: no cover - both targets are author states
+        raise ListingError(str(e), status_code=403) from e
+
+    now = _now()
+    if target == "withdrawal_requested":
+        # ⚠️ The index is deliberately NOT cleared and ``publishedVersion`` deliberately
+        # kept. The listing stays live while the request is pending — an author whose
+        # request took it off the shelf immediately would have unilaterally unpublished it,
+        # which is exactly what this state exists to prevent. A declined request then needs
+        # no repair, because nothing was undone.
+        listing = assistant.listing.model_copy(
+            update={"state": target, "withdrawal_requested_at": now}
+        )
+        await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
+        logger.info(f"🙋 Agent {agent_id} withdrawal requested by its owner {user.user_id}")
+        return listing
+
+    # Pre-publication withdrawal: nothing is on the shelf, so this is immediate. The
+    # unindex is belt-and-braces for a listing whose pointer outlived its key.
+    await _unindex_version(agent_id, assistant.listing.published_version)
+    listing = assistant.listing.model_copy(update={"state": target, "published_version": None})
+    await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
+    logger.info(f"📭 Agent {agent_id} submission withdrawn by its owner")
+    return listing
+
+
+async def decide_withdrawal(
+    agent_id: str, admin: User, *, decision: str, note: Optional[str] = None
+) -> AgentListing:
+    """Admin grants or declines an author's withdrawal request (§5.1).
+
+    ``grant`` takes the listing to ``private`` and off the shelf. ``decline`` returns it to
+    ``published`` and changes nothing else — the listing never stopped being live, so there
+    is no key to restore and no version to re-promote. That asymmetry is the payoff of
+    leaving the index alone while the request was pending.
+
+    A declining admin should say why, since the author asked for something and is not
+    getting it; ``note`` renders on their card exactly as a request-changes reason does.
+    """
+    assistant = await _load_any(agent_id)
+    if not assistant.listing:
+        raise ListingError("This agent has no marketplace listing.", status_code=404)
+    if assistant.listing.state != "withdrawal_requested":
+        raise ListingError(
+            "This agent has no pending withdrawal request.",
+            status_code=400,
+        )
+
+    target = "private" if decision == "grant" else "published"
+    try:
+        assert_transition(assistant.listing.state, target)
     except ListingTransitionError as e:
         raise ListingError(str(e), status_code=400) from e
 
     now = _now()
-    # Index first, record second — see ``_unindex_version`` for why delisting is ordered
-    # the opposite way round from publishing.
-    await _unindex_version(agent_id, assistant.listing.published_version)
-    listing = assistant.listing.model_copy(update={"state": "private", "published_version": None})
+    changes: dict = {
+        "state": target,
+        "reviewed_at": now,
+        "reviewed_by": admin.user_id,
+        "review_note": note or None,
+    }
+    if target == "private":
+        changes["published_version"] = None
+        # Key first, record second — the fail-closed ordering in ``_unindex_version``.
+        await _unindex_version(agent_id, assistant.listing.published_version)
+
+    listing = assistant.listing.model_copy(update=changes)
     await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
-    logger.info(f"📭 Agent {agent_id} unpublished by its owner")
+    logger.info(f"🙋 Agent {agent_id} withdrawal {decision}ed by {admin.user_id}")
     return listing
 
 
@@ -686,10 +768,10 @@ async def patch_listing_presentation(
     #
     # Attributed to the admin, not the author — ``createdBy`` is audit, never authorization,
     # and mislabelling this would put the author's name on someone else's edit.
-    was_published = is_published(assistant.listing.state)
+    was_listed = is_listed(assistant.listing.state)
     previously_published = assistant.listing.published_version
     promoted: Optional[int] = None
-    if was_published:
+    if was_listed:
         edited = assistant.model_copy(
             update={
                 "name": changes.get("name", assistant.name),
@@ -738,12 +820,27 @@ async def patch_listing_presentation(
 
 # ── admin reads ──────────────────────────────────────────────────────────────────────
 async def list_admin_listings(state: Optional[str] = None) -> Tuple[List[AdminListingRow], int]:
-    """Rows for the Review queue / Listings tables, plus the pending-review count.
+    """Rows for the Review queue / Listings tables, plus the pending-decision count.
 
     The count badges the admin nav so the queue is visible rather than discovered — the
     operational half of D2's answer to "a review queue makes publication stop".
+
+    ``state`` accepts the pseudo-value ``"pending"``, which is what the Review queue asks
+    for: both submissions and withdrawal requests (``PENDING_DECISION_STATES``). §5.1 is
+    explicit that withdrawal requests belong in the *existing* queue — "one queue rather
+    than a second surface to remember" — and a queue an admin has to remember to check is
+    a queue that grows.
     """
-    raw = await list_by_state(state)
+    wanted: Optional[Set[str]] = None
+    if state == _PENDING_QUERY:
+        wanted = set(PENDING_DECISION_STATES)
+    elif state is not None:
+        wanted = {state}
+
+    # A multi-state ask scans once and filters here rather than issuing one scan per state.
+    # The population is every Agent anyone has ever submitted and the caller is a human
+    # clicking a nav item, so one pass is cheaper than two round trips.
+    raw = await list_by_state(state if wanted and len(wanted) == 1 else None)
     publishers = {p.id: p for p in await list_publishers()}
 
     rows: List[AdminListingRow] = []
@@ -755,17 +852,25 @@ async def list_admin_listings(state: Optional[str] = None) -> Tuple[List[AdminLi
             continue
         if not assistant.listing:
             continue
+        if wanted is not None and assistant.listing.state not in wanted:
+            continue
         rows.append(_to_row(assistant, publishers.get(assistant.listing.publisher_id)))
 
     rows.sort(key=lambda r: (r.submitted_at or r.updated_at), reverse=True)
 
-    # The badge counts the review queue, not whatever slice the caller asked for — an
-    # admin filtering the Listings table to "published" still needs to see work waiting.
+    # The badge counts the whole decision queue, not whatever slice the caller asked for —
+    # an admin filtering the Listings table to "published" still needs to see work waiting.
     # When the fetched rows already cover the queue, count them instead of re-scanning.
-    if state is None or state == "in_review":
-        pending = len([r for r in rows if r.state == "in_review"])
+    if wanted is None or wanted >= set(PENDING_DECISION_STATES):
+        pending = len([r for r in rows if r.state in PENDING_DECISION_STATES])
     else:
-        pending = len(await list_by_state("in_review"))
+        pending = len(
+            [
+                item
+                for item in await list_by_state(None)
+                if (item.get("listing") or {}).get("state") in PENDING_DECISION_STATES
+            ]
+        )
 
     return rows, pending
 
