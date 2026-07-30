@@ -1,5 +1,11 @@
 import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
+import { Dialog } from '@angular/cdk/dialog';
+import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
+import {
+  ConfirmationDialogComponent,
+  ConfirmationDialogData,
+} from '../../../components/confirmation-dialog/confirmation-dialog.component';
 import {
   heroBuildingLibrary,
   heroCheckBadge,
@@ -223,6 +229,7 @@ import {
 })
 export class MarketplacePublishersPage implements OnInit {
   private readonly service = inject(AdminMarketplaceService);
+  private readonly dialog = inject(Dialog);
 
   readonly publishers = signal<PublisherProfile[]>([]);
   readonly loading = signal(true);
@@ -291,7 +298,33 @@ export class MarketplacePublishersPage implements OnInit {
     );
   }
 
+  /**
+   * Delete a publisher profile, behind a confirmation.
+   *
+   * Confirmed because it is irreversible and the id is not recoverable: the id is fixed at
+   * creation, so a profile deleted by mistake cannot be recreated as the same one, and
+   * every listing that named it stays unattributed. Every other control on this page is a
+   * toggle or a rename that can be undone by doing it again; this one cannot.
+   *
+   * The server refuses (409) while listings are still attributed, and that message names
+   * disabling as the alternative — so the dialog does not repeat it here.
+   */
   async remove(publisher: PublisherProfile): Promise<void> {
+    const ref = this.dialog.open<boolean>(ConfirmationDialogComponent, {
+      data: {
+        title: 'Delete this publisher?',
+        message:
+          `"${publisher.label}" is removed for good — its id is fixed at creation, so it ` +
+          'cannot be recreated as the same profile. Listings can only be deleted when ' +
+          'nothing is attributed to them; if you want it out of the submit picker while ' +
+          'existing credits keep rendering, disable it instead.',
+        confirmText: 'Delete',
+        cancelText: 'Cancel',
+        destructive: true,
+      } satisfies ConfirmationDialogData,
+    });
+    if (!(await firstValueFrom(ref.closed))) return;
+
     await this.mutate(() => this.service.deletePublisher(publisher.id));
   }
 

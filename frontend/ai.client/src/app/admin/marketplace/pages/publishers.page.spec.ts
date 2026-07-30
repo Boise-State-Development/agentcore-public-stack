@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
+import { Dialog } from '@angular/cdk/dialog';
+import { of } from 'rxjs';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import { MarketplacePublishersPage } from './publishers.page';
 import { PublisherProfile } from '../models/marketplace.model';
@@ -19,6 +21,8 @@ describe('MarketplacePublishersPage', () => {
     updatePublisher: ReturnType<typeof vi.fn>;
     deletePublisher: ReturnType<typeof vi.fn>;
   };
+  /** Delete is confirmed; default to "confirmed" so the other tests read unchanged. */
+  let mockDialog: { open: ReturnType<typeof vi.fn> };
 
   function publisher(overrides: Partial<PublisherProfile> = {}): PublisherProfile {
     return {
@@ -40,8 +44,12 @@ describe('MarketplacePublishersPage', () => {
       updatePublisher: vi.fn().mockResolvedValue(publisher()),
       deletePublisher: vi.fn().mockResolvedValue(undefined),
     };
+    mockDialog = { open: vi.fn().mockReturnValue({ closed: of(true) }) };
     TestBed.configureTestingModule({
-      providers: [{ provide: AdminMarketplaceService, useValue: mockService }],
+      providers: [
+        { provide: AdminMarketplaceService, useValue: mockService },
+        { provide: Dialog, useValue: mockDialog },
+      ],
     });
   });
 
@@ -60,6 +68,12 @@ describe('MarketplacePublishersPage', () => {
 
   function text(fixture: ComponentFixture<unknown>): string {
     return (fixture.nativeElement as HTMLElement).textContent ?? '';
+  }
+
+  function deleteButton(fixture: ComponentFixture<unknown>): HTMLButtonElement {
+    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button')).find(
+      (b) => b.textContent?.includes('Delete Office of the Registrar'),
+    ) as HTMLButtonElement;
   }
 
   it('lists the publishers an admin can attribute a listing to', async () => {
@@ -155,6 +169,26 @@ describe('MarketplacePublishersPage', () => {
     expect(mockService.updatePublisher).toHaveBeenCalledWith('pub-registrar', { enabled: false });
   });
 
+  it('confirms before deleting a publisher', async () => {
+    // The one control on this page that cannot be undone by clicking it again: the id is
+    // fixed at creation, so a mistaken delete cannot be put back.
+    const fixture = await render([publisher()]);
+    deleteButton(fixture).click();
+    await fixture.whenStable();
+
+    expect(mockDialog.open).toHaveBeenCalled();
+    expect(mockService.deletePublisher).toHaveBeenCalledWith('pub-registrar');
+  });
+
+  it('does not delete when the confirmation is dismissed', async () => {
+    mockDialog.open.mockReturnValue({ closed: of(undefined) });
+    const fixture = await render([publisher()]);
+    deleteButton(fixture).click();
+    await fixture.whenStable();
+
+    expect(mockService.deletePublisher).not.toHaveBeenCalled();
+  });
+
   it("surfaces the server's refusal when a publisher is still in use", async () => {
     // The 409 explains itself and suggests disabling instead. Replacing it with a generic
     // "could not save" would throw away the only actionable part.
@@ -163,10 +197,7 @@ describe('MarketplacePublishersPage', () => {
     });
     const fixture = await render([publisher()]);
 
-    const remove = Array.from(
-      (fixture.nativeElement as HTMLElement).querySelectorAll('button'),
-    ).find((b) => b.textContent?.includes('Delete Office of the Registrar')) as HTMLButtonElement;
-    remove.click();
+    deleteButton(fixture).click();
     await fixture.whenStable();
     fixture.detectChanges();
 

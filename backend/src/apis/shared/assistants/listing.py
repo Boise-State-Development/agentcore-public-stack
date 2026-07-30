@@ -87,6 +87,15 @@ LISTING_STATES: Tuple[str, ...] = (
 # Withdrawal is now a request an admin acts on (see §5.1 of the version-snapshots spec).
 # The edges an author still owns alone are the pre-publication ones: ``private → in_review``
 # and withdrawing a *pending* submission (``in_review``/``changes_requested`` → ``private``).
+#
+# ⚠️ ``changes_requested`` covers two different listings — one that was never published, and
+# one that *was* and is still serving while the author revises it (``review_listing`` does
+# not unpublish). Only the first should be able to walk ``→ private`` alone, but this table
+# cannot tell them apart, and adding ``changes_requested → withdrawal_requested`` to fix it
+# would open ``in_review → changes_requested → withdrawal_requested → published`` — a route
+# to ``published`` for something never approved, which is the one property
+# ``test_approval_is_the_only_door_into_the_store`` exists to hold. Left alone deliberately;
+# see the note on ``is_on_shelf``.
 ALLOWED_TRANSITIONS: Dict[Optional[str], Set[str]] = {
     None: {"in_review"},
     "private": {"in_review"},
@@ -203,11 +212,46 @@ def is_published(state: Optional[str]) -> bool:
 def is_listed(state: Optional[str]) -> bool:
     """Whether a listing state means "live in the store" (see ``LISTED_STATES``).
 
-    This is the predicate almost everything wants: the store index, the featured row, and
-    "does an admin edit need to cut a new version". It is true for ``withdrawal_requested``
-    as well as ``published``, because a requested withdrawal is not a granted one.
+    True for ``withdrawal_requested`` as well as ``published``, because a requested
+    withdrawal is not a granted one.
+
+    ⚠️ **State-only, and therefore incomplete for "is this on the shelf right now?"** — use
+    ``is_on_shelf`` for that. ``changes_requested`` is not in ``LISTED_STATES``, but a
+    *published* listing that an admin sends back for changes deliberately keeps serving its
+    approved version (``review_listing`` does not unpublish; a takedown is the operation
+    that pulls something down). Such a listing is in ``changes_requested`` **and** in the
+    store, so this predicate answers ``False`` about an Agent users can still see.
+
+    Kept as-is rather than widened because two callers genuinely want the state alone:
+    ``gsi5_keys``, which derives the index key at the moment of promotion, and the D13
+    "does an admin edit need a new version" test.
     """
     return state in LISTED_STATES
+
+
+def is_on_shelf(state: Optional[str], published_version: Optional[int]) -> bool:
+    """Whether this listing is in the store *right now* — the fact, not the state name.
+
+    ``published_version`` is the record of which snapshot carries the sparse index key, and
+    every path that takes an Agent off the shelf clears it in the same breath as the key
+    (``takedown_listing``, a granted withdrawal, a pre-publication withdraw). So the pointer
+    being set is the same statement as "a version of this is queryable in the store" — which
+    is the physics ``version_repository.set_version_index`` describes, asked as a question.
+
+    Prefer this over ``is_listed`` anywhere the answer changes what a *user* can do. The
+    case that forced it: an admin requesting changes on a live listing leaves it serving,
+    but moves it to ``changes_requested``. Asked by state alone, ``withdraw_listing`` then
+    reads that listing as not-live and sends the author straight to ``private`` — pulling a
+    listing users can currently see, with no admin ever deciding. That is exactly the
+    unilateral delisting ``withdrawal_requested`` exists to prevent, reached through the one
+    state nobody thought to check.
+
+    ``state`` is still consulted so a cleared-but-stale pointer cannot resurrect something:
+    ``private`` and ``taken_down`` are never on the shelf whatever the pointer says.
+    """
+    if state in ("private", "taken_down", None):
+        return False
+    return published_version is not None
 
 
 def gsi5_keys(state: Optional[str], category: Optional[str], created_at: str) -> Optional[Dict[str, str]]:

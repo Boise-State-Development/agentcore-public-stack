@@ -458,6 +458,16 @@ async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
         raise ListingError("This agent has no marketplace listing.", status_code=404)
 
     # A live listing can only be *requested* down; anything else goes straight to private.
+    #
+    # ⚠️ Known gap, left deliberately rather than patched here: a listing that was published
+    # and then sent back for changes is still serving (``review_listing`` does not
+    # unpublish), but its state is ``changes_requested``, so this reads it as not-live and
+    # the author goes straight to ``private`` — pulling something users can currently see
+    # without an admin deciding. Closing it needs a product call, not a predicate swap: the
+    # transition table cannot allow ``changes_requested → withdrawal_requested`` without
+    # also opening a route to ``published`` for a listing that was never approved (see
+    # ``ALLOWED_TRANSITIONS``), and it is unclear what declining such a request should
+    # restore the listing to.
     target = "withdrawal_requested" if is_listed(assistant.listing.state) else "private"
 
     try:
@@ -1012,6 +1022,12 @@ def _to_row(assistant: Assistant, publisher: Optional[PublisherProfile]) -> Admi
         state=listing.state,
         usage_count=assistant.usage_count,
         submitted_at=listing.submitted_at,
+        # Only while one is actually pending: the stamp survives the decision on the stored
+        # listing, and a resolved request rendering as "withdrawal requested 3 days ago"
+        # would put a decided listing back in front of an admin as if it still needed one.
+        withdrawal_requested_at=(
+            listing.withdrawal_requested_at if listing.state == "withdrawal_requested" else None
+        ),
         reviewed_at=listing.reviewed_at,
         review_note=listing.review_note,
         updated_at=assistant.updated_at,

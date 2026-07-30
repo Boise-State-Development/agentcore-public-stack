@@ -888,3 +888,89 @@ class TestReviewDiff:
         with _loaded(_make_assistant(listing=None)):
             resp = TestClient(app).get("/admin/agents/ast-001/diff")
         assert resp.status_code == 404
+
+
+class TestPublisherDeleteIsGuarded:
+    """Delete is refused while listings still name the publisher.
+
+    The page told admins this rule long before it existed: ``publishers.page.ts`` documents
+    "deleting is refused (409) while listings are attributed", and its error handling was
+    already written to pass the server's message straight through. Nothing enforced it, so
+    deleting an in-use profile silently unattributed every listing that named it — including
+    published ones, which then render as "Unattributed" with no surface for putting the
+    credit back. The id is fixed at creation, so it is not recoverable by recreating it.
+    """
+
+    def test_delete_is_refused_while_a_listing_is_attributed(self, app):
+        with patch(
+            f"{ADMIN_MODULE}.get_publisher",
+            new_callable=AsyncMock,
+            return_value=PublisherProfile.model_validate(
+                {"id": "pub-registrar", "label": "Registrar", "kind": "department"}
+            ),
+        ), patch(
+            f"{ADMIN_MODULE}.publisher_in_use", new_callable=AsyncMock, return_value=True
+        ), patch(
+            f"{ADMIN_MODULE}.delete_publisher", new_callable=AsyncMock
+        ) as delete:
+            resp = TestClient(app).delete("/admin/agents/publishers/pub-registrar")
+
+        assert resp.status_code == 409
+        # Names the alternative rather than only refusing — disabling is what was meant.
+        assert "Disable it instead" in resp.json()["detail"]
+        delete.assert_not_awaited()
+
+    def test_delete_proceeds_when_nothing_is_attributed(self, app):
+        with patch(
+            f"{ADMIN_MODULE}.get_publisher",
+            new_callable=AsyncMock,
+            return_value=PublisherProfile.model_validate(
+                {"id": "pub-registrar", "label": "Registrar", "kind": "department"}
+            ),
+        ), patch(
+            f"{ADMIN_MODULE}.publisher_in_use", new_callable=AsyncMock, return_value=False
+        ), patch(
+            f"{ADMIN_MODULE}.delete_publisher", new_callable=AsyncMock
+        ) as delete:
+            resp = TestClient(app).delete("/admin/agents/publishers/pub-registrar")
+
+        assert resp.status_code == 204
+        delete.assert_awaited_once_with("pub-registrar")
+
+
+class TestWithdrawalRequestIsLegibleInTheQueue:
+    """The row has to say it is a withdrawal, or the admin answers the wrong question.
+
+    Submissions and withdrawal requests share one queue (§5.1). Without a timestamp that
+    only a request carries, the row renders "submitted <the original date>" and reads as an
+    ordinary submission — which is how the SPA came to offer Approve on it.
+    """
+
+    def test_a_pending_request_carries_its_own_timestamp(self, app):
+        listing = _listing(
+            "withdrawal_requested",
+            publishedVersion=2,
+            withdrawalRequestedAt="2026-07-30T00:00:00Z",
+        )
+        assistant = _make_assistant(listing=listing)
+        by_state, publishers = _listing_rows(assistant)
+        with by_state, publishers:
+            resp = TestClient(app).get("/admin/agents/listings")
+
+        assert resp.json()["listings"][0]["withdrawalRequestedAt"] == "2026-07-30T00:00:00Z"
+
+    def test_a_resolved_request_does_not_keep_advertising_itself(self, app):
+        """The stamp survives the decision on the stored listing; the row must not.
+
+        A granted or declined request that still rendered "withdrawal requested 3 days ago"
+        would put a decided listing back in front of an admin as if it needed deciding.
+        """
+        listing = _listing(
+            "published", publishedVersion=2, withdrawalRequestedAt="2026-07-30T00:00:00Z"
+        )
+        assistant = _make_assistant(listing=listing)
+        by_state, publishers = _listing_rows(assistant)
+        with by_state, publishers:
+            resp = TestClient(app).get("/admin/agents/listings")
+
+        assert resp.json()["listings"][0].get("withdrawalRequestedAt") is None

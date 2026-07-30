@@ -210,10 +210,18 @@ export class AgentsPage implements OnInit {
     return state === 'in_review' || state === 'changes_requested' || state === 'published';
   }
 
+  /**
+   * "Request withdrawal" on a live listing, not "Unpublish" (§5.1).
+   *
+   * The author no longer owns that edge — `published → private` left the machine, and the
+   * click now creates a request an admin acts on. Labelling it "Unpublish" promised an
+   * outcome the button cannot deliver: the listing stays in the store until the admin
+   * decides, so the author walked away believing it was gone.
+   */
   withdrawLabel(agent: Agent): string {
     switch (this.listingState(agent)) {
       case 'published':
-        return 'Unpublish';
+        return 'Request withdrawal';
       case 'in_review':
         return 'Withdraw submission';
       default:
@@ -223,6 +231,19 @@ export class AgentsPage implements OnInit {
 
   isPublished(agent: Agent): boolean {
     return this.listingState(agent) === 'published';
+  }
+
+  /**
+   * Whether the agent is in the store *now* — which "View in store" is asking, and which
+   * `isPublished` answers wrongly for one state.
+   *
+   * A pending withdrawal request leaves the listing serving (§5.1). Gating the link on
+   * `published` hid it the moment the author asked to withdraw, telling them it was
+   * already off the shelf — the same false impression the confirmation copy used to give.
+   */
+  isInStore(agent: Agent): boolean {
+    const state = this.listingState(agent);
+    return state === 'published' || state === 'withdrawal_requested';
   }
 
   onViewInStore(agent: Agent): void {
@@ -276,16 +297,20 @@ export class AgentsPage implements OnInit {
     const published = this.isPublished(agent);
     const dialogRef = this.dialog.open<boolean>(ConfirmationDialogComponent, {
       data: {
-        title: published ? 'Unpublish this agent?' : 'Withdraw this submission?',
-        // D7.3 — say plainly that this recalls nothing. An author who believes
-        // unpublishing revokes access will make a worse decision than one who knows.
+        title: published ? 'Request withdrawal?' : 'Withdraw this submission?',
+        // Two things this has to get right, and it used to get both wrong on the published
+        // path. (1) §5.1 — this is a *request*: the listing stays in the store until an
+        // admin grants it, and saying "is removed from the store" sent authors away
+        // believing it was already down. (2) D7.3 — say plainly that it recalls nothing,
+        // because an author who thinks withdrawal revokes access decides worse than one
+        // who knows it does not.
         message: published
-          ? `"${agent.name}" is removed from the store and no one new can find it there. ` +
-            'It revokes nothing retroactively: anyone who already added it keeps it, ' +
-            'conversations underway keep running, and it stays reachable by direct link. ' +
-            'You can submit it again later.'
+          ? `An admin reviews this before "${agent.name}" comes off the shelf, so it stays ` +
+            'in the store until they decide. Even once it does come down, nothing is ' +
+            'recalled: anyone who already added it keeps it, conversations underway keep ' +
+            'running, and it stays reachable by direct link.'
           : `"${agent.name}" is pulled from the review queue. You can submit it again at any time.`,
-        confirmText: published ? 'Unpublish' : 'Withdraw',
+        confirmText: published ? 'Request withdrawal' : 'Withdraw',
         cancelText: 'Cancel',
         destructive: published,
       } as ConfirmationDialogData,
