@@ -20,6 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from apis.app_api.agent_designer.services.listing_service import (
     ListingError,
     list_admin_listings,
+    list_agent_versions,
+    rollback_listing,
     patch_listing_presentation,
     review_listing,
     decide_withdrawal,
@@ -54,6 +56,7 @@ from apis.shared.assistants.models import (
     AgentCategoryUpdateRequest,
     AgentListing,
     AgentVersionDiffResponse,
+    AgentVersionsResponse,
     PublisherCreateRequest,
     PublisherEligibilityRequest,
     PublisherEligibilityResponse,
@@ -62,6 +65,7 @@ from apis.shared.assistants.models import (
     PublisherUpdateRequest,
     ResolveReportRequest,
     ReviewListingRequest,
+    RollbackListingRequest,
     StoreFrontUpdateRequest,
     TakedownRequest,
     WithdrawalDecisionRequest,
@@ -225,9 +229,10 @@ async def decide_agent_withdrawal(
     have different inputs, different notes and opposite defaults. One endpoint with four
     decision values would make an accidental unpublication a one-character mistake.
 
-    ``grant`` → ``private`` and off the shelf. ``decline`` → back to ``published``, which
-    restores nothing because the listing never stopped being live while the request was
-    pending — that is the point of leaving the store index alone in ``withdrawal_requested``.
+    ``grant`` → ``private`` and off the shelf. ``decline`` → back to whatever state the
+    request came from (``withdrawal_from``), which restores nothing because the listing never
+    stopped being live while the request was pending — that is the point of leaving the store
+    index alone in ``withdrawal_requested``.
     """
     try:
         return await decide_withdrawal(
@@ -238,6 +243,50 @@ async def decide_agent_withdrawal(
     except Exception as e:
         logger.error(f"Error deciding agent withdrawal: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to decide withdrawal: {str(e)}")
+
+
+@router.get("/{agent_id}/versions", response_model=AgentVersionsResponse)
+async def list_agent_version_history(
+    agent_id: str, admin: User = Depends(require_marketplace_admin),
+):
+    """Every snapshot this Agent has, newest first — the rollback picker's source (§8).
+
+    Admin-only, like the diff and for the same reason: version *names* are harmless but this
+    is the history of an Agent's approvals, and the surface that reads it is the one that can
+    change what the store serves.
+    """
+    try:
+        versions, published = await list_agent_versions(agent_id)
+        return AgentVersionsResponse(versions=versions, published_version=published)
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error listing agent versions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list versions: {str(e)}")
+
+
+@router.post("/{agent_id}/rollback", response_model=AgentListing)
+async def rollback_agent_listing(
+    agent_id: str,
+    request: RollbackListingRequest,
+    admin: User = Depends(require_marketplace_admin),
+):
+    """Repoint a published listing at an earlier snapshot (§8).
+
+    The answer to "the approved version turned out to be wrong". Separate from ``/review``
+    because it is not a review decision — no version is cut, nothing moves through the queue,
+    and the listing stays ``published`` throughout. It only changes *which* approved artifact
+    the store serves, which is why it can only act on a listing that is already published.
+    """
+    try:
+        return await rollback_listing(
+            agent_id, admin, version=request.version, reason=request.reason
+        )
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error rolling back agent listing: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to roll back listing: {str(e)}")
 
 
 @router.patch("/{agent_id}/listing", response_model=AgentListing)

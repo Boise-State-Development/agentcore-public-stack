@@ -106,6 +106,60 @@ async def _publish(agent_id: str, category: str, created_at: str, publisher_id="
     await publish_agent_version(agent_id, category, created_at, publisher_id=publisher_id)
 
 
+# ── legacy rows left in the index ────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_a_legacy_agent_row_left_in_the_index_is_skipped_quietly(table, caplog):
+    """PR-2 moved the directory key onto the version row; older listings kept theirs.
+
+    Those Agent rows come back from the same query and cannot be an ``AgentVersion``, so
+    the generic handler logged a full pydantic traceback for each one on *every* store
+    browse. The listing is invisible either way — it has no snapshot to render — so the
+    read path skips it by sort key instead of failing to parse it.
+    """
+    _seed_agent(
+        table,
+        "ast-legacy",
+        created_at="2026-07-01T00:00:00Z",
+        name="Published Before Snapshots",
+        GSI5_PK="LISTED#Administration",
+        GSI5_SK="CREATED#2026-07-01T00:00:00Z",
+    )
+
+    with caplog.at_level("WARNING"):
+        listings, _ = await browse_category("Administration")
+
+    assert listings == []
+    assert "Skipping unparseable store row" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_row_does_not_shift_the_browse_all_ordering(table):
+    """The pairing bug the skip would otherwise expose.
+
+    ``browse_all`` sorts on each row's ``GSI5_SK``. It used to get those by zipping the raw
+    items against the projected responses, which is only correct while nothing is skipped —
+    one dropped row slides every later response onto the previous row's key.
+    """
+    await ensure_seeded()
+    _seed_agent(
+        table,
+        "ast-legacy",
+        created_at="2026-07-09T00:00:00Z",
+        name="Legacy",
+        GSI5_PK="LISTED#Administration",
+        GSI5_SK="CREATED#2026-07-09T00:00:00Z",
+    )
+    _seed_agent(table, "ast-old", created_at="2026-07-01T00:00:00Z", name="Older")
+    await _publish("ast-old", "Administration", "2026-07-01T00:00:00Z")
+    _seed_agent(table, "ast-new", created_at="2026-07-20T00:00:00Z", name="Newer")
+    await _publish("ast-new", "Teaching", "2026-07-20T00:00:00Z")
+
+    listings = await browse_all()
+
+    # Newest-first by *Agent* creation, with the legacy row absent rather than misplaced.
+    assert [row.name for row in listings] == ["Newer", "Older"]
+
+
 # ── the structural guarantee ─────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_browse_returns_published_agents(table):

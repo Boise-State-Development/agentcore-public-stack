@@ -31,6 +31,11 @@ import {
   RequestChangesDialogData,
   RequestChangesDialogResult,
 } from '../components/request-changes-dialog.component';
+import {
+  RollbackDialogComponent,
+  RollbackDialogData,
+  RollbackDialogResult,
+} from '../components/rollback-dialog.component';
 
 /**
  * Listings — every agent that has ever been submitted (D10).
@@ -218,6 +223,19 @@ import {
                           >
                             Request changes
                           </button>
+                          <!-- Only once there is something to roll back *to*. A control that
+                               opens a dialog whose only honest content is "there is nothing
+                               here" is worse than an absent one. -->
+                          @if (canRollBack(row)) {
+                            <button
+                              type="button"
+                              [disabled]="busyId() === row.agentId"
+                              (click)="rollback(row)"
+                              class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                            >
+                              Roll back
+                            </button>
+                          }
                           <button
                             type="button"
                             [disabled]="busyId() === row.agentId"
@@ -310,6 +328,45 @@ export class MarketplaceListingsPage implements OnInit {
     } catch (err) {
       const detail = (err as { error?: { detail?: unknown } })?.error?.detail;
       this.error.set(typeof detail === 'string' ? detail : 'Failed to record the decision.');
+    } finally {
+      this.busyId.set(null);
+    }
+  }
+
+  /**
+   * Whether an earlier snapshot exists to roll back to.
+   *
+   * Inferred from the version number rather than by fetching the history: `v1` is by
+   * definition the first, so there is nothing behind it. Anything above `v1` *may* have a
+   * predecessor — the dialog loads the real list and says so honestly if it does not.
+   */
+  canRollBack(row: AdminListingRow): boolean {
+    return (row.publishedVersion ?? 0) > 1;
+  }
+
+  /**
+   * Repoint a published listing at an earlier snapshot (§8).
+   *
+   * Not a review decision — nothing is cut, nothing queues, and the listing stays published.
+   * It changes only which approved artifact the store serves, which is why it sits beside
+   * "Take down" rather than in the review queue.
+   */
+  async rollback(row: AdminListingRow): Promise<void> {
+    const ref = this.dialog.open<RollbackDialogResult, RollbackDialogData>(
+      RollbackDialogComponent,
+      { data: { listing: row } },
+    );
+    const choice = await firstValueFrom(ref.closed);
+    if (!choice) return;
+
+    this.busyId.set(row.agentId);
+    this.error.set(null);
+    try {
+      await this.service.rollback(row.agentId, choice);
+      await this.reload();
+    } catch (err) {
+      const detail = (err as { error?: { detail?: unknown } })?.error?.detail;
+      this.error.set(typeof detail === 'string' ? detail : 'Failed to roll back the listing.');
     } finally {
       this.busyId.set(null);
     }

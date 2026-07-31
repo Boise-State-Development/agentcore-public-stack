@@ -151,6 +151,38 @@ export interface WithdrawalDecisionRequest {
 }
 
 /**
+ * One snapshot in an Agent's history, described just enough to pick out of a list.
+ *
+ * Deliberately not the whole version: the picker renders a number, a name and a date, and
+ * shipping every past snapshot's `instructions` to draw a dropdown would put an Agent's
+ * entire approval history on the wire.
+ */
+export interface AgentVersionSummary {
+  version: number;
+  name?: string;
+  tagline?: string;
+  createdAt?: string;
+  createdBy?: string;
+  isPublished: boolean;
+}
+
+export interface AgentVersionsResponse {
+  versions: AgentVersionSummary[];
+  publishedVersion?: number;
+}
+
+/**
+ * Repoint a published listing at an earlier snapshot (§8).
+ *
+ * `reason` is required and reaches the author's card, exactly as a takedown's does — an
+ * admin changing what users run is something the author has to be able to see.
+ */
+export interface RollbackListingRequest {
+  version: number;
+  reason: string;
+}
+
+/**
  * Presentation-only patch. The backend refuses behavior fields (`instructions`,
  * `bindings`, `modelConfig`, `starters`, `visibility`) with a 422 — an admin editing
  * behavior would own something they did not write and cannot test.

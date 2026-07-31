@@ -166,6 +166,22 @@ class AgentListing(BaseModel):
             "when — a request that vanishes on decline reads as though it was never made."
         ),
     )
+    withdrawal_from: Optional[ListingState] = Field(
+        None,
+        alias="withdrawalFrom",
+        description=(
+            "The state a pending withdrawal request came *from*, so declining it restores "
+            "exactly that rather than assuming ``published``.\n\n"
+            "Two states can be on the shelf and therefore reach ``withdrawal_requested``: "
+            "``published``, and a ``changes_requested`` listing that was published before the "
+            "admin sent it back (``review_listing`` deliberately does not unpublish). Without "
+            "this field, declining the second one would land it in ``published`` and silently "
+            "discard the outstanding change request — and, worse, it would make "
+            "``withdrawal_requested → published`` reachable from a listing that had never been "
+            "approved. Recording the origin is what keeps ``ALLOWED_TRANSITIONS`` provably "
+            "free of a second door into the store."
+        ),
+    )
     submitted_version: Optional[int] = Field(
         None,
         alias="submittedVersion",
@@ -789,6 +805,58 @@ class VersionFieldChange(BaseModel):
         description=(
             "Whether this field changes what the Agent *does* (instructions, bindings, "
             "model) rather than how it presents. Drives the reviewer's at-a-glance triage."
+        ),
+    )
+
+
+class AgentVersionSummary(BaseModel):
+    """One snapshot, described just enough to pick it out of a list (§8 rollback).
+
+    Deliberately not an ``AgentVersion``: the rollback picker renders a number, a name and a
+    date, and sending the full snapshot would put every past version's ``instructions`` on
+    the wire to draw a dropdown — the whole approval history of an Agent, to an admin who
+    asked which versions exist.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    version: int = Field(..., description="Version number, 1-based")
+    name: Optional[str] = Field(None, description="Name as of this snapshot")
+    tagline: Optional[str] = Field(None, description="Tagline as of this snapshot")
+    created_at: Optional[str] = Field(
+        None, alias="createdAt", description="ISO 8601 when the snapshot was cut"
+    )
+    created_by: Optional[str] = Field(
+        None, alias="createdBy", description="Who cut it — the author, or an admin for a D13 edit"
+    )
+    is_published: bool = Field(
+        False, alias="isPublished", description="Whether this is the snapshot the store serves"
+    )
+
+
+class AgentVersionsResponse(BaseModel):
+    """Every snapshot an Agent has, newest first, plus which one is live."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    versions: List[AgentVersionSummary] = Field(default_factory=list)
+    published_version: Optional[int] = Field(
+        None, alias="publishedVersion", description="The number the listing currently serves"
+    )
+
+
+class RollbackListingRequest(BaseModel):
+    """Repoint a published listing at an earlier snapshot (§8)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    version: int = Field(..., description="The snapshot to make live")
+    reason: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Why — rendered on the author's card. Required for the same reason takedown's is: "
+            "an admin changing what users run is something the author must be able to see."
         ),
     )
 

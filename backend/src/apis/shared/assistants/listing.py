@@ -70,8 +70,10 @@ LISTING_STATES: Tuple[str, ...] = (
 #   published         → changes_requested  admin requests changes on a live listing
 #   taken_down        → changes_requested  admin annotates an already-delisted listing
 #   in_review         → private            author withdraws a pending submission
-#   changes_requested → private            author withdraws
+#   changes_requested → private            author withdraws one that was never live
 #   published         → withdrawal_requested author ASKS to pull a live listing
+#   changes_requested → withdrawal_requested author ASKS to pull one that is *still* live
+#   withdrawal_requested → changes_requested admin declines; it goes back where it came from
 #   withdrawal_requested → private          admin grants the withdrawal
 #   withdrawal_requested → published        admin declines; the listing stays live
 #   withdrawal_requested → taken_down       admin pulls it outright instead
@@ -89,21 +91,26 @@ LISTING_STATES: Tuple[str, ...] = (
 # and withdrawing a *pending* submission (``in_review``/``changes_requested`` → ``private``).
 #
 # ⚠️ ``changes_requested`` covers two different listings — one that was never published, and
-# one that *was* and is still serving while the author revises it (``review_listing`` does
-# not unpublish). Only the first should be able to walk ``→ private`` alone, but this table
-# cannot tell them apart, and adding ``changes_requested → withdrawal_requested`` to fix it
-# would open ``in_review → changes_requested → withdrawal_requested → published`` — a route
-# to ``published`` for something never approved, which is the one property
-# ``test_approval_is_the_only_door_into_the_store`` exists to hold. Left alone deliberately;
-# see the note on ``is_on_shelf``.
+# one that *was* and is still serving while the author revises it (``review_listing``
+# deliberately does not unpublish). Only the first may walk ``→ private`` alone; the second
+# has to go through a request, which is why this row carries both exits and
+# ``withdraw_listing`` picks between them with ``is_on_shelf`` rather than by state name.
+#
+# The reason that is safe — and it is the whole reason ``AgentListing.withdrawal_from``
+# exists — is that declining a withdrawal returns the listing to the state it came *from*,
+# not to a hardcoded ``published``. So ``in_review → changes_requested →
+# withdrawal_requested → published`` is not reachable: a listing that entered
+# ``withdrawal_requested`` from ``changes_requested`` can only go back to
+# ``changes_requested``. Approval remains the only door into the store, and
+# ``test_approval_is_the_only_door_into_the_store`` asserts exactly that.
 ALLOWED_TRANSITIONS: Dict[Optional[str], Set[str]] = {
     None: {"in_review"},
     "private": {"in_review"},
     "in_review": {"published", "changes_requested", "private"},
-    "changes_requested": {"in_review", "private"},
+    "changes_requested": {"in_review", "private", "withdrawal_requested"},
     "published": {"taken_down", "changes_requested", "withdrawal_requested"},
     "taken_down": {"in_review", "changes_requested"},
-    "withdrawal_requested": {"private", "published", "taken_down"},
+    "withdrawal_requested": {"private", "published", "changes_requested", "taken_down"},
 }
 
 # States an author may drive. Everything else is the reviewer's (``require_admin``).

@@ -4,6 +4,8 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import {
   AgentVersionDiff,
+  AgentVersionsResponse,
+  RollbackListingRequest,
   PublisherCreateRequest,
   PublisherEligibilityResponse,
   PublisherUpdateRequest,
@@ -113,6 +115,24 @@ export class AdminMarketplaceService {
    */
   async decideWithdrawal(agentId: string, request: WithdrawalDecisionRequest): Promise<void> {
     await firstValueFrom(this.http.post(`${this.baseUrl()}/${agentId}/withdrawal`, request));
+  }
+
+  /** Every snapshot this agent has, newest first — the rollback picker's source (§8). */
+  async loadVersions(agentId: string): Promise<AgentVersionsResponse> {
+    return firstValueFrom(
+      this.http.get<AgentVersionsResponse>(`${this.baseUrl()}/${agentId}/versions`),
+    );
+  }
+
+  /**
+   * Repoint a published listing at an earlier snapshot (§8).
+   *
+   * Not a review decision: no version is cut, nothing enters the queue, and the listing
+   * stays published throughout. It only changes *which* approved artifact the store serves,
+   * which is why the backend refuses it on anything that is not already published.
+   */
+  async rollback(agentId: string, request: RollbackListingRequest): Promise<void> {
+    await firstValueFrom(this.http.post(`${this.baseUrl()}/${agentId}/rollback`, request));
   }
 
   /**

@@ -974,3 +974,150 @@ class TestWithdrawalRequestIsLegibleInTheQueue:
             resp = TestClient(app).get("/admin/agents/listings")
 
         assert resp.json()["listings"][0].get("withdrawalRequestedAt") is None
+
+
+class TestWithdrawalRemembersWhereItCameFrom:
+    """§5.1 — declining returns the listing to its origin, not to a hardcoded ``published``.
+
+    Two states can be on the shelf and so reach ``withdrawal_requested``: ``published``, and
+    a ``changes_requested`` listing that was published before the admin sent it back
+    (``review_listing`` deliberately does not unpublish). Declining the second into
+    ``published`` would discard the outstanding change request *and* make
+    ``withdrawal_requested → published`` reachable by something never approved.
+    """
+
+    def test_declining_returns_a_listing_to_the_state_it_came_from(self, app, _no_writes):
+        listing = _listing(
+            "withdrawal_requested", publishedVersion=2, withdrawalFrom="changes_requested"
+        )
+        with _loaded(_make_assistant(listing=listing)):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/withdrawal",
+                json={"decision": "decline", "note": "Keeping it up."},
+            )
+
+        assert resp.status_code == 200
+        written = _no_writes.call_args.args[1]
+        assert written.state == "changes_requested"
+        assert written.published_version == 2
+        # The pointer has done its job; leaving it set would re-decline into a stale origin.
+        assert written.withdrawal_from is None
+
+    def test_declining_an_ordinary_request_still_lands_in_published(self, app, _no_writes):
+        listing = _listing(
+            "withdrawal_requested", publishedVersion=2, withdrawalFrom="published"
+        )
+        with _loaded(_make_assistant(listing=listing)):
+            TestClient(app).post(
+                "/admin/agents/ast-001/withdrawal",
+                json={"decision": "decline", "note": "Still needed."},
+            )
+
+        assert _no_writes.call_args.args[1].state == "published"
+
+    def test_a_request_recorded_before_the_field_existed_falls_back_to_published(
+        self, app, _no_writes
+    ):
+        """Pre-existing pending requests carry no origin; ``published`` is the old behaviour."""
+        listing = _listing("withdrawal_requested", publishedVersion=2)
+        with _loaded(_make_assistant(listing=listing)):
+            TestClient(app).post(
+                "/admin/agents/ast-001/withdrawal",
+                json={"decision": "decline", "note": "Still needed."},
+            )
+
+        assert _no_writes.call_args.args[1].state == "published"
+
+    def test_granting_still_goes_private_and_off_the_shelf(self, app, _no_writes):
+        listing = _listing(
+            "withdrawal_requested", publishedVersion=2, withdrawalFrom="changes_requested"
+        )
+        index = _no_writes.set_version_index
+        with _loaded(_make_assistant(listing=listing)):
+            TestClient(app).post("/admin/agents/ast-001/withdrawal", json={"decision": "grant"})
+
+        written = _no_writes.call_args.args[1]
+        assert written.state == "private"
+        assert written.published_version is None
+        assert index.await_args.args[1:] == (2, None)
+
+
+class TestRollback:
+    """§8 — repoint a published listing at an earlier snapshot."""
+
+    def _versions(self, *numbers):
+        return patch(
+            f"{SERVICE_MODULE}.get_version",
+            new_callable=AsyncMock,
+            side_effect=lambda _a, n: (
+                SimpleNamespace(version=n) if n in numbers else None
+            ),
+        )
+
+    def test_rollback_repoints_the_listing_and_moves_the_key(self, app, _no_writes):
+        index = _no_writes.set_version_index
+        listing = _listing("published", publishedVersion=5, submittedVersion=5)
+        with _loaded(_make_assistant(listing=listing)), self._versions(2, 5):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/rollback",
+                json={"version": 2, "reason": "v5 broke citations."},
+            )
+
+        assert resp.status_code == 200
+        written = _no_writes.call_args.args[1]
+        assert written.published_version == 2
+        assert written.state == "published"
+        # The reason reaches the author, like a takedown's does.
+        assert written.review_note == "v5 broke citations."
+        # New key first, then clear the superseded one — ``_publish_version``'s ordering, so
+        # a half-failed rollback shows the Agent twice rather than not at all.
+        assert [(c.args[1], c.args[2] is None) for c in index.await_args_list] == [
+            (2, False),
+            (5, True),
+        ]
+
+    def test_rollback_needs_a_reason(self, app, _no_writes):
+        with _loaded(_make_assistant(listing=_listing("published", publishedVersion=5))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/rollback", json={"version": 2, "reason": "   "}
+            )
+
+        assert resp.status_code == 400
+        assert "reason" in resp.json()["detail"]
+        _no_writes.assert_not_awaited()
+
+    def test_rollback_refuses_a_version_that_does_not_exist(self, app, _no_writes):
+        with _loaded(_make_assistant(listing=_listing("published", publishedVersion=5))), \
+                self._versions(5):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/rollback", json={"version": 99, "reason": "nope"}
+            )
+
+        assert resp.status_code == 404
+        _no_writes.assert_not_awaited()
+
+    def test_rollback_refuses_the_version_already_live(self, app, _no_writes):
+        with _loaded(_make_assistant(listing=_listing("published", publishedVersion=5))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/rollback", json={"version": 5, "reason": "again"}
+            )
+
+        assert resp.status_code == 400
+        assert "already the published one" in resp.json()["detail"]
+        _no_writes.assert_not_awaited()
+
+    @pytest.mark.parametrize("state", ["private", "in_review", "changes_requested", "taken_down"])
+    def test_rollback_is_not_a_door_into_the_store(self, app, _no_writes, state):
+        """Only a *published* listing can be rolled back.
+
+        Otherwise this endpoint would publish an Agent without going through review — the
+        one thing the state machine is arranged to prevent.
+        """
+        with _loaded(_make_assistant(listing=_listing(state, publishedVersion=None))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/rollback", json={"version": 2, "reason": "no"}
+            )
+
+        assert resp.status_code == 400
+        assert state in resp.json()["detail"]
+        _no_writes.assert_not_awaited()
