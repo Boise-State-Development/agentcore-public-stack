@@ -35,6 +35,7 @@ from apis.shared.assistants.models import (
 from apis.shared.assistants.publishers import list_publishers
 from apis.shared.assistants.storefront import get_featured_ids
 from apis.shared.assistants.version_repository import batch_get_versions
+from apis.shared.assistants.versions import VERSION_SK_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +79,41 @@ def to_listing_response(
     )
 
 
-def _project(items: list, publishers: dict, *, category: str) -> List[AgentListingResponse]:
-    responses = []
+def _project_with_keys(
+    items: list, publishers: dict, *, category: str
+) -> List[Tuple[str, AgentListingResponse]]:
+    """``(GSI5_SK, response)`` for each row that renders.
+
+    ⚠️ **Pairs, not two parallel lists.** ``browse_all`` needs each response's sort key, and
+    it used to get it by ``zip``-ing the raw items against the projected responses — which is
+    only correct while *nothing is ever skipped*. Any dropped row shifts every later response
+    onto the previous row's key, so the merge silently sorts the shelf wrong. That was
+    latent; the stale-index skip below makes it reachable with real data, so the pairing is
+    built here where the drop happens instead of being reconstructed by position afterwards.
+    """
+    projected: List[Tuple[str, AgentListingResponse]] = []
     for item in items:
+        # ⚠️ Skip anything that is not a version row *before* trying to parse one.
+        #
+        # The index moved onto the ``VERSION#`` row in PR-2, but listings published before
+        # that still carry GSI5 keys on their ``METADATA`` item, so this query returns Agent
+        # rows too. They cannot validate as an ``AgentVersion`` (no ``agentId``), and the
+        # generic handler below logged a full pydantic traceback for each one, on every store
+        # browse — an error-shaped log line for a data condition that is merely old.
+        #
+        # Such a listing is invisible in the store either way: it has no version row to
+        # render. The fix for *that* is to clear the stale keys off the Agent row; this
+        # keeps the read path quiet in the meantime and correct forever, since a
+        # non-``VERSION#`` key in this index is never something the shelf should render.
+        sort_key = str(item.get("SK", ""))
+        if not sort_key.startswith(VERSION_SK_PREFIX):
+            logger.info(
+                "Skipping stale store index row %s/%s — the directory key belongs on the "
+                "published version, not the Agent",
+                item.get("PK"),
+                sort_key,
+            )
+            continue
         try:
             version = AgentVersion.model_validate(
                 {k: v for k, v in item.items() if k not in ("PK", "SK")}
@@ -88,10 +121,17 @@ def _project(items: list, publishers: dict, *, category: str) -> List[AgentListi
         except Exception:
             logger.warning("Skipping unparseable store row", exc_info=True)
             continue
-        projected = to_listing_response(version, publishers, category=category)
-        if projected:
-            responses.append(projected)
-    return responses
+        response = to_listing_response(version, publishers, category=category)
+        if response:
+            projected.append((str(item.get("GSI5_SK", "")), response))
+    return projected
+
+
+def _project(items: list, publishers: dict, *, category: str) -> List[AgentListingResponse]:
+    """The shelf rows, for callers that already know which partition they queried."""
+    return [
+        response for _key, response in _project_with_keys(items, publishers, category=category)
+    ]
 
 
 async def browse_category(
@@ -124,17 +164,17 @@ async def browse_all(*, limit: int = 50) -> List[AgentListingResponse]:
 
     publishers = {p.id: p for p in await list_publishers()}
 
+    # Sort on ``GSI5_SK``, not on the row's ``createdAt``. These are version rows now, so
+    # ``createdAt`` is when the *snapshot* was cut — merging on it would order the store by
+    # most-recently-approved and let a re-approved five-year-old Agent surface above a
+    # genuinely new one. ``GSI5_SK`` is ``CREATED#{agent createdAt}``, which is the ordering
+    # the per-category shelves already use, so merging on it keeps browse-all consistent
+    # with browse-category. ``_project_with_keys`` pairs the two so a skipped row cannot
+    # slide every later response onto the wrong key.
     merged: List[Tuple[str, AgentListingResponse]] = []
     for category in categories:
         items, _ = await query_store(category.id, limit=limit)
-        for item, response in zip(items, _project(items, publishers, category=category.id)):
-            # Sort on ``GSI5_SK``, not on the row's ``createdAt``. These are version rows
-            # now, so ``createdAt`` is when the *snapshot* was cut — merging on it would
-            # order the store by most-recently-approved and let a re-approved five-year-old
-            # Agent surface above a genuinely new one. ``GSI5_SK`` is ``CREATED#{agent
-            # createdAt}``, which is the ordering the per-category shelves already use, so
-            # merging on it is what keeps browse-all consistent with browse-category.
-            merged.append((str(item.get("GSI5_SK", "")), response))
+        merged.extend(_project_with_keys(items, publishers, category=category.id))
 
     # Newest-first across the merged set, matching the per-category ordering.
     merged.sort(key=lambda pair: pair[0], reverse=True)

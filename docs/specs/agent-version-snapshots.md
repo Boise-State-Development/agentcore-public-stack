@@ -1,8 +1,9 @@
 # Agent Version Snapshots — Immutable Approved Listings
 
-**Status:** Partially implemented — PR-1 (#784) and PR-2 (#787) merged; PR-3 (#789) open
+**Status:** **Complete.** PR-1 (#784) · PR-2 (#787) · PR-3 (#789) · PR-4 (#791) · PR-5 (#793) ·
+PR-6 (#795), plus #792 (orphan version rows), #799 (E2E fix pass) and the §8 rollback.
 **Author:** (drafted with Claude)
-**Date:** 2026-07-29 · revised 2026-07-29 against what shipped
+**Date:** 2026-07-29 · revised 2026-07-30 against what shipped
 **Targets branch:** `develop`
 **Supersedes:** the post-approval *drift detection* portion of `agent-marketplace.md` (D14)
 
@@ -327,7 +328,9 @@ finished backend, not a design problem. It needs the `admin.marketplace` scope
 | **PR-3** | Invocation resolution: published version for everyone but the owner, draft for the owner. ~~version in the agent cache key~~ (see §4.2 — deliberately not implemented). The one seam at `chat/routes.py`. | #789 |
 | **PR-4** | Lifecycle: `withdrawal_requested` state, delete refusal, admin queue entry for withdrawal requests. | |
 | **PR-5** | Review diff view (pending vs published). | |
-| **PR-6** | Publisher management admin page — independent of the rest; can land any time. | |
+| **PR-6** | Publisher management admin page — independent of the rest; can land any time. | ✅ #795 |
+| **follow-up** | E2E fix pass: detail read serves the snapshot, withdrawal decisions reachable, review diff reachable, publisher delete guarded. | ✅ #799 |
+| **§8** | Admin rollback to a prior version. | ✅ |
 
 PR-2 and PR-3 must ship in the same release: PR-2 alone makes the store show
 snapshots while pinned users still run the draft, which is the confusing half-state.
@@ -346,15 +349,27 @@ version attributed to the admin.
 
 ## 8. Open items
 
-- **Version retention.** Every resubmission cuts a version. Unbounded growth is
-  probably fine at this scale (a few hundred agents, a handful of versions each), but
-  worth a decision rather than a discovery. DynamoDB TTL on superseded versions older
-  than N months is the cheap answer — except versions referenced by an audit record
-  should survive.
-- **Does an admin need to roll back to a prior version?** Falls out nearly free once
-  versions are immutable and numbered (repoint `publishedVersion`), and it is the
-  obvious answer to "the approved version turned out to be wrong." Not in the phasing
-  above; say if it should be.
+- ~~**Version retention.**~~ **DECIDED 2026-07-30: deliberately unbounded.** Every
+  resubmission cuts a version and nothing removes one. At this scale — a few hundred
+  agents, a handful of versions each, a snapshot being a few KB — the storage is
+  immaterial, and the alternatives all cost more than they save. A TTL on superseded
+  versions is cheap to run but deletes invisibly and cannot exempt a version an audit or
+  takedown record points at; a keep-last-N prune is predictable but silently destroys the
+  older half of a listing's approval history, which is the thing the epic exists to make
+  durable. **Rollback (below) shipped and made this stronger, not weaker**: an old version
+  is no longer inert history, it is something an admin can put back on the shelf, so
+  deleting one now costs a recovery path. Revisit if a single Agent ever accumulates
+  enough versions to make the partition read slow — that is the symptom worth acting on,
+  not the row count.
+- ~~**Does an admin need to roll back to a prior version?**~~ **SHIPPED 2026-07-30.**
+  `GET /admin/agents/{id}/versions` + `POST /admin/agents/{id}/rollback`, with a picker on
+  the admin Listings page. Repoints `publishedVersion` and moves the GSI5 key through
+  `_publish_version`, so it inherits the new-key-first ordering. Three constraints worth
+  keeping: it acts **only on a `published` listing** (otherwise it is a second door into
+  the store, past review); it **requires a reason**, which lands on the author's card the
+  way a takedown's does, because an admin changing what users run is not something the
+  author should have to discover; and it **cuts no version** — rolling back is a pointer
+  move over immutable records, so rolling forward again is the same operation.
 - **Transaction vs fail-closed ordering.** Publishing and delisting are now two writes on
   two items (§3.3), and the "an unpublished agent cannot be in the store" invariant is held
   by call order rather than by atomicity. Ordering is enforced in one place

@@ -761,3 +761,36 @@ class TestSubmissionCutsTheSnapshot:
         assert written.published_version == 2, "a resubmission must not unpublish"
         assert written.submitted_version == 1
         _no_writes.set_version_index.assert_not_awaited()
+
+
+class TestAnAuthorCannotGrantTheirOwnWithdrawal:
+    """§5.1's core rule, guarded where it can actually be walked.
+
+    ``withdrawal_requested → private`` is a legal edge — it is how an admin *grants* a
+    withdrawal — and ``private`` is an author target. So the only thing keeping an author off
+    it is that ``withdraw_listing`` never chooses ``private`` as the target for a pending
+    request. That used to be implied by the transition table; once the target came from
+    ``is_on_shelf`` instead of the state name, a pending request with no published pointer
+    resolved to ``private`` and the author granted their own withdrawal.
+    """
+
+    @pytest.mark.parametrize("published_version", [3, None])
+    def test_asking_twice_is_refused_however_the_pointer_looks(
+        self, app, make_user, _no_writes, published_version
+    ):
+        assistant = _make_assistant(
+            listing=AgentListing(
+                state="withdrawal_requested",
+                category="Teaching",
+                publisherId="user-user-001",
+                publishedVersion=published_version,
+            )
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).delete("/agents/ast-001/listing")
+
+        assert resp.status_code == 400
+        assert "already asked" in resp.json()["detail"]
+        # The decisive assertion: nothing was written, so the listing did not go private.
+        _no_writes.assert_not_awaited()

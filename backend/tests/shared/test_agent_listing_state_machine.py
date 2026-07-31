@@ -97,11 +97,33 @@ def test_approval_is_the_only_door_into_the_store():
     publishable = {s for s in ALLOWED_TRANSITIONS if "published" in ALLOWED_TRANSITIONS[s]}
     # ``withdrawal_requested`` is the one addition, and it is not a door *into* the store:
     # the listing never left, so declining a withdrawal is a refusal to unpublish rather
-    # than a new publication. Nothing unreviewed can reach ``published`` through it — you
-    # can only get to ``withdrawal_requested`` from ``published`` in the first place.
+    # than a new publication.
     assert publishable == {"in_review", "withdrawal_requested"}
-    assert ALLOWED_TRANSITIONS["withdrawal_requested"] <= {"private", "published", "taken_down"}
-    assert {s for s, t in ALLOWED_TRANSITIONS.items() if "withdrawal_requested" in t} == {"published"}
+    assert ALLOWED_TRANSITIONS["withdrawal_requested"] <= {
+        "private",
+        "published",
+        "changes_requested",
+        "taken_down",
+    }
+
+    # The property that keeps the paragraph above true now that *two* states can reach
+    # ``withdrawal_requested``: a request can only be declined back into a state that could
+    # have sent it there. So `in_review → changes_requested → withdrawal_requested →
+    # published` is not walkable — a listing that entered from ``changes_requested`` returns
+    # to ``changes_requested``, and only one that was genuinely ``published`` returns to
+    # ``published``.
+    #
+    # ⚠️ The table permits both exits; what picks the right one is
+    # ``AgentListing.withdrawal_from``, read by ``decide_withdrawal``. If that field ever
+    # stops being recorded on the way in, this invariant is no longer enforced by anything —
+    # ``test_declining_returns_a_listing_to_the_state_it_came_from`` is the other half.
+    entrants = {s for s, t in ALLOWED_TRANSITIONS.items() if "withdrawal_requested" in t}
+    assert entrants == {"published", "changes_requested"}
+    decline_targets = ALLOWED_TRANSITIONS["withdrawal_requested"] - {"private", "taken_down"}
+    assert decline_targets == entrants, (
+        "A declined withdrawal must be able to land exactly where requests come from — no "
+        "more (that would be a new door into the store) and no less (that would strand one)."
+    )
 
 
 def test_private_cannot_jump_straight_to_published():

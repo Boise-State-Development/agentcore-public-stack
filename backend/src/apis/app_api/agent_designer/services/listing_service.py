@@ -39,6 +39,7 @@ from apis.shared.assistants.listing import (
     assert_transition,
     gsi5_keys,
     is_listed,
+    is_on_shelf,
 )
 from apis.shared.assistants.listing_repository import list_by_state, write_listing
 from apis.shared.assistants.version_diff import (
@@ -49,6 +50,7 @@ from apis.shared.assistants.version_diff import (
 from apis.shared.assistants.version_repository import (
     create_version,
     get_version,
+    list_versions,
     set_version_index,
 )
 from apis.shared.assistants.versions import snapshot_of
@@ -58,6 +60,7 @@ from apis.shared.assistants.models import (
     AdminListingRow,
     AgentListing,
     AgentVersionDiffResponse,
+    AgentVersionSummary,
     Assistant,
     VersionFieldChange,
     PublisherProfile,
@@ -457,18 +460,36 @@ async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
     if not assistant.listing:
         raise ListingError("This agent has no marketplace listing.", status_code=404)
 
+    current = assistant.listing.state
+
+    # ⚠️ Refuse a second request explicitly, before choosing a target.
+    #
+    # This used to fall out of the transition table — ``withdrawal_requested`` does not
+    # self-loop — but that only held while the target was picked from the *state*. Picking it
+    # from ``is_on_shelf`` means a pending request whose pointer is missing resolves to
+    # ``private``, and ``private`` is an author target, so the author would walk the grant
+    # edge themselves. Granting a withdrawal is the admin's decision (§5.1); an author who
+    # could do it by asking twice would have the unilateral delisting this state prevents.
+    if current == "withdrawal_requested":
+        raise ListingError(
+            "You have already asked for this listing to be pulled. An admin decides next; "
+            "it stays in the store until they do.",
+            status_code=400,
+        )
+
     # A live listing can only be *requested* down; anything else goes straight to private.
     #
-    # ⚠️ Known gap, left deliberately rather than patched here: a listing that was published
-    # and then sent back for changes is still serving (``review_listing`` does not
-    # unpublish), but its state is ``changes_requested``, so this reads it as not-live and
-    # the author goes straight to ``private`` — pulling something users can currently see
-    # without an admin deciding. Closing it needs a product call, not a predicate swap: the
-    # transition table cannot allow ``changes_requested → withdrawal_requested`` without
-    # also opening a route to ``published`` for a listing that was never approved (see
-    # ``ALLOWED_TRANSITIONS``), and it is unclear what declining such a request should
-    # restore the listing to.
-    target = "withdrawal_requested" if is_listed(assistant.listing.state) else "private"
+    # Asked as ``is_on_shelf``, not ``is_listed``: the state name alone gets this wrong for a
+    # listing that was published and then sent back for changes. That one is still serving
+    # (``review_listing`` deliberately does not unpublish) while sitting in
+    # ``changes_requested``, and reading it as not-live let the author pull something users
+    # could currently see with no admin deciding — the unilateral delisting §5.1 exists to
+    # prevent, reached through the one state nobody thought to check.
+    target = (
+        "withdrawal_requested"
+        if is_on_shelf(current, assistant.listing.published_version)
+        else "private"
+    )
 
     try:
         assert_transition(assistant.listing.state, target)
@@ -486,10 +507,19 @@ async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
         # which is exactly what this state exists to prevent. A declined request then needs
         # no repair, because nothing was undone.
         listing = assistant.listing.model_copy(
-            update={"state": target, "withdrawal_requested_at": now}
+            update={
+                "state": target,
+                "withdrawal_requested_at": now,
+                # Where to put it back if the admin says no. Recorded here rather than
+                # inferred at decision time because by then the origin is gone.
+                "withdrawal_from": current,
+            }
         )
         await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
-        logger.info(f"🙋 Agent {agent_id} withdrawal requested by its owner {user.user_id}")
+        logger.info(
+            f"🙋 Agent {agent_id} withdrawal requested by its owner {user.user_id} "
+            f"(from {current})"
+        )
         return listing
 
     # Pre-publication withdrawal: nothing is on the shelf, so this is immediate. The
@@ -506,10 +536,18 @@ async def decide_withdrawal(
 ) -> AgentListing:
     """Admin grants or declines an author's withdrawal request (§5.1).
 
-    ``grant`` takes the listing to ``private`` and off the shelf. ``decline`` returns it to
-    ``published`` and changes nothing else — the listing never stopped being live, so there
-    is no key to restore and no version to re-promote. That asymmetry is the payoff of
+    ``grant`` takes the listing to ``private`` and off the shelf. ``decline`` puts it back
+    where it came from and changes nothing else — the listing never stopped being live, so
+    there is no key to restore and no version to re-promote. That asymmetry is the payoff of
     leaving the index alone while the request was pending.
+
+    ⚠️ **"Where it came from", not "``published``".** Two states can be on the shelf and so
+    reach ``withdrawal_requested``: ``published``, and a ``changes_requested`` listing that
+    was published before the admin sent it back. Declining the second one into ``published``
+    would silently drop the outstanding change request *and* make ``withdrawal_requested →
+    published`` reachable by a listing that was never approved — the one thing
+    ``ALLOWED_TRANSITIONS`` is arranged to prevent. ``withdrawal_from`` is read here, and
+    falls back to ``published`` only for requests recorded before that field existed.
 
     A declining admin should say why, since the author asked for something and is not
     getting it; ``note`` renders on their card exactly as a request-changes reason does.
@@ -523,7 +561,7 @@ async def decide_withdrawal(
             status_code=400,
         )
 
-    target = "private" if decision == "grant" else "published"
+    target = "private" if decision == "grant" else (assistant.listing.withdrawal_from or "published")
     try:
         assert_transition(assistant.listing.state, target)
     except ListingTransitionError as e:
@@ -535,6 +573,10 @@ async def decide_withdrawal(
         "reviewed_at": now,
         "reviewed_by": admin.user_id,
         "review_note": note or None,
+        # The request is answered; the origin pointer has done its job. ``withdrawal_requested_at``
+        # deliberately stays — the author's card says what happened and when, and a request
+        # that vanished on decline would read as though it was never made.
+        "withdrawal_from": None,
     }
     if target == "private":
         changes["published_version"] = None
@@ -712,6 +754,105 @@ async def review_listing(
     return listing
 
 
+async def list_agent_versions(agent_id: str) -> Tuple[List[AgentVersionSummary], Optional[int]]:
+    """Every snapshot this Agent has, newest first, plus which one is live.
+
+    Backs the rollback picker. Summaries rather than whole versions: the picker needs to say
+    *which* version and when it was cut, and shipping every snapshot's full ``instructions``
+    to render a dropdown would send the entire approval history of an Agent down the wire to
+    draw a list of numbers.
+    """
+    assistant = await _load_any(agent_id)
+    published = assistant.listing.published_version if assistant.listing else None
+    versions = await list_versions(agent_id)
+    summaries = [
+        AgentVersionSummary(
+            version=v.version,
+            name=v.name,
+            tagline=v.tagline,
+            created_at=v.created_at,
+            created_by=v.created_by,
+            is_published=v.version == published,
+        )
+        for v in sorted(versions, key=lambda v: v.version or 0, reverse=True)
+        if v.version is not None
+    ]
+    return summaries, published
+
+
+async def rollback_listing(
+    agent_id: str, admin: User, *, version: int, reason: str
+) -> AgentListing:
+    """Repoint a published listing at an earlier snapshot (§8).
+
+    The answer to "the approved version turned out to be wrong", and nearly free because
+    versions are immutable and numbered: the old snapshot is still sitting there intact, so
+    a rollback is a pointer move plus an index move — no new version is cut, and nothing
+    about the author's draft changes.
+
+    **Only from ``published``.** A rollback is not a way *into* the store — an Agent that is
+    private, in review or taken down has no live listing to roll back, and letting this
+    endpoint publish one would be a second door past review. ``assert_transition`` is not
+    consulted because the state does not change; the explicit check below is the gate.
+
+    **A reason is required and reaches the author**, exactly as takedown and request-changes
+    do. An admin replacing what users run is a decision the author has to be able to see,
+    and the alternative — a silent pointer move — leaves them looking at a store tile that
+    no longer matches the version they last had approved, with nothing to explain it.
+
+    Ordering is ``_publish_version``'s: new key first, then clear the superseded one, so a
+    half-failed rollback shows the Agent twice rather than not at all.
+    """
+    assistant = await _load_any(agent_id)
+    if not assistant.listing:
+        raise ListingError("This agent has no marketplace listing.", status_code=404)
+
+    listing_now = assistant.listing
+    if listing_now.state != "published":
+        raise ListingError(
+            f"Only a published listing can be rolled back; this one is '{listing_now.state}'.",
+            status_code=400,
+        )
+    if not (reason or "").strip():
+        raise ListingError(
+            "A rollback needs a reason — it renders on the author's card, and replacing what "
+            "users run without saying why leaves them unable to tell what happened.",
+            status_code=400,
+        )
+
+    current = listing_now.published_version
+    if version == current:
+        raise ListingError(
+            f"Version {version} is already the published one.", status_code=400
+        )
+    if await get_version(agent_id, version) is None:
+        raise ListingError(f"Version {version} of this agent does not exist.", status_code=404)
+
+    now = _now()
+    listing = listing_now.model_copy(
+        update={
+            "published_version": version,
+            "reviewed_at": now,
+            "reviewed_by": admin.user_id,
+            "review_note": reason,
+        }
+    )
+    await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
+
+    # Record first, then move the key — the publish ordering. A key pointing at a version the
+    # listing does not claim is the failure the sparse index exists to prevent.
+    await _publish_version(
+        agent_id,
+        version,
+        category=listing.category,
+        agent_created_at=assistant.created_at,
+        superseding=current,
+    )
+
+    logger.info(f"⏪ Agent {agent_id} rolled back {current} → {version} by {admin.user_id}")
+    return listing
+
+
 async def takedown_listing(agent_id: str, admin: User, reason: str) -> AgentListing:
     """Delist a published Agent, clearing its directory key (D2).
 
@@ -873,10 +1014,22 @@ async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
     if not listing:
         raise ListingError("This agent has no marketplace listing.", status_code=404)
 
-    pending_number = listing.submitted_version
-    if pending_number is None or listing.state not in PENDING_DECISION_STATES:
+    # Two different causes, and collapsing them told the reviewer the wrong one. A listing
+    # sitting in ``in_review`` *does* have something awaiting review — if it also has no
+    # ``submittedVersion`` it predates snapshots, which is a fact about the record's age and
+    # not about the queue. Saying "nothing awaiting review" about a row the admin is looking
+    # at in the review queue reads as a bug in the queue.
+    if listing.state not in PENDING_DECISION_STATES:
         raise ListingError(
             "This agent has nothing awaiting review, so there is no diff to show.",
+            status_code=400,
+        )
+
+    pending_number = listing.submitted_version
+    if pending_number is None:
+        raise ListingError(
+            "This submission predates version snapshots, so there is nothing to compare. "
+            "Ask the author to resubmit — that captures one on the way in.",
             status_code=400,
         )
 

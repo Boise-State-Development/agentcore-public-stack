@@ -120,3 +120,69 @@ describe('SubmitListingDialogComponent — going public', () => {
     });
   });
 });
+
+/**
+ * Category preselection on a resubmission.
+ *
+ * The shelf an Agent already sits on is the answer nine times out of ten, and an author
+ * resubmitting a Teaching listing should not have to notice that the picker quietly offered
+ * them Administration instead — that silently moves a live listing to a different shelf.
+ */
+describe('SubmitListingDialogComponent — category preselection', () => {
+  function build(
+    data: Record<string, unknown>,
+    categories = [
+      { id: 'Administration', label: 'Administration' },
+      { id: 'Teaching', label: 'Teaching' },
+    ],
+  ): SubmitListingDialogComponent {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: DialogRef, useValue: { close: () => undefined } },
+        {
+          provide: DIALOG_DATA,
+          useValue: { agentId: 'ast-001', agentName: 'Policy Lookup', ...data },
+        },
+        {
+          provide: AgentListingService,
+          useValue: {
+            loadCategories: async () => categories,
+            preflight: async (): Promise<ListingPreflight> => ({
+              agentId: 'ast-001',
+              exposedSkills: [],
+              blockReason: null,
+              requiresPublic: false,
+              reachability: 'everyone',
+            }),
+            submit: async () => ({ listing: { state: 'in_review' } }),
+          },
+        },
+      ],
+    });
+    return TestBed.createComponent(SubmitListingDialogComponent).componentInstance;
+  }
+
+  it("keeps the listing's current shelf on a resubmission", async () => {
+    const component = build({ listing: { state: 'private', category: 'Teaching' } });
+    await component.ngOnInit();
+
+    expect(component.category()).toBe('Teaching');
+  });
+
+  it('leaves a first submission unselected rather than guessing', async () => {
+    // An author who never chose a shelf must choose one — defaulting to whichever category
+    // sorts first would file new listings under it by accident.
+    const component = build({});
+    await component.ngOnInit();
+
+    expect(component.category()).toBe('');
+  });
+
+  it('clears a shelf that has since been closed to new listings', async () => {
+    const component = build({ listing: { state: 'private', category: 'Retired' } });
+    await component.ngOnInit();
+
+    expect(component.category()).toBe('');
+  });
+});

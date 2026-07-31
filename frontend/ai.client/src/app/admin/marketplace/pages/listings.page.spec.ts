@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { Dialog } from '@angular/cdk/dialog';
 import { signal } from '@angular/core';
+import { of } from 'rxjs';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import { MarketplaceListingsPage } from './listings.page';
 import { AdminListingRow } from '../models/marketplace.model';
@@ -101,5 +102,123 @@ describe('MarketplaceListingsPage — published-version marker', () => {
     // wrong. This one means the system is working, and amber would misreport that.
     const fixture = await renderWith([row({ publishedVersion: 3 })]);
     expect(versionBadge(fixture, 'v3')!.className).not.toContain('amber');
+  });
+});
+
+/**
+ * Rollback (§8).
+ *
+ * Repointing a published listing at an earlier snapshot. Not a review decision — nothing is
+ * cut, nothing queues, the listing stays published — so it lives beside "Take down" rather
+ * than in the review queue.
+ */
+describe('MarketplaceListingsPage — rollback', () => {
+  let mockService: any;
+  let mockDialog: { open: ReturnType<typeof vi.fn> };
+
+  function row(overrides: Partial<AdminListingRow> = {}): AdminListingRow {
+    return {
+      agentId: 'ast-001',
+      name: 'Policy Lookup',
+      ownerName: 'Ada Author',
+      category: 'Administration',
+      state: 'published',
+      publishedVersion: 3,
+      usageCount: 12,
+      updatedAt: '2026-07-22T00:00:00Z',
+      reachability: 'everyone',
+      adminEdits: [],
+      ...overrides,
+    };
+  }
+
+  async function render(rows: AdminListingRow[]) {
+    mockService.loadListings.mockResolvedValue(rows);
+    const fixture = TestBed.createComponent(MarketplaceListingsPage);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  function button(fixture: ComponentFixture<unknown>, label: string) {
+    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === label,
+    );
+  }
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    mockService = {
+      error: signal<string | null>(null),
+      loadListings: vi.fn().mockResolvedValue([]),
+      takedown: vi.fn().mockResolvedValue(undefined),
+      review: vi.fn().mockResolvedValue(undefined),
+      rollback: vi.fn().mockResolvedValue(undefined),
+      loadVersions: vi.fn().mockResolvedValue({ versions: [], publishedVersion: 3 }),
+    };
+    mockDialog = {
+      open: vi.fn().mockReturnValue({ closed: of({ version: 2, reason: 'v3 broke citations.' }) }),
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: AdminMarketplaceService, useValue: mockService },
+        { provide: Dialog, useValue: mockDialog },
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('offers rollback on a published listing that has history behind it', async () => {
+    const fixture = await render([row({ publishedVersion: 3 })]);
+    expect(button(fixture, 'Roll back')).toBeTruthy();
+  });
+
+  it('hides rollback on v1 — there is nothing behind the first version', async () => {
+    // A control whose dialog can only say "nothing to roll back to" is worse than no control.
+    const fixture = await render([row({ publishedVersion: 1 })]);
+    expect(button(fixture, 'Roll back')).toBeFalsy();
+    // The other published action is unaffected.
+    expect(button(fixture, 'Take down')).toBeTruthy();
+  });
+
+  it('hides rollback on a listing that is not published', async () => {
+    const fixture = await render([row({ state: 'in_review', publishedVersion: undefined })]);
+    expect(button(fixture, 'Roll back')).toBeFalsy();
+  });
+
+  it('sends the chosen version and reason', async () => {
+    const fixture = await render([row()]);
+    button(fixture, 'Roll back')!.click();
+    await fixture.whenStable();
+
+    expect(mockService.rollback).toHaveBeenCalledWith('ast-001', {
+      version: 2,
+      reason: 'v3 broke citations.',
+    });
+    // Not a review decision — it must not travel through that endpoint.
+    expect(mockService.review).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the dialog is dismissed', async () => {
+    mockDialog.open.mockReturnValue({ closed: of(undefined) });
+    const fixture = await render([row()]);
+    button(fixture, 'Roll back')!.click();
+    await fixture.whenStable();
+
+    expect(mockService.rollback).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the server's refusal", async () => {
+    mockService.rollback.mockRejectedValue({
+      error: { detail: 'Version 2 of this agent does not exist.' },
+    });
+    const fixture = await render([row()]);
+    button(fixture, 'Roll back')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('does not exist');
   });
 });
