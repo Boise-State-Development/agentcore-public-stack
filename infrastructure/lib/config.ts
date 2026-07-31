@@ -59,6 +59,12 @@ export interface AppConfig {
   mcpSandbox: McpSandboxConfig;
   mcpIdentity: McpIdentityConfig;
   gateway: GatewayConfig;
+  /**
+   * Optional. Absent for any deployment without an external token service, which
+   * is the default. Kept optional rather than defaulted so a fork constructing
+   * AppConfig by hand does not have to know this feature exists.
+   */
+  tokenExchange?: TokenExchangeConfig;
   appVersion: string;
   tags: { [key: string]: string };
 }
@@ -296,6 +302,34 @@ export interface GatewayConfig {
 }
 
 /**
+ * RFC 8693 token exchange against an external token service.
+ *
+ * Lets the agent trade the signed-in user's Cognito access token for a token
+ * issued by a token service the organisation already runs, so downstream APIs
+ * that trust that service can serve agent requests as the user without being
+ * modified. Useful anywhere internal APIs already accept a JWT from an existing
+ * identity or token service — the pattern is not specific to any one kind of
+ * organisation.
+ *
+ * Deliberately not done by AgentCore Gateway: its outbound OAuth credential
+ * provider supports only CLIENT_CREDENTIALS and AUTHORIZATION_CODE
+ * (`OAuthGrantType` in the bedrock-agentcore-control API model has exactly those
+ * two values), so a token-exchange grant cannot be expressed there. A Gateway
+ * with AWS_IAM inbound auth also never sees the user's token, so it would have
+ * nothing to exchange. The runtime performs the exchange instead.
+ *
+ * Entirely optional and additive. Leave it unset and no resources, permissions,
+ * or environment variables are created — a deployment that only ever uses SigV4
+ * for MCP traffic is unaffected.
+ */
+export interface TokenExchangeConfig {
+  /** Exchange endpoint, e.g. https://tokens.example.org/v2/oauth/token */
+  url: string;
+  /** client_id this deployment authenticates as. */
+  clientId: string;
+}
+
+/**
  * Load and validate configuration from CDK context
  * @param scope The CDK construct scope
  * @returns Validated AppConfig object
@@ -303,6 +337,14 @@ export interface GatewayConfig {
 export function loadConfig(scope: cdk.App): AppConfig {
   // Load required configuration from environment variables or context
   const projectPrefix = process.env.CDK_PROJECT_PREFIX || scope.node.tryGetContext('projectPrefix');
+  const tokenExchangeUrl =
+    process.env.CDK_TOKEN_EXCHANGE_URL
+    || scope.node.tryGetContext('tokenExchange')?.url
+    || '';
+  const tokenExchangeClientId =
+    process.env.CDK_TOKEN_EXCHANGE_CLIENT_ID
+    || scope.node.tryGetContext('tokenExchange')?.clientId
+    || '';
   const awsRegion = process.env.CDK_AWS_REGION || scope.node.tryGetContext('awsRegion');
   
   // Validate required variables
@@ -533,6 +575,14 @@ export function loadConfig(scope: cdk.App): AppConfig {
         || scope.node.tryGetContext('gateway')?.inboundAuth
         || 'iam',
     },
+    // Left undefined unless a URL is configured, so the feature and every
+    // resource behind it stay absent for deployments that do not want it.
+    tokenExchange: tokenExchangeUrl
+      ? {
+          url: tokenExchangeUrl,
+          clientId: tokenExchangeClientId,
+        }
+      : undefined,
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
     },
