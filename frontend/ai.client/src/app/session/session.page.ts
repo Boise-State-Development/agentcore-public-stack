@@ -32,9 +32,9 @@ import { ToolService } from '../services/tool/tool.service';
 import { SkillService } from '../services/skill/skill.service';
 import { ChatContainerComponent, ChatContainerConfig } from './components/chat-container/chat-container.component';
 import {
-  ShareAssistantDialogComponent,
-  ShareAssistantDialogData,
-} from '../assistants/components/share-assistant-dialog.component';
+  ShareAgentDialogComponent,
+  ShareAgentDialogData,
+} from '../agents/components/share-agent-dialog.component';
 import { VoiceChatService } from './services/voice';
 import { SystemPromptsService } from '../services/system-prompts/system-prompts.service';
 import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.service';
@@ -897,8 +897,16 @@ export class ConversationPage implements OnDestroy {
     const assistant = this.assistant();
     if (!assistant) return;
 
-    this.dialog.open<unknown, ShareAssistantDialogData>(ShareAssistantDialogComponent, {
-      data: { assistant },
+    this.dialog.open<unknown, ShareAgentDialogData>(ShareAgentDialogComponent, {
+      data: {
+        agent: {
+          assistantId: assistant.assistantId,
+          name: assistant.name,
+          visibility: assistant.visibility,
+          userPermission: assistant.userPermission ?? 'owner',
+          emoji: assistant.emoji,
+        },
+      },
       hasBackdrop: false,
     });
   }

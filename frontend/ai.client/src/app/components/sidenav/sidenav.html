@@ -103,10 +103,22 @@
                     one job of this badge is to be the thing your eye lands on first, and
                     ember is the only accent here that is not already load-bearing.
 
+                    Filled `secondary-500` — the brand ember itself (#d64309), the same
+                    value the New Session `+` above is drawn in. Only the 500 step: it is
+                    the one literal hex in the scale, and every other step is derived by
+                    moving lightness alone while holding chroma, which walks the colour out
+                    of gamut in both directions. 50 clipped to a pale yellow and read as
+                    amber; 600 clipped toward pure red. Neither is the brand colour.
+
+                    ⚠️ White on 500 measures exactly 4.50:1 — it clears the AA floor for
+                    10px text with nothing to spare. Any change that darkens the text,
+                    lightens the fill, or puts this treatment on smaller type needs the
+                    contrast re-measured, not assumed.
+
                     Remove this once the rename has stopped being news, together with the
                     Assistants signpost above.
                 -->
-                <span class="ml-auto rounded-full bg-secondary-50 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-secondary-700 dark:bg-secondary-400/15 dark:text-secondary-200">New</span>
+                <span class="ml-auto rounded-full bg-secondary-500 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-white">New</span>
             </a>
         }
 

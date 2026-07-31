@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, OnInit } from '@angular/core';
 import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -9,48 +9,34 @@ import {
   heroChatBubbleLeftRight,
   heroShare,
   heroTrash,
-  heroCpuChip,
   heroSparkles,
   heroSquares2x2,
   heroBars3,
 } from '@ng-icons/heroicons/outline';
 import { AgentService } from './services/agent.service';
-import { AgentListingService } from './services/agent-listing.service';
 import { Agent } from './models/agent.model';
-import { ListingState } from './models/store.model';
 import {
   ConfirmationDialogComponent,
   ConfirmationDialogData,
 } from '../components/confirmation-dialog/confirmation-dialog.component';
-import { ShareAssistantDialogComponent, ShareAssistantDialogData } from '../assistants/components/share-assistant-dialog.component';
+import { ShareAgentDialogComponent, ShareAgentDialogData } from './components/share-agent-dialog.component';
 import { TooltipDirective } from '../components/tooltip/tooltip.directive';
 import { AgentsTabsComponent } from './components/agents-tabs.component';
 import { AgentIconComponent } from './components/agent-icon.component';
 import { AgentsViewMode, LocalSettingsService } from '../services/local-settings.service';
-import {
-  AgentIconDialogComponent,
-  AgentIconDialogData,
-  AgentIconDialogResult,
-} from './components/agent-icon-dialog.component';
-import { ListingStatusComponent } from './components/listing-status.component';
-import {
-  SubmitListingDialogComponent,
-  SubmitListingDialogData,
-  SubmitListingDialogResult,
-} from './components/submit-listing-dialog.component';
 
 /**
- * Agent Designer — the list surface, and the author's half of publication.
+ * Agent Designer — the list surface.
  *
- * A sibling of the Assistants list page but over the `/agents` surface: each card
- * carries the Agent's model + binding summary (the whole point of an Agent vs. a legacy
- * Assistant). Share reuses the assistants share dialog since the records are the same
- * (agentId == assistantId).
+ * A card is an **index entry**, not a summary: icon, name, one line, and the handful of
+ * verbs you act on it with. The model, the binding counts and the whole publication
+ * apparatus used to live here too, and between them they turned a page you scan into a
+ * page you read.
  *
- * This is also the **only** surface from which an Agent reaches the store (D2). The
- * listing state, the reviewer's note and the D13 admin-edit trail all render on the
- * author's own card, and the submit / withdraw controls sit beside them — an author
- * should never have to go looking for the state of their own submission.
+ * Publication now lives in the share dialog, with the rest of "who can reach this?" —
+ * people, the link and the store listing are one question asked at three widths, and
+ * splitting them across a card rail and an editor section made them read as three
+ * unrelated features.
  */
 @Component({
   selector: 'app-agents',
@@ -62,7 +48,6 @@ import {
     TooltipDirective,
     AgentsTabsComponent,
     AgentIconComponent,
-    ListingStatusComponent,
   ],
   providers: [
     provideIcons({
@@ -71,7 +56,6 @@ import {
       heroChatBubbleLeftRight,
       heroShare,
       heroTrash,
-      heroCpuChip,
       heroSparkles,
       heroSquares2x2,
       heroBars3,
@@ -81,7 +65,6 @@ import {
 export class AgentsPage implements OnInit {
   private router = inject(Router);
   private agentService = inject(AgentService);
-  private listingService = inject(AgentListingService);
   private localSettings = inject(LocalSettingsService);
   private dialog = inject(Dialog);
 
@@ -93,27 +76,12 @@ export class AgentsPage implements OnInit {
    * Grid or list, remembered per device (`LocalSettingsService`).
    *
    * Both views render the same agents with the same controls — the toggle changes
-   * density, never what is available. A view that quietly dropped the publication
-   * controls would make "which view am I in?" a question an author has to answer before
-   * they can find out why their submission was returned.
+   * density, never what is available.
    */
   readonly viewMode = this.localSettings.agentsViewMode;
 
-  /**
-   * Whether the marketplace is reachable at all. `null` until the probe resolves, so
-   * the publication controls appear once rather than flashing in and out, and stay
-   * hidden entirely when `AGENT_MARKETPLACE_ENABLED=false` 404s the routes.
-   */
-  readonly marketplaceAvailable = this.listingService.available;
-
-  /** Agent id whose listing is mid-write; disables that card's controls. */
-  readonly listingBusyId = signal<string | null>(null);
-  readonly listingError = signal<string | null>(null);
-
   ngOnInit(): void {
     void this.load();
-    // Doubles as the kill-switch probe — see `AgentListingService.available`.
-    void this.listingService.loadCategories();
   }
 
   private async load(): Promise<void> {
@@ -126,15 +94,6 @@ export class AgentsPage implements OnInit {
 
   setViewMode(mode: AgentsViewMode): void {
     this.localSettings.setAgentsViewMode(mode);
-  }
-
-  /** Count bindings by kind for the card summary (KB is welded, shown separately). */
-  bindingCount(agent: Agent, kind: string): number {
-    return agent.bindings.filter((b) => b.kind === kind).length;
-  }
-
-  modelLabel(agent: Agent): string | null {
-    return agent.modelConfig?.modelId ?? null;
   }
 
   async onCreateNew(): Promise<void> {
@@ -154,184 +113,28 @@ export class AgentsPage implements OnInit {
     this.router.navigate(['/'], { queryParams: { assistantId: agent.agentId } });
   }
 
+  /**
+   * Everything about who can reach this agent — people, the link, and the marketplace
+   * listing — lives in this one dialog. `agentId == assistantId`, so the share records
+   * and the agent record are the same thing under two names.
+   */
   async onShare(agent: Agent): Promise<void> {
-    // The share dialog operates on an Assistant shape; agentId == assistantId and
-    // the share records are identical, so we adapt the Agent into what it needs.
-    const dialogRef = this.dialog.open(ShareAssistantDialogComponent, {
+    const dialogRef = this.dialog.open(ShareAgentDialogComponent, {
       data: {
-        assistant: {
+        agent: {
           assistantId: agent.agentId,
           name: agent.name,
           visibility: agent.visibility,
           userPermission: agent.userPermission ?? 'owner',
+          emoji: agent.emoji,
+          iconUrl: agent.iconUrl,
         },
-      } as unknown as ShareAssistantDialogData,
+      } satisfies ShareAgentDialogData,
     });
     await firstValueFrom(dialogRef.closed);
-  }
-
-  // ── marketplace, the author's half (D2, D7.3) ──────────────────────────────────
-  /** Owner-only: an editor may change what an agent does, but not publish it. */
-  isOwner(agent: Agent): boolean {
-    return (agent.userPermission ?? 'owner') === 'owner';
-  }
-
-  /**
-   * The icon is presentation, not behavior (D13), so an editor may set it — the same
-   * line `PUT /agents/{id}` draws, and the same one the backend enforces. Publishing
-   * stays owner-only above.
-   */
-  canEditIcon(agent: Agent): boolean {
-    const permission = agent.userPermission ?? 'owner';
-    return permission === 'owner' || permission === 'editor';
-  }
-
-  private listingState(agent: Agent): ListingState | undefined {
-    return agent.listing?.state;
-  }
-
-  /**
-   * Submittable states, mirroring the backend transition table: never submitted,
-   * withdrawn (`private`), returned (`changes_requested`) or delisted (`taken_down`).
-   * `in_review` and `published` are deliberately absent — there is nothing to submit.
-   */
-  canSubmit(agent: Agent): boolean {
-    const state = this.listingState(agent);
-    return !state || state === 'private' || state === 'changes_requested' || state === 'taken_down';
-  }
-
-  submitLabel(agent: Agent): string {
-    return this.listingState(agent) ? 'Submit again' : 'Submit to marketplace';
-  }
-
-  /** `taken_down` is absent on purpose: the machine allows no author edge out of it. */
-  canWithdraw(agent: Agent): boolean {
-    const state = this.listingState(agent);
-    return state === 'in_review' || state === 'changes_requested' || state === 'published';
-  }
-
-  /**
-   * "Request withdrawal" on a live listing, not "Unpublish" (§5.1).
-   *
-   * The author no longer owns that edge — `published → private` left the machine, and the
-   * click now creates a request an admin acts on. Labelling it "Unpublish" promised an
-   * outcome the button cannot deliver: the listing stays in the store until the admin
-   * decides, so the author walked away believing it was gone.
-   */
-  withdrawLabel(agent: Agent): string {
-    switch (this.listingState(agent)) {
-      case 'published':
-        return 'Request withdrawal';
-      case 'in_review':
-        return 'Withdraw submission';
-      default:
-        return 'Withdraw';
-    }
-  }
-
-  isPublished(agent: Agent): boolean {
-    return this.listingState(agent) === 'published';
-  }
-
-  /**
-   * Whether the agent is in the store *now* — which "View in store" is asking, and which
-   * `isPublished` answers wrongly for one state.
-   *
-   * A pending withdrawal request leaves the listing serving (§5.1). Gating the link on
-   * `published` hid it the moment the author asked to withdraw, telling them it was
-   * already off the shelf — the same false impression the confirmation copy used to give.
-   */
-  isInStore(agent: Agent): boolean {
-    const state = this.listingState(agent);
-    return state === 'published' || state === 'withdrawal_requested';
-  }
-
-  onViewInStore(agent: Agent): void {
-    this.router.navigate(['/agents', agent.agentId]);
-  }
-
-  /**
-   * Set, replace or remove the agent's icon (D5).
-   *
-   * The dialog returns the record's new icon state, and the card is patched from it
-   * rather than re-listing every agent: the URL carries the new content digest, so a
-   * replacement repaints immediately instead of showing the cached previous icon.
-   */
-  async onEditIcon(agent: Agent): Promise<void> {
-    this.listingError.set(null);
-    const dialogRef = this.dialog.open<AgentIconDialogResult>(AgentIconDialogComponent, {
-      data: {
-        agentId: agent.agentId,
-        agentName: agent.name,
-        emoji: agent.emoji,
-        iconUrl: agent.iconUrl,
-      } satisfies AgentIconDialogData,
-    });
-    const result = await firstValueFrom(dialogRef.closed);
-    if (result) {
-      this.agentService.patchAgent(result.agentId, {
-        iconKey: result.iconKey,
-        iconUrl: result.iconUrl,
-      });
-    }
-  }
-
-  async onSubmitListing(agent: Agent): Promise<void> {
-    this.listingError.set(null);
-    const dialogRef = this.dialog.open<SubmitListingDialogResult>(SubmitListingDialogComponent, {
-      data: {
-        agentId: agent.agentId,
-        agentName: agent.name,
-        listing: agent.listing,
-        tagline: agent.tagline,
-        // Only read to prefill an absent tagline (#749).
-        description: agent.description,
-      } satisfies SubmitListingDialogData,
-    });
-    // The dialog writes through `AgentListingService`, which patches the card itself;
-    // the result is awaited only so a failure inside the dialog stays inside it.
-    await firstValueFrom(dialogRef.closed);
-  }
-
-  async onWithdrawListing(agent: Agent): Promise<void> {
-    const published = this.isPublished(agent);
-    const dialogRef = this.dialog.open<boolean>(ConfirmationDialogComponent, {
-      data: {
-        title: published ? 'Request withdrawal?' : 'Withdraw this submission?',
-        // Two things this has to get right, and it used to get both wrong on the published
-        // path. (1) §5.1 — this is a *request*: the listing stays in the store until an
-        // admin grants it, and saying "is removed from the store" sent authors away
-        // believing it was already down. (2) D7.3 — say plainly that it recalls nothing,
-        // because an author who thinks withdrawal revokes access decides worse than one
-        // who knows it does not.
-        message: published
-          ? `An admin reviews this before "${agent.name}" comes off the shelf, so it stays ` +
-            'in the store until they decide. Even once it does come down, nothing is ' +
-            'recalled: anyone who already added it keeps it, conversations underway keep ' +
-            'running, and it stays reachable by direct link.'
-          : `"${agent.name}" is pulled from the review queue. You can submit it again at any time.`,
-        confirmText: published ? 'Request withdrawal' : 'Withdraw',
-        cancelText: 'Cancel',
-        destructive: published,
-      } as ConfirmationDialogData,
-    });
-
-    if (!(await firstValueFrom(dialogRef.closed))) return;
-
-    this.listingBusyId.set(agent.agentId);
-    this.listingError.set(null);
-    try {
-      await this.listingService.withdraw(agent.agentId);
-    } catch (err) {
-      const detail = (err as { error?: { detail?: unknown } })?.error?.detail;
-      this.listingError.set(
-        typeof detail === 'string'
-          ? detail
-          : `Failed to ${published ? 'unpublish' : 'withdraw'} "${agent.name}".`,
-      );
-    } finally {
-      this.listingBusyId.set(null);
-    }
+    // The dialog can publish, withdraw or widen visibility; re-read so the card it was
+    // opened from is not the one surface still showing the old state.
+    await this.agentService.loadAgents(true);
   }
 
   async onDelete(agent: Agent): Promise<void> {
