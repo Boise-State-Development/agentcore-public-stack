@@ -1,0 +1,167 @@
+---
+title: Roadmap
+description: Where the AgentCore Public Stack is today and where it's going — from chat app to governed agent platform.
+template: splash
+prev: false
+next: false
+hero:
+  title: |
+    <span class="hero-kicker">Roadmap · Updated July 2026</span>
+    From chat app,
+    <span class="hero-accent">to agent platform.</span>
+  tagline: Chat is the home base — where people converse, run tools, and build agents today. The roadmap is about everything that runs beyond the chat window — shared agents, portable skills, scheduled work, and a governed registry of what your org has built.
+  actions:
+    - text: Get started
+      link: /agentcore-public-stack/getting-started/introduction/
+      icon: right-arrow
+      variant: primary
+    - text: Suggest a direction
+      link: https://github.com/Boise-State-Development/agentcore-public-stack/issues
+      icon: external
+      variant: minimal
+---
+
+{/* ── Legend ────────────────────────────────────────────────────────── */}
+
+<ul class="rm-legend rm-legend--page" aria-label="Roadmap status legend">
+	<li><span class="rm-dot rm-dot--live"></span><strong>Live</strong> shipped today</li>
+	<li><span class="rm-dot rm-dot--partial"></span><strong>Partial</strong> works with limits</li>
+	<li><span class="rm-dot rm-dot--building"></span><strong>Building</strong> active work</li>
+	<li><span class="rm-dot rm-dot--next"></span><strong>Next</strong> the next product horizon</li>
+	<li><span class="rm-dot rm-dot--exploring"></span><strong>Exploring</strong> a direction, not a commitment</li>
+</ul>
+
+{/* ── 01 · Conversation ─────────────────────────────────────────────── */}
+
+<section id="conversation" class="lp-section rm-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">01</span> the home base</p>
+	<h2 class="lp-h2">the conversation is <span class="lp-accent">home.</span></h2>
+	<p class="lp-lede">
+		Everything starts in chat: streaming responses, tools, artifacts, and voice. The work
+		here is about making a conversation durable — something you can leave, interrupt, and
+		return to without losing anything.
+	</p>
+	<div class="rm-grid">
+		<div class="rm-card"><div class="rm-card-head"><h3>Streaming chat over SSE</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Token-by-token responses with tool calls, errors, and metadata all riding the same stream.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Artifacts panel</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Generated documents, code, and pages rendered in a docked side panel.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Voice mode</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Speak to the assistant and hear responses back.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Automatic context compaction</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Long conversations roll older turns into a summary — surfaced in the UI as it happens.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Session workspace files</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Give each conversation a real file workspace the agent can read and write.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Interrupted-turn continuity</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Stop or refresh mid-response and keep the partial turn as context instead of losing it.</p></div>
+	</div>
+</section>
+
+{/* ── 02 · Agents ───────────────────────────────────────────────────── */}
+
+<section id="agents" class="lp-section rm-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">02</span> agents for everyone</p>
+	<h2 class="lp-h2">build once, <span class="lp-accent">share everywhere.</span></h2>
+	<p class="lp-lede">
+		Agents bundle instructions, tools, skills, and knowledge into something shareable. The
+		direction: lower the skill floor for building them, and raise the ceiling on what they
+		can be trusted to do.
+	</p>
+	<div class="rm-grid">
+		<div class="rm-card"><div class="rm-card-head"><h3>Custom agents</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Instructions, model, tools, skills, and knowledge bases — composed per agent.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Agent marketplace</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Publish agents with reach controls; teammates browse and pin in one click.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Version snapshots &amp; rollback</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Every publish is a snapshot; a bad release rolls back without touching the editor.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>@-mentions</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Pull another agent into the middle of a conversation when you need its capabilities.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Collaborative editing</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Viewer and editor sharing on agents — ownership is an access gate, not a silo.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Skill Creator</h3><span class="rm-pill rm-pill--next">Next</span></div><p>An agent that writes skills — turn a working conversation into a reusable capability.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Agent Designer</h3><span class="rm-pill rm-pill--next">Next</span></div><p>A governed design surface for composing agents from platform primitives.</p></div>
+	</div>
+</section>
+
+{/* ── 03 · Tools ────────────────────────────────────────────────────── */}
+
+<section id="tools" class="lp-section rm-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">03</span> tools &amp; integrations</p>
+	<h2 class="lp-h2">every protocol, <span class="lp-accent">one registry.</span></h2>
+	<p class="lp-lede">
+		Direct functions, AWS SDK calls, MCP servers behind AgentCore Gateway, and remote A2A
+		agents — registered once, governed by roles, and increasingly able to render their own
+		interfaces inside the conversation.
+	</p>
+	<div class="rm-grid">
+		<div class="rm-card"><div class="rm-card-head"><h3>Multi-protocol tools</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Direct, AWS SDK, MCP + SigV4 via Gateway, and A2A client calls — one tool registry.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>MCP Apps</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Tools render live interactive UIs inline in chat, streaming their inputs as the model types.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>OAuth consent mid-conversation</h3><span class="rm-pill rm-pill--live">Live</span></div><p>External tools request user consent in-stream and resume the turn after sign-in.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Per-tool enablement</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Enable individual tools within a server — expose exactly what each role needs.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Admin Gateway registration</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Register Lambda-backed MCP targets from the admin console, no redeploy required.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Tool search at scale</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Keep agent context small while the full tool catalog stays available on demand.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>A2A server surface</h3><span class="rm-pill rm-pill--exploring">Exploring</span></div><p>Expose platform agents to the outside world with their own AgentCards.</p></div>
+	</div>
+</section>
+
+{/* ── 04 · Knowledge ────────────────────────────────────────────────── */}
+
+<section id="knowledge" class="lp-section rm-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">04</span> knowledge &amp; memory</p>
+	<h2 class="lp-h2">what your agents <span class="lp-accent">know.</span></h2>
+	<p class="lp-lede">
+		Retrieval today, memory next. Knowledge bases ground answers in documents; memory
+		spaces will let people and teams carry curated context between conversations.
+	</p>
+	<div class="rm-grid">
+		<div class="rm-card"><div class="rm-card-head"><h3>Per-agent knowledge bases</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Each agent retrieves from its own Bedrock Knowledge Base inside your account.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Scheduled knowledge sync</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Connected sources re-index on a schedule so answers track changing documents.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Conversation export</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Save conversations out to connected storage services.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Memory spaces</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Bindable, shareable markdown "second brains" that agents load as context.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Export as an agent tool</h3><span class="rm-pill rm-pill--next">Next</span></div><p>Let the agent itself file results into your connected systems mid-conversation.</p></div>
+	</div>
+</section>
+
+{/* ── 05 · Governance ───────────────────────────────────────────────── */}
+
+<section id="governance" class="lp-section rm-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">05</span> governance &amp; cost</p>
+	<h2 class="lp-h2">trust is a <span class="lp-accent">feature.</span></h2>
+	<p class="lp-lede">
+		Everything an agent can touch is granted by a role, and everything a model call costs
+		is measured. The work here is making that visibility effortless — for admins and for
+		the people paying the bill.
+	</p>
+	<div class="rm-grid">
+		<div class="rm-card"><div class="rm-card-head"><h3>RBAC from your identity provider</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Roles bind to IdP groups with inheritance and wildcard grants across models, tools, and skills.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Delegated admin scopes</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Scope each admin surface to the people who own it instead of one all-powerful role.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Usage quotas</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Per-user budgets with in-stream warnings before the cutoff, not after.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Cost analytics</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Per-session, per-call cost breakdowns in the admin console.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Prompt-cache observability</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Cache status and prefix fingerprints on every call — the change that burned money has a name.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Admin audit log</h3><span class="rm-pill rm-pill--building">Building</span></div><p>A durable record of who changed what across the admin surfaces.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Cache-cost dashboard</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Fleet-wide cache write/read ratios and per-call anatomy, visualized.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Quota cooldown windows</h3><span class="rm-pill rm-pill--next">Next</span></div><p>Anchored usage windows and a platform-wide spend ceiling as a hard backstop.</p></div>
+	</div>
+</section>
+
+{/* ── 06 · Beyond chat ──────────────────────────────────────────────── */}
+
+<section id="beyond-chat" class="lp-section rm-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">06</span> beyond the chat window</p>
+	<h2 class="lp-h2">systems, not just <span class="lp-accent">conversations.</span></h2>
+	<p class="lp-lede">
+		The long arc: successful agent work should become a system you can run again — on a
+		schedule, headlessly, from other surfaces — with the same identity, grants, and cost
+		controls as an interactive session.
+	</p>
+	<div class="rm-grid">
+		<div class="rm-card"><div class="rm-card-head"><h3>Single-stack CDK deploy</h3><span class="rm-pill rm-pill--live">Live</span></div><p>One <code>PlatformStack</code>, three workflows — infrastructure and app code ship independently.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>API keys for programmatic access</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Call the platform from scripts and services with scoped keys.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Scheduled runs</h3><span class="rm-pill rm-pill--partial">Partial</span></div><p>Recurring agent runs exist behind a kill switch — the product surface is still to come.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Headless agent entrypoint</h3><span class="rm-pill rm-pill--exploring">Exploring</span></div><p>Run the same governed agents without a chat session attached.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Capability registry</h3><span class="rm-pill rm-pill--exploring">Exploring</span></div><p>A governed catalog of every agent, skill, and tool the org has built — discovery with guardrails.</p></div>
+	</div>
+</section>
+
+{/* ── Closing ───────────────────────────────────────────────────────── */}
+
+<section class="lp-section lp-reveal">
+	<div class="lp-final">
+		<p class="lp-eyebrow lp-eyebrow--center"><span class="lp-eyebrow-num">→</span> help shape what comes next</p>
+		<h2 class="lp-h2">what should we build <span class="lp-accent">next?</span></h2>
+		<p class="lp-lede">Tell us which capability, integration, or surface would change how your org works.</p>
+		<div class="lp-final-actions">
+			<a class="lp-band-cta" href="https://github.com/Boise-State-Development/agentcore-public-stack/issues">Open an issue →</a>
+			<a class="lp-band-cta lp-band-cta--ghost" href="/agentcore-public-stack/getting-started/introduction/">Read the docs</a>
+		</div>
+	</div>
+</section>
