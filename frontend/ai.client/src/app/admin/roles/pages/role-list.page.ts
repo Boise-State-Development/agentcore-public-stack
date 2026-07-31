@@ -18,6 +18,7 @@ import {
   heroArrowPath,
   heroChevronRight,
   heroArrowLeft,
+  heroKey,
 } from '@ng-icons/heroicons/outline';
 import { AppRolesService } from '../services/app-roles.service';
 import { AppRole } from '../models/app-role.model';
@@ -38,6 +39,7 @@ import { ToolsService } from '../../tools/services/tools.service';
       heroArrowPath,
       heroChevronRight,
       heroArrowLeft,
+      heroKey,
     }),
   ],
   host: {
@@ -153,6 +155,15 @@ import { ToolsService } from '../../tools/services/tools.service';
                         System
                       </span>
                     }
+                    @if (adminAccessBadge(role); as badge) {
+                      <span
+                        class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-xs bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200"
+                        [title]="badge.title"
+                      >
+                        <ng-icon name="heroKey" class="size-3" />
+                        {{ badge.label }}
+                      </span>
+                    }
                     @if (!role.enabled) {
                       <span class="px-2 py-0.5 text-xs font-medium rounded-xs bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">
                         Disabled
@@ -169,7 +180,7 @@ import { ToolsService } from '../../tools/services/tools.service';
                   }
 
                   <!-- Role Details Grid -->
-                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-3 text-sm">
+                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
                     <!-- JWT Mappings -->
                     <div>
                       <span class="font-medium text-gray-700 dark:text-gray-300">JWT Roles:</span>
@@ -211,6 +222,31 @@ import { ToolsService } from '../../tools/services/tools.service';
                                 +{{ role.grantedTools.length - 2 }} more
                               </span>
                             }
+                          }
+                        } @else {
+                          <span class="text-gray-400 dark:text-gray-500">None</span>
+                        }
+                      </div>
+                    </div>
+
+                    <!-- Admin Access -->
+                    <div>
+                      <span class="font-medium text-gray-700 dark:text-gray-300">Admin Access:</span>
+                      <div class="mt-1 flex flex-wrap gap-1">
+                        @if (role.isSystemRole && role.roleId === 'system_admin') {
+                          <span class="px-1.5 py-0.5 text-xs rounded-xs bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200">
+                            All Areas
+                          </span>
+                        } @else if (role.grantedAdminScopes.length > 0) {
+                          @for (scope of role.grantedAdminScopes.slice(0, 2); track scope) {
+                            <span class="px-1.5 py-0.5 text-xs rounded-xs bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200">
+                              {{ getAdminScopeLabel(scope) }}
+                            </span>
+                          }
+                          @if (role.grantedAdminScopes.length > 2) {
+                            <span class="px-1.5 py-0.5 text-xs rounded-xs bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">
+                              +{{ role.grantedAdminScopes.length - 2 }} more
+                            </span>
                           }
                         } @else {
                           <span class="text-gray-400 dark:text-gray-500">None</span>
@@ -295,10 +331,34 @@ export class RoleListPage {
 
   readonly rolesResource = this.appRolesService.rolesResource;
 
+  constructor() {
+    void this.loadAdminScopeLabels();
+  }
+
+  private async loadAdminScopeLabels(): Promise<void> {
+    try {
+      const response = await this.appRolesService.fetchAdminScopes();
+      this.adminScopeLabels.set(
+        new Map(response.scopes.map(s => [s.id, s.label]))
+      );
+    } catch {
+      // Non-fatal — `getAdminScopeLabel` falls back to the raw id.
+    }
+  }
+
   // Local state
   searchQuery = signal('');
   enabledFilter = signal('');
   syncing = signal<string | null>(null);
+
+  /**
+   * Scope id → human label, from `GET /admin/roles/admin-scopes`.
+   *
+   * Best-effort: if the registry fetch fails the cards fall back to raw scope
+   * ids, which still answers "does this role carry admin power?" — the question
+   * the badge exists for.
+   */
+  private readonly adminScopeLabels = signal<Map<string, string>>(new Map());
 
   // Computed
   readonly roles = computed(() => this.appRolesService.getRoles());
@@ -347,6 +407,39 @@ export class RoleListPage {
   getToolDisplayName(toolId: string): string {
     const tool = this.toolsService.getToolById(toolId);
     return tool?.name ?? toolId;
+  }
+
+  getAdminScopeLabel(scopeId: string): string {
+    return this.adminScopeLabels().get(scopeId) ?? scopeId;
+  }
+
+  /**
+   * The amber badge on the role title — the point of this feature is that a
+   * system admin can see *at a glance* which roles carry admin power, without
+   * opening each role's edit form.
+   *
+   * `system_admin` is special-cased: it holds every scope implicitly and so
+   * carries an empty `grantedAdminScopes`. Reading that as "no admin access"
+   * would be exactly backwards.
+   */
+  adminAccessBadge(role: AppRole): { label: string; title: string } | null {
+    if (role.roleId === 'system_admin') {
+      return {
+        label: 'Full Admin',
+        title: 'Holds every admin scope implicitly.',
+      };
+    }
+    const count = role.grantedAdminScopes.length;
+    if (count === 0) {
+      return null;
+    }
+    const names = role.grantedAdminScopes
+      .map(s => this.getAdminScopeLabel(s))
+      .join(', ');
+    return {
+      label: count === 1 ? 'Admin Access' : `Admin Access · ${count}`,
+      title: `Delegated admin areas: ${names}`,
+    };
   }
 
   async deleteRole(role: AppRole): Promise<void> {
