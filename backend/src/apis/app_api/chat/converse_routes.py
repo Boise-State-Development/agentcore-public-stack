@@ -19,6 +19,11 @@ before any Bedrock invocation occurs. Requests for models the caller's
 role does not permit are rejected with HTTP 403. Only Bedrock-provider
 models are supported — non-Bedrock catalog models (e.g. provider ``mantle``)
 are rejected by Bedrock with HTTP 400.
+
+Because an API key stores no roles of its own, the caller's roles are read
+back from the Users table per request (``_build_user_from_api_key``) so this
+surface resolves the *same* grants as the cookie-session path. Any new check
+added here must take that hydrated ``User`` — never a synthesized one.
 """
 
 import json
@@ -33,6 +38,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from apis.shared.auth.models import User
+from apis.shared.users import UserRepository
 from apis.shared import quota as shared_quota
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.costs.calculator import CostCalculator
@@ -80,13 +86,57 @@ async def _validate_api_key(api_key: str):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _build_user_from_api_key(validated_key) -> User:
-    """Construct a minimal User from a ValidatedApiKey for quota checking."""
+_user_repository: Optional[UserRepository] = None
+
+
+def get_user_repository() -> Optional[UserRepository]:
+    """Module-level UserRepository, or None when no Users table is configured."""
+    global _user_repository
+    if _user_repository is None:
+        repo = UserRepository()
+        if repo.enabled:
+            _user_repository = repo
+    return _user_repository
+
+
+async def _build_user_from_api_key(validated_key) -> User:
+    """Resolve the key owner's real identity for quota and RBAC checks.
+
+    An API key stores only ``key_id``/``user_id``/``name`` — never roles — so
+    the caller's roles have to be read back from the Users table, the same
+    record the cookie-session path enriches from (``_enrich_user_from_store``
+    in ``apis.shared.auth.dependencies``). That record holds the IdP roles
+    parsed from the Entra ID token at BFF callback, which is exactly the
+    shape ``AppRoleService.resolve_user_permissions`` expects.
+
+    This previously passed a hardcoded ``roles=["user"]`` placeholder. No
+    AppRole maps the JWT role ``user``, so permission resolution matched
+    nothing and fell back to the ``default`` role — which grants no models —
+    and *every* api-converse request 403'd regardless of the owner's actual
+    grants.
+
+    Fails closed: a key whose owner has no profile row (deprovisioned, or
+    never synced) gets 401 rather than silently degrading to ``default``.
+    """
+    repo = get_user_repository()
+    profile = await repo.get_user(validated_key.user_id) if repo else None
+
+    if profile is None:
+        logger.warning(
+            "API key %s references user %s with no profile row; refusing request",
+            validated_key.key_id,
+            validated_key.user_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired API key",
+        )
+
     return User(
-        email=f"{validated_key.user_id}@api-key",
+        email=profile.email or f"{validated_key.user_id}@api-key",
         user_id=validated_key.user_id,
-        name=validated_key.name,
-        roles=["user"],
+        name=profile.name or validated_key.name,
+        roles=profile.roles or [],
     )
 
 async def _record_cost(
@@ -513,7 +563,7 @@ async def api_converse(
         raise HTTPException(status_code=400, detail="messages array must not be empty")
 
     # 2.5 Build User and synthetic session_id for quota / cost accounting
-    user = _build_user_from_api_key(validated_key)
+    user = await _build_user_from_api_key(validated_key)
     session_id = f"api-converse-{validated_key.key_id}"
 
     # 2.6 Quota check (fail-open: errors are logged but don't block the request)
