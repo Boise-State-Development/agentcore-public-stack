@@ -149,6 +149,16 @@ build_cdk_context_params() {
     if [ -n "${CDK_GATEWAY_INBOUND_AUTH:-}" ]; then
         context_params="${context_params} --context gateway.inboundAuth=\"${CDK_GATEWAY_INBOUND_AUTH}\""
     fi
+
+    # RFC 8693 token exchange. Both omitted when empty: CDK context
+    # cannot express an empty string, and an absent value correctly means the
+    # feature stays dormant.
+    if [ -n "${CDK_TOKEN_EXCHANGE_URL:-}" ]; then
+        context_params="${context_params} --context tokenExchange.url=\"${CDK_TOKEN_EXCHANGE_URL}\""
+    fi
+    if [ -n "${CDK_TOKEN_EXCHANGE_CLIENT_ID:-}" ]; then
+        context_params="${context_params} --context tokenExchange.clientId=\"${CDK_TOKEN_EXCHANGE_CLIENT_ID}\""
+    fi
     if [ -n "${CDK_FRONTEND_CERTIFICATE_ARN:-}" ]; then
         context_params="${context_params} --context frontend.certificateArn=\"${CDK_FRONTEND_CERTIFICATE_ARN}\""
     fi
@@ -243,6 +253,8 @@ export CDK_MANAGE_DNS_RECORDS="${CDK_MANAGE_DNS_RECORDS:-$(get_json_value "manag
 # existing AWS_IAM Gateway makes the deploy fail. It applies to a newly
 # created Gateway.
 export CDK_GATEWAY_INBOUND_AUTH="${CDK_GATEWAY_INBOUND_AUTH:-$(get_json_value "gateway.inboundAuth" "${CONTEXT_FILE}")}"
+export CDK_TOKEN_EXCHANGE_URL="${CDK_TOKEN_EXCHANGE_URL:-$(get_json_value "tokenExchange.url" "${CONTEXT_FILE}")}"
+export CDK_TOKEN_EXCHANGE_CLIENT_ID="${CDK_TOKEN_EXCHANGE_CLIENT_ID:-$(get_json_value "tokenExchange.clientId" "${CONTEXT_FILE}")}"
 
 # Shared CORS origins — env var > context file (no hardcoded defaults)
 export CDK_CORS_ORIGINS="${CDK_CORS_ORIGINS:-$(get_json_value "corsOrigins" "${CONTEXT_FILE}")}"

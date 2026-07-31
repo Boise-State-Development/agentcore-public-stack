@@ -22,6 +22,7 @@ import { NetworkConstruct } from './constructs/network/network-construct';
 
 // Identity
 import { ArtifactRenderTokenSecretConstruct } from './constructs/identity/artifact-render-token-secret-construct';
+import { TokenExchangeSecretConstruct } from './constructs/identity/token-exchange-secret-construct';
 import { AuthProvidersConstruct } from './constructs/identity/auth-providers-construct';
 import { AuthSecretConstruct } from './constructs/identity/auth-secret-construct';
 import { BffCookieKeyConstruct } from './constructs/identity/bff-cookie-key-construct';
@@ -191,6 +192,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly artifactsContentBucket: s3.IBucket;
   public readonly artifactsTable: dynamodb.ITable;
   public readonly artifactRenderTokenSecret: secretsmanager.ISecret;
+  public readonly tokenExchangeSecret?: secretsmanager.ISecret;
   /**
    * The CSP `frame-ancestors` source list resolved for the artifacts
    * iframe origin (space-separated). Forwarded to the render Lambda
@@ -329,6 +331,19 @@ export class PlatformStack extends cdk.Stack {
       { config },
     );
     this.artifactRenderTokenSecret = artifactRenderToken.secret;
+
+    // Only for deployments that actually use an external token service. Creating
+    // it unconditionally would add a billed Secrets Manager secret to every
+    // fork, including those that never register an external MCP server and
+    // intend to use SigV4 for all API-to-MCP traffic.
+    if (config.tokenExchange) {
+      const tokenExchange = new TokenExchangeSecretConstruct(
+        this,
+        'TokenExchange',
+        { config },
+      );
+      this.tokenExchangeSecret = tokenExchange.secret;
+    }
 
     // ============================================================
     // Data tables
@@ -720,6 +735,7 @@ export class PlatformStack extends cdk.Stack {
       artifactsContentBucket: this.artifactsContentBucket,
       artifactsTable: this.artifactsTable,
       artifactRenderTokenSecret: this.artifactRenderTokenSecret,
+      tokenExchangeSecret: this.tokenExchangeSecret,
       artifactsOriginUrl: this.artifactsOriginUrl,
       skillResourcesBucket: this.skillResourcesBucket,
       memorySpacesBucket: this.memorySpacesBucket,

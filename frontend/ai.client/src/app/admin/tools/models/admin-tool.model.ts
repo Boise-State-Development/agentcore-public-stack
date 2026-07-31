@@ -134,6 +134,7 @@ export interface AdminTool {
   status: ToolStatus;
   requiresOauthProvider: string | null;
   forwardAuthToken: boolean;
+  tokenExchangeAudience?: string | null;
   isPublic: boolean;
   allowedAppRoles: string[];
   enabledByDefault: boolean;
@@ -186,6 +187,7 @@ export interface ToolCreateRequest {
   status?: ToolStatus;
   requiresOauthProvider?: string | null;
   forwardAuthToken?: boolean;
+  tokenExchangeAudience?: string | null;
   isPublic?: boolean;
   enabledByDefault?: boolean;
   mcpConfig?: MCPServerConfig;
@@ -204,6 +206,7 @@ export interface ToolUpdateRequest {
   status?: ToolStatus;
   requiresOauthProvider?: string | null;
   forwardAuthToken?: boolean;
+  tokenExchangeAudience?: string | null;
   isPublic?: boolean;
   enabledByDefault?: boolean;
   mcpConfig?: MCPServerConfig | null;
@@ -243,6 +246,23 @@ export interface MCPDiscoverRequest {
    * backend can resolve the admin's token.
    */
   requiresOauthProvider?: string | null;
+  /**
+   * Token-service applicationId (RFC 8693 `audience`) to exchange the user's
+   * token for at request time. When set, the runtime trades the signed-in user's
+   * Cognito access token for a token the target API already trusts and sends
+   * that as the bearer, so an existing API needs no changes to serve agent
+   * requests as the user.
+   *
+   * Mutually exclusive with `forwardAuthToken` and `requiresOauthProvider` —
+   * there is only one Authorization header. Requires MCP auth type `none`.
+   *
+   * Note: discovery does NOT exchange. The exchange client lives in the agent
+   * runtime, which `app_api` may not import (enforced import boundary), so
+   * registration discovers the tool list unauthenticated. Fine for servers that
+   * do not gate `tools/list`; a server that does will need its tools entered
+   * manually until an exchange client exists in the shared layer.
+   */
+  tokenExchangeAudience?: string | null;
 }
 
 /**
@@ -287,6 +307,7 @@ export interface ToolFormData {
   status: ToolStatus;
   requiresOauthProvider: string | null;
   forwardAuthToken: boolean;
+  tokenExchangeAudience?: string | null;
   isPublic: boolean;
   enabledByDefault: boolean;
   // MCP configuration (for mcp_external protocol)

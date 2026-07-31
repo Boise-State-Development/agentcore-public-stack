@@ -180,6 +180,7 @@ async def admin_create_tool(
             status=request.status,
             requires_oauth_provider=request.requires_oauth_provider,
             forward_auth_token=request.forward_auth_token,
+            token_exchange_audience=request.token_exchange_audience,
             is_public=request.is_public,
             enabled_by_default=request.enabled_by_default,
             mcp_config=mcp_config,

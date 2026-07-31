@@ -338,6 +338,20 @@ export class InferenceAgentCoreConstruct extends Construct {
         // user's Cognito access token as a Bearer token; 'iam' → SigV4.
         AGENTCORE_GATEWAY_INBOUND_AUTH: config.gateway.inboundAuth,
 
+        // RFC 8693 token exchange. Spread in only when configured, so a
+        // deployment that does not use it gets no extra environment variables at
+        // all — no diff to its runtime definition. The exchange runs here rather
+        // than in the Gateway because AgentCore's outbound OAuth credential
+        // provider has no token-exchange grant.
+        ...(config.tokenExchange
+          ? {
+              TOKEN_EXCHANGE_URL: config.tokenExchange.url,
+              TOKEN_EXCHANGE_CLIENT_ID: config.tokenExchange.clientId,
+              TOKEN_EXCHANGE_SECRET_ID:
+                props.refs.tokenExchangeSecret?.secretName ?? '',
+            }
+          : {}),
+
         // S3 storage
         S3_ASSISTANTS_VECTOR_STORE_BUCKET_NAME: vectorBucketName,
         S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME: vectorIndexName,

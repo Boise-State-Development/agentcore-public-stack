@@ -630,6 +630,15 @@ class ToolDefinition(BaseModel):
         description="If true, forward the user's OIDC authentication token to the MCP server. "
         "Only use for same-team controlled servers. Mutually exclusive with requires_oauth_provider.",
     )
+    token_exchange_audience: Optional[str] = Field(
+        None,
+        description="Token-service applicationId to exchange the user's token for (RFC 8693). "
+        "When set, the runtime trades the user's Cognito access token for a token-service JWT "
+        "scoped to this application and forwards that instead of the raw token — so APIs "
+        "that already trust token-service JWTs can serve agent requests as the signed-in user. "
+        "Takes precedence over forward_auth_token, which would send a token the target API "
+        "cannot validate. Mutually exclusive with requires_oauth_provider.",
+    )
 
     # Access control
     is_public: bool = Field(
@@ -722,6 +731,7 @@ class ToolDefinition(BaseModel):
             "status": self.status if isinstance(self.status, str) else self.status.value,
             "requiresOauthProvider": self.requires_oauth_provider,
             "forwardAuthToken": self.forward_auth_token,
+            "tokenExchangeAudience": self.token_exchange_audience,
             "isPublic": self.is_public,
             "enabledByDefault": self.enabled_by_default,
             "createdAt": to_iso(self.created_at) if self.created_at else None,
@@ -785,6 +795,7 @@ class ToolDefinition(BaseModel):
             status=item.get("status", ToolStatus.ACTIVE),
             requires_oauth_provider=item.get("requiresOauthProvider"),
             forward_auth_token=item.get("forwardAuthToken", False),
+            token_exchange_audience=item.get("tokenExchangeAudience"),
             is_public=item.get("isPublic", False),
             enabled_by_default=item.get("enabledByDefault", False),
             mcp_config=mcp_config,
@@ -1074,6 +1085,7 @@ class ToolCreateRequest(BaseModel):
     status: ToolStatus = Field(default=ToolStatus.ACTIVE)
     requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
     forward_auth_token: bool = Field(default=False, alias="forwardAuthToken")
+    token_exchange_audience: Optional[str] = Field(None, alias="tokenExchangeAudience")
     is_public: bool = Field(default=False, alias="isPublic")
     enabled_by_default: bool = Field(default=False, alias="enabledByDefault")
 
@@ -1099,6 +1111,7 @@ class ToolUpdateRequest(BaseModel):
     status: Optional[ToolStatus] = None
     requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
     forward_auth_token: Optional[bool] = Field(None, alias="forwardAuthToken")
+    token_exchange_audience: Optional[str] = Field(None, alias="tokenExchangeAudience")
     is_public: Optional[bool] = Field(None, alias="isPublic")
     enabled_by_default: Optional[bool] = Field(None, alias="enabledByDefault")
 
@@ -1285,6 +1298,7 @@ class AdminToolResponse(BaseModel):
     status: ToolStatus
     requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
     forward_auth_token: bool = Field(default=False, alias="forwardAuthToken")
+    token_exchange_audience: Optional[str] = Field(None, alias="tokenExchangeAudience")
     is_public: bool = Field(..., alias="isPublic")
     allowed_app_roles: List[str] = Field(..., alias="allowedAppRoles")
     enabled_by_default: bool = Field(..., alias="enabledByDefault")
@@ -1331,6 +1345,7 @@ class AdminToolResponse(BaseModel):
             status=tool.status,
             requires_oauth_provider=tool.requires_oauth_provider,
             forward_auth_token=tool.forward_auth_token,
+            token_exchange_audience=tool.token_exchange_audience,
             is_public=tool.is_public,
             allowed_app_roles=allowed_roles or tool.allowed_app_roles,
             enabled_by_default=tool.enabled_by_default,
@@ -1382,6 +1397,7 @@ class MCPDiscoverRequest(BaseModel):
     api_key_header: Optional[str] = Field(None, alias="apiKeyHeader")
     secret_arn: Optional[str] = Field(None, alias="secretArn")
     forward_auth_token: bool = Field(default=False, alias="forwardAuthToken")
+    token_exchange_audience: Optional[str] = Field(None, alias="tokenExchangeAudience")
     requires_oauth_provider: Optional[str] = Field(
         None, alias="requiresOauthProvider"
     )

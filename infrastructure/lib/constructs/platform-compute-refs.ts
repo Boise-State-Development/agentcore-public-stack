@@ -60,6 +60,12 @@ export interface PlatformComputeRefs {
   oauthUserTokensTable: dynamodb.ITable;
   oauthTokenEncryptionKey: kms.IKey;
   oauthClientSecretsSecret: secretsmanager.ISecret;
+  /**
+   * Confidential-client secret for the RFC 8693 token exchange.
+   * Undefined unless `config.tokenExchange` is configured — the secret is
+   * not created for deployments that do not use the feature.
+   */
+  tokenExchangeSecret?: secretsmanager.ISecret;
   authProvidersTable: dynamodb.ITable;
   authProviderSecretsSecret: secretsmanager.ISecret;
 
