@@ -28,6 +28,7 @@ export const ADMIN_SCOPE_IDS = [
   'admin.user_menu_links',
   'admin.roles',
   'admin.auth_providers',
+  'admin.audit',
 ] as const;
 
 export type AdminScopeId = (typeof ADMIN_SCOPE_IDS)[number];
@@ -44,6 +45,7 @@ export type AdminScopeId = (typeof ADMIN_SCOPE_IDS)[number];
 export const NON_DELEGABLE_SCOPE_IDS: readonly AdminScopeId[] = [
   'admin.roles',
   'admin.auth_providers',
+  'admin.audit',
 ];
 
 /**

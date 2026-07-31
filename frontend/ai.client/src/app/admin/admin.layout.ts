@@ -23,6 +23,7 @@ import {
   heroUsers,
   heroKey,
   heroFingerPrint,
+  heroClipboardDocumentList,
   heroBars3,
   heroSparkles,
   heroInbox,
@@ -74,6 +75,7 @@ interface NavGroup {
       heroUsers,
       heroKey,
       heroFingerPrint,
+      heroClipboardDocumentList,
       heroBars3,
       heroSparkles,
       heroInbox,
@@ -238,6 +240,7 @@ export class AdminLayout implements OnInit {
         { label: 'Users', icon: 'heroUsers', route: '/admin/users', scope: 'admin.users' },
         { label: 'Roles', icon: 'heroKey', route: '/admin/roles', scope: 'admin.roles' },
         { label: 'Auth Providers', icon: 'heroFingerPrint', route: '/admin/auth-providers', scope: 'admin.auth_providers' },
+        { label: 'Audit Log', icon: 'heroClipboardDocumentList', route: '/admin/audit', scope: 'admin.audit' },
       ],
     },
     {

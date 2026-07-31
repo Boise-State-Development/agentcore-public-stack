@@ -70,14 +70,27 @@ def test_every_scope_has_label_group_and_description() -> None:
         assert scope.description.strip(), scope.id
 
 
-def test_roles_and_auth_providers_are_non_delegable() -> None:
-    """I1 — the two escalation paths back to full admin.
+def test_non_delegable_set_is_exactly_the_three_reserved_surfaces() -> None:
+    """I1 — the escalation paths back to full admin, plus the trail that watches them.
 
     ``admin.roles`` is obvious. ``admin.auth_providers`` is the one that gets
     argued about: role resolution starts from JWT claims, so controlling IdP
     attribute mapping controls which AppRoles resolve at all.
+
+    ``admin.audit`` is not an escalation path — it is read-only. It is reserved
+    because the trail records what admins do *including* escalation attempts the
+    write-through guard refused, and the people it records are the last ones who
+    should control who reads it.
+
+    This assertion is exact rather than a subset check on purpose: a scope
+    silently *leaving* this set is the failure worth catching, and a subset
+    assertion would not catch it.
     """
-    assert NON_DELEGABLE_SCOPES == {"admin.roles", "admin.auth_providers"}
+    assert NON_DELEGABLE_SCOPES == {
+        "admin.roles",
+        "admin.auth_providers",
+        "admin.audit",
+    }
 
 
 def test_delegable_and_non_delegable_partition_the_registry() -> None:

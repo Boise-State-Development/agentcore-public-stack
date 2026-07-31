@@ -74,6 +74,7 @@ export interface PlatformComputeRefs {
   bffSessionsTable: dynamodb.ITable;
   usersTable: dynamodb.ITable;
   appRolesTable: dynamodb.ITable;
+  auditLogTable: dynamodb.ITable;
   apiKeysTable: dynamodb.ITable;
   userQuotasTable: dynamodb.ITable;
   quotaEventsTable: dynamodb.ITable;

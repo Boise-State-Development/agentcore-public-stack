@@ -273,6 +273,12 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./auth-providers/pages/provider-form.page').then(m => m.AuthProviderFormPage),
   },
   {
+    path: 'audit',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.audit' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./audit/pages/audit-log.page').then(m => m.AuditLogPage),
+  },
+  {
     path: 'manage-user-menu-links',
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.user_menu_links' } satisfies AdminScopeRouteData,

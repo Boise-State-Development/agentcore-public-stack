@@ -29,6 +29,7 @@ export interface AppApiSsmParams {
   usersTableArn: string;
   appRolesTableName: string;
   appRolesTableArn: string;
+  auditLogTableName: string;
   apiKeysTableName: string;
   apiKeysTableArn: string;
   oauthProvidersTableName: string;
@@ -145,6 +146,7 @@ export function resolveAppApiParams(
     usersTableArn: refs.usersTable.tableArn,
     appRolesTableName: refs.appRolesTable.tableName,
     appRolesTableArn: refs.appRolesTable.tableArn,
+    auditLogTableName: refs.auditLogTable.tableName,
     apiKeysTableName: refs.apiKeysTable.tableName,
     apiKeysTableArn: refs.apiKeysTable.tableArn,
     oauthProvidersTableName: refs.oauthProvidersTable.tableName,
@@ -239,6 +241,7 @@ export function buildAppApiEnvironment(
     DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME: params.systemCostRollupTableName,
     DYNAMODB_USERS_TABLE_NAME: params.usersTableName,
     DYNAMODB_APP_ROLES_TABLE_NAME: params.appRolesTableName,
+    DYNAMODB_AUDIT_LOG_TABLE_NAME: params.auditLogTableName,
     DYNAMODB_USER_FILES_TABLE_NAME: params.userFilesTableName,
     S3_USER_FILES_BUCKET_NAME: params.userFilesBucketName,
     FILE_UPLOAD_MAX_SIZE_BYTES: String(4194304),

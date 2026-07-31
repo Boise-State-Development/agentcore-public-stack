@@ -37,6 +37,7 @@ import { AdminTablesConstruct } from './constructs/data/admin-tables-construct';
 import { AuthTablesConstruct } from './constructs/data/auth-tables-construct';
 import { CostTrackingTablesConstruct } from './constructs/data/cost-tracking-tables-construct';
 import { FileUploadConstruct } from './constructs/data/file-upload-construct';
+import { AuditLogConstruct } from './constructs/data/audit-log-construct';
 import { QuotaTablesConstruct } from './constructs/data/quota-tables-construct';
 import { SharedConversationsConstruct } from './constructs/data/shared-conversations-construct';
 
@@ -158,6 +159,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly apiKeysTable: dynamodb.ITable;
   public readonly userQuotasTable: dynamodb.ITable;
   public readonly quotaEventsTable: dynamodb.ITable;
+  public readonly auditLogTable: dynamodb.ITable;
   public readonly sessionsMetadataTable: dynamodb.ITable;
   public readonly userCostSummaryTable: dynamodb.ITable;
   public readonly systemCostRollupTable: dynamodb.ITable;
@@ -360,6 +362,9 @@ export class PlatformStack extends cdk.Stack {
     });
     this.userQuotasTable = quotaTables.userQuotasTable;
     this.quotaEventsTable = quotaTables.quotaEventsTable;
+
+    const auditLog = new AuditLogConstruct(this, 'AuditLog', { config });
+    this.auditLogTable = auditLog.auditLogTable;
 
     const costTrackingTables = new CostTrackingTablesConstruct(
       this,
@@ -717,6 +722,7 @@ export class PlatformStack extends cdk.Stack {
       apiKeysTable: this.apiKeysTable,
       userQuotasTable: this.userQuotasTable,
       quotaEventsTable: this.quotaEventsTable,
+      auditLogTable: this.auditLogTable,
       sessionsMetadataTable: this.sessionsMetadataTable,
       userCostSummaryTable: this.userCostSummaryTable,
       systemCostRollupTable: this.systemCostRollupTable,
