@@ -223,9 +223,14 @@ import {
                           >
                             Request changes
                           </button>
-                          <!-- Only once there is something to roll back *to*. A control that
+                          <!-- Only once there is a second version to switch to. A control that
                                opens a dialog whose only honest content is "there is nothing
-                               here" is worse than an absent one. -->
+                               here" is worse than an absent one.
+
+                               Labelled for the operation, not one direction of it: after a
+                               rollback the same control is how an admin puts the newer
+                               version back, and "Roll back" would name the opposite of what
+                               it then does. -->
                           @if (canRollBack(row)) {
                             <button
                               type="button"
@@ -233,7 +238,7 @@ import {
                               (click)="rollback(row)"
                               class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                             >
-                              Roll back
+                              Change version
                             </button>
                           }
                           <button
@@ -334,14 +339,23 @@ export class MarketplaceListingsPage implements OnInit {
   }
 
   /**
-   * Whether an earlier snapshot exists to roll back to.
+   * Whether another snapshot exists to switch to.
    *
-   * Inferred from the version number rather than by fetching the history: `v1` is by
-   * definition the first, so there is nothing behind it. Anything above `v1` *may* have a
-   * predecessor — the dialog loads the real list and says so honestly if it does not.
+   * ⚠️ Asked as "does a second version exist?", not "are we serving above `v1`?". Those read
+   * the same until someone rolls back, and then they diverge in the one state where the
+   * control matters most: a listing rolled back to `v1` still has every later version
+   * sitting there, and repointing at one is the *same operation* in the other direction —
+   * which is exactly what the dialog promises ("the current version stays available to roll
+   * forward to"). Gating on `publishedVersion > 1` hid the button precisely then, stranding
+   * the rollback with no way to undo it from the UI even though the endpoint accepts it.
+   *
+   * `latestVersion` is the high-water mark and survives the pointer moving down, so it
+   * answers the question the affordance is really asking. Still inferred rather than fetched
+   * — a page of rows must not fetch every agent's history — and the dialog loads the real
+   * list and says so honestly in the edge the inference cannot see.
    */
   canRollBack(row: AdminListingRow): boolean {
-    return (row.publishedVersion ?? 0) > 1;
+    return (row.latestVersion ?? 0) > 1;
   }
 
   /**

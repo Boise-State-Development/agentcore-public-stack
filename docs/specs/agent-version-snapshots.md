@@ -370,6 +370,16 @@ version attributed to the admin.
   way a takedown's does, because an admin changing what users run is not something the
   author should have to discover; and it **cuts no version** — rolling back is a pointer
   move over immutable records, so rolling forward again is the same operation.
+
+  ⚠️ **That last property has to reach the UI, and at first it did not.** The Listings page
+  gated its control on `publishedVersion > 1`, which reads "are we serving above the first
+  version?" — the same answer as "does a second version exist?" right up until someone rolls
+  back, and the opposite one afterwards. A listing rolled back to `v1` still had every later
+  snapshot intact and the endpoint would happily repoint at one, but the only entry point was
+  hidden: the rollback could not be undone from the UI. The row now carries `latestVersion`
+  (the high-water mark, which survives the pointer moving down) and the control, its label
+  and the dialog's copy are all direction-neutral, because half of this feature's uses are
+  the second half of an earlier use.
 - **Transaction vs fail-closed ordering.** Publishing and delisting are now two writes on
   two items (§3.3), and the "an unpublished agent cannot be in the store" invariant is held
   by call order rather than by atomicity. Ordering is enforced in one place
