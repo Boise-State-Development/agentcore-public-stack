@@ -1158,6 +1158,29 @@ def _reachability(assistant: Assistant) -> str:
     return "owner_only"
 
 
+def _latest_version(listing: AgentListing) -> Optional[int]:
+    """The highest snapshot number this listing has, without reading the version partition.
+
+    Answers one question for the Listings table: *does more than one version exist?* — which
+    is what the rollback affordance actually depends on. ``published_version`` alone cannot
+    answer it, because a rollback moves that pointer **down**: a listing serving ``v1`` with
+    ``v2``–``v5`` behind it is indistinguishable from one that has only ever had ``v1``, and
+    the table hid the only route back to the newer snapshots (see
+    ``canRollBack``). Rolling forward is the same pointer move as rolling back, so the entry
+    point cannot be gated on the direction.
+
+    ``submitted_version`` is the high-water mark that survives a rollback: both counters only
+    ever move *up* when a snapshot is cut, so ``max`` of the two is ≥ 2 exactly when a second
+    version exists. It can *understate* the true highest — an admin presentation edit cuts a
+    version and bumps only ``published_version``, so a later rollback leaves the max one
+    short — which is harmless here, because no caller asks for the number itself, only
+    whether it is above one. Anything that needs the real list already calls
+    ``list_agent_versions``.
+    """
+    highest = max(listing.published_version or 0, listing.submitted_version or 0)
+    return highest or None
+
+
 def _to_row(assistant: Assistant, publisher: Optional[PublisherProfile]) -> AdminListingRow:
     listing = assistant.listing
     if listing is None:  # callers filter; belt-and-braces rather than a stripped assert
@@ -1184,6 +1207,7 @@ def _to_row(assistant: Assistant, publisher: Optional[PublisherProfile]) -> Admi
         reviewed_at=listing.reviewed_at,
         review_note=listing.review_note,
         updated_at=assistant.updated_at,
+        latest_version=_latest_version(listing),
         published_version=listing.published_version,
         reachability=_reachability(assistant),
         admin_edits=listing.admin_edits,

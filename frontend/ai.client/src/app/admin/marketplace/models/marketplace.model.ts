@@ -112,6 +112,16 @@ export interface AdminListingRow {
   publishedVersion?: number;
 
   /**
+   * The highest snapshot this agent has — for 1-based sequential versions, also how many.
+   *
+   * Distinct from `publishedVersion` because a rollback moves that pointer *down*: a listing
+   * serving `v1` with `v2`–`v5` behind it looks identical to one that has only ever had
+   * `v1`, and gating the rollback affordance on the latter reading hides the only way back
+   * to the newer snapshots.
+   */
+  latestVersion?: number;
+
+  /**
    * Who can open this agent if it is shelved, derived from `visibility` server-side.
    * `everyone` = PUBLIC; the other two mean the store tile will 404 for most users.
    * Advisory — the reviewer is told, never blocked.

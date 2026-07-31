@@ -1009,6 +1009,17 @@ class AdminListingRow(BaseModel):
     reviewed_at: Optional[str] = Field(None, alias="reviewedAt", description="ISO 8601 timestamp of the last review")
     review_note: Optional[str] = Field(None, alias="reviewNote", description="Most recent reviewer note")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 of the last write to the Agent record")
+    latest_version: Optional[int] = Field(
+        None,
+        alias="latestVersion",
+        description=(
+            "The highest snapshot number this Agent has, which for 1-based sequential "
+            "versions is also how many exist. Present so the Listings table can tell "
+            "'serving v1' apart from 'only ever had v1' — the rollback affordance depends "
+            "on whether *another* version exists, not on which one is currently live, and "
+            "after a rollback to v1 those two readings disagree. Derived, never stored."
+        ),
+    )
     published_version: Optional[int] = Field(
         None,
         alias="publishedVersion",

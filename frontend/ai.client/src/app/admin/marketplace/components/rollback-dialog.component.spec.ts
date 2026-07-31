@@ -73,12 +73,22 @@ describe('RollbackDialogComponent', () => {
     expect(component.selectable().map((v) => v.version)).toEqual([2, 1]);
   });
 
-  it('says so plainly when there is nothing to roll back to', async () => {
+  it('says so plainly when there is nothing else to switch to', async () => {
     const component = build([version(3, true)]);
     await component.ngOnInit();
 
     expect(component.selectable()).toEqual([]);
     expect(component.canSubmit()).toBe(false);
+  });
+
+  it('offers later versions too, so a rollback can be undone', async () => {
+    // Serving v1 with v2–v3 still on the shelf: nothing was deleted, so the picker's job is
+    // "everything that is not live", not "everything below the live one". Filtering by
+    // direction would make the sequel to every rollback unreachable.
+    const component = build([version(3), version(2), version(1, true)]);
+    await component.ngOnInit();
+
+    expect(component.selectable().map((v) => v.version)).toEqual([3, 2]);
   });
 
   it('will not submit without a reason', async () => {

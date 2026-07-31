@@ -162,6 +162,29 @@ describe('ReviewDiffComponent', () => {
     expect(text(fixture)).toContain('Could not load what changed');
   });
 
+  it('shows the server’s own explanation instead of the generic failure', async () => {
+    // The pre-snapshot case: retrying can never work, and "could not load" invites exactly
+    // that. The backend names the real cause and what to do about it — the reviewer has to
+    // see *that*, not a transport-shaped message about a data condition.
+    mockService.loadDiff.mockRejectedValue({
+      error: { detail: 'This submission predates version snapshots, so there is nothing to compare.' },
+    });
+    const fixture = render();
+    await expand(fixture);
+
+    expect(text(fixture)).toContain('predates version snapshots');
+    expect(text(fixture)).not.toContain('Could not load what changed');
+  });
+
+  it('falls back to the generic failure when the error carries no detail', async () => {
+    // A real transport failure has no `detail`, and "try again" is the right advice there.
+    mockService.loadDiff.mockRejectedValue({ error: { detail: '   ' } });
+    const fixture = render();
+    await expand(fixture);
+
+    expect(text(fixture)).toContain('Could not load what changed');
+  });
+
   it('marks the toggle as expanded for assistive technology', async () => {
     const fixture = render();
     const button = (fixture.nativeElement as HTMLElement).querySelector('button')!;

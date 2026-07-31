@@ -124,6 +124,7 @@ describe('MarketplaceListingsPage — rollback', () => {
       category: 'Administration',
       state: 'published',
       publishedVersion: 3,
+      latestVersion: 3,
       usageCount: 12,
       updatedAt: '2026-07-22T00:00:00Z',
       reachability: 'everyone',
@@ -170,27 +171,38 @@ describe('MarketplaceListingsPage — rollback', () => {
 
   afterEach(() => TestBed.resetTestingModule());
 
-  it('offers rollback on a published listing that has history behind it', async () => {
-    const fixture = await render([row({ publishedVersion: 3 })]);
-    expect(button(fixture, 'Roll back')).toBeTruthy();
+  it('offers the control on a published listing that has more than one version', async () => {
+    const fixture = await render([row({ publishedVersion: 3, latestVersion: 3 })]);
+    expect(button(fixture, 'Change version')).toBeTruthy();
   });
 
-  it('hides rollback on v1 — there is nothing behind the first version', async () => {
-    // A control whose dialog can only say "nothing to roll back to" is worse than no control.
-    const fixture = await render([row({ publishedVersion: 1 })]);
-    expect(button(fixture, 'Roll back')).toBeFalsy();
+  it('hides it when the agent has only ever had one version', async () => {
+    // A control whose dialog can only say "nothing else to switch to" is worse than none.
+    const fixture = await render([row({ publishedVersion: 1, latestVersion: 1 })]);
+    expect(button(fixture, 'Change version')).toBeFalsy();
     // The other published action is unaffected.
     expect(button(fixture, 'Take down')).toBeTruthy();
   });
 
-  it('hides rollback on a listing that is not published', async () => {
-    const fixture = await render([row({ state: 'in_review', publishedVersion: undefined })]);
-    expect(button(fixture, 'Roll back')).toBeFalsy();
+  it('keeps offering it after a rollback to v1, so the rollback can be undone', async () => {
+    // ⚠️ The regression this exists for. Gating on `publishedVersion > 1` hid the control in
+    // the one state that most needs it: v2–v5 are still there, repointing at one is the same
+    // operation in the other direction, and the endpoint accepts it — but the UI had removed
+    // the only way to ask. A rollback you cannot undo is a worse rollback.
+    const fixture = await render([row({ publishedVersion: 1, latestVersion: 5 })]);
+    expect(button(fixture, 'Change version')).toBeTruthy();
+  });
+
+  it('hides it on a listing that is not published', async () => {
+    const fixture = await render([
+      row({ state: 'in_review', publishedVersion: undefined, latestVersion: 4 }),
+    ]);
+    expect(button(fixture, 'Change version')).toBeFalsy();
   });
 
   it('sends the chosen version and reason', async () => {
     const fixture = await render([row()]);
-    button(fixture, 'Roll back')!.click();
+    button(fixture, 'Change version')!.click();
     await fixture.whenStable();
 
     expect(mockService.rollback).toHaveBeenCalledWith('ast-001', {
@@ -204,7 +216,7 @@ describe('MarketplaceListingsPage — rollback', () => {
   it('does nothing when the dialog is dismissed', async () => {
     mockDialog.open.mockReturnValue({ closed: of(undefined) });
     const fixture = await render([row()]);
-    button(fixture, 'Roll back')!.click();
+    button(fixture, 'Change version')!.click();
     await fixture.whenStable();
 
     expect(mockService.rollback).not.toHaveBeenCalled();
@@ -215,7 +227,7 @@ describe('MarketplaceListingsPage — rollback', () => {
       error: { detail: 'Version 2 of this agent does not exist.' },
     });
     const fixture = await render([row()]);
-    button(fixture, 'Roll back')!.click();
+    button(fixture, 'Change version')!.click();
     await fixture.whenStable();
     fixture.detectChanges();
 

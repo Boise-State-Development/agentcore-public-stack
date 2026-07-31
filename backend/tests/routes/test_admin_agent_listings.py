@@ -662,6 +662,44 @@ class TestListingsRowReportsTheLiveVersion:
 
         assert "drift" not in resp.json()["listings"][0]
 
+    def test_the_row_also_reports_how_many_versions_exist(self, app):
+        """``latestVersion`` is the high-water mark, ``publishedVersion`` is the pointer."""
+        assistant = _make_assistant(
+            listing=_listing("published", publishedVersion=3, submittedVersion=3)
+        )
+        by_state, publishers = _listing_rows(assistant)
+        with by_state, publishers:
+            resp = TestClient(app).get("/admin/agents/listings")
+
+        assert resp.json()["listings"][0]["latestVersion"] == 3
+
+    def test_a_rolled_back_row_still_reports_the_versions_above_it(self, app):
+        """⚠️ The distinction the rollback affordance depends on.
+
+        A rollback moves ``published_version`` **down**, so a listing serving ``v1`` with
+        ``v2``–``v5`` behind it looked identical to one that had only ever had ``v1``. The
+        Listings table hid its rollback control on that reading and stranded the rollback
+        with no way to undo it. ``submitted_version`` survives the pointer moving down.
+        """
+        assistant = _make_assistant(
+            listing=_listing("published", publishedVersion=1, submittedVersion=5)
+        )
+        by_state, publishers = _listing_rows(assistant)
+        with by_state, publishers:
+            row = TestClient(app).get("/admin/agents/listings").json()["listings"][0]
+
+        assert row["publishedVersion"] == 1
+        assert row["latestVersion"] == 5
+
+    def test_a_pre_snapshot_listing_reports_no_version_at_all(self, app):
+        """Absent, not ``0`` — the caller's question is "is there a second one?"."""
+        assistant = _make_assistant(listing=_listing("published", submittedVersion=None))
+        by_state, publishers = _listing_rows(assistant)
+        with by_state, publishers:
+            row = TestClient(app).get("/admin/agents/listings").json()["listings"][0]
+
+        assert row.get("latestVersion") is None
+
 
 class TestWithdrawalDecision:
     """§5.1 — withdrawal is a request an admin acts on, in the existing queue."""

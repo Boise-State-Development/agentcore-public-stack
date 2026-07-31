@@ -153,13 +153,31 @@ export class ReviewDiffComponent {
     }
   }
 
+  /**
+   * Load the diff, preferring the server's own explanation over a generic one.
+   *
+   * ⚠️ **The reason a diff is missing is usually the useful part.** This used to discard the
+   * response entirely and always say "could not load", which reads as a transient failure —
+   * so a reviewer looking at a submission that simply *predates* version snapshots was told
+   * to try again, and trying again could never work. The backend distinguishes those cases
+   * deliberately (it names the pre-snapshot one and tells the author to resubmit); throwing
+   * that away at the boundary put the reviewer back where the collapsed message left them.
+   *
+   * The generic line stays as the fallback for the case it was written for: a real transport
+   * failure, where there is no `detail` and retrying is exactly the right advice.
+   */
   private async load(): Promise<void> {
     this.loading.set(true);
     this.error.set(null);
     try {
       this.diff.set(await this.service.loadDiff(this.agentId()));
-    } catch {
-      this.error.set('Could not load what changed. Try again, or review the agent directly.');
+    } catch (err) {
+      const detail = (err as { error?: { detail?: unknown } })?.error?.detail;
+      this.error.set(
+        typeof detail === 'string' && detail.trim()
+          ? detail
+          : 'Could not load what changed. Try again, or review the agent directly.',
+      );
     } finally {
       this.loading.set(false);
     }
