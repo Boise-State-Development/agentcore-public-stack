@@ -68,7 +68,14 @@
                 know, and a greyed-out entry with a past-tense badge reads as deactivated
                 rather than as a door. Retire it, and the "New" badge below, once the
                 rename has landed with users.
+
+                ⚠️ TEMPORARY host gate (`showAssistantsSignpost`): production apex only, the
+                same gate the `/assistants` route carries, because the page now also answers
+                "where did my assistants from the *previous site* go?" — a question only
+                people arriving off legacy.boisestate.ai have. See
+                `shared/utils/legacy-migration-host.ts`.
             -->
+            @if (showAssistantsSignpost) {
             <a
                 routerLink="/assistants"
                 routerLinkActive="bg-gray-200/80 dark:bg-white/10"
@@ -81,6 +88,7 @@
                 </div>
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Assistants</span>
             </a>
+            }
 
             <a
                 routerLink="/agents"

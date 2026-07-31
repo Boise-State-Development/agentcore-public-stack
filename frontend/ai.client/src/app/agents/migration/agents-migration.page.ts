@@ -10,6 +10,7 @@ import {
   heroCpuChip,
   heroDocumentText,
   heroLink,
+  heroPaperAirplane,
   heroPuzzlePiece,
   heroShieldCheck,
   heroSparkles,
@@ -66,6 +67,34 @@ interface OpensUp {
  * Everything claimed here is a surface that ships today. If a capability is removed or
  * gated, the claim on this page goes with it — an explainer that oversells is worse than
  * the redirect it replaced. (This is why scheduled runs are not mentioned; see `opensUp`.)
+ *
+ * ## Two audiences, and why the second one gets two sentences
+ *
+ * "Assistants are now Agents" is only the *whole* truth for people who built on this
+ * version of the site. There is a second group — everyone who built an assistant on the
+ * **previous** boisestate.ai, now parked at `legacy.boisestate.ai` — for whom "nothing was
+ * lost, it is all under Agents" is flatly wrong: that generation of assistant is not
+ * compatible with this one, none of it came across, and re-creating it here is manual work.
+ *
+ * They are answered in the hero, in one paragraph: where their assistants are, and that
+ * moving them is by hand. That is the entire answer, and it was deliberately cut back to
+ * it — an earlier draft gave them a section with two comparison cards and a four-step
+ * procedure, which turned a short piece of bad news into something that read like a
+ * project. Someone who has to rebuild an assistant does not need it explained twice; they
+ * need the link and the honest sentence.
+ *
+ * What the hero cannot do is carry the qualifier through the rest of the page, so every
+ * unqualified "everything you built is here" below it is scoped to *this* version instead
+ * ("here", "on this site"). A reassurance a reader cannot trust is worth less than no
+ * reassurance: the person who follows "nothing to do" and finds an empty list stops
+ * believing the rest of the page, including the parts that are true for them.
+ *
+ * The one place precision beats brevity is the link — it *reads* as `legacy.boisestate.ai`
+ * and *points* at `?segment=my`, so the sentence stays plain while the click still lands on
+ * their own list rather than a home page they have to search from.
+ *
+ * ⚠️ This whole page is host-gated (production apex + localhost; see
+ * `shared/utils/legacy-migration-host.ts`) and comes out with the legacy site.
  */
 @Component({
   selector: 'app-agents-migration',
@@ -83,6 +112,7 @@ interface OpensUp {
       heroCpuChip,
       heroDocumentText,
       heroLink,
+      heroPaperAirplane,
       heroPuzzlePiece,
       heroShieldCheck,
       heroSparkles,
@@ -94,12 +124,23 @@ interface OpensUp {
 })
 export class AgentsMigrationPage {
   /**
+   * Deep link to the reader's **own** assistants on the previous site, not its home page.
+   * `?segment=my` is the legacy list's "mine" tab. Someone sent to a landing page has to
+   * re-find their work before they can start copying it, and that re-finding is where
+   * people give up.
+   */
+  readonly legacyAssistantsUrl = 'https://legacy.boisestate.ai/assistants?segment=my';
+
+  /**
    * What came across untouched. One line each — this section answers a worry, and a worry
    * is answered by a short concrete list, not by an explanation of the mechanism.
+   *
+   * ⚠️ Scoped to assistants built **in this version**. See the class doc: unqualified here
+   * is a lie to the legacy half of the audience.
    */
   readonly carriedOver: readonly { label: string; detail: string; icon: string }[] = [
     {
-      label: 'Every assistant you built',
+      label: 'Every assistant you built here',
       detail: 'The same name, the same instructions, the same opening questions.',
       icon: 'heroSparkles',
     },
@@ -177,14 +218,12 @@ export class AgentsMigrationPage {
    * A "Run on a schedule" card sat here and has been pulled: scheduled runs work, but they
    * have no navigation of their own yet, so the card promised a feature with nowhere to go.
    * Put it back (with `heroClock`) when that surface is rolled out.
+   *
+   * A "Share it with everyone" card was also pulled — not because it was untrue, but because
+   * the marketplace outgrew a card. It has its own section below, since "how do I get one
+   * published" is a procedure and a card can only tease it.
    */
   readonly opensUp: readonly OpensUp[] = [
-    {
-      title: 'Share it with everyone',
-      body:
-        'Put an agent up for review and it appears in Discover, where anyone here can find it and use it — instead of you sending a link to one person at a time.',
-      icon: 'heroSquares2x2',
-    },
     {
       title: 'Keep the ones you like',
       body:
@@ -196,6 +235,56 @@ export class AgentsMigrationPage {
       body:
         'Type @ in any conversation to hand what you are working on to a different agent, then carry on. Nothing to close, nothing to start over.',
       icon: 'heroChatBubbleLeftRight',
+    },
+  ];
+
+  /**
+   * How an agent gets published. Three steps because there are three, and each one names
+   * who acts — you, an admin, everyone — since the question underneath "how do I publish" is
+   * really "who decides, and when does it stop being mine to change".
+   *
+   * The decider is named as **an admin**, not "someone" or "a person". Anonymous review
+   * ("someone reads it") makes an accountable process sound like a committee behind a
+   * curtain; "an admin" is a role the reader already knows exists here, so the same sentence
+   * reads as governance rather than as a mystery.
+   *
+   * No "shelf" either, in any of the three. It is the marketplace metaphor talking, and it
+   * only makes sense to someone already picturing a store — the reader who needs this list
+   * most is the one who is not. The literal words the UI uses (a **category** you choose,
+   * **Discover** where it lands) cost nothing and need no decoding. The author-facing
+   * surfaces this page hands off to were brought in step: the submit dialog's Category and
+   * Tagline hints, its "Note to the admin", and the withdrawal confirmation in
+   * `share-agent-dialog`. **Shelf survives in code** — `CategoryShelf`, the `shelves` signal,
+   * the internal comments — because that is the domain model's name, not copy a user reads.
+   * ⚠️ Still on the admin side: `categories.page.ts`, `publishers.page.ts` and the
+   * reachability warning in `models/reachability.ts` say it to reviewers.
+   *
+   * ⚠️ Every claim here is asserted against the shipped flow, not the intent:
+   * `submit-listing-dialog.component.ts` for what the author fills in (category, tagline,
+   * optional note, and the public checkbox), `LISTING_STATE_LABELS` in `store.model.ts` for
+   * the vocabulary an admin's decision comes back in, and `PUBLISHED_VERSION_TOOLTIP` in
+   * the admin marketplace model for the snapshot rule in step 3. If the review flow changes,
+   * this list changes with it — the fastest way to make a governed process feel arbitrary is
+   * to describe it inaccurately.
+   */
+  readonly marketplaceSteps: readonly { title: string; body: string; icon: string }[] = [
+    {
+      title: 'You submit it',
+      body:
+        'Choose the category it belongs in, write the one line that sits under its name, and add a note to the admin if there is something they should know. Agents start private, so you confirm you are making this one public.',
+      icon: 'heroPaperAirplane',
+    },
+    {
+      title: 'An admin reviews it',
+      body:
+        'An admin reads it before anyone else can. They publish it, or come back asking for changes — either way you see the decision, and their reasoning, on your own agent.',
+      icon: 'heroShieldCheck',
+    },
+    {
+      title: 'It goes live in Discover',
+      body:
+        'Published, it appears in Discover for everyone here to find, use and pin. What they run is the approved version, so you can keep working on yours — your next version goes live when it is approved too.',
+      icon: 'heroSquares2x2',
     },
   ];
 }
