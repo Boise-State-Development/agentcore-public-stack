@@ -106,7 +106,10 @@ import {
             ></div>
             <span class="sr-only">Loading audit records</span>
           </div>
-        } @else if (records().length === 0) {
+        } @else if (records().length === 0 && !error()) {
+          <!-- Only when the read succeeded and genuinely returned nothing.
+               Showing "nothing recorded" next to a failure banner tells the
+               admin the month is empty when we do not actually know that. -->
           <div
             class="rounded-2xl border border-dashed border-gray-300 px-6 py-16 text-center dark:border-gray-600"
           >
