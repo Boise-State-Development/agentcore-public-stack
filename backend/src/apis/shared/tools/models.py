@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from apis.shared.timestamps import from_iso, to_iso
 
 
@@ -639,6 +639,26 @@ class ToolDefinition(BaseModel):
         "Takes precedence over forward_auth_token, which would send a token the target API "
         "cannot validate. Mutually exclusive with requires_oauth_provider.",
     )
+
+    @field_validator("token_exchange_audience", mode="before")
+    @classmethod
+    def _clean_token_exchange_audience(cls, v: object) -> object:
+        """
+        Strip surrounding whitespace and treat blank as unset.
+
+        A pasted audience arrived with a leading space, which made the token
+        service refuse every exchange: it compares the audience against its
+        allowlist with an ordinal comparison, so " <guid>" != "<guid>". The tool
+        still appeared to work because the endpoint it called happened to allow
+        anonymous access — the request simply went unauthenticated. Silent
+        downgrade from delegated identity to anonymous is the worst possible
+        failure mode for this feature, so the value is normalised on the way in
+        rather than trusted.
+        """
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
 
     # Access control
     is_public: bool = Field(
