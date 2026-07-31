@@ -168,7 +168,7 @@ interface StagedPin {
               </span>
               Members cannot remove a locked agent — it is in their sidebar for good. Lock
               the ones that genuinely must be there and leave the rest removable, or Pinned
-              stops being the user's own shelf.
+              stops being the user's own list.
             }
             @if (lockedElsewhere()) {
               <span [class]="lockWarning() ? 'mt-2 block' : ''">
@@ -176,7 +176,7 @@ interface StagedPin {
                 other {{ lockedElsewhereRoles() === 1 ? 'role locks' : 'roles lock' }}
                 {{ lockedElsewhere() }} more.
                 A member who matches several roles gets the union of all of them, and a
-                lock from any one role wins — so the shelf an individual ends up with can
+                lock from any one role wins — so the set an individual ends up with can
                 be larger than any single role's list.
               </span>
             }
@@ -385,7 +385,7 @@ interface StagedPin {
             </h2>
             <p class="mb-3 text-sm/6 text-gray-600 dark:text-gray-400">
               Everything that has been submitted to the store. Seeding an agent that is not
-              published still works — it is a pin, not a shelf slot — but members can only
+              published still works — it is a pin, not a listing — but members can only
               open one they could reach on their own.
             </p>
 
