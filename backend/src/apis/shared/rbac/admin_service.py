@@ -1,8 +1,16 @@
 """Admin service for AppRole management operations."""
 
+import copy
 import logging
 from typing import List, Optional, Set
 
+from apis.shared.audit import (
+    AuditAction,
+    AuditOutcome,
+    AuditService,
+    diff_fields,
+    get_audit_service,
+)
 from apis.shared.auth.models import User
 
 from .models import AppRole, EffectivePermissions, AppRoleCreate, AppRoleUpdate
@@ -31,14 +39,33 @@ class AppRoleAdminService:
     - System role protection
     """
 
+    # Role fields whose changes are worth a durable before/after. Excludes the
+    # denormalized `effective_permissions` (derived, and it would double the
+    # item for no investigative gain) and the timestamps (the record carries
+    # its own).
+    AUDITED_FIELDS = [
+        "display_name",
+        "description",
+        "jwt_role_mappings",
+        "inherits_from",
+        "granted_tools",
+        "granted_models",
+        "granted_skills",
+        "granted_admin_scopes",
+        "priority",
+        "enabled",
+    ]
+
     def __init__(
         self,
         repository: Optional[AppRoleRepository] = None,
         cache: Optional[AppRoleCache] = None,
+        audit: Optional[AuditService] = None,
     ):
-        """Initialize admin service with repository and cache."""
+        """Initialize admin service with repository, cache, and audit sink."""
         self.repository = repository or AppRoleRepository()
         self.cache = cache or get_app_role_cache()
+        self.audit = audit or get_audit_service()
         self._perm_service = None
 
     def _permission_service(self):
@@ -133,6 +160,16 @@ class AppRoleAdminService:
             },
         )
 
+        # A new role's "after" is its whole grant set — there is no prior state
+        # to diff against, and the grants are the point of the record.
+        self.audit.record(
+            action=AuditAction.ROLE_CREATED,
+            actor=admin,
+            target_id=role.role_id,
+            changes=self.AUDITED_FIELDS,
+            after={f: getattr(role, f) for f in self.AUDITED_FIELDS},
+        )
+
         return created_role
 
     async def update_role(
@@ -156,8 +193,27 @@ class AppRoleAdminService:
         if not existing:
             return None
 
+        # Snapshot before anything mutates it — the update loop below writes
+        # onto `existing` in place, so a diff taken afterwards would compare the
+        # object to itself and report no changes.
+        before_snapshot = copy.deepcopy(existing)
+
         # Who may touch *this* role at all — see the method docstring.
-        await self._assert_actor_may_mutate(existing, admin)
+        try:
+            await self._assert_actor_may_mutate(existing, admin)
+        except RoleMutationForbidden as e:
+            # A delegated admin reaching for a protected or scope-bearing role.
+            # This is the one audit record worth having even though no state
+            # changed — a refused escalation is a signal, and the guard is the
+            # only place it exists.
+            self.audit.record(
+                action=AuditAction.ROLE_MUTATION_DENIED,
+                actor=admin,
+                target_id=role_id,
+                outcome=AuditOutcome.DENIED,
+                reason=str(e),
+            )
+            raise
 
         # System role protection
         if existing.is_system_role and role_id == "system_admin":
@@ -224,6 +280,23 @@ class AppRoleAdminService:
             },
         )
 
+        # Diff against the pre-mutation snapshot rather than trusting
+        # `update_dict`: the form posts every field on every save, so its keys
+        # describe what was *submitted*, not what changed. A record claiming ten
+        # changed fields on a description edit is worse than no record.
+        changed, before, after = diff_fields(
+            before_snapshot, existing, self.AUDITED_FIELDS
+        )
+        if changed:
+            self.audit.record(
+                action=AuditAction.ROLE_UPDATED,
+                actor=admin,
+                target_id=role_id,
+                changes=changed,
+                before=before,
+                after=after,
+            )
+
         return updated_role
 
     async def delete_role(self, role_id: str, admin: User) -> bool:
@@ -267,6 +340,16 @@ class AppRoleAdminService:
                 },
             )
 
+            # `before` carries the full grant set: once the role is gone this
+            # record is the only remaining evidence of what it conferred.
+            self.audit.record(
+                action=AuditAction.ROLE_DELETED,
+                actor=admin,
+                target_id=role_id,
+                changes=self.AUDITED_FIELDS,
+                before={f: getattr(existing, f) for f in self.AUDITED_FIELDS},
+            )
+
         return deleted
 
     async def sync_effective_permissions(
@@ -307,6 +390,16 @@ class AppRoleAdminService:
                 "admin_user_id": admin.user_id,
                 "admin_email": admin.email,
             },
+        )
+
+        # A sync grants nothing new — it recomputes the denormalized projection.
+        # Recorded anyway because it *can* change what a role effectively
+        # confers (an inherited grant added upstream lands here), and a history
+        # with a silent step is worse than one with a noisy one.
+        self.audit.record(
+            action=AuditAction.ROLE_SYNCED,
+            actor=admin,
+            target_id=role_id,
         )
 
         return updated_role

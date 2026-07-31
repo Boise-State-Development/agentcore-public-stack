@@ -102,14 +102,16 @@ describe('PlatformStack', () => {
 
   describe('DynamoDB tables', () => {
     it('creates all shared tables', () => {
-      // 25 tables. Was 24 — the memory-spaces table was added for the
-      // Memory Spaces feature. Prior note: the system-prompts table was
-      // added for admin-managed Conversation Modes (custom system prompt
-      // catalog); previously 24 before the standalone "assistants" table
-      // was decommissioned (the python app uses rag-assistants for both
+      // 26 tables. Was 25 — the audit-log table was added for the
+      // administrative audit trail (delegated admin scopes, PR-5). Prior
+      // note: the memory-spaces table was added for the Memory Spaces
+      // feature; before that the system-prompts table was added for
+      // admin-managed Conversation Modes (custom system prompt catalog);
+      // previously 24 before the standalone "assistants" table was
+      // decommissioned (the python app uses rag-assistants for both
       // assistant config and document metadata via
       // DYNAMODB_ASSISTANTS_TABLE_NAME).
-      template.resourceCountIs('AWS::DynamoDB::Table', 25);
+      template.resourceCountIs('AWS::DynamoDB::Table', 26);
     });
   });
 

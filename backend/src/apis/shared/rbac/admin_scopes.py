@@ -163,6 +163,18 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         ),
         delegable=False,
     ),
+    AdminScope(
+        id="admin.audit",
+        label="Audit Log",
+        group=GROUP_IDENTITY,
+        description=(
+            "Read the administrative audit trail. Never delegable — it records "
+            "what admins do, including escalation attempts the guard refused, "
+            "and the people it records are the last ones who should control "
+            "who reads it."
+        ),
+        delegable=False,
+    ),
 )
 
 
