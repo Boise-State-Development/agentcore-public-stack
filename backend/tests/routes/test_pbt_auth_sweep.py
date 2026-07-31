@@ -131,6 +131,37 @@ non_admin_roles_strategy = st.lists(
 )
 
 
+# The admin app is built once and shared across Hypothesis examples.
+#
+# It used to be constructed inside the example body, which meant
+# `include_router(admin_router)` — ~50ms on average, occasionally over 100ms for
+# 130 routes — ran 100 times per test against Hypothesis's default 200ms
+# deadline. The test passed with no margin and failed as `DeadlineExceeded`
+# whenever the full suite loaded the machine, which reads as an auth regression
+# rather than the timing artifact it is.
+#
+# Nothing about the property depends on a fresh app: the generated roles reach
+# the route only through the session dependency, so the override reads the
+# current user out of a holder that each example rewrites.
+_CURRENT_USER: dict = {}
+_ADMIN_CLIENT = None
+
+
+def _admin_client():
+    """Build (once) a TestClient over the admin router with a swappable user."""
+    global _ADMIN_CLIENT
+    if _ADMIN_CLIENT is None:
+        from apis.app_api.admin.routes import router as admin_router
+
+        app = FastAPI()
+        app.include_router(admin_router)
+        app.dependency_overrides[get_current_user_from_session] = (
+            lambda: _CURRENT_USER["user"]
+        )
+        _ADMIN_CLIENT = TestClient(app, raise_server_exceptions=False)
+    return _ADMIN_CLIENT
+
+
 class TestNonAdminRoleRejection:
     """Property 4: Non-admin role rejection.
 
@@ -151,20 +182,18 @@ class TestNonAdminRoleRejection:
 
         **Validates: Requirements 7.2, 7.3**
         """
-        from apis.app_api.admin.routes import router as admin_router
         from apis.shared.rbac.models import UserEffectivePermissions
 
-        app = FastAPI()
-        app.include_router(admin_router)
-
-        # Override the session dependency to return a user with the generated roles
+        # The generated roles reach the route through the session dependency,
+        # which reads this holder — see `_admin_client` for why the app itself
+        # is built once rather than per example.
         user = User(
             email="prop4@example.com",
             user_id="prop4-user",
             name="Property 4 User",
             roles=roles,
         )
-        app.dependency_overrides[get_current_user_from_session] = lambda: user
+        _CURRENT_USER["user"] = user
 
         # Mock AppRoleService to return no admin AppRoles (simulates
         # JWT roles that don't map to system_admin in DynamoDB)
@@ -181,10 +210,8 @@ class TestNonAdminRoleRejection:
         )
 
         with patch("apis.shared.rbac.service._service_instance", mock_service):
-            client = TestClient(app, raise_server_exceptions=False)
-
             # Pick a representative admin endpoint — GET /admin/managed-models
-            resp = client.get("/admin/managed-models")
+            resp = _admin_client().get("/admin/managed-models")
 
         assert resp.status_code == 403, (
             f"Expected 403 for roles={roles}, got {resp.status_code}: {resp.text}"
