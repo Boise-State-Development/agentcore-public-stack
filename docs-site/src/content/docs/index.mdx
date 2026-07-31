@@ -1,60 +1,350 @@
 ---
 title: AgentCore Public Stack
-description: The unofficial frontend for Strands and AgentCore — a production-ready, multi-agent conversational AI platform on AWS Bedrock AgentCore.
+description: The open-source, production-ready conversational AI platform for AWS Bedrock AgentCore and Strands Agents — chat, agents, tools, knowledge, and governance, deployed into an AWS account you control.
 template: splash
 hero:
   title: |
     <span class="hero-kicker">Strands · AgentCore</span>
-    AgentCore Public Stack
-  image:
-    dark: ../../assets/globe-dark.svg
-    light: ../../assets/globe-light.svg
-    alt: AgentCore Public Stack logo
-  tagline: The unofficial frontend for Strands Agents and AWS Bedrock AgentCore.
+    Own your AI platform,
+    <span class="hero-accent">on your own cloud.</span>
+  tagline: AgentCore Public Stack is the open-source, production-ready conversational AI platform for AWS Bedrock AgentCore and Strands Agents — chat, agents, tools, knowledge, and governance, deployed into an AWS account you control.
   actions:
     - text: Get started
       link: /agentcore-public-stack/getting-started/introduction/
       icon: right-arrow
       variant: primary
+    - text: See the roadmap
+      link: /agentcore-public-stack/roadmap/
+      icon: rocket
+      variant: minimal
     - text: View on GitHub
       link: https://github.com/Boise-State-Development/agentcore-public-stack
       icon: external
       variant: minimal
 ---
 
-import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import ScreenshotPlaceholder from '../../components/ScreenshotPlaceholder.astro';
 
-A production-ready, multi-agent conversational AI platform built on **AWS Bedrock AgentCore** and **Strands Agents** — streaming chat, tools, RAG, MCP Apps, artifacts, and voice, wired together and ready to deploy.
+{/* ── Hero product shot ─────────────────────────────────────────────── */}
 
-<CardGrid>
-	<LinkCard
-		title="Getting Started"
-		href="/agentcore-public-stack/getting-started/introduction/"
-		description="What the platform is, how it fits together, and how to run it locally."
+<div class="lp-hero-shot lp-reveal">
+	<ScreenshotPlaceholder
+		label="Full app — a streaming conversation with an artifact open in the side panel"
+		title="chat.your-university.edu"
+		aspect="16 / 9"
 	/>
-	<LinkCard
-		title="Local Development"
-		href="/agentcore-public-stack/local-development/"
-		description="Run the backend and SPA locally against a deployed environment."
-	/>
-	<LinkCard
-		title="Deployment"
-		href="/agentcore-public-stack/deployment/overview/"
-		description="Ship to AWS: platform stack, backend images, and the frontend."
-	/>
-	<LinkCard
-		title="Features"
-		href="/agentcore-public-stack/features/agents/"
-		description="Agents, tools, MCP Apps, RAG, artifacts, voice, and SSE streaming."
-	/>
-	<LinkCard
-		title="MCP & Integrations"
-		href="/agentcore-public-stack/integrations/mcp-overview/"
-		description="Connect MCP servers, Gateway targets, and remote A2A agents."
-	/>
-	<LinkCard
-		title="Reference"
-		href="/agentcore-public-stack/reference/sse-event-types/"
-		description="SSE event types, service boundaries, and CLI commands."
-	/>
-</CardGrid>
+</div>
+
+<div class="lp-chiprow lp-reveal" aria-label="Platform capabilities">
+	<span class="lp-chip">Streaming chat</span>
+	<span class="lp-chip">Custom agents</span>
+	<span class="lp-chip">Skills</span>
+	<span class="lp-chip">MCP&nbsp;+&nbsp;MCP Apps</span>
+	<span class="lp-chip">Knowledge bases</span>
+	<span class="lp-chip">Artifacts</span>
+	<span class="lp-chip">Voice</span>
+	<span class="lp-chip">RBAC&nbsp;+&nbsp;quotas</span>
+	<span class="lp-chip">Cost analytics</span>
+</div>
+
+{/* ── Why this exists — the vendor-independence argument ────────────── */}
+
+<section id="why" class="lp-section lp-reveal">
+	<div class="lp-manifesto">
+		<p class="lp-eyebrow"><span class="lp-eyebrow-num">✱</span> why this exists</p>
+		<h2 class="lp-h2">every vendor now agrees: <span class="lp-accent">don't get locked in.</span></h2>
+		<p class="lp-lede">
+			The AI labs are openly competing with their own biggest customers and partners, and
+			even the platform vendors now coach enterprises to keep their AI stack swappable —
+			while each one pitches its own ecosystem as the safe place to do it. We think the
+			advice is right and the conclusion goes further than any vendor will take it: the
+			only harness that's truly separate from the model is one you can read, fork, and
+			run yourself.
+		</p>
+		<blockquote class="lp-quote">
+			<p>"Keep your harness separate from the model."</p>
+			<cite>— Satya Nadella, Microsoft CEO, on making any model swappable · <a href="https://techcrunch.com/2026/07/29/microsoft-is-openly-competing-with-openai-anthropic-more-than-ever/">TechCrunch, July 2026</a></cite>
+		</blockquote>
+		<div class="lp-manifesto-grid">
+			<div class="lp-manifesto-item">
+				<h3>The harness is yours.</h3>
+				<p>The chat surface, agents, tools, and governance are open-source code deployed in your AWS account — infrastructure you control, not a subscription you rent.</p>
+			</div>
+			<div class="lp-manifesto-item">
+				<h3>Models are swappable.</h3>
+				<p>Every provider Strands Agents supports — Bedrock by default, plus Anthropic, OpenAI, Gemini, Ollama, and more — switchable per conversation and per agent. When a better or cheaper model ships, you swap it that afternoon.</p>
+			</div>
+			<div class="lp-manifesto-item">
+				<h3>Leaving costs nothing.</h3>
+				<p>No per-seat contracts, no proprietary formats, no ecosystem toll. Your data, prompts, and agents live inside a security boundary you already operate.</p>
+			</div>
+		</div>
+	</div>
+</section>
+
+{/* ── 01 · Chat ─────────────────────────────────────────────────────── */}
+
+<section id="chat" class="lp-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">01</span> the conversation</p>
+	<h2 class="lp-h2">chat that ships <span class="lp-accent">finished.</span></h2>
+	<p class="lp-lede">
+		Not a demo loop — the whole conversational surface. Token-by-token streaming over SSE,
+		artifacts rendered in a docked panel, voice in and out, and context that manages itself
+		on long conversations instead of falling over.
+	</p>
+	<div class="lp-feature">
+		<ul class="lp-points">
+			<li><strong>Streaming, end to end.</strong> Tool calls, interactive tool UIs, and errors all arrive as stream events — the UI never blocks on a spinner.</li>
+			<li><strong>Artifacts.</strong> Generated documents, code, and pages open in a side panel you can keep working next to.</li>
+			<li><strong>Voice mode.</strong> Speak to the assistant and hear it answer.</li>
+			<li><strong>Automatic compaction.</strong> Older turns roll into a summary when context runs long — surfaced in the UI, never silent.</li>
+			<li><strong>Conversations that survive anything.</strong> Refresh mid-stream, switch tabs, come back tomorrow — the session picks up where it was.</li>
+		</ul>
+		<ScreenshotPlaceholder
+			label="A conversation mid-stream — tool call running, artifact panel docked on the right"
+			title="Conversation — artifact panel"
+		/>
+	</div>
+</section>
+
+{/* ── 02 · Agents ───────────────────────────────────────────────────── */}
+
+<section id="agents" class="lp-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">02</span> agents</p>
+	<h2 class="lp-h2">build an agent once. <span class="lp-accent">your whole org runs it.</span></h2>
+	<p class="lp-lede">
+		Agents bundle instructions, tools, skills, and knowledge bases into something anyone can
+		use. Publish to the marketplace, and teammates pin it in one click — no setup guide,
+		no terminal.
+	</p>
+	<div class="lp-feature lp-feature--flip">
+		<ScreenshotPlaceholder
+			label="Agent marketplace — browse view with published agent cards"
+			title="Agent marketplace"
+		/>
+		<ul class="lp-points">
+			<li><strong>Marketplace.</strong> Publish an agent and control who can find it — a team, a role, or everyone.</li>
+			<li><strong>Version snapshots.</strong> Every publish is a snapshot; roll back a bad release without touching the editor.</li>
+			<li><strong>@-mentions.</strong> Pull a second agent into the middle of a conversation when you need its tools.</li>
+			<li><strong>Collaborative editing.</strong> Share an agent with viewers and editors — ownership is an access gate, not a silo.</li>
+			<li><strong>Skills.</strong> Reusable instruction packs agents load on demand, governed by the same role system as tools and models.</li>
+		</ul>
+	</div>
+</section>
+
+{/* ── 03 · Tools & MCP ──────────────────────────────────────────────── */}
+
+<section id="tools" class="lp-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">03</span> tools &amp; integrations</p>
+	<h2 class="lp-h2">connect the systems <span class="lp-accent">you already run.</span></h2>
+	<p class="lp-lede">
+		Four tool protocols, one registry: direct functions, AWS SDK calls, MCP servers behind
+		AgentCore Gateway, and remote A2A agents. Admins register a server; role-based access
+		decides who gets which tools.
+	</p>
+	<div class="lp-feature">
+		<ul class="lp-points">
+			<li><strong>MCP Apps.</strong> Tools can render live, interactive UIs inline in the conversation — not just text results.</li>
+			<li><strong>OAuth built in.</strong> Tools that need user consent trigger it mid-conversation and resume where they left off.</li>
+			<li><strong>Per-tool enablement.</strong> Turn individual tools on or off within a server — expose exactly what each role needs.</li>
+			<li><strong>Gateway targets.</strong> Register Lambda-backed MCP targets from the admin console, secured with SigV4.</li>
+			<li><strong>A2A agents.</strong> Call out to remote agents running on their own AgentCore Runtimes.</li>
+		</ul>
+		<ScreenshotPlaceholder
+			label="An MCP App rendered inline in a conversation (interactive tool UI)"
+			title="MCP App — inline tool UI"
+		/>
+	</div>
+</section>
+
+{/* ── 04 · Knowledge ────────────────────────────────────────────────── */}
+
+<section id="knowledge" class="lp-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">04</span> knowledge</p>
+	<h2 class="lp-h2">answers grounded in <span class="lp-accent">your documents.</span></h2>
+	<p class="lp-lede">
+		Every agent can carry its own knowledge base. Upload documents, connect sources, and
+		keep them fresh with scheduled re-sync — retrieval runs on Bedrock Knowledge Bases
+		inside your account.
+	</p>
+	<div class="lp-feature lp-feature--flip">
+		<ScreenshotPlaceholder
+			label="Knowledge base management — documents list with sync status"
+			title="Agent knowledge base"
+		/>
+		<ul class="lp-points">
+			<li><strong>Per-agent knowledge bases.</strong> Each agent retrieves from its own corpus — no cross-contamination between teams.</li>
+			<li><strong>Scheduled sync.</strong> Connected sources re-index on a schedule, so answers track the documents as they change.</li>
+			<li><strong>Citations in the stream.</strong> Retrieval results ride the same SSE stream as everything else.</li>
+			<li><strong>Export conversations.</strong> Save finished conversations out to connected storage.</li>
+		</ul>
+	</div>
+</section>
+
+{/* ── 05 · Governance ───────────────────────────────────────────────── */}
+
+<section id="governance" class="lp-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">05</span> governance &amp; cost</p>
+	<h2 class="lp-h2">governed by default, <span class="lp-accent">down to the token.</span></h2>
+	<p class="lp-lede">
+		Access control and cost visibility aren't bolt-ons. Roles map to your identity provider's
+		groups and gate every model, tool, and skill — and every model call is metered, priced,
+		and attributable.
+	</p>
+	<div class="lp-feature">
+		<ul class="lp-points">
+			<li><strong>RBAC from your IdP.</strong> Roles bind to identity-provider groups, with inheritance and wildcard grants.</li>
+			<li><strong>Delegated admin.</strong> Scope admin surfaces to the people who own them — models, tools, users, costs.</li>
+			<li><strong>Usage quotas.</strong> Per-user token budgets with in-stream warnings before a cutoff, not after.</li>
+			<li><strong>Cost analytics.</strong> Per-session, per-call cost breakdowns in the admin console.</li>
+			<li><strong>Prompt-cache observability.</strong> Cache hit/miss status and prefix fingerprints on every call — see exactly which change burned money.</li>
+		</ul>
+		<ScreenshotPlaceholder
+			label="Admin cost analytics — per-session call breakdown with cache status"
+			title="Admin — cost analytics"
+		/>
+	</div>
+</section>
+
+{/* ── 06 · Deploy ───────────────────────────────────────────────────── */}
+
+<section id="deploy" class="lp-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">06</span> your infrastructure</p>
+	<h2 class="lp-h2">one stack. <span class="lp-accent">your AWS account.</span></h2>
+	<p class="lp-lede">
+		Everything deploys as a single CDK stack plus three GitHub Actions workflows. No SaaS
+		control plane, no per-seat licensing — your data never leaves the security boundary
+		you already operate.
+	</p>
+	<div class="lp-feature">
+		<div class="lp-terminal" role="img" aria-label="Deploy pipeline: one CDK stack, then backend images, then the frontend">
+			<div class="lp-terminal-bar"><span class="shot-dots" aria-hidden="true"><i></i><i></i><i></i></span>deploy — bash</div>
+			<pre class="lp-terminal-body">{`$ npx cdk deploy your-prefix-PlatformStack
+✓ PlatformStack        one stack, every AWS resource
+
+$ gh workflow run backend.yml
+✓ app-api              ECS behind the SPA
+✓ inference-api        AgentCore Runtime container
+✓ rag-ingestion        knowledge base pipeline
+✓ artifact-render      artifact rendering
+
+$ gh workflow run frontend-deploy.yml
+✓ SPA → S3 + CloudFront
+
+Deployed. Your models, your data, your bill.`}</pre>
+		</div>
+		<ul class="lp-points">
+			<li><strong>Single CDK stack.</strong> Every resource lives in one <code>PlatformStack</code> — no cross-stack ordering to babysit.</li>
+			<li><strong>Zero-downtime backend deploys.</strong> Images ship out-of-band via ECR and rolling service updates.</li>
+			<li><strong>Bring your own models.</strong> Any provider Strands Agents supports — Bedrock, Anthropic, OpenAI, Gemini, local models, and more — behind an admin-curated catalog.</li>
+			<li><strong>Consumption pricing.</strong> Pay AWS for what your people actually use — not per seat.</li>
+		</ul>
+	</div>
+</section>
+
+{/* ── Roadmap teaser ────────────────────────────────────────────────── */}
+
+<section id="roadmap-teaser" class="lp-section lp-reveal">
+	<div class="lp-band">
+		<div class="lp-band-copy">
+			<p class="lp-eyebrow"><span class="lp-eyebrow-num">→</span> where this is going</p>
+			<h2 class="lp-h2">from chat app to <span class="lp-accent">agent platform.</span></h2>
+			<p class="lp-lede">
+				Chat is the home base — the roadmap is about what runs beyond it: shared agents,
+				portable skills, scheduled work, and a governed registry of everything your org
+				has built.
+			</p>
+			<a class="lp-band-cta" href="/agentcore-public-stack/roadmap/">Explore the roadmap →</a>
+		</div>
+		<ul class="rm-legend" aria-label="Roadmap status legend">
+			<li><span class="rm-dot rm-dot--live"></span><strong>Live</strong> shipped today</li>
+			<li><span class="rm-dot rm-dot--partial"></span><strong>Partial</strong> works with limits</li>
+			<li><span class="rm-dot rm-dot--building"></span><strong>Building</strong> active work</li>
+			<li><span class="rm-dot rm-dot--next"></span><strong>Next</strong> the next horizon</li>
+			<li><span class="rm-dot rm-dot--exploring"></span><strong>Exploring</strong> a direction, not a commitment</li>
+		</ul>
+	</div>
+</section>
+
+{/* ── FAQ ───────────────────────────────────────────────────────────── */}
+
+<section class="lp-section lp-section--narrow lp-reveal">
+	<h2 class="lp-h2">frequently asked <span class="lp-accent">questions.</span></h2>
+	<div class="lp-faq">
+		<details>
+			<summary>What is the AgentCore Public Stack?</summary>
+			<p>
+				A production-ready, multi-agent conversational AI platform built on AWS Bedrock
+				AgentCore and Strands Agents — an Angular chat frontend, FastAPI backends, and a
+				CDK-defined AWS platform, developed in the open by Boise State University.
+			</p>
+		</details>
+		<details>
+			<summary>Is this an official AWS product?</summary>
+			<p>
+				No — it's the <em>unofficial</em> frontend for Strands and AgentCore: an
+				independent open-source project that builds on those AWS services and tracks
+				them closely.
+			</p>
+		</details>
+		<details>
+			<summary>Why not just buy Copilot or ChatGPT Enterprise?</summary>
+			<p>
+				Those are excellent products — rented from vendors who are increasingly
+				competing with each other, repricing as they go, and coaching you not to get
+				locked in while selling you their ecosystem. Renting the harness means renting
+				the switching costs. Owning it means model choice, pricing, and roadmap stay
+				decisions you make, not terms you accept.
+			</p>
+		</details>
+		<details>
+			<summary>Which models does it support?</summary>
+			<p>
+				The model layer is Strands Agents, so you're not tied to any one vendor's
+				catalog. Amazon Bedrock is the default provider, and Strands also supports
+				Anthropic, OpenAI, Google Gemini, Mistral, Ollama, SageMaker, LiteLLM, and
+				more — plus custom providers for anything it doesn't ship (see the
+				<a href="https://strandsagents.com/docs/user-guide/concepts/model-providers/">full
+				provider list</a>). Admins curate the catalog, users switch per conversation,
+				and role-based access controls who can use which model.
+			</p>
+		</details>
+		<details>
+			<summary>Where does my data live?</summary>
+			<p>
+				In your AWS account. Conversations, documents, and knowledge bases stay inside
+				your own security boundary, and models are used for inference only — your data
+				is never used to train third-party models.
+			</p>
+		</details>
+		<details>
+			<summary>What does it cost to run?</summary>
+			<p>
+				There's no license — you pay AWS for consumption. Built-in quotas, cost
+				analytics, and prompt-cache observability exist precisely so you can see and
+				control that spend per user and per call.
+			</p>
+		</details>
+		<details>
+			<summary>How do I deploy it?</summary>
+			<p>
+				One CDK stack for infrastructure, three GitHub Actions workflows for the
+				application. The <a href="/agentcore-public-stack/deployment/overview/">deployment
+				guide</a> walks through it end to end.
+			</p>
+		</details>
+	</div>
+</section>
+
+{/* ── Final CTA ─────────────────────────────────────────────────────── */}
+
+<section class="lp-section lp-reveal">
+	<div class="lp-final">
+		<h2 class="lp-h2">run your own. <span class="lp-accent">tonight.</span></h2>
+		<p class="lp-lede">Clone the repo, deploy the stack, and hand your whole org an AI platform you control.</p>
+		<div class="lp-final-actions">
+			<a class="lp-band-cta" href="/agentcore-public-stack/getting-started/quick-start/">Quick start →</a>
+			<a class="lp-band-cta lp-band-cta--ghost" href="https://github.com/Boise-State-Development/agentcore-public-stack">Star on GitHub</a>
+		</div>
+	</div>
+</section>
