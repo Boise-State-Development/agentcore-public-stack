@@ -3,6 +3,7 @@ import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark } from '@ng-icons/heroicons/outline';
 import { ReportReason } from '../models/store.model';
+import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 
 export interface ReportAgentDialogData {
   agentName: string;
@@ -44,7 +45,7 @@ export type ReportAgentDialogResult =
 @Component({
   selector: 'app-report-agent-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [DialogDismissDirective, NgIcon],
   providers: [provideIcons({ heroXMark })],
   host: {
     class: 'block',
@@ -56,20 +57,11 @@ export type ReportAgentDialogResult =
       aria-hidden="true"
     ></div>
 
-    <!--
-      ⚠️ Dismiss-on-click lives here, NOT on the backdrop above. The backdrop is painted
-      underneath this container, which is itself inset-0 — so it covers the backdrop
-      completely and no click ever reaches it. A click handler on the backdrop looks
-      right and can never fire.
-
-      Guarded on mousedown as well as click: without that, selecting text in the note and
-      releasing the mouse outside the panel fires a click here (the two ends of the drag
-      resolve to this common ancestor) and would throw away what the user just typed.
-    -->
+    <!-- Dismiss-on-click goes here, not on the backdrop — see DialogDismissDirective. -->
     <div
       class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
-      (mousedown)="onOverlayMouseDown($event)"
-      (click)="onOverlayClick($event)"
+      appDialogDismiss
+      (dismissed)="onCancel()"
     >
       <!--
         Capped and column-flexed so the body scrolls and the header/footer stay put,
@@ -251,28 +243,6 @@ export class ReportAgentDialogComponent {
 
   onNoteInput(event: Event): void {
     this.note.set((event.target as HTMLTextAreaElement).value);
-  }
-
-  /** True only while a press that *started* on the overlay is still in flight. */
-  private pressStartedOnOverlay = false;
-
-  onOverlayMouseDown(event: MouseEvent): void {
-    this.pressStartedOnOverlay = event.target === event.currentTarget;
-  }
-
-  /**
-   * Close only when the whole click — press and release — happened on the overlay itself.
-   *
-   * `target === currentTarget` alone is not enough: a drag that starts inside the panel
-   * and ends outside it still delivers a click here, because the browser dispatches to the
-   * nearest common ancestor. That is a text selection in the note field, and discarding an
-   * unsent report to honour it would be the worst possible reading of the gesture.
-   */
-  onOverlayClick(event: MouseEvent): void {
-    const startedAndEndedOnOverlay =
-      this.pressStartedOnOverlay && event.target === event.currentTarget;
-    this.pressStartedOnOverlay = false;
-    if (startedAndEndedOnOverlay) this.onCancel();
   }
 
   onAttachToggle(event: Event): void {

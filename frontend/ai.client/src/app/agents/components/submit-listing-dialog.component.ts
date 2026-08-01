@@ -11,6 +11,7 @@ import {
   TAGLINE_MAX,
   deriveTagline,
 } from '../models/store.model';
+import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 
 export interface SubmitListingDialogData {
   agentId: string;
@@ -48,7 +49,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
 @Component({
   selector: 'app-submit-listing-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [DialogDismissDirective, NgIcon],
   providers: [provideIcons({ heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash })],
   host: {
     class: 'block',
@@ -58,10 +59,11 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
       aria-hidden="true"
-      (click)="onCancel()"
     ></div>
 
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0">
+    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
+      appDialogDismiss
+      (dismissed)="onCancel()">
       <div
         class="dialog-panel relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
         role="dialog"

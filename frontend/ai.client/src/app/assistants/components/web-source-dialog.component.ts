@@ -22,6 +22,7 @@ import {
 } from '../models/web-source.model';
 import { WebSourceError, WebSourceService } from '../services/web-source.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 
 /** Data passed in when the assistant editor opens the dialog. */
 export interface WebSourceDialogData {
@@ -43,7 +44,7 @@ export interface WebSourceDialogData {
 @Component({
   selector: 'app-web-source-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon],
+  imports: [DialogDismissDirective, FormsModule, NgIcon],
   providers: [
     provideIcons({
       heroExclamationTriangle,

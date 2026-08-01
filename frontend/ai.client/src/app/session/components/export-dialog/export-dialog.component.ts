@@ -38,6 +38,7 @@ import {
   FolderSelection,
 } from '../../../assistants/components/file-source-browser-dialog.component';
 import { FileSourceConnector } from '../../../assistants/models/file-source.model';
+import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
 
 /** Data passed in when the session list opens the export dialog. */
 export interface ExportDialogData {
@@ -75,7 +76,7 @@ const FORMAT_LABELS: Record<ExportFormat, string> = {
 @Component({
   selector: 'app-export-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [DialogDismissDirective, NgIcon],
   providers: [
     provideIcons({
       heroArrowPath,
@@ -97,11 +98,12 @@ const FORMAT_LABELS: Record<ExportFormat, string> = {
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-500/75 dark:bg-gray-900/80"
       aria-hidden="true"
-      (click)="cancel()"
     ></div>
 
     <!-- Centering wrapper -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-center justify-center p-4">
+    <div class="fixed inset-0 z-10 flex min-h-full items-center justify-center p-4"
+      appDialogDismiss
+      (dismissed)="cancel()">
       <div
         class="dialog-panel relative flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10"
         role="dialog"
