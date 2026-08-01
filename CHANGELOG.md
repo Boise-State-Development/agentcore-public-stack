@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.12.3] - 2026-08-01
+
+Frontend patch. Stops the Memory Spaces kill switch from surfacing an error dialog while it does its job. No backend, infrastructure or configuration changes.
+
+### 🐛 Fixed
+
+- **A `404 /memory/spaces` error dialog appeared on every page load** in environments where Memory Spaces is turned off. The 404 is deliberate — `MEMORY_SPACES_ENABLED=false` makes the whole surface return 404 so the feature can be hidden without being removed, and `MemorySpaceService` already reads that as "feature unavailable" and drops the nav entry. But `error.interceptor` toasts every non-401 unless a request opts out, and `MemorySpaceApiService` never did, so the feature hid itself and then announced it. `SUPPRESS_ERROR_TOAST` is now set on all fourteen Memory Spaces requests via a shared `requestContext()` helper, matching the existing `FileSourceService` idiom. Applied service-wide rather than to the list call alone: a disabled environment 404s every endpoint, and a deep link to a space detail page never calls `list` (#819)
+
+### 🧪 Test Coverage
+
+- New `memory-space-api.service.spec.ts` — table-driven assertion that every method sets `SUPPRESS_ERROR_TOAST`, plus guards that the pre-existing `params` and `responseType: 'blob'` options survived being merged with `context`
+
 ## [1.12.2] - 2026-08-01
 
 Second half of the 1.12.1 deploy split. Restores the GSI that release deferred, completing 1.12.0's infrastructure. No application code changes.
