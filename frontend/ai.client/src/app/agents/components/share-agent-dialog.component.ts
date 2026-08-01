@@ -846,8 +846,8 @@ export class ShareAgentDialogComponent {
         // recalls nothing, because an author who thinks withdrawal revokes access decides
         // worse than one who knows it does not.
         message: published
-          ? `An admin reviews this before "${name}" comes off the shelf, so it stays in ` +
-            'the store until they decide. Even once it does come down, nothing is ' +
+          ? `An admin reviews this before "${name}" comes down from Discover, so it stays ` +
+            'published until they decide. Even once it does come down, nothing is ' +
             'recalled: anyone who already added it keeps it, conversations underway keep ' +
             'running, and it stays reachable by direct link.'
           : `"${name}" is pulled from the review queue. You can submit it again at any time.`,

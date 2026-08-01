@@ -55,7 +55,7 @@ import {
         <div class="mb-6">
           <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Publishers</h1>
           <p class="mt-1 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
-            Who a listing is attributed to on the shelf — the Registrar, Communications &
+            Who a listing is attributed to in Discover — the Registrar, Communications &
             Marketing, the university itself. An agent built by one person can still speak
             as the office that owns it.
           </p>

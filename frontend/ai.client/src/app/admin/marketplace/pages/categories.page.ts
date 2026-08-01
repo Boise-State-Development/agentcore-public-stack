@@ -38,7 +38,7 @@ import { AgentCategory } from '../models/marketplace.model';
         <div class="mb-6">
           <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Categories</h1>
           <p class="mt-1 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
-            The shelves of the store, in browse order. Empty categories hide themselves on
+            How the store is grouped, in browse order. Empty categories hide themselves on
             Discover, so it is safe to add one before anything is published into it.
           </p>
         </div>

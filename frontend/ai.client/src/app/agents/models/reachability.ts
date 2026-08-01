@@ -40,7 +40,7 @@ export function reachabilityIsLimited(value: ListingReachability): boolean {
  */
 export function reachabilityReviewerMessage(value: ListingReachability): string | null {
   if (value === 'owner_only') {
-    return "Private — only the author can open this. Approving it shelves a tile nobody else can use.";
+    return 'Private — only the author can open this. Approving it publishes a tile nobody else can use.';
   }
   if (value === 'shared_only') {
     return 'Shared — only people it is shared with can open it. Everyone else will get an error.';

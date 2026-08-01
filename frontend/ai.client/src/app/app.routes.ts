@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 import { authGuard } from './auth/auth.guard';
 import { adminGuard } from './auth/admin.guard';
 import { firstBootGuard } from './auth/first-boot.guard';
+import { legacyMigrationHostGuard } from './shared/utils/legacy-migration-host';
 
 export const routes: Routes = [
     {
@@ -64,9 +65,14 @@ export const routes: Routes = [
         // assistants go — entirely unanswered. So it renders the explainer instead, which
         // says what changed, that nothing was lost, and what the Agent surface adds. Every
         // path out of it lands on `/agents`.
+        //
+        // ⚠️ TEMPORARY host gate: the explainer only renders on the production apex, where
+        // people arriving off the previous version of the site have that question. Everywhere
+        // else `legacyMigrationHostGuard` restores the old silent redirect onto `/agents`.
+        // See `shared/utils/legacy-migration-host.ts`.
         path: 'assistants',
         loadComponent: () => import('./agents/migration/agents-migration.page').then(m => m.AgentsMigrationPage),
-        canActivate: [authGuard],
+        canActivate: [authGuard, legacyMigrationHostGuard],
         pathMatch: 'full',
     },
     {

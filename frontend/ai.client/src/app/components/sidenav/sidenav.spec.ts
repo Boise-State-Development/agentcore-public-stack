@@ -9,6 +9,7 @@ import { SessionService as BffSessionService } from '../../auth/session.service'
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
 import { AgentService } from '../../agents/services/agent.service';
+import { LEGACY_MIGRATION_HOST } from '../../shared/utils/legacy-migration-host';
 
 describe('Sidenav', () => {
   let mockRouter: any;
@@ -175,9 +176,17 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
 
   let mockUserService: any;
   let mockAgentService: any;
+  /**
+   * ⚠️ TEMPORARY, with the Assistants signpost it gates. Defaults to `true` — the interesting
+   * assertions below are about the signpost's *content* and its coupling to `showAgents()`,
+   * and every one of them would pass vacuously on a host where the entry is absent outright.
+   * The host gate itself gets its own test rather than silently suppressing the others.
+   */
+  let onLegacyMigrationHost: boolean;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
+    onLegacyMigrationHost = true;
     mockUserService = {
       hasAnyRole: vi.fn().mockReturnValue(false),
       currentUser: signal({ user_id: 'u1', email: 'u1@example.com' }),
@@ -213,6 +222,9 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
           useValue: { accessible$: signal<boolean | null>(false), loadSpaces: vi.fn().mockResolvedValue(undefined) },
         },
         { provide: AgentService, useValue: mockAgentService },
+        // `useFactory`, not `useValue`: resolution happens at render time, so a test can
+        // flip the flag after `configureTestingModule` and before `renderSidenav()`.
+        { provide: LEGACY_MIGRATION_HOST, useFactory: () => onLegacyMigrationHost },
       ],
     });
   });
@@ -294,6 +306,21 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
     mockAgentService.accessible$.set(false);
     const fixture = await renderSidenav();
     expect(assistantsNavLink(fixture)).toBeNull();
+  });
+
+  it('hides the Assistants signpost off the production apex', async () => {
+    // ⚠️ TEMPORARY, with the signpost. The explainer now also answers "where did the
+    // assistants I built on the *previous site* go?", which is a question only production
+    // has — on dev or beta the entry would point at an explanation of a site that reader is
+    // not on. (`localhost` is allowed, but as a bench, not an audience.) Paired with
+    // `legacyMigrationHostGuard` on the route, so the URL cannot be reached by hand where
+    // the nav entry is hidden.
+    onLegacyMigrationHost = false;
+    const fixture = await renderSidenav();
+
+    expect(assistantsNavLink(fixture)).toBeNull();
+    // The Agents entry is untouched by the host gate — it is a different feature.
+    expect(agentsNavLink(fixture)).toBeDefined();
   });
 
   it('badges Agents as New, not as Preview — unfamiliar is not unstable', async () => {

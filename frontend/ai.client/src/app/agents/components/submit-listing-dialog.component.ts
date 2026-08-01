@@ -17,7 +17,7 @@ export interface SubmitListingDialogData {
   agentName: string;
   /** Present on a resubmission; its category preselects the picker. */
   listing?: AgentListingBlock;
-  /** The current shelf subtitle, if the Agent already has one. */
+  /** The current listing subtitle, if the Agent already has one. */
   tagline?: string;
   /** Only used to prefill an absent tagline — see `deriveTagline` (#749). */
   description?: string;
@@ -142,7 +142,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
                 Category
               </label>
               <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-                Which shelf it sits on. A reviewer may move it.
+                Where it appears in Discover. An admin may move it.
               </p>
               <select
                 id="listing-category"
@@ -166,14 +166,14 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
             <!--
               Tagline (D4). Prefilled from the description's first clause for the many
               Agents that predate the field — the author edits rather than invents, and
-              sees what the shelf will say at the one moment they are looking at it.
+              sees what the listing will say at the one moment they are looking at it.
             -->
             <div class="mt-5">
               <label for="listing-tagline" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
                 Tagline
               </label>
               <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-                The one line under the name on the shelf. We started it from your
+                The one line under the name in Discover. We started it from your
                 description — make it read like a subtitle.
               </p>
               <input
@@ -191,7 +191,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
 
             <div class="mt-5">
               <label for="listing-note" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
-                Note to the reviewer <span class="font-normal text-gray-500 dark:text-gray-400">(optional)</span>
+                Note to the admin <span class="font-normal text-gray-500 dark:text-gray-400">(optional)</span>
               </label>
               <textarea
                 id="listing-note"
@@ -229,8 +229,8 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
 
             <p class="mt-5 text-xs/5 text-gray-500 dark:text-gray-400">
               You'll be credited as the publisher. An admin may reattribute the listing to a
-              department or the university at approval — that changes the name on the shelf and
-              nothing about who can run it.
+              department or the university at approval — that changes the name shown with it in
+              Discover and nothing about who can run it.
             </p>
 
             @if (error(); as message) {
@@ -313,11 +313,11 @@ export class SubmitListingDialogComponent implements OnInit {
         'available to everyone at Boise State.',
   );
 
-  /** A resubmission is answering a reviewer; a first submission is introducing itself. */
+  /** A resubmission is answering an admin; a first submission is introducing itself. */
   readonly notePlaceholder = computed(() =>
     this.isResubmission()
       ? 'What you changed since the last review.'
-      : 'Anything the reviewer should know — who it is for, what it draws on.',
+      : 'Anything the admin should know — who it is for, what it draws on.',
   );
 
   async ngOnInit(): Promise<void> {
