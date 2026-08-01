@@ -92,8 +92,11 @@ import { parseIso } from '../../../utils/date';
           <ul class="flex flex-col gap-3">
             @for (row of submissions(); track row.agentId) {
               <li
-                class="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4 sm:flex-row sm:items-center dark:border-gray-700 dark:bg-gray-800"
+                class="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
               >
+                <!-- The decision row. The reachability warning is deliberately NOT in
+                     here — see the note on it below. -->
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <app-agent-tile [agentId]="row.agentId" [iconUrl]="row.iconUrl" [emoji]="row.emoji" />
 
                 <div class="min-w-0 flex-1">
@@ -130,10 +133,6 @@ import { parseIso } from '../../../utils/date';
                     </p>
                   }
 
-                  <!-- Reachability. Never collapsed away and never a blocker: approving a
-                       PRIVATE agent shelves a tile that 404s for everyone but its author,
-                       and that is the one fact the reviewer cannot get from anywhere else
-                       on this row. -->
                   <!-- §6.1 — what this submission changes against what is published.
                        Collapsed by default and fetched on expand: the queue is a list of
                        decisions, and pre-loading a diff per row would pull every pending
@@ -144,19 +143,6 @@ import { parseIso } from '../../../utils/date';
                        guaranteed-empty diff next to a decision about taking it down. -->
                   @if (!isWithdrawal(row)) {
                     <app-review-diff [agentId]="row.agentId" />
-                  }
-
-                  @if (reachabilityWarning(row); as warning) {
-                    <p
-                      class="mt-1 flex items-start gap-1.5 text-sm/6 text-amber-700 dark:text-amber-400"
-                    >
-                      <ng-icon
-                        name="heroEyeSlash"
-                        class="mt-1 size-4 shrink-0"
-                        aria-hidden="true"
-                      />
-                      <span>{{ warning }}</span>
-                    </p>
                   }
                 </div>
 
@@ -201,6 +187,24 @@ import { parseIso } from '../../../utils/date';
                     </button>
                   }
                 </div>
+                </div>
+
+                <!-- Reachability, on its own full-width row.
+                     It started inside the identity column, where it was squeezed to ~160px
+                     of a 528px card and wrapped across five lines. A sentence the reviewer
+                     has to work to read is one they will skip, which defeats the point of
+                     surfacing it at all. Never collapsed away and never a blocker:
+                     approving a PRIVATE agent shelves a tile that 404s for everyone but
+                     its author, and that is the one fact this row cannot otherwise tell
+                     them. -->
+                @if (reachabilityWarning(row); as warning) {
+                  <p
+                    class="flex items-start gap-1.5 border-t border-gray-100 pt-3 text-sm/6 text-amber-700 dark:border-gray-700 dark:text-amber-400"
+                  >
+                    <ng-icon name="heroEyeSlash" class="mt-1 size-4 shrink-0" aria-hidden="true" />
+                    <span>{{ warning }}</span>
+                  </p>
+                }
               </li>
             }
           </ul>
