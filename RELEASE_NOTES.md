@@ -1,3 +1,45 @@
+# Release Notes — v1.12.2
+
+**Release Date:** August 1, 2026
+**Previous Release:** v1.12.1 (August 1, 2026)
+
+---
+
+> 🏗️ **CDK deploy required** — `platform.yml` only, and **only after 1.12.1's `AgentDirectoryIndex` reports `ACTIVE`**. Deploying before that reproduces the 1.12.0 failure exactly. Backend and frontend are unchanged from 1.12.0.
+
+---
+
+## What this release does
+
+Completes the deploy 1.12.1 split in half. It restores `AgentReportsIndex` — the GSI backing the admin problem-report queue — which 1.12.1 deferred so that release could add a single index and satisfy DynamoDB's one-GSI-per-`UpdateTable` limit.
+
+The index definition is unchanged. This is the byte-for-byte inverse of 1.12.1's removal, so the construct returns to matching `develop` exactly and the two branches stop diverging.
+
+**The admin problem-report queue works again.** It had been returning 500 since 1.12.0, because the code that reads the index shipped while the deploy that would have created it rolled back. Reports users submitted during the gap were written normally and none were lost — only the admin view that reads them was unavailable.
+
+## Before deploying
+
+Confirm 1.12.1's index finished backfilling. CloudFormation reports success while an index is still `CREATING`, and starting this deploy against a `CREATING` index puts two index operations in flight and fails the same way 1.12.0 did:
+
+```bash
+aws dynamodb describe-table \
+  --table-name {prefix}-rag-assistants \
+  --query 'Table.GlobalSecondaryIndexes[].{Name:IndexName,Status:IndexStatus}' \
+  --output table
+```
+
+Five indexes, all `ACTIVE`, `AgentDirectoryIndex` among them. Then run `platform.yml`. Afterwards the table should read six.
+
+Nothing else to run. No data migration.
+
+## Note for operators
+
+The 1.12.0 → 1.12.1 → 1.12.2 sequence exists because **1.12.0 added two GSIs to an existing table in one CloudFormation update**. `UpdateTable` permits exactly one GSI create or delete per call. `CreateTable` has no such limit, which is why a brand-new table with several indexes deploys without trouble.
+
+The trap is that this is invisible in any environment that took the changes incrementally. Both indexes reached `develop` in separate merges and so got a deploy each; only an environment jumping a whole release at once sees them collapse into a single update. When cutting a release, the question to ask is not "are there new indexes?" but **"does any *existing* table gain more than one?"** — and if so, split the deploy before merging rather than after a rollback.
+
+---
+
 # Release Notes — v1.12.1
 
 **Release Date:** August 1, 2026

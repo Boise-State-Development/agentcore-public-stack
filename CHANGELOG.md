@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.12.2] - 2026-08-01
+
+Second half of the 1.12.1 deploy split. Restores the GSI that release deferred, completing 1.12.0's infrastructure. No application code changes.
+
+### 🐛 Fixed
+
+- **`AgentReportsIndex` is restored**, reverting 1.12.1's temporary removal byte-for-byte — the index definition never changed, and `infrastructure/lib/constructs/rag/rag-data-construct.ts` is back to matching `develop` exactly. With `AgentDirectoryIndex` created and `ACTIVE`, this update adds a single GSI and stays inside DynamoDB's one-create-per-`UpdateTable` limit
+- **The admin problem-report queue works again.** It had returned 500 since 1.12.0, because `apis/shared/assistants/reports.py` queries this index and the 1.12.0 deploy that would have created it rolled back. User-submitted reports were written throughout and none were lost — only the admin view that reads them was unavailable
+
 ## [1.12.1] - 2026-08-01
 
 Deploy hotfix. 1.12.0's `platform.yml` deploy failed and rolled the PlatformStack back, leaving production running 1.12.0 code — the backend and frontend deploys both succeeded — on 1.11.1 infrastructure. This release makes the CDK deploy land. No application code changes.
