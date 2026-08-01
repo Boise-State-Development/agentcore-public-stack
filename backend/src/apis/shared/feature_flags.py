@@ -105,7 +105,49 @@ def agents_enabled() -> bool:
     Designer UI → binding reflection); now complete, it defaults on.
 
     Gates *feature existence* per environment; *who* may use a specific agent is the
-    identity-based access check already enforced by the assistant service, and the SPA
-    nav is separately preview-gated (system-admin) until Assistants are deprecated.
+    identity-based access check already enforced by the assistant service. This flag is
+    now the **only** control on the surface: the SPA nav was preview-gated to system
+    admins until the marketplace went GA, and that condition came off with D14 (the nav
+    entry is gated on this flag alone). See ``agent_marketplace_enabled`` for why there
+    is no RBAC capability on this axis.
+
+    ⚠️ **The kill switch's meaning changed in Designer Phase 5.** While the SPA shipped
+    both nouns, turning this off degraded gracefully: the Agents nav disappeared and the
+    Assistants editor was still there. Phase 5 retired that editor and redirected
+    ``/assistants*`` onto the Agent surface, so there is nothing left to fall back to —
+    off now means *no authoring surface at all*, not *the previous one*. Treat it as an
+    outage switch, not a feature toggle. (The records are untouched either way; the
+    routes and the SPA pages are what disappear.)
     """
     return os.environ.get("AGENTS_API_ENABLED", "").strip().lower() != "false"
+
+
+def agent_marketplace_enabled() -> bool:
+    """Whether the Agent Marketplace surface is enabled for this environment.
+
+    Covers the listing lifecycle (submit / review / takedown), publisher profiles, and
+    the admin Review queue + Listings pages. **Default ON with a kill switch** (house
+    style, mirroring ``agents_enabled``): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables. The CDK side threads
+    ``config.agentMarketplace.enabled`` into this env var with the same empty-string-safe
+    ternary, so an unset GitHub Actions variable can never silently turn it off.
+
+    App-api only. The marketplace adds no inference-api routes — publication is a
+    catalog concern, and the inference API stays inference-only.
+
+    **This flag is the only lever, and the store is GA.** D14 originally paired it with an
+    ``agent-marketplace`` RBAC *capability* that would 404 the routes for ungranted roles,
+    "mirroring the ``skills`` gate from Skills v2 PR-5". That gate no longer exists — it was
+    removed because a capability id cannot be granted from the admin roles UI (see
+    ``skills_enabled`` above and ``AppRoleService.resolve_user_permissions``), so copying it
+    would ship a gate nobody can open. D14 has since been revised to drop the capability
+    outright rather than defer it: per-role rollout of a feature *surface* needs a grantable
+    axis this codebase does not have, and inventing one is not in this epic's scope.
+
+    The interim state it left behind was worse than either end state. One template condition
+    (``@if (showAgents() && isAdmin())``) hid the nav entry while ``/agents/discover``,
+    ``/agents/{id}``, the composer ``@``-mention menu and role-seeded pins were all reachable
+    by any authenticated user — the only closed door was the one we controlled. The nav gate
+    is now this flag alone.
+    """
+    return os.environ.get("AGENT_MARKETPLACE_ENABLED", "").strip().lower() != "false"

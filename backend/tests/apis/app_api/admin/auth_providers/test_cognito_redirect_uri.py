@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from apis.shared.auth.models import User
 from apis.shared.auth import require_admin
+from tests.conftest import override_admin_auth
 
 
 @pytest.fixture
@@ -35,7 +36,7 @@ def _create_app(admin_user: User) -> FastAPI:
     admin_router = APIRouter(prefix="/admin")
     admin_router.include_router(router)
     app.include_router(admin_router)
-    app.dependency_overrides[require_admin] = lambda: admin_user
+    override_admin_auth(app, lambda: admin_user)
     return app
 
 

@@ -1,0 +1,146 @@
+/* Assistants → Agents explainer.
+
+   Borrows the login/first-boot signature — graph-paper grid over a soft Boise-blue
+   wash — but at a fraction of the intensity, because this page lives *inside* the app
+   shell rather than replacing it. One decorated panel (the hero), then ordinary
+   surfaces; a page that announced itself in every section would read as a takeover. */
+
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------- Hero: graph paper over a corner wash ---------- */
+
+.hero-field {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Ruled grid, faded out toward the lower right so the headline sits on paper and
+     the call-to-action sits on clean stock. */
+  background-image:
+    linear-gradient(to right, color-mix(in oklab, var(--color-primary-500) 9%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--color-primary-500) 9%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+  -webkit-mask-image: radial-gradient(110% 90% at 12% 0%, black 0%, transparent 68%);
+  mask-image: radial-gradient(110% 90% at 12% 0%, black 0%, transparent 68%);
+}
+
+.hero-field::after {
+  /* The wash itself: one warm-cornered bloom of primary, kept well under the text. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(70% 120% at 4% -10%, color-mix(in oklab, var(--color-primary-500) 14%, transparent) 0%, transparent 62%),
+    radial-gradient(50% 90% at 100% 100%, color-mix(in oklab, var(--color-primary-400) 8%, transparent) 0%, transparent 60%);
+}
+
+:host-context(html.dark) .hero-field {
+  background-image:
+    linear-gradient(to right, color-mix(in oklab, var(--color-primary-300) 10%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--color-primary-300) 10%, transparent) 1px, transparent 1px);
+}
+
+:host-context(html.dark) .hero-field::after {
+  background:
+    radial-gradient(70% 120% at 4% -10%, color-mix(in oklab, var(--color-primary-500) 26%, transparent) 0%, transparent 62%),
+    radial-gradient(50% 90% at 100% 100%, color-mix(in oklab, var(--color-primary-400) 12%, transparent) 0%, transparent 60%);
+}
+
+/* ---------- Type details ---------- */
+
+.eyebrow {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+/* "Assistants" in the headline: present, legible, and visibly the previous draft.
+   A strikethrough rather than a colour change alone, so the retirement survives
+   greyscale and does not lean on hue to carry meaning. */
+.former {
+  color: var(--color-gray-400);
+  text-decoration: line-through;
+  /* Thick enough to read as a deliberate mark at display size rather than as a
+     rendering artefact, thin enough not to cut the word in half. */
+  text-decoration-thickness: 0.07em;
+  text-decoration-color: var(--color-gray-400);
+}
+
+:host-context(html.dark) .former {
+  color: var(--color-gray-500);
+  text-decoration-color: var(--color-gray-500);
+}
+
+/* ---------- Ledger: a spotlight band down the "Agent" column ---------- */
+
+.ledger-now {
+  position: relative;
+  background: color-mix(in oklab, var(--color-primary-500) 5%, transparent);
+}
+
+/* Hairlines on both sides of the band turn it from a tint into a deliberate column. */
+.ledger thead .ledger-now::before,
+.ledger thead .ledger-now::after,
+.ledger tbody .ledger-now::before,
+.ledger tbody .ledger-now::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in oklab, var(--color-primary-500) 18%, transparent);
+}
+
+.ledger .ledger-now::before {
+  left: 0;
+}
+
+.ledger .ledger-now::after {
+  right: 0;
+}
+
+:host-context(html.dark) .ledger-now {
+  background: color-mix(in oklab, var(--color-primary-400) 10%, transparent);
+}
+
+:host-context(html.dark) .ledger .ledger-now::before,
+:host-context(html.dark) .ledger .ledger-now::after {
+  background: color-mix(in oklab, var(--color-primary-300) 24%, transparent);
+}
+
+/* ---------- Load ---------- */
+
+/* One orchestrated arrival: sections rise in sequence as the page settles. Purely
+   additive — `.reveal` starts visible under reduced motion and if animations never
+   run, so nothing here can strand content in an invisible state. */
+@media (prefers-reduced-motion: no-preference) {
+  .reveal {
+    opacity: 0;
+    animation: reveal-rise 520ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  /* `nth-child`, not `nth-of-type`: the six panels are a <header> followed by five
+     <section>s, and per-type counting would restart the sequence at the first one.
+     Keep a delay for every panel — an unlisted `.reveal` gets `animation-delay: 0`,
+     which lands it ahead of the ones above it and breaks the sequence. */
+  .reveal:nth-child(1) { animation-delay: 0ms; }
+  .reveal:nth-child(2) { animation-delay: 90ms; }
+  .reveal:nth-child(3) { animation-delay: 160ms; }
+  .reveal:nth-child(4) { animation-delay: 220ms; }
+  .reveal:nth-child(5) { animation-delay: 270ms; }
+  .reveal:nth-child(6) { animation-delay: 310ms; }
+}
+
+@keyframes reveal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

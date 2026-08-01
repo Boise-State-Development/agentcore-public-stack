@@ -1,4 +1,9 @@
 import { ShareEntry, UserPermission } from '../../assistants/models/assistant.model';
+import { AgentListingBlock, ListingPublisher } from './store.model';
+
+// `AgentListingBlock` lives with the other marketplace types in `store.model.ts` and is
+// re-exported here for the many callers that reach for it alongside `Agent`.
+export type { AgentListingBlock };
 
 /**
  * Agent Designer contract (Phase 4). Mirrors the backend `/agents` surface
@@ -52,12 +57,27 @@ export interface AgentBinding {
   config?: Record<string, unknown>;
 }
 
+/**
+ * One thing an Agent can reach, as the detail page names it (Marketplace Phase 3).
+ * Names, never refs — the backend resolves binding refs to display names so this
+ * payload can be rendered to anyone who may see the Agent.
+ */
+export interface AgentCapability {
+  label: string;
+  kind: string;
+}
+
 export interface Agent {
   agentId: string;
   ownerName: string;
   name: string;
   description: string;
-  instructions: string;
+  /**
+   * The system prompt. **Absent unless you are the owner or an editor** (Marketplace
+   * Phase 3): under a store, a PUBLIC agent is browsable by the whole institution, so
+   * viewers get `capabilities` instead of behaviour.
+   */
+  instructions?: string;
   modelConfig?: AgentModelConfig;
   bindings: AgentBinding[];
   visibility: 'PRIVATE' | 'PUBLIC' | 'SHARED';
@@ -70,10 +90,50 @@ export interface Agent {
   createdAt: string;
   updatedAt: string;
 
+  // Marketplace listing (Phase 1) + the detail read (Phase 3). All are absent on the
+  // list route and on an agent that was never submitted.
+  tagline?: string;
+  /** S3 object key for the uploaded square icon (D5); the bytes are never on the record. */
+  iconKey?: string;
+  /**
+   * Where to render the icon from (Phase 4) — a relative API path carrying the key's
+   * digest as `?v=`. Absent → `app-agent-icon` draws the generated gradient.
+   */
+  iconUrl?: string;
+  listing?: AgentListingBlock;
+  /** Resolved on `GET /agents/{id}` only. */
+  capabilities?: AgentCapability[];
+  modelLabel?: string;
+  /** Attribution as the page renders it; `listing.publisherId` is an id and never shown. */
+  publisher?: ListingPublisher | null;
+  categoryLabel?: string;
+
   // Share metadata (present for shared agents)
   firstInteracted?: boolean;
   isSharedWithMe?: boolean;
   userPermission?: UserPermission;
+}
+
+/**
+ * D6's answer to "will this run for me?" — two states, not three.
+ *
+ * A middle `'limits'` (runs, but degraded) was specced and removed in #747: it required a
+ * binding to declare `config.optional`, which nothing ever wrote, and it contradicted the
+ * Designer spec's D5 — "No downgrade on missing capability (block-only v1)" — which is the
+ * rule the runtime resolver actually implements. Any gap blocks.
+ */
+export type RunnabilityState = 'ready' | 'blocked';
+
+export interface MissingCapability {
+  label: string;
+  kind: string;
+  optional: boolean;
+}
+
+export interface AgentRunnability {
+  agentId: string;
+  state: RunnabilityState;
+  missing: MissingCapability[];
 }
 
 export interface CreateAgentDraftRequest {

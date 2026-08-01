@@ -3,12 +3,12 @@
 import os
 import logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone
 
 import boto3
 from botocore.exceptions import ClientError
 
 from .models import AppRole
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,7 @@ class AppRoleRepository:
                 raise ValueError(f"Role '{role.role_id}' already exists")
 
             # Set timestamps
-            now = datetime.now(timezone.utc).isoformat() + "Z"
+            now = utc_now_iso()
             role.created_at = now
             role.updated_at = now
 
@@ -152,7 +152,7 @@ class AppRoleRepository:
                 raise ValueError(f"Role '{role.role_id}' not found")
 
             # Update timestamp
-            role.updated_at = datetime.now(timezone.utc).isoformat() + "Z"
+            role.updated_at = utc_now_iso()
             role.created_at = existing.created_at  # Preserve original
 
             # Delete old mapping items and create new ones
@@ -190,8 +190,9 @@ class AppRoleRepository:
             if existing.is_system_role:
                 raise ValueError(f"Cannot delete system role '{role_id}'")
 
-            # Delete all mapping items
-            await self._delete_mapping_items(role_id)
+            # Delete all mapping items. A deleted role takes its default pins (D9) with
+            # it — unlike an update, where they must survive.
+            await self._delete_mapping_items(role_id, include_agent_pins=True)
 
             # Delete the role definition
             self._table.delete_item(
@@ -421,8 +422,24 @@ class AppRoleRepository:
 
         return items
 
-    async def _delete_mapping_items(self, role_id: str):
-        """Delete all mapping items for a role (JWT, tool, model mappings)."""
+    async def _delete_mapping_items(self, role_id: str, include_agent_pins: bool = False):
+        """Delete a role's mapping items (JWT, tool, model, skill grants).
+
+        ⚠️ **Deletes by prefix, not "everything that is not DEFINITION".** ``update_role``
+        rebuilds the mapping items from the ``AppRole`` record, so anything under this
+        partition that the record does not carry would be wiped by every role edit and
+        never rewritten. Default agent pins (``AGENT_PIN#``, D9) are exactly that: they
+        share the partition with the grants but are deliberately not part of ``AppRole``,
+        because a pin is not a permission. Any future per-role item that is not
+        reconstructible from ``_build_role_items`` needs the same protection.
+
+        ``include_agent_pins`` is set only by ``delete_role``, where the role — and so
+        everything hanging off it — is going away.
+        """
+        prefixes = ("JWT_MAPPING#", "TOOL_GRANT#", "MODEL_GRANT#", "SKILL_GRANT#")
+        if include_agent_pins:
+            prefixes = prefixes + ("AGENT_PIN#",)
+
         try:
             # Query all items with this role's PK
             response = self._table.query(
@@ -430,10 +447,9 @@ class AppRoleRepository:
                 ExpressionAttributeValues={":pk": f"ROLE#{role_id}"},
             )
 
-            # Delete each item except the DEFINITION (which will be updated)
             with self._table.batch_writer() as batch:
                 for item in response.get("Items", []):
-                    if item["SK"] != "DEFINITION":
+                    if str(item["SK"]).startswith(prefixes):
                         batch.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
 
         except ClientError as e:

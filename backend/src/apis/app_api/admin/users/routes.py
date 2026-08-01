@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import Optional, List
 import logging
 
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from apis.shared.costs.aggregator import CostAggregator
 from agents.main_agent.quota.repository import QuotaRepository
 from agents.main_agent.quota.resolver import QuotaResolver
@@ -19,6 +19,11 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["admin-users"])
+
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_users_admin = require_admin_scope("admin.users")
 
 
 # ========== Dependencies ==========
@@ -68,7 +73,7 @@ async def list_users(
     domain: Optional[str] = Query(None, description="Filter by email domain"),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None, description="Pagination cursor"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_users_admin),
     service: UserAdminService = Depends(get_user_admin_service)
 ):
     """
@@ -99,7 +104,7 @@ async def list_users(
 @router.get("/search", response_model=UserListResponse)
 async def search_users(
     email: str = Query(..., description="Email to search (exact match)"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_users_admin),
     service: UserAdminService = Depends(get_user_admin_service)
 ):
     """
@@ -126,7 +131,7 @@ async def search_users(
 @router.get("/domains/list", response_model=List[str])
 async def list_email_domains(
     limit: int = Query(50, ge=1, le=200),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_users_admin),
     service: UserAdminService = Depends(get_user_admin_service)
 ):
     """
@@ -144,7 +149,7 @@ async def list_email_domains(
 @router.get("/{user_id}", response_model=UserDetailResponse)
 async def get_user_detail(
     user_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_users_admin),
     service: UserAdminService = Depends(get_user_admin_service)
 ):
     """

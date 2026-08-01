@@ -3,6 +3,7 @@ import { firstValueFrom } from 'rxjs';
 import { AgentApiService } from './agent-api.service';
 import {
   Agent,
+  AgentRunnability,
   BindableItem,
   BindableKind,
   CreateAgentDraftRequest,
@@ -63,6 +64,13 @@ export class AgentService {
     return firstValueFrom(this.api.getAgent(id));
   }
 
+  /** D6 — will this Agent run for the signed-in user? Rendered by the detail page and
+   * the chat launch card; advisory on both, so every caller treats a failure as "unknown"
+   * rather than as an error worth showing. */
+  getRunnability(id: string): Promise<AgentRunnability> {
+    return firstValueFrom(this.api.getRunnability(id));
+  }
+
   createDraft(request: CreateAgentDraftRequest = {}): Promise<Agent> {
     return firstValueFrom(this.api.createDraft(request));
   }
@@ -85,6 +93,20 @@ export class AgentService {
     this.error.set(null);
     await firstValueFrom(this.api.deleteAgent(id));
     this.agents.update((current) => current.filter((a) => a.agentId !== id));
+  }
+
+  /**
+   * Merge a partial update into one cached agent, in place.
+   *
+   * For changes that happen outside the Designer's own write path — a marketplace
+   * submission or withdrawal, which returns a listing rather than a whole Agent. The
+   * alternative is reloading the list to observe one field, which discards nothing
+   * useful but flickers every card.
+   */
+  patchAgent(id: string, patch: Partial<Agent>): void {
+    this.agents.update((current) =>
+      current.map((a) => (a.agentId === id ? { ...a, ...patch } : a)),
+    );
   }
 
   /**

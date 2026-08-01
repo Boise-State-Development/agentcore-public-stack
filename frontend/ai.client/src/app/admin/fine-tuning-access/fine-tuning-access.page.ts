@@ -12,6 +12,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 import { FineTuningAdminStateService } from './services/fine-tuning-admin-state.service';
+import { parseIso } from '../../utils/date';
 
 @Component({
   selector: 'app-fine-tuning-access-page',
@@ -89,7 +90,7 @@ export class FineTuningAccessPage implements OnInit {
   }
 
   formatDate(iso: string): string {
-    const d = new Date(iso);
+    const d = parseIso(iso);
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
 

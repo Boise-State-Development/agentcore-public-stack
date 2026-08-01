@@ -16,6 +16,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.timestamps import to_iso
 
 from apis.shared.files.models import (
     FileMetadata,
@@ -255,7 +256,7 @@ class FileUploadService:
             logger.error(f"Failed to generate pre-signed URL: {e}")
             raise
 
-        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=self.presign_expiration)).isoformat() + "Z"
+        expires_at = to_iso(datetime.now(timezone.utc) + timedelta(seconds=self.presign_expiration))
 
         logger.info(f"Generated pre-signed URL for upload {upload_id} by user {user_id}")
 
@@ -381,9 +382,9 @@ class FileUploadService:
             logger.error(f"Failed to generate preview URL: {e}")
             raise
 
-        expires_at = (
+        expires_at = to_iso(
             datetime.now(timezone.utc) + timedelta(seconds=self.preview_url_expiration)
-        ).isoformat() + "Z"
+        )
 
         return PreviewUrlResponse(
             upload_id=upload_id,
@@ -546,9 +547,9 @@ class FileUploadService:
             logger.error(f"Failed to generate thumbnail presigned URL: {e}")
             raise
 
-        expires_at = (
+        expires_at = to_iso(
             datetime.now(timezone.utc) + timedelta(seconds=self.preview_url_expiration)
-        ).isoformat() + "Z"
+        )
 
         return ThumbnailResponse(
             upload_id=upload_id,

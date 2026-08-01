@@ -14,18 +14,18 @@ class TestAppRoleCache:
     @pytest.mark.asyncio
     async def test_user_permissions_set_get(self):
         perms = MagicMock()
-        await self.cache.set_user_permissions("u1", perms)
-        assert await self.cache.get_user_permissions("u1") is perms
+        await self.cache.set_user_permissions("u1", "fp", perms)
+        assert await self.cache.get_user_permissions("u1", "fp") is perms
 
     @pytest.mark.asyncio
     async def test_user_permissions_miss(self):
-        assert await self.cache.get_user_permissions("nope") is None
+        assert await self.cache.get_user_permissions("nope", "fp") is None
 
     @pytest.mark.asyncio
     async def test_user_permissions_expired(self):
         perms = MagicMock()
-        await self.cache.set_user_permissions("u1", perms, ttl=timedelta(seconds=-1))
-        assert await self.cache.get_user_permissions("u1") is None
+        await self.cache.set_user_permissions("u1", "fp", perms, ttl=timedelta(seconds=-1))
+        assert await self.cache.get_user_permissions("u1", "fp") is None
 
     @pytest.mark.asyncio
     async def test_role_set_get(self):
@@ -62,9 +62,9 @@ class TestAppRoleCache:
     @pytest.mark.asyncio
     async def test_invalidate_user(self):
         perms = MagicMock()
-        await self.cache.set_user_permissions("u1", perms)
+        await self.cache.set_user_permissions("u1", "fp", perms)
         await self.cache.invalidate_user("u1")
-        assert await self.cache.get_user_permissions("u1") is None
+        assert await self.cache.get_user_permissions("u1", "fp") is None
 
     @pytest.mark.asyncio
     async def test_invalidate_user_nonexistent(self):
@@ -75,28 +75,28 @@ class TestAppRoleCache:
         role = MagicMock(); role.role_id = "admin"
         perms = MagicMock()
         await self.cache.set_role(role)
-        await self.cache.set_user_permissions("u1", perms)
+        await self.cache.set_user_permissions("u1", "fp", perms)
         await self.cache.invalidate_role("admin")
         assert await self.cache.get_role("admin") is None
-        assert await self.cache.get_user_permissions("u1") is None  # user cache cleared
+        assert await self.cache.get_user_permissions("u1", "fp") is None  # user cache cleared
 
     @pytest.mark.asyncio
     async def test_invalidate_jwt_mapping(self):
         await self.cache.set_jwt_mapping("viewer", ["r1"])
         perms = MagicMock()
-        await self.cache.set_user_permissions("u1", perms)
+        await self.cache.set_user_permissions("u1", "fp", perms)
         await self.cache.invalidate_jwt_mapping("viewer")
         assert await self.cache.get_jwt_mapping("viewer") is None
-        assert await self.cache.get_user_permissions("u1") is None
+        assert await self.cache.get_user_permissions("u1", "fp") is None
 
     @pytest.mark.asyncio
     async def test_invalidate_all(self):
         role = MagicMock(); role.role_id = "admin"
-        await self.cache.set_user_permissions("u1", MagicMock())
+        await self.cache.set_user_permissions("u1", "fp", MagicMock())
         await self.cache.set_role(role)
         await self.cache.set_jwt_mapping("v", ["r1"])
         await self.cache.invalidate_all()
-        assert await self.cache.get_user_permissions("u1") is None
+        assert await self.cache.get_user_permissions("u1", "fp") is None
         assert await self.cache.get_role("admin") is None
         assert await self.cache.get_jwt_mapping("v") is None
 
@@ -110,7 +110,7 @@ class TestAppRoleCache:
         role = MagicMock(); role.role_id = "old"
         await self.cache.set_role(role, ttl=timedelta(seconds=-1))
         await self.cache.set_jwt_mapping("old", ["r1"], ttl=timedelta(seconds=-1))
-        await self.cache.set_user_permissions("old", MagicMock(), ttl=timedelta(seconds=-1))
+        await self.cache.set_user_permissions("old", "fp", MagicMock(), ttl=timedelta(seconds=-1))
         await self.cache.cleanup_expired()
         assert self.cache.get_stats()["roleCacheSize"] == 0
         assert self.cache.get_stats()["jwtMappingCacheSize"] == 0
@@ -170,10 +170,42 @@ class TestAppRoleService:
             user_id="u1", app_roles=["r1"], tools=["*"], models=["*"],
             resolved_at="now", quota_tier=None,
         )
-        await self.cache.set_user_permissions("u1", perms)
-        result = await self.svc.resolve_user_permissions(self._make_user())
+        from apis.shared.rbac.cache import roles_fingerprint
+        user = self._make_user()
+        # Seed under the same role-set key the service will compute.
+        await self.cache.set_user_permissions(
+            "u1", roles_fingerprint(user.roles), perms
+        )
+        result = await self.svc.resolve_user_permissions(user)
         assert result is perms
         self.repo.get_roles_for_jwt_role.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_resolve_user_permissions_not_shared_across_role_sets(self):
+        """Same user_id, different roles → no cache crossover.
+
+        Regression guard for the API-key path, which builds a User for the
+        same subject as the cookie session; a shared key let one poison the
+        other's grants for the whole TTL.
+        """
+        from apis.shared.rbac.cache import roles_fingerprint
+        from apis.shared.rbac.models import UserEffectivePermissions
+        stale = UserEffectivePermissions(
+            user_id="u1", app_roles=["default"], tools=[], models=[],
+            resolved_at="now", quota_tier=None,
+        )
+        placeholder = self._make_user(roles=["user"])
+        await self.cache.set_user_permissions(
+            "u1", roles_fingerprint(placeholder.roles), stale
+        )
+
+        self.repo.get_roles_for_jwt_role.return_value = ["r1"]
+        self.repo.get_role.return_value = self._make_role()
+        real = self._make_user(roles=["Staff"])
+        result = await self.svc.resolve_user_permissions(real)
+
+        assert result is not stale
+        assert "*" in result.models
 
     @pytest.mark.asyncio
     async def test_resolve_user_permissions_from_db(self):

@@ -33,6 +33,7 @@ import {
   ConfirmationDialogData
 } from '../components/confirmation-dialog/confirmation-dialog.component';
 import { TooltipDirective } from '../components/tooltip';
+import { parseIso } from '../utils/date';
 
 /** Maximum number of files that can be selected for bulk delete */
 const MAX_SELECTION = 20;
@@ -622,7 +623,7 @@ export class FileBrowserPage implements OnInit {
     if (!dateString) return '';
 
     try {
-      const date = new Date(dateString);
+      const date = parseIso(dateString);
       const now = new Date();
       const diffMs = now.getTime() - date.getTime();
       const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));

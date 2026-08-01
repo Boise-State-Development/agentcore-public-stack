@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 import { ConfigService } from '../../services/config.service';
 import {
   Agent,
+  AgentRunnability,
   AgentsListResponse,
   AgentSharesResponse,
   BindableKind,
@@ -12,6 +13,15 @@ import {
   CreateAgentRequest,
   UpdateAgentRequest,
 } from '../models/agent.model';
+import {
+  AgentIconResponse,
+  AgentListingBlock,
+  ListingPreflight,
+  ListingSubmissionResponse,
+  SubmitListingRequest,
+  SubmitReportRequest,
+  SubmitReportResponse,
+} from '../models/store.model';
 import {
   ShareAssistantRequest,
   UnshareAssistantRequest,
@@ -50,6 +60,17 @@ export class AgentApiService {
     return this.http.get<Agent>(`${this.baseUrl()}/${id}`);
   }
 
+  /**
+   * Will this Agent run for the signed-in user? (D6)
+   *
+   * A separate call from `getAgent` on purpose: the detail page paints identity,
+   * description and starters immediately, and this answer — which fans out across the
+   * viewer's model/tool/skill catalogs — resolves into the sidebar when it arrives.
+   */
+  getRunnability(id: string): Observable<AgentRunnability> {
+    return this.http.get<AgentRunnability>(`${this.baseUrl()}/${id}/runnability`);
+  }
+
   updateAgent(id: string, request: UpdateAgentRequest): Observable<Agent> {
     return this.http.put<Agent>(`${this.baseUrl()}/${id}`, request);
   }
@@ -78,5 +99,54 @@ export class AgentApiService {
 
   getAgentShares(id: string): Observable<AgentSharesResponse> {
     return this.http.get<AgentSharesResponse>(`${this.baseUrl()}/${id}/shares`);
+  }
+
+  // ── marketplace, the author's half (D2/D7) ─────────────────────────────────────
+  /** The D7 answers before the author commits: skill exposure and any block. */
+  getListingPreflight(id: string): Observable<ListingPreflight> {
+    return this.http.get<ListingPreflight>(`${this.baseUrl()}/${id}/listing/preflight`);
+  }
+
+  submitListing(id: string, request: SubmitListingRequest): Observable<ListingSubmissionResponse> {
+    return this.http.post<ListingSubmissionResponse>(
+      `${this.baseUrl()}/${id}/listing/submit`,
+      request,
+    );
+  }
+
+  /** Unpublish or withdraw. Returns the listing at `private`; revokes nothing (D7.3). */
+  withdrawListing(id: string): Observable<AgentListingBlock> {
+    return this.http.delete<AgentListingBlock>(`${this.baseUrl()}/${id}/listing`);
+  }
+
+  /**
+   * Report a problem with a published agent (D15).
+   *
+   * ⚠️ Not a review. There are no stars, no public comments and no visible counts — this
+   * posts a private message to the curator, and nothing the reporter writes is ever
+   * rendered to another browsing user. The server refuses anything not published (D15.3)
+   * and *updates* the reporter's already-open report rather than stacking a second one
+   * (D15.4), which the response reports back as `replacedExisting`.
+   */
+  reportAgent(id: string, request: SubmitReportRequest): Observable<SubmitReportResponse> {
+    return this.http.post<SubmitReportResponse>(`${this.baseUrl()}/${id}/report`, request);
+  }
+
+  /**
+   * Upload the agent's square icon (D5). Multipart, because the server has to see the
+   * bytes: it validates the format and dimensions and re-encodes to strip metadata, none
+   * of which a presigned direct-to-S3 upload could do.
+   *
+   * No explicit `Content-Type` — the browser has to set the multipart boundary itself.
+   */
+  uploadIcon(id: string, file: File): Observable<AgentIconResponse> {
+    const form = new FormData();
+    form.append('file', file);
+    return this.http.post<AgentIconResponse>(`${this.baseUrl()}/${id}/icon`, form);
+  }
+
+  /** Clear the icon, returning the agent to its generated gradient. */
+  removeIcon(id: string): Observable<AgentIconResponse> {
+    return this.http.delete<AgentIconResponse>(`${this.baseUrl()}/${id}/icon`);
   }
 }

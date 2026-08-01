@@ -45,6 +45,14 @@ from apis.inference_api.chat.agent_binding_resolver import (
     resolve_agent_invocation,
 )
 from apis.shared.sessions.metadata import ensure_session_metadata_exists
+from apis.shared.tools.injected import (
+    ARTIFACT_TOOL_IDS,
+    EXCEL_SPREADSHEET_TOOL_IDS,
+    POWERPOINT_PRESENTATION_TOOL_IDS,
+    SPREADSHEET_TOOL_IDS,
+    WORD_DOCUMENT_TOOL_IDS,
+    WORKSPACE_TOOL_IDS,
+)
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 from .app_context_dispatch import (
@@ -53,6 +61,7 @@ from .app_context_dispatch import (
     merge_and_clear_pending_context,
 )
 from .app_tool_dispatch import AppToolCallError, dispatch_app_tool_call
+from .agent_binding_policy import binds_conversation
 from .models import FileContent, InvocationRequest
 from .service import generate_conversation_title, get_agent
 from .system_prompt_resolver import (
@@ -382,9 +391,6 @@ async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enable
 # Spreadsheet Analysis Tool Injection
 # ============================================================
 
-SPREADSHEET_TOOL_IDS = {"list_spreadsheets", "analyze_spreadsheet"}
-
-
 def _build_spreadsheet_tools(
     enabled_tools: list | None,
     assistant_id: str | None,
@@ -414,9 +420,6 @@ def _build_spreadsheet_tools(
 # ============================================================
 # Artifact Authoring Tool Injection
 # ============================================================
-
-ARTIFACT_TOOL_IDS = {"create_artifact"}
-
 
 def _build_artifact_tools(
     enabled_tools: list | None,
@@ -449,9 +452,6 @@ def _build_artifact_tools(
 # ============================================================
 # Word Document Tool Injection
 # ============================================================
-
-WORD_DOCUMENT_TOOL_IDS = {"create_word_document"}
-
 
 def _build_word_document_tools(
     enabled_tools: list | None,
@@ -491,9 +491,6 @@ def _build_word_document_tools(
 # Workspace Tool Injection
 # ============================================================
 
-WORKSPACE_TOOL_IDS = {"workspace_files"}
-
-
 def _build_workspace_tools(
     enabled_tools: list | None,
     session_id: str,
@@ -531,9 +528,6 @@ def _build_workspace_tools(
 # ============================================================
 # Excel Spreadsheet Tool Injection
 # ============================================================
-
-EXCEL_SPREADSHEET_TOOL_IDS = {"create_excel_spreadsheet"}
-
 
 def _build_excel_spreadsheet_tools(
     enabled_tools: list | None,
@@ -575,9 +569,6 @@ def _build_excel_spreadsheet_tools(
 # ============================================================
 # PowerPoint Presentation Tool Injection
 # ============================================================
-
-POWERPOINT_PRESENTATION_TOOL_IDS = {"create_powerpoint_presentation"}
-
 
 def _build_powerpoint_presentation_tools(
     enabled_tools: list | None,
@@ -1061,8 +1052,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # resume there is no interrupt to validate — the agent is rebuilt from the
     # resent params and re-entered with an empty prompt (assistant-prefill).
     is_continuation = bool(input_data.continue_truncated)
+    # Marketplace D11: the Agent was `@`-mentioned in the composer, so it runs
+    # this turn only — it does not bind the conversation. Only meaningful
+    # alongside `rag_assistant_id`; on its own it does nothing.
+    is_agent_mention = bool(input_data.agent_mention) and bool(input_data.rag_assistant_id)
     logger.info(
-        "Invocation request received (resume=%s, continue_truncated=%s)" % (is_resume, is_continuation)
+        "Invocation request received (resume=%s, continue_truncated=%s, agent_mention=%s)"
+        % (is_resume, is_continuation, is_agent_mention)
     )
     logger.info("Message received")
 
@@ -1374,6 +1370,20 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # request's skills AND force skill-mode (agent_type="skill") for the turn. None ⇒ the
     # Agent binds no skills ⇒ the request's agent_type/enabled_skills drive the turn.
     agent_skills_override = None
+    # Version snapshots (§4): which Agent snapshot this turn resolved to, for the log line
+    # below. ``None`` means the live record ran — a plain chat turn with no Agent, an Agent
+    # with nothing published, or the owner running their own draft.
+    #
+    # ⚠️ Deliberately **not** in the agent cache key, despite what the spec's §4.2 says. The
+    # key is built from construction *values*, and everything a version changes about
+    # behavior already reaches it: instructions via ``system_prompt``, tool bindings via
+    # ``enabled_tools``, skills via ``skills_hash``/``agent_type``, the model via
+    # ``model_id``, and a memory binding by skipping the cache entirely (extra_tools). So
+    # promoting a version already misses. Adding the number would buy no discrimination and
+    # would cost real safety: the resume path rebuilds its key from ``PausedTurnSnapshot``,
+    # so a new key element the snapshot did not carry orphans the paused agent and breaks
+    # OAuth-consent / tool-approval resumes (``service.py`` warns about exactly this).
+    resolved_version = None
 
     logger.info(
         "Invocation request - processing with assistant context"
@@ -1388,6 +1398,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         from apis.shared.assistants.service import (
             get_assistant_with_access_check,
             mark_share_as_interacted,
+        )
+        from apis.shared.assistants.version_resolution import (
+            AgentVersionUnavailableError,
+            resolve_invocation_agent,
         )
         from apis.shared.sessions.messages import get_messages
         from apis.shared.sessions.metadata import (
@@ -1406,7 +1420,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # If it does, verify it's the same assistant (can't change assistants mid-session)
         # If it doesn't, verify session has no messages (can only attach to new sessions)
         # Skip validation for preview sessions (they don't persist state)
-        if not is_preview_session(input_data.session_id):
+        #
+        # Marketplace D11: an `@`-mention turn skips BOTH rules on purpose. It
+        # borrows the Agent for one turn without binding the conversation, so
+        # "you already have a different Agent" and "this thread already has
+        # messages" are the normal case rather than the error case. The Agent's
+        # own access check below is untouched — skipping this block relaxes
+        # *binding* semantics, never authorization. Rule in
+        # ``agent_binding_policy`` so it is testable without this stack.
+        if binds_conversation(
+            is_agent_mention=is_agent_mention,
+            is_preview=is_preview_session(input_data.session_id),
+        ):
             try:
                 existing_metadata = await get_session_metadata(input_data.session_id, user_id)
                 existing_assistant_id = existing_metadata.preferences.assistant_id if existing_metadata and existing_metadata.preferences else None
@@ -1442,7 +1467,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 logger.error("Error checking session state", exc_info=True)
                 # Continue anyway - better to allow than block on error
         else:
-            logger.info("Preview session - skipping session state validation")
+            logger.info(
+                "Turn does not bind the conversation (mention=%s) - skipping session state validation"
+                % is_agent_mention
+            )
 
         # 2. Load assistant with access check
         logger.info("Loading assistant with access check...")
@@ -1473,6 +1501,41 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         logger.info("Assistant instructions retrieved")
         logger.info("Assistant instructions length retrieved")
         logger.info("Assistant vector index retrieved")
+
+        # 2a. Version snapshots (§4) — decide WHICH configuration this caller runs.
+        #
+        # This is the seam the whole epic was built toward: everything below resolves
+        # against ``assistant``, so swapping in the published snapshot here changes what
+        # runs without touching binding resolution, the system prompt, or the harness.
+        #
+        # Everyone but the owner runs the reviewed snapshot; the owner runs their own draft
+        # so they can iterate before resubmitting. An Agent with nothing published (never
+        # submitted, private, or in review) returns unchanged — that is the common case and
+        # it behaves exactly as it did before this feature.
+        #
+        # ⚠️ Ordered *before* the access check's side effects below on purpose: it is not an
+        # access decision and must not be read as one. The caller was already admitted.
+        try:
+            assistant, resolved_version = await resolve_invocation_agent(assistant, user_id)
+        except AgentVersionUnavailableError as unavailable:
+            # A published Agent whose snapshot is missing fails the turn rather than
+            # falling back to the draft — the fallback would serve unreviewed instructions
+            # to a pinned user at exactly the moment something is already broken.
+            logger.error(f"Published version unavailable: {unavailable}")
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "This agent's published version could not be loaded. Please try again, "
+                    "or contact an administrator if it persists."
+                ),
+            ) from unavailable
+
+        # Which configuration actually ran. Worth a line: "this agent behaved oddly" is not
+        # answerable without knowing whether the turn ran an approved snapshot or a draft.
+        logger.info(
+            "Agent configuration for this turn: %s",
+            f"published version {resolved_version}" if resolved_version else "live record / draft",
+        )
 
         # Mark as viewed if this is a shared assistant (not owned)
         if assistant.owner_id != user_id:
@@ -1610,7 +1673,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
         # 6. Save assistant_id to session preferences (persist for future loads)
         # Skip persistence for preview sessions
-        if not is_preview_session(input_data.session_id):
+        #
+        # Marketplace D11: a mention turn deliberately writes nothing. Persisting
+        # here would silently convert the whole conversation to the Agent — the
+        # SPA self-heals its `assistantId` query param from these preferences on
+        # reload — so one `@` would bind the thread forever, which is the exact
+        # behavior the per-turn design rejects. Same predicate as the validation
+        # above, deliberately: validating without persisting would refuse the
+        # second mention in a thread, and persisting without validating would let
+        # a mention annex the conversation.
+        if binds_conversation(
+            is_agent_mention=is_agent_mention,
+            is_preview=is_preview_session(input_data.session_id),
+        ):
             try:
                 existing_metadata = await get_session_metadata(input_data.session_id, user_id)
                 if existing_metadata:
@@ -1662,7 +1737,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 logger.error("Failed to save assistant_id to session preferences", exc_info=True)
                 # Continue - not critical if metadata save fails
         else:
-            logger.info("Preview session - skipping assistant_id persistence")
+            logger.info(
+                "Turn does not bind the conversation (mention=%s) - skipping assistant_id persistence"
+                % is_agent_mention
+            )
 
     # Append active custom system prompt (if any). Gating rules + lookup live
     # in `system_prompt_resolver.py` so they can be unit-tested independently
@@ -2117,6 +2195,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 original_message=input_data.message if message_will_be_modified else None,
                 interrupt_responses=interrupt_responses_payload,
                 continue_truncated=is_continuation,
+                # Which Agent ran this turn (#756). Recorded on the cost row so a
+                # deliberate `@`-mention prefix swap is distinguishable from the
+                # nondeterministic-ordering regression the fingerprints exist to catch.
+                # Passed per turn rather than read off the agent: the agent instance is
+                # cached and shared across turns, so per-turn state must never live on it
+                # (see #741/#751).
+                turn_agent_id=input_data.rag_assistant_id,
             ):
                 yield event
                 # Interleave the finished title between agent events (same

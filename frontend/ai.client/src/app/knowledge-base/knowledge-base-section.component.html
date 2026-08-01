@@ -1,7 +1,8 @@
-<!-- Knowledge (grouped inset — mildly contrasted from the page) -->
-<section class="space-y-4 rounded-2xl border border-gray-200 bg-gray-100/60 p-5 dark:border-gray-700 dark:bg-gray-800/40 sm:p-6">
-  <div class="flex items-center gap-3">
-    <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Knowledge base</h2>
+<!-- Knowledge (card surface — matches the Skills / Memory spaces sections) -->
+<section class="space-y-4 rounded-2xl border border-gray-200/80 bg-white p-5 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80 sm:p-6">
+  <div class="flex items-center gap-2">
+    <ng-icon name="heroBookOpen" class="size-5 text-amber-500" aria-hidden="true" />
+    <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Knowledge base</h2>
     @if (webCrawlActive()) {
       <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2 py-0.5 text-xs/4 font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
         <span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>

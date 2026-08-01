@@ -12,6 +12,7 @@ import {
 import { ContentBlock, Message, FileAttachmentData } from '../../../services/models/message.model';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
+import { parseIso } from '../../../../utils/date';
 
 function isImageMimeType(mimeType: string): boolean {
   return mimeType.startsWith('image/');
@@ -150,7 +151,7 @@ export class UserMessageComponent implements AfterViewInit {
     if (diffMinutes < 60) return `${diffMinutes}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
 
-    return new Date(sentMs).toLocaleString(undefined, {
+    return parseIso(sentMs).toLocaleString(undefined, {
       year: 'numeric',
       month: 'short',
       day: 'numeric',

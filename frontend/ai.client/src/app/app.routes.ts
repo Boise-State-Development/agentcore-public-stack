@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 import { authGuard } from './auth/auth.guard';
 import { adminGuard } from './auth/admin.guard';
 import { firstBootGuard } from './auth/first-boot.guard';
+import { legacyMigrationHostGuard } from './shared/utils/legacy-migration-host';
 
 export const routes: Routes = [
     {
@@ -34,20 +35,45 @@ export const routes: Routes = [
         canActivate: [adminGuard],
         loadChildren: () => import('./admin/admin.routes').then(m => m.adminRoutes),
     },
+    // ── Assistant deprecation (Designer Phase 5) ────────────────────────────────────
+    // There is one noun, and it is Agent (Marketplace D1). The Designer reached parity
+    // and then passed it — bindings, icons, listings, pins, `@`-mention and reports all
+    // exist only on the Agent surface — so the old editor had strictly less to offer for
+    // the same record.
+    //
+    // The two **deep** links stay redirects rather than deletions: `/assistants/:id/edit`
+    // is in people's bookmarks, in old chat sessions' "edit" links and in links colleagues
+    // have shared with each other. The ids are identical on both sides (the compat mapping
+    // renders a legacy Assistant *as* an Agent — there was no data migration), so the
+    // redirect lands on the same record. Removing them would turn every one of those into
+    // a 404 for no gain. They stay *silent* for the same reason they exist: those URLs are
+    // an intent ("edit this record"), and interrupting an intent with an announcement is
+    // hostile.
     {
         path: 'assistants/new',
-        loadComponent: () => import('./assistants/assistant-form/assistant-form.page').then(m => m.AssistantFormPage),
-        canActivate: [authGuard],
+        redirectTo: 'agents/new',
+        pathMatch: 'full',
     },
     {
         path: 'assistants/:id/edit',
-        loadComponent: () => import('./assistants/assistant-form/assistant-form.page').then(m => m.AssistantFormPage),
-        canActivate: [authGuard],
+        redirectTo: 'agents/:id/edit',
+        pathMatch: 'full',
     },
     {
+        // The **list** URL is different: it is the one people browse to, and a silent
+        // redirect answers the routing question while leaving the human one — where did my
+        // assistants go — entirely unanswered. So it renders the explainer instead, which
+        // says what changed, that nothing was lost, and what the Agent surface adds. Every
+        // path out of it lands on `/agents`.
+        //
+        // ⚠️ TEMPORARY host gate: the explainer only renders on the production apex, where
+        // people arriving off the previous version of the site have that question. Everywhere
+        // else `legacyMigrationHostGuard` restores the old silent redirect onto `/agents`.
+        // See `shared/utils/legacy-migration-host.ts`.
         path: 'assistants',
-        loadComponent: () => import('./assistants/assistants.page').then(m => m.AssistantsPage),
-        canActivate: [authGuard],
+        loadComponent: () => import('./agents/migration/agents-migration.page').then(m => m.AgentsMigrationPage),
+        canActivate: [authGuard, legacyMigrationHostGuard],
+        pathMatch: 'full',
     },
     {
         path: 'agents/new',
@@ -57,6 +83,30 @@ export const routes: Routes = [
     {
         path: 'agents/:id/edit',
         loadComponent: () => import('./agents/agent-form/agent-form.page').then(m => m.AgentFormPage),
+        canActivate: [authGuard],
+    },
+    {
+        // Marketplace Discover (spec phase 2). Sits under the same preview gate as the
+        // rest of /agents — the sidenav entry is system-admin only until Agents are
+        // unveiled, so this is not user-visible yet.
+        path: 'agents/discover',
+        loadComponent: () => import('./agents/discover/discover.page').then(m => m.AgentDiscoverPage),
+        canActivate: [authGuard],
+    },
+    {
+        // Marketplace Pinned tab (spec phase 5). Declared with the other literal
+        // `agents/*` paths, above `agents/:id`, for the same reason.
+        path: 'agents/pinned',
+        loadComponent: () => import('./agents/pinned/pinned.page').then(m => m.AgentPinnedPage),
+        canActivate: [authGuard],
+    },
+    {
+        // Marketplace detail (spec phase 3). Declared AFTER `agents/discover` so the
+        // literal path is not captured by `:id`, and after `agents/:id/edit` so the
+        // deeper route still wins. `id` binds to the page's `input.required` via
+        // `withComponentInputBinding()`.
+        path: 'agents/:id',
+        loadComponent: () => import('./agents/detail/agent-detail.page').then(m => m.AgentDetailPage),
         canActivate: [authGuard],
     },
     {

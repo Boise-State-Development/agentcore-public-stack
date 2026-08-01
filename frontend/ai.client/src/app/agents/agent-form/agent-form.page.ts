@@ -49,10 +49,16 @@ import { ThemeService } from '../../components/topnav/components/theme-toggle/th
 import { ToastService } from '../../services/toast/toast.service';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 import { AgentPreviewComponent } from './components/agent-preview.component';
+import { AgentIconComponent } from '../components/agent-icon.component';
 import {
-  ShareAssistantDialogComponent,
-  ShareAssistantDialogData,
-} from '../../assistants/components/share-assistant-dialog.component';
+  AgentIconDialogComponent,
+  AgentIconDialogData,
+  AgentIconDialogResult,
+} from '../components/agent-icon-dialog.component';
+import {
+  ShareAgentDialogComponent,
+  ShareAgentDialogData,
+} from '../components/share-agent-dialog.component';
 import { KnowledgeBaseSectionComponent } from '../../knowledge-base/knowledge-base-section.component';
 
 /** A model param rendered as an editable control (numeric or enum). */
@@ -103,6 +109,7 @@ interface MemorySelection {
     CdkConnectedOverlay,
     TooltipDirective,
     AgentPreviewComponent,
+    AgentIconComponent,
     KnowledgeBaseSectionComponent,
   ],
   providers: [
@@ -139,6 +146,15 @@ export class AgentFormPage implements OnInit, OnDestroy {
   readonly agentId = signal<string | null>(null);
   readonly saving = signal(false);
   readonly loadingAgent = signal(false);
+  /** The RBAC-filtered binding palettes are fetched on every entry (create + edit). */
+  readonly loadingPalettes = signal(true);
+  /**
+   * The page is still assembling. Both fetches feed sections of the same form
+   * (the palettes render the Model/Tools/Skills/Memory pickers; the record fills
+   * the persona + selections), so the editor stays behind a skeleton until both
+   * settle — otherwise the form paints empty and then visibly rewrites itself.
+   */
+  readonly loading = computed(() => this.loadingPalettes() || this.loadingAgent());
   readonly userPermission = signal<'owner' | 'editor' | 'viewer'>('owner');
   /**
    * Whether {@link userPermission} reflects a value loaded from the server.
@@ -151,6 +167,18 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
   readonly mode = computed<'create' | 'edit'>(() => (this.agentId() ? 'edit' : 'create'));
   readonly isViewer = computed(() => this.userPermission() === 'viewer');
+
+  // ---- store icon (D5) --------------------------------------------------
+  /**
+   * The uploaded square icon, rendered by `app-agent-icon` — the agent's face on cards,
+   * in the store and in the share dialog. It sits in **Persona**, beside the emoji, not
+   * with publication: it is presentation of this record, and D13 lets an editor set it
+   * while publication stays owner-only. Publication itself lives in the share dialog.
+   */
+  readonly iconUrl = signal<string | undefined>(undefined);
+
+  /** Presentation, not behaviour (D13) — the same line `PUT /agents/{id}` draws. */
+  readonly canEditIcon = computed(() => this.userPermission() !== 'viewer');
 
   // Bindable palettes (RBAC-filtered) + current selections.
   readonly models = signal<BindableItem[]>([]);
@@ -211,8 +239,6 @@ export class AgentFormPage implements OnInit, OnDestroy {
   private readonly bindingsDirty = signal(false);
   readonly isDirty = computed(() => this.form?.dirty === true || this.bindingsDirty());
 
-  readonly previewModelLabel = computed<string | null>(() => this.selectedModel()?.label ?? null);
-
   readonly emojiPickerPositions: ConnectedPosition[] = [
     { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top', offsetY: 8 },
     { originX: 'start', originY: 'top', overlayX: 'start', overlayY: 'bottom', offsetY: -8 },
@@ -241,7 +267,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
     this.formSub = this.form.valueChanges.subscribe(() => this.syncFormToSignals());
 
     // Load the RBAC-filtered palettes in parallel; then hydrate an existing agent.
-    void this.loadPalettes();
+    void this.loadPalettes().finally(() => this.loadingPalettes.set(false));
 
     const id = this.route.snapshot.paramMap.get('id');
     this.agentId.set(id);
@@ -273,26 +299,37 @@ export class AgentFormPage implements OnInit, OnDestroy {
   }
 
   private async loadPalettes(): Promise<void> {
-    const [models, tools, skills, spaces] = await Promise.all([
-      this.agentService.loadBindable('model'),
-      this.agentService.loadBindable('tool'),
-      this.agentService.loadBindable('skill'),
-      this.agentService.loadBindable('memory_space'),
-    ]);
-    this.models.set(models);
-    this.tools.set(tools);
-    this.skills.set(skills);
-    this.spaces.set(spaces);
+    try {
+      const [models, tools, skills, spaces] = await Promise.all([
+        this.agentService.loadBindable('model'),
+        this.agentService.loadBindable('tool'),
+        this.agentService.loadBindable('skill'),
+        this.agentService.loadBindable('memory_space'),
+      ]);
+      this.models.set(models);
+      this.tools.set(tools);
+      this.skills.set(skills);
+      this.spaces.set(spaces);
+    } catch (err) {
+      // Don't let a palette failure strand the page on its skeleton — fall through
+      // to the form with empty pickers (the Model section renders its own empty state).
+      console.error('Error loading bindable palettes:', err);
+      this.toast.error('Could not load the available models, tools and skills.');
+    }
   }
 
   private async loadAgent(id: string): Promise<void> {
     try {
       const agent = await this.agentService.getAgent(id);
       this.userPermission.set(agent.userPermission ?? 'owner');
+      this.iconUrl.set(agent.iconUrl);
       this.form.patchValue({
         name: agent.name,
         description: agent.description,
-        instructions: agent.instructions,
+        // Marketplace Phase 3 gates `instructions` to owner/editor. Reaching this form
+        // means one of those, so the fallback is defensive, not an expected path — the
+        // field's own `required` validator surfaces it if the gate ever changes.
+        instructions: agent.instructions ?? '',
         visibility: agent.visibility,
         tags: agent.tags ?? [],
         emoji: agent.emoji ?? '',
@@ -641,17 +678,49 @@ export class AgentFormPage implements OnInit, OnDestroy {
   openShareDialog(): void {
     const id = this.agentId();
     if (!id) return;
-    this.dialog.open(ShareAssistantDialogComponent, {
+    this.dialog.open(ShareAgentDialogComponent, {
       data: {
-        assistant: {
+        agent: {
           assistantId: id,
           name: this.form.get('name')?.value || 'Agent',
           visibility: this.form.get('visibility')?.value,
           userPermission: this.userPermission(),
+          emoji: this.form.get('emoji')?.value || undefined,
+          iconUrl: this.iconUrl(),
         },
-      } as unknown as ShareAssistantDialogData,
+      } satisfies ShareAgentDialogData,
       hasBackdrop: false,
     });
+  }
+
+  // ---- store icon ------------------------------------------------------
+  /**
+   * Set, replace or remove the store icon (D5).
+   *
+   * The dialog writes the record itself and returns the new icon state; the page is
+   * patched from that rather than re-read, because the returned URL carries the new
+   * content digest and a replacement must repaint instead of showing the cached
+   * previous icon. `patchAgent` keeps the agents list in step behind us.
+   */
+  async onEditIcon(): Promise<void> {
+    const id = this.agentId();
+    if (!id) return;
+    const dialogRef = this.dialog.open<AgentIconDialogResult>(AgentIconDialogComponent, {
+      data: {
+        agentId: id,
+        agentName: this.form.get('name')?.value || 'Agent',
+        emoji: this.form.get('emoji')?.value || undefined,
+        iconUrl: this.iconUrl(),
+      } satisfies AgentIconDialogData,
+    });
+    const result = await firstValueFrom(dialogRef.closed);
+    if (result) {
+      this.iconUrl.set(result.iconUrl);
+      this.agentService.patchAgent(result.agentId, {
+        iconKey: result.iconKey,
+        iconUrl: result.iconUrl,
+      });
+    }
   }
 }
 

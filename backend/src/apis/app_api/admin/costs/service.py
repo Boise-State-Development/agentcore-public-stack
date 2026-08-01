@@ -341,6 +341,8 @@ class AdminCostService:
         total_cache_write = 0
         avoidable_misses = 0
         wasted_usd = 0.0
+        agent_switch_misses = 0
+        agent_switch_usd = 0.0
 
         for record in records:
             token_usage = record.get("tokenUsage") or {}
@@ -361,15 +363,23 @@ class AdminCostService:
             cache_write = int(token_usage.get("cacheWriteInputTokens") or 0)
             cache_status = record.get("cacheStatus")
             row_wasted = float(record.get("wastedUsd") or 0.0)
+            # #756 — derived at write time, where the predecessor row was already
+            # in hand; read here as a plain projection.
+            agent_switched = bool(record.get("agentSwitched"))
 
             total_cost += cost
             total_cache_read += cache_read
             total_cache_write += cache_write
             if cache_status == "miss_avoidable":
                 avoidable_misses += 1
+                # A split of the totals, never a deduction from them.
+                if agent_switched:
+                    agent_switch_misses += 1
+                    agent_switch_usd += row_wasted
             wasted_usd += row_wasted
 
             gap_raw = record.get("cacheGapSeconds")
+            prefix_gap_raw = record.get("cachePrefixGapSeconds")
             calls.append(SessionCallRow(
                 timestamp=record.get("timestamp", ""),
                 message_id=record.get("messageId"),
@@ -381,7 +391,12 @@ class AdminCostService:
                 cost=cost,
                 cache_status=cache_status,
                 cache_gap_seconds=int(gap_raw) if gap_raw is not None else None,
+                cache_prefix_gap_seconds=(
+                    int(prefix_gap_raw) if prefix_gap_raw is not None else None
+                ),
                 wasted_usd=row_wasted,
+                turn_agent_id=record.get("turnAgentId"),
+                agent_switched=agent_switched,
                 prefix_fingerprints=(
                     PrefixFingerprints(**fingerprints_raw)
                     if isinstance(fingerprints_raw, dict) else None
@@ -406,6 +421,8 @@ class AdminCostService:
             total_cache_write_tokens=total_cache_write,
             avoidable_miss_count=avoidable_misses,
             wasted_usd=round(wasted_usd, 6),
+            agent_switch_miss_count=agent_switch_misses,
+            agent_switch_usd=round(agent_switch_usd, 6),
             cache_efficiency=cache_efficiency,
         )
 

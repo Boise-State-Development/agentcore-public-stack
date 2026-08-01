@@ -67,6 +67,33 @@ class TestCompatMapping:
         assert view["agentId"] == "ast_123"
         assert "ownerId" not in view and "owner_id" not in view
 
+    def test_agent_view_projects_the_listing_block(self):
+        """Marketplace Phase 3: the detail read carries ``listing``, so the projection
+        has to actually emit it — the field existed on the response model from Phase 1
+        but nothing populated it."""
+        from apis.shared.assistants.models import AgentListing
+
+        a = _legacy_assistant(
+            tagline="Find and cite university policy",
+            listing=AgentListing(
+                state="published", category="Administration", publisher_id="pub-registrar"
+            ),
+        )
+        view = to_agent_view(a)
+
+        assert view["tagline"] == "Find and cite university policy"
+        assert view["listing"]["state"] == "published"
+        assert view["listing"]["publisherId"] == "pub-registrar"
+
+    def test_an_unsubmitted_agents_marketplace_fields_are_all_none(self):
+        """``response_model_exclude_none`` then drops them, so the payload for an agent
+        that was never submitted is byte-identical to before the marketplace shipped."""
+        view = to_agent_view(_legacy_assistant())
+
+        assert view["listing"] is None
+        assert view["tagline"] is None
+        assert view["iconKey"] is None
+
 
 class TestModelContract:
     def test_modelconfig_alias_roundtrip(self):

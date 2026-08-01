@@ -27,14 +27,14 @@ import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
 import { AgentService } from '../agents/services/agent.service';
-import { Agent } from '../agents/models/agent.model';
+import { Agent, AgentRunnability } from '../agents/models/agent.model';
 import { ToolService } from '../services/tool/tool.service';
 import { SkillService } from '../services/skill/skill.service';
 import { ChatContainerComponent, ChatContainerConfig } from './components/chat-container/chat-container.component';
 import {
-  ShareAssistantDialogComponent,
-  ShareAssistantDialogData,
-} from '../assistants/components/share-assistant-dialog.component';
+  ShareAgentDialogComponent,
+  ShareAgentDialogData,
+} from '../agents/components/share-agent-dialog.component';
 import { VoiceChatService } from './services/voice';
 import { SystemPromptsService } from '../services/system-prompts/system-prompts.service';
 import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.service';
@@ -106,6 +106,13 @@ export class ConversationPage implements OnDestroy {
   // assistantId), when the /agents surface is enabled and it resolves. Drives
   // the per-primitive picker locks; null for plain chat or a legacy assistant.
   agent = signal<Agent | null>(null);
+  /**
+   * D6 for the launch card, when it resolves. Deliberately a third signal rather than a
+   * field on `agent`: it fans out across the viewer's model/tool/skill catalogs, so it
+   * settles in after the card has already painted — the same two-load split the store's
+   * detail page uses.
+   */
+  runnability = signal<AgentRunnability | null>(null);
   isLoadingAssistant = signal(false);
   isSettingsOpen = signal(false);
 
@@ -345,6 +352,7 @@ export class ConversationPage implements OnDestroy {
         this.assistant.set(null);
         this.assistantError.set(null);
         this.agent.set(null);
+        this.runnability.set(null);
       }
       // Always release the picker locks. They live in root singleton services
       // that OUTLIVE this component, so a freshly-created "new chat" component
@@ -570,7 +578,7 @@ export class ConversationPage implements OnDestroy {
       });
   }
 
-  onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[] }) {
+  onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string }) {
     // Use the effective session ID (route sessionId or staged sessionId)
     const sessionIdToUse = this.effectiveSessionId();
 
@@ -587,12 +595,16 @@ export class ConversationPage implements OnDestroy {
     // Loading state is set inside submitChatRequest once the (possibly
     // freshly generated) session id is known — it's per-session now.
 
-    // Submit the chat request with file upload IDs and assistant ID if present
+    // Submit the chat request with file upload IDs and assistant ID if present.
+    // A `@`-mention (Marketplace D11) rides alongside rather than replacing the bound
+    // assistant: it runs this one turn, the URL keeps whatever the conversation is bound
+    // to, and the next unmentioned message goes back to that.
     this.chatRequestService.submitChatRequest(
       message.content,
       sessionIdToUse,
       message.fileUploadIds,
-      assistantIdToUse
+      assistantIdToUse,
+      message.mentionAgentId
     ).catch((error) => {
       console.error('Error sending chat request:', error);
     });
@@ -775,7 +787,18 @@ export class ConversationPage implements OnDestroy {
       this.applyAgentBindingLocks(agent);
     } catch {
       this.agent.set(null);
+      this.runnability.set(null);
       this.clearAgentBindingLocks();
+      return;
+    }
+
+    // D6 for the launch card's run line. Not awaited by anything the conversation needs,
+    // and a failure leaves the line absent rather than erroring — "will this run for you?"
+    // is advisory here exactly as it is on the store's detail page.
+    try {
+      this.runnability.set(await this.agentService.getRunnability(assistantId));
+    } catch {
+      this.runnability.set(null);
     }
   }
 
@@ -853,12 +876,17 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
-   * Navigate to the assistant edit page.
+   * Navigate to the Designer for the Agent driving this session.
+   *
+   * The id is the same record either way — the compat mapping renders a legacy Assistant
+   * *as* an Agent, so `/agents/:id/edit` opens what `/assistants/:id/edit` used to. Routed
+   * directly rather than through the redirect so the address bar never shows the retired
+   * path.
    */
   editAssistant(): void {
     const assistantId = this.assistant()?.assistantId;
     if (assistantId) {
-      this.router.navigate(['/assistants', assistantId, 'edit']);
+      this.router.navigate(['/agents', assistantId, 'edit']);
     }
   }
 
@@ -869,8 +897,16 @@ export class ConversationPage implements OnDestroy {
     const assistant = this.assistant();
     if (!assistant) return;
 
-    this.dialog.open<unknown, ShareAssistantDialogData>(ShareAssistantDialogComponent, {
-      data: { assistant },
+    this.dialog.open<unknown, ShareAgentDialogData>(ShareAgentDialogComponent, {
+      data: {
+        agent: {
+          assistantId: assistant.assistantId,
+          name: assistant.name,
+          visibility: assistant.visibility,
+          userPermission: assistant.userPermission ?? 'owner',
+          emoji: assistant.emoji,
+        },
+      },
       hasBackdrop: false,
     });
   }

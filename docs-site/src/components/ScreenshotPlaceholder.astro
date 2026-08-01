@@ -1,0 +1,38 @@
+---
+// Screenshot placeholder — a frosted app-window frame with a labelled, dashed
+// drop zone. Used on the landing + roadmap pages wherever a real product
+// screenshot belongs. Replace by dropping an <img> (or <picture>) into the
+// window body and deleting the `.shot-placeholder` block, keeping `.shot` and
+// `.shot-bar` so the window chrome stays consistent.
+//
+// Props:
+//   label   — what to capture, shown inside the drop zone (required)
+//   title   — text in the window title bar (defaults to the label)
+//   aspect  — CSS aspect-ratio of the window body (default "16 / 10")
+//   kind    — "app" (traffic-light dots) | "browser" (dots + address pill)
+interface Props {
+	label: string;
+	title?: string;
+	aspect?: string;
+	kind?: 'app' | 'browser';
+}
+
+const { label, title = label, aspect = '16 / 10', kind = 'browser' } = Astro.props;
+---
+
+<figure class="shot" data-screenshot-placeholder={label}>
+	<div class="shot-bar">
+		<span class="shot-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+		{kind === 'browser' ? <span class="shot-address">{title}</span> : <span class="shot-title">{title}</span>}
+	</div>
+	<div class="shot-body" style={`aspect-ratio: ${aspect};`}>
+		<div class="shot-placeholder">
+			<svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+				<circle cx="12" cy="13" r="4" />
+			</svg>
+			<span class="shot-label">{label}</span>
+			<span class="shot-hint">screenshot placeholder</span>
+		</div>
+	</div>
+</figure>

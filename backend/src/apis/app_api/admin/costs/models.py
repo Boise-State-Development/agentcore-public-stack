@@ -122,7 +122,25 @@ class SessionCallRow(BaseModel):
     cost: float = 0.0
     cache_status: Optional[str] = Field(None, alias="cacheStatus")
     cache_gap_seconds: Optional[int] = Field(None, alias="cacheGapSeconds")
+    # Seconds since the last call with the SAME prefix, present only when that
+    # was an older call than the immediately previous one (#753). Its absence
+    # means the two coincide; its presence explains a status that would
+    # otherwise look inconsistent with `cacheGapSeconds`.
+    cache_prefix_gap_seconds: Optional[int] = Field(
+        None, alias="cachePrefixGapSeconds"
+    )
     wasted_usd: float = Field(0.0, alias="wastedUsd")
+    # #756 — which Agent ran this call, and whether that changed from the call
+    # before it. An `@`-mention (Marketplace D11) hands one turn to a different
+    # Agent, which genuinely re-writes the prefix; without this a deliberate swap
+    # is indistinguishable from a nondeterministic-ordering regression, since both
+    # flip `toolConfigHash` and `systemPromptHash` together.
+    turn_agent_id: Optional[str] = Field(None, alias="turnAgentId")
+    agent_switched: bool = Field(
+        False,
+        alias="agentSwitched",
+        description="This call ran on a different Agent than the previous one — an explained prefix re-write",
+    )
     prefix_fingerprints: Optional[PrefixFingerprints] = Field(
         None, alias="prefixFingerprints"
     )
@@ -140,6 +158,13 @@ class SessionCostAnatomy(BaseModel):
     total_cache_write_tokens: int = Field(0, alias="totalCacheWriteTokens")
     avoidable_miss_count: int = Field(0, alias="avoidableMissCount")
     wasted_usd: float = Field(0.0, alias="wastedUsd")
+    # #756 — the subset of the two figures above that an Agent switch explains.
+    # Deliberately a *split*, not a deduction: the totals still carry every dollar
+    # spent, because hiding the cost of `@`-mentions would understate a feature we
+    # want to be able to measure on purpose. Subtract to get unexplained waste,
+    # which is the number a prefix-stability regression moves.
+    agent_switch_miss_count: int = Field(0, alias="agentSwitchMissCount")
+    agent_switch_usd: float = Field(0.0, alias="agentSwitchUsd")
     # cacheRead / (cacheRead + cacheWrite) over the session; None until
     # there has been any cache activity.
     cache_efficiency: Optional[float] = Field(None, alias="cacheEfficiency")

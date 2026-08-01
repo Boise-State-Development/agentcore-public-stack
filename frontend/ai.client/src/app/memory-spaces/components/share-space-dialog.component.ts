@@ -11,6 +11,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { MemorySpaceSummary, ShareRole, SpaceMember } from '../models/memory-space.model';
 import { MemorySpaceService } from '../services/memory-space.service';
+import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 
 export interface ShareSpaceDialogData {
   space: MemorySpaceSummary;
@@ -33,7 +34,7 @@ interface GrantRow {
 @Component({
   selector: 'app-share-space-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon],
+  imports: [DialogDismissDirective, FormsModule, NgIcon],
   providers: [provideIcons({ heroXMark, heroShare, heroUserPlus, heroTrash, heroChevronDown })],
   host: {
     class: 'block',
@@ -43,10 +44,11 @@ interface GrantRow {
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-500/75 dark:bg-gray-900/80"
       aria-hidden="true"
-      (click)="onCancel()"
     ></div>
 
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0">
+    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
+      appDialogDismiss
+      (dismissed)="onCancel()">
       <div
         class="dialog-panel relative transform overflow-hidden rounded-2xl border border-gray-200 bg-white px-4 pt-5 pb-4 text-left shadow-xl sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:border-gray-700 dark:bg-gray-800"
         role="dialog"

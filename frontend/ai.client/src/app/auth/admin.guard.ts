@@ -4,12 +4,16 @@ import { SessionService } from './session.service';
 import { UserService } from './user.service';
 
 /**
- * Route guard that protects admin routes using backend RBAC resolution.
+ * Route guard for the `/admin` shell, using backend RBAC resolution.
  *
- * Checks the BFF session for an authenticated user, then resolves
- * AppRoles from `/users/me/permissions` and gates on `system_admin`.
- * Unauthenticated users are bounced through `/auth/login`; authenticated
- * users without the role land back on the home page.
+ * Checks the BFF session for an authenticated user, then resolves permissions
+ * from `/users/me/permissions`. Gates on `canAccessAdmin` — `system_admin`
+ * **or** any delegated admin scope — because the console is no longer
+ * all-or-nothing. Which *pages* inside it are reachable is `adminScopeGuard`'s
+ * job; this only decides whether the shell opens at all.
+ *
+ * Unauthenticated users are bounced through `/auth/login`; authenticated users
+ * with no admin access at all land back on the home page.
  */
 export const adminGuard: CanActivateFn = async (route, state) => {
   const sessionService = inject(SessionService);
@@ -25,8 +29,8 @@ export const adminGuard: CanActivateFn = async (route, state) => {
 
   await userService.ensurePermissionsLoaded();
 
-  if (!userService.isAdmin()) {
-    console.warn('User lacks system_admin AppRole:', userService.getUser()?.roles);
+  if (!userService.canAccessAdmin()) {
+    console.warn('User has no admin access:', userService.getUser()?.roles);
     router.navigate(['/']);
     return false;
   }

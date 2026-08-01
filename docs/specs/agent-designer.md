@@ -1,6 +1,9 @@
 # Agent Designer — a unified authoring surface for composed Agents
 
-**Status:** Draft / proposal (2026-07-07)
+**Status:** ✅ **Implemented** (phases 0–5; Phase 5, Assistant deprecation, closed 2026-07-26).
+Originally drafted 2026-07-07 as a proposal. There is one noun now, and it is Agent: `/assistants*`
+redirects to `/agents` and the old editor is gone. See the phasing table below for per-phase state.
+
 **Author:** (drafted with Claude)
 **Targets branch:** `develop`
 **Supersedes:** the "extend the Assistant editor to bind a Memory Space" assumption in
@@ -182,12 +185,43 @@ definition.
 
 ## Migration / Assistant deprecation
 
-1. Evolve the store (D2) + ship the Agent contract with the compat mapping.
-2. Build the Designer to parity, then past it (tools/skills/memory binding old Assistants never had).
-3. Render legacy Assistants as Agents; redirect the Assistants editor to the Designer.
-4. Deprecate the "Assistant" term across UI + docs; retire the old editor.
+1. ✅ Evolve the store (D2) + ship the Agent contract with the compat mapping.
+2. ✅ Build the Designer to parity, then past it (tools/skills/memory binding old Assistants never had).
+3. ✅ Render legacy Assistants as Agents; redirect the Assistants editor to the Designer.
+4. ✅ Deprecate the "Assistant" term across UI + docs; retire the old editor.
 
 No big-bang: legacy ids and the compat mapping keep everything running throughout.
+
+**Step 3, as shipped.** `/assistants`, `/assistants/new` and `/assistants/:id/edit` are
+`redirectTo` entries onto their `/agents` equivalents rather than deletions. Those paths are in
+bookmarks, in the "edit" link of every old chat session, and in links people shared with each
+other; because the ids are the same record on both sides, the redirect lands on exactly what the
+old URL opened. The sidenav ships one entry, and the Agents "Preview" badge came off with the
+second noun it existed to disambiguate.
+
+⚠️ **This changed what the `AGENTS_API_ENABLED` kill switch means.** While both nouns shipped,
+turning it off degraded to the Assistants editor. There is no longer anything to fall back to, so
+off now means no authoring surface at all. It is an outage switch, not a feature toggle — records
+are untouched either way.
+
+**The term pass is deliberately not a find-and-replace.** `"You are a helpful assistant that…"`
+stays as the instructions placeholder: that is the conventional system-prompt idiom, and rewriting
+it to "agent" would be worse prompt guidance, not better terminology. Neither did the SSE
+`role: "assistant"` vocabulary change — that is the model's message role, not our product concept.
+What changed is the words naming *our* concept: nav, the session indicator, the share dialog,
+settings copy.
+
+**Step 4, as shipped.** Deleted: `assistants.page`, `assistant-form.page`, `assistant-list`,
+`assistant-preview`, and the `assistant-form` barrel. **`frontend/.../assistants/` is not gone**,
+and is not a feature any more — it is the set of pieces the Agent surface consumes: the share
+dialog, the assistant card, the knowledge-base dialogs and services, `PreviewChatService`, and the
+models. It keeps the name because the record is still an Assistant *on the wire*; renaming the
+folder would drag the API contract's vocabulary with it. Its `README.md` says so, with the
+consumer map. Anything new and user-facing goes under `agents/`.
+
+**The backend `/assistants/*` surface is unchanged and not deprecated.** `test-chat` and the
+document sub-routes deliberately live there and are called by the Designer's own preview pane and
+knowledge-base section.
 
 ---
 
@@ -196,10 +230,10 @@ No big-bang: legacy ids and the compat mapping keep everything running throughou
 ```
 Phase 0  This spec — contracts, term map, AWS-federation decision            ✅ done (#590)
 Phase 1  Agent record + uniform binding model + compat mapping (back-compat)  ✅ done (#591, #592, + flag plumbing)
-Phase 2  Bindable-primitives catalog API (Registry-lite, RBAC-composed)       ← the palette (next)
-Phase 3  Harness resolution: memory index injection + memory_* tools + model   ← Workstream B payoff (thin slice, D6)
-Phase 4  Agent Designer page (Agent Harness Editor)                            ← the headline UI, on P1–P2 contracts
-Phase 5  Assistant deprecation + migration
+Phase 2  Bindable-primitives catalog API (Registry-lite, RBAC-composed)       ✅ done
+Phase 3  Harness resolution: memory index injection + memory_* tools + model  ✅ done
+Phase 4  Agent Designer page (Agent Harness Editor)                           ✅ done
+Phase 5  Assistant deprecation + migration                                    ✅ done (#746)
 Later    Federate AgentCore Registry / managed Harness as catalog+run backends (D1)
 ```
 

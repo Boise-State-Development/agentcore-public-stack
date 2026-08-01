@@ -27,6 +27,15 @@ from .preview import is_preview_session
 
 logger = logging.getLogger(__name__)
 
+# How many recent call rows to read when looking for the predecessor whose cache
+# entry a call could have hit (#753). Wide enough to see past one interleaved
+# `@`-mention turn — including a tool-using one, which writes several rows — and
+# small enough to stay a single cheap GSI query. When the same-prefix predecessor
+# falls outside this window we classify conservatively as `miss_ttl_expired`
+# rather than guessing, so widening it can only ever recover under-reported
+# waste, never manufacture it.
+_CACHE_PREDECESSOR_LOOKBACK = 10
+
 
 def _convert_floats_to_decimal(obj: Any) -> Any:
     """
@@ -363,17 +372,27 @@ def _derive_cache_observability(
     timestamp: str,
     message_metadata: MessageMetadata,
 ) -> Dict[str, Any]:
-    """Classify this model call's prompt-cache outcome against the previous call.
+    """Classify this model call's prompt-cache outcome against its predecessor.
 
-    Queries the session's most recent existing ``C#`` cost row (one GSI read,
-    Limit=1) and derives:
+    Reads a small window of the session's most recent ``C#`` cost rows (one GSI
+    query) and derives:
 
     - ``cacheStatus``: first_write | hit | miss_ttl_expired | miss_avoidable
       | uncached (see ``apis.shared.observability.CacheStatus``).
     - ``cacheGapSeconds``: whole seconds since the previous call, when known.
+    - ``cachePrefixGapSeconds``: seconds since the last call with the *same*
+      prefix, when that is a different (older) call than the previous one.
     - ``wastedUsd``: for avoidable misses, the re-written previously-cached
       prefix priced at the cache-write premium over the cache-read rate,
       using this row's own pricingSnapshot.
+
+    ⚠️ The predecessor that decides ``miss_avoidable`` vs ``miss_ttl_expired``
+    is the last call with the **same toolConfig + system-prompt fingerprints**,
+    not simply the last call (#753). Those are the only entries this call could
+    have hit. Measuring the TTL against whatever ran most recently is wrong the
+    moment two prefixes interleave in one session — which is exactly what an
+    `@`-mention does — and it reported genuine TTL expiries as avoidable waste,
+    inflating the metric that exists to catch nondeterministic prefix assembly.
 
     The stream coordinator writes a turn's rows sequentially in call order,
     so within a multi-call turn each call sees its predecessor. Returns {}
@@ -401,8 +420,11 @@ def _derive_cache_observability(
 
         cache_read, cache_write = _extract_cache_usage(message_metadata)
 
-        # Most recent existing cost row for this session (GSI_SK = C#<timestamp>
-        # sorts chronologically; descending scan + Limit=1 = the previous call).
+        # Recent cost rows for this session, newest first (GSI_SK = C#<timestamp>
+        # sorts chronologically). We need a window rather than just the previous
+        # call: the TTL question is "was the entry this call could have HIT still
+        # alive", and that entry belongs to the most recent call with the *same
+        # prefix*, which is not always the call immediately before. See #753.
         response = table.query(
             IndexName="SessionLookupIndex",
             KeyConditionExpression=(
@@ -410,33 +432,76 @@ def _derive_cache_observability(
                 & Key("GSI_SK").begins_with("C#")
             ),
             ScanIndexForward=False,
-            Limit=1,
+            Limit=_CACHE_PREDECESSOR_LOOKBACK,
         )
-        prev_items = response.get("Items", [])
-        prev_row = _convert_decimal_to_float(prev_items[0]) if prev_items else None
+        prev_items = [_convert_decimal_to_float(item) for item in response.get("Items", [])]
+        prev_row = prev_items[0] if prev_items else None
 
-        gap_seconds: Optional[float] = None
-        prev_cached_prefix: Optional[int] = None
-        if prev_row:
-            prev_ts = prev_row.get("timestamp")
+        try:
+            current_dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except (ValueError, AttributeError, TypeError):
+            current_dt = None
+
+        def _gap_to(row: Optional[Dict[str, Any]]) -> Optional[float]:
+            if row is None or current_dt is None:
+                return None
             try:
-                current_dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                prev_dt = datetime.fromisoformat(str(prev_ts).replace("Z", "+00:00"))
-                gap_seconds = (current_dt - prev_dt).total_seconds()
+                row_dt = datetime.fromisoformat(str(row.get("timestamp")).replace("Z", "+00:00"))
             except (ValueError, AttributeError, TypeError):
-                gap_seconds = None
+                return None
+            return (current_dt - row_dt).total_seconds()
 
-            prev_usage = prev_row.get("tokenUsage") or {}
-            prev_cached_prefix = int(
-                (prev_usage.get("cacheReadInputTokens") or 0)
-                + (prev_usage.get("cacheWriteInputTokens") or 0)
+        def _cached_prefix_of(row: Optional[Dict[str, Any]]) -> Optional[int]:
+            if row is None:
+                return None
+            usage = row.get("tokenUsage") or {}
+            return int(
+                (usage.get("cacheReadInputTokens") or 0)
+                + (usage.get("cacheWriteInputTokens") or 0)
             )
+
+        prev_gap_seconds = _gap_to(prev_row)
+
+        # The predecessor whose cache entry this call would actually have hit:
+        # the newest row sharing this call's toolConfig + system-prompt prefix.
+        # Both hashes are already persisted per row, so this costs no new data —
+        # only a wider read of rows we were already indexing.
+        own_prints = getattr(message_metadata, "prefixFingerprints", None) or {}
+        own_key = (own_prints.get("toolConfigHash"), own_prints.get("systemPromptHash"))
+        match_row: Optional[Dict[str, Any]] = None
+        comparable = all(part is not None for part in own_key)
+        if comparable:
+            for row in prev_items:  # already newest-first
+                row_prints = row.get("prefixFingerprints") or {}
+                if (row_prints.get("toolConfigHash"), row_prints.get("systemPromptHash")) == own_key:
+                    match_row = row
+                    break
+
+        if not comparable:
+            # No fingerprints on this call (hook disabled, or a non-Bedrock
+            # provider): fall back to the previous call, which is what this
+            # derivation did before #753.
+            classify_gap = prev_gap_seconds
+            prev_cached_prefix = _cached_prefix_of(prev_row)
+        elif match_row is not None:
+            classify_gap = _gap_to(match_row)
+            prev_cached_prefix = _cached_prefix_of(match_row)
+        else:
+            # This prefix has no predecessor inside the lookback window, so any
+            # entry for it is older than every row we just read. Pass None, which
+            # classifies as `miss_ttl_expired` rather than `miss_avoidable`.
+            # Deliberately the conservative direction: under-reporting waste
+            # keeps the metric trustworthy, whereas crying wolf is what made it
+            # useless. `prev_cached_prefix` still comes from the previous call so
+            # the below-threshold `first_write` guard keeps working.
+            classify_gap = None
+            prev_cached_prefix = _cached_prefix_of(prev_row)
 
         status = classify_cache_status(
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
             previous_call_exists=prev_row is not None,
-            gap_seconds=gap_seconds,
+            gap_seconds=classify_gap,
             previous_cached_prefix_tokens=prev_cached_prefix,
         )
         wasted_usd = compute_wasted_usd(
@@ -450,13 +515,49 @@ def _derive_cache_observability(
             "cacheStatus": status.value,
             "wastedUsd": round(wasted_usd, 6),
         }
-        if gap_seconds is not None and gap_seconds >= 0:
-            result["cacheGapSeconds"] = int(gap_seconds)
+
+        # #756 — was this prefix re-write *explained*?
+        #
+        # An `@`-mention hands one turn to a different Agent (Marketplace D11), which
+        # swaps the system prompt and toolConfig and so genuinely re-writes the cache
+        # prefix. That spend is real and stays in `wastedUsd` — hiding it would understate
+        # the cost of the mention feature, which is a thing worth measuring on purpose.
+        # What it must not do is look like the nondeterministic-ordering regression the
+        # fingerprints exist to catch: both present as `toolConfigHash` and
+        # `systemPromptHash` flipping together, and until now nothing on the row told them
+        # apart, so expected traffic diluted the signal.
+        #
+        # Recorded here rather than derived on read because this is the only place that
+        # already holds the predecessor row. Compared against the *previous call*, not the
+        # same-prefix match above: the question is "did the Agent change from one turn to
+        # the next", and the same-prefix row is by construction one that did not.
+        own_agent = getattr(message_metadata, "turnAgentId", None)
+        prev_agent = (prev_row or {}).get("turnAgentId")
+        if prev_row is not None and own_agent != prev_agent:
+            result["agentSwitched"] = True
+
+        # `cacheGapSeconds` keeps its original meaning — seconds since the
+        # previous call — because the anatomy page and its consumers read it as
+        # a plain chronology. When the call that actually determined the verdict
+        # was a different, older one, `cachePrefixGapSeconds` records that gap
+        # too, so a status that looks inconsistent with the visible gap explains
+        # itself instead of reading as a bug.
+        if prev_gap_seconds is not None and prev_gap_seconds >= 0:
+            result["cacheGapSeconds"] = int(prev_gap_seconds)
+        if (
+            classify_gap is not None
+            and classify_gap >= 0
+            and classify_gap != prev_gap_seconds
+        ):
+            result["cachePrefixGapSeconds"] = int(classify_gap)
 
         if status is CacheStatus.MISS_AVOIDABLE:
             logger.warning(
-                "🔥 Avoidable prompt-cache miss: session=%s gap=%ss cacheWrite=%d wasted=$%.6f",
-                session_id, result.get("cacheGapSeconds"), cache_write, wasted_usd,
+                "🔥 Avoidable prompt-cache miss: session=%s gap=%ss prefix_gap=%ss "
+                "cacheWrite=%d wasted=$%.6f",
+                session_id, result.get("cacheGapSeconds"),
+                result.get("cachePrefixGapSeconds", result.get("cacheGapSeconds")),
+                cache_write, wasted_usd,
             )
         return result
 
@@ -497,6 +598,7 @@ def _emit_cache_metrics(
             model_id=message_metadata.model_info.model_id if message_metadata.model_info else None,
             session_id=session_id,
             cache_status=status,
+            agent_switched=bool(cache_observability.get("agentSwitched")),
         )
     except Exception as e:  # noqa: BLE001 - metrics must never break the write path
         logger.debug("Cache EMF emission skipped: %s", e)

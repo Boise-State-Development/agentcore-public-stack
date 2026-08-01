@@ -29,7 +29,7 @@ from apis.shared.models.models import (
     ManagedModel,
     ModelRoleAssignment,
 )
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from apis.shared.feature_flags import skills_enabled
 from apis.shared.models.managed_models import (
     create_managed_model,
@@ -43,6 +43,11 @@ from .services.model_roles import get_model_role_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_models_admin = require_admin_scope("admin.models")
 
 
 
@@ -83,7 +88,7 @@ async def list_bedrock_models(
         ]
     ] = Query(None, description="Filter by customization type"),
     max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return (client-side limit)"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List available AWS Bedrock foundation models (admin only).
@@ -196,7 +201,7 @@ async def list_bedrock_models(
 @router.get("/gemini/models", response_model=GeminiModelsResponse)
 async def list_gemini_models(
     max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List available Google Gemini models (admin only).
@@ -308,7 +313,7 @@ async def list_gemini_models(
 @router.get("/openai/models", response_model=OpenAIModelsResponse)
 async def list_openai_models(
     max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List available OpenAI models (admin only).
@@ -404,7 +409,7 @@ async def list_openai_models(
 async def list_mantle_models(
     region: Optional[str] = Query(None, description="AWS region to query (defaults to the service region)"),
     max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return"),
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List available Amazon Bedrock Mantle models (admin only).
@@ -507,7 +512,7 @@ async def list_mantle_models(
 
 @router.get("/managed-models", response_model=ManagedModelsListResponse)
 async def list_managed_models_endpoint(
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List all enabled models (admin only).
@@ -556,7 +561,7 @@ async def list_managed_models_endpoint(
 @router.post("/managed-models", response_model=ManagedModel, status_code=status.HTTP_201_CREATED)
 async def create_managed_model_endpoint(
     model_data: ManagedModelCreate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     Create a new enabled model (admin only).
@@ -612,7 +617,7 @@ async def create_managed_model_endpoint(
 @router.get("/managed-models/{model_id}", response_model=ManagedModel)
 async def get_managed_model_endpoint(
     model_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     Get a specific enabled model by ID (admin only).
@@ -662,7 +667,7 @@ async def get_managed_model_endpoint(
 async def update_managed_model_endpoint(
     model_id: str,
     updates: ManagedModelUpdate,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     Update an enabled model (admin only).
@@ -748,7 +753,7 @@ async def update_managed_model_endpoint(
 @router.delete("/managed-models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_managed_model_endpoint(
     model_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     Delete an enabled model (admin only).
@@ -801,7 +806,7 @@ async def delete_managed_model_endpoint(
 @router.get("/managed-models/{model_id}/roles", response_model=List[ModelRoleAssignment])
 async def get_managed_model_roles(
     model_id: str,
-    admin_user: User = Depends(require_admin),
+    admin_user: User = Depends(require_models_admin),
 ):
     """
     List every AppRole that grants access to a model, and how.
@@ -870,6 +875,16 @@ from .roles.routes import router as roles_router
 
 router.include_router(roles_router)
 
+# ========== Include Role Default-Pins Subrouter (Marketplace D9) ==========
+# Its own module, mounted on the same ``/roles`` prefix: the AppRole record is the source
+# of truth for a default pin, but a pin is NOT a permission — keeping it out of the role
+# CRUD routes is the same separation the storage keeps (see ``assistants/role_pins.py``).
+# Every route depends on ``require_marketplace_admin``, so the surface 404s while the
+# marketplace kill switch is off.
+from .roles.agent_pins import router as role_agent_pins_router
+
+router.include_router(role_agent_pins_router)
+
 # ========== Include Tools Admin Subrouter ==========
 from .tools.routes import router as tools_router
 
@@ -883,6 +898,14 @@ if skills_enabled():
     from .skills.routes import router as skills_router
 
     router.include_router(skills_router)
+
+# ========== Include Agent Marketplace Admin Subrouter ==========
+# Mounted unconditionally; every route depends on ``require_marketplace_admin``, which
+# 404s while AGENT_MARKETPLACE_ENABLED is off (the ``/agents`` surface pattern) rather
+# than being unmounted at import time.
+from .agents.routes import router as agent_marketplace_admin_router
+
+router.include_router(agent_marketplace_admin_router)
 
 # ========== Include OAuth Admin Subrouter ==========
 from .oauth.routes import router as oauth_admin_router
@@ -903,6 +926,11 @@ router.include_router(export_targets_admin_router)
 from .auth_providers.routes import router as auth_providers_router
 
 router.include_router(auth_providers_router)
+
+# ========== Include Audit Log Admin Subrouter ==========
+from .audit.routes import router as audit_router
+
+router.include_router(audit_router)
 
 # ========== Include User Menu Links Admin Subrouter ==========
 from .user_menu_links.routes import router as user_menu_links_admin_router

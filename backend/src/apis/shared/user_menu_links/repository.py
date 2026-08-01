@@ -3,13 +3,13 @@
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
 from typing import List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
 
 from .models import UserMenuLink, UserMenuLinkCreate, UserMenuLinkUpdate
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ class UserMenuLinksRepository:
         if not self._enabled:
             raise RuntimeError("User-menu links repository is not enabled")
 
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = utc_now_iso()
         link = UserMenuLink(
             link_id=str(uuid.uuid4()),
             label=data.label,
@@ -133,7 +133,7 @@ class UserMenuLinksRepository:
         update_fields = updates.model_dump(exclude_none=True)
         for field_name, value in update_fields.items():
             setattr(existing, field_name, value)
-        existing.updated_at = datetime.now(timezone.utc).isoformat() + "Z"
+        existing.updated_at = utc_now_iso()
 
         # Re-validate the merged kind/url/body_markdown invariant before persist.
         if existing.kind == "external" and not existing.url:

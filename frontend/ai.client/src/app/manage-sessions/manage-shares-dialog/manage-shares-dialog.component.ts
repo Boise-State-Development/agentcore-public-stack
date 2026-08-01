@@ -18,6 +18,8 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { ShareService, ShareResponse } from '../../session/services/share/share.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { parseIso } from '../../utils/date';
+import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 
 export interface ManageSharesDialogData {
   sessionId: string;
@@ -27,7 +29,7 @@ export interface ManageSharesDialogData {
 @Component({
   selector: 'app-manage-shares-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [DialogDismissDirective, NgIcon],
   providers: [
     provideIcons({
       heroXMark,
@@ -48,11 +50,12 @@ export interface ManageSharesDialogData {
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-500/75 dark:bg-gray-900/80"
       aria-hidden="true"
-      (click)="onClose()"
     ></div>
 
     <!-- Dialog Panel -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0">
+    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
+      appDialogDismiss
+      (dismissed)="onClose()">
       <div
         class="dialog-panel relative w-full transform overflow-hidden rounded-lg bg-white px-4 pt-5 pb-4 text-left shadow-xl sm:my-8 sm:max-w-lg sm:p-6 dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10"
         role="dialog"
@@ -284,7 +287,7 @@ export class ManageSharesDialogComponent implements OnInit {
   protected formatDate(dateString: string): string {
     if (!dateString) return '';
     try {
-      const date = new Date(dateString);
+      const date = parseIso(dateString);
       return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
     } catch {
       return '';

@@ -1,7 +1,13 @@
 """Admin API routes for OIDC authentication provider management.
 
-All endpoints require system admin access since authentication
-configuration is a security-sensitive operation.
+**Non-delegable — these routes keep bare ``require_admin`` on purpose.**
+This is the non-obvious half of the rule. Role resolution starts from JWT
+claims: ``resolve_user_permissions`` walks the user's claim-derived roles
+through ``jwtRoleMappings`` to reach an AppRole. So whoever controls IdP
+attribute mapping controls which groups arrive, and therefore which AppRoles
+resolve at all — it is role administration by another route. The matching
+registry entry is ``admin.auth_providers``, marked ``delegable=False`` in
+``apis/shared/rbac/admin_scopes.py``.
 """
 
 import logging

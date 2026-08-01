@@ -10,17 +10,17 @@ import {
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
-  heroCpuChip,
-  heroWrenchScrewdriver,
   heroSparkles,
-  heroCircleStack,
   heroArrowTopRightOnSquare,
   heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
 import { ChatContainerComponent, ChatContainerConfig } from '../../../session/components/chat-container/chat-container.component';
 import { ChatInputComponent } from '../../../session/components/chat-input/chat-input.component';
 import { PreviewChatService } from '../../../assistants/assistant-form/services/preview-chat.service';
-import { AssistantCardComponent } from '../../../assistants/components/assistant-card.component';
+import {
+  AgentLaunchCardComponent,
+  AgentLaunchCardView,
+} from '../../components/agent-launch-card.component';
 import { ModelService } from '../../../session/services/model/model.service';
 
 /**
@@ -34,8 +34,12 @@ import { ModelService } from '../../../session/services/model/model.service';
  * exercises the agent exactly as a real invoker would. Unlike the assistant
  * preview it sends a minimal body (no `system_prompt`/owner-tools override,
  * which would fight the bindings and blow the prompt cap for a long persona),
- * so a dirty form shows a "save to apply" banner and a capability strip makes
- * the resolved context explicit — the two things the assistant preview lacked.
+ * so a dirty form shows a "save to apply" banner making the gap between the
+ * saved record and the open form explicit — the thing the assistant preview lacked.
+ *
+ * It deliberately does NOT restate the model, tools, skills or memory spaces. That was
+ * a capability strip here, and it was a read-out of the form sitting one column to the
+ * left: the same facts, in a second place that could only ever agree or be wrong.
  *
  * Reuses the assistant preview's `PreviewChatService` (opting out of its
  * system_prompt + owner-tools injection) and provides it at the component
@@ -44,14 +48,11 @@ import { ModelService } from '../../../session/services/model/model.service';
 @Component({
   selector: 'app-agent-preview',
   standalone: true,
-  imports: [NgIcon, ChatContainerComponent, ChatInputComponent, AssistantCardComponent],
+  imports: [NgIcon, ChatContainerComponent, ChatInputComponent, AgentLaunchCardComponent],
   providers: [
     PreviewChatService,
     provideIcons({
-      heroCpuChip,
-      heroWrenchScrewdriver,
       heroSparkles,
-      heroCircleStack,
       heroArrowTopRightOnSquare,
       heroExclamationTriangle,
     }),
@@ -60,7 +61,7 @@ import { ModelService } from '../../../session/services/model/model.service';
   template: `
     @if (agentId()) {
       <div class="flex h-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-        <!-- Header: title + capability strip + open-in-full -->
+        <!-- Header: title + open-in-full -->
         <div class="shrink-0 border-b border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="flex items-center justify-between gap-2">
             <div class="min-w-0">
@@ -77,34 +78,6 @@ import { ModelService } from '../../../session/services/model/model.service';
                 <ng-icon name="heroArrowTopRightOnSquare" class="size-4" aria-hidden="true" />
               </button>
             </div>
-          </div>
-
-          <!-- Capability strip: what the agent runs with -->
-          <div class="mt-2 flex flex-wrap items-center gap-1.5">
-            @if (modelLabel()) {
-              <span class="inline-flex items-center gap-1 rounded-full bg-primary-50 px-2 py-0.5 text-xs/5 font-medium text-primary-700 dark:bg-primary-500/10 dark:text-primary-300">
-                <ng-icon name="heroCpuChip" class="size-3.5" aria-hidden="true" />
-                {{ modelLabel() }}
-              </span>
-            }
-            @if (toolCount() > 0) {
-              <span class="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs/5 font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                <ng-icon name="heroWrenchScrewdriver" class="size-3.5" aria-hidden="true" />
-                {{ toolCount() }} {{ toolCount() === 1 ? 'tool' : 'tools' }}
-              </span>
-            }
-            @if (skillCount() > 0) {
-              <span class="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-xs/5 font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
-                <ng-icon name="heroSparkles" class="size-3.5" aria-hidden="true" />
-                {{ skillCount() }} {{ skillCount() === 1 ? 'skill' : 'skills' }}
-              </span>
-            }
-            @if (memoryCount() > 0) {
-              <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs/5 font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
-                <ng-icon name="heroCircleStack" class="size-3.5" aria-hidden="true" />
-                {{ memoryCount() }} {{ memoryCount() === 1 ? 'space' : 'spaces' }}
-              </span>
-            }
           </div>
 
           <!-- Dirty banner: bindings/model/params resolve from the saved record -->
@@ -125,15 +98,14 @@ import { ModelService } from '../../../session/services/model/model.service';
         <div class="relative flex min-h-0 flex-1 flex-col">
           @if (!hasMessages()) {
             <div class="flex flex-1 items-center justify-center overflow-y-auto bg-white p-6 dark:bg-gray-800">
-              <app-assistant-card
-                [name]="name()"
-                [description]="description()"
-                [emoji]="emoji()"
-                [starters]="starters()"
+              <app-agent-launch-card
+                [view]="cardView()"
                 (starterSelected)="onStarterSelected($event)"
               />
             </div>
             <div class="shrink-0 border-t border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <!-- No @-mention here (D11): the preview already runs the thing being
+                   edited, so handing its turn to another Agent would make it lie. -->
               <app-chat-input
                 [sessionId]="previewChatService.sessionId()"
                 [isChatLoading]="previewChatService.isLoading()"
@@ -141,6 +113,7 @@ import { ModelService } from '../../../session/services/model/model.service';
                 [showVoiceControl]="false"
                 [showSettingsControl]="false"
                 [autoFocus]="false"
+                [showAgentMentions]="false"
                 (messageSubmitted)="onMessageSubmitted($event)"
                 (messageCancelled)="onMessageCancelled()"
               />
@@ -192,10 +165,6 @@ export class AgentPreviewComponent implements OnDestroy {
 
   // Capability strip (current selections — reflected once saved)
   readonly modelId = input<string | null>(null);
-  readonly modelLabel = input<string | null>(null);
-  readonly toolCount = input<number>(0);
-  readonly skillCount = input<number>(0);
-  readonly memoryCount = input<number>(0);
 
   // Save awareness
   readonly isDirty = input<boolean>(false);
@@ -210,6 +179,24 @@ export class AgentPreviewComponent implements OnDestroy {
   readonly greetingMessage = computed(() =>
     this.name() ? `Chat with ${this.name()}` : 'Start a conversation',
   );
+
+  /**
+   * The launch card as the author's own agent sees it — built from the live form rather
+   * than a fetched record, so a name typed a second ago is already on the tile.
+   *
+   * `listed: false` regardless of the real listing state: the store affordances are Add
+   * and Agent details, and neither means anything on the page where you are editing the
+   * thing. Capabilities are likewise omitted — the header's capability strip already
+   * names what this agent runs with, from the live selections rather than the saved ones.
+   */
+  readonly cardView = computed<AgentLaunchCardView>(() => ({
+    agentId: this.agentId() ?? '',
+    name: this.name(),
+    description: this.description(),
+    emoji: this.emoji(),
+    starters: this.starters(),
+    listed: false,
+  }));
 
   readonly chatConfigMessagesOnly: Partial<ChatContainerConfig> = {
     embeddedMode: true,

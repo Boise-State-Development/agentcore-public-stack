@@ -20,6 +20,7 @@ from enum import Enum
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from apis.shared.timestamps import from_iso, to_iso
 
 
 # Regex for a skill_id — identical shape to tool_id (see ToolCreateRequest).
@@ -231,8 +232,8 @@ class SkillDefinition(BaseModel):
             "visibility": self.visibility
             if isinstance(self.visibility, str)
             else self.visibility.value,
-            "createdAt": self.created_at.isoformat() + "Z" if self.created_at else None,
-            "updatedAt": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+            "createdAt": to_iso(self.created_at) if self.created_at else None,
+            "updatedAt": to_iso(self.updated_at) if self.updated_at else None,
             "createdBy": self.created_by,
             "updatedBy": self.updated_by,
         }
@@ -267,10 +268,10 @@ class SkillDefinition(BaseModel):
             category=item.get("category"),
             owner_id=item.get("ownerId", "system"),
             visibility=item.get("visibility", SkillVisibility.ADMIN),
-            created_at=datetime.fromisoformat(created_at.rstrip("Z"))
+            created_at=from_iso(created_at)
             if created_at
             else datetime.now(timezone.utc),
-            updated_at=datetime.fromisoformat(updated_at.rstrip("Z"))
+            updated_at=from_iso(updated_at)
             if updated_at
             else datetime.now(timezone.utc),
             created_by=item.get("createdBy"),
@@ -400,8 +401,8 @@ class AdminSkillResponse(BaseModel):
             owner_id=skill.owner_id,
             visibility=skill.visibility,
             allowed_app_roles=allowed_roles or skill.allowed_app_roles,
-            created_at=skill.created_at.isoformat() + "Z" if skill.created_at else "",
-            updated_at=skill.updated_at.isoformat() + "Z" if skill.updated_at else "",
+            created_at=to_iso(skill.created_at) if skill.created_at else "",
+            updated_at=to_iso(skill.updated_at) if skill.updated_at else "",
             created_by=skill.created_by,
             updated_by=skill.updated_by,
         )
@@ -462,7 +463,7 @@ class UserSkillPreference(BaseModel):
             user_id=item.get("userId", ""),
             skill_preferences=dict(item.get("skillPreferences", {})),
             updated_at=(
-                datetime.fromisoformat(updated_at.rstrip("Z"))
+                from_iso(updated_at)
                 if updated_at
                 else datetime.now(timezone.utc)
             ),

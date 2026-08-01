@@ -42,6 +42,7 @@ def emit_prompt_cache_metrics(
     model_id: Optional[str] = None,
     session_id: Optional[str] = None,
     cache_status: Optional[str] = None,
+    agent_switched: bool = False,
 ) -> None:
     """Emit one EMF record for a completed model call.
 
@@ -53,6 +54,14 @@ def emit_prompt_cache_metrics(
     - ``AvoidableMiss``: count of calls classified ``miss_avoidable`` — the
       alarm target (a prefix-stability regression shows up as a step change).
     - ``WastedUsd``: dollars attributed to avoidable re-writes.
+    - ``AgentSwitchMiss``: the subset of ``AvoidableMiss`` explained by the turn
+      running on a different Agent than the one before it — an ``@``-mention
+      (Marketplace D11) genuinely re-writes the prefix. Emitted as its own metric
+      rather than as a dimension on ``AvoidableMiss`` so the alarm target stays a
+      single fleet-wide sum: subtract it to get unexplained waste, which is the
+      number that should never step-change. `turnAgentId` rides along as a
+      property, not a dimension, so per-Agent detail is queryable without
+      multiplying metric streams.
 
     Best-effort: never raises.
     """
@@ -68,6 +77,7 @@ def emit_prompt_cache_metrics(
                             {"Name": "CacheReadTokens", "Unit": "Count"},
                             {"Name": "CacheWriteTokens", "Unit": "Count"},
                             {"Name": "AvoidableMiss", "Unit": "Count"},
+                            {"Name": "AgentSwitchMiss", "Unit": "Count"},
                             {"Name": "WastedUsd", "Unit": "None"},
                         ],
                     }
@@ -76,6 +86,7 @@ def emit_prompt_cache_metrics(
             "CacheReadTokens": int(cache_read_tokens or 0),
             "CacheWriteTokens": int(cache_write_tokens or 0),
             "AvoidableMiss": 1 if avoidable_miss else 0,
+            "AgentSwitchMiss": 1 if (avoidable_miss and agent_switched) else 0,
             "WastedUsd": round(float(wasted_usd or 0.0), 6),
         }
         if model_id:

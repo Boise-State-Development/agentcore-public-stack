@@ -18,6 +18,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { UserStateService } from '../../services/user-state.service';
 import { QuotaEventSummary } from '../../models';
+import { parseIso } from '../../../../utils/date';
 
 @Component({
   selector: 'app-user-detail',
@@ -343,7 +344,7 @@ export class UserDetailPage implements OnInit {
     if (!isoString) {
       return 'Never';
     }
-    const date = new Date(isoString);
+    const date = parseIso(isoString);
     if (isNaN(date.getTime())) {
       return 'Never';
     }

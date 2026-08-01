@@ -11,11 +11,11 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -137,8 +137,8 @@ class OAuthProvider:
     # and an export target (e.g. a combined-scope Drive connector). Validated
     # in the admin route for the same reason as above.
     export_target_adapter_id: Optional[str] = None
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
-    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
+    created_at: str = field(default_factory=lambda: utc_now_iso())
+    updated_at: str = field(default_factory=lambda: utc_now_iso())
 
     @property
     def scopes_hash(self) -> str:
@@ -188,8 +188,8 @@ class OAuthProvider:
             custom_parameters=item.get("customParameters"),
             file_source_adapter_id=item.get("fileSourceAdapterId"),
             export_target_adapter_id=item.get("exportTargetAdapterId"),
-            created_at=item.get("createdAt", datetime.now(timezone.utc).isoformat() + "Z"),
-            updated_at=item.get("updatedAt", datetime.now(timezone.utc).isoformat() + "Z"),
+            created_at=item.get("createdAt", utc_now_iso()),
+            updated_at=item.get("updatedAt", utc_now_iso()),
         )
 
 

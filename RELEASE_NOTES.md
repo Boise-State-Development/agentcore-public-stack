@@ -1,3 +1,276 @@
+# Release Notes — v1.12.0
+
+**Release Date:** August 1, 2026
+**Previous Release:** v1.11.1 (July 24, 2026)
+
+---
+
+> 🏗️ **CDK deploy required this release** — one new DynamoDB table (`{prefix}-audit-log`), one new GSI on the assistants table (`AgentDirectoryIndex`), and an optional Secrets Manager secret. Deploy order is `platform.yml` → `backend.yml` → `frontend-deploy.yml`. **Wait for the new GSI to reach `ACTIVE` before shipping the backend** — CloudFormation reports success while the index is still backfilling, and the marketplace store queries it. No data migration.
+
+---
+
+## Highlights
+
+This release turns Agents from a personal authoring tool into a **governed institutional catalog**.
+
+The **Agent Marketplace** ships GA. An author submits their Agent from the Designer, an admin reviews and approves it, and it appears on a browsable store with categories, a curated front, icons and problem reports. Approval means something durable now: every submission freezes an **immutable version snapshot**, and both the store and the invocation path serve *that* snapshot — so an author editing after approval can no longer silently change what the institution is running. Admins can roll a listing back to any earlier approved version, see a diff of exactly what a submission changed, and read `publishedVersion` to know exactly which snapshot the store is serving.
+
+Governance grew to match. **Delegated admin scopes** let a system admin hand out a single admin area — Cost Analytics, Tools, Marketplace — without handing over the whole console, across 16 scopes with three (`admin.roles`, `admin.auth_providers`, `admin.audit`) permanently non-delegable and no wildcard on the axis. Every role mutation, including denied ones, now lands in a durable **audit trail** with its own admin page.
+
+Two integration paths open up for forks and downstream teams. An AgentCore Gateway can authenticate inbound calls with a **Cognito JWT** instead of SigV4, so Gateway targets can act per-user. And the agent can perform an **RFC 8693 token exchange**, trading the signed-in user's token for one issued by a token service the organization already runs — letting existing internal APIs serve agent traffic as the user with no change on their side.
+
+The Assistant → Agent rename completes: the Assistant editor is retired and `/assistants` becomes an explainer. **Action required:** a CDK deploy, and forks running SigV4 Gateway callers should read the breaking-change note before touching `CDK_GATEWAY_INBOUND_AUTH` — a Gateway's authorizer is immutable after creation.
+
+---
+
+## Agent Marketplace
+
+Agents can now be published to an institution-wide store, reviewed by an admin, and discovered by everyone else. Previously an Agent was reachable only by its author and whoever they shared a link with; there was no catalog, no review, and no way for an admin to know what was in circulation.
+
+### Backend
+
+- `apis/shared/assistants/listing.py`, `listing_repository.py`, `storefront.py`, `categories.py`, `publishers.py`, `reports.py` — the listing lifecycle (draft → submitted → approved → published → withdrawn/taken down), category and publisher records, and the storefront composition.
+- `apis/app_api/agent_designer/services/` — `listing_service.py` (submit + preflight), `store_service.py` (browse), `agent_detail.py`, `icon_service.py`, `pin_service.py`, `role_pin_service.py`, `report_service.py`.
+- `apis/app_api/admin/agents/routes.py` — the admin surface: review queues, listings, categories, publishers, store front, reports, takedown, rollback, withdrawal decisions.
+- **Runnability** is checked before a listing is offered: an Agent whose bound model, tool, skill or memory space is missing is `blocked`, and the reviewer is told when a listed Agent is unopenable rather than discovering it after publication.
+- **Icons** (`apis/shared/assistants/icons.py`) — bytes live in S3 under a content-addressed key `assistants/{agent_id}/icons/{sha256[:16]}.{png|jpg}`; the digest doubles as the ETag and the `?v=` cache version, so icons cache `immutable` and still change on upload. Uploads are format-sniffed (the `Content-Type` header is ignored) and **always re-encoded**, which strips EXIF — an author uploading a phone photo would otherwise publish its GPS coordinates institution-wide.
+- **`@`-mention** (`apis/inference_api/chat/agent_binding_policy.py`) — mentioning an Agent from the composer hands it exactly one turn. Mention turns deliberately skip *both* halves of conversation binding: they neither validate against the session's bound Agent nor persist a new binding, so mentioning inside an existing thread is the normal case and the next unmentioned message is plain chat again. Binding is never authorization — the Agent is still resolved through `get_assistant_with_access_check` on every turn.
+
+### Frontend
+
+- `agents/discover/discover.page.ts` — the storefront-style browse page, with `agent-store-tile`, `agent-spotlight` and category filtering.
+- `agents/detail/agent-detail.page.ts` — the public Agent page, gated on runnability, with the instructions disclosure gate.
+- `agents/pinned/pinned.page.ts` plus `agent-pin.service.ts` — user pins, seeded from role defaults that resolve live rather than being copied.
+- `agents/components/submit-listing-dialog.component.ts` — the author's submit flow, with a preflight that names every blocker (including visibility) before submission and lets the author go public inline.
+- `agents/components/share-agent-dialog.component.ts` — one surface for an Agent's reach: visibility, collaborators and listing state together.
+- `session/components/chat-input/agent-mention-menu.component.ts` — the composer's `@`-mention picker.
+- `admin/marketplace/` — Review queue, Listings, Categories, Default pins, Store front, Publishers and Reports pages, with dialogs for takedown, request-changes, rollback, withdrawal decisions and report resolution.
+
+### Infrastructure
+
+- New sparse `AgentDirectoryIndex` GSI (`GSI5_PK`/`GSI5_SK`, ALL projection) on `{prefix}-rag-assistants` — only listed Agents carry the keys, so unlisted Agents cost nothing.
+- New CDK config `agentMarketplace.enabled` → `AGENT_MARKETPLACE_ENABLED` on **app-api only**; the marketplace adds no inference-api routes, because publication is a catalog concern.
+
+### A note on the GA gate
+
+The store shipped behind an `@if (showAgents() && isAdmin())` nav condition, which turned out to be the *only* closed door: `/agents/discover`, agent detail pages, the composer `@`-mention menu and role-seeded pins were all already reachable by any authenticated user. That interim state was worse than either end state, so the nav gate is now the feature flag alone. There is no RBAC capability on this axis — a capability id cannot be granted from the admin roles UI (the same defect that made the short-lived `skills` and `scheduled-runs` gates inoperable), so shipping one would have meant a gate nobody could open.
+
+---
+
+## Immutable Agent Version Snapshots
+
+Approval now freezes what it approved. Before this, an admin approved an Agent and the author could edit its instructions, swap its model or add tools the next minute — users would silently get the new behavior under the old approval. Now every submission captures an `AgentVersion`, and both the store and the invocation path serve the *approved snapshot*, not the author's working draft.
+
+### Backend
+
+- `apis/shared/assistants/versions.py`, `version_repository.py` — `VERSION#` child rows under the Agent's own partition, capturing instructions, model, tool/skill/memory bindings.
+- `apis/shared/assistants/version_resolution.py` — resolves which version a given caller should run.
+- `apis/shared/assistants/version_diff.py` — computes the delta between the last approved snapshot and the submission under review.
+- Rollback and roll-forward: an admin can point a published listing at any earlier approved version.
+- **Drift detection was removed, not extended.** The post-approval drift marker (#757) hashed `assistant.instructions` and nothing else — it could not see a model swap, a tool change or a retargeted memory space, and its weak `edited` fallback reported an admin's own typo fix as a behavior change. Snapshots made the question moot: a published Agent is an immutable snapshot the author cannot reach, so `listing.publishedVersion` answers "is what I approved still what is live?" as a fact rather than a heuristic. `_instructions_hash` and `_drift` are deleted rather than left dormant.
+  - **Transitional detail:** `AgentListing` is `extra="allow"`, so a listing approved *before* the removal still carries `approvedInstructionsHash` in DynamoDB. Nothing writes it, and it is explicitly stripped from responses for viewers who lack instructions permission — a hash of the instructions would confirm a guessed prompt. Safe to delete from stored rows once none carry it.
+
+### Frontend
+
+- `admin/marketplace/components/review-diff.component.ts` — the reviewer sees exactly what changed, so approval is a decision about a delta rather than a re-read of the whole Agent.
+- `admin/marketplace/components/rollback-dialog.component.ts` and the version picker on the admin Listings page.
+- `agents/components/listing-status.component.ts` — the author's view of listing state and which version is published.
+
+### Withdrawal became a request
+
+An author asks for a listing to be withdrawn rather than unilaterally unpublishing; an admin decides, the withdrawal's origin is recorded, and `delete` respects a pending request instead of racing it.
+
+---
+
+## Delegated Admin Scopes
+
+A system admin can now hand out one admin area at a time. Previously the admin console was all-or-nothing: the only way to let someone manage the tool catalog was to make them a full system admin.
+
+### Backend
+
+- `apis/shared/rbac/admin_scopes.py` — a **closed registry** of 16 scopes (`admin.costs`, `admin.quota`, `admin.fine_tuning`, `admin.models`, `admin.tools`, `admin.skills`, `admin.connectors`, `admin.file_sources`, `admin.export_targets`, `admin.marketplace`, `admin.users`, `admin.system_prompts`, `admin.user_menu_links`, `admin.roles`, `admin.auth_providers`, `admin.audit`), grouped to mirror the admin nav.
+- Scopes are defined in code, never derived from a catalog and never free text — a deliberate response to the `skills`/`scheduled-runs` capability gates, which could not be granted from the roles UI at all and were therefore inoperable.
+- **Three scopes are permanently non-delegable.** `admin.roles` is self-evident: whoever can edit a role can grant themselves anything. `admin.auth_providers` is the non-obvious one — role resolution starts from JWT claims, so whoever controls IdP attribute mapping controls which AppRoles resolve; it is role administration by another route. `admin.audit` records the actions the other two take. Enforced at the service layer by `role_constraints.validate_admin_scopes`, so the rule holds for the REST API, seed scripts and future automation alike.
+- **There is deliberately no wildcard.** `"*"` is the idiom on the tool, model and skill axes; here it would be shorthand for turning a role into a superuser. Full admin is spelled `system_admin`.
+- New `grantedAdminScopes` axis on `AppRole`, enforced on admin routes and exposed over the API.
+
+### Frontend
+
+- `auth/admin-scope.guard.ts` and `admin/admin-scope.model.ts` — the admin console nav and routes gate on resolved scopes.
+- The roles form renders real checkboxes from the served registry, grouped exactly as an admin already navigates the console.
+- The roles list shows which roles carry delegated admin power, so it is visible at a glance rather than buried in a detail page.
+
+---
+
+## Administrative Audit Trail
+
+Role mutations are now durably recorded. An admin can answer "who changed this role, when, and what did they change" — including attempts that were denied.
+
+### Backend
+
+- `apis/shared/audit/` — `models.py` (`AuditAction`, `AuditOutcome`, `AuditRecord`), `repository.py`, `service.py`.
+- Recorded actions: `app_role.created`, `app_role.updated`, `app_role.deleted`, `app_role.synced`, and `app_role.mutation_denied` — denied attempts matter as much as successful ones.
+- `apis/app_api/admin/audit/routes.py` — month-scoped browsing, per-actor lookup, and an action registry.
+
+### Frontend
+
+- `admin/audit/pages/audit-log.page.ts` — the audit page, with month navigation. The empty state is gated on a *successful* read, so a failed load no longer renders "Nothing recorded in <month>" underneath its own error banner and tells an admin a month is empty when nobody knows that.
+
+### Infrastructure
+
+- New `{prefix}-audit-log` DynamoDB table: `PK`/`SK`, `ActorIndex` (`GSI1PK`/`GSI1SK`) and `RecentIndex` (`GSI2PK`/`GSI2SK`) both ALL-projected, PITR enabled, AWS-managed encryption, TTL on `expiresAt`. Name published to `/{prefix}/audit/audit-log-table-name`.
+
+---
+
+## AgentCore Gateway JWT Inbound Auth
+
+A Gateway can now authenticate inbound calls with a Cognito JWT instead of SigV4, so Gateway targets can act as the signed-in user rather than behind a single service identity.
+
+- `config.gateway.inboundAuth` (`'iam' | 'jwt'`, default `iam`) selects the Gateway's single inbound authorizer, driven by `CDK_GATEWAY_INBOUND_AUTH`.
+- The agent forwards the signed-in user's token to a JWT Gateway.
+- Outbound credentials stay per-target, so one Gateway still serves both IAM-invoked Lambda targets and OAuth targets.
+
+### ⚠️ The authorizer is immutable after creation
+
+Changing `inboundAuth` on an **existing** Gateway does not work. The AgentCore control plane rejects it mid-deploy:
+
+```
+Authorizer type cannot be updated for an existing gateway
+(Service: BedrockAgentCoreControl, Status Code: 400)
+```
+
+This is invisible to every pre-deploy check available. The CloudFormation resource reference documents `AuthorizerType` as "Update requires: No interruption", and `cdk diff` — even through a real change set — reports an in-place `[~]` modify. Both describe CloudFormation's plan, not the service's validation. **A change set is not a deploy test.**
+
+The default therefore stays `iam`, matching every Gateway already deployed. Moving an existing deployment to `jwt` requires a *new* Gateway plus target re-registration and a cutover, not a config flip. `load-env.sh` validates the value so a typo fails the deploy rather than silently falling back.
+
+**Forks:** a Gateway accepts exactly one authorizer type — there is no "accept either SigV4 or JWT" mode. If anything other than this stack's agent calls your Gateway with SigV4, migrate those callers before creating a JWT Gateway.
+
+---
+
+## RFC 8693 Token Exchange
+
+The agent can trade the signed-in user's Cognito access token for a token issued by a token service the organization already runs, so **existing internal APIs can serve agent traffic as the user without being modified**.
+
+- `agents/main_agent/integrations/token_exchange.py` — performs the exchange and forwards the result to the MCP server exactly as `forward_auth_token` does with a raw token. Exchanged tokens are cached per `(user, audience)` and reused until shortly before expiry; the cache holds credentials, so entries are never shared across users.
+- **Why not the Gateway:** AgentCore Gateway's outbound OAuth credential provider supports only `CLIENT_CREDENTIALS` and `AUTHORIZATION_CODE` — verified against the `bedrock-agentcore-control` API model, where `OAuthGrantType` has exactly those two values and `TOKEN_EXCHANGE` appears nowhere. A token-exchange grant is not expressible there. Separately, a Gateway with `AWS_IAM` inbound auth never receives the user's token, so it would have nothing to exchange.
+- **Known limitation:** revocation does not propagate. The token service validates the subject token offline (signature, issuer, expiry, `token_use`, `client_id`) and never asks Cognito whether it is still live, so a Cognito token revoked before its expiry remains exchangeable. Exposure is bounded by the token service's own lifetime cap.
+
+### Infrastructure
+
+- New optional `{prefix}-token-exchange-client` Secrets Manager secret holding a `client_id → client_secret` map, **populated out of band** — CDK cannot generate a credential shared with an external system.
+- Entirely additive: leave `CDK_TOKEN_EXCHANGE_URL` unset and no resources, permissions or environment variables are created. A deployment that only ever uses SigV4 for MCP traffic is unaffected.
+
+---
+
+## The Assistant → Agent Rename Completes
+
+One noun in the nav. The Assistant editor is retired and `/assistants` is now an explainer page that tells first-time visitors where their work went, host-gated so a legacy site answers appropriately.
+
+- Assistant **records are untouched** — the Agent Designer reads and writes the same data. What disappeared is the old authoring surface (`assistants/assistant-form/`, `assistant-list`, `assistant-preview`), about 2,200 lines.
+- `agents/migration/agents-migration.page.ts` and `shared/utils/legacy-migration-host.ts` — the explainer and its host gating.
+- **The meaning of the `AGENTS_ENABLED` kill switch changed.** While both nouns shipped, turning it off degraded gracefully: the Agents nav disappeared and the Assistants editor was still there. There is nothing left to fall back to now — off means *no authoring surface at all*. Treat it as an outage switch, not a feature toggle. Records are untouched either way; the routes and pages are what disappear.
+
+---
+
+## 🐛 Bug fixes
+
+- **Chat was completely down on any deploy carrying the `@`-mention cost work.** Every turn returned an AgentCore 424 because the container 500'd before the model was reached: `StreamCoordinator.stream_response()` forwarded `turn_agent_id` from inside its own body but never accepted it as a parameter. `ChatAgent` passes the kwarg on *every* turn, not just mention turns, so this was a total outage rather than a mention-path bug — reproduced on dev with an Agent attached and with no Agent and zero tools alike (#771).
+- **A session's conversation forked when an `@`-mention ran.** The agent cache keys on *configuration*, so a mention builds a second `Agent`, each with its own `TurnBasedSessionManager`; both wrote the same DynamoDB session row and neither knew the other existed. The model answered "not in history" about messages the user could plainly see. Conversation history is now aliased across manager instances (#750).
+- **Compaction state moved backwards for the same structural reason** — `initialize()` never re-runs on an agent-cache hit, so state loaded once went stale. It is now re-read every turn. A clobbered checkpoint is a prompt-cache *cost* bug before it is a correctness one (#761).
+- **Timestamps were emitted as `2026-07-27T05:09:55.853557+00:00Z`** — an offset *and* a `Z`, which is not valid ISO 8601. `datetime.now(timezone.utc).isoformat()` already renders the offset; appending `"Z"` broke it. `new Date()` returns `Invalid Date`, and every SPA formatter fell back silently, so it read as missing data: the agent detail page showed "Last updated —" for an Agent edited minutes earlier, and admin Reports showed "recently" for every report ever filed. New `apis/shared/timestamps.py` plus SPA-side `iso-date.ts` (#772).
+- **Every API-key request was denied every model.** `/chat/api-converse` built its `User` with a hardcoded `roles=["user"]` placeholder; no AppRole maps that JWT role, so permission resolution matched nothing and fell back to `default`, which grants no models in production — 403 "Access denied to model" regardless of the caller's real grants. An API-key record stores only key id, user id and name, so the owner's roles are now read back from the Users table per request, along with email and name — which also stops quota tier and cost attribution being charged against a synthetic `{user_id}@api-key` identity (#796).
+- **~2,500 false "tool not found" warnings per day in production.** `ToolFilter` knew three tool classes (registry, gateway, external MCP) and warned on anything else. Context-bound tools are a fourth — they need request scope baked in at construction, so inference-api builds them per invocation and passes them as `extra_tools`, which `BaseAgent` appends *after* filtering. Every enabled one logged "not found in registry or catalog, skipping" and then worked fine (`create_artifact` 1,744, `analyze_spreadsheet` 1,690, `list_spreadsheets` 1,690 over 48h), drowning the one signal that branch exists to give: a genuinely stale tool id pinned in a saved session (#794).
+- **Cache-TTL classification used the wrong clock.** `classify_cache_status` measured the gap to the immediately-previous call row, which is wrong the moment two prefixes interleave in one session — exactly what an `@`-mention does. The entry a call could have hit belongs to the last call with the *same* prefix. Measured on dev: a plain turn 266s after a mention was booked as `miss_avoidable` waste, but the entry it needed was written 308s earlier, past the 300s TTL — the re-write was unavoidable. Three of six rows in that session were false positives (#754).
+- **The unopenable-Agent warning was unreadable where it mattered most.** It shipped inside the review card's identity column, competing for width with the agent name and the action buttons — measured at ~160px of a 528px card, wrapped across five lines. It now sits on its own full-width row beneath the decision, separated by a hairline rule. Structural only: no wording, logic or gating change, and Approve was never blocked on it. This is the signal standing between "approved" and a store tile that 404s for everyone but its author, so being on screen was not the same as being read (#776).
+- **The agent detail page never loaded its agent** — broken since marketplace phase 3, now covered by a load-path spec (#740, #742, #743).
+- Deleting an Agent left its entire `VERSION#` snapshot history in the table permanently — child rows live under the Agent's partition precisely so they never outlive what they concern (#792).
+- Four version-snapshot gaps found in end-to-end testing, plus the version picker becoming unreachable after a rollback and the reviewer not being told why a diff was missing (#799, #801).
+- The `limits` (degraded) runnability state is removed. It could never occur — it degraded only when a binding declared `config.optional == true`, a key read in exactly one place and written nowhere, with no API accepting it and no Designer control for it. Building toward it would also have contradicted the block-only binding model that `agent_binding_resolver` actually implements (#762).
+- The admin roles list shows which roles carry delegated admin power (#807).
+- A failed category change surfaces an error banner instead of failing silently (#795).
+- Dialogs dismiss on a backdrop click across the SPA, and the agent feedback dialog scrolls instead of clipping (#811).
+
+---
+
+## 🔒 Security
+
+- Backend security pins: `pillow` 12.2.0 → 12.3.0, new pins for `pyasn1` 0.6.4 and `soupsieve` 2.8.4 (#723).
+- Frontend and infrastructure transitive vulnerabilities patched by lockfile regeneration. `aws-cdk-lib` was bumped rather than overridden, because it **bundles its dependencies** — an npm `overrides` entry cannot reach a CVE inside the bundle (#723).
+- Docs site upgraded to Astro 7 to clear transitive advisories (#724).
+- Uploaded Agent icons are always re-encoded, stripping EXIF (including GPS) before an icon is published institution-wide (#735).
+
+---
+
+## ⚠️ Breaking changes
+
+| Change | Who is affected | What to do |
+|---|---|---|
+| Assistant editor retired; `/assistants` is now an explainer | Anyone linking directly to the old editor | Use the Agent Designer. Records are unchanged; `AGENTS_ENABLED=false` no longer falls back to the old editor — treat it as an outage switch |
+| Publishing requires PUBLIC visibility | Authors submitting a private Agent | Go public from the submit dialog (now inline; previously required a detour to settings) |
+| `limits` runnability state removed | API consumers reading `runnability` | Handle `ready` and `blocked` only |
+| Gateway authorizer is immutable | Forks setting `CDK_GATEWAY_INBOUND_AUTH=jwt` on an existing Gateway | Do not. It fails mid-deploy. Create a new Gateway and re-register targets |
+| A Gateway accepts one authorizer type | Forks with non-agent SigV4 Gateway callers | Migrate those callers before creating a JWT Gateway |
+
+---
+
+## 🏗️ Infrastructure
+
+| Resource | Detail |
+|---|---|
+| `{prefix}-audit-log` DynamoDB table | New. `PK`/`SK`; `ActorIndex` + `RecentIndex` GSIs (ALL projection); PITR on; TTL `expiresAt`; AWS-managed encryption. Name at `/{prefix}/audit/audit-log-table-name` |
+| `AgentDirectoryIndex` GSI | New, on `{prefix}-rag-assistants`. `GSI5_PK` = `LISTED#{category}`, `GSI5_SK` = `CREATED#{created_at}` (newest-first), ALL projection, **sparse** — only listed Agents carry the keys |
+| `{prefix}-token-exchange-client` secret | New, **optional**. Created only when `tokenExchange` is configured; populated out of band |
+| `AgentCoreGatewayConstruct` | Gains a `CUSTOM_JWT` inbound-authorizer path driven by `config.gateway.inboundAuth` |
+| CDK config | New `agentMarketplace.enabled`, `gateway.inboundAuth`, optional `tokenExchange.url` / `tokenExchange.clientId` |
+
+---
+
+## 🔧 CI/CD
+
+- `platform.yml` accepts three new repository variables: `CDK_GATEWAY_INBOUND_AUTH`, `CDK_TOKEN_EXCHANGE_URL`, `CDK_TOKEN_EXCHANGE_CLIENT_ID`. All three are safe to leave unset.
+- `load-env.sh` threads them into CDK context and **validates the authorizer value** (`iam` | `jwt`), so a typo fails the deploy instead of silently falling through to the `iam` default.
+- `test_non_admin_roles_get_403` no longer rebuilds the FastAPI admin app inside every Hypothesis example (~50ms × 100 across 130 routes against a 200ms deadline). It passed with no margin and failed as `DeadlineExceeded` under load, which reads as an auth regression rather than the timing artifact it was; adding any admin router made it likelier to trip (#808).
+- SPA test isolation: cross-file state leaks that made `ng test` flaky are fixed in `src/test-setup.ts` (#759).
+
+---
+
+## 📦 Dependencies
+
+| Component | Package | From | To |
+|---|---|---|---|
+| Backend | `pillow` | 12.2.0 | 12.3.0 |
+| Backend | `pyasn1` | — | 0.6.4 (new pin) |
+| Backend | `soupsieve` | — | 2.8.4 (new pin) |
+| Infrastructure | `aws-cdk-lib` | 2.260.0 | 2.262.0 |
+| Docs site | `astro` | 6.4.6 | 7.1.3 |
+| Docs site | `@astrojs/starlight` | 0.39.3 | 0.41.4 |
+| Docs site | `sharp` | 0.34.5 | 0.35.3 |
+
+---
+
+## 🚀 Deployment notes
+
+**A CDK deploy is required.** Order: `platform.yml` → `backend.yml` → `frontend-deploy.yml`.
+
+1. **Deploy `platform.yml` first and wait for the new GSI.** `AgentDirectoryIndex` on the assistants table backfills asynchronously — CloudFormation reports the stack green while the index is still `CREATING`, and the marketplace store queries it. Confirm `IndexStatus: ACTIVE` before shipping the backend:
+   ```bash
+   aws dynamodb describe-table --table-name {prefix}-rag-assistants \
+     --query 'Table.GlobalSecondaryIndexes[?IndexName==`AgentDirectoryIndex`].IndexStatus'
+   ```
+   Note that `platform.yml`, `backend.yml` and `frontend-deploy.yml` share a concurrency group, so a merge cannot be relied on to order them — run and verify platform before the rest.
+2. **Then `backend.yml`, then `frontend-deploy.yml`.**
+3. **No data migration.** Existing Agents keep working; they simply have no listing and no version snapshots until an author submits one.
+4. **Feature flags — all default ON, opt-out only. This is the GA moment.** An environment with no variable set gets the Agent store live for every authenticated user on this deploy, with an empty catalog until the first Agent is approved. If an environment should *not* get the store yet, set the variable **before** deploying — the flags are empty-string-safe, so an unset or blank GitHub Actions variable resolves to *enabled*, never to off.
+   - `AGENT_MARKETPLACE_ENABLED=false` (or `CDK_AGENT_MARKETPLACE_ENABLED=false`) disables the marketplace surface on app-api.
+   - `AGENTS_ENABLED=false` now removes the *only* authoring surface — see the rename section above before using it.
+   - Agent categories **self-seed on first read** (`categories.ensure_seeded`), so there is no per-environment seeding step and nothing to forget.
+5. **Gateway inbound auth — leave `CDK_GATEWAY_INBOUND_AUTH` unset** on every environment whose Gateway already exists. Setting it to `jwt` against a live `AWS_IAM` Gateway fails mid-deploy and cannot be fixed by a config change; it applies only to a newly created Gateway.
+6. **Token exchange is dormant by default.** Leave `CDK_TOKEN_EXCHANGE_URL` and `CDK_TOKEN_EXCHANGE_CLIENT_ID` unset unless the organization runs a token service with a token-exchange endpoint. If enabling: deploy, then populate the `{prefix}-token-exchange-client` secret out of band with the `client_id → client_secret` map.
+7. **Delegated admin scopes require no action.** Existing `system_admin` roles are unaffected; no role gains or loses access on deploy. Delegation is opt-in per role from the roles admin page.
+8. **The audit log starts empty** and fills from the first role mutation after deploy. It is not backfilled — there is no historical source to backfill from.
+
+---
+
 # Release Notes — v1.11.1
 
 **Release Date:** July 24, 2026

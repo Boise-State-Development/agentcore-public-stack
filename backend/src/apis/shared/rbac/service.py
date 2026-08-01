@@ -2,14 +2,14 @@
 
 import logging
 from typing import List, Set, Optional
-from datetime import datetime, timezone
 
 from apis.shared.auth.models import User
 from apis.shared.tools.scoped_ids import base_tool_id
 
 from .models import AppRole, UserEffectivePermissions
 from .repository import AppRoleRepository
-from .cache import AppRoleCache, get_app_role_cache
+from .cache import AppRoleCache, get_app_role_cache, roles_fingerprint
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +70,11 @@ class AppRoleService:
         Returns:
             UserEffectivePermissions with merged permissions
         """
-        # Step 1: Check cache
-        cached = await self.cache.get_user_permissions(user.user_id)
+        # Step 1: Check cache. Keyed on the role set as well as the subject —
+        # two callers can share a user_id but carry different roles (see
+        # ``roles_fingerprint``), and they must not read each other's entry.
+        fingerprint = roles_fingerprint(user.roles)
+        cached = await self.cache.get_user_permissions(user.user_id, fingerprint)
         if cached:
             logger.debug(f"Cache hit for user permissions: {user.user_id}")
             return cached
@@ -111,7 +114,7 @@ class AppRoleService:
         permissions = self._merge_permissions(user.user_id, matching_roles)
 
         # Step 5: Cache and return
-        await self.cache.set_user_permissions(user.user_id, permissions)
+        await self.cache.set_user_permissions(user.user_id, fingerprint, permissions)
 
         logger.debug(
             f"Resolved permissions for {user.name}: "
@@ -121,6 +124,17 @@ class AppRoleService:
         )
 
         return permissions
+
+    async def get_role(self, role_id: str) -> Optional[AppRole]:
+        """A role record, through the same cache the permission resolution uses.
+
+        Public because the Marketplace's default pins (D9) need a role's ``priority`` and
+        ``displayName`` to order and label a resolved shelf, and re-reading DynamoDB per
+        pin read would drop a cache the request path already warmed. It returns the record,
+        not a permission decision — pins are resolved by their own query and never enter
+        ``UserEffectivePermissions``.
+        """
+        return await self._get_role_with_cache(role_id)
 
     async def _get_role_with_cache(self, role_id: str) -> Optional[AppRole]:
         """Get role from cache or database."""
@@ -142,6 +156,8 @@ class AppRoleService:
         Merge rules:
         - Tools: Union (user gets access to all tools from all roles)
         - Models: Union (user gets access to all models from all roles)
+        - Admin scopes: Union (but no ``"*"`` — there is no wildcard on this
+          axis; full admin is the ``system_admin`` role, not a scope)
         - Quota Tier: Highest priority role's tier wins
         """
         if not roles:
@@ -151,14 +167,16 @@ class AppRoleService:
                 tools=[],
                 models=[],
                 skills=[],
+                admin_scopes=[],
                 quota_tier=None,
-                resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
+                resolved_at=utc_now_iso(),
             )
 
         # Collect all tools, models and skills (union)
         all_tools: Set[str] = set()
         all_models: Set[str] = set()
         all_skills: Set[str] = set()
+        all_admin_scopes: Set[str] = set()
 
         for role in roles:
             if role.effective_permissions:
@@ -177,6 +195,11 @@ class AppRoleService:
                     all_skills.add("*")
                 else:
                     all_skills.update(role.effective_permissions.skills)
+
+                # No wildcard handling: `"*"` is not a valid admin scope, so a
+                # stray one is carried through as an unknown scope that matches
+                # nothing rather than silently granting every admin surface.
+                all_admin_scopes.update(role.effective_permissions.admin_scopes)
 
         # Determine quota tier (highest priority wins)
         sorted_roles = sorted(roles, key=lambda r: r.priority, reverse=True)
@@ -199,8 +222,9 @@ class AppRoleService:
             tools=sorted(all_tools),
             models=sorted(all_models),
             skills=sorted(all_skills),
+            admin_scopes=sorted(all_admin_scopes),
             quota_tier=quota_tier,
-            resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
+            resolved_at=utc_now_iso(),
         )
 
     async def can_access_tool(self, user: User, tool_id: str) -> bool:

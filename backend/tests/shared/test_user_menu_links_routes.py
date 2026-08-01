@@ -6,6 +6,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from apis.shared.auth import get_current_user_from_session, require_admin
+from tests.conftest import override_admin_auth
 from apis.shared.auth.models import User
 from apis.shared.user_menu_links import repository as repo_module
 from apis.shared.user_menu_links import service as service_module
@@ -77,7 +78,7 @@ class TestAdminRoutes:
     def test_create_returns_201(self, user_menu_links_table):
         app = _build_admin_app()
         admin = _make_user(email="admin@example.com", roles=["system_admin"])
-        app.dependency_overrides[require_admin] = lambda: admin
+        override_admin_auth(app, lambda: admin)
 
         client = TestClient(app)
         resp = client.post(
@@ -92,7 +93,7 @@ class TestAdminRoutes:
     def test_create_rejects_non_http_url_with_422(self, user_menu_links_table):
         app = _build_admin_app()
         admin = _make_user(email="admin@example.com", roles=["system_admin"])
-        app.dependency_overrides[require_admin] = lambda: admin
+        override_admin_auth(app, lambda: admin)
 
         client = TestClient(app)
         resp = client.post(
@@ -104,7 +105,7 @@ class TestAdminRoutes:
     def test_create_missing_url_for_external_returns_422(self, user_menu_links_table):
         app = _build_admin_app()
         admin = _make_user(email="admin@example.com", roles=["system_admin"])
-        app.dependency_overrides[require_admin] = lambda: admin
+        override_admin_auth(app, lambda: admin)
 
         client = TestClient(app)
         resp = client.post(
@@ -119,7 +120,7 @@ class TestAdminRoutes:
         def _forbid():
             raise HTTPException(status_code=403, detail="Forbidden")
 
-        app.dependency_overrides[require_admin] = _forbid
+        override_admin_auth(app, _forbid)
 
         client = TestClient(app)
         resp = client.get("/admin/user-menu-links/")
@@ -128,7 +129,7 @@ class TestAdminRoutes:
     def test_list_then_get_round_trips(self, user_menu_links_table):
         app = _build_admin_app()
         admin = _make_user(email="admin@example.com", roles=["system_admin"])
-        app.dependency_overrides[require_admin] = lambda: admin
+        override_admin_auth(app, lambda: admin)
 
         client = TestClient(app)
         created = client.post(
@@ -147,7 +148,7 @@ class TestAdminRoutes:
     def test_get_missing_returns_404(self, user_menu_links_table):
         app = _build_admin_app()
         admin = _make_user(email="admin@example.com", roles=["system_admin"])
-        app.dependency_overrides[require_admin] = lambda: admin
+        override_admin_auth(app, lambda: admin)
 
         client = TestClient(app)
         resp = client.get("/admin/user-menu-links/does-not-exist")
@@ -156,7 +157,7 @@ class TestAdminRoutes:
     def test_update_returns_400_on_invariant_violation(self, user_menu_links_table):
         app = _build_admin_app()
         admin = _make_user(email="admin@example.com", roles=["system_admin"])
-        app.dependency_overrides[require_admin] = lambda: admin
+        override_admin_auth(app, lambda: admin)
 
         client = TestClient(app)
         created = client.post(
@@ -176,7 +177,7 @@ class TestAdminRoutes:
     def test_delete_returns_204_then_404(self, user_menu_links_table):
         app = _build_admin_app()
         admin = _make_user(email="admin@example.com", roles=["system_admin"])
-        app.dependency_overrides[require_admin] = lambda: admin
+        override_admin_auth(app, lambda: admin)
 
         client = TestClient(app)
         created = client.post(
@@ -200,7 +201,7 @@ class TestPublicRoute:
     def test_returns_only_enabled_links(self, user_menu_links_table):
         admin_app = _build_admin_app()
         admin = _make_user(email="admin@example.com", roles=["system_admin"])
-        admin_app.dependency_overrides[require_admin] = lambda: admin
+        override_admin_auth(admin_app, lambda: admin)
         admin_client = TestClient(admin_app)
 
         # Seed one enabled + one disabled link via the admin API.

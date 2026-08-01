@@ -161,6 +161,38 @@ export class RagDataConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Sparse marketplace directory index (docs/specs/agent-marketplace.md).
+    // Same shape and same reasoning as DueSyncIndex above: GSI5 keys are written
+    // only while listing.state == "published", so unpublication is enforced by
+    // physics — no key, so the browse query cannot return the agent. Written
+    // exclusively by apis/shared/assistants/listing_repository.py; the generic
+    // assistant update lists GSI5_* as immutable so a routine author edit can
+    // never resurrect a directory key on a delisted agent.
+    //   GSI5_PK = LISTED#{category}   GSI5_SK = CREATED#{created_at}  (newest-first)
+    this.assistantsTable.addGlobalSecondaryIndex({
+      indexName: 'AgentDirectoryIndex',
+      partitionKey: { name: 'GSI5_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI5_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Sparse open-report index for user problem reports (D15, Phase 8). Reports are
+    // child rows of the Agent (PK = AST#{id}, SK = REPORT#{report_id}) so they are
+    // deleted with it; this index is written ONLY while state == "open", so a resolved
+    // or dismissed report leaves the admin queue by losing its key rather than by being
+    // filtered out — the same physics as AgentDirectoryIndex above.
+    //   GSI6_PK = "REPORTS#OPEN"   GSI6_SK = CREATED#{created_at}  (oldest-first sweep)
+    // One partition is correct here: the open queue is bounded by how fast admins work
+    // and is read only by the admin console, which wants one chronological sweep rather
+    // than per-agent slices. If it ever outgrows a hot partition, that is a product
+    // signal (nobody is triaging) before it is a capacity one.
+    this.assistantsTable.addGlobalSecondaryIndex({
+      indexName: 'AgentReportsIndex',
+      partitionKey: { name: 'GSI6_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI6_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // ── SSM publications (consumed by restore tooling, app-api/inference-api runtime) ──
     new ssm.StringParameter(this, 'RagAssistantsTableNameParameter', {
       parameterName: `/${config.projectPrefix}/rag/assistants-table-name`,

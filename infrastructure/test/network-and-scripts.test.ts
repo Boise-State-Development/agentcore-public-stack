@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { createMockConfig, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
+import { mockCognitoRefs, MOCK_BFF_CLIENT_ID } from './helpers/mock-cognito';
 
 import { NetworkConstruct } from '../lib/constructs/network/network-construct';
 import { AlbConstruct } from '../lib/constructs/network/alb-construct';
@@ -247,10 +248,23 @@ describe('McpSandboxBucketConstruct — detailed', () => {
 
 describe('AgentCoreGatewayConstruct — detailed', () => {
   let t: Template;
+  /** Template built with inboundAuth explicitly set to 'jwt'. */
+  let jwtTemplate: Template;
+
   beforeAll(() => {
     const stack = testStack();
-    new AgentCoreGatewayConstruct(stack, 'GW', { config });
+    new AgentCoreGatewayConstruct(stack, 'GW', {
+      config,
+      ...mockCognitoRefs(stack),
+    });
     t = Template.fromStack(stack);
+
+    const jwtStack = testStack();
+    new AgentCoreGatewayConstruct(jwtStack, 'GW', {
+      config: createMockConfig({ gateway: { inboundAuth: 'jwt' } }),
+      ...mockCognitoRefs(jwtStack),
+    });
+    jwtTemplate = Template.fromStack(jwtStack);
   });
 
   it('gateway uses MCP protocol', () => {
@@ -259,10 +273,70 @@ describe('AgentCoreGatewayConstruct — detailed', () => {
     });
   });
 
-  it('gateway uses AWS_IAM authorizer', () => {
+  it('gateway uses AWS_IAM authorizer by default', () => {
+    // The authorizer is immutable after Gateway creation (AgentCore rejects an
+    // authorizerType change on an existing Gateway), so the default must match
+    // what is already deployed everywhere: AWS_IAM. Defaulting to CUSTOM_JWT
+    // would break PlatformStack on every existing deployment.
     t.hasResourceProperties('AWS::BedrockAgentCore::Gateway', {
       AuthorizerType: 'AWS_IAM',
     });
+    const gw = Object.values(
+      t.findResources('AWS::BedrockAgentCore::Gateway'),
+    )[0] as any;
+    expect(gw.Properties.AuthorizerConfiguration).toBeUndefined();
+  });
+
+  it('gateway uses CUSTOM_JWT when inboundAuth is jwt', () => {
+    jwtTemplate.hasResourceProperties('AWS::BedrockAgentCore::Gateway', {
+      AuthorizerType: 'CUSTOM_JWT',
+    });
+  });
+
+  it('JWT authorizer validates client_id, not audience', () => {
+    // Cognito *access* tokens carry `client_id` and no `aud` claim, so
+    // AllowedAudience could never match and would 401 every call.
+    jwtTemplate.hasResourceProperties('AWS::BedrockAgentCore::Gateway', {
+      AuthorizerConfiguration: {
+        CustomJWTAuthorizer: {
+          AllowedClients: [MOCK_BFF_CLIENT_ID],
+        },
+      },
+    });
+    const gw = Object.values(
+      jwtTemplate.findResources('AWS::BedrockAgentCore::Gateway'),
+    )[0] as any;
+    expect(
+      gw.Properties.AuthorizerConfiguration.CustomJWTAuthorizer.AllowedAudience,
+    ).toBeUndefined();
+  });
+
+  it('JWT authorizer points at the Cognito OIDC discovery document', () => {
+    const gw = Object.values(
+      jwtTemplate.findResources('AWS::BedrockAgentCore::Gateway'),
+    )[0] as any;
+    expect(
+      gw.Properties.AuthorizerConfiguration.CustomJWTAuthorizer.DiscoveryUrl,
+    ).toContain('/.well-known/openid-configuration');
+  });
+
+  it('does not require Cognito refs in the default iam mode', () => {
+    // A fork that never opts into JWT must not be forced to wire Cognito.
+    const stack = testStack();
+    expect(
+      () => new AgentCoreGatewayConstruct(stack, 'GW', { config }),
+    ).not.toThrow();
+  });
+
+  it('throws when JWT auth is selected without Cognito refs', () => {
+    // Fail fast at synth rather than deploying a Gateway that 401s everything.
+    const stack = testStack();
+    expect(
+      () =>
+        new AgentCoreGatewayConstruct(stack, 'GW', {
+          config: createMockConfig({ gateway: { inboundAuth: 'jwt' } }),
+        }),
+    ).toThrow(/inboundAuth is 'jwt' but/);
   });
 
   it('gateway role has NO standing lambda:Invoke* grant (per-target only)', () => {

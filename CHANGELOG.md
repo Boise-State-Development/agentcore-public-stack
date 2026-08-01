@@ -4,6 +4,96 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.12.0] - 2026-08-01
+
+Feature release that turns Agents from a personal authoring tool into a **governed institutional catalog**. The **Agent Marketplace** ships GA — authors submit, admins review, and the store front, pins, categories, publisher profiles and problem reports are all live — backed by **immutable version snapshots** so what a user runs is the version an admin approved, not the author's current draft. On the governance side, **delegated admin scopes** let a system admin hand out one admin area at a time, and every role mutation now lands in a durable **audit trail**. Two integration paths open up for forks: an AgentCore Gateway can authenticate inbound calls with a **Cognito JWT** instead of SigV4, and the agent can perform an **RFC 8693 token exchange** so downstream APIs serve agent traffic as the signed-in user. The Assistant → Agent rename completes: the Assistant editor is retired and `/assistants` becomes an explainer. Requires a CDK deploy (new audit-log table, a new assistants-table GSI, optional token-exchange secret); no data migration.
+
+### 🚀 Added
+
+- **Agent Marketplace** — the full publication lifecycle for Agents: authors submit a listing from the Designer (with a preflight that names every blocker before submission), admins review/approve/request-changes/take down from a Review queue, and approved Agents appear on a browsable **Discover** store with categories, a curated store front, and a detail page gated on runnability. Backed by a sparse `AgentDirectoryIndex` GSI on the assistants table and a new `apis/shared/assistants/` listing/storefront/category layer; `/agents/*` on app-api and `/admin/agents/*` for review. Default ON with the `AGENT_MARKETPLACE_ENABLED` kill switch (#730, #731, #732, #733, #734)
+- **Agent store GA** — the store's only closed door was an `isAdmin()` nav condition while `/agents/discover`, agent detail, `@`-mentions and role-seeded pins were already reachable by any authenticated user. The nav is now gated on the feature flag alone (#755)
+- **Immutable Agent version snapshots** — every submission freezes an `AgentVersion` (`VERSION#` child rows under the Agent's partition) capturing instructions, model, tools, skills and memory bindings. The store serves the approved snapshot, and invocation runs it rather than the author's live draft, so an author editing after approval cannot change what users get (#783, #784, #787, #789)
+- **Version rollback** — an admin can roll a published listing back to any earlier approved version from the admin Listings page, and roll forward again; the version picker stays reachable after a rollback (#800, #801)
+- **Submission diffs for reviewers** — the review queue shows exactly what changed between the last approved snapshot and the submission under review, so approval is a decision about a delta rather than a re-read (#793)
+- **`publishedVersion` answers "is what I approved still what is live?"** — a version number rather than a heuristic. The post-approval drift *marker* shipped first (#757), hashing only `assistant.instructions`, and was then removed rather than left dormant: a published Agent is now an immutable snapshot the author cannot reach, so there is nothing to drift. `approvedInstructionsHash` is no longer written and is stripped from viewer responses for listings approved before the change (#757, #787)
+- **Agent icons** — authors upload a square 512×512 PNG/JPEG (≤ 400 KB) that renders at all four store sizes. Bytes live in S3 under a content-addressed key (`assistants/{agent_id}/icons/{sha256[:16]}.{ext}`) with the digest doubling as the ETag/cache version; images are always re-encoded, which strips EXIF so a phone photo does not publish its GPS coordinates (#731, #735)
+- **Pins and the curated store front** — users pin Agents to a Pinned page, and admins seed default pins per AppRole that resolve live, so a role's members get a curated starting set without a copy being made (#736, #737)
+- **`@`-mention** — mentioning an Agent from the composer hands exactly one turn to it; the conversation is not bound to that Agent, and the next unmentioned message is plain chat again. Binding rules live in `apis/inference_api/chat/agent_binding_policy.py` (#738)
+- **Problem reports and in-conversation feedback** — users report a problem with an Agent from the store or leave feedback on an Agent directly from the conversation; reports land in an admin queue with a resolve flow (#739, #810)
+- **Withdrawal as a request** — an author asks for a listing to be withdrawn rather than unilaterally unpublishing; admins decide, delete respects a pending request, and the withdrawal's origin is recorded (#791, #800)
+- **Publisher profiles** — an admin page for the publisher identity attached to listings, with per-publisher eligibility (#795)
+- **Delegated admin scopes** — a system admin can grant one admin *feature area* at a time (16 scopes: costs, quota, fine-tuning, models, tools, skills, connectors, file sources, export targets, marketplace, users, system prompts, user menu links, roles, auth providers, audit) as a new `grantedAdminScopes` axis on `AppRole`. `admin.roles`, `admin.auth_providers` and `admin.audit` are permanently non-delegable; there is deliberately no wildcard. Enforced on admin routes, exposed over the API, and rendered as real checkboxes in the roles form and the admin console nav (#768, #769, #770, #774, #775, #780)
+- **Administrative audit trail** — role create/update/delete/sync and denied role mutations are written to a new durable audit-log table with actor and recent-activity indexes and a TTL, surfaced on an admin Audit page with month-scoped browsing (#808)
+- **AgentCore Gateway inbound auth via Cognito JWT** — a Gateway can be created with `CUSTOM_JWT` inbound auth (`CDK_GATEWAY_INBOUND_AUTH=jwt`) and the agent forwards the signed-in user's token to it, so Gateway targets can act per-user instead of behind a single SigV4 identity. Defaults to `iam`; see the breaking-change note below (#778)
+- **RFC 8693 token exchange** — the agent can trade the signed-in user's Cognito access token for a JWT issued by a token service the organization already runs, so existing internal APIs serve agent traffic as the user with no change on their side. Entirely optional and additive: unset `CDK_TOKEN_EXCHANGE_URL` and no resources, permissions or env vars are created. Tokens are cached per (user, audience) (#803)
+- **Docs-site landing page redesign and product roadmap** (#805)
+- Agent store surfaces — an Agent launch card in place of the assistant card, a storefront-style Discover page, and a list view on My Agents (#767)
+- A share dialog that is the single surface for an Agent's reach — visibility, collaborators and listing state in one place (#802)
+- Loading state on the Agent Designer form (#729)
+- The Knowledge base section matches its sibling cards, and the sidenav "New" badge uses the brand ember (#813, #802)
+
+### ⚠️ Changed
+
+- **The Assistant editor is retired.** `/assistants` is now an explainer page for the rename rather than an editor, and the nav carries one noun. Assistant *records* are untouched — the Agent Designer reads and writes the same data — but the old authoring surface is gone, so `AGENTS_ENABLED=false` is now an outage switch rather than a fall-back to the previous UI (#758, #760, #782, #785, #809)
+- **`CDK_GATEWAY_INBOUND_AUTH` cannot be changed on an existing Gateway.** AgentCore rejects an authorizer change on a live Gateway (`Authorizer type cannot be updated for an existing gateway`), and neither the CloudFormation resource schema nor `cdk diff` predicts it — the failure appears mid-deploy. The default stays `iam`; moving an existing deployment to `jwt` requires a new Gateway plus target re-registration and a cutover (#779)
+- **Forks with SigV4 Gateway callers must not switch to JWT** without migrating those callers — a Gateway accepts exactly one authorizer type, so there is no "either SigV4 or JWT" mode (#778)
+- The `limits` (degraded) Agent runnability state is removed — it was unreachable and contradicted the block-only binding model; every gap already resolved to `blocked` (#762)
+- Publishing an Agent now requires PUBLIC visibility, and authors can go public directly from the submit dialog instead of bouncing to settings first (#781)
+- Marketplace copy drops the internal "shelf" and "reviewer" vocabulary (#809)
+- Locked pin seeds now cost an admin something rather than counting against a user cap (#763)
+- `@`-mention turns are marked on the cost row (`agentSwitched`) so a deliberate agent swap is distinguishable from a prompt-cache regression (#765)
+
+### 🐛 Fixed
+
+- **Chat was completely down on any deploy carrying the `@`-mention cost work** — `StreamCoordinator.stream_response()` forwarded `turn_agent_id` from inside its own body but never accepted it as a parameter, and `ChatAgent` passes it on *every* turn, so every request 500'd in the container and surfaced as an AgentCore 424 (#771)
+- **A session's conversation forked when an `@`-mention ran** — the agent cache keys on configuration, so a mention builds a second `Agent` with its own session manager; both wrote the same DynamoDB row and the model answered "not in history" for messages the user could see. History is now aliased across manager instances (#750)
+- **Compaction state moved backwards for the same reason** — it is now re-read per turn instead of loaded once at `initialize()`, which never re-runs on an agent-cache hit (#761)
+- **Timestamps were emitted as `2026-07-27T05:09:55+00:00Z`** — an offset *and* a `Z`, which is not valid ISO 8601 and which `new Date()` rejects. Every SPA formatter fell back silently, so the agent detail page showed "Last updated —" on an agent edited minutes earlier and admin Reports showed "recently" for every report ever filed (#772)
+- **API-key requests were denied every model** — `/chat/api-converse` built its user with a hardcoded `roles=["user"]` placeholder, which matches no AppRole, fell through to `default` (which grants no models in prod) and 403'd regardless of the caller's real grants. The owner's roles, email and name are now read from the Users table per request, which also stops quota and cost being charged to a synthetic `{user_id}@api-key` identity (#796)
+- **The agent detail page never loaded its agent** — broken since marketplace phase 3 (#740, #742, #743)
+- **~2,500 false "tool not found" warnings a day in production** — `ToolFilter` knew three tool classes and warned on anything else; context-bound tools are a fourth, appended after filtering, so every enabled one warned and then worked fine, drowning the one genuine signal that branch exists to give (#794)
+- Cache-TTL classification measured the gap to the immediately-previous call instead of the last call with the *same* prefix, so interleaved prefixes (exactly what an `@`-mention creates) booked unavoidable re-writes as `miss_avoidable` waste (#754)
+- Deleting an Agent left its entire `VERSION#` snapshot history in the table permanently (#792)
+- Four version-snapshot gaps found in end-to-end testing (#799)
+- The reviewer is now told when a listed Agent is unopenable, and why a submission diff is missing (#773, #801)
+- The unopenable-Agent warning moved out of the review card's identity column onto its own full-width row — squeezed beside the action buttons it rendered at ~160px across five lines, and a warning the reviewer has to work to read is one they skip (#776)
+- The admin roles list shows which roles carry delegated admin power (#807)
+- A failed category change surfaces an error banner instead of failing silently (#795)
+- The audit page no longer claims a month is empty when the read failed (#808)
+- Dialogs dismiss on a backdrop click across the SPA, and the agent feedback dialog scrolls instead of clipping (#811)
+- Cross-file state leaks that made `ng test` flaky (#759)
+- `test_non_admin_roles_get_403` rebuilt the whole admin app on every Hypothesis example (~50ms × 100 across 130 routes), tripping the 200ms deadline under load and reading as an auth regression (#808)
+
+### 🔒 Security
+
+- Backend security pins bumped: `pillow` 12.2.0 → 12.3.0, plus new pins for `pyasn1` 0.6.4 and `soupsieve` 2.8.4 (#723)
+- Frontend and infrastructure transitive vulnerabilities patched via lockfile regeneration; `aws-cdk-lib` bumped to pick up its bundled `fast-uri` fix (#723)
+- Uploaded Agent icons are always re-encoded, stripping EXIF (including GPS) before an icon is published institution-wide (#735)
+
+### 🏗️ Infrastructure
+
+- New `{prefix}-audit-log` DynamoDB table — `PK`/`SK`, `ActorIndex` and `RecentIndex` GSIs (ALL projection), PITR on, TTL on `expiresAt`, name published to `/{prefix}/audit/audit-log-table-name` (#808)
+- New `AgentDirectoryIndex` GSI (`GSI5_PK`/`GSI5_SK`) on the `{prefix}-rag-assistants` table, sparse — only listed Agents carry the keys (#731)
+- New optional `{prefix}-token-exchange-client` Secrets Manager secret, created only when `tokenExchange` is configured and populated out of band (#803)
+- `AgentCoreGatewayConstruct` gains a `CUSTOM_JWT` inbound-authorizer path driven by `config.gateway.inboundAuth` (#778, #779)
+- New CDK config: `agentMarketplace.enabled`, `gateway.inboundAuth`, and optional `tokenExchange.url` / `tokenExchange.clientId` (#731, #778, #803)
+
+### 🔧 CI/CD
+
+- `platform.yml` accepts `CDK_GATEWAY_INBOUND_AUTH`, `CDK_TOKEN_EXCHANGE_URL` and `CDK_TOKEN_EXCHANGE_CLIENT_ID`; `load-env.sh` threads them into CDK context and validates the authorizer value so a typo fails the deploy instead of silently falling back to `iam` (#778, #803)
+
+### 📦 Dependencies
+
+- Backend: `pillow` 12.2.0 → 12.3.0; new pins `pyasn1` 0.6.4, `soupsieve` 2.8.4 (#723)
+- Infrastructure: `aws-cdk-lib` 2.260.0 → 2.262.0 (#723)
+- Docs site: `astro` 6.4.6 → 7.1.3, `@astrojs/starlight` 0.39.3 → 0.41.4, `sharp` 0.34.5 → 0.35.3 (#724)
+
+### 📚 Docs
+
+- New specs: `docs/specs/agent-marketplace.md` (superseding the Agent Directory spec), `docs/specs/agent-version-snapshots.md`, `docs/specs/granular-admin-permissions.md`, `docs/specs/AGENTCORE_GATEWAY_TOKEN_EXCHANGE_PLAN.md` (#730, #783, #768, #788)
+- Corrected the `@`-mention prompt-cache arithmetic — a mention costs one prefix re-write, not two (#752)
+- Weekly kaizen research scan for 2026-07-24 (#719)
+
 ## [1.11.1] - 2026-07-24
 
 Patch release fixing Markdown artifact downloads that saved the HTML render wrapper instead of the authored `.md` source. Backend-only, no dependency changes, no CDK deploy — ships via `backend.yml` (artifact-render Lambda). Existing artifacts are fixed on download with no re-storage.

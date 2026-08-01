@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
-from apis.shared.auth import User, require_admin
+from apis.shared.auth import User, require_admin_scope
 from apis.shared.skills.models import (
     AddRemoveSkillRolesRequest,
     AdminSkillListResponse,
@@ -29,13 +29,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/skills", tags=["admin-skills"])
 
+# Every route in this package is guarded by this one scope, so the
+# permission boundary is the package boundary. Enforced by
+# tests/architecture/test_admin_scope_coverage.py.
+require_skills_admin = require_admin_scope("admin.skills")
+
 
 @router.get("/", response_model=AdminSkillListResponse)
 async def admin_list_all_skills(
     status: Optional[str] = Query(
         None, description="Filter by status (active, draft, disabled)"
     ),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """List all skills in the catalog with their role assignments."""
     logger.info("Admin listing full skill catalog")
@@ -52,7 +57,7 @@ async def admin_list_all_skills(
 @router.get("/{skill_id}", response_model=AdminSkillResponse)
 async def admin_get_skill(
     skill_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Get a specific skill by ID, with its directly-granting roles."""
     logger.info("Admin getting skill")
@@ -71,7 +76,7 @@ async def admin_get_skill(
 @router.post("/", response_model=AdminSkillResponse)
 async def admin_create_skill(
     request: SkillCreateRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Create a new skill catalog entry.
 
@@ -110,7 +115,7 @@ async def admin_create_skill(
 async def admin_update_skill(
     skill_id: str,
     request: SkillUpdateRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Update skill metadata. Re-validates bound tools when they change."""
     logger.info("Admin updating skill")
@@ -139,7 +144,7 @@ async def admin_delete_skill(
     hard: bool = Query(
         False, description="If true, permanently delete instead of soft delete"
     ),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Delete a skill. Soft (disable) by default; hard=true permanently deletes."""
     logger.info("Admin deleting skill")
@@ -166,7 +171,7 @@ async def admin_delete_skill(
 @router.get("/{skill_id}/roles", response_model=SkillRolesResponse)
 async def get_skill_roles(
     skill_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Get AppRoles that grant access to this skill (direct/inherited)."""
     logger.info("Admin getting roles for skill")
@@ -184,7 +189,7 @@ async def get_skill_roles(
 async def set_skill_roles(
     skill_id: str,
     request: SetSkillRolesRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Replace which AppRoles grant access to this skill (bidirectional sync)."""
     logger.info("Admin setting roles for skill")
@@ -201,7 +206,7 @@ async def set_skill_roles(
 async def add_roles_to_skill(
     skill_id: str,
     request: AddRemoveSkillRolesRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Add AppRoles to skill access (preserves existing)."""
     logger.info("Admin adding roles to skill")
@@ -218,7 +223,7 @@ async def add_roles_to_skill(
 async def remove_roles_from_skill(
     skill_id: str,
     request: AddRemoveSkillRolesRequest,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Remove AppRoles from skill access."""
     logger.info("Admin removing roles from skill")
@@ -245,7 +250,7 @@ def _resource_value_error(e: ValueError) -> HTTPException:
 @router.get("/{skill_id}/resources", response_model=SkillResourcesResponse)
 async def list_skill_resources(
     skill_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """List a skill's reference-file manifest (no bytes)."""
     logger.info("Admin listing skill reference files")
@@ -264,7 +269,7 @@ async def upload_skill_resource(
     skill_id: str,
     file: UploadFile = File(...),
     kind: str = Form("reference"),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Upload (or replace) one supporting file for a skill.
 
@@ -301,7 +306,7 @@ async def upload_skill_resource(
 async def read_skill_resource(
     skill_id: str,
     filename: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Return the raw bytes of one reference file with its content type."""
     logger.info("Admin reading skill reference file")
@@ -325,7 +330,7 @@ async def read_skill_resource(
 async def delete_skill_resource(
     skill_id: str,
     filename: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_skills_admin),
 ):
     """Delete one reference file from a skill. Returns the updated manifest."""
     logger.info("Admin deleting skill reference file")

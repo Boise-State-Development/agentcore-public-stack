@@ -408,6 +408,43 @@ import {
                     </p>
                   </div>
                 }
+
+                <!-- Token exchange (RFC 8693) — for APIs that trust a different issuer -->
+                <div class="border-t border-gray-200 pt-6 dark:border-gray-700">
+                  <label for="tokenExchangeAudience" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    Or exchange the token first (RFC 8693)
+                  </label>
+                  <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+                    Use when the target API trusts a <em>different</em> issuer than this app — for example an
+                    existing institutional token service. The user's token is traded for one that API already
+                    accepts, so the API needs no changes. Leave blank to disable.
+                  </p>
+                  <input
+                    id="tokenExchangeAudience"
+                    type="text"
+                    formControlName="tokenExchangeAudience"
+                    placeholder="target application id (audience), e.g. a GUID from your token service"
+                    class="mt-2 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm/6 text-gray-900 placeholder-gray-400 shadow-xs focus:border-primary-500 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500"
+                  />
+
+                  @if (form.get('tokenExchangeAudience')?.value) {
+                    <div class="mt-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
+                      <p class="mb-1 text-sm/6 font-medium text-amber-900 dark:text-amber-100">
+                        Requires configuration
+                      </p>
+                      <p class="text-sm/6 text-amber-800 dark:text-amber-200">
+                        The platform must be deployed with a token exchange endpoint configured, and this
+                        deployment's client secret populated, or these tools will not load. Set the MCP
+                        Authentication Type to "None" above — the exchanged token uses the Authorization header,
+                        so it cannot be combined with SigV4.
+                      </p>
+                      <p class="mt-2 text-sm/6 text-amber-800 dark:text-amber-200">
+                        Tool discovery below does not exchange tokens, so a server that requires
+                        authentication to list its tools will return nothing here.
+                      </p>
+                    </div>
+                  }
+                </div>
               </section>
 
               <!-- User OAuth Connector -->
@@ -1001,6 +1038,7 @@ export class ToolFormPage implements OnInit {
     enabledByDefault: [false],
     requiresOauthProvider: [''],
     forwardAuthToken: [false],
+    tokenExchangeAudience: [''],
     // MCP External Server configuration
     mcpServerUrl: [''],
     mcpTransport: ['streamable-http'],
@@ -1098,6 +1136,7 @@ export class ToolFormPage implements OnInit {
         apiKeyHeader: formValue.mcpApiKeyHeader || null,
         secretArn: formValue.mcpSecretArn || null,
         forwardAuthToken: formValue.forwardAuthToken || false,
+        tokenExchangeAudience: formValue.tokenExchangeAudience || null,
         requiresOauthProvider: formValue.requiresOauthProvider || null,
       });
 
@@ -1256,15 +1295,38 @@ export class ToolFormPage implements OnInit {
       this.selectedProtocol.set(value);
     });
 
-    // Mutual exclusivity: forwardAuthToken and requiresOauthProvider
+    // Mutual exclusivity across the three per-user auth modes. All three put a
+    // credential in the Authorization header and there is only one, so selecting
+    // any clears the others. The backend enforces this too (tools service
+    // _validate_auth_config); this just avoids submitting a request that 400s.
     this.form.get('forwardAuthToken')?.valueChanges.subscribe(checked => {
-      if (checked && this.form.get('requiresOauthProvider')?.value) {
-        this.form.get('requiresOauthProvider')?.setValue('');
+      if (checked) {
+        if (this.form.get('requiresOauthProvider')?.value) {
+          this.form.get('requiresOauthProvider')?.setValue('');
+        }
+        if (this.form.get('tokenExchangeAudience')?.value) {
+          this.form.get('tokenExchangeAudience')?.setValue('');
+        }
       }
     });
     this.form.get('requiresOauthProvider')?.valueChanges.subscribe(value => {
-      if (value && this.form.get('forwardAuthToken')?.value) {
-        this.form.get('forwardAuthToken')?.setValue(false);
+      if (value) {
+        if (this.form.get('forwardAuthToken')?.value) {
+          this.form.get('forwardAuthToken')?.setValue(false);
+        }
+        if (this.form.get('tokenExchangeAudience')?.value) {
+          this.form.get('tokenExchangeAudience')?.setValue('');
+        }
+      }
+    });
+    this.form.get('tokenExchangeAudience')?.valueChanges.subscribe(value => {
+      if (value) {
+        if (this.form.get('forwardAuthToken')?.value) {
+          this.form.get('forwardAuthToken')?.setValue(false);
+        }
+        if (this.form.get('requiresOauthProvider')?.value) {
+          this.form.get('requiresOauthProvider')?.setValue('');
+        }
       }
     });
 
@@ -1308,6 +1370,7 @@ export class ToolFormPage implements OnInit {
         enabledByDefault: tool.enabledByDefault,
         requiresOauthProvider: tool.requiresOauthProvider || '',
         forwardAuthToken: tool.forwardAuthToken || false,
+        tokenExchangeAudience: tool.tokenExchangeAudience || '',
       });
 
       // Update protocol signal
@@ -1484,6 +1547,7 @@ export class ToolFormPage implements OnInit {
           enabledByDefault: formValue.enabledByDefault,
           requiresOauthProvider: requiresOauthProvider,
           forwardAuthToken: formValue.forwardAuthToken || false,
+          tokenExchangeAudience: formValue.tokenExchangeAudience || null,
           mcpConfig: mcpConfig,
           a2aConfig: a2aConfig,
           mcpGatewayConfig: mcpGatewayConfig,
@@ -1501,6 +1565,7 @@ export class ToolFormPage implements OnInit {
           enabledByDefault: formValue.enabledByDefault,
           requiresOauthProvider: requiresOauthProvider,
           forwardAuthToken: formValue.forwardAuthToken || false,
+          tokenExchangeAudience: formValue.tokenExchangeAudience || null,
           mcpConfig: mcpConfig,
           a2aConfig: a2aConfig,
           mcpGatewayConfig: mcpGatewayConfig,

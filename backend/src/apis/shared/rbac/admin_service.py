@@ -1,14 +1,28 @@
 """Admin service for AppRole management operations."""
 
+import copy
 import logging
 from typing import List, Optional, Set
 
+from apis.shared.audit import (
+    AuditAction,
+    AuditOutcome,
+    AuditService,
+    diff_fields,
+    get_audit_service,
+)
 from apis.shared.auth.models import User
 
 from .models import AppRole, EffectivePermissions, AppRoleCreate, AppRoleUpdate
 from .repository import AppRoleRepository
 from .cache import AppRoleCache, get_app_role_cache
-from .role_constraints import validate_jwt_role_mappings
+from .admin_scopes import normalize_scopes
+from .role_constraints import (
+    RoleMutationForbidden,
+    is_protected_role,
+    validate_admin_scopes,
+    validate_jwt_role_mappings,
+)
 from .version import bump_roles_version
 
 logger = logging.getLogger(__name__)
@@ -25,14 +39,50 @@ class AppRoleAdminService:
     - System role protection
     """
 
+    # Role fields whose changes are worth a durable before/after. Excludes the
+    # denormalized `effective_permissions` (derived, and it would double the
+    # item for no investigative gain) and the timestamps (the record carries
+    # its own).
+    AUDITED_FIELDS = [
+        "display_name",
+        "description",
+        "jwt_role_mappings",
+        "inherits_from",
+        "granted_tools",
+        "granted_models",
+        "granted_skills",
+        "granted_admin_scopes",
+        "priority",
+        "enabled",
+    ]
+
     def __init__(
         self,
         repository: Optional[AppRoleRepository] = None,
         cache: Optional[AppRoleCache] = None,
+        audit: Optional[AuditService] = None,
     ):
-        """Initialize admin service with repository and cache."""
+        """Initialize admin service with repository, cache, and audit sink."""
         self.repository = repository or AppRoleRepository()
         self.cache = cache or get_app_role_cache()
+        self.audit = audit or get_audit_service()
+        self._perm_service = None
+
+    def _permission_service(self):
+        """A resolver sharing *this* service's repository and cache.
+
+        Deliberately not ``get_app_role_service()``: that global singleton
+        builds its own repository, which would bypass this instance's injected
+        one — real DynamoDB traffic from a unit test, and two different views of
+        the same data in any caller that injects a repository on purpose.
+        """
+        if self._perm_service is None:
+            from .service import AppRoleService
+
+            self._perm_service = AppRoleService(
+                repository=self.repository, cache=self.cache
+            )
+        return self._perm_service
 
     # =========================================================================
     # CRUD Operations
@@ -66,6 +116,9 @@ class AppRoleAdminService:
         # malformed entries, regardless of role.
         validate_jwt_role_mappings(role_data.role_id, role_data.jwt_role_mappings)
 
+        # Reject unknown or non-delegable admin scopes.
+        validate_admin_scopes(role_data.granted_admin_scopes)
+
         # Build the AppRole object
         role = AppRole(
             role_id=role_data.role_id,
@@ -76,6 +129,7 @@ class AppRoleAdminService:
             granted_tools=role_data.granted_tools,
             granted_models=role_data.granted_models,
             granted_skills=role_data.granted_skills,
+            granted_admin_scopes=normalize_scopes(role_data.granted_admin_scopes),
             priority=role_data.priority,
             enabled=role_data.enabled,
             is_system_role=False,
@@ -106,6 +160,16 @@ class AppRoleAdminService:
             },
         )
 
+        # A new role's "after" is its whole grant set — there is no prior state
+        # to diff against, and the grants are the point of the record.
+        self.audit.record(
+            action=AuditAction.ROLE_CREATED,
+            actor=admin,
+            target_id=role.role_id,
+            changes=self.AUDITED_FIELDS,
+            after={f: getattr(role, f) for f in self.AUDITED_FIELDS},
+        )
+
         return created_role
 
     async def update_role(
@@ -129,6 +193,28 @@ class AppRoleAdminService:
         if not existing:
             return None
 
+        # Snapshot before anything mutates it — the update loop below writes
+        # onto `existing` in place, so a diff taken afterwards would compare the
+        # object to itself and report no changes.
+        before_snapshot = copy.deepcopy(existing)
+
+        # Who may touch *this* role at all — see the method docstring.
+        try:
+            await self._assert_actor_may_mutate(existing, admin)
+        except RoleMutationForbidden as e:
+            # A delegated admin reaching for a protected or scope-bearing role.
+            # This is the one audit record worth having even though no state
+            # changed — a refused escalation is a signal, and the guard is the
+            # only place it exists.
+            self.audit.record(
+                action=AuditAction.ROLE_MUTATION_DENIED,
+                actor=admin,
+                target_id=role_id,
+                outcome=AuditOutcome.DENIED,
+                reason=str(e),
+            )
+            raise
+
         # System role protection
         if existing.is_system_role and role_id == "system_admin":
             # For system_admin, only allow updating display_name, description,
@@ -150,11 +236,23 @@ class AppRoleAdminService:
         if updates.jwt_role_mappings is not None:
             validate_jwt_role_mappings(role_id, updates.jwt_role_mappings)
 
+        # Reject unknown or non-delegable admin scopes. Note that for
+        # `system_admin` this never fires: the field is not in `allowed_fields`
+        # above, so it has already been stripped — which is correct, since
+        # system_admin holds every scope implicitly.
+        if updates.granted_admin_scopes is not None:
+            validate_admin_scopes(updates.granted_admin_scopes)
+
         # Apply updates
         update_dict = updates.model_dump(exclude_unset=True, by_alias=False)
         for field, value in update_dict.items():
             if hasattr(existing, field):
                 setattr(existing, field, value)
+
+        if updates.granted_admin_scopes is not None:
+            existing.granted_admin_scopes = normalize_scopes(
+                existing.granted_admin_scopes
+            )
 
         # Validate inheritance if changed
         if updates.inherits_from is not None:
@@ -181,6 +279,23 @@ class AppRoleAdminService:
                 "changes": list(update_dict.keys()),
             },
         )
+
+        # Diff against the pre-mutation snapshot rather than trusting
+        # `update_dict`: the form posts every field on every save, so its keys
+        # describe what was *submitted*, not what changed. A record claiming ten
+        # changed fields on a description edit is worse than no record.
+        changed, before, after = diff_fields(
+            before_snapshot, existing, self.AUDITED_FIELDS
+        )
+        if changed:
+            self.audit.record(
+                action=AuditAction.ROLE_UPDATED,
+                actor=admin,
+                target_id=role_id,
+                changes=changed,
+                before=before,
+                after=after,
+            )
 
         return updated_role
 
@@ -225,6 +340,16 @@ class AppRoleAdminService:
                 },
             )
 
+            # `before` carries the full grant set: once the role is gone this
+            # record is the only remaining evidence of what it conferred.
+            self.audit.record(
+                action=AuditAction.ROLE_DELETED,
+                actor=admin,
+                target_id=role_id,
+                changes=self.AUDITED_FIELDS,
+                before={f: getattr(existing, f) for f in self.AUDITED_FIELDS},
+            )
+
         return deleted
 
     async def sync_effective_permissions(
@@ -267,6 +392,16 @@ class AppRoleAdminService:
             },
         )
 
+        # A sync grants nothing new — it recomputes the denormalized projection.
+        # Recorded anyway because it *can* change what a role effectively
+        # confers (an inherited grant added upstream lands here), and a history
+        # with a silent step is worse than one with a noisy one.
+        self.audit.record(
+            action=AuditAction.ROLE_SYNCED,
+            actor=admin,
+            target_id=role_id,
+        )
+
         return updated_role
 
     # =========================================================================
@@ -280,6 +415,14 @@ class AppRoleAdminService:
         Compute effective permissions for a role, including inheritance.
 
         This resolves single-level inheritance and merges permissions.
+
+        **Admin scopes deliberately do not inherit.** Tools, models, and skills
+        absorb a parent's grants because that is the convenience `inheritsFrom`
+        exists to provide. Administrative power is different: a role acquiring
+        the ability to manage the tool catalog as a side effect of someone
+        setting `inheritsFrom` is exactly the surprise delegated admin exists to
+        prevent. `effective_permissions.admin_scopes` is always the role's own
+        `granted_admin_scopes`, verbatim.
         """
         all_tools: Set[str] = set(role.granted_tools)
         all_models: Set[str] = set(role.granted_models)
@@ -292,12 +435,78 @@ class AppRoleAdminService:
                 all_tools.update(parent.granted_tools)
                 all_models.update(parent.granted_models)
                 all_skills.update(parent.granted_skills)
+                # NOT parent.granted_admin_scopes — see docstring.
 
         return EffectivePermissions(
             tools=list(all_tools),
             models=list(all_models),
             skills=list(all_skills),
             quota_tier=None,  # Quota tier comes from direct configuration
+            admin_scopes=normalize_scopes(role.granted_admin_scopes),
+        )
+
+    async def _assert_actor_may_mutate(self, role: AppRole, actor: User) -> None:
+        """Gate mutation of admin-bearing roles to ``system_admin``.
+
+        ``update_role`` is not only reached from the roles admin. The tool,
+        model, and skill admin pages each offer a "which roles can use this?"
+        picker that writes *through* into role records — ``set_roles_for_tool``,
+        ``set_roles_for_model``, ``set_roles_for_skill`` all land here. That is
+        by design: granting a tool is a tool-admin's job.
+
+        What is not their job is touching a role that carries administrative
+        power. Without this guard a delegated ``admin.tools`` holder could add a
+        tool grant to ``system_admin`` — or to any role carrying
+        ``grantedAdminScopes`` — from a surface that was never meant to
+        administer roles.
+
+        So: if the target role is protected or scope-bearing, the actor must
+        hold ``system_admin``. Everything else is untouched, which keeps the
+        legitimate case (a tools admin granting a tool to ``faculty``) working.
+
+        This sits in ``update_role`` rather than in the three write-through
+        callers so that any *future* resource surface that grows a role picker
+        inherits the guard instead of having to remember it.
+
+        Fails closed: if permission resolution raises, the mutation is denied.
+
+        Raises:
+            RoleMutationForbidden: if the actor lacks ``system_admin`` and the
+                target role is protected or carries admin scopes.
+        """
+        sensitive = is_protected_role(role.role_id) or bool(role.granted_admin_scopes)
+        if not sensitive:
+            return
+
+        try:
+            permissions = await self._permission_service().resolve_user_permissions(
+                actor
+            )
+            if "system_admin" in permissions.app_roles:
+                return
+        except Exception:
+            logger.exception(
+                "Failed to resolve permissions for %s while gating a mutation of "
+                "role %s, denying",
+                actor.user_id,
+                role.role_id,
+            )
+            raise RoleMutationForbidden(
+                "Unable to verify permissions for this change."
+            )
+
+        logger.warning(
+            "Blocked non-system_admin mutation of admin-bearing role %s",
+            role.role_id,
+            extra={
+                "event": "role_mutation_blocked",
+                "role_id": role.role_id,
+                "actor_user_id": actor.user_id,
+            },
+        )
+        raise RoleMutationForbidden(
+            f"Role '{role.role_id}' grants administrative access and can only "
+            "be modified by a system administrator."
         )
 
     async def _validate_inheritance(self, inherits_from: List[str]):

@@ -179,6 +179,45 @@ describe('ChatRequestService', () => {
     );
   });
 
+  // ── `@`-mention: one turn, not a binding (Marketplace D11) ──────────────────────
+  describe('agent mention', () => {
+    it('sends the mentioned agent with the flag that stops it binding the session', async () => {
+      await service.submitChatRequest('@Policy Lookup hi', 'session1', undefined, undefined, 'agent-9');
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rag_assistant_id: 'agent-9',
+          agent_mention: true,
+        }),
+      );
+    });
+
+    it('a mention beats the conversation-bound assistant for that turn', async () => {
+      // The user just named who they want, in the composer, for this message.
+      await service.submitChatRequest('@Grader hi', 'session1', undefined, 'assistant1', 'agent-9');
+
+      const sent = mockChatHttpService.sendChatRequest.mock.calls[0][0];
+      expect(sent['rag_assistant_id']).toBe('agent-9');
+      expect(sent['agent_mention']).toBe(true);
+    });
+
+    it('leaves the URL bound to the conversation assistant, not the mention', async () => {
+      // Otherwise one `@` would convert the whole thread — the SPA reads this param as
+      // the session's assistant on every subsequent load.
+      await service.submitChatRequest('@Grader hi', null, undefined, 'assistant1', 'agent-9');
+
+      const navigation = mockRouter.navigate.mock.calls[0];
+      expect(navigation[1].queryParams).toEqual({ assistantId: 'assistant1' });
+    });
+
+    it('an unmentioned turn carries no flag at all', async () => {
+      await service.submitChatRequest('Hello', 'session1', undefined, 'assistant1');
+
+      const sent = mockChatHttpService.sendChatRequest.mock.calls[0][0];
+      expect('agent_mention' in sent).toBe(false);
+    });
+  });
+
   it('keys loading and viewed-session state to the submitted session', async () => {
     const chatState = TestBed.inject(ChatStateService) as any;
 

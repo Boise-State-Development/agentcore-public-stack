@@ -2,10 +2,10 @@
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +47,8 @@ class AuthProvider:
     logo_url: Optional[str] = None
     button_color: Optional[str] = None
     # Metadata
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
-    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
+    created_at: str = field(default_factory=lambda: utc_now_iso())
+    updated_at: str = field(default_factory=lambda: utc_now_iso())
     created_by: Optional[str] = None
     # Cognito federated identity provider name
     cognito_provider_name: Optional[str] = None
@@ -173,8 +173,8 @@ class AuthProvider:
             allowed_audiences=item.get("allowedAudiences"),
             logo_url=item.get("logoUrl"),
             button_color=item.get("buttonColor"),
-            created_at=item.get("createdAt", datetime.now(timezone.utc).isoformat() + "Z"),
-            updated_at=item.get("updatedAt", datetime.now(timezone.utc).isoformat() + "Z"),
+            created_at=item.get("createdAt", utc_now_iso()),
+            updated_at=item.get("updatedAt", utc_now_iso()),
             created_by=item.get("createdBy"),
             cognito_provider_name=item.get("cognitoProviderName"),
             agentcore_runtime_arn=item.get("agentcoreRuntimeArn"),

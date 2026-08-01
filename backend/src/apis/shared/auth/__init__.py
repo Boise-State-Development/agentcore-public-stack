@@ -3,7 +3,7 @@
 from .dependencies import get_current_user_from_session, security
 from .models import User
 from .state_store import StateStore, InMemoryStateStore, DynamoDBStateStore, create_state_store
-from .rbac import require_app_roles, require_admin
+from .rbac import require_app_roles, require_admin, require_admin_scope
 
 __all__ = [
     "get_current_user_from_session",
@@ -15,4 +15,5 @@ __all__ = [
     "create_state_store",
     "require_app_roles",
     "require_admin",
+    "require_admin_scope",
 ]

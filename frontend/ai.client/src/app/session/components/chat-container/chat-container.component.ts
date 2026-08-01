@@ -8,8 +8,6 @@ import {
   computed,
   viewChild,
 } from '@angular/core';
-import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark } from '@ng-icons/heroicons/outline';
 import { Message } from '../../services/models/message.model';
 import { MessageListComponent } from '../message-list/message-list.component';
 import { ChatInputComponent } from '../chat-input/chat-input.component';
@@ -19,7 +17,12 @@ import { Topnav } from '../../../components/topnav/topnav';
 import { SidenavService } from '../../../services/sidenav/sidenav.service';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
 import { Assistant } from '../../../assistants/models/assistant.model';
-import { AssistantCardComponent } from '../../../assistants/components/assistant-card.component';
+import { Agent, AgentRunnability } from '../../../agents/models/agent.model';
+import {
+  AgentLaunchCardComponent,
+  AgentLaunchCardView,
+  agentLaunchCardView,
+} from '../../../agents/components/agent-launch-card.component';
 import { AssistantIndicatorComponent } from '../assistant-indicator/assistant-indicator.component';
 import { SessionCostBadgeComponent } from '../session-cost-badge/session-cost-badge.component';
 import { VoiceOverlayComponent } from '../voice-overlay';
@@ -65,13 +68,11 @@ export interface ChatContainerConfig {
     AnimatedTextComponent,
     ParagraphSkeletonComponent,
     Topnav,
-    NgIcon,
-    AssistantCardComponent,
+    AgentLaunchCardComponent,
     AssistantIndicatorComponent,
     SessionCostBadgeComponent,
     VoiceOverlayComponent,
   ],
-  providers: [provideIcons({ heroXMark })],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './chat-container.component.html',
   styleUrl: './chat-container.component.css',
@@ -107,6 +108,15 @@ export class ChatContainerComponent {
 
   // Optional inputs
   assistant = input<Assistant | null>(null);
+  /**
+   * The governed Agent behind this conversation, when it resolves (`agentId ==
+   * assistantId`). The launch card reads from this rather than `assistant` because
+   * tagline, publisher, category and capabilities exist only on the Agent shape — see
+   * `agentLaunchCardView`.
+   */
+  agent = input<Agent | null>(null);
+  /** D6, fetched best-effort by the session page; the card omits the line without it. */
+  runnability = input<AgentRunnability | null>(null);
   assistantError = input<string | null>(null);
   isLoadingAssistant = input<boolean>(false);
   isChatLoading = input<boolean>(false);
@@ -130,7 +140,10 @@ export class ChatContainerComponent {
   }));
 
   // Output events
-  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[] }>();
+  // `mentionAgentId` rides through untouched (Marketplace D11): the container is a
+  // layout shell, and dropping the field here would silently turn every `@`-mention
+  // back into a plain turn.
+  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string }>();
   continueRequested = output<void>();
   messageCancelled = output<void>();
   fileAttached = output<File>();
@@ -141,6 +154,50 @@ export class ChatContainerComponent {
   assistantEdit = output<void>();
   assistantShare = output<void>();
   voiceClosed = output<void>();
+
+  /**
+   * What the launch card renders.
+   *
+   * Prefers the Agent shape and falls back to the Assistant, because the two loads are
+   * independent: `loadAssistant` resolves first and `loadAgentBindings` follows, and the
+   * Agent call is allowed to fail outright (the `/agents` surface can be off). Without
+   * the fallback the card would flicker in a beat late, or never paint at all in a
+   * flag-off environment — for a record that is the same record either way.
+   *
+   * The fallback is deliberately `listed: false`: an Assistant carries no listing, so
+   * neither store affordance is offered rather than guessed at.
+   */
+  protected readonly launchCardView = computed<AgentLaunchCardView | null>(() => {
+    const agent = this.agent();
+    if (agent) return agentLaunchCardView(agent);
+
+    const assistant = this.assistant();
+    if (!assistant) return null;
+    return {
+      agentId: assistant.assistantId,
+      name: assistant.name,
+      description: assistant.description,
+      ownerName: assistant.ownerName,
+      emoji: assistant.emoji,
+      starters: assistant.starters ?? [],
+      listed: false,
+    };
+  });
+
+  /**
+   * The agent the foot-of-conversation feedback link asks about, or null.
+   *
+   * Read off `agent()` rather than `launchCardView()` even though the card already carries
+   * a `listed` flag: the card falls back to the Assistant shape with `listed: false`, and
+   * an affordance that is silently absent whenever the `/agents` load loses a race would
+   * be a hard thing to notice and a harder one to explain. Here, no Agent means no link,
+   * for the one honest reason — we do not know that this is a store agent.
+   */
+  protected readonly feedbackAgent = computed<{ id: string; name: string } | null>(() => {
+    const agent = this.agent();
+    if (agent?.listing?.state !== 'published') return null;
+    return { id: agent.agentId, name: agent.name };
+  });
 
   // Computed signals
   protected readonly hasMessages = computed(() => this.messages().length > 0);
@@ -199,7 +256,7 @@ export class ChatContainerComponent {
   }
 
   // Event handlers
-  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[] }) {
+  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string }) {
     this.messageSubmitted.emit(event);
 
     // Wait for DOM to update (user message to be added) then scroll to it

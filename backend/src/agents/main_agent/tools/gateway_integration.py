@@ -3,7 +3,10 @@ Gateway MCP client integration for managed tool execution
 """
 import logging
 from typing import List, Optional, Any
-from agents.main_agent.integrations.gateway_mcp_client import get_gateway_client_if_enabled
+from agents.main_agent.integrations.gateway_mcp_client import (
+    GatewayAuthError,
+    get_gateway_client_if_enabled,
+)
 from apis.shared.tools.scoped_ids import parse_scoped_tool_id
 
 logger = logging.getLogger(__name__)
@@ -79,15 +82,27 @@ class GatewayIntegration:
         """Initialize gateway integration"""
         self.client: Optional[Any] = None
 
-    def get_client(self, enabled_gateway_tool_ids: List[str]) -> Optional[Any]:
+    def get_client(
+        self,
+        enabled_gateway_tool_ids: List[str],
+        auth_token: Optional[str] = None,
+    ) -> Optional[Any]:
         """
         Get Gateway MCP client if gateway tools are enabled
 
         Args:
             enabled_gateway_tool_ids: List of gateway tool IDs (e.g., ["gateway_wikipedia", "gateway_arxiv"])
+            auth_token: The current user's Cognito access token, forwarded as a
+                Bearer token to the JWT-authorized Gateway. Required unless the
+                Gateway is running in legacy ``iam`` inbound-auth mode.
 
         Returns:
             MCPClient instance or None if not available
+
+        Note:
+            The client is per-user because the bearer token is. This integration
+            is instantiated per agent (``BaseAgent.__init__``), so the token
+            never outlives the invocation it belongs to.
         """
         if not enabled_gateway_tool_ids:
             logger.info("No gateway tools requested")
@@ -95,7 +110,18 @@ class GatewayIntegration:
 
         # Get Gateway MCP client (Strands 1.16+ Managed Integration)
         # Store as instance variable to keep session alive during Agent lifecycle
-        self.client = get_gateway_client_if_enabled(enabled_tool_ids=enabled_gateway_tool_ids)
+        try:
+            self.client = get_gateway_client_if_enabled(
+                enabled_tool_ids=enabled_gateway_tool_ids,
+                auth_token=auth_token,
+            )
+        except GatewayAuthError as e:
+            # Degrade gracefully: the turn proceeds without Gateway tools rather
+            # than failing outright. Every Gateway call would 401 anyway, and a
+            # user with no token cannot be served these tools at all.
+            logger.warning(f"⚠️  Gateway tools unavailable: {e}")
+            self.client = None
+            return None
 
         if self.client:
             logger.info(f"✅ Gateway MCP client created (Managed Integration with Strands 1.16+)")

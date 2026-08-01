@@ -11,6 +11,7 @@ import {
   ElementRef,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPlus,
@@ -37,6 +38,11 @@ import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { VoiceChatService, type VoiceStatus } from '../../services/voice';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
+import {
+  AgentMentionService,
+  MentionableAgent,
+} from '../../../agents/services/agent-mention.service';
+import { AgentMentionMenuComponent } from './agent-mention-menu.component';
 
 // Must stay in sync with the inline min-height/max-height on the textarea in
 // chat-input.component.html.
@@ -47,11 +53,22 @@ interface Message {
   content: string;
   timestamp: Date;
   fileUploadIds?: string[];
+  /**
+   * Marketplace D11: the Agent `@`-mentioned for **this turn only**. The conversation is
+   * not bound to it — the next message with no mention is plain chat again.
+   */
+  mentionAgentId?: string;
+}
+
+/** The `@…` the caret is currently sitting in, and where it starts in the text. */
+interface MentionToken {
+  query: string;
+  start: number;
 }
 
 @Component({
   selector: 'app-chat-input',
-  imports: [FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent],
+  imports: [FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent],
   providers: [
     provideIcons({
       heroPlus,
@@ -73,6 +90,7 @@ export class ChatInputComponent {
   private readonly toolService = inject(ToolService);
   private readonly voiceChatService = inject(VoiceChatService);
   protected readonly systemPromptsService = inject(SystemPromptsService);
+  private readonly router = inject(Router);
 
   // Input: session ID for file uploads
   readonly sessionId = input<string | null>(null);
@@ -94,6 +112,11 @@ export class ChatInputComponent {
   // Input: auto-focus the textarea on load and session change (defaults to true).
   // Disabled where the input sits beside an editable form (e.g. assistant preview).
   readonly autoFocus = input<boolean>(true);
+
+  // Input: offer the `@`-mention menu (defaults to true). Off where handing the turn to
+  // another Agent makes no sense — the Agent editor's own preview, which is already
+  // running the Agent being edited.
+  readonly showAgentMentions = input<boolean>(true);
 
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
 
@@ -173,6 +196,58 @@ export class ChatInputComponent {
     }
   });
 
+  // =========================================================================
+  // `@`-mention (Marketplace D11)
+  //
+  // Mentioning an Agent hands **that turn** to its model, tools and skills without
+  // leaving the thread. The conversation is not bound to it: the mention rides one
+  // request, and the next plain message is plain chat again.
+  //
+  // The menu opens on an `@` that starts a word and closes on anything that ends the
+  // token — whitespace, a second `@`, moving the caret away, or Escape. `mentionedAgent`
+  // survives the menu closing, because the *selection* is a property of the pending turn
+  // while the menu is a property of what is being typed right now.
+  // =========================================================================
+  private readonly mentionService = inject(AgentMentionService);
+
+  /** The Agent this turn will be handed to, once picked. Cleared on submit. */
+  readonly mentionedAgent = signal<MentionableAgent | null>(null);
+
+  /** The `@…` token under the caret, or null when the caret is not in one. */
+  private readonly mentionToken = signal<MentionToken | null>(null);
+
+  readonly mentionActiveIndex = signal(0);
+
+  readonly mentionResults = computed(() => {
+    const token = this.mentionToken();
+    return token ? this.mentionService.search(token.query) : [];
+  });
+
+  /**
+   * The menu opens only when there is something to offer, and only when the turn is not
+   * already spoken for.
+   *
+   * A user with no Agents — or an environment with the whole surface switched off, where
+   * both source calls 404 — must be able to type `@` in a sentence without a menu
+   * appearing to say it has nothing. Once the lists load, the token is still set and the
+   * menu pops in on its own.
+   *
+   * **One mention per turn.** D11 hands *the* turn to *an* Agent, so a second mention has
+   * nothing to mean. Suppressing the menu while one is pending also stops it re-opening
+   * when the caret lands back inside the `@Name` text already committed — names contain
+   * spaces, so that would otherwise happen constantly. The chip's `✕` is how you change
+   * your mind.
+   */
+  readonly isMentionMenuOpen = computed(
+    () =>
+      this.showAgentMentions() &&
+      this.mentionToken() !== null &&
+      this.mentionedAgent() === null &&
+      this.mentionService.mentionable().length > 0,
+  );
+
+  readonly mentionQuery = computed(() => this.mentionToken()?.query ?? '');
+
   constructor() {
     // Focus the textarea on first mount...
     afterNextRender(() => this.focusInput());
@@ -218,11 +293,15 @@ export class ChatInputComponent {
     this.messageSubmitted.emit({
       content,
       timestamp: new Date(),
-      fileUploadIds: fileUploadIds.length > 0 ? fileUploadIds : undefined
+      fileUploadIds: fileUploadIds.length > 0 ? fileUploadIds : undefined,
+      mentionAgentId: this.mentionedAgent()?.agentId,
     });
 
-    // Clear input and pending uploads
+    // Clear input and pending uploads. The mention clears with them: it belongs to the
+    // turn that was just sent, not to the composer (D11).
     this.userInput.set('');
+    this.mentionedAgent.set(null);
+    this.closeMentionMenu();
     this.resetTextareaHeight();
     this.fileUploadService.clearReadyUploads();
   }
@@ -301,6 +380,100 @@ export class ChatInputComponent {
     const textarea = event.target as HTMLTextAreaElement;
     this.userInput.set(textarea.value);
     this.autoResize(textarea);
+    this.syncMentionToken(textarea);
+  }
+
+  // ---------------------------------------------------------------- mentions (D11)
+
+  /**
+   * Recompute the `@…` token from the text before the caret.
+   *
+   * Matched rather than tracked: the caret can move by click, arrow key, undo or paste,
+   * and a state machine that only listens to typing gets out of step with all four. The
+   * token must start a word (`^` or whitespace) so an email address never opens the menu,
+   * and it ends at whitespace or a second `@`.
+   */
+  private syncMentionToken(textarea: HTMLTextAreaElement): void {
+    if (!this.showAgentMentions()) {
+      return;
+    }
+    const caret = textarea.selectionStart ?? textarea.value.length;
+    const before = textarea.value.slice(0, caret);
+    const match = /(?:^|\s)@([^\s@]*)$/.exec(before);
+
+    if (!match) {
+      this.mentionToken.set(null);
+      return;
+    }
+
+    void this.mentionService.load();
+    this.mentionToken.set({ query: match[1], start: caret - match[1].length - 1 });
+    this.mentionActiveIndex.set(0);
+  }
+
+  /** Caret moves that are not edits — a click or an arrow key — also open or close the menu. */
+  onTextareaCaretMove(event: Event): void {
+    this.syncMentionToken(event.target as HTMLTextAreaElement);
+  }
+
+  /**
+   * Commit a pick: replace the typed `@query` with the Agent's name and remember it for
+   * this turn.
+   *
+   * The literal `@Name` stays in the message text. It is what the user typed, it is what
+   * the thread will show them tomorrow when they wonder why one answer looks different,
+   * and the model reads it as the address it is.
+   */
+  onMentionPicked(agent: MentionableAgent): void {
+    const token = this.mentionToken();
+    const textarea = this.messageInput()?.nativeElement;
+    if (!token || !textarea) {
+      return;
+    }
+
+    const caret = textarea.selectionStart ?? textarea.value.length;
+    const replacement = `@${agent.name} `;
+    const next =
+      textarea.value.slice(0, token.start) + replacement + textarea.value.slice(caret);
+
+    this.userInput.set(next);
+    this.mentionedAgent.set(agent);
+    this.mentionToken.set(null);
+
+    // Write through to the element and restore the caret: the textarea is not bound to
+    // the signal (it uses `[value]` + an input handler), so the DOM is authoritative for
+    // the caret and would otherwise sit at the end of the replaced text.
+    textarea.value = next;
+    const caretAfter = token.start + replacement.length;
+    textarea.setSelectionRange(caretAfter, caretAfter);
+    textarea.focus();
+    this.autoResize(textarea);
+  }
+
+  /** Clear the pending mention; the turn goes back to plain chat. */
+  clearMention(): void {
+    this.mentionedAgent.set(null);
+    this.focusInput();
+  }
+
+  private closeMentionMenu(): void {
+    this.mentionToken.set(null);
+  }
+
+  private moveMentionSelection(delta: number): void {
+    const count = this.mentionResults().length;
+    if (count === 0) {
+      return;
+    }
+    const next = (this.mentionActiveIndex() + delta + count) % count;
+    this.mentionActiveIndex.set(next);
+  }
+
+  private commitActiveMention(): void {
+    const agent = this.mentionResults()[this.mentionActiveIndex()];
+    if (agent) {
+      this.onMentionPicked(agent);
+    }
   }
 
   /**
@@ -326,6 +499,34 @@ export class ChatInputComponent {
   }
 
   onKeyDown(event: KeyboardEvent) {
+    // The `@` menu owns the keyboard while it is open (D11). Enter must pick an Agent
+    // rather than send the half-typed message — a send that fires out from under an open
+    // menu is the single most annoying way to get an autocomplete wrong.
+    if (this.isMentionMenuOpen()) {
+      switch (event.key) {
+        case 'ArrowDown':
+          event.preventDefault();
+          this.moveMentionSelection(1);
+          return;
+        case 'ArrowUp':
+          event.preventDefault();
+          this.moveMentionSelection(-1);
+          return;
+        case 'Enter':
+        case 'Tab':
+          if (this.mentionResults().length > 0) {
+            event.preventDefault();
+            this.commitActiveMention();
+            return;
+          }
+          break;
+        case 'Escape':
+          event.preventDefault();
+          this.closeMentionMenu();
+          return;
+      }
+    }
+
     // Submit on Enter (without Shift)
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -335,10 +536,25 @@ export class ChatInputComponent {
 
   onFocus() {
     this.isFocused.set(true);
+    // Warm the `@` candidates before the first keystroke needs them — both sources are
+    // session-cached, so this costs one request per session and makes the menu instant.
+    if (this.showAgentMentions()) {
+      void this.mentionService.load();
+    }
   }
 
   onBlur() {
     this.isFocused.set(false);
+    // The menu's own rows commit on `mousedown` and preventDefault, so reaching here
+    // means the user went somewhere else entirely — close it. The *selected* Agent
+    // survives: it belongs to the pending turn, not to the menu.
+    this.closeMentionMenu();
+  }
+
+  /** The menu's last row: the store, which is where a search over everything belongs (D11). */
+  onMentionBrowseAll(): void {
+    this.closeMentionMenu();
+    void this.router.navigate(['/agents/discover']);
   }
 
   // =========================================================================

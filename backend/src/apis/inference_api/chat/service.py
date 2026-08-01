@@ -118,6 +118,80 @@ def _is_paused_on_interrupt(agent: BaseAgent) -> bool:
     return bool(state is not None and getattr(state, "activated", False))
 
 
+def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
+    """Point a newly built agent at the conversation its session is already having.
+
+    The cache key varies with an agent's *configuration* — system prompt, tools,
+    model, skills — and that is correct: those genuinely need different ``Agent``
+    objects. The **conversation** is not configuration. One session is one
+    conversation, whichever agent happens to run a given turn.
+
+    Without this, an `@`-mention (Marketplace D11) forks the thread. The mention
+    turn misses the cache and builds a second agent, which restores history and
+    looks fine; the next plain turn reverts the key and cache-*hits* the original
+    instance, whose in-memory list still ends before the mention. ``initialize()``
+    never re-runs on a hit, so the stale list wins and the model answers "NOT IN
+    HISTORY" about a turn the user can see on screen (issue #741).
+
+    ⚠️ The list is shared **by reference, deliberately**. Copying would fix only
+    the direction that already works — the miss. The turn that goes stale is a
+    cache hit, where nothing runs at all and there is no opportunity to copy
+    anything. Aliasing is what makes the mention turn's appends visible to the
+    instance the *next* turn will hit. This holds because every site that rebinds
+    ``agent.messages`` lives inside ``TurnBasedSessionManager.initialize()``
+    (document stripping, content-block sanitizing, compaction slicing, pairing
+    repair) and so runs before we get here; after construction the list is only
+    appended to. A future compaction that rebinds mid-life would silently break
+    the alias — ``test_second_cache_key_for_a_session_shares_the_conversation``
+    is what catches that.
+
+    Re-restoring on a stale hit was the alternative and is worse: restored history
+    passes through the sanitizers and pairing repair while accumulated history does
+    not, so the same conversation can serialize differently depending on the path
+    that produced it — a prefix-byte change on an arbitrary turn, which is exactly
+    what the prompt-cache contract forbids. Aliasing never re-serializes anything.
+
+    Safe against concurrent turns because the single-flight session lease admits
+    one turn per session at a time. Cross-replica divergence is not our problem
+    either way — separate processes share no cache — but the length guard below
+    keeps us from *losing* history if a live instance ever trails what was
+    restored from Memory.
+    """
+    inner = getattr(agent, "agent", None)
+    if inner is None or not isinstance(getattr(inner, "messages", None), list):
+        return
+
+    live = None
+    for key, cached in _agent_cache.items():
+        if key[0] != session_id:
+            continue
+        cached_inner = getattr(cached, "agent", None)
+        if isinstance(getattr(cached_inner, "messages", None), list):
+            live = cached_inner  # newest wins — dict preserves insertion order
+
+    if live is None or live.messages is inner.messages:
+        return
+
+    # A restored list longer than the live one means that instance is behind
+    # (another replica wrote to Memory). Keep the longer history rather than
+    # aliasing to a shorter one. Note the reverse comparison would be wrong:
+    # compaction legitimately makes a restored list *shorter* than the live one.
+    if len(inner.messages) > len(live.messages):
+        logger.info(
+            "Session %s: restored history (%d) is ahead of the live instance (%d); "
+            "keeping the restored list",
+            scrub_log(session_id), len(inner.messages), len(live.messages),
+        )
+        return
+
+    logger.info(
+        "Session %s: adopting the in-flight conversation (%d message(s)) for a "
+        "newly built agent",
+        scrub_log(session_id), len(live.messages),
+    )
+    inner.messages = live.messages
+
+
 async def get_agent(
     session_id: str,
     user_id: Optional[str] = None,
@@ -252,6 +326,12 @@ async def get_agent(
     if resolved_agent_type != "voice":
         create_kwargs["accessible_skill_ids"] = accessible_skill_ids
     agent = create_agent(**create_kwargs)
+
+    # One session is one conversation, even when a turn runs under a different
+    # configuration (an `@`-mention, a different toolset). Runs before the
+    # extra_tools early return below, because an uncached agent still takes a
+    # turn in the thread and must not fork it. See #741.
+    _adopt_session_conversation(agent, session_id)
 
     # Stamp the type onto the construction snapshot so a paused turn can
     # resume on the same factory variant after cache eviction. A turn carrying

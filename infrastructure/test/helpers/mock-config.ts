@@ -60,6 +60,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     agents: {
       enabled: false,
     },
+    agentMarketplace: {
+      enabled: false,
+    },
     fineTuning: {},
     artifacts: {
       retentionDays: 90,
@@ -73,6 +76,11 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
         enabled: false,
         accessTokenClaims: {},
       },
+    },
+    gateway: {
+      // Mirror the production default. JWT tests opt in explicitly via
+      // createMockConfig({ gateway: { inboundAuth: 'jwt' } }).
+      inboundAuth: 'iam',
     },
     cognito: {
       domainPrefix: MOCK_PREFIX,

@@ -117,13 +117,25 @@ import {
             <p
               class="mt-1 text-lg/7 font-semibold"
               [class]="
-                anatomyResource.value().avoidableMissCount > 0
+                unexplainedMisses() > 0
                   ? 'text-red-600 dark:text-red-400'
                   : 'text-gray-900 dark:text-white'
               "
             >
               {{ anatomyResource.value().avoidableMissCount }}
             </p>
+            <!--
+              #756 — an @-mention re-writes the prefix on purpose and looks exactly
+              like the regression this page exists to find. The count stays whole (the
+              spend was real); the explained part is named underneath so the red number
+              above only means "unexplained".
+            -->
+            @if (anatomyResource.value().agentSwitchMissCount > 0) {
+              <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                {{ anatomyResource.value().agentSwitchMissCount }} from an agent switch ·
+                <span class="font-medium">{{ unexplainedMisses() }} unexplained</span>
+              </p>
+            }
           </div>
           <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
             <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -234,6 +246,17 @@ import {
                     </td>
                     <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                       {{ formatGap(row.call.cacheGapSeconds) }}
+                      @if (row.call.cachePrefixGapSeconds; as prefixGap) {
+                        <!-- The gap that decided the verdict, when a call with a
+                             different prefix ran in between (e.g. an @-mention).
+                             Without it, a miss_ttl_expired beside a short gap
+                             reads as a bug rather than as the correct answer. -->
+                        <span
+                          class="ml-1 text-xs text-gray-500 dark:text-gray-400"
+                          [title]="'Last call with the same prefix was ' + formatGap(prefixGap) + ' ago — that is the entry this call could have hit'"
+                          >({{ formatGap(prefixGap) }})</span
+                        >
+                      }
                     </td>
                     <td
                       class="whitespace-nowrap px-3 py-2 text-right tabular-nums"
@@ -353,6 +376,19 @@ export class SessionCostAnatomyPage {
 
   /** True when the backend returned 404 — the session has no cost rows. */
   readonly notFound = computed(() => this.errorStatus(this.anatomyResource.error()) === 404);
+
+  /**
+   * Avoidable misses with no explanation — the number that should never move (#756).
+   *
+   * `avoidableMissCount` includes deliberate `@`-mention prefix swaps, which cost real
+   * money but are not a regression. The backend reports the explained subset rather than
+   * deducting it, so the page does the subtraction where a reader can see both halves.
+   */
+  readonly unexplainedMisses = computed(() => {
+    const anatomy = this.anatomyResource.value();
+    if (!anatomy) return 0;
+    return Math.max(0, anatomy.avoidableMissCount - anatomy.agentSwitchMissCount);
+  });
 
   private expandedRows = signal<ReadonlySet<number>>(new Set());
 

@@ -23,6 +23,7 @@ must go to a child row (``AST#{id}/BINDING#…``), not inline here.
 
 from typing import List
 
+from apis.shared.assistants.icons import icon_url
 from apis.shared.assistants.models import AgentBinding, Assistant
 
 
@@ -51,6 +52,10 @@ def to_agent_view(assistant: Assistant) -> dict:
     Returns a plain dict (camelCase keys) — the HTTP response model is a route concern
     (Phase 3). ``agentId`` aliases ``assistantId``; legacy ids remain valid. ``owner_id``
     is deliberately omitted (never returned to clients), matching ``AssistantResponse``.
+
+    ``instructions`` is projected here and **dropped by the route** for anyone who is not
+    an owner or editor (Marketplace Phase 3). The gate lives at the route because that is
+    where the caller's permission is known; this function stays a pure record projection.
     """
     return {
         "agentId": assistant.assistant_id,
@@ -69,4 +74,14 @@ def to_agent_view(assistant: Assistant) -> dict:
         "status": assistant.status,
         "createdAt": assistant.created_at,
         "updatedAt": assistant.updated_at,
+        # Marketplace (Phase 1 fields, projected in Phase 3 when the detail page first
+        # needed them). All three are ``None`` on an agent that was never submitted —
+        # the D3 backfill default — and every route serving ``AgentResponse`` uses
+        # ``response_model_exclude_none``, so that payload is unchanged.
+        "tagline": assistant.tagline,
+        "iconKey": assistant.icon_key,
+        # Derived, never stored (Phase 4): the record holds the S3 key, the read shape
+        # holds where to fetch it from. ``None`` when unset → the SPA's generated gradient.
+        "iconUrl": icon_url(assistant.assistant_id, assistant.icon_key),
+        "listing": assistant.listing.model_dump(by_alias=True) if assistant.listing else None,
     }

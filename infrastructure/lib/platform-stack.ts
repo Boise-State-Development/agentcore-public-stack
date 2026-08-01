@@ -22,6 +22,7 @@ import { NetworkConstruct } from './constructs/network/network-construct';
 
 // Identity
 import { ArtifactRenderTokenSecretConstruct } from './constructs/identity/artifact-render-token-secret-construct';
+import { TokenExchangeSecretConstruct } from './constructs/identity/token-exchange-secret-construct';
 import { AuthProvidersConstruct } from './constructs/identity/auth-providers-construct';
 import { AuthSecretConstruct } from './constructs/identity/auth-secret-construct';
 import { BffCookieKeyConstruct } from './constructs/identity/bff-cookie-key-construct';
@@ -36,6 +37,7 @@ import { AdminTablesConstruct } from './constructs/data/admin-tables-construct';
 import { AuthTablesConstruct } from './constructs/data/auth-tables-construct';
 import { CostTrackingTablesConstruct } from './constructs/data/cost-tracking-tables-construct';
 import { FileUploadConstruct } from './constructs/data/file-upload-construct';
+import { AuditLogConstruct } from './constructs/data/audit-log-construct';
 import { QuotaTablesConstruct } from './constructs/data/quota-tables-construct';
 import { SharedConversationsConstruct } from './constructs/data/shared-conversations-construct';
 
@@ -157,6 +159,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly apiKeysTable: dynamodb.ITable;
   public readonly userQuotasTable: dynamodb.ITable;
   public readonly quotaEventsTable: dynamodb.ITable;
+  public readonly auditLogTable: dynamodb.ITable;
   public readonly sessionsMetadataTable: dynamodb.ITable;
   public readonly userCostSummaryTable: dynamodb.ITable;
   public readonly systemCostRollupTable: dynamodb.ITable;
@@ -191,6 +194,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly artifactsContentBucket: s3.IBucket;
   public readonly artifactsTable: dynamodb.ITable;
   public readonly artifactRenderTokenSecret: secretsmanager.ISecret;
+  public readonly tokenExchangeSecret?: secretsmanager.ISecret;
   /**
    * The CSP `frame-ancestors` source list resolved for the artifacts
    * iframe origin (space-separated). Forwarded to the render Lambda
@@ -330,6 +334,19 @@ export class PlatformStack extends cdk.Stack {
     );
     this.artifactRenderTokenSecret = artifactRenderToken.secret;
 
+    // Only for deployments that actually use an external token service. Creating
+    // it unconditionally would add a billed Secrets Manager secret to every
+    // fork, including those that never register an external MCP server and
+    // intend to use SigV4 for all API-to-MCP traffic.
+    if (config.tokenExchange) {
+      const tokenExchange = new TokenExchangeSecretConstruct(
+        this,
+        'TokenExchange',
+        { config },
+      );
+      this.tokenExchangeSecret = tokenExchange.secret;
+    }
+
     // ============================================================
     // Data tables
     // ============================================================
@@ -345,6 +362,9 @@ export class PlatformStack extends cdk.Stack {
     });
     this.userQuotasTable = quotaTables.userQuotasTable;
     this.quotaEventsTable = quotaTables.quotaEventsTable;
+
+    const auditLog = new AuditLogConstruct(this, 'AuditLog', { config });
+    this.auditLogTable = auditLog.auditLogTable;
 
     const costTrackingTables = new CostTrackingTablesConstruct(
       this,
@@ -568,7 +588,13 @@ export class PlatformStack extends cdk.Stack {
     // /^${prefix}-mcp-/ Lambda naming convention used by the
     // external mcp-servers repo). No code lives here — Gateway
     // Targets are managed out-of-band by mcp-servers' own deploy.
-    new AgentCoreGatewayConstruct(this, 'AgentCoreGateway', { config });
+    // Cognito refs are passed explicitly (not via SSM) because the pool is a
+    // sibling in this same stack — see AgentCoreGatewayConstructProps.
+    new AgentCoreGatewayConstruct(this, 'AgentCoreGateway', {
+      config,
+      userPool: cognitoConstruct.userPool,
+      bffAppClient: cognitoConstruct.bffAppClient,
+    });
 
     // ============================================================
     // MCP sandbox edge (always-on; bucket+dist; everything is wired
@@ -696,6 +722,7 @@ export class PlatformStack extends cdk.Stack {
       apiKeysTable: this.apiKeysTable,
       userQuotasTable: this.userQuotasTable,
       quotaEventsTable: this.quotaEventsTable,
+      auditLogTable: this.auditLogTable,
       sessionsMetadataTable: this.sessionsMetadataTable,
       userCostSummaryTable: this.userCostSummaryTable,
       systemCostRollupTable: this.systemCostRollupTable,
@@ -714,6 +741,7 @@ export class PlatformStack extends cdk.Stack {
       artifactsContentBucket: this.artifactsContentBucket,
       artifactsTable: this.artifactsTable,
       artifactRenderTokenSecret: this.artifactRenderTokenSecret,
+      tokenExchangeSecret: this.tokenExchangeSecret,
       artifactsOriginUrl: this.artifactsOriginUrl,
       skillResourcesBucket: this.skillResourcesBucket,
       memorySpacesBucket: this.memorySpacesBucket,

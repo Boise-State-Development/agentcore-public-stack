@@ -29,6 +29,31 @@ describe('SessionService', () => {
   // jsdom enforces `__Host-` cookie prefix rules (Secure required, no
   // http://localhost), so a real `document.cookie` write is silently
   // rejected. Install a minimal one-cookie shim per-test.
+  //
+  // This spec replaces two process globals — `document.cookie` and
+  // `window.location`. The builder runs vitest with `isolate: false`, so
+  // anything left installed here follows every spec that later lands in the
+  // same worker. Snapshot the real descriptors up front and put them back in
+  // `afterEach`.
+  const realCookieDescriptor = Object.getOwnPropertyDescriptor(document, 'cookie');
+  const realLocationDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+
+  const restoreGlobals = () => {
+    if (realCookieDescriptor) {
+      Object.defineProperty(document, 'cookie', realCookieDescriptor);
+    } else {
+      // `cookie` lives on Document.prototype; dropping our own property
+      // re-exposes the real accessor.
+      delete (document as unknown as Record<string, unknown>)['cookie'];
+    }
+
+    if (realLocationDescriptor) {
+      Object.defineProperty(window, 'location', realLocationDescriptor);
+    } else {
+      delete (window as unknown as Record<string, unknown>)['location'];
+    }
+  };
+
   let cookieStore = '';
   const installCookieShim = () => {
     cookieStore = '';
@@ -85,6 +110,7 @@ describe('SessionService', () => {
   afterEach(() => {
     httpMock.verify();
     clearCsrfCookie();
+    restoreGlobals();
     TestBed.resetTestingModule();
     vi.restoreAllMocks();
   });

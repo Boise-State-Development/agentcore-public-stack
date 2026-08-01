@@ -55,6 +55,13 @@ class EnvVars:
 
     # --- Gateway ---
     GATEWAY_MCP_ENABLED = "AGENTCORE_GATEWAY_MCP_ENABLED"
+    # Gateway inbound authorizer mode: "iam" (default) or "jwt".
+    # MUST match the deployed Gateway's authorizerType. CDK sets this from
+    # `config.gateway.inboundAuth` so the two cannot drift; the default is
+    # deliberately the conservative one (see Defaults.GATEWAY_INBOUND_AUTH).
+    # With "iam" the agent SigV4-signs Gateway calls; with "jwt" it sends the
+    # signed-in user's Cognito access token as a Bearer token.
+    GATEWAY_INBOUND_AUTH = "AGENTCORE_GATEWAY_INBOUND_AUTH"
 
     # --- MCP Apps (host renderer initiative) ---
     MCP_APPS_HOST_ENABLED = "AGENTCORE_MCP_APPS_HOST_ENABLED"
@@ -120,6 +127,15 @@ class Defaults:
 
     # --- Gateway ---
     GATEWAY_MCP_ENABLED = True
+    # Fail-safe default: SigV4. An absent env var must mean "behave like the
+    # Gateway that is actually deployed today", and AgentCore refuses to change
+    # a Gateway's authorizerType after creation ("Authorizer type cannot be
+    # updated for an existing gateway"), so every existing Gateway is AWS_IAM.
+    # Defaulting to 'jwt' made a partial deploy (infra rolled back, backend
+    # shipped) send bearer tokens to an IAM Gateway and 401 every tool call.
+    # CDK sets this explicitly from `config.gateway.inboundAuth`, so a JWT
+    # Gateway still gets 'jwt' — but only once the infra says so.
+    GATEWAY_INBOUND_AUTH = "iam"
 
     # --- MCP Apps (host renderer initiative) ---
     # Gates the entire MCP Apps host surface. Flipped on in PR #7 of

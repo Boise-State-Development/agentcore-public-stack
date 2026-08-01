@@ -124,3 +124,33 @@ def register_safe_500_handler(app: Any) -> None:
         return JSONResponse(status_code=500, content={"detail": _GENERIC_INTERNAL_ERROR})
 
     app.add_exception_handler(Exception, _handler)
+
+
+def register_role_mutation_forbidden_handler(app: Any) -> None:
+    """Install a FastAPI handler mapping ``RoleMutationForbidden`` to 403.
+
+    Raised when a delegated admin tries to mutate a role that carries
+    administrative power (a protected role, or one with ``grantedAdminScopes``)
+    from a resource surface such as the tool/model/skill role pickers.
+
+    It needs its own handler because those routes catch ``ValueError`` and map
+    it to 400 — a denied privilege escalation reported as "bad request" is both
+    misleading to the caller and invisible in a 4xx-by-status dashboard. The
+    exception's message is safe to return: it names only the role id the caller
+    just submitted, and the escalation is denied either way.
+    """
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+
+    from apis.shared.rbac.role_constraints import RoleMutationForbidden
+
+    async def _handler(request: Request, exc: RoleMutationForbidden) -> JSONResponse:
+        logger.warning(
+            "Role mutation forbidden on %s %s: %s",
+            request.method,
+            request.url.path,
+            exc,
+        )
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+    app.add_exception_handler(RoleMutationForbidden, _handler)

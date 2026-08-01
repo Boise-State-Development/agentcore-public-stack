@@ -9,8 +9,9 @@ import {
   heroChatBubbleLeftRight,
   heroShare,
   heroTrash,
-  heroCpuChip,
   heroSparkles,
+  heroSquares2x2,
+  heroBars3,
 } from '@ng-icons/heroicons/outline';
 import { AgentService } from './services/agent.service';
 import { Agent } from './models/agent.model';
@@ -18,21 +19,36 @@ import {
   ConfirmationDialogComponent,
   ConfirmationDialogData,
 } from '../components/confirmation-dialog/confirmation-dialog.component';
-import { ShareAssistantDialogComponent, ShareAssistantDialogData } from '../assistants/components/share-assistant-dialog.component';
+import { ShareAgentDialogComponent, ShareAgentDialogData } from './components/share-agent-dialog.component';
 import { TooltipDirective } from '../components/tooltip/tooltip.directive';
+import { AgentsTabsComponent } from './components/agents-tabs.component';
+import { AgentIconComponent } from './components/agent-icon.component';
+import { AgentsViewMode, LocalSettingsService } from '../services/local-settings.service';
 
 /**
- * Agent Designer — the list surface. A sibling of the Assistants list page but
- * over the `/agents` surface: each card carries the Agent's model + binding
- * summary (the whole point of an Agent vs. a legacy Assistant). Share reuses the
- * assistants share dialog since the records are the same (agentId == assistantId).
+ * Agent Designer — the list surface.
+ *
+ * A card is an **index entry**, not a summary: icon, name, one line, and the handful of
+ * verbs you act on it with. The model, the binding counts and the whole publication
+ * apparatus used to live here too, and between them they turned a page you scan into a
+ * page you read.
+ *
+ * Publication now lives in the share dialog, with the rest of "who can reach this?" —
+ * people, the link and the store listing are one question asked at three widths, and
+ * splitting them across a card rail and an editor section made them read as three
+ * unrelated features.
  */
 @Component({
   selector: 'app-agents',
   templateUrl: './agents.page.html',
   styleUrl: './agents.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, TooltipDirective],
+  imports: [
+    NgIcon,
+    TooltipDirective,
+    AgentsTabsComponent,
+    AgentIconComponent,
+  ],
   providers: [
     provideIcons({
       heroPlus,
@@ -40,19 +56,29 @@ import { TooltipDirective } from '../components/tooltip/tooltip.directive';
       heroChatBubbleLeftRight,
       heroShare,
       heroTrash,
-      heroCpuChip,
       heroSparkles,
+      heroSquares2x2,
+      heroBars3,
     }),
   ],
 })
 export class AgentsPage implements OnInit {
   private router = inject(Router);
   private agentService = inject(AgentService);
+  private localSettings = inject(LocalSettingsService);
   private dialog = inject(Dialog);
 
   readonly agents = this.agentService.agents$;
   readonly loading = this.agentService.loading$;
   readonly error = this.agentService.error$;
+
+  /**
+   * Grid or list, remembered per device (`LocalSettingsService`).
+   *
+   * Both views render the same agents with the same controls — the toggle changes
+   * density, never what is available.
+   */
+  readonly viewMode = this.localSettings.agentsViewMode;
 
   ngOnInit(): void {
     void this.load();
@@ -66,13 +92,8 @@ export class AgentsPage implements OnInit {
     }
   }
 
-  /** Count bindings by kind for the card summary (KB is welded, shown separately). */
-  bindingCount(agent: Agent, kind: string): number {
-    return agent.bindings.filter((b) => b.kind === kind).length;
-  }
-
-  modelLabel(agent: Agent): string | null {
-    return agent.modelConfig?.modelId ?? null;
+  setViewMode(mode: AgentsViewMode): void {
+    this.localSettings.setAgentsViewMode(mode);
   }
 
   async onCreateNew(): Promise<void> {
@@ -92,20 +113,28 @@ export class AgentsPage implements OnInit {
     this.router.navigate(['/'], { queryParams: { assistantId: agent.agentId } });
   }
 
+  /**
+   * Everything about who can reach this agent — people, the link, and the marketplace
+   * listing — lives in this one dialog. `agentId == assistantId`, so the share records
+   * and the agent record are the same thing under two names.
+   */
   async onShare(agent: Agent): Promise<void> {
-    // The share dialog operates on an Assistant shape; agentId == assistantId and
-    // the share records are identical, so we adapt the Agent into what it needs.
-    const dialogRef = this.dialog.open(ShareAssistantDialogComponent, {
+    const dialogRef = this.dialog.open(ShareAgentDialogComponent, {
       data: {
-        assistant: {
+        agent: {
           assistantId: agent.agentId,
           name: agent.name,
           visibility: agent.visibility,
           userPermission: agent.userPermission ?? 'owner',
+          emoji: agent.emoji,
+          iconUrl: agent.iconUrl,
         },
-      } as unknown as ShareAssistantDialogData,
+      } satisfies ShareAgentDialogData,
     });
     await firstValueFrom(dialogRef.closed);
+    // The dialog can publish, withdraw or widen visibility; re-read so the card it was
+    // opened from is not the one surface still showing the old state.
+    await this.agentService.loadAgents(true);
   }
 
   async onDelete(agent: Agent): Promise<void> {

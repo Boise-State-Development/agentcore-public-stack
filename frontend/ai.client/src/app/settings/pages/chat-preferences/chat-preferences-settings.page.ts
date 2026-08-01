@@ -179,7 +179,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
             <div>
               <span class="text-sm/6 font-medium text-gray-900 dark:text-white">Memories</span>
               <p class="text-sm/6 text-gray-500 dark:text-gray-400">
-                View and manage what the assistant remembers about you.
+                View and manage what the agent remembers about you.
               </p>
             </div>
           </div>

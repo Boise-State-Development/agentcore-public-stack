@@ -24,6 +24,8 @@ import pytest
 from strands import Agent, tool
 from strands.hooks import BeforeInvocationEvent
 
+from apis.shared.rbac.models import EffectivePermissions
+
 from agents.main_agent.session.hooks.prefix_fingerprint import (
     PrefixFingerprintHook,
     get_prefix_fingerprint,
@@ -80,10 +82,13 @@ TOOLS_BY_ID = {"alpha_tool": alpha_tool, "beta_tool": beta_tool, "gamma_tool": g
 
 
 def _role(role_id: str, tools: list, skills: list, priority: int = 10) -> SimpleNamespace:
+    # `effective_permissions` uses the real dataclass rather than a namespace:
+    # a hand-rolled stand-in silently loses any field added to the real type,
+    # and the merge under test reads every axis off it.
     return SimpleNamespace(
         role_id=role_id,
         priority=priority,
-        effective_permissions=SimpleNamespace(
+        effective_permissions=EffectivePermissions(
             tools=tools, models=[], skills=skills, quota_tier=None
         ),
     )

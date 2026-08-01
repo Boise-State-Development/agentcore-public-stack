@@ -17,11 +17,11 @@ which may land on a different replica.
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Optional
 
 import boto3
 from botocore.exceptions import ClientError
+from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class OAuthDisconnectRepository:
             return
         item = {
             **self._key(user_id, provider_id),
-            "disconnected_at": datetime.now(timezone.utc).isoformat() + "Z",
+            "disconnected_at": utc_now_iso(),
         }
         try:
             self._table.put_item(Item=item)

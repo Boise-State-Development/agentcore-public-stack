@@ -33,6 +33,7 @@ import {
   ManageSharesDialogComponent,
   ManageSharesDialogData,
 } from './manage-shares-dialog/manage-shares-dialog.component';
+import { parseIso } from '../utils/date';
 
 /** Maximum number of sessions that can be selected for bulk delete */
 const MAX_SELECTION = 20;
@@ -533,7 +534,7 @@ export class ManageSessionsPage implements OnInit {
   formatDate(dateString: string): string {
     if (!dateString) return '';
     try {
-      const date = new Date(dateString);
+      const date = parseIso(dateString);
       const now = new Date();
       const diffMs = now.getTime() - date.getTime();
       const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
