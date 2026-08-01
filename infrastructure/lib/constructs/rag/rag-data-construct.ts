@@ -176,22 +176,25 @@ export class RagDataConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // Sparse open-report index for user problem reports (D15, Phase 8). Reports are
-    // child rows of the Agent (PK = AST#{id}, SK = REPORT#{report_id}) so they are
-    // deleted with it; this index is written ONLY while state == "open", so a resolved
-    // or dismissed report leaves the admin queue by losing its key rather than by being
-    // filtered out — the same physics as AgentDirectoryIndex above.
-    //   GSI6_PK = "REPORTS#OPEN"   GSI6_SK = CREATED#{created_at}  (oldest-first sweep)
-    // One partition is correct here: the open queue is bounded by how fast admins work
-    // and is read only by the admin console, which wants one chronological sweep rather
-    // than per-agent slices. If it ever outgrows a hot partition, that is a product
-    // signal (nobody is triaging) before it is a capacity one.
-    this.assistantsTable.addGlobalSecondaryIndex({
-      indexName: 'AgentReportsIndex',
-      partitionKey: { name: 'GSI6_PK', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'GSI6_SK', type: dynamodb.AttributeType.STRING },
-      projectionType: dynamodb.ProjectionType.ALL,
-    });
+    // ⚠️ TEMPORARILY REMOVED — restored by the immediately following hotfix.
+    //
+    // `AgentReportsIndex` (GSI6) belongs here, right after AgentDirectoryIndex
+    // (GSI5). Both arrived on `develop` in separate merges, so dev picked them up
+    // one deploy at a time; the 1.12.0 release collapsed them into a single CFN
+    // update against an environment that had neither, and DynamoDB rejected it:
+    //
+    //   "Cannot perform more than one GSI creation or deletion in a single update"
+    //
+    // UpdateTable allows exactly one GSI create/delete per call — a limit that only
+    // bites an EXISTING table (CreateTable takes as many as you like, which is why
+    // the brand-new audit-log table's two indexes were fine). So GSI5 lands in this
+    // deploy alone, and GSI6 is re-added in the next one once GSI5 reports ACTIVE.
+    //
+    // This is a deploy-sequencing artifact with a lifetime of one deploy. It is not
+    // a decision about the index: nothing in the code that reads it changed, so
+    // `apis/shared/assistants/reports.py` queries an index that does not exist yet
+    // and the admin problem-report queue stays broken until the follow-up lands.
+    // Do NOT copy this file to `develop` — develop already has both indexes live.
 
     // ── SSM publications (consumed by restore tooling, app-api/inference-api runtime) ──
     new ssm.StringParameter(this, 'RagAssistantsTableNameParameter', {

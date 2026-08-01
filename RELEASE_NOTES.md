@@ -1,3 +1,53 @@
+# Release Notes — v1.12.1
+
+**Release Date:** August 1, 2026
+**Previous Release:** v1.12.0 (August 1, 2026)
+
+---
+
+> 🏗️ **CDK deploy required** — this release exists to make 1.12.0's CDK deploy land. Deploy `platform.yml` only; the backend and frontend are unchanged from 1.12.0 and already shipped. **A second deploy follows in 1.12.2** — see below.
+
+---
+
+## What happened
+
+1.12.0's `platform.yml` deploy failed and rolled the PlatformStack back. The `backend.yml` and `frontend-deploy.yml` deploys both succeeded, so production spent the gap running 1.12.0 code on 1.11.1 infrastructure — the agent store returning 500 on a `AgentDirectoryIndex` that did not exist yet.
+
+The cause: 1.12.0 adds **two** GSIs to the existing assistants table in a single CloudFormation update — `AgentDirectoryIndex` for the marketplace store and `AgentReportsIndex` for the problem-report queue. DynamoDB's `UpdateTable` permits exactly one GSI create or delete per call, so CloudFormation failed on that resource and rolled back everything else with it, including the new audit-log table.
+
+The 1.12.0 deploy note called for one new GSI. There were two. They arrived on `develop` in separate merges and so got a platform deploy each, which is why no non-production environment ever saw the limit — only an environment jumping the whole release at once does.
+
+The restriction applies to `UpdateTable` alone. `CreateTable` accepts as many indexes as you like, which is why the brand-new audit-log table's two GSIs were never the problem.
+
+## What this release does
+
+Defers `AgentReportsIndex` so the deploy carries a single GSI addition. Nothing else changes — no application code, and the index definition itself is untouched.
+
+This deploy also re-applies everything the rollback reverted: the `audit-log` table and its app-api wiring, the optional token-exchange secret, and the Gateway construct changes. **The agent store recovers here.**
+
+## Deploying
+
+Run `platform.yml`. Then wait for the index to finish backfilling before deploying 1.12.2 — CloudFormation reports success while the index is still `CREATING`:
+
+```bash
+aws dynamodb describe-table \
+  --table-name {prefix}-rag-assistants \
+  --query 'Table.GlobalSecondaryIndexes[].{Name:IndexName,Status:IndexStatus}' \
+  --output table
+```
+
+Every index should read `ACTIVE`, `AgentDirectoryIndex` among them. On a table of a few thousand agents this takes a couple of minutes.
+
+Nothing else to run: `backend.yml` and `frontend-deploy.yml` are unchanged from 1.12.0. No data migration.
+
+## Known issue
+
+The **admin problem-report queue returns 500** until 1.12.2 deploys, since it queries the deferred index. User-submitted reports are still written and are not lost — only the admin queue that reads them is unavailable.
+
+Nothing else regresses. Audit writes fail open by design: `AuditService` checks for the table environment variable and falls back to structured logs, so no administrative mutation fails while the table is absent.
+
+---
+
 # Release Notes — v1.12.0
 
 **Release Date:** August 1, 2026
