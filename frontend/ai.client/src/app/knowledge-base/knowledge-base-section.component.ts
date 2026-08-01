@@ -13,6 +13,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowDownTray,
   heroArrowPath,
+  heroBookOpen,
   heroGlobeAlt,
   heroLink,
   heroPlus,
@@ -76,6 +77,7 @@ import { parseIso } from '../utils/date';
     provideIcons({
       heroArrowDownTray,
       heroArrowPath,
+      heroBookOpen,
       heroGlobeAlt,
       heroLink,
       heroPlus,
