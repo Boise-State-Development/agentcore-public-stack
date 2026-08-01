@@ -1,0 +1,110 @@
+name: "GSI Update Limit"
+
+# Release gate for DynamoDB's one-GSI-per-UpdateTable limit.
+#
+# DynamoDB's UpdateTable API permits exactly ONE GSI creation or deletion per
+# call. CloudFormation issues one UpdateTable per changed table, so a template
+# that adds two indexes to an EXISTING table fails the deploy and rolls back
+# every other resource in the stack with it. CreateTable has no such limit, so
+# a brand-new table with many indexes is fine.
+#
+# This only ever triggers on PRs into `main`, because only `main` is exposed.
+# `develop` deploys on every merge, so two indexes arriving in two PRs get two
+# separate deploys — one index each — and both succeed. A release collapses
+# those merges into a single CloudFormation update, which is where the two
+# indexes finally meet. Dev soak time cannot surface this; the release diff is
+# the only place it can be caught.
+#
+# Release 1.12.0 hit exactly this on 2026-08-01 and took production down.
+# See .claude/skills/cutting-a-release/SKILL.md §1.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# Safe to cancel superseded runs: this workflow reads two JSON files and does
+# no AWS work, so there is no CloudFormation rollback hazard.
+concurrency:
+  group: gsi-update-limit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gsi-update-limit:
+    name: GSI Update Limit
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Fetch main branch
+        run: |
+          git fetch origin main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      # Compares infrastructure/gsi-inventory.json — a committed, synth-generated
+      # inventory — between origin/main and this PR. No npm install and no CDK
+      # synth needed: the inventory for both sides is already in git.
+      #
+      # This gate assumes the PR's inventory actually matches its CDK code. That
+      # is enforced separately by infrastructure/test/gsi-update-limit.test.ts,
+      # which re-synthesizes the app and fails if the committed inventory has
+      # drifted. That test runs on every PR via ci.yml (run_infra), so both
+      # checks must be required for this gate to mean anything.
+      #
+      # Until a release carrying gsi-inventory.json has reached `main`, there is
+      # no baseline to diff against and this step reports SKIPPED rather than
+      # failing. Do the §1 check by hand for that first release.
+      - name: Check GSI update limit
+        id: gsi-check
+        continue-on-error: true
+        run: |
+          node scripts/release/check-gsi-update-limit.mjs --base origin/main \
+            2>&1 | tee /tmp/gsi-check-output.txt
+
+          # tee masks the script's exit status, so read it back from PIPESTATUS.
+          exit "${PIPESTATUS[0]}"
+
+      - name: Generate summary
+        if: always()
+        run: |
+          source scripts/common/summary.sh
+
+          if [ "${{ steps.gsi-check.outcome }}" = "success" ]; then
+            STATUS="success"
+          else
+            STATUS="failure"
+          fi
+
+          write_workflow_header "GSI Update Limit" "${STATUS}"
+
+          {
+            echo '```'
+            cat /tmp/gsi-check-output.txt 2>/dev/null || echo "(no output captured)"
+            echo '```'
+            echo ""
+            if [ "${STATUS}" != "success" ]; then
+              echo "This release must be **split across two deploys** — ship one index,"
+              echo "wait for it to report \`ACTIVE\`, then ship the next. Do the split"
+              echo "**before merging**: see \`.claude/skills/cutting-a-release/SKILL.md\` §1."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Evaluate result
+        run: |
+          if [ "${{ steps.gsi-check.outcome }}" != "success" ]; then
+            echo "::error::This release would need more than one GSI operation on an existing DynamoDB table. DynamoDB rejects that and CloudFormation will roll back the entire stack update. Split the release — see .claude/skills/cutting-a-release/SKILL.md §1."
+            exit 1
+          fi
+          echo "GSI update-limit check passed."
