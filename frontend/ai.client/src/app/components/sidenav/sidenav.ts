@@ -9,6 +9,7 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
 import { AgentService } from '../../agents/services/agent.service';
+import { LEGACY_MIGRATION_HOST } from '../../shared/utils/legacy-migration-host';
 
 @Component({
   selector: 'app-sidenav',
@@ -38,8 +39,14 @@ export class Sidenav {
     return session.title || 'Untitled Session';
   });
 
-  // Check if user has system_admin AppRole (resolved from backend RBAC)
-  protected isAdmin = this.userService.isAdmin;
+  /**
+   * Whether to offer the "Admin Dashboard" entry point.
+   *
+   * `canAccessAdmin`, not `isAdmin`: a delegated admin holds no `system_admin`
+   * AppRole but does have somewhere to go inside the console, and hiding the
+   * link would leave them typing `/admin` by hand.
+   */
+  protected isAdmin = this.userService.canAccessAdmin;
 
   /**
    * Whether to show the "Memory Spaces" nav entry. Rides the spaces list
@@ -58,6 +65,16 @@ export class Sidenav {
    * hides it so it doesn't flash in before disappearing.
    */
   readonly showAgents = computed(() => this.agentService.accessible$() === true);
+
+  /**
+   * Whether to show the "Assistants" signpost. ⚠️ TEMPORARY, and deliberately *not* a
+   * signal: the host cannot change without a full page load, so this is a constant for the
+   * lifetime of the app instance. Scoped to the production apex because that is the only
+   * place the question it answers ("where did the assistants I built on the old site go?")
+   * gets asked — see `shared/utils/legacy-migration-host.ts`. The `/assistants` route is
+   * gated on the same host, so the two never disagree.
+   */
+  protected readonly showAssistantsSignpost = inject(LEGACY_MIGRATION_HOST);
 
   constructor() {
     // Kick off the accessibility probes once the user is authenticated —

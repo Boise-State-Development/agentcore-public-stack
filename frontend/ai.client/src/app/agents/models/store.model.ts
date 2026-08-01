@@ -27,7 +27,15 @@ export type ListingState =
   | 'in_review'
   | 'published'
   | 'changes_requested'
-  | 'taken_down';
+  | 'taken_down'
+  /**
+   * The author has asked to pull a live listing and an admin has not yet decided (§5.1).
+   *
+   * ⚠️ Still **live in the store**. Dropping it off the shelf the moment the author asked
+   * would hand them the unilateral delisting this state exists to prevent, so it reads as a
+   * pending request rather than as a removal.
+   */
+  | 'withdrawal_requested';
 
 /** One admin edit to a listing's presentation, surfaced back to the author (D13). */
 export interface AdminEdit {
@@ -44,6 +52,7 @@ export const LISTING_STATE_LABELS: Record<ListingState, string> = {
   published: 'Published',
   changes_requested: 'Changes requested',
   taken_down: 'Taken down',
+  withdrawal_requested: 'Withdrawal requested',
 };
 
 /**
@@ -56,6 +65,9 @@ export const LISTING_STATE_CLASSES: Record<ListingState, string> = {
   published: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
   changes_requested: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
   taken_down: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
+  // Amber like in_review, not rose: this is work waiting on an admin, not a problem with
+  // the listing — and it is still published while it waits.
+  withdrawal_requested: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
 };
 
 /**
@@ -86,6 +98,13 @@ export interface SubmitListingRequest {
   publisherId?: string;
   note?: string;
   /**
+   * The author's explicit consent to make this agent PUBLIC as part of publishing it.
+   * The marketplace is public-only and every agent starts PRIVATE, so this is the normal
+   * path, not an edge case. Omitting it is refused by the backend — the widening is
+   * consent, never a side effect of submitting.
+   */
+  makePublic?: boolean;
+  /**
    * Shelf subtitle (D4). Omit to leave any existing tagline untouched — a resubmission
    * that does not touch the field must not blank it.
    */
@@ -101,16 +120,25 @@ export interface SkillExposure {
 /**
  * The D7 answers, before the author commits.
  *
- * `blockReason` non-null means submission is impossible (a `memory_space` binding,
- * D7.2) and the text explains why. The dialog renders it; it never re-derives it.
+ * ⚠️ `blockReason` and `requiresPublic` are separate on purpose. A block is "leave this
+ * dialog and go fix something" — the form is hidden, because nothing below it would help.
+ * `requiresPublic` is "tick the box and submitting handles it". They were briefly one
+ * field, and that made the *common* path a dead end: every agent starts PRIVATE, so a
+ * first-time author was bounced to another screen to set visibility and come back.
  */
 export interface ListingPreflight {
   agentId: string;
   exposedSkills: SkillExposure[];
   blockReason?: string | null;
   /**
-   * Who would be able to open this agent once shelved. Advisory — publishing a
-   * PRIVATE/SHARED agent is allowed, but the tile 404s for everyone it is not shared with.
+   * This agent is not PUBLIC yet, so submitting must widen it. Drives the consent
+   * checkbox — never disables Submit on its own.
+   */
+  requiresPublic?: boolean;
+  /**
+   * Who would be able to open this agent once shelved. At submit time this is now a
+   * consequence of `requiresPublic`; it still matters to the reviewer, because an agent
+   * published as PUBLIC can be narrowed afterwards.
    */
   reachability: ListingReachability;
 }
@@ -208,13 +236,26 @@ export interface CategoryShelf {
  * Why an agent is being reported.
  *
  * A small fixed set so the admin queue can sort by severity without reading every note.
- * `inappropriate` is the one meant to page a human rather than wait for a sweep.
+ * `inappropriate` is the one meant to page a human rather than wait for a sweep, and
+ * `suggestion` — which is not a defect at all — is deliberately last in that order.
+ *
+ * `suggestion` exists because feedback moved out of the store's detail page and into the
+ * foot of the conversation, where "it should also do X" is as common as "it is broken".
+ * It stays the same record in the same queue: a user does not know which kind of thing
+ * they hit, and a second intake form would only mis-sort the ones who guess wrong.
  */
-export type ReportReason = 'inaccurate' | 'broken' | 'inappropriate' | 'other';
+export type ReportReason = 'inaccurate' | 'broken' | 'inappropriate' | 'suggestion' | 'other';
 
 export interface SubmitReportRequest {
   reason: ReportReason;
   note?: string;
+  /**
+   * The conversation the user opted to attach, for the curator's context.
+   *
+   * ⚠️ Opt-in and **server-verified**: the backend keeps it only if it is a session this
+   * caller owns, and silently drops it otherwise rather than failing the submission.
+   */
+  sessionId?: string;
 }
 
 /**

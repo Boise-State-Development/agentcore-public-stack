@@ -1,10 +1,16 @@
 # `assistants/` — shared building blocks, not a feature
 
 ⚠️ **There is no Assistants feature any more.** There is one noun, and it is **Agent**
-(Marketplace D1). Designer Phase 5 retired the Assistant editor: `/assistants`,
-`/assistants/new` and `/assistants/:id/edit` are `redirectTo` entries onto `/agents`, and
-the pages behind them (`assistants.page`, `assistant-form.page`, `assistant-list`,
-`assistant-preview`) were deleted.
+(Marketplace D1). Designer Phase 5 retired the Assistant editor: `/assistants/new` and
+`/assistants/:id/edit` are `redirectTo` entries onto `/agents`, and the pages behind them
+(`assistants.page`, `assistant-form.page`, `assistant-list`, `assistant-preview`) were
+deleted.
+
+`/assistants` itself is the one exception, and it is **not** an Assistants page: it renders
+`agents/migration/agents-migration.page`, which explains the rename and sends every route
+out of it to `/agents`. It lives under `agents/` like everything else user-facing, and the
+sidenav carries a matching muted "Assistants → Moved" signpost. Both are transitional —
+retire them once the rename has stopped being news.
 
 What is left in this folder is **the parts the Agent surface still consumes.** It survives
 under this name because the underlying record is still an Assistant on the wire — the ids

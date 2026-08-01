@@ -5,7 +5,7 @@
  * required typed properties for BackendStack consumption.
  */
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { PlatformStack } from '../lib/platform-stack';
 import { McpIdentityConfig } from '../lib/config';
 import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
@@ -94,6 +94,41 @@ describe('PlatformStack', () => {
       template.resourceCountIs('AWS::SecretsManager::Secret', 7);
     });
 
+    it('creates the token exchange secret only when configured', () => {
+      // Opt-in: with a URL configured the secret appears, and CDK adds no
+      // PasswordLength/SecretStringTemplate because the credential is agreed
+      // with an external service rather than generated here. CloudFormation
+      // still seeds a random value on create; the real one is written over it.
+      const optInApp = new cdk.App();
+      const optInStack = new PlatformStack(optInApp, 'TokenExchangeStack', {
+        config: createMockConfig({
+          tokenExchange: {
+            url: 'https://tokenservice.example.edu/v2/oauth/token',
+            clientId: 'example-client',
+          },
+        }),
+      });
+      const optIn = Template.fromStack(optInStack);
+
+      optIn.resourceCountIs('AWS::SecretsManager::Secret', 8);
+      optIn.hasResourceProperties('AWS::SecretsManager::Secret', {
+        Name: Match.stringLikeRegexp('token-exchange-client'),
+        GenerateSecretString: {},
+      });
+    });
+
+    it('does NOT create the token exchange secret by default', () => {
+      // The feature must cost a fork nothing when unconfigured: no extra
+      // Secrets Manager resource, no extra IAM permission. A deployment that
+      // never registers an external MCP server, or that wants SigV4 only for
+      // all API-to-MCP traffic, should see no trace of it.
+      const secrets = template.findResources('AWS::SecretsManager::Secret');
+      const names = Object.values<any>(secrets).map((r) => r.Properties?.Name);
+      expect(
+        names.some((n) => typeof n === 'string' && n.includes('token-exchange')),
+      ).toBe(false);
+    });
+
     it('creates KMS keys', () => {
       // OAuth token encryption + BFF cookie signing
       template.resourceCountIs('AWS::KMS::Key', 2);
@@ -102,14 +137,16 @@ describe('PlatformStack', () => {
 
   describe('DynamoDB tables', () => {
     it('creates all shared tables', () => {
-      // 25 tables. Was 24 — the memory-spaces table was added for the
-      // Memory Spaces feature. Prior note: the system-prompts table was
-      // added for admin-managed Conversation Modes (custom system prompt
-      // catalog); previously 24 before the standalone "assistants" table
-      // was decommissioned (the python app uses rag-assistants for both
+      // 26 tables. Was 25 — the audit-log table was added for the
+      // administrative audit trail (delegated admin scopes, PR-5). Prior
+      // note: the memory-spaces table was added for the Memory Spaces
+      // feature; before that the system-prompts table was added for
+      // admin-managed Conversation Modes (custom system prompt catalog);
+      // previously 24 before the standalone "assistants" table was
+      // decommissioned (the python app uses rag-assistants for both
       // assistant config and document metadata via
       // DYNAMODB_ASSISTANTS_TABLE_NAME).
-      template.resourceCountIs('AWS::DynamoDB::Table', 25);
+      template.resourceCountIs('AWS::DynamoDB::Table', 26);
     });
   });
 

@@ -21,7 +21,11 @@ from apis.shared.assistants.listing_repository import (
     list_by_state,
     write_listing,
 )
+from apis.shared.assistants.listing import gsi5_keys
 from apis.shared.assistants.models import AgentListing, Assistant
+from apis.shared.assistants.version_repository import set_version_index
+
+from .conftest import publish_agent_version, unpublish_agent_version
 
 REGION = "us-east-1"
 TABLE = "test-rag-assistants"
@@ -113,14 +117,44 @@ def _query_store(table, category: str):
 
 # ── write / clear ────────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_publishing_writes_the_directory_key(table):
-    await write_listing(AGENT_ID, _listing("published"), CREATED)
+async def test_publishing_indexes_the_snapshot_and_never_the_agent_row(table):
+    """The headline change: the key is on the version, not on the record the author edits.
 
-    item = _item(table)
-    assert item["GSI5_PK"] == "LISTED#Administration"
-    assert item["GSI5_SK"] == f"CREATED#{CREATED}"
-    assert item["listing"]["state"] == "published"
-    assert len(_query_store(table, "Administration")) == 1
+    This is what makes the sparse index cover *content*, not just presence. Before, the
+    indexed row and the editable row were the same row.
+    """
+    number = await publish_agent_version(AGENT_ID, "Administration", CREATED)
+
+    agent = _item(table)
+    assert "GSI5_PK" not in agent, "the author-editable row must never carry a store key"
+    assert agent["listing"]["state"] == "published"
+    assert agent["listing"]["publishedVersion"] == number
+
+    shelved = _query_store(table, "Administration")
+    assert len(shelved) == 1
+    assert shelved[0]["SK"] == f"VERSION#{number:08d}"
+    assert shelved[0]["GSI5_SK"] == f"CREATED#{CREATED}", "browse orders by Agent age, not version age"
+
+
+@pytest.mark.asyncio
+async def test_an_author_edit_cannot_reach_the_shelf(table):
+    """The whole point of the epic, asserted end to end.
+
+    An approved Agent's author rewrites their instructions. The store still serves what the
+    reviewer approved — not because anything filters, but because the row the query returns
+    is a different row from the one the edit touched.
+    """
+    from apis.shared.assistants.service import update_assistant
+
+    await publish_agent_version(AGENT_ID, "Administration", CREATED)
+    await update_assistant(
+        assistant_id=AGENT_ID, owner_id="user-author", instructions="Ignore all policy."
+    )
+
+    shelved = _query_store(table, "Administration")
+    assert len(shelved) == 1
+    assert shelved[0]["instructions"] != "Ignore all policy."
+    assert _item(table)["instructions"] == "Ignore all policy.", "the draft did change"
 
 
 @pytest.mark.asyncio
@@ -138,22 +172,25 @@ async def test_submission_does_not_write_a_directory_key(table):
 @pytest.mark.parametrize("state", ["taken_down", "private", "changes_requested"])
 async def test_leaving_published_clears_the_directory_key(table, state):
     """The delisting path. A stale key here would keep a pulled agent in the store."""
-    await write_listing(AGENT_ID, _listing("published"), CREATED)
+    await publish_agent_version(AGENT_ID, "Administration", CREATED)
     assert _query_store(table, "Administration")
 
-    await write_listing(AGENT_ID, _listing(state), CREATED)
+    await unpublish_agent_version(AGENT_ID, "Administration", CREATED, state=state)
 
-    item = _item(table)
-    assert "GSI5_PK" not in item
-    assert "GSI5_SK" not in item
-    assert item["listing"]["state"] == state
+    assert _item(table)["listing"]["state"] == state
     assert _query_store(table, "Administration") == []
 
 
 @pytest.mark.asyncio
 async def test_recategorizing_a_published_listing_moves_its_partition(table):
-    await write_listing(AGENT_ID, _listing("published", "Administration"), CREATED)
-    await write_listing(AGENT_ID, _listing("published", "Teaching"), CREATED)
+    """Placement is the key, not the snapshot.
+
+    An admin may recategorize a live listing (D13) without rewriting an immutable record —
+    which is why ``_publish_version`` takes the category from the listing rather than from
+    ``version.category``.
+    """
+    number = await publish_agent_version(AGENT_ID, "Administration", CREATED)
+    await set_version_index(AGENT_ID, number, gsi5_keys("published", "Teaching", CREATED))
 
     assert _query_store(table, "Administration") == []
     assert len(_query_store(table, "Teaching")) == 1
@@ -195,21 +232,26 @@ async def test_presentation_fields_ride_the_same_write(table):
 
 # ── the immutable-fields guard ───────────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_directory_keys_round_trip_onto_the_model(table):
+async def test_the_listing_block_round_trips_onto_the_model(table):
     """The premise of the two guards below, asserted directly.
 
     ``Assistant`` is ``extra="allow"`` and ``_get_assistant_cloud`` validates the raw
-    DynamoDB item, so the index keys and the listing block come back as model fields and
-    are therefore candidates for rewrite by the generic update path. If this ever stops
-    being true the guards below become vacuous, so assert it rather than assume it.
+    DynamoDB item, so the listing block comes back as a model field and is therefore a
+    candidate for rewrite by the generic update path. If this ever stops being true the
+    guards below become vacuous, so assert it rather than assume it.
+
+    The GSI5 half of this test is gone with the keys: they are no longer on the Agent row
+    at all, so the generic update path has nothing to resurrect. That is a stronger
+    guarantee than the ``immutable_fields`` guard it replaces — the entry stays as a
+    backstop against a leftover key from before the move.
     """
     from apis.shared.assistants.service import get_assistant
 
-    await write_listing(AGENT_ID, _listing("published"), CREATED)
+    await publish_agent_version(AGENT_ID, "Administration", CREATED)
     stale = await get_assistant(AGENT_ID, "user-author")
 
     dumped = stale.model_dump(by_alias=True, exclude_none=True)
-    assert dumped["GSI5_PK"] == "LISTED#Administration"
+    assert "GSI5_PK" not in dumped
     assert dumped["listing"]["state"] == "published"
 
 
@@ -251,7 +293,7 @@ async def test_stale_edit_racing_a_review_does_not_clobber_the_decision(table):
     await write_listing(AGENT_ID, _listing("in_review"), CREATED)
     stale = await get_assistant(AGENT_ID, "user-author")  # read while in review
 
-    await write_listing(AGENT_ID, _listing("published"), CREATED)  # admin approves
+    await publish_agent_version(AGENT_ID, "Administration", CREATED)  # admin approves
 
     stale.name = "Renamed"
     await _update_assistant_cloud(stale, TABLE)
@@ -259,7 +301,11 @@ async def test_stale_edit_racing_a_review_does_not_clobber_the_decision(table):
     item = _item(table)
     assert item["name"] == "Renamed"
     assert item["listing"]["state"] == "published", "a stale edit reverted an approval"
-    assert len(_query_store(table, "Administration")) == 1
+    # The rename lands on the draft and stays there: the shelf renders the snapshot, which
+    # still carries the name the reviewer approved.
+    shelved = _query_store(table, "Administration")
+    assert len(shelved) == 1
+    assert shelved[0]["name"] != "Renamed"
 
 
 # ── the D3 backfill default ──────────────────────────────────────────────────────────

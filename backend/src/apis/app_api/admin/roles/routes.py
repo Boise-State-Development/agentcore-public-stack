@@ -13,7 +13,10 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from apis.shared.auth import User, require_admin
+from apis.shared.rbac.admin_scopes import ADMIN_SCOPES
 from apis.shared.rbac.models import (
+    AdminScopeListResponse,
+    AdminScopeResponse,
     AppRoleCreate,
     AppRoleUpdate,
     AppRoleResponse,
@@ -55,6 +58,43 @@ async def list_roles(
     return AppRoleListResponse(
         roles=[AppRoleResponse.from_app_role(r) for r in roles],
         total=len(roles),
+    )
+
+
+# ⚠️ Must stay ABOVE `/{role_id}`. FastAPI matches in declaration order, and
+# `/{role_id}` is a single-segment catch-all — declared first, it would swallow
+# `/admin-scopes` and return a 404 for a role literally named "admin-scopes".
+# (`/cache/stats` below is safe only because it has two segments.)
+@router.get("/admin-scopes", response_model=AdminScopeListResponse)
+async def list_admin_scopes(
+    admin: User = Depends(require_admin),
+):
+    """
+    List the delegated admin scope registry.
+
+    Feeds the role form's scope picker. The registry is closed and defined in
+    code (`apis/shared/rbac/admin_scopes.py`) rather than derived from a
+    catalog — the roles UI has no free-text entry, so a grantable id that
+    isn't served here cannot be granted at all.
+
+    Non-delegable scopes are included with `delegable: false` so the picker can
+    show them as unavailable rather than silently omitting them.
+
+    Requires full admin: granting admin scopes is a `system_admin`-only act,
+    and this router is non-delegable for exactly that reason.
+    """
+    return AdminScopeListResponse(
+        scopes=[
+            AdminScopeResponse(
+                id=scope.id,
+                label=scope.label,
+                group=scope.group,
+                description=scope.description,
+                delegable=scope.delegable,
+            )
+            for scope in ADMIN_SCOPES
+        ],
+        total=len(ADMIN_SCOPES),
     )
 
 

@@ -3,6 +3,12 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import {
+  AgentVersionDiff,
+  AgentVersionsResponse,
+  RollbackListingRequest,
+  PublisherCreateRequest,
+  PublisherEligibilityResponse,
+  PublisherUpdateRequest,
   AdminListingRow,
   AdminQueueCounts,
   AdminReportRow,
@@ -17,6 +23,7 @@ import {
   ReviewListingRequest,
   RoleAgentPinsResponse,
   RoleAgentPinsUpdateRequest,
+  WithdrawalDecisionRequest,
 } from '../models/marketplace.model';
 
 interface PublishersResponse {
@@ -59,6 +66,19 @@ export class AdminMarketplaceService {
     return this.fetchListings(`${this.baseUrl()}/submissions`);
   }
 
+  /**
+   * What a pending submission changes against what is published (§6.1).
+   *
+   * Fetched per row on demand rather than with the queue: the queue is a list of decisions
+   * to make, and pre-loading a diff for every row would pull every pending Agent's full
+   * instructions down to render badges nobody has opened yet.
+   */
+  async loadDiff(agentId: string): Promise<AgentVersionDiff> {
+    return firstValueFrom(
+      this.http.get<AgentVersionDiff>(`${this.baseUrl()}/${agentId}/diff`),
+    );
+  }
+
   /** The Listings table: every agent that has ever been submitted. */
   async loadListings(state?: ListingState): Promise<AdminListingRow[]> {
     const url = state ? `${this.baseUrl()}/listings?state=${state}` : `${this.baseUrl()}/listings`;
@@ -83,6 +103,36 @@ export class AdminMarketplaceService {
   /** Approve a submission, or return it to the author with a reason. */
   async review(agentId: string, request: ReviewListingRequest): Promise<void> {
     await firstValueFrom(this.http.post(`${this.baseUrl()}/${agentId}/review`, request));
+  }
+
+  /**
+   * Grant or decline an author's request to pull a live listing (§5.1).
+   *
+   * Deliberately not folded into `review`. That call answers "may this go into the store?";
+   * this one answers "may this come out?", and the two have opposite defaults — a
+   * withdrawal request routed through `review` with `approve` reads as agreeing with the
+   * author while actually re-publishing over their request.
+   */
+  async decideWithdrawal(agentId: string, request: WithdrawalDecisionRequest): Promise<void> {
+    await firstValueFrom(this.http.post(`${this.baseUrl()}/${agentId}/withdrawal`, request));
+  }
+
+  /** Every snapshot this agent has, newest first — the rollback picker's source (§8). */
+  async loadVersions(agentId: string): Promise<AgentVersionsResponse> {
+    return firstValueFrom(
+      this.http.get<AgentVersionsResponse>(`${this.baseUrl()}/${agentId}/versions`),
+    );
+  }
+
+  /**
+   * Repoint a published listing at an earlier snapshot (§8).
+   *
+   * Not a review decision: no version is cut, nothing enters the queue, and the listing
+   * stays published throughout. It only changes *which* approved artifact the store serves,
+   * which is why the backend refuses it on anything that is not already published.
+   */
+  async rollback(agentId: string, request: RollbackListingRequest): Promise<void> {
+    await firstValueFrom(this.http.post(`${this.baseUrl()}/${agentId}/rollback`, request));
   }
 
   /**
@@ -179,6 +229,59 @@ export class AdminMarketplaceService {
       this.http.get<PublishersResponse>(`${this.baseUrl()}/publishers`),
     );
     return response.publishers ?? [];
+  }
+
+  /**
+   * Create a publisher profile (D12).
+   *
+   * The id is server-generated from the label, and immutable — it is what listings store,
+   * so renaming a publisher must never strand the attributions pointing at it.
+   */
+  async createPublisher(request: PublisherCreateRequest): Promise<PublisherProfile> {
+    return firstValueFrom(
+      this.http.post<PublisherProfile>(`${this.baseUrl()}/publishers`, request),
+    );
+  }
+
+  async updatePublisher(
+    publisherId: string,
+    request: PublisherUpdateRequest,
+  ): Promise<PublisherProfile> {
+    return firstValueFrom(
+      this.http.patch<PublisherProfile>(`${this.baseUrl()}/publishers/${publisherId}`, request),
+    );
+  }
+
+  /** Refused (409) while listings are attributed to it — disable instead. */
+  async deletePublisher(publisherId: string): Promise<void> {
+    await firstValueFrom(this.http.delete(`${this.baseUrl()}/publishers/${publisherId}`));
+  }
+
+  /**
+   * Who may *propose* this publisher at submission (D12).
+   *
+   * ⚠️ An allowlist for the author's submit dialog only. An admin may attribute any listing
+   * to any publisher regardless of it — that is how the store gets its day-one set of
+   * official Agents without a staff member's personal name on them. It never appears in an
+   * access check.
+   */
+  async loadPublisherEligibility(publisherId: string): Promise<string[]> {
+    const response = await firstValueFrom(
+      this.http.get<PublisherEligibilityResponse>(
+        `${this.baseUrl()}/publishers/${publisherId}/eligibility`,
+      ),
+    );
+    return response.userIds ?? [];
+  }
+
+  async savePublisherEligibility(publisherId: string, userIds: string[]): Promise<string[]> {
+    const response = await firstValueFrom(
+      this.http.put<PublisherEligibilityResponse>(
+        `${this.baseUrl()}/publishers/${publisherId}/eligibility`,
+        { userIds },
+      ),
+    );
+    return response.userIds ?? [];
   }
 
   async loadCategories(): Promise<AgentCategory[]> {

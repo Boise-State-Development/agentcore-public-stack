@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 import { authGuard } from './auth/auth.guard';
 import { adminGuard } from './auth/admin.guard';
 import { firstBootGuard } from './auth/first-boot.guard';
+import { legacyMigrationHostGuard } from './shared/utils/legacy-migration-host';
 
 export const routes: Routes = [
     {
@@ -40,12 +41,14 @@ export const routes: Routes = [
     // exist only on the Agent surface — so the old editor had strictly less to offer for
     // the same record.
     //
-    // These stay as **redirects rather than deletions**: `/assistants/:id/edit` is in
-    // people's bookmarks, in old chat sessions' "edit" links and in links colleagues have
-    // shared with each other. The ids are identical on both sides (the compat mapping
+    // The two **deep** links stay redirects rather than deletions: `/assistants/:id/edit`
+    // is in people's bookmarks, in old chat sessions' "edit" links and in links colleagues
+    // have shared with each other. The ids are identical on both sides (the compat mapping
     // renders a legacy Assistant *as* an Agent — there was no data migration), so the
     // redirect lands on the same record. Removing them would turn every one of those into
-    // a 404 for no gain.
+    // a 404 for no gain. They stay *silent* for the same reason they exist: those URLs are
+    // an intent ("edit this record"), and interrupting an intent with an announcement is
+    // hostile.
     {
         path: 'assistants/new',
         redirectTo: 'agents/new',
@@ -57,8 +60,19 @@ export const routes: Routes = [
         pathMatch: 'full',
     },
     {
+        // The **list** URL is different: it is the one people browse to, and a silent
+        // redirect answers the routing question while leaving the human one — where did my
+        // assistants go — entirely unanswered. So it renders the explainer instead, which
+        // says what changed, that nothing was lost, and what the Agent surface adds. Every
+        // path out of it lands on `/agents`.
+        //
+        // ⚠️ TEMPORARY host gate: the explainer only renders on the production apex, where
+        // people arriving off the previous version of the site have that question. Everywhere
+        // else `legacyMigrationHostGuard` restores the old silent redirect onto `/agents`.
+        // See `shared/utils/legacy-migration-host.ts`.
         path: 'assistants',
-        redirectTo: 'agents',
+        loadComponent: () => import('./agents/migration/agents-migration.page').then(m => m.AgentsMigrationPage),
+        canActivate: [authGuard, legacyMigrationHostGuard],
         pathMatch: 'full',
     },
     {

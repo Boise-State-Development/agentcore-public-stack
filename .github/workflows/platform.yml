@@ -71,6 +71,18 @@ jobs:
       # a different AWS account (records are then created manually from the
       # deploy's CfnOutputs). Defaults to true.
       CDK_MANAGE_DNS_RECORDS: ${{ vars.CDK_MANAGE_DNS_RECORDS }}
+      # AgentCore Gateway inbound authorizer: "iam" (default) or "jwt".
+      # The authorizer is IMMUTABLE after Gateway creation — the AgentCore
+      # control plane rejects a change on an existing Gateway. Leave unset (or
+      # "iam") for any environment whose Gateway already exists; "jwt" only
+      # applies to a newly created Gateway.
+      CDK_GATEWAY_INBOUND_AUTH: ${{ vars.CDK_GATEWAY_INBOUND_AUTH }}
+      # RFC 8693 token exchange (optional). Leave both unset unless the
+      # organisation runs a token service with a token-exchange endpoint; the
+      # feature is dormant when the URL is empty. Not secrets — the client
+      # secret itself lives in Secrets Manager and is populated out of band.
+      CDK_TOKEN_EXCHANGE_URL: ${{ vars.CDK_TOKEN_EXCHANGE_URL }}
+      CDK_TOKEN_EXCHANGE_CLIENT_ID: ${{ vars.CDK_TOKEN_EXCHANGE_CLIENT_ID }}
       CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
       CDK_COGNITO_DOMAIN_PREFIX: ${{ vars.CDK_COGNITO_DOMAIN_PREFIX }}
       CDK_COGNITO_CALLBACK_URLS: ${{ vars.CDK_COGNITO_CALLBACK_URLS }}

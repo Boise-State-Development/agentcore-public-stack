@@ -129,6 +129,33 @@
           }
         </div>
 
+        <!--
+          Store icon (D5). Beside the emoji because that is what it is — the agent's
+          face, on cards and on the shelf — not part of publication. Editors may set it
+          (presentation, D13); only owners publish, which happens in the share dialog.
+          Edit-mode only: the upload needs a saved record to attach to.
+        -->
+        @if (mode() === 'edit' && canEditIcon()) {
+          <div class="shrink-0">
+            <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Icon</label>
+            <button
+              type="button"
+              (click)="onEditIcon()"
+              [appTooltip]="iconUrl() ? 'Change icon' : 'Add icon'"
+              appTooltipPosition="top"
+              [attr.aria-label]="iconUrl() ? 'Change icon' : 'Add icon'"
+              class="mt-1 block rounded-2xl transition hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800"
+            >
+              <app-agent-icon
+                [agentId]="agentId()!"
+                [iconUrl]="iconUrl()"
+                [emoji]="liveFormEmoji()"
+                [size]="40"
+              />
+            </button>
+          </div>
+        }
+
         <!-- Name -->
         <div class="flex-1">
           <label for="name" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Name</label>
@@ -206,15 +233,49 @@
       @if (models().length === 0) {
         <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">No models are available to your role.</p>
       } @else {
+        <!--
+          Selection is a **stroke, not a fill**. These cards are the largest tap targets
+          on the page, and a `primary-50` wash across one of them turned the section into
+          a block of colour that pulled rank on everything below it. The outline says the
+          same thing at the edge, where the eye is already reading the card's boundary.
+
+          `border` + `ring-1` on the same colour, rather than `border-2`: the ring is
+          drawn outside the border box, so the stroke thickens without the card shifting
+          by a pixel against its unselected neighbours in the grid.
+
+          The check stays. Colour is never the only carrier of state (WCAG 1.4.1), and a
+          stroke is a weaker signal than a wash — dropping the fill makes the glyph load
+          bearing rather than decorative.
+
+          ⚠️ Dark mode steps up to `primary-300`. Measured against the dark card, the
+          brand navy is a **1.45:1** stroke and `primary-400` only reaches 2.24:1 — both
+          under the 3:1 WCAG 1.4.11 floor for a non-text indicator. The old fill hid that:
+          a wash reads even when its edge does not. `primary-300` measures 3.45:1. Same
+          reason the check steps up with it.
+        -->
         <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
           @for (m of models(); track m.ref) {
-            <button type="button" (click)="selectModel(m.ref)" class="flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left transition" [class.border-primary-500]="selectedModelId() === m.ref" [class.ring-1]="selectedModelId() === m.ref" [class.ring-primary-500]="selectedModelId() === m.ref" [class.bg-primary-50]="selectedModelId() === m.ref" [class.dark:bg-primary-500/10]="selectedModelId() === m.ref" [class.border-gray-200]="selectedModelId() !== m.ref" [class.dark:border-gray-700]="selectedModelId() !== m.ref" [class.hover:border-gray-300]="selectedModelId() !== m.ref">
+            <button
+              type="button"
+              (click)="selectModel(m.ref)"
+              [attr.aria-pressed]="selectedModelId() === m.ref"
+              class="flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left transition"
+              [class]="
+                selectedModelId() === m.ref
+                  ? 'border-primary-500 ring-1 ring-primary-500 dark:border-primary-300 dark:ring-primary-300'
+                  : 'border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600'
+              "
+            >
               <div class="min-w-0">
                 <p class="truncate text-sm font-medium text-gray-900 dark:text-white">{{ m.label }}</p>
                 <p class="truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ m.description }}</p>
               </div>
               @if (selectedModelId() === m.ref) {
-                <ng-icon name="heroCheck" class="size-5 shrink-0 text-primary-500" aria-hidden="true" />
+                <ng-icon
+                  name="heroCheck"
+                  class="size-5 shrink-0 text-primary-500 dark:text-primary-300"
+                  aria-hidden="true"
+                />
               }
             </button>
           }
@@ -372,6 +433,7 @@
       [permissionResolved]="permissionResolved()"
       [createDraft]="createDraftAgent"
     />
+
   </form>
   }
     </div>
@@ -407,10 +469,6 @@
         [emoji]="liveFormEmoji()"
         [starters]="liveFormStarters()"
         [modelId]="selectedModelId()"
-        [modelLabel]="previewModelLabel()"
-        [toolCount]="selectedToolRefs().size"
-        [skillCount]="selectedSkillRefs().size"
-        [memoryCount]="memorySelections().length"
         [isDirty]="isDirty()"
         [saving]="saving()"
         [canSave]="!isViewer()"

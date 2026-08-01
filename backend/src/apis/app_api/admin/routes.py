@@ -927,6 +927,11 @@ from .auth_providers.routes import router as auth_providers_router
 
 router.include_router(auth_providers_router)
 
+# ========== Include Audit Log Admin Subrouter ==========
+from .audit.routes import router as audit_router
+
+router.include_router(audit_router)
+
 # ========== Include User Menu Links Admin Subrouter ==========
 from .user_menu_links.routes import router as user_menu_links_admin_router
 

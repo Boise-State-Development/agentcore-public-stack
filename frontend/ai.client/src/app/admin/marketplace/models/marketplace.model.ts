@@ -15,6 +15,7 @@ import {
   ListingState,
   LISTING_STATE_CLASSES,
   LISTING_STATE_LABELS,
+  ReportReason,
 } from '../../../agents/models/store.model';
 
 /**
@@ -27,43 +28,23 @@ export type { AdminEdit, ListingState };
 export { LISTING_STATE_CLASSES, LISTING_STATE_LABELS };
 
 /**
- * How far a published listing has drifted from what the reviewer approved (#744).
+ * The published-version marker.
  *
- * Unlike `ListingState` this is admin-only vocabulary — it answers a curator's question
- * ("has this changed under me?"), not an author's, so it is defined here rather than in
- * the shared store model.
+ * Replaces the post-approval drift badge (#744), which is gone rather than dormant: it
+ * detected an author editing a published agent, and a published agent is now an immutable
+ * snapshot the author cannot reach. The curator's question was "has this changed under
+ * me?", and the honest answer is now a version number instead of a heuristic — the author's
+ * edits live on their draft and reach nobody until a new version is approved.
  *
- * **These are two different claims and are styled differently on purpose.**
- * `'instructions'` is measured: the instructions hash differs from the one recorded at
- * approval, so behavior definitely changed — that is the governance signal D2's "no
- * re-review on edit" non-goal leaves uncovered, and it is worth an admin's attention.
- * `'edited'` is inferred from timestamps on listings approved before the hash baseline
- * existed; the cause is unknown and is just as likely to be a rename or an admin's own
- * D13 presentation edit. Rendering the weak one as urgently as the strong one is how the
- * whole marker gets learned-ignored, so it stays visually quieter.
+ * Deliberately quiet styling. The old marker had to compete for attention because it meant
+ * something was wrong; this one is orientation, not an alarm.
  */
-export type ListingDrift = 'instructions' | 'edited';
+export const PUBLISHED_VERSION_CLASSES =
+  'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
 
-export const LISTING_DRIFT_LABELS: Record<ListingDrift, string> = {
-  instructions: 'Instructions changed',
-  edited: 'Edited since review',
-};
-
-export const LISTING_DRIFT_CLASSES: Record<ListingDrift, string> = {
-  instructions: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
-  edited: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
-};
-
-/** The hover explanation for each marker — the label alone does not say what to do. */
-export const LISTING_DRIFT_TOOLTIPS: Record<ListingDrift, string> = {
-  instructions:
-    "This agent's instructions differ from the version that was approved. Its behavior " +
-    'has changed since review, and any locked role pins cannot be opted out of.',
-  edited:
-    'This listing was edited after it was reviewed, but it predates change tracking, so ' +
-    'we cannot tell whether its behavior changed. It may only be a rename or a ' +
-    'presentation fix.',
-};
+export const PUBLISHED_VERSION_TOOLTIP =
+  'The approved snapshot this listing serves. The author can keep editing their draft ' +
+  'without changing what users run — a new version only goes live when it is approved.';
 
 /**
  * The store-front row is the *same* shelf shape Discover renders, deliberately: an admin
@@ -110,19 +91,36 @@ export interface AdminListingRow {
   state: ListingState;
   usageCount: number;
   submittedAt?: string;
+  /**
+   * Set only while a withdrawal request is pending.
+   *
+   * The queue shows submissions and withdrawal requests together (§5.1), and this is what
+   * tells them apart. Without it a request renders as "submitted <the original date>" and
+   * reads as an ordinary submission — so the admin answers "should this be published?"
+   * about a listing whose author asked to take it down.
+   */
+  withdrawalRequestedAt?: string;
   reviewedAt?: string;
   reviewNote?: string;
   updatedAt: string;
   /**
-   * Post-approval drift, derived server-side (#744). Only ever set on a published listing.
+   * Which immutable snapshot the store is serving. Only ever set on a published listing.
    *
-   * The two values are different claims and must not render alike. `'instructions'` is
-   * *measured* — the instructions hash differs from the one recorded at approval, so
-   * behavior definitely changed. `'edited'` is *inferred* — the record was written after
-   * the review, but the cause is unknown and may be an admin's own presentation edit.
-   * Only listings approved before the hash baseline shipped can report `'edited'`.
+   * This is a fact, not an inference — it replaced the `drift` marker, whose stronger
+   * signal was a hash comparison and whose weaker one was a timestamp guess that fired on
+   * an admin's own presentation edits.
    */
-  drift?: ListingDrift;
+  publishedVersion?: number;
+
+  /**
+   * The highest snapshot this agent has — for 1-based sequential versions, also how many.
+   *
+   * Distinct from `publishedVersion` because a rollback moves that pointer *down*: a listing
+   * serving `v1` with `v2`–`v5` behind it looks identical to one that has only ever had
+   * `v1`, and gating the rollback affordance on the latter reading hides the only way back
+   * to the newer snapshots.
+   */
+  latestVersion?: number;
 
   /**
    * Who can open this agent if it is shelved, derived from `visibility` server-side.
@@ -147,6 +145,51 @@ export interface ReviewListingRequest {
 }
 
 export interface TakedownRequest {
+  reason: string;
+}
+
+/**
+ * An admin's answer to an author's request to pull a live listing (§5.1).
+ *
+ * `grant`/`decline`, never `approve`/`reject`: "approve" means "publish this" everywhere
+ * else on this surface, and approving a *withdrawal* reads dangerously like approving the
+ * listing. Its own endpoint for the same reason — one endpoint with four decision values
+ * would make an accidental unpublication a one-character mistake.
+ */
+export interface WithdrawalDecisionRequest {
+  decision: 'grant' | 'decline';
+  note?: string;
+}
+
+/**
+ * One snapshot in an Agent's history, described just enough to pick out of a list.
+ *
+ * Deliberately not the whole version: the picker renders a number, a name and a date, and
+ * shipping every past snapshot's `instructions` to draw a dropdown would put an Agent's
+ * entire approval history on the wire.
+ */
+export interface AgentVersionSummary {
+  version: number;
+  name?: string;
+  tagline?: string;
+  createdAt?: string;
+  createdBy?: string;
+  isPublished: boolean;
+}
+
+export interface AgentVersionsResponse {
+  versions: AgentVersionSummary[];
+  publishedVersion?: number;
+}
+
+/**
+ * Repoint a published listing at an earlier snapshot (§8).
+ *
+ * `reason` is required and reaches the author's card, exactly as a takedown's does — an
+ * admin changing what users run is something the author has to be able to see.
+ */
+export interface RollbackListingRequest {
+  version: number;
   reason: string;
 }
 
@@ -276,8 +319,13 @@ export interface RoleAgentPinsUpdateRequest {
 /**
  * Why an agent was reported. A fixed set so the queue sorts by severity without anyone
  * reading every note; `inappropriate` is the one that should page a human.
+ *
+ * Re-exported from the user-facing model rather than restated. It *was* restated, and the
+ * two copies drifted the moment `suggestion` was added for the in-conversation feedback
+ * link: the reporter's dialog offered a reason the admin queue's own type did not admit.
+ * One declaration, in the file the submit side already reads from.
  */
-export type ReportReason = 'inaccurate' | 'broken' | 'inappropriate' | 'other';
+export type { ReportReason };
 
 /**
  * A report's own tiny lifecycle. Deliberately **not** a mirror of `ListingState`: a
@@ -308,6 +356,14 @@ export interface AdminReportRow {
   reporterName: string;
   reason: ReportReason;
   note?: string;
+  /**
+   * The conversation the reporter opted to attach, when they filed from inside one.
+   *
+   * A reference to look up, not a transcript — nothing on this surface reads the
+   * conversation. Absent is a normal state (they declined, or filed from the store page),
+   * so the row must not imply anything was withheld.
+   */
+  sessionId?: string;
   state: ReportState;
   createdAt: string;
   resolvedAt?: string;
@@ -332,3 +388,93 @@ export interface AdminQueueCounts {
   pendingCount: number;
   openReportCount: number;
 }
+
+/**
+ * One field that differs between the approved snapshot and the pending one (§6.1).
+ *
+ * `before`/`after` are raw snapshot values, rendered per field by the diff component —
+ * a tagline as text, `bindings` as kinds and refs. The backend deliberately does not
+ * pre-render them into strings, which would put presentation on the wrong side of the wire.
+ */
+export interface VersionFieldChange {
+  /** Snapshot field name, camelCase as the rest of the Agent surface names it. */
+  field: string;
+  /** Value in the published version; absent on a first submission. */
+  before?: unknown;
+  after?: unknown;
+  /**
+   * Whether this changes what the Agent *does* (instructions, bindings, model) rather
+   * than how it presents. Drives the reviewer's at-a-glance triage.
+   */
+  behavior: boolean;
+}
+
+/**
+ * The pending version against the currently published one (§6.1).
+ *
+ * Answers the reviewer's real question — "what changed since I approved this?" — which the
+ * queue could not answer before: a submission arrived with no reference to what it
+ * replaces, so a typo fix and a full rewrite looked identical.
+ */
+export interface AgentVersionDiff {
+  agentId: string;
+  /** The live snapshot; absent on a first submission. */
+  publishedVersion?: number;
+  /** The snapshot under review. */
+  pendingVersion?: number;
+  /**
+   * Nothing is published yet, so there is nothing to diff against. A distinct signal
+   * rather than an empty `changes` list, which would read as "nothing changed".
+   */
+  firstSubmission: boolean;
+  /** Instructions, bindings or model differ — a careful read rather than a glance. */
+  behaviorChanged: boolean;
+  changes: VersionFieldChange[];
+  /** Unified line diff of the instructions; empty when unchanged or on a first submission. */
+  instructionsDiff: string[];
+}
+// ── publisher management (D12, PR-6) ───────────────────────────────────────────────
+
+/**
+ * Create a publisher profile.
+ *
+ * No `id` field: the backend derives it from the label and it is immutable thereafter,
+ * because listings store the id. Renaming a publisher changes `label` only — the same rule
+ * categories follow, and for the same reason.
+ */
+export interface PublisherCreateRequest {
+  label: string;
+  kind: PublisherKind;
+  verified?: boolean;
+  iconKey?: string;
+  order?: number;
+  enabled?: boolean;
+}
+
+/** Update a publisher. All fields optional; `id` is absent because it cannot change. */
+export interface PublisherUpdateRequest {
+  label?: string;
+  kind?: PublisherKind;
+  verified?: boolean;
+  iconKey?: string;
+  order?: number;
+  enabled?: boolean;
+}
+
+export interface PublisherEligibilityResponse {
+  publisherId: string;
+  userIds: string[];
+}
+
+/** Display copy for each publisher kind — the picker needs to say what it means. */
+export const PUBLISHER_KIND_LABELS: Record<PublisherKind, string> = {
+  institution: 'Institution',
+  department: 'Department',
+  individual: 'Individual',
+};
+
+export const PUBLISHER_KIND_HINTS: Record<PublisherKind, string> = {
+  institution: 'The university itself — for agents that speak for Boise State.',
+  department: 'A team or office, e.g. the Registrar or Communications & Marketing.',
+  individual: 'A person. Auto-created from an author\'s display name on first submission.',
+};

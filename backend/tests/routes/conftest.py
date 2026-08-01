@@ -53,6 +53,42 @@ def _stub_ensure_session_metadata_exists(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Auto-stub the api-converse profile lookup
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def stub_api_key_user_profile(monkeypatch):
+    """Give /chat/api-converse a Users-table profile to hydrate roles from.
+
+    The handler reads the key owner's real roles per request and fails closed
+    when no profile row exists (an API key stores no roles of its own). Route
+    tests that only patch ``_validate_api_key`` would otherwise all 401.
+
+    Tests exercising hydration itself — the fail-closed path, or which roles
+    reach RBAC — should re-patch ``converse_routes.get_user_repository``
+    directly rather than rely on this default.
+    """
+    from apis.shared.users import UserProfile
+
+    profile = UserProfile(
+        userId="user-001",
+        email="test@example.com",
+        name="Test User",
+        roles=["Staff"],
+        emailDomain="example.com",
+        createdAt="2026-01-01T00:00:00Z",
+        lastLoginAt="2026-01-01T00:00:00Z",
+    )
+    repo = AsyncMock()
+    repo.get_user = AsyncMock(return_value=profile)
+    monkeypatch.setattr(
+        "apis.app_api.chat.converse_routes.get_user_repository",
+        lambda: repo,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Requirement 1.3: User factory fixture
 # ---------------------------------------------------------------------------
 

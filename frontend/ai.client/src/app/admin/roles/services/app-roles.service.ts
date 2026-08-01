@@ -8,6 +8,7 @@ import {
   AppRoleCreateRequest,
   AppRoleUpdateRequest,
 } from '../models/app-role.model';
+import { AdminScopeListResponse } from '../../admin-scope.model';
 
 /**
  * Service to manage AppRoles.
@@ -63,6 +64,21 @@ export class AppRolesService {
       this.http.get<AppRoleListResponse>(`${this.baseUrl()}/`)
     );
     return response;
+  }
+
+  /**
+   * Fetch the delegated admin scope registry.
+   *
+   * Served from code rather than derived from a catalog, so the role form's
+   * picker always offers exactly the scopes the server will accept. Includes
+   * non-delegable entries with `delegable: false` — the picker shows them as
+   * unavailable rather than omitting them, so an admin can see that Roles and
+   * Auth Providers exist and are deliberately withheld.
+   */
+  async fetchAdminScopes(): Promise<AdminScopeListResponse> {
+    return firstValueFrom(
+      this.http.get<AdminScopeListResponse>(`${this.baseUrl()}/admin-scopes`)
+    );
   }
 
   /**

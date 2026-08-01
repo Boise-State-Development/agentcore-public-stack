@@ -6,10 +6,12 @@ category — and nothing else.
 
 Two properties are worth stating because they are easy to erode later:
 
-* **The query cannot return an unpublished agent.** Not because it filters, but because
-  an unpublished agent has no GSI5 key. Any future change that starts filtering
-  ``listing.state`` in here is a sign the index has stopped being sparse, which is a
-  bug in the write path, not something to compensate for on read.
+* **The query cannot return an unpublished agent, or unapproved content.** Not because it
+  filters, but because the GSI5 key lives on the published ``VERSION#`` snapshot: an
+  unpublished agent has no key, and an author's draft edits are not in the indexed row at
+  all. Any future change that starts filtering ``listing.state`` in here is a sign the
+  index has stopped being sparse, which is a bug in the write path, not something to
+  compensate for on read.
 * **The store read never carries behavior.** No ``instructions``, no binding refs, no
   owner id. ``AgentResponse`` exists for the surfaces that legitimately need those; the
   shelf is seen by every browsing user and gets the narrowest projection that renders.
@@ -20,17 +22,20 @@ from typing import List, Optional, Tuple
 
 from apis.shared.assistants.categories import ensure_seeded, list_categories
 from apis.shared.assistants.icons import icon_url
-from apis.shared.assistants.listing import is_published
+from apis.shared.assistants.listing import is_on_shelf
 from apis.shared.assistants.listing_repository import batch_get_agents, query_store
 from apis.shared.assistants.models import (
     AgentCategory,
     AgentListingResponse,
+    AgentVersion,
     Assistant,
     ListingPublisher,
     PublisherProfile,
 )
 from apis.shared.assistants.publishers import list_publishers
 from apis.shared.assistants.storefront import get_featured_ids
+from apis.shared.assistants.version_repository import batch_get_versions
+from apis.shared.assistants.versions import VERSION_SK_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -40,47 +45,93 @@ _MAX_FANOUT_CATEGORIES = 12
 
 
 def to_listing_response(
-    assistant: Assistant, publishers: dict
+    version: AgentVersion, publishers: dict, *, category: str
 ) -> Optional[AgentListingResponse]:
-    """Project a stored agent into the shelf shape, or ``None`` if it cannot render."""
-    listing = assistant.listing
-    if not listing:
-        # Only reachable if a GSI5 key outlived its listing block, which the single-write
-        # invariant in listing_repository is designed to prevent. Skip rather than crash
-        # the whole shelf for one bad row.
-        logger.warning(f"Indexed agent {assistant.assistant_id} has no listing block; skipping")
+    """Project a published **snapshot** into the shelf shape, or ``None`` if it cannot render.
+
+    Everything rendered comes from the version, so the shelf shows what the reviewer
+    approved rather than whatever the author's draft says today.
+
+    ``category`` is passed in rather than read off the version. Placement lives in the index
+    key so an admin can recategorize a live listing without rewriting an immutable record
+    (D13), which means the key is the authority and ``version.category`` is only the
+    author's original proposal. Every caller here already knows which shelf it queried.
+    """
+    if not version.agent_id:
+        logger.warning("Indexed version carries no agentId; skipping")
         return None
 
-    profile: Optional[PublisherProfile] = publishers.get(listing.publisher_id)
+    profile: Optional[PublisherProfile] = publishers.get(version.publisher_id)
     return AgentListingResponse(
-        agent_id=assistant.assistant_id,
-        name=assistant.name,
-        tagline=assistant.tagline,
-        emoji=assistant.emoji,
+        agent_id=version.agent_id,
+        name=version.name,
+        tagline=version.tagline,
+        emoji=version.emoji,
         # Phase 4: the uploaded icon when there is one, the generated gradient when not —
         # and the emoji above is what that gradient carries, so both always ship.
-        icon_url=icon_url(assistant.assistant_id, assistant.icon_key),
+        icon_url=icon_url(version.agent_id, version.icon_key),
         publisher=(
             ListingPublisher(label=profile.label, kind=profile.kind, verified=profile.verified)
             if profile
             else None
         ),
-        category=listing.category,
+        category=category,
     )
 
 
-def _project(items: list, publishers: dict) -> List[AgentListingResponse]:
-    responses = []
+def _project_with_keys(
+    items: list, publishers: dict, *, category: str
+) -> List[Tuple[str, AgentListingResponse]]:
+    """``(GSI5_SK, response)`` for each row that renders.
+
+    ⚠️ **Pairs, not two parallel lists.** ``browse_all`` needs each response's sort key, and
+    it used to get it by ``zip``-ing the raw items against the projected responses — which is
+    only correct while *nothing is ever skipped*. Any dropped row shifts every later response
+    onto the previous row's key, so the merge silently sorts the shelf wrong. That was
+    latent; the stale-index skip below makes it reachable with real data, so the pairing is
+    built here where the drop happens instead of being reconstructed by position afterwards.
+    """
+    projected: List[Tuple[str, AgentListingResponse]] = []
     for item in items:
+        # ⚠️ Skip anything that is not a version row *before* trying to parse one.
+        #
+        # The index moved onto the ``VERSION#`` row in PR-2, but listings published before
+        # that still carry GSI5 keys on their ``METADATA`` item, so this query returns Agent
+        # rows too. They cannot validate as an ``AgentVersion`` (no ``agentId``), and the
+        # generic handler below logged a full pydantic traceback for each one, on every store
+        # browse — an error-shaped log line for a data condition that is merely old.
+        #
+        # Such a listing is invisible in the store either way: it has no version row to
+        # render. The fix for *that* is to clear the stale keys off the Agent row; this
+        # keeps the read path quiet in the meantime and correct forever, since a
+        # non-``VERSION#`` key in this index is never something the shelf should render.
+        sort_key = str(item.get("SK", ""))
+        if not sort_key.startswith(VERSION_SK_PREFIX):
+            logger.info(
+                "Skipping stale store index row %s/%s — the directory key belongs on the "
+                "published version, not the Agent",
+                item.get("PK"),
+                sort_key,
+            )
+            continue
         try:
-            assistant = Assistant.model_validate(item)
+            version = AgentVersion.model_validate(
+                {k: v for k, v in item.items() if k not in ("PK", "SK")}
+            )
         except Exception:
             logger.warning("Skipping unparseable store row", exc_info=True)
             continue
-        projected = to_listing_response(assistant, publishers)
-        if projected:
-            responses.append(projected)
-    return responses
+        response = to_listing_response(version, publishers, category=category)
+        if response:
+            projected.append((str(item.get("GSI5_SK", "")), response))
+    return projected
+
+
+def _project(items: list, publishers: dict, *, category: str) -> List[AgentListingResponse]:
+    """The shelf rows, for callers that already know which partition they queried."""
+    return [
+        response for _key, response in _project_with_keys(items, publishers, category=category)
+    ]
 
 
 async def browse_category(
@@ -89,7 +140,7 @@ async def browse_category(
     """One category's shelf, newest-first, with a real cursor (single GSI5 partition)."""
     publishers = {p.id: p for p in await list_publishers()}
     items, next_cursor = await query_store(category, limit=limit, cursor=cursor)
-    return _project(items, publishers), next_cursor
+    return _project(items, publishers, category=category), next_cursor
 
 
 async def browse_all(*, limit: int = 50) -> List[AgentListingResponse]:
@@ -113,11 +164,17 @@ async def browse_all(*, limit: int = 50) -> List[AgentListingResponse]:
 
     publishers = {p.id: p for p in await list_publishers()}
 
+    # Sort on ``GSI5_SK``, not on the row's ``createdAt``. These are version rows now, so
+    # ``createdAt`` is when the *snapshot* was cut — merging on it would order the store by
+    # most-recently-approved and let a re-approved five-year-old Agent surface above a
+    # genuinely new one. ``GSI5_SK`` is ``CREATED#{agent createdAt}``, which is the ordering
+    # the per-category shelves already use, so merging on it keeps browse-all consistent
+    # with browse-category. ``_project_with_keys`` pairs the two so a skipped row cannot
+    # slide every later response onto the wrong key.
     merged: List[Tuple[str, AgentListingResponse]] = []
     for category in categories:
         items, _ = await query_store(category.id, limit=limit)
-        for item, response in zip(items, _project(items, publishers)):
-            merged.append((str(item.get("createdAt", "")), response))
+        merged.extend(_project_with_keys(items, publishers, category=category.id))
 
     # Newest-first across the merged set, matching the per-category ordering.
     merged.sort(key=lambda pair: pair[0], reverse=True)
@@ -129,10 +186,15 @@ async def resolve_featured(
 ) -> Tuple[List[AgentListingResponse], List[str]]:
     """Project the configured store-front ids into shelf rows, in the admin's order.
 
-    Returns ``(rows, unavailable_ids)``. An id is *unavailable* when the Agent was deleted
-    or its listing is no longer ``published`` — a takedown must drop it off the shelf, and
-    the sparse-index physics that guarantee this for browse do not apply to a hand-curated
-    id list, so the state check has to be explicit here.
+    Returns ``(rows, unavailable_ids)``. An id is *unavailable* when the Agent was deleted,
+    its listing is no longer ``published``, or its published snapshot is missing — a
+    takedown must drop it off the shelf, and the sparse-index physics that guarantee this
+    for browse do not apply to a hand-curated id list, so the check has to be explicit here.
+
+    **Two reads, not one.** The Agent row says *which* version is published; the version row
+    is what renders. Resolving the featured row from the Agent record instead would make
+    this the one store surface still serving the author's draft — the curated shelf is
+    exactly where that would be least noticed and most damaging.
 
     The unavailable ids are returned rather than swallowed so the admin console can show
     an admin why their row is short. Nothing on this path *writes*: a takedown that is
@@ -144,7 +206,9 @@ async def resolve_featured(
     records = await batch_get_agents(agent_ids)
     publishers = {p.id: p for p in await list_publishers()}
 
-    rows: List[AgentListingResponse] = []
+    # Pass one: which of these are published, and at which version.
+    published: List[Tuple[str, int]] = []
+    categories: dict = {}
     unavailable: List[str] = []
     for agent_id in agent_ids:
         item = records.get(agent_id)
@@ -158,10 +222,27 @@ async def resolve_featured(
             unavailable.append(agent_id)
             continue
         listing = assistant.listing
-        if not listing or not is_published(listing.state):
+        # ``is_on_shelf``, not ``is_listed``: the featured row must agree with browse about
+        # what is in the store. A published listing an admin sent back for changes keeps
+        # serving, and asking by state alone would drop it from the featured row while the
+        # category shelf still carried it — the same Agent present and absent on one page.
+        if not listing or not is_on_shelf(listing.state, listing.published_version):
             unavailable.append(agent_id)
             continue
-        projected = to_listing_response(assistant, publishers)
+        published.append((agent_id, listing.published_version))
+        categories[agent_id] = listing.category
+
+    versions = await batch_get_versions(published)
+
+    # Pass two: render from the snapshots, in the admin's configured order.
+    rows: List[AgentListingResponse] = []
+    for agent_id, _number in published:
+        version = versions.get(agent_id)
+        projected = (
+            to_listing_response(version, publishers, category=categories[agent_id])
+            if version
+            else None
+        )
         if projected:
             rows.append(projected)
         else:

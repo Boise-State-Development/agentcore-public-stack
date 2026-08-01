@@ -65,7 +65,12 @@ _GSI6_ATTRS = ("GSI6_PK", "GSI6_SK")
 
 # ``state`` is a DynamoDB reserved word; ``reason`` and ``note`` are aliased alongside it
 # rather than checked one by one against the reserved list, which grows.
-_NAMES = {"#st": "state", "#reason": "reason", "#note": "note"}
+_NAMES = {
+    "#st": "state",
+    "#reason": "reason",
+    "#note": "note",
+    "#session": "sessionId",
+}
 
 
 def _now() -> str:
@@ -115,12 +120,16 @@ async def submit_report(
     reporter_name: str,
     reason: ReportReason,
     note: Optional[str],
+    session_id: Optional[str] = None,
 ) -> Tuple[AgentReport, bool]:
     """File a report, or update this reporter's already-open one (D15.4).
 
     Returns ``(report, replaced_existing)``. ``replaced_existing`` is True only when an
     *open* report was updated in place — that is the case the UI must not describe as a
     second report having been queued.
+
+    ``session_id`` is the conversation the reporter opted to attach. Like ``note`` it is
+    fully replaced on an amendment, never merged: see the REMOVE branch below for why.
 
     Three conditional writes, no read, in the order the cases actually occur:
 
@@ -146,6 +155,11 @@ async def submit_report(
     }
     if note:
         body["note"] = note
+    # ⚠️ Stored as given. Whether this session belongs to ``reporter_id`` is settled by the
+    # caller (``report_service.file_report``) before we get here — this module is storage,
+    # and a check duplicated in two places is a check that eventually disagrees with itself.
+    if session_id:
+        body["sessionId"] = session_id
 
     def _built(created_at: str) -> AgentReport:
         return AgentReport.model_validate(
@@ -186,6 +200,15 @@ async def submit_report(
     else:
         # An amended report with the text removed must not keep the old text.
         remove_parts.append("#note")
+
+    if session_id:
+        set_parts.append("#session = :session")
+        values[":session"] = session_id
+    else:
+        # Same rule, and it matters more here: unticking the box on an amendment is the
+        # user *withdrawing* the conversation they previously shared. Leaving the old
+        # reference behind would make that consent impossible to take back.
+        remove_parts.append("#session")
 
     expression = "SET " + ", ".join(set_parts)
     if remove_parts:

@@ -101,12 +101,59 @@ differ between a dev and a prod stack:
 | **Frame ancestors** | `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS`, `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` — leave unset in production |
 | **Networking** | `CDK_VPC_CIDR` |
 | **Retention** | `CDK_RETAIN_DATA_ON_DELETE`, `CDK_ARTIFACTS_RETENTION_DAYS` |
+| **Gateway inbound auth** | `CDK_GATEWAY_INBOUND_AUTH` (`iam` default; `jwt` only on a newly created Gateway — see below) |
 
 :::caution[Extra frame ancestors are a real loosening]
 `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS` and `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS`
 let additional origins embed your users' artifacts and MCP Apps. They're handy
 for pointing a local SPA at a shared dev stack, but every listed origin can frame
 that content — leave them unset on production.
+:::
+
+## Gateway inbound authentication
+
+The AgentCore Gateway accepts **one** inbound authorizer. It defaults to `iam` —
+the Gateway is invoked with SigV4, which is what every already-deployed Gateway
+uses.
+
+Setting `CDK_GATEWAY_INBOUND_AUTH=jwt` makes the Gateway validate a Cognito
+access token presented as a bearer token, and the agent then sends the signed-in
+user's token on every call. That mode is required for on-behalf-of token
+exchange, which can only exchange a *user* subject token.
+
+Outbound credentials are unaffected either way. They're configured **per target**,
+so one Gateway fronts IAM-invoked Lambda targets and OAuth/token-exchange targets
+side by side.
+
+:::danger[The authorizer cannot be changed after the Gateway is created]
+`jwt` only takes effect on a **newly created** Gateway. Switching an existing one
+fails mid-deploy:
+
+```
+Authorizer type cannot be updated for an existing gateway
+(Service: BedrockAgentCoreControl, Status Code: 400)
+```
+
+Neither pre-deploy check catches this. The CloudFormation resource reference
+documents `AuthorizerType` as *"Update requires: No interruption"*, and `cdk diff`
+— even using a real change set — reports an in-place `[~]` modify. Both describe
+CloudFormation's plan, not the AgentCore service's validation.
+
+The stack rolls back cleanly and the Gateway is unharmed, but the deploy fails.
+**Leave this unset (or `iam`) for any environment whose Gateway already exists.**
+Moving an existing deployment to JWT means creating a new Gateway, re-registering
+its targets, and cutting over.
+:::
+
+:::caution[If you do run a JWT Gateway: check for SigV4 callers]
+A `jwt` Gateway **stops accepting SigV4**. In this repository the agent is the
+only thing that calls the Gateway data plane, so nothing else is affected. If
+your fork added something else that invokes the Gateway with SigV4 — a Lambda, a
+scheduled job, another service — it will get `401`s. Move those callers onto a
+user bearer token first.
+
+The infrastructure and backend halves must **deploy together**: whichever lands
+second leaves a window where Gateway tool calls fail.
 :::
 
 ## Data retention on teardown

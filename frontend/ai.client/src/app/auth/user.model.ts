@@ -21,6 +21,16 @@ export interface UserPermissions {
   appRoles: string[];
   tools: string[];
   models: string[];
+  skills: string[];
+  /**
+   * Delegated admin feature areas (e.g. `admin.tools`), from the closed
+   * registry served by GET /admin/roles/admin-scopes. Empty for a user who is
+   * not a delegated admin; `system_admin` holds every scope implicitly and so
+   * also carries an empty list here — check `appRoles` for the superuser.
+   *
+   * Not yet consumed: the admin guard and nav still gate on `system_admin`.
+   */
+  adminScopes: string[];
   quotaTier: string | null;
   resolvedAt: string;
 }

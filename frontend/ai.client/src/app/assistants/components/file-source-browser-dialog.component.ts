@@ -34,6 +34,7 @@ import { Document } from '../models/document.model';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 
 /**
  * What the dialog is for. `import` (default) multi-selects files to ingest
@@ -93,7 +94,7 @@ type ConnectPhase = 'initiating' | 'awaiting';
 @Component({
   selector: 'app-file-source-browser-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [DialogDismissDirective, NgIcon],
   providers: [
     provideIcons({
       heroArrowDownTray,

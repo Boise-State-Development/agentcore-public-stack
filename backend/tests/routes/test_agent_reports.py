@@ -99,19 +99,26 @@ def client(app, make_user):
 _UNSET = object()
 
 
-def _report_agent(client, *, assistant=_UNSET, body=None, submitted=None):
+def _report_agent(client, *, assistant=_UNSET, body=None, submitted=None, session=_UNSET):
     """POST the report with the storage layer stubbed at the service's own boundary.
 
     ``assistant=None`` means "the access check denies", which is why the default is a
-    sentinel rather than ``None``.
+    sentinel rather than ``None``. ``session`` is the same shape for the session-metadata
+    read behind an attached conversation: ``None`` means "not a session this caller owns",
+    and the default resolves to a stub that says they do.
     """
     resolved = _make_assistant() if assistant is _UNSET else assistant
+    resolved_session = object() if session is _UNSET else session
 
     with (
         patch(
             f"{REPORT_SERVICE}.get_assistant_with_access_check",
             AsyncMock(return_value=(resolved, "viewer") if resolved else (None, None)),
         ),
+        patch(
+            "apis.shared.sessions.metadata.get_session_metadata",
+            AsyncMock(return_value=resolved_session),
+        ) as session_read,
         patch(
             f"{REPORT_SERVICE}.submit_report",
             AsyncMock(return_value=submitted or (_report(), False)),
@@ -120,12 +127,12 @@ def _report_agent(client, *, assistant=_UNSET, body=None, submitted=None):
         response = client.post(
             f"/agents/{AGENT}/report", json=body or {"reason": "broken", "note": "It errors out"}
         )
-    return response, submit
+    return response, submit, session_read
 
 
 # ── reportable means published (D15.3) ───────────────────────────────────────────────
 def test_a_published_agent_can_be_reported(client):
-    response, submit = _report_agent(client)
+    response, submit, _ = _report_agent(client)
 
     assert response.status_code == 201
     assert submit.await_count == 1
@@ -139,14 +146,14 @@ def test_an_unpublished_agent_cannot_be_reported(client, state):
     A takedown is not available as a remedy for something that was never listed, so there
     is no useful thing the queue could do with the report either.
     """
-    response, submit = _report_agent(client, assistant=_make_assistant(listing_state=state))
+    response, submit, _ = _report_agent(client, assistant=_make_assistant(listing_state=state))
 
     assert response.status_code == 400
     assert submit.await_count == 0, "nothing may reach storage for an unpublished agent"
 
 
 def test_an_agent_that_was_never_submitted_cannot_be_reported(client):
-    response, submit = _report_agent(client, assistant=_make_assistant(listing_state=None))
+    response, submit, _ = _report_agent(client, assistant=_make_assistant(listing_state=None))
 
     assert response.status_code == 400
     assert submit.await_count == 0
@@ -154,7 +161,7 @@ def test_an_agent_that_was_never_submitted_cannot_be_reported(client):
 
 def test_an_agent_the_caller_cannot_reach_is_a_404(client):
     """The access check runs first, so reporting is not a way to probe for agents."""
-    response, submit = _report_agent(client, assistant=None)
+    response, submit, _ = _report_agent(client, assistant=None)
 
     assert response.status_code == 404
     assert submit.await_count == 0
@@ -162,22 +169,95 @@ def test_an_agent_the_caller_cannot_reach_is_a_404(client):
 
 def test_an_unknown_reason_is_refused(client):
     """The fixed set is what lets the queue sort by severity without reading every note."""
-    response, submit = _report_agent(client, body={"reason": "i-just-dont-like-it"})
+    response, submit, _ = _report_agent(client, body={"reason": "i-just-dont-like-it"})
 
     assert response.status_code == 422
     assert submit.await_count == 0
 
 
+def test_a_suggestion_is_a_reason(client):
+    """Feedback from inside a conversation is as often "it should also do X" as a defect."""
+    response, submit, _ = _report_agent(
+        client, body={"reason": "suggestion", "note": "It should also cite the handbook"}
+    )
+
+    assert response.status_code == 201
+    assert submit.await_args.kwargs["reason"] == "suggestion"
+
+
+# ── the attached conversation is opt-in, and verified (not trusted) ──────────────────
+def test_an_attached_conversation_the_caller_owns_is_stored(client):
+    response, submit, session_read = _report_agent(
+        client, body={"reason": "broken", "sessionId": "sess-123"}
+    )
+
+    assert response.status_code == 201
+    assert session_read.await_args.args == ("sess-123", "user-001")
+    assert submit.await_args.kwargs["session_id"] == "sess-123"
+
+
+def test_a_conversation_the_caller_does_not_own_is_dropped(client):
+    """⚠️ The id comes from the request body, so it is checked rather than believed.
+
+    Without this, anyone could hand an admin a pointer to somebody else's conversation and
+    the queue would present it as context the *reporter* chose to share.
+    """
+    response, submit, _ = _report_agent(
+        client, body={"reason": "broken", "sessionId": "not-mine"}, session=None
+    )
+
+    assert response.status_code == 201, "the report itself is still the thing being sent"
+    assert submit.await_args.kwargs["session_id"] is None
+
+
+def test_a_report_with_no_conversation_never_reads_session_metadata(client):
+    response, submit, session_read = _report_agent(client)
+
+    assert response.status_code == 201
+    assert session_read.await_count == 0
+    assert submit.await_args.kwargs["session_id"] is None
+
+
+def test_a_failed_session_lookup_does_not_lose_the_report(client):
+    """The attachment is context; the feedback is the payload. Never trade one for the other."""
+    with (
+        patch(
+            f"{REPORT_SERVICE}.get_assistant_with_access_check",
+            AsyncMock(return_value=(_make_assistant(), "viewer")),
+        ),
+        patch(
+            "apis.shared.sessions.metadata.get_session_metadata",
+            AsyncMock(side_effect=RuntimeError("DynamoDB is having a day")),
+        ),
+        patch(
+            f"{REPORT_SERVICE}.submit_report", AsyncMock(return_value=(_report(), False))
+        ) as submit,
+    ):
+        response = client.post(
+            f"/agents/{AGENT}/report", json={"reason": "broken", "sessionId": "sess-123"}
+        )
+
+    assert response.status_code == 201
+    assert submit.await_args.kwargs["session_id"] is None
+
+
+def test_the_reporter_response_never_echoes_the_attached_conversation(client):
+    """The reference is for the curator. Echoing it back adds nothing and widens the shape."""
+    response, _, _ = _report_agent(client, body={"reason": "broken", "sessionId": "sess-123"})
+
+    assert "sessionId" not in response.json()
+
+
 # ── one open report per reporter (D15.4) ─────────────────────────────────────────────
 def test_a_replaced_report_says_so(client):
     """The UI has to be able to say "we updated your report" rather than imply a second."""
-    response, _ = _report_agent(client, submitted=(_report(), True))
+    response, _, _ = _report_agent(client, submitted=(_report(), True))
 
     assert response.json()["replacedExisting"] is True
 
 
 def test_a_first_report_does_not_claim_to_have_replaced_anything(client):
-    response, _ = _report_agent(client, submitted=(_report(), False))
+    response, _, _ = _report_agent(client, submitted=(_report(), False))
 
     assert response.json()["replacedExisting"] is False
 
@@ -188,7 +268,7 @@ def test_the_reporter_response_leaks_nothing_about_the_queue(client):
     landed. Queue position, other reports and every admin field would each be a way to
     read a surface the reporter has no business in.
     """
-    response, _ = _report_agent(client)
+    response, _, _ = _report_agent(client)
 
     assert set(response.json()) == {
         "agentId",
@@ -223,7 +303,7 @@ def test_reporting_is_404_when_the_marketplace_is_off(client, monkeypatch):
     """404 rather than 403, so the surface reads as unmounted while the feature ships."""
     monkeypatch.setenv("AGENT_MARKETPLACE_ENABLED", "false")
 
-    response, submit = _report_agent(client)
+    response, submit, _ = _report_agent(client)
 
     assert response.status_code == 404
     assert submit.await_count == 0

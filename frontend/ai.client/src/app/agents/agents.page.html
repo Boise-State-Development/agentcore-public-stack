@@ -74,15 +74,6 @@
       </div>
     </div>
 
-    @if (listingError(); as message) {
-      <div
-        role="alert"
-        class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
-      >
-        {{ message }}
-      </div>
-    }
-
     <!-- Content -->
     <main>
       @if (loading()) {
@@ -128,9 +119,7 @@
           </button>
         </div>
       } @else if (viewMode() === 'list') {
-        <!-- List view. Same agents, same controls, less air: one line each until an
-             agent has something to say (a reviewer's note, publication controls), and
-             those rows earn their extra height. -->
+        <!-- List view. Same agents, same controls, less air: one line each. -->
         <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
           @for (agent of agents(); track agent.agentId) {
             <li class="px-4 py-3">
@@ -148,31 +137,10 @@
                       @if (agent.status === 'DRAFT') {
                         <span class="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs/5 font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Draft</span>
                       }
-                      @if (agent.listing) {
-                        <span class="shrink-0"><app-listing-status [listing]="agent.listing" part="badge" /></span>
-                      }
                     </span>
                     <span class="mt-0.5 block truncate text-sm/6 text-gray-500 dark:text-gray-400">{{ agent.description || 'No description' }}</span>
                   </span>
                 </button>
-
-                <div class="hidden shrink-0 items-center gap-1.5 lg:flex">
-                  @if (modelLabel(agent); as model) {
-                    <span class="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-xs/5 font-medium text-gray-700 dark:bg-gray-700/60 dark:text-gray-300" [appTooltip]="model" appTooltipPosition="top">
-                      <ng-icon name="heroCpuChip" class="size-3.5" aria-hidden="true" />
-                      <span class="max-w-[9rem] truncate">{{ model }}</span>
-                    </span>
-                  }
-                  @if (bindingCount(agent, 'tool'); as n) {
-                    <span class="inline-flex items-center rounded-md bg-blue-50 px-2 py-1 text-xs/5 font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ n }} tool{{ n === 1 ? '' : 's' }}</span>
-                  }
-                  @if (bindingCount(agent, 'skill'); as n) {
-                    <span class="inline-flex items-center rounded-md bg-purple-50 px-2 py-1 text-xs/5 font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">{{ n }} skill{{ n === 1 ? '' : 's' }}</span>
-                  }
-                  @if (bindingCount(agent, 'memory_space'); as n) {
-                    <span class="inline-flex items-center rounded-md bg-emerald-50 px-2 py-1 text-xs/5 font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">{{ n }} memory</span>
-                  }
-                </div>
 
                 <span class="hidden shrink-0 text-xs/5 lowercase text-gray-400 sm:block dark:text-gray-500">{{ agent.visibility }}</span>
 
@@ -193,56 +161,6 @@
                   }
                 </div>
               </div>
-
-              <!-- The reviewer's reason and the D13 edit trail. Never collapsed away:
-                   "changes requested" without the reason is worse than no badge at all,
-                   and a row that hid it would make the layout toggle load-bearing. -->
-              @if (agent.listing) {
-                <!-- No margin on the wrapper: the note carries its own `mt-2`, so a
-                     listing with nothing to say adds no gap to the row. -->
-                <div class="sm:pl-13"><app-listing-status [listing]="agent.listing" part="note" /></div>
-              }
-
-              @if (marketplaceAvailable() && canEditIcon(agent)) {
-                <div class="mt-2 flex flex-wrap items-center gap-2 sm:pl-13">
-                  <button
-                    type="button"
-                    (click)="onEditIcon(agent)"
-                    class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                  >
-                    {{ agent.iconUrl ? 'Change icon' : 'Add icon' }}
-                  </button>
-                  @if (isOwner(agent) && canSubmit(agent)) {
-                    <button
-                      type="button"
-                      (click)="onSubmitListing(agent)"
-                      [disabled]="listingBusyId() === agent.agentId"
-                      class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                    >
-                      {{ submitLabel(agent) }}
-                    </button>
-                  }
-                  @if (isOwner(agent) && isPublished(agent)) {
-                    <button
-                      type="button"
-                      (click)="onViewInStore(agent)"
-                      class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                    >
-                      View in store
-                    </button>
-                  }
-                  @if (isOwner(agent) && canWithdraw(agent)) {
-                    <button
-                      type="button"
-                      (click)="onWithdrawListing(agent)"
-                      [disabled]="listingBusyId() === agent.agentId"
-                      class="rounded-lg px-2.5 py-1 text-xs/5 font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
-                    >
-                      {{ listingBusyId() === agent.agentId ? 'Working…' : withdrawLabel(agent) }}
-                    </button>
-                  }
-                </div>
-              }
             </li>
           }
         </ul>
@@ -269,76 +187,10 @@
                 </div>
               </button>
 
-              <!-- Binding summary -->
-              <div class="mt-4 flex flex-wrap gap-1.5">
-                @if (modelLabel(agent); as model) {
-                  <span class="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-xs/5 font-medium text-gray-700 dark:bg-gray-700/60 dark:text-gray-300" [appTooltip]="model" appTooltipPosition="top">
-                    <ng-icon name="heroCpuChip" class="size-3.5" aria-hidden="true" />
-                    <span class="max-w-[10rem] truncate">{{ model }}</span>
-                  </span>
-                }
-                @if (bindingCount(agent, 'tool'); as n) {
-                  <span class="inline-flex items-center rounded-md bg-blue-50 px-2 py-1 text-xs/5 font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ n }} tool{{ n === 1 ? '' : 's' }}</span>
-                }
-                @if (bindingCount(agent, 'skill'); as n) {
-                  <span class="inline-flex items-center rounded-md bg-purple-50 px-2 py-1 text-xs/5 font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">{{ n }} skill{{ n === 1 ? '' : 's' }}</span>
-                }
-                @if (bindingCount(agent, 'memory_space'); as n) {
-                  <span class="inline-flex items-center rounded-md bg-emerald-50 px-2 py-1 text-xs/5 font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">{{ n }} memory</span>
-                }
-              </div>
-
-              <!-- Marketplace listing (D2) — state, the reviewer's note, the D13 edit trail -->
-              @if (agent.listing) {
-                <div class="mt-4">
-                  <app-listing-status [listing]="agent.listing" />
-                </div>
-              }
-
-              <!-- Presentation + publication controls, hidden entirely when the
-                   marketplace routes are unmounted so nothing offers a dead click.
-                   Icon is owner-or-editor (presentation, D13); publishing is owner-only. -->
-              @if (marketplaceAvailable() && canEditIcon(agent)) {
-                <div class="mt-3 flex flex-wrap items-center gap-2">
-                  <!-- Presentation (D13): an editor may set the icon; only the owner publishes. -->
-                  <button
-                    type="button"
-                    (click)="onEditIcon(agent)"
-                    class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                  >
-                    {{ agent.iconUrl ? 'Change icon' : 'Add icon' }}
-                  </button>
-                  @if (isOwner(agent) && canSubmit(agent)) {
-                    <button
-                      type="button"
-                      (click)="onSubmitListing(agent)"
-                      [disabled]="listingBusyId() === agent.agentId"
-                      class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                    >
-                      {{ submitLabel(agent) }}
-                    </button>
-                  }
-                  @if (isOwner(agent) && isPublished(agent)) {
-                    <button
-                      type="button"
-                      (click)="onViewInStore(agent)"
-                      class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                    >
-                      View in store
-                    </button>
-                  }
-                  @if (isOwner(agent) && canWithdraw(agent)) {
-                    <button
-                      type="button"
-                      (click)="onWithdrawListing(agent)"
-                      [disabled]="listingBusyId() === agent.agentId"
-                      class="rounded-lg px-2.5 py-1 text-xs/5 font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
-                    >
-                      {{ listingBusyId() === agent.agentId ? 'Working…' : withdrawLabel(agent) }}
-                    </button>
-                  }
-                </div>
-              }
+              <!-- Spacer: with the binding summary gone the card body is one or two
+                   lines, so the action rail is pushed to the bottom rather than left
+                   floating mid-card in a stretched grid row. -->
+              <div class="flex-1"></div>
 
               <!-- Actions -->
               <div class="mt-4 flex items-center justify-between border-t border-gray-100 pt-3 dark:border-gray-700/60">

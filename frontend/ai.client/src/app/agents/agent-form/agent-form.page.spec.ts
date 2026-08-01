@@ -23,10 +23,6 @@ class StubPreviewComponent {
   emoji = input('');
   starters = input<string[]>([]);
   modelId = input<string | null>(null);
-  modelLabel = input('');
-  toolCount = input(0);
-  skillCount = input(0);
-  memoryCount = input(0);
   isDirty = input(false);
   saving = input(false);
   canSave = input(false);

@@ -14,9 +14,12 @@ reasons that both bite if ignored:
    (D13 exists so an admin can fix a tagline without the author). The authorization for
    these writes lives in the service layer, not in an ownership check here.
 
-Every write puts the listing state and its index keys in **one** ``update_item``, so the
-two can never disagree — a published listing always has keys and an unpublished one never
-does, with no window in between.
+⚠️ **The store index no longer lives on the Agent row.** It moved to the published
+``VERSION#`` item (``version_repository.set_version_index``), because keeping it here meant
+the browse query answered from the same record the author edits — an approved listing could
+serve rewritten instructions. ``write_listing`` now unconditionally REMOVEs the GSI5
+attributes, so the only way onto the shelf is a promoted snapshot. Reason 1 above still
+holds and matters more than ever: the generic update path must never resurrect a key here.
 """
 
 import base64
@@ -25,7 +28,6 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-from .listing import gsi5_keys
 from .models import AgentListing
 from .serialization import from_ddb, to_ddb_safe
 
@@ -58,6 +60,7 @@ async def write_listing(
     icon_key: Optional[str] = None,
     name: Optional[str] = None,
     updated_at: Optional[str] = None,
+    visibility: Optional[str] = None,
 ) -> None:
     """Persist a listing block and reconcile the sparse directory keys in one write.
 
@@ -65,11 +68,14 @@ async def write_listing(
     is why browse is newest-first. The optional presentation fields let an admin D13 edit
     ride along in the same call rather than racing a second update.
 
+    ``visibility`` rides along for the same reason, and for one more: publishing an Agent
+    the author has just consented to make public must not be able to half-happen. Two
+    writes could leave it listed but unreachable — precisely the state this whole gate
+    exists to prevent — so the widening and the listing land together or not at all.
+
     Raises ``ValueError`` (via the conditional check) if the agent no longer exists.
     """
     from botocore.exceptions import ClientError
-
-    keys = gsi5_keys(listing.state, listing.category, created_at)
 
     set_parts = ["listing = :listing"]
     values: Dict[str, Any] = {
@@ -93,16 +99,17 @@ async def write_listing(
         set_parts.append("#name = :name")
         names["#name"] = "name"
         values[":name"] = name
+    if visibility is not None:
+        set_parts.append("visibility = :visibility")
+        values[":visibility"] = visibility
 
-    if keys:
-        for attr, value in keys.items():
-            set_parts.append(f"{attr} = :{attr.lower()}")
-            values[f":{attr.lower()}"] = value
-    else:
-        # Not published → the keys must not exist. REMOVE is unconditional on purpose:
-        # a stale key would keep a delisted agent answerable by the store query, which is
-        # the single failure the sparse index is there to make impossible.
-        remove_parts.extend(_GSI5_ATTRS)
+    # The store index no longer lives here. It moved to the published ``VERSION#`` row
+    # (``version_repository.set_version_index``) so the browse query reads an immutable
+    # snapshot rather than the record the author edits. REMOVE is unconditional and
+    # permanent: any key still on an Agent row is a leftover from before that move, and
+    # leaving one would keep the *draft* answerable by the store query — the exact failure
+    # the whole feature exists to close.
+    remove_parts.extend(_GSI5_ATTRS)
 
     expression = "SET " + ", ".join(set_parts)
     if remove_parts:
@@ -126,10 +133,7 @@ async def write_listing(
         logger.error(f"Failed to write listing for {agent_id}: {e}")
         raise
 
-    logger.info(
-        f"📇 Listing for {agent_id} → {listing.state} "
-        f"({'indexed ' + keys['GSI5_PK'] if keys else 'not indexed'})"
-    )
+    logger.info(f"📇 Listing for {agent_id} → {listing.state}")
 
 
 async def clear_listing(agent_id: str) -> None:
@@ -206,6 +210,11 @@ async def query_store(
     scan, no filter, and no state check. It cannot return an unpublished agent because
     an unpublished agent has no key in this index; that is the whole point of keeping
     the index sparse rather than filtering on ``listing.state`` after the fact.
+
+    ⚠️ **Returns ``VERSION#`` items, not Agent rows.** The keys moved to the published
+    snapshot, so what comes back here is an ``AgentVersion``'s attributes. That is what
+    makes the sparse-index guarantee cover *content* as well as presence: the query cannot
+    return draft instructions because a draft has no row in this index at all.
 
     ``ScanIndexForward=False`` gives newest-first, since ``GSI5_SK`` is
     ``CREATED#{created_at}``. There is no popularity sort — the store front is the

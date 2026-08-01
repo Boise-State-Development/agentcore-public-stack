@@ -6,17 +6,21 @@ import { provideLocationMocks } from '@angular/common/testing';
 import { routes } from './app.routes';
 
 /**
- * Assistant-deprecation redirects (Designer Phase 5, #746).
+ * Assistant deprecation (Designer Phase 5, #746).
  *
- * `/assistants*` no longer renders anything — it redirects onto the Agent surface. These
- * paths are in people's bookmarks, in the "edit" link of every old chat session, and in
- * links colleagues shared with each other, so the redirect is the compatibility promise:
- * the ids are the same record on both sides (the compat mapping renders a legacy
- * Assistant *as* an Agent — nothing was migrated), so the redirect lands on the same
- * thing the old URL opened.
+ * The two **deep** `/assistants/*` paths redirect onto the Agent surface. They are in
+ * people's bookmarks, in the "edit" link of every old chat session, and in links
+ * colleagues shared with each other, so the redirect is the compatibility promise: the
+ * ids are the same record on both sides (the compat mapping renders a legacy Assistant
+ * *as* an Agent — nothing was migrated), so the redirect lands on the same thing the old
+ * URL opened.
+ *
+ * The bare `/assistants` **list** URL does not redirect: it renders the migration
+ * explainer, because that URL is browsed to rather than acted on, and a silent bounce
+ * leaves "where did my assistants go" unanswered.
  *
  * Asserted against the real route table rather than a hand-built one: the bug this guards
- * against is someone deleting the redirect entries, and a fixture table would not notice.
+ * against is someone deleting these entries, and a fixture table would not notice.
  */
 describe('app routes — assistant deprecation redirects', () => {
   @Component({ template: '' })
@@ -53,9 +57,11 @@ describe('app routes — assistant deprecation redirects', () => {
     TestBed.resetTestingModule();
   });
 
-  it('sends the assistants list to the agents hub', async () => {
+  it('keeps the assistants list URL on itself so the explainer can render', async () => {
+    // Not a redirect. Someone who bookmarked their Assistants list gets told what
+    // happened to it; bouncing them silently onto /agents is the bug this guards against.
     await router.navigateByUrl('/assistants');
-    expect(router.url).toBe('/agents');
+    expect(router.url).toBe('/assistants');
   });
 
   it('sends the new-assistant form to the Designer', async () => {

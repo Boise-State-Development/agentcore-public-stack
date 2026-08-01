@@ -1,0 +1,337 @@
+<div class="min-h-dvh">
+  <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- ── Hero ──────────────────────────────────────────────────────────────
+         The graph-paper field and the blue wash are decorative and live behind
+         an aria-hidden layer; the panel's own contrast is carried by the text. -->
+    <header class="reveal relative overflow-hidden rounded-3xl border border-gray-200 bg-white px-6 py-12 sm:px-12 sm:py-16 dark:border-gray-700 dark:bg-gray-800">
+      <div class="hero-field" aria-hidden="true"></div>
+
+      <div class="relative">
+        <p class="eyebrow text-primary-600 dark:text-primary-300">What changed</p>
+
+        <h1 class="mt-4 max-w-2xl text-3xl/tight font-bold tracking-tight text-gray-900 sm:text-5xl/tight dark:text-white">
+          <span class="former">Assistants</span> are now
+          <span class="text-primary-600 dark:text-primary-300">Agents</span>.
+        </h1>
+
+        <p class="mt-5 max-w-xl text-base/7 text-gray-600 dark:text-gray-300">
+          Nothing was lost and nothing was switched off. If you had built assistants on
+          <em class="not-italic font-semibold text-gray-900 dark:text-white">this latest version</em>,
+          everything is waiting for you under
+          <strong class="font-semibold text-gray-900 dark:text-white">Agents</strong>, exactly as
+          you left it — under a more industry-aligned name.
+        </p>
+        <!-- The legacy half, in one paragraph. It sits in the hero rather than in a section
+             of its own because the whole message is two facts — where they are, and that
+             moving them is manual. Anything longer turns a short answer into a project.
+
+             The link *reads* as the bare host the reader knows and *goes* to their own
+             list (`?segment=my`), so the sentence stays plain while the click still lands
+             somewhere useful. -->
+        <p class="mt-3 max-w-xl text-base/7 text-gray-600 dark:text-gray-300">
+          If you built assistants on the
+          <strong class="font-semibold text-gray-900 dark:text-white">previous version</strong> of
+          boisestate.ai, they are still available at
+          <a
+            [href]="legacyAssistantsUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="rounded font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-primary-300 dark:hover:text-primary-200"
+            >legacy.boisestate.ai</a
+          >. We apologize, but legacy assistants were incompatible with our new version and
+          will need to be migrated by hand.
+        </p>
+
+        <div class="mt-8 flex flex-wrap items-center gap-3">
+          <a
+            routerLink="/agents"
+            class="group inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition-all duration-200 hover:bg-primary-600 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 active:scale-[0.98] dark:focus-visible:ring-offset-gray-800"
+          >
+            Go to my agents
+            <ng-icon
+              name="heroArrowRight"
+              class="size-4 transition-transform duration-200 group-hover:translate-x-0.5"
+              aria-hidden="true"
+            />
+          </a>
+          <a
+            routerLink="/agents/discover"
+            class="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm/6 font-semibold text-gray-700 transition hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 dark:focus-visible:ring-offset-gray-800"
+          >
+            <ng-icon name="heroSquares2x2" class="size-4" aria-hidden="true" />
+            Browse what others built
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <!-- ── Reassurance ───────────────────────────────────────────────────────
+         First section on the page: the rename is only interesting once you know
+         your work survived it.
+
+         Every claim in here is scoped to assistants built on this site — "here",
+         "on this site", and the heading itself — because for a legacy assistant
+         none of it is true. The hero says so once; this must not quietly take it
+         back three paragraphs later. -->
+    <section class="reveal mt-14" aria-labelledby="kept-heading">
+      <div class="flex items-center gap-3">
+        <span
+          class="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
+          aria-hidden="true"
+        >
+          <ng-icon name="heroShieldCheck" class="size-5" />
+        </span>
+        <h2 id="kept-heading" class="text-xl/7 font-bold tracking-tight text-gray-900 sm:text-2xl/8 dark:text-white">
+          The assistants you built here are safe. They became agents.
+        </h2>
+      </div>
+
+      <p class="mt-3 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
+        Every one you made on this site is under Agents right now, with the same name you gave
+        it. There is nothing to move, re-create or set up again.
+      </p>
+
+      <ul class="mt-7 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        @for (item of carriedOver; track item.label) {
+          <li class="flex gap-4 rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
+            <span
+              class="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300"
+              aria-hidden="true"
+            >
+              <ng-icon [name]="item.icon" class="size-5" />
+            </span>
+            <div class="min-w-0">
+              <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">{{ item.label }}</h3>
+              <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">{{ item.detail }}</p>
+            </div>
+          </li>
+        }
+      </ul>
+    </section>
+
+    <!-- ── The ledger ────────────────────────────────────────────────────────
+         The argument for the change, in one table. Marked up as a real table so
+         a screen reader hears the comparison rather than two lists of icons. -->
+    <section class="reveal mt-16" aria-labelledby="ledger-heading">
+      <h2 id="ledger-heading" class="text-xl/7 font-bold tracking-tight text-gray-900 sm:text-2xl/8 dark:text-white">
+        Why we call them agents
+      </h2>
+      <p class="mt-3 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
+        <strong class="font-semibold text-gray-900 dark:text-white">Agent</strong> is the word
+        everyone else uses for this. It is the term you will meet in the AI tools you already
+        use, in the articles you read and in the training you take — so what you pick up out
+        there works in here, and what you learn in here travels with you. "Assistant" was our
+        own word for it, and only ever meant something here.
+      </p>
+      <p class="mt-3 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
+        The word matches what it does. An assistant could follow the instructions you wrote
+        and read the documents you gave it, and that was all of it. An agent still does both —
+        and you can now also choose the AI model behind it, hand it tools so it can go and do
+        things rather than only talk about them, add skills it picks up when a task calls for
+        them, and give it a memory that carries from one conversation to the next.
+      </p>
+
+      <div class="ledger mt-7 overflow-x-auto rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+        <table class="w-full min-w-lg border-collapse text-left">
+          <caption class="sr-only">
+            What an assistant could do compared with what an agent can do
+          </caption>
+          <thead>
+            <tr class="border-b border-gray-200 dark:border-gray-700">
+              <th scope="col" class="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                Capability
+              </th>
+              <th scope="col" class="w-28 px-3 py-3.5 text-center text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                Assistant
+              </th>
+              <th scope="col" class="ledger-now w-28 px-3 py-3.5 text-center text-xs font-semibold uppercase tracking-wider text-primary-700 dark:text-primary-300">
+                Agent
+              </th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
+            @for (row of ledger; track row.label) {
+              <tr>
+                <th scope="row" class="px-5 py-4 font-normal">
+                  <span class="flex items-start gap-3">
+                    <ng-icon
+                      [name]="row.icon"
+                      class="mt-0.5 size-4 shrink-0 text-gray-400 dark:text-gray-500"
+                      aria-hidden="true"
+                    />
+                    <span class="min-w-0">
+                      <span class="block text-sm/6 font-semibold text-gray-900 dark:text-white">{{ row.label }}</span>
+                      <span class="mt-0.5 block text-sm/6 text-gray-500 dark:text-gray-400">{{ row.detail }}</span>
+                    </span>
+                  </span>
+                </th>
+
+                <td class="px-3 py-4 text-center align-middle">
+                  @if (row.assistant === 'yes') {
+                    <ng-icon name="heroCheck" class="size-5 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+                    <span class="sr-only">Yes</span>
+                  } @else {
+                    <span class="text-gray-300 dark:text-gray-600" aria-hidden="true">—</span>
+                    <span class="sr-only">No</span>
+                  }
+                </td>
+
+                <td class="ledger-now px-3 py-4 text-center align-middle">
+                  <ng-icon name="heroCheck" class="size-5 text-primary-600 dark:text-primary-300" aria-hidden="true" />
+                  <span class="sr-only">Yes</span>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── What it opens up ──────────────────────────────────────────────────
+         The forward-looking half. One noun is what made each of these possible;
+         none of them had anywhere to live on the old surface. -->
+    <section class="reveal mt-16" aria-labelledby="opens-heading">
+      <h2 id="opens-heading" class="text-xl/7 font-bold tracking-tight text-gray-900 sm:text-2xl/8 dark:text-white">
+        What that opens up
+      </h2>
+      <p class="mt-3 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
+        An agent is not just yours to chat with. You can use one somebody else built, and call
+        on one in the middle of a conversation. Both work today.
+      </p>
+
+      <div class="mt-7 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        @for (item of opensUp; track item.title) {
+          <article class="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-6 transition-all duration-200 hover:border-gray-300 hover:shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600">
+            <span
+              class="inline-flex size-10 items-center justify-center rounded-xl bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300"
+              aria-hidden="true"
+            >
+              <ng-icon [name]="item.icon" class="size-5" />
+            </span>
+            <h3 class="mt-4 text-base/7 font-semibold text-gray-900 dark:text-white">{{ item.title }}</h3>
+            <p class="mt-1.5 text-sm/6 text-gray-600 dark:text-gray-400">{{ item.body }}</p>
+          </article>
+        }
+      </div>
+    </section>
+
+    <!-- ── The marketplace ───────────────────────────────────────────────────
+         The one section that asks the reader for something rather than
+         explaining something to them, so it comes last before the close.
+
+         Review is presented as what it is — an admin reads it before anyone
+         else can — rather than softened into "a quick check". Someone deciding
+         whether to spend an afternoon on an agent deserves to know a human
+         stands between them and publication, and stating it plainly reads as a
+         quality bar. Hedging it reads as a gate you might fail. -->
+    <section class="reveal mt-16" aria-labelledby="store-heading">
+      <div class="flex items-center gap-3">
+        <span
+          class="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300"
+          aria-hidden="true"
+        >
+          <ng-icon name="heroSquares2x2" class="size-5" />
+        </span>
+        <h2 id="store-heading" class="text-xl/7 font-bold tracking-tight text-gray-900 sm:text-2xl/8 dark:text-white">
+          Put yours in the marketplace
+        </h2>
+      </div>
+
+      <p class="mt-3 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
+        Discover is where they all live: agents built here, by people here, that anyone can
+        find and use. If you have built something that works, it probably solves a problem you
+        are not the only one having — and putting it up is how the person three offices over
+        stops rebuilding it.
+      </p>
+
+      <ol class="mt-7 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        @for (step of marketplaceSteps; track step.title; let i = $index) {
+          <li class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+            <div class="flex items-center gap-3">
+              <span
+                class="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300"
+                aria-hidden="true"
+              >
+                <ng-icon [name]="step.icon" class="size-5" />
+              </span>
+              <span class="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                Step {{ i + 1 }}
+              </span>
+            </div>
+            <h3 class="mt-4 text-base/7 font-semibold text-gray-900 dark:text-white">{{ step.title }}</h3>
+            <p class="mt-1.5 text-sm/6 text-gray-600 dark:text-gray-400">{{ step.body }}</p>
+          </li>
+        }
+      </ol>
+
+      <div class="mt-6 flex flex-wrap items-center gap-3">
+        <a
+          routerLink="/agents/discover"
+          class="group inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition-all duration-200 hover:bg-primary-600 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 active:scale-[0.98] dark:focus-visible:ring-offset-gray-800"
+        >
+          <ng-icon name="heroSquares2x2" class="size-4" aria-hidden="true" />
+          Browse the marketplace
+          <ng-icon
+            name="heroArrowRight"
+            class="size-4 transition-transform duration-200 group-hover:translate-x-0.5"
+            aria-hidden="true"
+          />
+        </a>
+        <a
+          routerLink="/agents"
+          class="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm/6 font-semibold text-gray-700 transition hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 dark:focus-visible:ring-offset-gray-800"
+        >
+          Submit one of mine
+        </a>
+      </div>
+
+      <p class="mt-6 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
+        There is no bar to clear beyond being useful and being yours. We are genuinely excited
+        to see what you build.
+      </p>
+    </section>
+
+    <!-- ── Close ─────────────────────────────────────────────────────────────
+         One door out, and the bookmark promise repeated where someone who
+         skimmed the page will still catch it. -->
+    <section class="reveal mt-16 mb-8 rounded-3xl border border-gray-200 bg-gray-50 px-6 py-10 text-center sm:px-12 dark:border-gray-700 dark:bg-gray-800/60">
+      <h2 class="text-xl/7 font-bold tracking-tight text-gray-900 sm:text-2xl/8 dark:text-white">
+        Everything you built here is under Agents
+      </h2>
+      <p class="mx-auto mt-3 max-w-xl text-sm/6 text-gray-600 dark:text-gray-400">
+        Open it and you will find every one of them, working as before. The only new thing to
+        learn is what you can add to them.
+      </p>
+      <p class="mx-auto mt-3 max-w-xl text-sm/6 text-gray-600 dark:text-gray-400">
+        Looking for something you made on the older site? It is still at
+        <a
+          [href]="legacyAssistantsUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="rounded font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-primary-300 dark:hover:text-primary-200"
+          >legacy.boisestate.ai</a
+        >, and you can set it up again here whenever you are ready.
+      </p>
+
+      <div class="mt-7 flex flex-wrap items-center justify-center gap-3">
+        <a
+          routerLink="/agents"
+          class="group inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition-all duration-200 hover:bg-primary-600 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 active:scale-[0.98] dark:focus-visible:ring-offset-gray-800"
+        >
+          Go to my agents
+          <ng-icon
+            name="heroArrowRight"
+            class="size-4 transition-transform duration-200 group-hover:translate-x-0.5"
+            aria-hidden="true"
+          />
+        </a>
+      </div>
+
+      <p class="mx-auto mt-7 flex max-w-md items-center justify-center gap-2 text-xs/5 text-gray-500 dark:text-gray-500">
+        <ng-icon name="heroLink" class="size-3.5 shrink-0" aria-hidden="true" />
+        Old <code class="rounded bg-gray-200/70 px-1 py-0.5 font-mono dark:bg-gray-700/70">/assistants</code> links
+        still work — there is no need to update your bookmarks.
+      </p>
+    </section>
+  </div>
+</div>

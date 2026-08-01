@@ -20,8 +20,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from apis.app_api.agent_designer.services.listing_service import (
     ListingError,
     list_admin_listings,
+    list_agent_versions,
+    rollback_listing,
     patch_listing_presentation,
     review_listing,
+    decide_withdrawal,
+    diff_pending_version,
     takedown_listing,
 )
 from apis.shared.assistants.categories import (
@@ -51,6 +55,8 @@ from apis.shared.assistants.models import (
     AgentCategoryCreateRequest,
     AgentCategoryUpdateRequest,
     AgentListing,
+    AgentVersionDiffResponse,
+    AgentVersionsResponse,
     PublisherCreateRequest,
     PublisherEligibilityRequest,
     PublisherEligibilityResponse,
@@ -59,8 +65,10 @@ from apis.shared.assistants.models import (
     PublisherUpdateRequest,
     ResolveReportRequest,
     ReviewListingRequest,
+    RollbackListingRequest,
     StoreFrontUpdateRequest,
     TakedownRequest,
+    WithdrawalDecisionRequest,
 )
 from apis.shared.assistants.storefront import (
     MAX_FEATURED,
@@ -72,6 +80,7 @@ from apis.shared.assistants.publishers import (
     get_publisher,
     list_eligibility,
     list_publishers,
+    publisher_in_use,
     put_publisher,
     set_eligibility,
 )
@@ -103,9 +112,13 @@ async def require_marketplace_admin(admin: User = Depends(require_marketplace_sc
 # ── review queue + listings (D10) ────────────────────────────────────────────────────
 @router.get("/submissions", response_model=AdminListingsResponse)
 async def list_submissions(admin: User = Depends(require_marketplace_admin)):
-    """The Review queue: every submission awaiting a decision (D2)."""
+    """The Review queue: everything awaiting an admin decision (D2, §5.1).
+
+    Submissions *and* withdrawal requests. One queue rather than two surfaces — §5.1 is
+    explicit about that, and a second queue is one an admin has to remember exists.
+    """
     try:
-        rows, pending = await list_admin_listings(state="in_review")
+        rows, pending = await list_admin_listings(state="pending")
         return AdminListingsResponse(listings=rows, pending_count=pending)
     except Exception as e:
         logger.error(f"Error listing agent submissions: {e}", exc_info=True)
@@ -129,6 +142,29 @@ async def list_listings(
     except Exception as e:
         logger.error(f"Error listing agent listings: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list listings: {str(e)}")
+
+
+@router.get("/{agent_id}/diff", response_model=AgentVersionDiffResponse)
+async def get_agent_review_diff(
+    agent_id: str,
+    admin: User = Depends(require_marketplace_admin),
+):
+    """What the pending submission changes against what is published (§6.1).
+
+    The reviewer's actual question — "what changed since I approved this?" — which the queue
+    could not answer before: a submission arrived with no reference to what it replaces, so
+    a typo fix and a full rewrite looked identical and both got the same careful read.
+
+    Admin-only for the same reason the review queue is: this returns ``instructions``, which
+    the user-facing Agent read gates to owner/editor.
+    """
+    try:
+        return await diff_pending_version(agent_id)
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error building agent review diff: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to build review diff: {str(e)}")
 
 
 @router.post("/{agent_id}/review", response_model=AgentListing)
@@ -178,6 +214,79 @@ async def takedown_agent_listing(
     except Exception as e:
         logger.error(f"Error taking down agent listing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to take down listing: {str(e)}")
+
+
+@router.post("/{agent_id}/withdrawal", response_model=AgentListing)
+async def decide_agent_withdrawal(
+    agent_id: str,
+    request: WithdrawalDecisionRequest,
+    admin: User = Depends(require_marketplace_admin),
+):
+    """Grant or decline an author's request to pull a live listing (§5.1).
+
+    Deliberately **not** folded into ``POST /{agent_id}/review``. That endpoint answers "may
+    this go into the store?"; this one answers "may this come out?", and the two decisions
+    have different inputs, different notes and opposite defaults. One endpoint with four
+    decision values would make an accidental unpublication a one-character mistake.
+
+    ``grant`` → ``private`` and off the shelf. ``decline`` → back to whatever state the
+    request came from (``withdrawal_from``), which restores nothing because the listing never
+    stopped being live while the request was pending — that is the point of leaving the store
+    index alone in ``withdrawal_requested``.
+    """
+    try:
+        return await decide_withdrawal(
+            agent_id, admin, decision=request.decision, note=request.note
+        )
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error deciding agent withdrawal: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to decide withdrawal: {str(e)}")
+
+
+@router.get("/{agent_id}/versions", response_model=AgentVersionsResponse)
+async def list_agent_version_history(
+    agent_id: str, admin: User = Depends(require_marketplace_admin),
+):
+    """Every snapshot this Agent has, newest first — the rollback picker's source (§8).
+
+    Admin-only, like the diff and for the same reason: version *names* are harmless but this
+    is the history of an Agent's approvals, and the surface that reads it is the one that can
+    change what the store serves.
+    """
+    try:
+        versions, published = await list_agent_versions(agent_id)
+        return AgentVersionsResponse(versions=versions, published_version=published)
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error listing agent versions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list versions: {str(e)}")
+
+
+@router.post("/{agent_id}/rollback", response_model=AgentListing)
+async def rollback_agent_listing(
+    agent_id: str,
+    request: RollbackListingRequest,
+    admin: User = Depends(require_marketplace_admin),
+):
+    """Repoint a published listing at an earlier snapshot (§8).
+
+    The answer to "the approved version turned out to be wrong". Separate from ``/review``
+    because it is not a review decision — no version is cut, nothing moves through the queue,
+    and the listing stays ``published`` throughout. It only changes *which* approved artifact
+    the store serves, which is why it can only act on a listing that is already published.
+    """
+    try:
+        return await rollback_listing(
+            agent_id, admin, version=request.version, reason=request.reason
+        )
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error rolling back agent listing: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to roll back listing: {str(e)}")
 
 
 @router.patch("/{agent_id}/listing", response_model=AgentListing)
@@ -529,15 +638,32 @@ async def update_publisher_profile(
 async def delete_publisher_profile(
     publisher_id: str, admin: User = Depends(require_marketplace_admin)
 ):
-    """Delete a publisher profile and its eligibility items.
+    """Delete a publisher profile, but only while nothing is attributed to it.
 
-    Listings already attributed to it keep the id; the admin Listings table renders them
-    without a resolved publisher so the gap is visible and can be reassigned. Deleting an
-    attribution must never change who can run an Agent (D12).
+    Same rule and same wording as categories: a referenced profile cannot be deleted,
+    because listings store the *id* and would be left pointing at nothing. The admin
+    Listings table renders those as "Unattributed", and there is no surface for putting the
+    attribution back — so the delete is not a visible gap to repair, it is silent data loss
+    across every listing that named it, live ones included.
+
+    Disable instead. That drops it from the submit picker while existing attributions keep
+    rendering, which is nearly always what was meant.
+
+    Deleting an attribution never changes who can run an Agent — publisher is display only
+    (D12). This guard is about not stranding the display, not about access.
     """
     try:
         if not await get_publisher(publisher_id):
             raise HTTPException(status_code=404, detail=f"Publisher not found: {publisher_id}")
+        if await publisher_in_use(publisher_id):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Listings are still attributed to this publisher. Disable it instead — "
+                    "that removes it from the submit picker while the listings already "
+                    "credited to it keep rendering."
+                ),
+            )
         await delete_publisher(publisher_id)
     except HTTPException:
         raise

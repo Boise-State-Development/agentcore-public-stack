@@ -55,9 +55,13 @@ from apis.shared.assistants.pins import (
     get_pin_state,
     remove_pin,
 )
+from apis.shared.assistants.listing import is_listed
 from apis.shared.assistants.publishers import list_publishers
 from apis.shared.assistants.role_pins import list_pins_for_roles
-from apis.shared.assistants.service import get_assistant_with_access_check
+from apis.shared.assistants.service import (
+    get_assistant_with_access_check,
+    resolve_assistant_permission,
+)
 from apis.shared.auth.models import User
 from apis.shared.rbac.service import get_app_role_service
 
@@ -258,8 +262,38 @@ async def pin_agent(user: User, agent_id: str) -> PinnedAgentResponse:
         agent_id, user.user_id, user.email
     )
     if assistant is None or permission is None:
-        # Not-found and access-denied deliberately collapse: telling a stranger that an id
+        # Not-found and access-denied normally collapse: telling a stranger that an id
         # exists but is not theirs is a disclosure the store has no reason to make.
+        #
+        # The exception is an Agent the store has *already advertised*. Its existence is
+        # not a secret — the caller is here because a published tile offered them an Add
+        # button — so collapsing to "not found" withholds nothing and leaves them with an
+        # error that contradicts the page they are looking at. Publication now requires
+        # PUBLIC, so this should only be reachable for a listing narrowed after approval;
+        # it is the failure that has no submit-time gate, which is exactly why it must
+        # explain itself. The extra read costs nothing on the success path.
+        #
+        # Best-effort: this lookup exists only to word the failure better, so it must
+        # never make the failure worse. A raise here would turn a well-defined 404 into a
+        # 500 on a path that already knows its answer.
+        try:
+            existing, _ = await resolve_assistant_permission(agent_id, user.user_id, user.email)
+        except Exception:
+            logger.warning(
+                f"Could not classify pin denial for {agent_id}; falling back to 404",
+                exc_info=True,
+            )
+            existing = None
+        if existing is not None and existing.listing and is_listed(existing.listing.state):
+            logger.warning(
+                f"Pin denied on published agent {agent_id} for {user.user_id}: "
+                f"visibility is {existing.visibility}"
+            )
+            raise PinError(
+                403,
+                "This agent is listed in the store but its owner has restricted who can "
+                "open it, so it can't be added right now.",
+            )
         raise PinError(404, f"Agent not found: {agent_id}")
 
     try:

@@ -6,6 +6,7 @@ import {
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark, heroExclamationTriangle } from '@ng-icons/heroicons/outline';
+import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
 
 /**
  * Data passed to the delete tool dialog.
@@ -24,7 +25,7 @@ export type DeleteToolDialogResult = boolean | undefined;
 @Component({
   selector: 'app-delete-tool-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [DialogDismissDirective, NgIcon],
   providers: [provideIcons({ heroXMark, heroExclamationTriangle })],
   host: {
     'class': 'block',
@@ -35,11 +36,12 @@ export type DeleteToolDialogResult = boolean | undefined;
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-500/75 dark:bg-gray-900/80"
       aria-hidden="true"
-      (click)="onCancel()"
     ></div>
 
     <!-- Dialog Panel -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0"
+      appDialogDismiss
+      (dismissed)="onCancel()">
       <div
         class="dialog-panel relative transform overflow-hidden rounded-lg bg-white px-4 pt-5 pb-4 text-left shadow-xl sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10"
         role="alertdialog"

@@ -244,6 +244,10 @@
 
       <div class="chat-messages-container embedded">
         <div class="min-w-0">
+          <!-- No feedback link in embedded mode: this is the Designer's preview of a
+               draft, so the only person here is the author, and "give feedback on your
+               own agent" routes them to a curator queue instead of the editor they are
+               already sitting in. -->
           <app-message-list
             [messages]="messages()"
             [isChatLoading]="isChatLoading()"
@@ -309,6 +313,8 @@
           [messages]="messages()"
           [isChatLoading]="isChatLoading()"
           [streamingMessageId]="streamingMessageId()"
+          [feedbackAgent]="feedbackAgent()"
+          [sessionId]="sessionId()"
           (continueRequested)="continueRequested.emit()" />
       </div>
     </div>

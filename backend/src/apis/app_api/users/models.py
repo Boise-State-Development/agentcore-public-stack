@@ -30,6 +30,16 @@ class UserPermissionsResponse(BaseModel):
     app_roles: List[str] = Field(..., alias="appRoles", description="Resolved application roles")
     tools: List[str] = Field(..., description="Accessible tool IDs")
     models: List[str] = Field(..., description="Accessible model IDs")
+    # `skills` predates admin scopes and was carried by UserEffectivePermissions
+    # for months without ever reaching this response — the field-added-to-model,
+    # forgotten-in-the-response-shape bug. Both default to [] so a client on an
+    # older build is unaffected.
+    skills: List[str] = Field(default_factory=list, description="Accessible skill IDs")
+    admin_scopes: List[str] = Field(
+        default_factory=list,
+        alias="adminScopes",
+        description="Delegated admin feature areas granted to this user",
+    )
     quota_tier: Optional[str] = Field(None, alias="quotaTier", description="Assigned quota tier")
     resolved_at: str = Field(..., alias="resolvedAt", description="ISO timestamp of resolution")
 

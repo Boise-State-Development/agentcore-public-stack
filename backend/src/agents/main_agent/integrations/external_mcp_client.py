@@ -31,6 +31,10 @@ from apis.shared.tools.scoped_ids import base_tool_id, collect_tool_name_filters
 from agents.main_agent.integrations import oauth_token_cache
 from agents.main_agent.integrations.mcp_apps import UICapableMCPClient
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
+from agents.main_agent.integrations.token_exchange import (
+    TokenExchangeError,
+    get_token_exchange_client,
+)
 from agents.main_agent.integrations.oauth_auth import (
     CompositeAuth,
     create_oauth_bearer_auth,
@@ -364,7 +368,11 @@ class ExternalMCPIntegration:
 
                 forward_auth = bool(getattr(tool, "forward_auth_token", False))
                 requires_oauth = bool(tool.requires_oauth_provider)
-                requires_user_auth = forward_auth or requires_oauth
+                exchange_audience = getattr(tool, "token_exchange_audience", None)
+                # An exchanged token is per-user just like the other two modes,
+                # so it must partition the client cache the same way — otherwise
+                # one user's Directory token would be reused for another.
+                requires_user_auth = forward_auth or requires_oauth or bool(exchange_audience)
 
                 cache_key = self._get_cache_key(tool_id, user_id, requires_user_auth)
                 # A different selected-tool subset is a different client, so fold
@@ -396,7 +404,58 @@ class ExternalMCPIntegration:
                 token_provider: Optional[Callable[[], Optional[str]]] = None
                 provider_id: Optional[str] = None
 
-                if forward_auth:
+                if exchange_audience:
+                    # RFC 8693: trade the user's Cognito token for one the
+                    # downstream API already trusts. Checked before forward_auth
+                    # because forwarding the raw Cognito token to such an API
+                    # would send a credential it cannot validate — a silent
+                    # 401 rather than an obvious misconfiguration.
+                    if not auth_token:
+                        logger.warning(
+                            f"Tool {tool_id} needs a token exchange but no auth_token "
+                            "was provided; skipping"
+                        )
+                        continue
+                    if not user_id:
+                        logger.warning(
+                            f"Tool {tool_id} needs a token exchange but no user_id "
+                            "was provided; skipping (tokens must be cached per user)"
+                        )
+                        continue
+
+                    exchanger = get_token_exchange_client()
+                    if not exchanger.configured:
+                        logger.warning(
+                            f"Tool {tool_id} declares token_exchange_audience but the "
+                            "runtime has no exchange configuration; skipping"
+                        )
+                        continue
+
+                    # Resolved lazily per request, like the OAuth path: exchanged
+                    # tokens are short-lived (600s in dev) and a client may
+                    # outlive one, so binding a value here would go stale
+                    # mid-conversation. TokenExchangeClient handles caching.
+                    async def _exchange(
+                        t=auth_token, a=exchange_audience, u=user_id, tid=tool_id
+                    ) -> Optional[str]:
+                        try:
+                            return await exchanger.exchange(
+                                subject_token=t, audience=a, user_id=u
+                            )
+                        except TokenExchangeError as exc:
+                            # Fail closed: no token means the request goes
+                            # unauthenticated and the downstream API refuses it,
+                            # which is the correct outcome and is visible here.
+                            logger.warning(f"Token exchange failed for {tid}: {exc}")
+                            return None
+
+                    token_provider = _exchange
+                    logger.info(
+                        f"Using RFC 8693 token exchange for tool {tool_id} "
+                        f"(audience={exchange_audience})"
+                    )
+
+                elif forward_auth:
                     if not auth_token:
                         logger.warning(
                             f"Tool {tool_id} has forward_auth_token=true but no auth_token provided"

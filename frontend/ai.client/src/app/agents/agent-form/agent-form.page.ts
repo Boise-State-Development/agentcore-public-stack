@@ -49,10 +49,16 @@ import { ThemeService } from '../../components/topnav/components/theme-toggle/th
 import { ToastService } from '../../services/toast/toast.service';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 import { AgentPreviewComponent } from './components/agent-preview.component';
+import { AgentIconComponent } from '../components/agent-icon.component';
 import {
-  ShareAssistantDialogComponent,
-  ShareAssistantDialogData,
-} from '../../assistants/components/share-assistant-dialog.component';
+  AgentIconDialogComponent,
+  AgentIconDialogData,
+  AgentIconDialogResult,
+} from '../components/agent-icon-dialog.component';
+import {
+  ShareAgentDialogComponent,
+  ShareAgentDialogData,
+} from '../components/share-agent-dialog.component';
 import { KnowledgeBaseSectionComponent } from '../../knowledge-base/knowledge-base-section.component';
 
 /** A model param rendered as an editable control (numeric or enum). */
@@ -103,6 +109,7 @@ interface MemorySelection {
     CdkConnectedOverlay,
     TooltipDirective,
     AgentPreviewComponent,
+    AgentIconComponent,
     KnowledgeBaseSectionComponent,
   ],
   providers: [
@@ -160,6 +167,18 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
   readonly mode = computed<'create' | 'edit'>(() => (this.agentId() ? 'edit' : 'create'));
   readonly isViewer = computed(() => this.userPermission() === 'viewer');
+
+  // ---- store icon (D5) --------------------------------------------------
+  /**
+   * The uploaded square icon, rendered by `app-agent-icon` — the agent's face on cards,
+   * in the store and in the share dialog. It sits in **Persona**, beside the emoji, not
+   * with publication: it is presentation of this record, and D13 lets an editor set it
+   * while publication stays owner-only. Publication itself lives in the share dialog.
+   */
+  readonly iconUrl = signal<string | undefined>(undefined);
+
+  /** Presentation, not behaviour (D13) — the same line `PUT /agents/{id}` draws. */
+  readonly canEditIcon = computed(() => this.userPermission() !== 'viewer');
 
   // Bindable palettes (RBAC-filtered) + current selections.
   readonly models = signal<BindableItem[]>([]);
@@ -219,8 +238,6 @@ export class AgentFormPage implements OnInit, OnDestroy {
    * covers the persona fields; this flag covers the out-of-form binding signals. */
   private readonly bindingsDirty = signal(false);
   readonly isDirty = computed(() => this.form?.dirty === true || this.bindingsDirty());
-
-  readonly previewModelLabel = computed<string | null>(() => this.selectedModel()?.label ?? null);
 
   readonly emojiPickerPositions: ConnectedPosition[] = [
     { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top', offsetY: 8 },
@@ -305,6 +322,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
     try {
       const agent = await this.agentService.getAgent(id);
       this.userPermission.set(agent.userPermission ?? 'owner');
+      this.iconUrl.set(agent.iconUrl);
       this.form.patchValue({
         name: agent.name,
         description: agent.description,
@@ -660,17 +678,49 @@ export class AgentFormPage implements OnInit, OnDestroy {
   openShareDialog(): void {
     const id = this.agentId();
     if (!id) return;
-    this.dialog.open(ShareAssistantDialogComponent, {
+    this.dialog.open(ShareAgentDialogComponent, {
       data: {
-        assistant: {
+        agent: {
           assistantId: id,
           name: this.form.get('name')?.value || 'Agent',
           visibility: this.form.get('visibility')?.value,
           userPermission: this.userPermission(),
+          emoji: this.form.get('emoji')?.value || undefined,
+          iconUrl: this.iconUrl(),
         },
-      } as unknown as ShareAssistantDialogData,
+      } satisfies ShareAgentDialogData,
       hasBackdrop: false,
     });
+  }
+
+  // ---- store icon ------------------------------------------------------
+  /**
+   * Set, replace or remove the store icon (D5).
+   *
+   * The dialog writes the record itself and returns the new icon state; the page is
+   * patched from that rather than re-read, because the returned URL carries the new
+   * content digest and a replacement must repaint instead of showing the cached
+   * previous icon. `patchAgent` keeps the agents list in step behind us.
+   */
+  async onEditIcon(): Promise<void> {
+    const id = this.agentId();
+    if (!id) return;
+    const dialogRef = this.dialog.open<AgentIconDialogResult>(AgentIconDialogComponent, {
+      data: {
+        agentId: id,
+        agentName: this.form.get('name')?.value || 'Agent',
+        emoji: this.form.get('emoji')?.value || undefined,
+        iconUrl: this.iconUrl(),
+      } satisfies AgentIconDialogData,
+    });
+    const result = await firstValueFrom(dialogRef.closed);
+    if (result) {
+      this.iconUrl.set(result.iconUrl);
+      this.agentService.patchAgent(result.agentId, {
+        iconKey: result.iconKey,
+        iconUrl: result.iconUrl,
+      });
+    }
   }
 }
 

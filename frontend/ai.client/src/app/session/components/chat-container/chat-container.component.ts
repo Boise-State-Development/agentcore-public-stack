@@ -184,6 +184,21 @@ export class ChatContainerComponent {
     };
   });
 
+  /**
+   * The agent the foot-of-conversation feedback link asks about, or null.
+   *
+   * Read off `agent()` rather than `launchCardView()` even though the card already carries
+   * a `listed` flag: the card falls back to the Assistant shape with `listed: false`, and
+   * an affordance that is silently absent whenever the `/agents` load loses a race would
+   * be a hard thing to notice and a harder one to explain. Here, no Agent means no link,
+   * for the one honest reason — we do not know that this is a store agent.
+   */
+  protected readonly feedbackAgent = computed<{ id: string; name: string } | null>(() => {
+    const agent = this.agent();
+    if (agent?.listing?.state !== 'published') return null;
+    return { id: agent.agentId, name: agent.name };
+  });
+
   // Computed signals
   protected readonly hasMessages = computed(() => this.messages().length > 0);
   protected readonly showSkeleton = computed(

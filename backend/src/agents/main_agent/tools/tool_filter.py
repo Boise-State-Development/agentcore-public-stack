@@ -5,6 +5,7 @@ import logging
 from typing import List, Optional, Any, Tuple
 from agents.main_agent.config.constants import Prefixes
 from agents.main_agent.tools.tool_registry import ToolRegistry
+from apis.shared.tools.injected import INJECTED_TOOL_IDS
 from apis.shared.tools.scoped_ids import base_tool_id
 
 logger = logging.getLogger(__name__)
@@ -94,8 +95,12 @@ class ToolFilter:
             elif base in self._external_mcp_tools:
                 # External MCP tool - handled separately
                 pass
+            elif base in INJECTED_TOOL_IDS:
+                # Context-bound tool built per request and appended to the
+                # agent's tools as extra_tools - never in the registry.
+                pass
             else:
-                logger.warning(f"Tool '{tool_id}' not found in registry, skipping")
+                logger.warning(f"Tool '{tool_id}' is not a known tool id, skipping")
 
         logger.info(f"Local tools enabled: {len(filtered_tools)}")
         logger.info(f"Gateway tools enabled: {len(gateway_tool_ids)}")
@@ -122,6 +127,7 @@ class ToolFilter:
         filtered_tools = []
         gateway_tool_ids = []
         external_mcp_tool_ids = []
+        injected_tool_ids = []
         seen_local: set[int] = set()
 
         for tool_id in enabled_tool_ids:
@@ -142,12 +148,19 @@ class ToolFilter:
             elif base in self._external_mcp_tools:
                 # External MCP tool (deployed separately)
                 external_mcp_tool_ids.append(tool_id)
+            elif base in INJECTED_TOOL_IDS:
+                # Context-bound tool: inference_api builds it per request and
+                # passes it via extra_tools, which BaseAgent appends after
+                # filtering. Not in the registry by design, so this is a
+                # normal path — not a missing tool.
+                injected_tool_ids.append(tool_id)
             else:
-                logger.warning(f"Tool '{tool_id}' not found in registry or catalog, skipping")
+                logger.warning(f"Tool '{tool_id}' is not a known tool id, skipping")
 
         logger.info(f"Local tools enabled: {len(filtered_tools)}")
         logger.info(f"Gateway tools enabled: {len(gateway_tool_ids)}")
         logger.info(f"External MCP tools enabled: {len(external_mcp_tool_ids)}")
+        logger.info(f"Context-bound tools enabled: {len(injected_tool_ids)}")
 
         return ToolFilterResult(filtered_tools, gateway_tool_ids, external_mcp_tool_ids)
 
@@ -167,12 +180,14 @@ class ToolFilter:
                 "local_tools": 0,
                 "gateway_tools": 0,
                 "external_mcp_tools": 0,
+                "injected_tools": 0,
                 "unknown_tools": 0
             }
 
         local_count = 0
         gateway_count = 0
         external_mcp_count = 0
+        injected_count = 0
         unknown_count = 0
 
         for tool_id in enabled_tool_ids:
@@ -183,6 +198,8 @@ class ToolFilter:
                 gateway_count += 1
             elif base in self._external_mcp_tools:
                 external_mcp_count += 1
+            elif base in INJECTED_TOOL_IDS:
+                injected_count += 1
             else:
                 unknown_count += 1
 
@@ -191,5 +208,6 @@ class ToolFilter:
             "local_tools": local_count,
             "gateway_tools": gateway_count,
             "external_mcp_tools": external_mcp_count,
+            "injected_tools": injected_count,
             "unknown_tools": unknown_count
         }

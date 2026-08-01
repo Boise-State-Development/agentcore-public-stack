@@ -39,6 +39,8 @@ from apis.shared.assistants.service import (
     assistant_exists,
     create_assistant,
     create_assistant_draft,
+    AssistantListedError,
+    assert_deletable,
     delete_assistant,
     get_assistant_with_access_check,
     list_assistant_shares,
@@ -407,6 +409,15 @@ async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depe
     logger.info("DELETE /assistants/{assistant_id}")
 
     try:
+        # 0. Refuse a listed Agent BEFORE touching anything (§5.2).
+        #
+        # ⚠️ Order is load-bearing. Steps 2 and 3 below are destructive — documents
+        # soft-deleted, sync policies removed — and they run before the record delete. If
+        # the listing check fired down there instead, a refused delete would leave the Agent
+        # gutted but still in the store: exactly the failure the refusal exists to prevent,
+        # with a live listing pointing at a broken Agent.
+        await assert_deletable(assistant_id, user_id)
+
         # 1. List all documents for the assistant
         docs, _ = await list_assistant_documents(
             assistant_id=assistant_id,
@@ -441,6 +452,10 @@ async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depe
 
     except HTTPException:
         raise
+    except AssistantListedError as e:
+        # 409, not 400: the request is well-formed and the caller is allowed — the Agent is
+        # simply in a state that forbids it, and the message says how to change that.
+        raise HTTPException(status_code=409, detail=e.message)
     except Exception as e:
         logger.error(f"Error deleting assistant: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete assistant: {str(e)}")

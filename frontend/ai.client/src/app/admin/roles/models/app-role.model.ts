@@ -6,6 +6,8 @@ export interface EffectivePermissions {
   tools: string[];
   /** Model IDs accessible via this role */
   models: string[];
+  /** Admin areas granted by this role (never inherited) */
+  adminScopes: string[];
   /** Quota tier ID, if assigned */
   quotaTier: string | null;
 }
@@ -28,6 +30,12 @@ export interface AppRole {
   grantedTools: string[];
   /** Directly granted model IDs */
   grantedModels: string[];
+  /**
+   * Directly granted admin scopes. Unlike the three axes above these are never
+   * inherited from `inheritsFrom`, and there is no `'*'` wildcard — full admin
+   * is the `system_admin` role, not a scope.
+   */
+  grantedAdminScopes: string[];
   /** Pre-computed effective permissions (from grants + inheritance) */
   effectivePermissions: EffectivePermissions;
   /** Priority for quota tier selection (0-999, higher wins) */
@@ -70,6 +78,8 @@ export interface AppRoleCreateRequest {
   grantedTools?: string[];
   /** Directly granted model IDs */
   grantedModels?: string[];
+  /** Delegated admin areas. Non-delegable ids are rejected by the server. */
+  grantedAdminScopes?: string[];
   /** Priority for quota tier selection (0-999) */
   priority?: number;
   /** Whether this role is active */
@@ -93,6 +103,8 @@ export interface AppRoleUpdateRequest {
   grantedTools?: string[];
   /** Directly granted model IDs */
   grantedModels?: string[];
+  /** Delegated admin areas. Non-delegable ids are rejected by the server. */
+  grantedAdminScopes?: string[];
   /** Priority for quota tier selection (0-999) */
   priority?: number;
   /** Whether this role is active */
@@ -110,6 +122,7 @@ export interface AppRoleFormData {
   inheritsFrom: string[];
   grantedTools: string[];
   grantedModels: string[];
+  grantedAdminScopes: string[];
   priority: number;
   enabled: boolean;
 }

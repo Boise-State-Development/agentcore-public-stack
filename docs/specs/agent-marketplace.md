@@ -439,8 +439,17 @@ only when a user matches zero AppRoles.
 ## D15 — Users report problems; the report is private and lands in the admin queue
 
 A store with no way to say "this one is wrong" pushes that signal into email, or nowhere.
-Any user who can run a published Agent can **report a problem with it** from the detail
-page, and the report joins the admin console as a second work stream beside submissions.
+Any user who can run a published Agent can **report a problem with it**, and the report
+joins the admin console as a second work stream beside submissions.
+
+**Where from: the foot of the conversation, and the detail page.** As first built this
+lived only on the detail page, which turned out to be the wrong place to *put* it and the
+right place to *have* it. The moment someone has something to say about an Agent is the
+moment it just answered them — not a later trip back to the tile they launched it from. So
+the same intake also sits at the end of a conversation with a published Agent, carrying two
+things the detail page cannot: a `suggestion` reason (feedback from inside a conversation
+is as often "it should also do X" as "it is broken"), and an **opt-in reference to the
+conversation itself**.
 
 **This is not a review, and the distinction is the whole design.** The non-goal below
 still stands: no stars, no public comments, no visible counts. A report is a *private
@@ -473,9 +482,33 @@ not a mirror of the listing state machine — the report is a note about an Agen
 state of it. Resolving a report never changes `listing.state`; if a report warrants
 delisting, the admin takes the Agent down and that is a separate, recorded act.
 
-`reason` is a small fixed set (`inaccurate`, `broken`, `inappropriate`, `other`) plus free
-text. The set exists so the queue can be sorted by severity without reading every note;
-`inappropriate` is the one that should page a human rather than wait for a sweep.
+**6. The attached conversation is opt-in, verified, and withdrawable.** A report filed from
+a conversation may carry its `sessionId` so the curator can look up what actually happened.
+Three rules make that safe rather than merely convenient:
+
+- **Opt-in.** A checkbox, ticked by default because it is what makes the feedback
+  actionable, but visible and undoable — it is the user's conversation.
+- **Verified, not trusted.** The id arrives in the request body, so the server keeps it
+  only if it resolves to a session the *caller* owns. Without that check, anyone could hand
+  an admin a pointer to somebody else's conversation and the queue would present it as
+  context the reporter chose to share. A session that does not check out is **dropped, not
+  rejected**: the feedback is the payload, the attachment is context, and failing the whole
+  submission to protect a nicety loses the thing the user came to say.
+- **Withdrawable.** Amending a report with the box unticked *removes* the stored reference
+  (D15.4 means the second submission updates the first). Consent that cannot be taken back
+  is not consent.
+
+⚠️ It is a **reference, not a transcript.** No admin surface reads the conversation today;
+the queue shows the id. An admin transcript reader is a separate feature with its own
+privacy weight, and is deliberately not smuggled in here.
+
+`reason` is a small fixed set (`inaccurate`, `broken`, `inappropriate`, `suggestion`,
+`other`) plus free text. The set exists so the queue can be sorted by severity without
+reading every note; `inappropriate` is the one that should page a human rather than wait
+for a sweep, and `suggestion` — the one reason that is not a defect — sorts last so it
+never displaces a complaint. It stays the *same* record in the *same* queue: a user does
+not know whether what they hit is a defect or a missing capability, and a second intake
+form would only mis-sort the ones who guess wrong.
 
 ⚠️ **A report is not a permission signal and not a ranking input.** It must not feed
 `usageCount`, the store front, or any ordering. The moment report volume influences
@@ -529,7 +562,7 @@ outlives it:
 
 ```
 PK = AST#{agent_id}, SK = "REPORT#{report_id}"
-{ reporterId, reporterName, reason, note, state, createdAt,
+{ reporterId, reporterName, reason, note, sessionId?, state, createdAt,
   resolvedAt?, resolvedBy?, resolutionNote? }
 ```
 
@@ -641,7 +674,7 @@ auth rule; admin routes `Depends(require_admin)` (= `require_app_roles("system_a
 | `POST /agents/{id}/listing/submit` | Author submits. Runs D7 checks; 400 on a `memory_space` binding. |
 | `DELETE /agents/{id}/listing` | Author unpublishes. |
 | `GET /agents/pins` · `POST`/`DELETE /agents/{id}/pin` | The user's effective pin list; pin / dismiss (D9). Pinning is gated on the caller being able to *reach* the Agent, not on it being published. |
-| `POST /agents/{id}/report` | Report a problem with a published Agent (D15). One open report per reporter. |
+| `POST /agents/{id}/report` | Feedback on a published Agent (D15) — from the foot of a conversation or the detail page. One open report per reporter. Optional `sessionId` attaches the conversation; verified against the caller and dropped if it does not check out. |
 | `GET /admin/agents/reports` · `POST /admin/agents/{id}/reports/{reportId}/resolve` | Report queue; resolve or dismiss, reporter visible (D15). Also `GET /admin/agents/{id}/reports` for one Agent's history and `GET /admin/agents/queues` for the two nav counts. |
 | `GET /admin/agents/submissions` · `POST /admin/agents/{id}/review` | Review queue; approve / request changes (D2). |
 | `GET /admin/agents/listings` · `POST /admin/agents/{id}/takedown` | Listings table; delist with a reason. |

@@ -16,6 +16,7 @@ import {
   heroCheck,
 } from '@ng-icons/heroicons/outline';
 import { ShareService, ShareResponse } from '../../services/share/share.service';
+import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
 
 export interface ShareModalData {
   sessionId: string;
@@ -27,7 +28,7 @@ type AccessLevel = 'public' | 'specific';
 @Component({
   selector: 'app-share-modal',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon],
+  imports: [DialogDismissDirective, FormsModule, NgIcon],
   providers: [
     provideIcons({ heroXMark, heroClipboard, heroArrowUpOnSquare, heroCheck }),
   ],
@@ -40,11 +41,12 @@ type AccessLevel = 'public' | 'specific';
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-500/75 dark:bg-gray-900/80"
       aria-hidden="true"
-      (click)="onClose()"
     ></div>
 
     <!-- Dialog Panel -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0">
+    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
+      appDialogDismiss
+      (dismissed)="onClose()">
       <div
         class="dialog-panel relative w-full transform overflow-hidden rounded-lg bg-white px-4 pt-5 pb-4 text-left shadow-xl sm:my-8 sm:max-w-md sm:p-6 dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10"
         role="dialog"

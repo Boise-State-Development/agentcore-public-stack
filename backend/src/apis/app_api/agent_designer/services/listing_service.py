@@ -24,22 +24,45 @@ Three rules are enforced here and nowhere else:
 the rest. Publisher is a name on a shelf.
 """
 
-import hashlib
 import logging
 import os
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 from apis.shared.assistants.compat import effective_bindings
 from apis.shared.assistants.categories import ensure_seeded
 from apis.shared.assistants.icons import icon_url
-from apis.shared.assistants.listing import ListingTransitionError, assert_transition
+from apis.shared.assistants.listing import (
+    PENDING_DECISION_STATES,
+    ListingAuthorityError,
+    ListingTransitionError,
+    assert_author_target,
+    assert_transition,
+    gsi5_keys,
+    is_listed,
+    is_on_shelf,
+)
 from apis.shared.assistants.listing_repository import list_by_state, write_listing
+from apis.shared.assistants.version_diff import (
+    behavior_changed,
+    changed_fields,
+    instructions_diff,
+)
+from apis.shared.assistants.version_repository import (
+    create_version,
+    get_version,
+    list_versions,
+    set_version_index,
+)
+from apis.shared.assistants.versions import snapshot_of
 from apis.shared.assistants.models import (
     AdminEdit,
     AdminListingPatchRequest,
     AdminListingRow,
     AgentListing,
+    AgentVersionDiffResponse,
+    AgentVersionSummary,
     Assistant,
+    VersionFieldChange,
     PublisherProfile,
     SkillExposure,
     SubmitListingRequest,
@@ -82,6 +105,11 @@ _EDIT_FIELD_LABELS = {
     "icon_key": "icon",
     "publisher_id": "publisher",
 }
+
+
+# What the Review queue asks for: "everything needing a decision", spelled as a state so the
+# route keeps one query parameter instead of growing a second one.
+_PENDING_QUERY = "pending"
 
 
 def _now() -> str:
@@ -191,6 +219,55 @@ async def _memory_space_block(assistant: Assistant, user: User) -> None:
         raise ListingError(reason, status_code=400)
 
 
+def _visibility_block_reason(assistant: Assistant) -> Optional[str]:
+    """The blocking message for an Agent that is not ``PUBLIC``, or ``None`` if clear.
+
+    **The marketplace is public-only.** Sharing an Agent with named coworkers is a separate
+    mechanism with its own control on the agent tile, and a listing carries no audience of
+    its own — ``AgentListing`` has no scope field, and the store is one global shelf. So a
+    published SHARED or PRIVATE Agent is not a "team listing"; it is a tile shown to
+    everyone that nobody but the author can open, and every pin against it 404s.
+
+    Split from the raising path for the same reason as ``_memory_space_block_reason``:
+    ``preflight_listing`` shows it, ``submit_listing`` enforces it, and one function
+    decides so the dialog and the transition cannot drift apart.
+    """
+    if assistant.visibility == "PUBLIC":
+        return None
+    if assistant.visibility == "SHARED":
+        return (
+            "This agent can't be published while it's shared with specific people. The "
+            "store is public — everyone would see it, but only the people it's shared "
+            "with could open it. Set Visibility to Public to publish it, or keep sharing "
+            "it directly instead."
+        )
+    return (
+        "This agent can't be published while it's private. The store is public, so people "
+        "would see it and get an error when they opened it. Set Visibility to Public and "
+        "submit again."
+    )
+
+
+def _visibility_block(assistant: Assistant, *, consented: bool) -> None:
+    """Refuse an Agent that is not ``PUBLIC`` and whose author has not consented to it.
+
+    Not a silent widening — publication must never be a side door that changes who can
+    reach an Agent. But the refusal alone made the *common* path a dead end: every Agent
+    starts PRIVATE, so a first-time author was told to go set visibility on another screen
+    and come back. ``consented`` is the submit dialog's checkbox: the author is looking at
+    what the store will say about their Agent and ticks a box that says it becomes public.
+    That is consent captured where it means something, and it is why the widening is
+    allowed to ride the same write.
+
+    An omitted flag still refuses, so a direct API caller cannot widen an Agent by accident.
+    """
+    if consented:
+        return
+    reason = _visibility_block_reason(assistant)
+    if reason:
+        raise ListingError(reason, status_code=400)
+
+
 async def _exposed_skills(assistant: Assistant) -> List[SkillExposure]:
     """Skills the author wrote that publication makes readable (D7.1).
 
@@ -244,7 +321,7 @@ async def _resolve_proposed_publisher(user: User, publisher_id: Optional[str]) -
 # ── author transitions ───────────────────────────────────────────────────────────────
 async def preflight_listing(
     agent_id: str, user: User
-) -> Tuple[List[SkillExposure], Optional[str], str]:
+) -> Tuple[List[SkillExposure], Optional[str], str, bool]:
     """Run the D7 checks **without** transitioning, for the submit dialog.
 
     D7.1 asks the dialog to enumerate the exposed skills *before* the author commits,
@@ -255,20 +332,23 @@ async def preflight_listing(
     Owner-only, like every other author path: the skill exposure is a statement about
     what the *owner's* publication would reveal, and it is not an editor's to see.
 
-    Also returns reachability, which is *not* a D7 check and deliberately not a block:
-    the author is told their store tile will 404 for people who cannot already reach the
-    Agent, and left to decide. Returned even alongside a ``block_reason`` — the two are
-    independent facts and suppressing one behind the other just hides work from the
-    author's next attempt.
+    ``requires_public`` is deliberately **not** folded into ``block_reason``. A block sends
+    the author out of the dialog; needing to go public is something the dialog itself can
+    resolve, with the consent checkbox that sets ``make_public``. Returning them as one
+    field is what made the ordinary path a dead end.
+
+    Reachability still rides along for the same reason it always did — an Agent published
+    as PUBLIC can be narrowed afterwards, which no submit-time gate can catch.
     """
     assistant = await _load_for_author(agent_id, user)
     reachability = _reachability(assistant)
+    requires_public = _visibility_block_reason(assistant) is not None
     block_reason = await _memory_space_block_reason(assistant, user)
-    # Order mirrors submit_listing: an agent that cannot be published at all is not first
-    # walked through a skill-exposure confirmation.
+    # An agent that cannot be published at all is not first walked through a
+    # skill-exposure confirmation.
     if block_reason:
-        return [], block_reason, reachability
-    return await _exposed_skills(assistant), None, reachability
+        return [], block_reason, reachability, requires_public
+    return await _exposed_skills(assistant), None, reachability, requires_public
 
 
 async def submit_listing(
@@ -286,17 +366,48 @@ async def submit_listing(
     # Order matters: block before disclosing. An author whose agent cannot be published
     # at all should not first be walked through a skill-exposure confirmation.
     await _memory_space_block(assistant, user)
+    _visibility_block(assistant, consented=request.make_public)
     exposed = await _exposed_skills(assistant)
     publisher_id = await _resolve_proposed_publisher(user, request.publisher_id)
 
     now = _now()
     previous = assistant.listing
+
+    # ── the snapshot (version-snapshots §3.2) ────────────────────────────────────────
+    # Cut **here**, at submission, rather than at approval. Taking it at approval leaves a
+    # window: the author submits, the admin reads it, the author edits, the admin approves
+    # — and what gets published is not what was read. That is the same class of bug this
+    # whole feature exists to close, just narrower. Freezing now means the reviewer is
+    # always looking at an artifact that cannot move under them, and the cost is that
+    # changing a pending submission means withdrawing and resubmitting (which cuts a new
+    # version rather than mutating the pending one).
+    #
+    # The proposed category, publisher and tagline are folded in first, so the snapshot is
+    # the submission as the author composed it — not the record as it stood a moment before.
+    tagline = (request.tagline or "").strip() or None
+    proposed = assistant.model_copy(
+        update={
+            "tagline": tagline if tagline is not None else assistant.tagline,
+            "listing": AgentListing(
+                state="in_review", category=request.category, publisher_id=publisher_id
+            ),
+        }
+    )
+    version = await create_version(
+        agent_id, snapshot_of(proposed, created_at=now, created_by=user.user_id)
+    )
+
     listing = AgentListing(
         state="in_review",
         category=request.category,
         publisher_id=publisher_id,
         submitted_at=now,
         submitted_by=user.user_id,
+        submitted_version=version.version,
+        # A resubmission does not unpublish anything. The previously approved version keeps
+        # its index key and keeps serving until an admin promotes the new one, so the shelf
+        # never goes blank while a review is pending.
+        published_version=previous.published_version if previous else None,
         # A resubmission carries its review history forward; the note stays visible until
         # the reviewer replaces it, so the author keeps the context they are acting on.
         reviewed_at=previous.reviewed_at if previous else None,
@@ -307,18 +418,41 @@ async def submit_listing(
     # The tagline rides this write rather than a second one (same reason as the D13 patch
     # path). ``None`` means "leave it alone" — an author resubmitting without touching the
     # field must not have their existing subtitle blanked.
-    tagline = (request.tagline or "").strip() or None
+    #
+    # Only widen when it actually needs widening: an Agent that is already PUBLIC must not
+    # have ``visibility`` rewritten just because the box was ticked, and a no-op write is
+    # a lie in the audit trail.
+    widen_to = "PUBLIC" if (request.make_public and assistant.visibility != "PUBLIC") else None
     await write_listing(
-        agent_id, listing, assistant.created_at, updated_at=now, tagline=tagline
+        agent_id,
+        listing,
+        assistant.created_at,
+        updated_at=now,
+        tagline=tagline,
+        visibility=widen_to,
     )
+    if widen_to:
+        logger.info(
+            f"🌐 Agent {agent_id} widened {assistant.visibility} → PUBLIC on submission "
+            f"by {user.user_id}"
+        )
     logger.info(f"📨 Agent {agent_id} submitted for review by {user.user_id}")
     return listing, exposed
 
 
 async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
-    """Author unpublishes or withdraws a submission — back to ``private`` (D2).
+    """Author withdraws — immediately if nothing is live, as a *request* if something is.
 
-    Unpublishing revokes nothing retroactively: people who pinned it keep their pin,
+    **The same endpoint, two different acts, and the listing state decides which.** Before
+    publication, withdrawing is the author's alone: a pending submission is their own work
+    and pulling it costs nobody anything. Once a listing is live, other people have pinned
+    it, so removal becomes something an admin sees — the same reasoning that makes
+    publication go through a queue in the first place (D2). Splitting these across two
+    endpoints was the alternative and is worse: the author's intent is identical either way
+    ("take this down"), and making them pick the right verb for their listing's state is
+    asking them to know the state machine.
+
+    Neither act revokes anything retroactively: people who pinned it keep their pin,
     conversations underway keep running, and the agent stays reachable by direct link
     because ``visibility`` is a separate axis. It is a delisting, not a recall.
     """
@@ -326,16 +460,199 @@ async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
     if not assistant.listing:
         raise ListingError("This agent has no marketplace listing.", status_code=404)
 
+    current = assistant.listing.state
+
+    # ⚠️ Refuse a second request explicitly, before choosing a target.
+    #
+    # This used to fall out of the transition table — ``withdrawal_requested`` does not
+    # self-loop — but that only held while the target was picked from the *state*. Picking it
+    # from ``is_on_shelf`` means a pending request whose pointer is missing resolves to
+    # ``private``, and ``private`` is an author target, so the author would walk the grant
+    # edge themselves. Granting a withdrawal is the admin's decision (§5.1); an author who
+    # could do it by asking twice would have the unilateral delisting this state prevents.
+    if current == "withdrawal_requested":
+        raise ListingError(
+            "You have already asked for this listing to be pulled. An admin decides next; "
+            "it stays in the store until they do.",
+            status_code=400,
+        )
+
+    # A live listing can only be *requested* down; anything else goes straight to private.
+    #
+    # Asked as ``is_on_shelf``, not ``is_listed``: the state name alone gets this wrong for a
+    # listing that was published and then sent back for changes. That one is still serving
+    # (``review_listing`` deliberately does not unpublish) while sitting in
+    # ``changes_requested``, and reading it as not-live let the author pull something users
+    # could currently see with no admin deciding — the unilateral delisting §5.1 exists to
+    # prevent, reached through the one state nobody thought to check.
+    target = (
+        "withdrawal_requested"
+        if is_on_shelf(current, assistant.listing.published_version)
+        else "private"
+    )
+
     try:
-        assert_transition(assistant.listing.state, "private")
+        assert_transition(assistant.listing.state, target)
+        assert_author_target(target)
+    except ListingTransitionError as e:
+        raise ListingError(str(e), status_code=400) from e
+    except ListingAuthorityError as e:  # pragma: no cover - both targets are author states
+        raise ListingError(str(e), status_code=403) from e
+
+    now = _now()
+    if target == "withdrawal_requested":
+        # ⚠️ The index is deliberately NOT cleared and ``publishedVersion`` deliberately
+        # kept. The listing stays live while the request is pending — an author whose
+        # request took it off the shelf immediately would have unilaterally unpublished it,
+        # which is exactly what this state exists to prevent. A declined request then needs
+        # no repair, because nothing was undone.
+        listing = assistant.listing.model_copy(
+            update={
+                "state": target,
+                "withdrawal_requested_at": now,
+                # Where to put it back if the admin says no. Recorded here rather than
+                # inferred at decision time because by then the origin is gone.
+                "withdrawal_from": current,
+            }
+        )
+        await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
+        logger.info(
+            f"🙋 Agent {agent_id} withdrawal requested by its owner {user.user_id} "
+            f"(from {current})"
+        )
+        return listing
+
+    # Pre-publication withdrawal: nothing is on the shelf, so this is immediate. The
+    # unindex is belt-and-braces for a listing whose pointer outlived its key.
+    await _unindex_version(agent_id, assistant.listing.published_version)
+    listing = assistant.listing.model_copy(update={"state": target, "published_version": None})
+    await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
+    logger.info(f"📭 Agent {agent_id} submission withdrawn by its owner")
+    return listing
+
+
+async def decide_withdrawal(
+    agent_id: str, admin: User, *, decision: str, note: Optional[str] = None
+) -> AgentListing:
+    """Admin grants or declines an author's withdrawal request (§5.1).
+
+    ``grant`` takes the listing to ``private`` and off the shelf. ``decline`` puts it back
+    where it came from and changes nothing else — the listing never stopped being live, so
+    there is no key to restore and no version to re-promote. That asymmetry is the payoff of
+    leaving the index alone while the request was pending.
+
+    ⚠️ **"Where it came from", not "``published``".** Two states can be on the shelf and so
+    reach ``withdrawal_requested``: ``published``, and a ``changes_requested`` listing that
+    was published before the admin sent it back. Declining the second one into ``published``
+    would silently drop the outstanding change request *and* make ``withdrawal_requested →
+    published`` reachable by a listing that was never approved — the one thing
+    ``ALLOWED_TRANSITIONS`` is arranged to prevent. ``withdrawal_from`` is read here, and
+    falls back to ``published`` only for requests recorded before that field existed.
+
+    A declining admin should say why, since the author asked for something and is not
+    getting it; ``note`` renders on their card exactly as a request-changes reason does.
+    """
+    assistant = await _load_any(agent_id)
+    if not assistant.listing:
+        raise ListingError("This agent has no marketplace listing.", status_code=404)
+    if assistant.listing.state != "withdrawal_requested":
+        raise ListingError(
+            "This agent has no pending withdrawal request.",
+            status_code=400,
+        )
+
+    target = "private" if decision == "grant" else (assistant.listing.withdrawal_from or "published")
+    try:
+        assert_transition(assistant.listing.state, target)
     except ListingTransitionError as e:
         raise ListingError(str(e), status_code=400) from e
 
     now = _now()
-    listing = assistant.listing.model_copy(update={"state": "private"})
+    changes: dict = {
+        "state": target,
+        "reviewed_at": now,
+        "reviewed_by": admin.user_id,
+        "review_note": note or None,
+        # The request is answered; the origin pointer has done its job. ``withdrawal_requested_at``
+        # deliberately stays — the author's card says what happened and when, and a request
+        # that vanished on decline would read as though it was never made.
+        "withdrawal_from": None,
+    }
+    if target == "private":
+        changes["published_version"] = None
+        # Key first, record second — the fail-closed ordering in ``_unindex_version``.
+        await _unindex_version(agent_id, assistant.listing.published_version)
+
+    listing = assistant.listing.model_copy(update=changes)
     await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
-    logger.info(f"📭 Agent {agent_id} unpublished by its owner")
+    logger.info(f"🙋 Agent {agent_id} withdrawal {decision}ed by {admin.user_id}")
     return listing
+
+
+# ── version promotion ────────────────────────────────────────────────────────────────
+async def _publish_version(
+    agent_id: str,
+    number: int,
+    *,
+    category: str,
+    agent_created_at: str,
+    superseding: Optional[int] = None,
+) -> None:
+    """Point the store at version ``number``, taking the key off whatever it replaces.
+
+    Order matters and is the opposite of what feels natural: **write the new key first,
+    then clear the old.** Clearing first would leave the shelf blank for the width of a
+    round trip, and a blank shelf is a worse failure than a momentary duplicate — one is a
+    published Agent vanishing, the other is the same Agent appearing under two versions
+    until the second call lands.
+
+    ``agent_created_at`` is the sort key, deliberately the *Agent's* creation timestamp and
+    not the version's: browse is newest-first by Agent, and keying on version age would let
+    a resubmission of a two-year-old Agent jump the top of the shelf every time it was
+    re-approved. Promotion is not publication of a new thing.
+
+    ``category`` comes from the **listing**, not from the snapshot. Placement is the one
+    thing about a published version that an admin may legitimately change afterwards (D13),
+    and it is expressed as the index key rather than written into the frozen record — which
+    is exactly the line this design draws everywhere: content is immutable, *where it sits*
+    is a fact about now. ``version.category`` stays as the author proposed and the reviewer
+    saw it; the shelf a row appears on is the key.
+    """
+    await set_version_index(
+        agent_id, number, gsi5_keys("published", category, agent_created_at)
+    )
+    if superseding is not None and superseding != number:
+        await _unindex_version(agent_id, superseding)
+
+
+async def _unindex_version(agent_id: str, number: Optional[int]) -> None:
+    """Take a version off the shelf, tolerating one that is already gone.
+
+    ⚠️ **Call this BEFORE writing the listing, and write the listing before calling
+    ``_publish_version``.** The store index and the listing block used to be one
+    ``update_item`` — ``listing_repository`` says so, and that atomicity is what made "an
+    unpublished agent cannot be in the store" a fact rather than a hope. Moving the index
+    onto the version row split it into two writes on two items, and the invariant now has to
+    be bought with **ordering** instead:
+
+        publish   → write the listing, then write the key   (partial ⇒ recorded, not shelved)
+        unpublish → clear the key, then write the listing   (partial ⇒ not shelved, recorded live)
+
+    Both partial outcomes leave the Agent **off** the shelf. The reverse orders leave it on
+    the shelf while the record says otherwise, which is the single failure the sparse index
+    exists to prevent. A DynamoDB transaction would restore true atomicity and is the honest
+    upgrade if this ever needs to be stronger than fail-closed.
+
+    A missing version row here is not worth failing a takedown over: the outcome the caller
+    wants — "this is not in the store" — is already true, and raising would leave an admin
+    unable to complete a delisting because of a row that does not exist.
+    """
+    if number is None:
+        return
+    try:
+        await set_version_index(agent_id, number, None)
+    except ValueError:
+        logger.warning(f"Version {number} of {agent_id} is already absent; nothing to unindex")
 
 
 # ── admin transitions ────────────────────────────────────────────────────────────────
@@ -370,6 +687,18 @@ async def review_listing(
     except ListingTransitionError as e:
         raise ListingError(str(e), status_code=400) from e
 
+    # Re-checked here, not just at submit: ``visibility`` is an independent axis the author
+    # can narrow at any point after submitting, so the gate that ran then says nothing about
+    # now. Approving anyway would shelve a tile that 404s for every person who taps it.
+    # Reviewer-facing wording — it is not this admin's job to widen someone else's access.
+    if target == "published" and assistant.visibility != "PUBLIC":
+        raise ListingError(
+            f"This agent's visibility is now {assistant.visibility.title()}, so it can't be "
+            "published — the store is public, and everyone but the author would get an "
+            "error opening it. Request changes and ask the author to set it to Public.",
+            status_code=400,
+        )
+
     if category is not None:
         await _validate_category(category)
     if publisher_id is not None:
@@ -388,15 +717,139 @@ async def review_listing(
         "reviewed_by": admin.user_id,
         "review_note": note or None,
     }
-    # Approval — and only approval — establishes the behavior baseline the drift marker
-    # compares against (#744). ``request_changes`` deliberately leaves any existing hash
-    # alone: it does not publish anything, so it has no baseline to set, and clearing the
-    # previous one would blind the marker on a listing that is still live in the store.
+    # Approval promotes the version cut at submission — the artifact this admin actually
+    # read — never "the latest", which an admin presentation edit (§6.2) could have moved
+    # underneath them.
+    #
+    # ⚠️ A submission with no version predates this feature. Refusing is the safe answer:
+    # publishing it would put an unversioned listing on a shelf that reads versions, which
+    # renders as an empty tile. The author resubmits and gets one.
+    promoted: Optional[int] = None
     if target == "published":
-        changes["approved_instructions_hash"] = _instructions_hash(assistant)
+        promoted = assistant.listing.submitted_version
+        if promoted is None:
+            raise ListingError(
+                "This submission predates version snapshots and has nothing to publish. "
+                "Ask the author to resubmit — it will be captured on the way in.",
+                status_code=400,
+            )
+        changes["published_version"] = promoted
+
     listing = assistant.listing.model_copy(update=changes)
     await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
+
+    # Index last, and only after the listing write succeeded. The index is what the store
+    # actually answers from, so a key written against a listing that failed to persist
+    # would shelve something no record claims is published.
+    if promoted is not None:
+        await _publish_version(
+            agent_id,
+            promoted,
+            category=listing.category,
+            agent_created_at=assistant.created_at,
+            superseding=assistant.listing.published_version,
+        )
+
     logger.info(f"⚖️ Agent {agent_id} review by {admin.user_id}: {decision} → {target}")
+    return listing
+
+
+async def list_agent_versions(agent_id: str) -> Tuple[List[AgentVersionSummary], Optional[int]]:
+    """Every snapshot this Agent has, newest first, plus which one is live.
+
+    Backs the rollback picker. Summaries rather than whole versions: the picker needs to say
+    *which* version and when it was cut, and shipping every snapshot's full ``instructions``
+    to render a dropdown would send the entire approval history of an Agent down the wire to
+    draw a list of numbers.
+    """
+    assistant = await _load_any(agent_id)
+    published = assistant.listing.published_version if assistant.listing else None
+    versions = await list_versions(agent_id)
+    summaries = [
+        AgentVersionSummary(
+            version=v.version,
+            name=v.name,
+            tagline=v.tagline,
+            created_at=v.created_at,
+            created_by=v.created_by,
+            is_published=v.version == published,
+        )
+        for v in sorted(versions, key=lambda v: v.version or 0, reverse=True)
+        if v.version is not None
+    ]
+    return summaries, published
+
+
+async def rollback_listing(
+    agent_id: str, admin: User, *, version: int, reason: str
+) -> AgentListing:
+    """Repoint a published listing at an earlier snapshot (§8).
+
+    The answer to "the approved version turned out to be wrong", and nearly free because
+    versions are immutable and numbered: the old snapshot is still sitting there intact, so
+    a rollback is a pointer move plus an index move — no new version is cut, and nothing
+    about the author's draft changes.
+
+    **Only from ``published``.** A rollback is not a way *into* the store — an Agent that is
+    private, in review or taken down has no live listing to roll back, and letting this
+    endpoint publish one would be a second door past review. ``assert_transition`` is not
+    consulted because the state does not change; the explicit check below is the gate.
+
+    **A reason is required and reaches the author**, exactly as takedown and request-changes
+    do. An admin replacing what users run is a decision the author has to be able to see,
+    and the alternative — a silent pointer move — leaves them looking at a store tile that
+    no longer matches the version they last had approved, with nothing to explain it.
+
+    Ordering is ``_publish_version``'s: new key first, then clear the superseded one, so a
+    half-failed rollback shows the Agent twice rather than not at all.
+    """
+    assistant = await _load_any(agent_id)
+    if not assistant.listing:
+        raise ListingError("This agent has no marketplace listing.", status_code=404)
+
+    listing_now = assistant.listing
+    if listing_now.state != "published":
+        raise ListingError(
+            f"Only a published listing can be rolled back; this one is '{listing_now.state}'.",
+            status_code=400,
+        )
+    if not (reason or "").strip():
+        raise ListingError(
+            "A rollback needs a reason — it renders on the author's card, and replacing what "
+            "users run without saying why leaves them unable to tell what happened.",
+            status_code=400,
+        )
+
+    current = listing_now.published_version
+    if version == current:
+        raise ListingError(
+            f"Version {version} is already the published one.", status_code=400
+        )
+    if await get_version(agent_id, version) is None:
+        raise ListingError(f"Version {version} of this agent does not exist.", status_code=404)
+
+    now = _now()
+    listing = listing_now.model_copy(
+        update={
+            "published_version": version,
+            "reviewed_at": now,
+            "reviewed_by": admin.user_id,
+            "review_note": reason,
+        }
+    )
+    await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
+
+    # Record first, then move the key — the publish ordering. A key pointing at a version the
+    # listing does not claim is the failure the sparse index exists to prevent.
+    await _publish_version(
+        agent_id,
+        version,
+        category=listing.category,
+        agent_created_at=assistant.created_at,
+        superseding=current,
+    )
+
+    logger.info(f"⏪ Agent {agent_id} rolled back {current} → {version} by {admin.user_id}")
     return listing
 
 
@@ -417,12 +870,19 @@ async def takedown_listing(agent_id: str, admin: User, reason: str) -> AgentList
         raise ListingError(str(e), status_code=400) from e
 
     now = _now()
+    # Off the shelf before the record says so — a takedown that half-failed must leave the
+    # Agent invisible, never visible-but-recorded-down.
+    await _unindex_version(agent_id, assistant.listing.published_version)
     listing = assistant.listing.model_copy(
         update={
             "state": "taken_down",
             "reviewed_at": now,
             "reviewed_by": admin.user_id,
             "review_note": reason,
+            # The pointer clears with the key. A taken-down listing that still named a
+            # published version would read as "this is live" to every reader that trusts
+            # the pointer, and PR-3 makes invocation one of those readers.
+            "published_version": None,
         }
     )
     await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
@@ -457,11 +917,44 @@ async def patch_listing_presentation(
         AdminEdit(field=_EDIT_FIELD_LABELS.get(field, field), at=now, by=admin.name or admin.user_id)
         for field in sorted(changes)
     ]
+    category = changes.get("category", assistant.listing.category)
+    publisher_id = changes.get("publisher_id", assistant.listing.publisher_id)
+
+    # ── an admin edit to a live listing cuts a version (§6.2) ────────────────────────
+    # The store renders from the published snapshot now, so a tagline fix that only touched
+    # the Agent row would land nowhere — D13 would look like it silently stopped working.
+    # Of the two honest options the spec puts up, this is the one that keeps immutability
+    # absolute: the version is the unit of "what an admin blessed", and an admin editing it
+    # is still an admin blessing it. The cost is that a category fix reads as a release in
+    # the version history, which is the cheaper wrong.
+    #
+    # Attributed to the admin, not the author — ``createdBy`` is audit, never authorization,
+    # and mislabelling this would put the author's name on someone else's edit.
+    was_listed = is_listed(assistant.listing.state)
+    previously_published = assistant.listing.published_version
+    promoted: Optional[int] = None
+    if was_listed:
+        edited = assistant.model_copy(
+            update={
+                "name": changes.get("name", assistant.name),
+                "tagline": changes.get("tagline", assistant.tagline),
+                "icon_key": changes.get("icon_key", assistant.icon_key),
+                "listing": assistant.listing.model_copy(
+                    update={"category": category, "publisher_id": publisher_id}
+                ),
+            }
+        )
+        version = await create_version(
+            agent_id, snapshot_of(edited, created_at=now, created_by=admin.user_id)
+        )
+        promoted = version.version
+
     listing = assistant.listing.model_copy(
         update={
-            "category": changes.get("category", assistant.listing.category),
-            "publisher_id": changes.get("publisher_id", assistant.listing.publisher_id),
+            "category": category,
+            "publisher_id": publisher_id,
             "admin_edits": edits,
+            **({"published_version": promoted} if promoted is not None else {}),
         }
     )
     # ``name``/``tagline``/``iconKey`` live on the Agent record, not the listing block, so
@@ -475,18 +968,130 @@ async def patch_listing_presentation(
         name=changes.get("name"),
         updated_at=now,
     )
+    if promoted is not None:
+        await _publish_version(
+            agent_id,
+            promoted,
+            category=category,
+            agent_created_at=assistant.created_at,
+            superseding=previously_published,
+        )
     logger.info(f"✏️ Admin {admin.user_id} edited listing presentation for {agent_id}: {sorted(changes)}")
     return listing
 
 
 # ── admin reads ──────────────────────────────────────────────────────────────────────
+# camelCase for the wire, so the SPA reads the same field names it already knows from
+# ``AgentResponse``. Snake_case would leak the storage attribute names into the UI.
+_DIFF_FIELD_ALIASES = {
+    "model_settings": "modelConfig",
+    "icon_key": "iconKey",
+    "publisher_id": "publisherId",
+}
+
+
+def _wire_value(value):
+    """Serialize a snapshot value for the diff payload, keeping ``None`` distinct from ``[]``."""
+    if isinstance(value, list):
+        return [_wire_value(item) for item in value]
+    dump = getattr(value, "model_dump", None)
+    return dump(by_alias=True) if dump else value
+
+
+async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
+    """What the pending submission changes against what is published (§6.1).
+
+    Reads the two snapshots the listing points at — ``submittedVersion`` and
+    ``publishedVersion`` — rather than "the latest two". An admin presentation edit (§6.2)
+    cuts a version too, so ordinal arithmetic would sooner or later diff the wrong pair.
+
+    Raises ``ListingError`` when there is nothing under review: a diff is a thing you read
+    *before deciding*, and offering one for a listing with no pending submission would
+    invite deciding on it.
+    """
+    assistant = await _load_any(agent_id)
+    listing = assistant.listing
+    if not listing:
+        raise ListingError("This agent has no marketplace listing.", status_code=404)
+
+    # Two different causes, and collapsing them told the reviewer the wrong one. A listing
+    # sitting in ``in_review`` *does* have something awaiting review — if it also has no
+    # ``submittedVersion`` it predates snapshots, which is a fact about the record's age and
+    # not about the queue. Saying "nothing awaiting review" about a row the admin is looking
+    # at in the review queue reads as a bug in the queue.
+    if listing.state not in PENDING_DECISION_STATES:
+        raise ListingError(
+            "This agent has nothing awaiting review, so there is no diff to show.",
+            status_code=400,
+        )
+
+    pending_number = listing.submitted_version
+    if pending_number is None:
+        raise ListingError(
+            "This submission predates version snapshots, so there is nothing to compare. "
+            "Ask the author to resubmit — that captures one on the way in.",
+            status_code=400,
+        )
+
+    pending = await get_version(agent_id, pending_number)
+    if pending is None:
+        raise ListingError(
+            f"Version {pending_number} of this agent could not be loaded.", status_code=404
+        )
+
+    published_number = listing.published_version
+    published = (
+        await get_version(agent_id, published_number) if published_number is not None else None
+    )
+    # A pointer to a version that is gone is not the same as never having published: say so
+    # by falling back to the first-submission rendering rather than diffing against nothing
+    # and reporting every field as changed.
+    first_submission = published is None
+
+    changes = [
+        VersionFieldChange(
+            field=_DIFF_FIELD_ALIASES.get(field, field),
+            before=_wire_value(before),
+            after=_wire_value(after),
+            behavior=field in ("instructions", "bindings", "model_settings"),
+        )
+        for field, before, after in changed_fields(published, pending)
+    ]
+
+    return AgentVersionDiffResponse(
+        agent_id=agent_id,
+        published_version=published.version if published else None,
+        pending_version=pending_number,
+        first_submission=first_submission,
+        behavior_changed=behavior_changed(published, pending),
+        changes=changes,
+        instructions_diff=instructions_diff(published, pending),
+    )
+
+
+
 async def list_admin_listings(state: Optional[str] = None) -> Tuple[List[AdminListingRow], int]:
-    """Rows for the Review queue / Listings tables, plus the pending-review count.
+    """Rows for the Review queue / Listings tables, plus the pending-decision count.
 
     The count badges the admin nav so the queue is visible rather than discovered — the
     operational half of D2's answer to "a review queue makes publication stop".
+
+    ``state`` accepts the pseudo-value ``"pending"``, which is what the Review queue asks
+    for: both submissions and withdrawal requests (``PENDING_DECISION_STATES``). §5.1 is
+    explicit that withdrawal requests belong in the *existing* queue — "one queue rather
+    than a second surface to remember" — and a queue an admin has to remember to check is
+    a queue that grows.
     """
-    raw = await list_by_state(state)
+    wanted: Optional[Set[str]] = None
+    if state == _PENDING_QUERY:
+        wanted = set(PENDING_DECISION_STATES)
+    elif state is not None:
+        wanted = {state}
+
+    # A multi-state ask scans once and filters here rather than issuing one scan per state.
+    # The population is every Agent anyone has ever submitted and the caller is a human
+    # clicking a nav item, so one pass is cheaper than two round trips.
+    raw = await list_by_state(state if wanted and len(wanted) == 1 else None)
     publishers = {p.id: p for p in await list_publishers()}
 
     rows: List[AdminListingRow] = []
@@ -498,81 +1103,82 @@ async def list_admin_listings(state: Optional[str] = None) -> Tuple[List[AdminLi
             continue
         if not assistant.listing:
             continue
+        if wanted is not None and assistant.listing.state not in wanted:
+            continue
         rows.append(_to_row(assistant, publishers.get(assistant.listing.publisher_id)))
 
     rows.sort(key=lambda r: (r.submitted_at or r.updated_at), reverse=True)
 
-    # The badge counts the review queue, not whatever slice the caller asked for — an
-    # admin filtering the Listings table to "published" still needs to see work waiting.
+    # The badge counts the whole decision queue, not whatever slice the caller asked for —
+    # an admin filtering the Listings table to "published" still needs to see work waiting.
     # When the fetched rows already cover the queue, count them instead of re-scanning.
-    if state is None or state == "in_review":
-        pending = len([r for r in rows if r.state == "in_review"])
+    if wanted is None or wanted >= set(PENDING_DECISION_STATES):
+        pending = len([r for r in rows if r.state in PENDING_DECISION_STATES])
     else:
-        pending = len(await list_by_state("in_review"))
+        pending = len(
+            [
+                item
+                for item in await list_by_state(None)
+                if (item.get("listing") or {}).get("state") in PENDING_DECISION_STATES
+            ]
+        )
 
     return rows, pending
 
 
-def _instructions_hash(assistant: Assistant) -> str:
-    """SHA-256 of an Agent's instructions — the drift marker's behavior baseline (#744).
-
-    Hashed rather than stored verbatim: the listing block is read on every admin table
-    load, and instructions run to thousands of tokens. We only ever need to answer "same
-    or not", never "what changed" — a diff view would read the live record anyway.
-    """
-    return hashlib.sha256((assistant.instructions or "").encode("utf-8")).hexdigest()
-
-
-def _drift(assistant: Assistant, listing: AgentListing) -> Optional[str]:
-    """Whether a published listing has drifted from what the reviewer approved (#744).
-
-    D2 deliberately does not re-review edits, and there is no versioning — an approved
-    author may rewrite instructions and the new behavior is live immediately. That is
-    defensible for an Agent someone *chose* to pin; it reads differently once an admin has
-    **locked** it into a role's sidebar (D9), because then the affected user cannot opt out
-    either. This marker does not add a gate; it gives the curator a reason to look.
-
-    Only ``published`` listings can drift. A draft or an in-review submission has no
-    approved state to differ from, and a taken-down one is already off the shelf.
-
-    ⚠️ **The timestamp fallback is deliberately the weaker claim.** ``updated_at`` bumps on
-    *every* write to the record, including an admin's own D13 presentation edit (which does
-    not touch ``reviewed_at``) and a harmless author rename. Reporting that as "behavior
-    changed" would have admins chasing their own typo fixes. It is reported as ``edited``
-    and must render as the softer signal. Listings approved since the hash shipped never
-    reach the fallback — ``review_listing`` writes the baseline on the way in.
-    """
-    if listing.state != "published":
-        return None
-
-    if listing.approved_instructions_hash:
-        return "instructions" if _instructions_hash(assistant) != listing.approved_instructions_hash else None
-
-    # Legacy listing, approved before the baseline existed. ``review_listing`` writes
-    # ``updated_at`` from the same ``now`` as ``reviewed_at``, so a freshly approved record
-    # compares equal and only a later write can exceed it. Both are ISO 8601 UTC, so the
-    # string comparison is chronological.
-    if listing.reviewed_at and assistant.updated_at > listing.reviewed_at:
-        return "edited"
-    return None
+# ``_instructions_hash`` and ``_drift`` lived here (#744). Both are gone rather than
+# dormant: they detected an author editing a published Agent, and a published Agent is now
+# an immutable snapshot the author cannot reach. The reviewer's real question — "is what I
+# approved still what is live?" — is answered by ``listing.publishedVersion`` instead, which
+# is a fact rather than a heuristic, and never had the weak ``edited`` fallback's habit of
+# reporting an admin's own typo fix as a behavior change.
 
 
 def _reachability(assistant: Assistant) -> str:
     """Who can actually open this Agent, projected from ``visibility`` (see ``ListingReachability``).
 
-    The store browse read applies no access check, so this is the only thing standing
-    between "approved" and a shelf tile that 404s for everyone but the author. Derived on
-    every read rather than stored — ``visibility`` can change at any time and a cached
-    copy would be wrong exactly when it mattered.
+    Derived on every read rather than stored — ``visibility`` can change at any time and a
+    cached copy would be wrong exactly when it mattered.
 
-    ⚠️ Advisory only. Publishing a SHARED Agent to a team is legitimate; the fix for the
-    bad case is the author widening visibility, not this function refusing.
+    ⚠️ This used to say publishing a SHARED Agent to a team was legitimate, and that it was
+    the *only* thing standing between "approved" and a tile that 404s for everyone but the
+    author. Both were wrong. The marketplace is public-only — sharing with named coworkers
+    is a separate mechanism, and a listing has no audience of its own — so anything short
+    of PUBLIC is now refused outright at submit and again at approve
+    (``_visibility_block_reason``).
+
+    What survives is the case no gate can catch: an Agent published as PUBLIC and narrowed
+    afterwards. This is what tells a reviewer, and the admin listings table, that an
+    already-published row has gone unreachable.
     """
     if assistant.visibility == "PUBLIC":
         return "everyone"
     if assistant.visibility == "SHARED":
         return "shared_only"
     return "owner_only"
+
+
+def _latest_version(listing: AgentListing) -> Optional[int]:
+    """The highest snapshot number this listing has, without reading the version partition.
+
+    Answers one question for the Listings table: *does more than one version exist?* — which
+    is what the rollback affordance actually depends on. ``published_version`` alone cannot
+    answer it, because a rollback moves that pointer **down**: a listing serving ``v1`` with
+    ``v2``–``v5`` behind it is indistinguishable from one that has only ever had ``v1``, and
+    the table hid the only route back to the newer snapshots (see
+    ``canRollBack``). Rolling forward is the same pointer move as rolling back, so the entry
+    point cannot be gated on the direction.
+
+    ``submitted_version`` is the high-water mark that survives a rollback: both counters only
+    ever move *up* when a snapshot is cut, so ``max`` of the two is ≥ 2 exactly when a second
+    version exists. It can *understate* the true highest — an admin presentation edit cuts a
+    version and bumps only ``published_version``, so a later rollback leaves the max one
+    short — which is harmless here, because no caller asks for the number itself, only
+    whether it is above one. Anything that needs the real list already calls
+    ``list_agent_versions``.
+    """
+    highest = max(listing.published_version or 0, listing.submitted_version or 0)
+    return highest or None
 
 
 def _to_row(assistant: Assistant, publisher: Optional[PublisherProfile]) -> AdminListingRow:
@@ -592,10 +1198,17 @@ def _to_row(assistant: Assistant, publisher: Optional[PublisherProfile]) -> Admi
         state=listing.state,
         usage_count=assistant.usage_count,
         submitted_at=listing.submitted_at,
+        # Only while one is actually pending: the stamp survives the decision on the stored
+        # listing, and a resolved request rendering as "withdrawal requested 3 days ago"
+        # would put a decided listing back in front of an admin as if it still needed one.
+        withdrawal_requested_at=(
+            listing.withdrawal_requested_at if listing.state == "withdrawal_requested" else None
+        ),
         reviewed_at=listing.reviewed_at,
         review_note=listing.review_note,
         updated_at=assistant.updated_at,
-        drift=_drift(assistant, listing),
+        latest_version=_latest_version(listing),
+        published_version=listing.published_version,
         reachability=_reachability(assistant),
         admin_edits=listing.admin_edits,
     )

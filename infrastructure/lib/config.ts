@@ -58,6 +58,13 @@ export interface AppConfig {
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
   mcpIdentity: McpIdentityConfig;
+  gateway: GatewayConfig;
+  /**
+   * Optional. Absent for any deployment without an external token service, which
+   * is the default. Kept optional rather than defaulted so a fork constructing
+   * AppConfig by hand does not have to know this feature exists.
+   */
+  tokenExchange?: TokenExchangeConfig;
   appVersion: string;
   tags: { [key: string]: string };
 }
@@ -255,6 +262,74 @@ export interface McpIdentityConfig {
 }
 
 /**
+ * AgentCore Gateway configuration.
+ *
+ * `inboundAuth` selects the Gateway's single inbound authorizer. AgentCore
+ * allows exactly one authorizer type per Gateway (`authorizerType` is a scalar:
+ * CUSTOM_JWT | AWS_IAM | NONE | AUTHENTICATE_ONLY) — there is no "accept either
+ * SigV4 or JWT" mode. Outbound credentials remain per-target, so a single
+ * Gateway still serves both IAM-invoked Lambda targets and OAuth/token-exchange
+ * targets.
+ *
+ * ## The authorizer is immutable after creation
+ *
+ * Changing this value on an **existing** Gateway does not work. The AgentCore
+ * control plane rejects it:
+ *
+ * ```
+ * Authorizer type cannot be updated for an existing gateway
+ * (Service: BedrockAgentCoreControl, Status Code: 400)
+ * ```
+ *
+ * This is *not* visible from CloudFormation: the resource schema documents both
+ * `AuthorizerType` and `AuthorizerConfiguration` as "Update requires: No
+ * interruption", and `cdk diff` — even via a real change set — reports an
+ * in-place `[~]` modify. Both reflect CFN's model, not the service's validation.
+ * The failure only surfaces at deploy time, mid-update.
+ *
+ * So `inboundAuth` effectively sets the authorizer **at Gateway creation**.
+ * Moving an existing deployment from AWS_IAM to CUSTOM_JWT requires a *new*
+ * Gateway plus target re-registration and a cutover — not a config flip. See
+ * docs/specs/AGENTCORE_GATEWAY_TOKEN_EXCHANGE_PLAN.md.
+ *
+ * Defaults to `iam`, matching every Gateway already deployed. Do not change the
+ * default to `jwt`: it would make `PlatformStack` fail on every existing
+ * deployment (this repo's included) and — because the agent reads the same
+ * value — point the agent at an auth mode its Gateway does not accept.
+ */
+export interface GatewayConfig {
+  inboundAuth: 'jwt' | 'iam';
+}
+
+/**
+ * RFC 8693 token exchange against an external token service.
+ *
+ * Lets the agent trade the signed-in user's Cognito access token for a token
+ * issued by a token service the organisation already runs, so downstream APIs
+ * that trust that service can serve agent requests as the user without being
+ * modified. Useful anywhere internal APIs already accept a JWT from an existing
+ * identity or token service — the pattern is not specific to any one kind of
+ * organisation.
+ *
+ * Deliberately not done by AgentCore Gateway: its outbound OAuth credential
+ * provider supports only CLIENT_CREDENTIALS and AUTHORIZATION_CODE
+ * (`OAuthGrantType` in the bedrock-agentcore-control API model has exactly those
+ * two values), so a token-exchange grant cannot be expressed there. A Gateway
+ * with AWS_IAM inbound auth also never sees the user's token, so it would have
+ * nothing to exchange. The runtime performs the exchange instead.
+ *
+ * Entirely optional and additive. Leave it unset and no resources, permissions,
+ * or environment variables are created — a deployment that only ever uses SigV4
+ * for MCP traffic is unaffected.
+ */
+export interface TokenExchangeConfig {
+  /** Exchange endpoint, e.g. https://tokens.example.org/v2/oauth/token */
+  url: string;
+  /** client_id this deployment authenticates as. */
+  clientId: string;
+}
+
+/**
  * Load and validate configuration from CDK context
  * @param scope The CDK construct scope
  * @returns Validated AppConfig object
@@ -262,6 +337,14 @@ export interface McpIdentityConfig {
 export function loadConfig(scope: cdk.App): AppConfig {
   // Load required configuration from environment variables or context
   const projectPrefix = process.env.CDK_PROJECT_PREFIX || scope.node.tryGetContext('projectPrefix');
+  const tokenExchangeUrl =
+    process.env.CDK_TOKEN_EXCHANGE_URL
+    || scope.node.tryGetContext('tokenExchange')?.url
+    || '';
+  const tokenExchangeClientId =
+    process.env.CDK_TOKEN_EXCHANGE_CLIENT_ID
+    || scope.node.tryGetContext('tokenExchange')?.clientId
+    || '';
   const awsRegion = process.env.CDK_AWS_REGION || scope.node.tryGetContext('awsRegion');
   
   // Validate required variables
@@ -481,6 +564,25 @@ export function loadConfig(scope: cdk.App): AppConfig {
           ?? {},
       },
     },
+    gateway: {
+      // Inbound authorizer selection. Defaults to 'iam' — the authorizer is
+      // immutable after Gateway creation (the AgentCore control plane rejects
+      // an authorizerType change), so every already-deployed Gateway is
+      // AWS_IAM and the default must match that. 'jwt' applies to a *newly
+      // created* Gateway. See GatewayConfig.
+      inboundAuth:
+        (process.env.CDK_GATEWAY_INBOUND_AUTH as 'jwt' | 'iam' | undefined)
+        || scope.node.tryGetContext('gateway')?.inboundAuth
+        || 'iam',
+    },
+    // Left undefined unless a URL is configured, so the feature and every
+    // resource behind it stay absent for deployments that do not want it.
+    tokenExchange: tokenExchangeUrl
+      ? {
+          url: tokenExchangeUrl,
+          clientId: tokenExchangeClientId,
+        }
+      : undefined,
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
     },
@@ -662,6 +764,15 @@ function validateConfig(config: AppConfig): void {
   const cidrPattern = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
   if (!cidrPattern.test(config.vpcCidr)) {
     throw new Error(`Invalid VPC CIDR format: ${config.vpcCidr}`);
+  }
+
+  // Validate Gateway inbound auth selection. A typo here would otherwise
+  // silently fall through to an unintended authorizer and 401 every Gateway
+  // call, so fail fast at synth instead.
+  if (!['jwt', 'iam'].includes(config.gateway.inboundAuth)) {
+    throw new Error(
+      `gateway.inboundAuth must be 'jwt' or 'iam'. Got: ${config.gateway.inboundAuth}`
+    );
   }
 
   // Validate RAG Ingestion configuration (always provisioned).

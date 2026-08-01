@@ -5,8 +5,9 @@ Provides an httpx Auth class that injects OAuth Bearer tokens into requests.
 The token is retrieved dynamically at request time based on user context.
 """
 
+import inspect
 import logging
-from typing import Generator, Optional, Callable
+from typing import AsyncGenerator, Generator, Optional, Callable
 
 import httpx
 
@@ -38,11 +39,15 @@ class OAuthBearerAuth(httpx.Auth):
 
         Args:
             token: Static token to use (for simple cases)
-            token_provider: Callback function that returns the current token.
-                           Called synchronously at request time.
+            token_provider: Callback returning the current token. May be a plain
+                callable (resolved synchronously at request time, e.g. an
+                in-memory cache lookup) or an async callable (awaited in
+                `async_auth_flow`, e.g. an RFC 8693 token exchange that may need
+                a network round trip).
         """
         self._token = token
         self._token_provider = token_provider
+        self._provider_is_async = inspect.iscoroutinefunction(token_provider)
 
         if not token and not token_provider:
             raise ValueError("Either token or token_provider must be provided")
@@ -50,8 +55,31 @@ class OAuthBearerAuth(httpx.Auth):
     def _get_token(self) -> Optional[str]:
         """Get the current token, either static or from provider."""
         if self._token_provider:
+            if self._provider_is_async:
+                # Refuse rather than return a coroutine, which would be
+                # stringified into the Authorization header and produce a
+                # baffling 401 at the far end.
+                raise RuntimeError(
+                    "async token_provider requires the async request path "
+                    "(httpx will call async_auth_flow); this is a wiring bug"
+                )
             return self._token_provider()
         return self._token
+
+    async def _get_token_async(self) -> Optional[str]:
+        """Resolve the token, awaiting the provider when it is async."""
+        if self._token_provider:
+            if self._provider_is_async:
+                return await self._token_provider()
+            return self._token_provider()
+        return self._token
+
+    def _apply(self, request: httpx.Request, token: Optional[str]) -> None:
+        if token:
+            request.headers["Authorization"] = f"Bearer {token}"
+            logger.debug("Added OAuth Bearer token to request")
+        else:
+            logger.warning("No OAuth token available for request")
 
     def auth_flow(
         self, request: httpx.Request
@@ -61,14 +89,22 @@ class OAuthBearerAuth(httpx.Auth):
 
         This method is called by httpx for each request.
         """
-        token = self._get_token()
+        self._apply(request, self._get_token())
+        yield request
 
-        if token:
-            request.headers["Authorization"] = f"Bearer {token}"
-            logger.debug("Added OAuth Bearer token to request")
-        else:
-            logger.warning("No OAuth token available for request")
+    async def async_auth_flow(
+        self, request: httpx.Request
+    ) -> AsyncGenerator[httpx.Request, httpx.Response]:
+        """
+        Async counterpart of `auth_flow`.
 
+        httpx calls this on async clients, which is what the MCP streamable-HTTP
+        transport uses. Overriding it is what makes an async token provider
+        possible: the default implementation delegates to the sync `auth_flow`,
+        which cannot await. Without this, a network-backed provider would have to
+        block the event loop.
+        """
+        self._apply(request, await self._get_token_async())
         yield request
 
 

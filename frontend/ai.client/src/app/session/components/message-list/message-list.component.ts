@@ -15,6 +15,7 @@ import { ArtifactCardComponent } from './components/artifact/artifact-card.compo
 import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
 import { McpAppCardComponent } from './components/mcp-app-card/mcp-app-card.component';
+import { AgentFeedbackLinkComponent } from '../../../agents/components/agent-feedback-link.component';
 import { McpAppCardStateService } from '../../services/mcp-apps/mcp-app-card-state.service';
 import {
   OAuthConsentRequest,
@@ -43,6 +44,7 @@ import { ChatStateService } from '../../services/chat/chat-state.service';
     ArtifactCardComponent,
     ArtifactPanelComponent,
     McpAppCardComponent,
+    AgentFeedbackLinkComponent,
   ],
   templateUrl: './message-list.component.html',
   styleUrl: './message-list.component.css',
@@ -60,6 +62,16 @@ export class MessageListComponent {
   streamingMessageId = input<string | null>(null);
   embeddedMode = input<boolean>(false);
 
+  /**
+   * The published marketplace agent behind this conversation, when there is one — the
+   * foot-of-conversation feedback link, and nothing else. Null for plain chat, a legacy
+   * assistant, or an agent that is not published (D15.3).
+   */
+  feedbackAgent = input<{ id: string; name: string } | null>(null);
+
+  /** The conversation itself, offered to attach to that feedback. */
+  sessionId = input<string | null>(null);
+
   /** Bubbled up when the user clicks "Continue" on a max_tokens-truncated
    *  assistant message. The page reuses the normal submit path with a
    *  canned prompt. */
@@ -75,6 +87,15 @@ export class MessageListComponent {
   /** Persisted app-initiated tool cards, hydrated on reload (PR #6). */
   protected mcpAppCards = this.mcpAppCardState.cards;
   protected hasMcpAppCards = this.mcpAppCardState.hasCards;
+
+  /**
+   * The feedback link needs something to give feedback *about*, so it waits for a turn to
+   * have happened, and stays out of the way while one is still streaming — it sits at the
+   * very foot of the tail, and appearing under a half-written answer reads as part of it.
+   */
+  protected readonly showFeedbackLink = computed(
+    () => !!this.feedbackAgent() && this.messages().length > 0 && !this.isChatLoading(),
+  );
 
   /** Only the final message of a recoverable max_tokens turn gets the
    *  "Continue" affordance. Live-only state, never shown while a new

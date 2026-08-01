@@ -149,7 +149,16 @@ export function createRuntimeExecutionRole(
     sid: 'SecretsManagerRead',
     effect: iam.Effect.ALLOW,
     actions: ['secretsmanager:GetSecretValue'],
-    resources: [`${oauthClientSecretsArn}*`, `${authProviderSecretsArn}*`],
+    // Trailing wildcard: AWS appends a random 6-char suffix to secret ARNs.
+    // The exchange secret is only granted when the feature is configured,
+    // so a deployment without it gets no extra permission.
+    resources: [
+      `${oauthClientSecretsArn}*`,
+      `${authProviderSecretsArn}*`,
+      ...(refs.tokenExchangeSecret
+        ? [`${refs.tokenExchangeSecret.secretArn}*`]
+        : []),
+    ],
   }));
 
   // ── AgentCore Identity OAuth vault secrets ──

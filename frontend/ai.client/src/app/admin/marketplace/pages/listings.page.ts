@@ -9,18 +9,13 @@ import {
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import {
-  heroRectangleStack,
-  heroCheckBadge,
-  heroExclamationTriangle,
-} from '@ng-icons/heroicons/outline';
+import { heroRectangleStack, heroCheckBadge } from '@ng-icons/heroicons/outline';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import {
   AdminListingRow,
-  LISTING_DRIFT_CLASSES,
-  LISTING_DRIFT_LABELS,
-  LISTING_DRIFT_TOOLTIPS,
+  PUBLISHED_VERSION_CLASSES,
+  PUBLISHED_VERSION_TOOLTIP,
   LISTING_STATE_CLASSES,
   LISTING_STATE_LABELS,
   ListingState,
@@ -31,6 +26,16 @@ import {
   TakedownDialogData,
   TakedownDialogResult,
 } from '../components/takedown-dialog.component';
+import {
+  RequestChangesDialogComponent,
+  RequestChangesDialogData,
+  RequestChangesDialogResult,
+} from '../components/request-changes-dialog.component';
+import {
+  RollbackDialogComponent,
+  RollbackDialogData,
+  RollbackDialogResult,
+} from '../components/rollback-dialog.component';
 
 /**
  * Listings — every agent that has ever been submitted (D10).
@@ -52,7 +57,7 @@ import {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, AgentTileComponent, TooltipDirective],
   providers: [
-    provideIcons({ heroRectangleStack, heroCheckBadge, heroExclamationTriangle }),
+    provideIcons({ heroRectangleStack, heroCheckBadge }),
   ],
   template: `
     <div class="min-h-dvh">
@@ -182,29 +187,19 @@ import {
                           {{ stateLabels[row.state] }}
                         </span>
                         <!--
-                          Post-approval drift (#744). Sits under the state badge rather than
-                          in its own column: it only ever applies to published rows, so a
+                          Which snapshot is live. Sits under the state badge rather than in
+                          its own column: it only ever applies to published rows, so a
                           column would be mostly empty and would push the table wider.
+                          (This replaced the post-approval drift marker — see the model.)
                         -->
-                        @if (row.drift; as drift) {
+                        @if (row.publishedVersion; as version) {
                           <span
-                            class="inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-xs font-medium"
-                            [class]="driftClasses[drift]"
-                            [appTooltip]="driftTooltips[drift]"
+                            class="inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-xs font-medium tabular-nums"
+                            [class]="publishedVersionClasses"
+                            [appTooltip]="publishedVersionTooltip"
                             appTooltipPosition="top"
                           >
-                            <!--
-                              The icon is only on the measured signal. The inferred one is
-                              a maybe, and a warning triangle would overstate it.
-                            -->
-                            @if (drift === 'instructions') {
-                              <ng-icon
-                                name="heroExclamationTriangle"
-                                class="size-3.5"
-                                aria-hidden="true"
-                              />
-                            }
-                            {{ driftLabels[drift] }}
+                            v{{ version }}
                           </span>
                         }
                       </div>
@@ -214,14 +209,47 @@ import {
                     </td>
                     <td class="px-4 py-3 text-right">
                       @if (row.state === 'published') {
-                        <button
-                          type="button"
-                          [disabled]="busyId() === row.agentId"
-                          (click)="takedown(row)"
-                          class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-rose-700 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-rose-400 dark:hover:bg-gray-700"
-                        >
-                          Take down
-                        </button>
+                        <div class="flex justify-end gap-2">
+                          <!-- The gentler half of the pair, and the only route to a
+                               resubmission that still has a published version to diff
+                               against: every other way back (take down, granted withdrawal)
+                               clears the published-version pointer first, so the review
+                               diff has nothing to compare against without this. -->
+                          <button
+                            type="button"
+                            [disabled]="busyId() === row.agentId"
+                            (click)="requestChanges(row)"
+                            class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                          >
+                            Request changes
+                          </button>
+                          <!-- Only once there is a second version to switch to. A control that
+                               opens a dialog whose only honest content is "there is nothing
+                               here" is worse than an absent one.
+
+                               Labelled for the operation, not one direction of it: after a
+                               rollback the same control is how an admin puts the newer
+                               version back, and "Roll back" would name the opposite of what
+                               it then does. -->
+                          @if (canRollBack(row)) {
+                            <button
+                              type="button"
+                              [disabled]="busyId() === row.agentId"
+                              (click)="rollback(row)"
+                              class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                            >
+                              Change version
+                            </button>
+                          }
+                          <button
+                            type="button"
+                            [disabled]="busyId() === row.agentId"
+                            (click)="takedown(row)"
+                            class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-rose-700 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-rose-400 dark:hover:bg-gray-700"
+                          >
+                            Take down
+                          </button>
+                        </div>
                       }
                     </td>
                   </tr>
@@ -253,9 +281,8 @@ export class MarketplaceListingsPage implements OnInit {
   ];
   readonly stateLabels = LISTING_STATE_LABELS;
   readonly stateClasses = LISTING_STATE_CLASSES;
-  readonly driftLabels = LISTING_DRIFT_LABELS;
-  readonly driftClasses = LISTING_DRIFT_CLASSES;
-  readonly driftTooltips = LISTING_DRIFT_TOOLTIPS;
+  readonly publishedVersionClasses = PUBLISHED_VERSION_CLASSES;
+  readonly publishedVersionTooltip = PUBLISHED_VERSION_TOOLTIP;
 
   ngOnInit(): void {
     void this.reload();
@@ -276,6 +303,86 @@ export class MarketplaceListingsPage implements OnInit {
       this.error.set(this.service.error() ?? 'Failed to load listings.');
     } finally {
       this.loading.set(false);
+    }
+  }
+
+  /**
+   * Send a *live* listing back to its author with a note, without taking it down.
+   *
+   * The listing keeps serving its approved version while the author revises — this is
+   * feedback, not a delisting, and `takedown` is the button for the other intent.
+   *
+   * It is also the only transition that leaves `publishedVersion` intact, which makes it
+   * the only way a resubmission ever arrives with something to diff against. Without this
+   * control the review diff renders "first submission" on every submission an agent ever
+   * makes, however many versions it has.
+   */
+  async requestChanges(row: AdminListingRow): Promise<void> {
+    const ref = this.dialog.open<RequestChangesDialogResult, RequestChangesDialogData>(
+      RequestChangesDialogComponent,
+      { data: { listing: row } },
+    );
+    const note = await firstValueFrom(ref.closed);
+    if (!note) return;
+
+    this.busyId.set(row.agentId);
+    this.error.set(null);
+    try {
+      await this.service.review(row.agentId, { decision: 'request_changes', note });
+      await this.reload();
+    } catch (err) {
+      const detail = (err as { error?: { detail?: unknown } })?.error?.detail;
+      this.error.set(typeof detail === 'string' ? detail : 'Failed to record the decision.');
+    } finally {
+      this.busyId.set(null);
+    }
+  }
+
+  /**
+   * Whether another snapshot exists to switch to.
+   *
+   * ⚠️ Asked as "does a second version exist?", not "are we serving above `v1`?". Those read
+   * the same until someone rolls back, and then they diverge in the one state where the
+   * control matters most: a listing rolled back to `v1` still has every later version
+   * sitting there, and repointing at one is the *same operation* in the other direction —
+   * which is exactly what the dialog promises ("the current version stays available to roll
+   * forward to"). Gating on `publishedVersion > 1` hid the button precisely then, stranding
+   * the rollback with no way to undo it from the UI even though the endpoint accepts it.
+   *
+   * `latestVersion` is the high-water mark and survives the pointer moving down, so it
+   * answers the question the affordance is really asking. Still inferred rather than fetched
+   * — a page of rows must not fetch every agent's history — and the dialog loads the real
+   * list and says so honestly in the edge the inference cannot see.
+   */
+  canRollBack(row: AdminListingRow): boolean {
+    return (row.latestVersion ?? 0) > 1;
+  }
+
+  /**
+   * Repoint a published listing at an earlier snapshot (§8).
+   *
+   * Not a review decision — nothing is cut, nothing queues, and the listing stays published.
+   * It changes only which approved artifact the store serves, which is why it sits beside
+   * "Take down" rather than in the review queue.
+   */
+  async rollback(row: AdminListingRow): Promise<void> {
+    const ref = this.dialog.open<RollbackDialogResult, RollbackDialogData>(
+      RollbackDialogComponent,
+      { data: { listing: row } },
+    );
+    const choice = await firstValueFrom(ref.closed);
+    if (!choice) return;
+
+    this.busyId.set(row.agentId);
+    this.error.set(null);
+    try {
+      await this.service.rollback(row.agentId, choice);
+      await this.reload();
+    } catch (err) {
+      const detail = (err as { error?: { detail?: unknown } })?.error?.detail;
+      this.error.set(typeof detail === 'string' ? detail : 'Failed to roll back the listing.');
+    } finally {
+      this.busyId.set(null);
     }
   }
 

@@ -2,14 +2,36 @@
 
 import os
 import asyncio
+import hashlib
 import logging
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, List, Any, Sequence
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 
 from .models import AppRole, UserEffectivePermissions
 
 logger = logging.getLogger(__name__)
+
+
+def roles_fingerprint(roles: Optional[Sequence[str]]) -> str:
+    """Stable short digest of a caller's JWT roles.
+
+    Part of the user-permissions cache key. ``resolve_user_permissions``
+    derives its result *purely* from ``user.roles``, so the cache key has to
+    cover the roles too — keying on ``user_id`` alone lets two requests that
+    carry the same subject but different roles read each other's entries.
+
+    That is not hypothetical: the API-key path and the cookie-session path
+    build a ``User`` for the *same* ``user_id``, and an API-key request whose
+    role hydration produced a different list would otherwise serve (and
+    poison) the SPA session's permissions for the whole 5-minute TTL.
+
+    Sorted before hashing because permission resolution unions across roles
+    and is therefore order-independent — ``["Staff", "OFFICE365"]`` and
+    ``["OFFICE365", "Staff"]`` must not occupy two entries.
+    """
+    normalized = "\x00".join(sorted(roles or []))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass
@@ -71,11 +93,15 @@ class AppRoleCache:
     # User Permissions Cache
     # =========================================================================
 
+    @staticmethod
+    def _user_key(user_id: str, fingerprint: str) -> str:
+        return f"user:{user_id}:{fingerprint}"
+
     async def get_user_permissions(
-        self, user_id: str
+        self, user_id: str, fingerprint: str
     ) -> Optional[UserEffectivePermissions]:
-        """Get cached user permissions."""
-        entry = self._user_cache.get(f"user:{user_id}")
+        """Get cached user permissions for this user *and* role set."""
+        entry = self._user_cache.get(self._user_key(user_id, fingerprint))
         if entry and not entry.is_expired:
             return entry.value
         return None
@@ -83,12 +109,13 @@ class AppRoleCache:
     async def set_user_permissions(
         self,
         user_id: str,
+        fingerprint: str,
         permissions: UserEffectivePermissions,
         ttl: Optional[timedelta] = None,
     ):
-        """Cache user permissions."""
+        """Cache user permissions under this user *and* role set."""
         ttl = ttl or self.DEFAULT_USER_TTL
-        self._user_cache[f"user:{user_id}"] = CacheEntry(
+        self._user_cache[self._user_key(user_id, fingerprint)] = CacheEntry(
             value=permissions, expires_at=datetime.now(timezone.utc) + ttl
         )
 
@@ -135,11 +162,15 @@ class AppRoleCache:
     # =========================================================================
 
     async def invalidate_user(self, user_id: str):
-        """Invalidate cache for a specific user."""
-        key = f"user:{user_id}"
-        if key in self._user_cache:
+        """Invalidate every cached role-set entry for a specific user."""
+        prefix = f"user:{user_id}:"
+        stale = [k for k in self._user_cache if k.startswith(prefix)]
+        for key in stale:
             del self._user_cache[key]
-            logger.debug(f"Invalidated user cache: {user_id}")
+        if stale:
+            logger.debug(
+                f"Invalidated user cache: {user_id} ({len(stale)} role-set entries)"
+            )
 
     async def invalidate_role(self, role_id: str):
         """Invalidate cache for a specific role and all affected users."""

@@ -60,10 +60,15 @@ from apis.shared.assistants.models import (
     UpdateAssistantRequest,
     UpdateSharePermissionRequest,
 )
+from apis.shared.assistants.version_resolution import (
+    AgentVersionUnavailableError,
+    resolve_display_agent,
+)
 from apis.shared.assistants.service import (
     assistant_exists,
     create_assistant,
     create_assistant_draft,
+    AssistantListedError,
     delete_assistant,
     get_assistant_with_access_check,
     list_assistant_shares,
@@ -163,11 +168,15 @@ def _agent_response(assistant, *, permission: Optional[str] = None,
         # Dropped rather than blanked: every route here serves the model with
         # ``response_model_exclude_none``, so the key is simply absent for a viewer.
         view.pop("instructions", None)
-        # The drift baseline (#744) is a hash *of* the instructions, so it rides the same
-        # gate. On its own it is not reversible, but it would confirm a guessed prompt for
-        # anyone who could produce one — which is exactly what dropping ``instructions``
-        # above exists to prevent. Admins read it through the admin listings projection,
-        # never through here.
+        # ``approvedInstructionsHash`` rides the same gate: a hash *of* the instructions is
+        # not reversible alone, but it would confirm a guessed prompt for anyone who could
+        # produce one.
+        #
+        # Nothing writes this field any more — version snapshots replaced drift detection
+        # and it is off the model. It is still stripped because ``AgentListing`` is
+        # ``extra="allow"``: a listing approved *before* that removal still carries the
+        # attribute in DynamoDB, and it would now round-trip straight through to a viewer.
+        # Transitional, and safe to delete once no stored listing carries it.
         if isinstance(view.get("listing"), dict):
             view["listing"].pop("approvedInstructionsHash", None)
     if permission is not None:
@@ -353,11 +362,16 @@ async def list_bindable_endpoint(
 async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require_agents_enabled)):
     """Retrieve an Agent by id with visibility-based access control.
 
-    This is the marketplace **detail read** (Phase 3). Two things beyond Phase 1:
+    This is the marketplace **detail read** (Phase 3). Three things beyond Phase 1:
 
     * ``instructions`` is gated to owner/editor — see ``INSTRUCTIONS_PERMISSIONS``.
     * ``capabilities`` + ``modelLabel`` are resolved, so the detail page can say what the
       Agent reaches by *name* rather than making the SPA dereference binding refs.
+    * A published Agent is served from its **approved snapshot** to everyone who cannot edit
+      it (§4). This is the page a store user reads before deciding to open something, so it
+      has to describe the configuration that will actually run — otherwise the author's
+      unreviewed draft supplies the name, the summary and, through ``bindings``, the
+      capability list, while invocation quietly runs the approved version instead.
 
     Capability resolution is best-effort: it is presentation, and a catalog hiccup should
     not turn a readable Agent into a 500. The list route does not resolve them at all.
@@ -370,6 +384,24 @@ async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require
         )
         if not assistant:
             raise HTTPException(status_code=403, detail="Access denied: you do not have permission to access this agent")
+
+        # Snapshot before anything reads ``assistant``, so ``capabilities`` and the listing
+        # display below resolve against the same configuration the response describes.
+        # ``can_edit`` is the instructions gate: whoever may edit the draft must be shown the
+        # draft, because this endpoint is also what loads the Agent Designer's form.
+        try:
+            assistant, _ = await resolve_display_agent(
+                assistant, can_edit=permission in INSTRUCTIONS_PERMISSIONS
+            )
+        except AgentVersionUnavailableError as unavailable:
+            logger.error(f"Published version unavailable for detail read: {unavailable}")
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "This agent's published version could not be loaded. Please try again, "
+                    "or contact an administrator if it persists."
+                ),
+            ) from unavailable
 
         response = _agent_response(assistant, permission=permission)
         try:
@@ -474,6 +506,10 @@ async def delete_agent_endpoint(agent_id: str, current_user: User = Depends(requ
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
     except HTTPException:
         raise
+    except AssistantListedError as e:
+        # 409, not 400: the request is well-formed and the caller is allowed — the Agent is
+        # simply in a state that forbids it, and the message says how to change that.
+        raise HTTPException(status_code=409, detail=e.message)
     except Exception as e:
         logger.error(f"Error deleting agent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete agent: {str(e)}")
@@ -561,17 +597,21 @@ async def agent_listing_preflight_endpoint(
 ):
     """What the submit dialog needs before the author commits (D7, owner only).
 
-    A read-only rehearsal of the submit checks: the skills publication would expose,
-    and the memory-space block if there is one. Declared before ``/listing/submit``
-    only for reading order — the paths are literal and do not collide.
+    A read-only rehearsal of the submit checks: the skills publication would expose, the
+    memory-space block if there is one, and whether the author still has to consent to
+    going public. Declared before ``/listing/submit`` only for reading order — the paths
+    are literal and do not collide.
     """
     try:
-        exposed, block_reason, reachability = await preflight_listing(agent_id, current_user)
+        exposed, block_reason, reachability, requires_public = await preflight_listing(
+            agent_id, current_user
+        )
         return ListingPreflightResponse(
             agent_id=agent_id,
             exposed_skills=exposed,
             block_reason=block_reason,
             reachability=reachability,
+            requires_public=requires_public,
         )
     except ListingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
@@ -678,10 +718,21 @@ async def report_agent_endpoint(
     A second report while the reporter's first is still open **updates** it rather than
     stacking (D15.4), and the response says so — without that the queue is trivially
     floodable and the count at the top of the nav stops meaning anything.
+
+    This is also the endpoint behind the feedback link at the foot of a conversation, which
+    is where most of its traffic now comes from. Two things follow from that. ``reason`` may
+    be ``suggestion`` — feedback from inside a conversation is as often "it should also do
+    X" as "it is broken". And ``sessionId`` may carry the conversation the user opted to
+    attach; it is verified against the caller before it is stored, and silently dropped
+    rather than rejected if it does not check out (see ``_attachable_session_id``).
     """
     try:
         report, replaced = await file_report(
-            agent_id, current_user, reason=request.reason, note=request.note
+            agent_id,
+            current_user,
+            reason=request.reason,
+            note=request.note,
+            session_id=request.session_id,
         )
         return SubmitReportResponse(
             agent_id=agent_id,

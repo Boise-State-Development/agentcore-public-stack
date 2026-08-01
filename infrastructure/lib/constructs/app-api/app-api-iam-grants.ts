@@ -160,6 +160,7 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     { sid: 'OidcStateAccess', arn: props.refs.oidcStateTable.tableArn },
     { sid: 'UsersTableAccess', arn: props.refs.usersTable.tableArn },
     { sid: 'AppRolesTableAccess', arn: props.refs.appRolesTable.tableArn },
+    { sid: 'AuditLogTableAccess', arn: props.refs.auditLogTable.tableArn },
     { sid: 'ApiKeysTableAccess', arn: props.refs.apiKeysTable.tableArn },
     { sid: 'OAuthProvidersAccess', arn: props.refs.oauthProvidersTable.tableArn },
     { sid: 'OAuthUserTokensAccess', arn: props.refs.oauthUserTokensTable.tableArn },

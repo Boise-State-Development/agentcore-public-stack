@@ -3,7 +3,7 @@ import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash } from '@ng-icons/heroicons/outline';
 import { AgentListingService } from '../services/agent-listing.service';
-import { reachabilityAuthorMessage } from '../models/reachability';
+import { ListingReachability } from '../models/reachability';
 import {
   AgentCategory,
   AgentListingBlock,
@@ -11,13 +11,14 @@ import {
   TAGLINE_MAX,
   deriveTagline,
 } from '../models/store.model';
+import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 
 export interface SubmitListingDialogData {
   agentId: string;
   agentName: string;
   /** Present on a resubmission; its category preselects the picker. */
   listing?: AgentListingBlock;
-  /** The current shelf subtitle, if the Agent already has one. */
+  /** The current listing subtitle, if the Agent already has one. */
   tagline?: string;
   /** Only used to prefill an absent tagline — see `deriveTagline` (#749). */
   description?: string;
@@ -30,19 +31,25 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
  * Submit an Agent to the marketplace (D2), with the D7 disclosures.
  *
  * The dialog does not decide anything. It asks `GET /agents/{id}/listing/preflight`,
- * which runs the same two checks the transition enforces, and renders the answers:
+ * which runs the same checks the transition enforces, and renders the answers:
  *
  * * **Skill exposure (D7.1)** — publishing an Agent effectively publishes the contents
  *   of every skill its author wrote and bound, because Skills v2 resolves a `skill`
  *   binding on `skill.owner_id == agent.owner_id`. The names are listed, not counted.
  * * **Memory spaces (D7.2)** — a `memory_space` binding blocks submission outright, so
- *   Submit is disabled and the backend's message (which names the space) explains why.
+ *   the form is hidden and the backend's message (which names the space) explains why.
  *   The author learns this before filling in a category, not after clicking.
+ * * **Going public** — the marketplace is public-only, and every Agent starts PRIVATE,
+ *   so most first submissions need visibility widened. That is a *checkbox here*, not a
+ *   block: `makePublic` rides the submit request and the backend widens in the same
+ *   write. Sending the author to the agent editor to change a setting and come back was
+ *   the whole reason this needed fixing — but it stays consent, so the box starts
+ *   unticked and Submit is disabled until it is ticked.
  */
 @Component({
   selector: 'app-submit-listing-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [DialogDismissDirective, NgIcon],
   providers: [provideIcons({ heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash })],
   host: {
     class: 'block',
@@ -52,10 +59,11 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
       aria-hidden="true"
-      (click)="onCancel()"
     ></div>
 
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0">
+    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
+      appDialogDismiss
+      (dismissed)="onCancel()">
       <div
         class="dialog-panel relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
         role="dialog"
@@ -100,15 +108,34 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
               <p>{{ reason }}</p>
             </div>
           } @else {
-            <!-- Reachability. Deliberately *below* the D7.2 block and *above* the form:
-                 it does not stop the submission, but an author who reads nothing else
-                 should still see that their tile would 404 for everyone else. -->
-            @if (reachabilityWarning(); as warning) {
+            <!-- Going public. Above the form because it is the one thing here that changes
+                 who can reach the agent, and it is a *choice*, not a warning: the author
+                 acts on it in place rather than being sent to another screen. -->
+            @if (requiresPublic()) {
               <div
-                class="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-900 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+                class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-900/20"
               >
-                <ng-icon name="heroEyeSlash" class="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-                <p>{{ warning }}</p>
+                <div class="flex gap-3">
+                  <input
+                    id="listing-make-public"
+                    type="checkbox"
+                    [checked]="makePublic()"
+                    (change)="onMakePublicChange($event)"
+                    [attr.aria-describedby]="'listing-make-public-help'"
+                    class="mt-1 size-4 shrink-0 rounded border-gray-300 text-blue-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                  />
+                  <div>
+                    <label
+                      for="listing-make-public"
+                      class="block text-sm/6 font-medium text-amber-900 dark:text-amber-200"
+                    >
+                      Make this agent public
+                    </label>
+                    <p id="listing-make-public-help" class="text-sm/6 text-amber-900 dark:text-amber-200">
+                      {{ makePublicHelp() }}
+                    </p>
+                  </div>
+                </div>
               </div>
             }
 
@@ -117,7 +144,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
                 Category
               </label>
               <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-                Which shelf it sits on. A reviewer may move it.
+                Where it appears in Discover. An admin may move it.
               </p>
               <select
                 id="listing-category"
@@ -141,14 +168,14 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
             <!--
               Tagline (D4). Prefilled from the description's first clause for the many
               Agents that predate the field — the author edits rather than invents, and
-              sees what the shelf will say at the one moment they are looking at it.
+              sees what the listing will say at the one moment they are looking at it.
             -->
             <div class="mt-5">
               <label for="listing-tagline" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
                 Tagline
               </label>
               <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-                The one line under the name on the shelf. We started it from your
+                The one line under the name in Discover. We started it from your
                 description — make it read like a subtitle.
               </p>
               <input
@@ -166,7 +193,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
 
             <div class="mt-5">
               <label for="listing-note" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
-                Note to the reviewer <span class="font-normal text-gray-500 dark:text-gray-400">(optional)</span>
+                Note to the admin <span class="font-normal text-gray-500 dark:text-gray-400">(optional)</span>
               </label>
               <textarea
                 id="listing-note"
@@ -204,8 +231,8 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
 
             <p class="mt-5 text-xs/5 text-gray-500 dark:text-gray-400">
               You'll be credited as the publisher. An admin may reattribute the listing to a
-              department or the university at approval — that changes the name on the shelf and
-              nothing about who can run it.
+              department or the university at approval — that changes the name shown with it in
+              Discover and nothing about who can run it.
             </p>
 
             @if (error(); as message) {
@@ -246,11 +273,15 @@ export class SubmitListingDialogComponent implements OnInit {
   readonly exposedSkills = signal<SkillExposure[]>([]);
   readonly blockReason = signal<string | null>(null);
   /**
-   * Who will be able to open this once it is shelved. A *warning*, not a block — the
-   * author may legitimately publish a SHARED agent to their team, so this never disables
-   * Submit; it just makes sure "nobody can open my tile" is not discovered afterwards.
+   * This agent is not PUBLIC yet. Not a block: the checkbox below resolves it, and
+   * submitting widens visibility in the same write. The marketplace is public-only, and
+   * every agent starts PRIVATE, so this is the ordinary first-submission path.
    */
-  readonly reachabilityWarning = signal<string | null>(null);
+  readonly requiresPublic = signal(false);
+  /** The author's consent. Starts unticked — going public is a decision, not a default. */
+  readonly makePublic = signal(false);
+  /** The current reachability, kept to word the consent copy for what it actually changes. */
+  private readonly reachability = signal<ListingReachability>('everyone');
   readonly loading = signal(true);
   readonly submitting = signal(false);
   readonly error = signal<string | null>(null);
@@ -263,14 +294,32 @@ export class SubmitListingDialogComponent implements OnInit {
   readonly isResubmission = computed(() => !!this.data.listing);
 
   readonly canSubmit = computed(
-    () => !!this.category() && !this.submitting() && !this.blockReason(),
+    () =>
+      !!this.category() &&
+      !this.submitting() &&
+      !this.blockReason() &&
+      // Consent is required, not implied: the backend refuses an omitted flag, so a
+      // Submit that looked enabled here would fail on the round trip.
+      (!this.requiresPublic() || this.makePublic()),
   );
 
-  /** A resubmission is answering a reviewer; a first submission is introducing itself. */
+  /**
+   * Says what going public actually changes *from*, so "shared with 3 people → everyone"
+   * and "only me → everyone" do not read as the same sentence.
+   */
+  readonly makePublicHelp = computed(() =>
+    this.reachability() === 'shared_only'
+      ? 'Right now only the people it is shared with can open it. The store is public, so ' +
+        'publishing it makes it available to everyone at Boise State.'
+      : 'Right now only you can open it. The store is public, so publishing it makes it ' +
+        'available to everyone at Boise State.',
+  );
+
+  /** A resubmission is answering an admin; a first submission is introducing itself. */
   readonly notePlaceholder = computed(() =>
     this.isResubmission()
       ? 'What you changed since the last review.'
-      : 'Anything the reviewer should know — who it is for, what it draws on.',
+      : 'Anything the admin should know — who it is for, what it draws on.',
   );
 
   async ngOnInit(): Promise<void> {
@@ -289,7 +338,8 @@ export class SubmitListingDialogComponent implements OnInit {
       this.categories.set(categories);
       this.exposedSkills.set(preflight.exposedSkills ?? []);
       this.blockReason.set(preflight.blockReason ?? null);
-      this.reachabilityWarning.set(reachabilityAuthorMessage(preflight.reachability));
+      this.requiresPublic.set(preflight.requiresPublic ?? false);
+      this.reachability.set(preflight.reachability);
       // Only preselect a category that is still open for new listings.
       if (!categories.some((c) => c.id === this.category())) {
         this.category.set('');
@@ -313,6 +363,10 @@ export class SubmitListingDialogComponent implements OnInit {
     this.tagline.set((event.target as HTMLInputElement).value);
   }
 
+  onMakePublicChange(event: Event): void {
+    this.makePublic.set((event.target as HTMLInputElement).checked);
+  }
+
   async onSubmit(): Promise<void> {
     if (!this.canSubmit()) return;
     this.submitting.set(true);
@@ -321,6 +375,9 @@ export class SubmitListingDialogComponent implements OnInit {
       const response = await this.listings.submit(this.data.agentId, {
         category: this.category(),
         note: this.note().trim() || undefined,
+        // Sent only when it is actually being asked for, so an already-public agent's
+        // request does not carry a consent it never sought.
+        makePublic: this.requiresPublic() ? this.makePublic() : undefined,
         // Omitted rather than blanked when empty — the backend reads `undefined` as
         // "leave the existing tagline alone".
         tagline: this.tagline().trim() || undefined,

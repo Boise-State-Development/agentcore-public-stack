@@ -4,6 +4,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
+  heroChatBubbleLeftRight,
   heroCheck,
   heroExclamationTriangle,
   heroFlag,
@@ -43,16 +44,25 @@ import { parseIso } from '../../../utils/date';
   selector: 'app-marketplace-reports',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, RouterLink, AgentTileComponent, TooltipDirective],
-  providers: [provideIcons({ heroCheck, heroExclamationTriangle, heroFlag, heroNoSymbol })],
+  providers: [
+    provideIcons({
+      heroChatBubbleLeftRight,
+      heroCheck,
+      heroExclamationTriangle,
+      heroFlag,
+      heroNoSymbol,
+    }),
+  ],
   template: `
     <div class="min-h-dvh">
       <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
         <div class="mb-6">
           <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Reports</h1>
           <p class="mt-1 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
-            Problems users reported from an agent's page. These are private — they never
-            appear in the store, and the author is never told who reported them. Resolving one
-            records your decision; it does not change the agent.
+            Feedback users sent about an agent — from the foot of a conversation, or from the
+            agent's page. These are private: they never appear in the store, and the author is
+            never told who sent them. Resolving one records your decision; it does not change
+            the agent.
           </p>
         </div>
 
@@ -85,7 +95,7 @@ import { parseIso } from '../../../utils/date';
               Nothing reported
             </h2>
             <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-              Problems users report from an agent's page appear here.
+              Feedback users send from a conversation, or from an agent's page, appears here.
             </p>
           </div>
         } @else {
@@ -155,6 +165,31 @@ import { parseIso } from '../../../utils/date';
                         class="mt-2 whitespace-pre-wrap rounded-2xl bg-gray-50 px-3 py-2 text-sm/6 text-gray-700 dark:bg-gray-900 dark:text-gray-300"
                       >
                         {{ row.note }}
+                      </p>
+                    }
+
+                    <!--
+                      The conversation the reporter chose to share, when they filed from
+                      inside one. Rendered as a reference rather than a link: there is no
+                      admin transcript reader yet, and a link that 404s for everyone but
+                      the reporter would be worse than an id they can quote to support.
+                      Absent is normal and says nothing — they declined, or filed from the
+                      store page — so there is no "no conversation" state to render.
+                    -->
+                    @if (row.sessionId) {
+                      <p
+                        class="mt-2 flex flex-wrap items-center gap-1.5 text-sm/6 text-gray-500 dark:text-gray-400"
+                      >
+                        <ng-icon
+                          name="heroChatBubbleLeftRight"
+                          class="size-4 shrink-0"
+                          aria-hidden="true"
+                        />
+                        <span>Reporter shared their conversation:</span>
+                        <code
+                          class="rounded-sm bg-gray-100 px-1.5 py-0.5 font-mono text-xs/5 text-gray-700 dark:bg-gray-700 dark:text-gray-200"
+                          >{{ row.sessionId }}</code
+                        >
                       </p>
                     }
                   </div>
@@ -259,6 +294,8 @@ export class ReportsPage implements OnInit {
         return 'Not working';
       case 'inappropriate':
         return 'Inappropriate';
+      case 'suggestion':
+        return 'Suggestion';
       default:
         return 'Other';
     }
