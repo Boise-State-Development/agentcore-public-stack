@@ -16,6 +16,7 @@ from typing import List, Optional, Tuple
 
 from .models import AgentBinding, AgentModelConfig, Assistant
 from .serialization import from_ddb, to_ddb_safe
+from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
 from apis.shared.timestamps import to_iso, utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -853,8 +854,14 @@ async def _list_user_assistants_cloud(
         return all_assistants, next_page_token
 
     except ClientError as e:
-        error_code = e.response.get("Error", {}).get("Code", "Unknown")
-        logger.error(f"Failed to list user assistants from DynamoDB: {error_code} - {e}")
+        # Already fail-soft for every ``ClientError``; the missing-index case is split out
+        # only so the log names the index rather than leaving someone to decode a botocore
+        # repr while a deploy is half-landed.
+        if is_missing_index_error(e):
+            log_missing_index("OwnerStatusIndex", "this user's own agents")
+        else:
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            logger.error(f"Failed to list user assistants from DynamoDB: {error_code} - {e}")
         return [], None
     except Exception as e:
         logger.error(f"Failed to list user assistants from DynamoDB: {e}", exc_info=True)
@@ -1432,9 +1439,12 @@ async def list_shared_with_user(user_email: str) -> List[Assistant]:
         return assistants
 
     except ClientError as e:
-        error_code = e.response.get("Error", {}).get("Code", "Unknown")
-        if error_code == "ResourceNotFoundException":
-            logger.debug(f"SharedWithIndex GSI not found - sharing feature may not be deployed yet")
+        # The "not deployed yet" case used to be matched on ``ResourceNotFoundException``,
+        # which real DynamoDB never raises for a missing *index* — it raises
+        # ``ValidationException``, so that branch only ever fired under moto and the
+        # intended debug-level path logged at ERROR in production instead.
+        if is_missing_index_error(e):
+            log_missing_index("SharedWithIndex", "agents shared with this user")
         else:
             logger.error(f"Error listing shared assistants: {e}")
         return []
