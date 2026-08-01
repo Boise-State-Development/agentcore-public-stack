@@ -39,6 +39,7 @@ import {
   SubmitListingDialogData,
   SubmitListingDialogResult,
 } from './submit-listing-dialog.component';
+import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 
 /** Good enough to tell an address from a half-typed name — the backend is the authority. */
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -87,7 +88,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
 @Component({
   selector: 'app-share-agent-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon, AgentIconComponent, ListingStatusComponent],
+  imports: [DialogDismissDirective, FormsModule, NgIcon, AgentIconComponent, ListingStatusComponent],
   providers: [
     provideIcons({
       heroXMark,
@@ -110,10 +111,11 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
       aria-hidden="true"
-      (click)="onCancel()"
     ></div>
 
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0">
+    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
+      appDialogDismiss
+      (dismissed)="onCancel()">
       <div
         class="dialog-panel relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
         role="dialog"

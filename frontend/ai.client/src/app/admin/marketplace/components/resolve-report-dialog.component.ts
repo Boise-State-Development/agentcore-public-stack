@@ -3,6 +3,7 @@ import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark } from '@ng-icons/heroicons/outline';
 import { AdminReportRow } from '../models/marketplace.model';
+import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
 
 export interface ResolveReportDialogData {
   report: AdminReportRow;
@@ -29,7 +30,7 @@ export type ResolveReportDialogResult = { note?: string } | undefined;
 @Component({
   selector: 'app-resolve-report-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [DialogDismissDirective, NgIcon],
   providers: [provideIcons({ heroXMark })],
   host: {
     class: 'block',
@@ -39,11 +40,12 @@ export type ResolveReportDialogResult = { note?: string } | undefined;
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
       aria-hidden="true"
-      (click)="onCancel()"
     ></div>
 
     <div
       class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
+      appDialogDismiss
+      (dismissed)="onCancel()"
     >
       <div
         class="dialog-panel relative w-full overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"

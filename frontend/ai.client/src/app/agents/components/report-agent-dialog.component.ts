@@ -3,6 +3,7 @@ import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark } from '@ng-icons/heroicons/outline';
 import { ReportReason } from '../models/store.model';
+import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 
 export interface ReportAgentDialogData {
   agentName: string;
@@ -44,7 +45,7 @@ export type ReportAgentDialogResult =
 @Component({
   selector: 'app-report-agent-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [DialogDismissDirective, NgIcon],
   providers: [provideIcons({ heroXMark })],
   host: {
     class: 'block',
@@ -54,20 +55,30 @@ export type ReportAgentDialogResult =
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
       aria-hidden="true"
-      (click)="onCancel()"
     ></div>
 
+    <!-- Dismiss-on-click goes here, not on the backdrop — see DialogDismissDirective. -->
     <div
       class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
+      appDialogDismiss
+      (dismissed)="onCancel()"
     >
+      <!--
+        Capped and column-flexed so the body scrolls and the header/footer stay put,
+        matching the sibling dialogs in this folder. Without the cap the panel grows past
+        the viewport and simply clips: the title goes off the top and Send goes off the
+        bottom, with nothing to scroll. This one got away with it while it was four
+        reasons and no checkbox; adding the suggestion reason and the conversation opt-in
+        is what pushed it over on a short window.
+      -->
       <div
-        class="dialog-panel relative w-full overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
+        class="dialog-panel relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
         role="dialog"
         aria-modal="true"
         aria-labelledby="report-title"
         aria-describedby="report-description"
       >
-        <div class="flex items-start justify-between gap-3 px-6 pt-5">
+        <div class="flex shrink-0 items-start justify-between gap-3 px-6 pt-5">
           <div class="min-w-0">
             <h2 id="report-title" class="text-lg/7 font-semibold text-gray-900 dark:text-white">
               @if (fromConversation()) {
@@ -91,7 +102,7 @@ export type ReportAgentDialogResult =
           </button>
         </div>
 
-        <div class="px-6 py-4">
+        <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           @if (data.hasOpenReport) {
             <!-- D15.4 surfaced before the user writes, not after: they are amending. -->
             <div class="mb-4 rounded-2xl bg-amber-50 px-4 py-3 dark:bg-amber-900/20">
@@ -181,7 +192,7 @@ export type ReportAgentDialogResult =
         </div>
 
         <div
-          class="flex justify-end gap-2 border-t border-gray-200 px-6 py-4 dark:border-gray-700"
+          class="flex shrink-0 justify-end gap-2 border-t border-gray-200 px-6 py-4 dark:border-gray-700"
         >
           <button
             type="button"

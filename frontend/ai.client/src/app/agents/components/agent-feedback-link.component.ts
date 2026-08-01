@@ -34,15 +34,24 @@ import {
   imports: [NgIcon],
   providers: [provideIcons({ heroChatBubbleLeftRight, heroCheckCircle })],
   template: `
-    <div class="mt-6 flex justify-center px-4 pb-2">
+    <!--
+      Right-aligned and quiet: this is a footnote to the conversation, not a call to
+      action, and centring it under the last answer gave it the weight of one.
+
+      ⚠️ Subtlety here is size and weight, NOT contrast. The obvious way to play this down
+      is a lighter grey, but gray-400 on white is ~2.8:1 and fails AA for body text — so
+      the resting colour stays gray-500 (~4.8:1) and the smaller type, dropped hover fill
+      and column layout do the work instead.
+    -->
+    <div class="mt-4 flex flex-col items-end gap-1 px-4 pb-2">
       @if (confirmation(); as message) {
         <p
-          class="flex items-center gap-2 text-sm/6 text-gray-500 dark:text-gray-400"
+          class="flex items-center gap-1.5 text-xs/5 text-gray-500 dark:text-gray-400"
           role="status"
         >
           <ng-icon
             name="heroCheckCircle"
-            class="size-4 shrink-0 text-green-600 dark:text-green-400"
+            class="size-3.5 shrink-0 text-green-600 dark:text-green-400"
             aria-hidden="true"
           />
           <span>{{ message }}</span>
@@ -52,15 +61,15 @@ import {
           type="button"
           [disabled]="busy()"
           (click)="onOpen()"
-          class="flex items-center gap-2 rounded-2xl px-3 py-1.5 text-sm/6 text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+          class="flex items-center gap-1.5 rounded-2xl px-2 py-1 text-xs/5 text-gray-500 hover:text-gray-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:text-gray-200"
         >
-          <ng-icon name="heroChatBubbleLeftRight" class="size-4 shrink-0" aria-hidden="true" />
+          <ng-icon name="heroChatBubbleLeftRight" class="size-3.5 shrink-0" aria-hidden="true" />
           <span>Give feedback on {{ agentName() }}</span>
         </button>
       }
 
       @if (error(); as message) {
-        <p class="text-sm/6 text-red-600 dark:text-red-400" role="alert">{{ message }}</p>
+        <p class="text-xs/5 text-red-600 dark:text-red-400" role="alert">{{ message }}</p>
       }
     </div>
   `,

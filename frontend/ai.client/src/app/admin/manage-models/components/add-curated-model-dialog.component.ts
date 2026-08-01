@@ -10,6 +10,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark } from '@ng-icons/heroicons/outline';
 import { AppRolesService } from '../../roles/services/app-roles.service';
 import { CuratedModel } from '../models/curated-models';
+import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
 
 /**
  * Data passed to the add-curated-model dialog.
@@ -29,7 +30,7 @@ export type AddCuratedModelDialogResult = string[] | undefined;
 @Component({
   selector: 'app-add-curated-model-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [DialogDismissDirective, NgIcon],
   providers: [provideIcons({ heroXMark })],
   host: {
     'class': 'block',
@@ -40,11 +41,12 @@ export type AddCuratedModelDialogResult = string[] | undefined;
     <div
       class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
       aria-hidden="true"
-      (click)="onCancel()"
     ></div>
 
     <!-- Dialog Panel -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0">
+    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
+      appDialogDismiss
+      (dismissed)="onCancel()">
       <div
         class="dialog-panel relative w-full overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
         role="dialog"
