@@ -56,6 +56,7 @@ Feature release that turns Agents from a personal authoring tool into a **govern
 - Deleting an Agent left its entire `VERSION#` snapshot history in the table permanently (#792)
 - Four version-snapshot gaps found in end-to-end testing (#799)
 - The reviewer is now told when a listed Agent is unopenable, and why a submission diff is missing (#773, #801)
+- The unopenable-Agent warning moved out of the review card's identity column onto its own full-width row — squeezed beside the action buttons it rendered at ~160px across five lines, and a warning the reviewer has to work to read is one they skip (#776)
 - The admin roles list shows which roles carry delegated admin power (#807)
 - A failed category change surfaces an error banner instead of failing silently (#795)
 - The audit page no longer claims a month is empty when the read failed (#808)
