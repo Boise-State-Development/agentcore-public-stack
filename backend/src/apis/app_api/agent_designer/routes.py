@@ -120,6 +120,7 @@ from apis.shared.assistants.models import (
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import agent_marketplace_enabled, agents_enabled
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -410,7 +411,7 @@ async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require
             response.model_label = model_label
             response.publisher, response.category_label = await resolve_listing_display(assistant)
         except Exception:
-            logger.warning(f"Failed to resolve capabilities for agent {agent_id}", exc_info=True)
+            logger.warning(f"Failed to resolve capabilities for agent {scrub_log(agent_id)}", exc_info=True)
         return response
     except HTTPException:
         raise

@@ -13,7 +13,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Routes, Route } from '@angular/router';
 import { signal } from '@angular/core';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 
 import { adminRoutes } from './admin.routes';
 import { AdminLayout } from './admin.layout';
