@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.12.1] - 2026-08-01
+
+Deploy hotfix. 1.12.0's `platform.yml` deploy failed and rolled the PlatformStack back, leaving production running 1.12.0 code — the backend and frontend deploys both succeeded — on 1.11.1 infrastructure. This release makes the CDK deploy land. No application code changes.
+
+### 🐛 Fixed
+
+- **The 1.12.0 PlatformStack deploy adds two GSIs to the existing assistants table in a single CloudFormation update**, and DynamoDB's `UpdateTable` permits exactly one GSI create or delete per call — so the update failed on `RagData/RagAssistantsTable` and rolled back every other resource with it, including the new audit-log table. `AgentDirectoryIndex` and `AgentReportsIndex` reached `develop` in separate merges and so got a platform deploy each; the release collapsed them into one update against an environment that had neither. `AgentReportsIndex` is deferred to 1.12.2 so this deploy carries a single GSI addition — it is restored, unchanged, in that release. The limit applies only to an existing table, which is why the brand-new audit-log table's two indexes were never a problem
+
+### ⚠️ Known Issue
+
+- The admin problem-report queue returns 500 until 1.12.2 deploys, because `apis/shared/assistants/reports.py` queries `AgentReportsIndex`. Nothing else regresses: the agent store recovers with `AgentDirectoryIndex` in this release, and audit writes fail open by design (`AuditService` gates on the table env var, so mutations succeed and log rather than error)
+
 ## [1.12.0] - 2026-08-01
 
 Feature release that turns Agents from a personal authoring tool into a **governed institutional catalog**. The **Agent Marketplace** ships GA — authors submit, admins review, and the store front, pins, categories, publisher profiles and problem reports are all live — backed by **immutable version snapshots** so what a user runs is the version an admin approved, not the author's current draft. On the governance side, **delegated admin scopes** let a system admin hand out one admin area at a time, and every role mutation now lands in a durable **audit trail**. Two integration paths open up for forks: an AgentCore Gateway can authenticate inbound calls with a **Cognito JWT** instead of SigV4, and the agent can perform an **RFC 8693 token exchange** so downstream APIs serve agent traffic as the signed-in user. The Assistant → Agent rename completes: the Assistant editor is retired and `/assistants` becomes an explainer. Requires a CDK deploy (new audit-log table, a new assistants-table GSI, optional token-exchange secret); no data migration.
