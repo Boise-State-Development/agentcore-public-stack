@@ -13,7 +13,7 @@
 
 This release turns Agents from a personal authoring tool into a **governed institutional catalog**.
 
-The **Agent Marketplace** ships GA. An author submits their Agent from the Designer, an admin reviews and approves it, and it appears on a browsable store with categories, a curated front, icons and problem reports. Approval means something durable now: every submission freezes an **immutable version snapshot**, and both the store and the invocation path serve *that* snapshot — so an author editing after approval can no longer silently change what the institution is running. Admins can roll a listing back to any earlier approved version, see a diff of exactly what a submission changed, and are told when a published Agent has drifted from what they approved.
+The **Agent Marketplace** ships GA. An author submits their Agent from the Designer, an admin reviews and approves it, and it appears on a browsable store with categories, a curated front, icons and problem reports. Approval means something durable now: every submission freezes an **immutable version snapshot**, and both the store and the invocation path serve *that* snapshot — so an author editing after approval can no longer silently change what the institution is running. Admins can roll a listing back to any earlier approved version, see a diff of exactly what a submission changed, and read `publishedVersion` to know exactly which snapshot the store is serving.
 
 Governance grew to match. **Delegated admin scopes** let a system admin hand out a single admin area — Cost Analytics, Tools, Marketplace — without handing over the whole console, across 16 scopes with three (`admin.roles`, `admin.auth_providers`, `admin.audit`) permanently non-delegable and no wildcard on the axis. Every role mutation, including denied ones, now lands in a durable **audit trail** with its own admin page.
 
@@ -67,13 +67,14 @@ Approval now freezes what it approved. Before this, an admin approved an Agent a
 - `apis/shared/assistants/version_resolution.py` — resolves which version a given caller should run.
 - `apis/shared/assistants/version_diff.py` — computes the delta between the last approved snapshot and the submission under review.
 - Rollback and roll-forward: an admin can point a published listing at any earlier approved version.
-- **Drift detection** marks a published Agent whose author has edited it since approval, for both the author and the admin queue.
+- **Drift detection was removed, not extended.** The post-approval drift marker (#757) hashed `assistant.instructions` and nothing else — it could not see a model swap, a tool change or a retargeted memory space, and its weak `edited` fallback reported an admin's own typo fix as a behavior change. Snapshots made the question moot: a published Agent is an immutable snapshot the author cannot reach, so `listing.publishedVersion` answers "is what I approved still what is live?" as a fact rather than a heuristic. `_instructions_hash` and `_drift` are deleted rather than left dormant.
+  - **Transitional detail:** `AgentListing` is `extra="allow"`, so a listing approved *before* the removal still carries `approvedInstructionsHash` in DynamoDB. Nothing writes it, and it is explicitly stripped from responses for viewers who lack instructions permission — a hash of the instructions would confirm a guessed prompt. Safe to delete from stored rows once none carry it.
 
 ### Frontend
 
 - `admin/marketplace/components/review-diff.component.ts` — the reviewer sees exactly what changed, so approval is a decision about a delta rather than a re-read of the whole Agent.
 - `admin/marketplace/components/rollback-dialog.component.ts` and the version picker on the admin Listings page.
-- `agents/components/listing-status.component.ts` — the author's view of listing state and drift.
+- `agents/components/listing-status.component.ts` — the author's view of listing state and which version is published.
 
 ### Withdrawal became a request
 
@@ -258,9 +259,10 @@ One noun in the nav. The Assistant editor is retired and `/assistants` is now an
    Note that `platform.yml`, `backend.yml` and `frontend-deploy.yml` share a concurrency group, so a merge cannot be relied on to order them — run and verify platform before the rest.
 2. **Then `backend.yml`, then `frontend-deploy.yml`.**
 3. **No data migration.** Existing Agents keep working; they simply have no listing and no version snapshots until an author submits one.
-4. **Feature flags — all default ON, opt-out only:**
+4. **Feature flags — all default ON, opt-out only. This is the GA moment.** An environment with no variable set gets the Agent store live for every authenticated user on this deploy, with an empty catalog until the first Agent is approved. If an environment should *not* get the store yet, set the variable **before** deploying — the flags are empty-string-safe, so an unset or blank GitHub Actions variable resolves to *enabled*, never to off.
    - `AGENT_MARKETPLACE_ENABLED=false` (or `CDK_AGENT_MARKETPLACE_ENABLED=false`) disables the marketplace surface on app-api.
    - `AGENTS_ENABLED=false` now removes the *only* authoring surface — see the rename section above before using it.
+   - Agent categories **self-seed on first read** (`categories.ensure_seeded`), so there is no per-environment seeding step and nothing to forget.
 5. **Gateway inbound auth — leave `CDK_GATEWAY_INBOUND_AUTH` unset** on every environment whose Gateway already exists. Setting it to `jwt` against a live `AWS_IAM` Gateway fails mid-deploy and cannot be fixed by a config change; it applies only to a newly created Gateway.
 6. **Token exchange is dormant by default.** Leave `CDK_TOKEN_EXCHANGE_URL` and `CDK_TOKEN_EXCHANGE_CLIENT_ID` unset unless the organization runs a token service with a token-exchange endpoint. If enabling: deploy, then populate the `{prefix}-token-exchange-client` secret out of band with the `client_id → client_secret` map.
 7. **Delegated admin scopes require no action.** Existing `system_admin` roles are unaffected; no role gains or loses access on deploy. Delegation is opt-in per role from the roles admin page.
