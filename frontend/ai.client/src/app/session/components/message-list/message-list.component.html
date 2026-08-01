@@ -150,6 +150,17 @@
       <app-pulsating-loader />
     </div>
   }
+
+  <!-- Last thing in the tail: feedback on the marketplace agent behind this
+       conversation. The moment someone has something to say about an agent is
+       the moment it just answered them — not a later trip back to the store
+       tile they launched it from. Published agents only (D15.3). -->
+  @if (showFeedbackLink()) {
+    <app-agent-feedback-link
+      [agentId]="feedbackAgent()!.id"
+      [agentName]="feedbackAgent()!.name"
+      [sessionId]="sessionId()" />
+  }
   </ng-template>
 
   <!-- No turns yet — no group to anchor the tail inside. -->

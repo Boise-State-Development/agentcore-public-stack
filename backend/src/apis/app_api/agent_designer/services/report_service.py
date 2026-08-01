@@ -56,7 +56,12 @@ class ReportError(Exception):
 
 
 async def file_report(
-    agent_id: str, user: User, *, reason: ReportReason, note: Optional[str]
+    agent_id: str,
+    user: User,
+    *,
+    reason: ReportReason,
+    note: Optional[str],
+    session_id: Optional[str] = None,
 ) -> Tuple[AgentReport, bool]:
     """Record a user's problem report against a published Agent (D15).
 
@@ -90,7 +95,46 @@ async def file_report(
         reporter_name=_display_name(user),
         reason=reason,
         note=(note or "").strip() or None,
+        session_id=await _attachable_session_id(session_id, user),
     )
+
+
+async def _attachable_session_id(session_id: Optional[str], user: User) -> Optional[str]:
+    """The conversation reference to store, or None.
+
+    ⚠️ **The client's word is not enough here.** ``sessionId`` arrives in the request body,
+    so without this check any user could hand an admin a pointer to a conversation that is
+    not theirs — and the queue would present it as context the *reporter* consented to
+    share. So the id is kept only if the metadata read scoped to this user finds it.
+
+    A session that does not resolve is **dropped, not rejected**. The report itself is the
+    thing the user wanted to send; failing the whole submission because an optional
+    attachment did not resolve would lose the feedback to protect a nicety. Same reasoning
+    for a metadata read that errors — the reference is context, never the payload.
+    """
+    if not session_id:
+        return None
+
+    try:
+        from apis.shared.sessions.metadata import get_session_metadata
+
+        metadata = await get_session_metadata(session_id, user.user_id)
+    except Exception:
+        logger.warning(
+            f"Could not verify session {session_id} for a report by {user.user_id}; "
+            "filing the report without the conversation reference",
+            exc_info=True,
+        )
+        return None
+
+    if metadata is None:
+        logger.info(
+            f"Dropping unattachable session {session_id} from {user.user_id}'s report — "
+            "not a conversation this user owns"
+        )
+        return None
+
+    return session_id
 
 
 def _display_name(user: User) -> str:
@@ -171,6 +215,7 @@ async def _to_row(report: AgentReport) -> AdminReportRow:
         reporter_name=report.reporter_name,
         reason=report.reason,
         note=report.note,
+        session_id=report.session_id,
         state=report.state,
         created_at=report.created_at,
         resolved_at=report.resolved_at,
