@@ -27,7 +27,14 @@ PublisherKind = Literal["institution", "department", "individual"]
 # Agent Marketplace Phase 8 (D15): problem reports. A small fixed set so the queue can be
 # sorted by severity without reading every note — ``inappropriate`` is the one that should
 # page a human rather than wait for a sweep.
-ReportReason = Literal["inaccurate", "broken", "inappropriate", "other"]
+#
+# ``suggestion`` joined the set when feedback moved out of the store's detail page and into
+# the conversation itself. It is deliberately the *same* record and the *same* queue rather
+# than a parallel "feedback" object: a user at the foot of a conversation does not know
+# whether what they hit is a defect or a missing capability, and asking them to pick the
+# right intake form would only mis-sort the ones who guess wrong. What the reason set does
+# is let the queue keep triaging by severity — see ``REPORT_REASON_SEVERITY``.
+ReportReason = Literal["inaccurate", "broken", "inappropriate", "suggestion", "other"]
 
 # Deliberately NOT a mirror of ``ListingState``: a report is a note *about* an Agent, not
 # a state *of* it. Resolving one never changes ``listing.state`` (D15.5) — if a report
@@ -68,6 +75,10 @@ REPORT_REASON_SEVERITY: Dict[str, int] = {
     "broken": 1,
     "inaccurate": 2,
     "other": 3,
+    # Last on purpose. A suggestion is the one reason that is *not* a defect, so it must
+    # never displace a complaint in the sweep — but it stays in the same queue, because an
+    # admin reading "it should also do X" is reading the most useful signal the store gets.
+    "suggestion": 4,
 }
 
 
@@ -1497,6 +1508,17 @@ class AgentReport(BaseModel):
     reporter_name: str = Field(..., alias="reporterName", description="Reporter display name, for the queue")
     reason: ReportReason = Field(..., description="Fixed-set reason, so the queue sorts by severity")
     note: Optional[str] = Field(None, description="The reporter's free text")
+    session_id: Optional[str] = Field(
+        None,
+        alias="sessionId",
+        description=(
+            "The conversation the reporter chose to attach, when they filed from the foot of "
+            "one and left the box ticked. ⚠️ Opt-in, and verified to belong to the reporter "
+            "before it is stored — see ``report_service.file_report``. Absent means the user "
+            "declined or filed from the store page, and absence is a normal state the queue "
+            "must render without implying anything was withheld."
+        ),
+    )
     state: ReportState = Field("open", description="open → resolved | dismissed (D15.5)")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601; the GSI6 sort key while open")
     updated_at: Optional[str] = Field(None, alias="updatedAt", description="ISO 8601 of the last write")
@@ -1521,6 +1543,16 @@ class SubmitReportRequest(BaseModel):
     reason: ReportReason = Field(..., description="Why it is being reported")
     note: Optional[str] = Field(
         None, max_length=2000, description="What is wrong, in the reporter's words"
+    )
+    session_id: Optional[str] = Field(
+        None,
+        alias="sessionId",
+        description=(
+            "Conversation to attach for context, when the reporter opted in. Ignored unless "
+            "it is a session the *caller* owns — the server checks rather than trusting it, "
+            "since an id sent from a client is otherwise a way to hand an admin a pointer to "
+            "somebody else's conversation."
+        ),
     )
 
 
@@ -1599,6 +1631,14 @@ class AdminReportRow(BaseModel):
     reporter_name: str = Field(..., alias="reporterName", description="Reporter display name (admin-only, D15.2)")
     reason: ReportReason = Field(..., description="Fixed-set reason")
     note: Optional[str] = Field(None, description="The reporter's free text")
+    session_id: Optional[str] = Field(
+        None,
+        alias="sessionId",
+        description=(
+            "The conversation the reporter attached, if they opted in. A reference for the "
+            "admin to look up, not a transcript — nothing here reads the conversation."
+        ),
+    )
     state: ReportState = Field(..., description="open / resolved / dismissed")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 when it was filed")
     resolved_at: Optional[str] = Field(None, alias="resolvedAt", description="ISO 8601 of the decision")

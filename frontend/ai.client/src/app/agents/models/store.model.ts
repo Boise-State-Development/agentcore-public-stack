@@ -236,13 +236,26 @@ export interface CategoryShelf {
  * Why an agent is being reported.
  *
  * A small fixed set so the admin queue can sort by severity without reading every note.
- * `inappropriate` is the one meant to page a human rather than wait for a sweep.
+ * `inappropriate` is the one meant to page a human rather than wait for a sweep, and
+ * `suggestion` — which is not a defect at all — is deliberately last in that order.
+ *
+ * `suggestion` exists because feedback moved out of the store's detail page and into the
+ * foot of the conversation, where "it should also do X" is as common as "it is broken".
+ * It stays the same record in the same queue: a user does not know which kind of thing
+ * they hit, and a second intake form would only mis-sort the ones who guess wrong.
  */
-export type ReportReason = 'inaccurate' | 'broken' | 'inappropriate' | 'other';
+export type ReportReason = 'inaccurate' | 'broken' | 'inappropriate' | 'suggestion' | 'other';
 
 export interface SubmitReportRequest {
   reason: ReportReason;
   note?: string;
+  /**
+   * The conversation the user opted to attach, for the curator's context.
+   *
+   * ⚠️ Opt-in and **server-verified**: the backend keeps it only if it is a session this
+   * caller owns, and silently drops it otherwise rather than failing the submission.
+   */
+  sessionId?: string;
 }
 
 /**

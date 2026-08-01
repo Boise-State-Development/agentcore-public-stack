@@ -718,10 +718,21 @@ async def report_agent_endpoint(
     A second report while the reporter's first is still open **updates** it rather than
     stacking (D15.4), and the response says so — without that the queue is trivially
     floodable and the count at the top of the nav stops meaning anything.
+
+    This is also the endpoint behind the feedback link at the foot of a conversation, which
+    is where most of its traffic now comes from. Two things follow from that. ``reason`` may
+    be ``suggestion`` — feedback from inside a conversation is as often "it should also do
+    X" as "it is broken". And ``sessionId`` may carry the conversation the user opted to
+    attach; it is verified against the caller before it is stored, and silently dropped
+    rather than rejected if it does not check out (see ``_attachable_session_id``).
     """
     try:
         report, replaced = await file_report(
-            agent_id, current_user, reason=request.reason, note=request.note
+            agent_id,
+            current_user,
+            reason=request.reason,
+            note=request.note,
+            session_id=request.session_id,
         )
         return SubmitReportResponse(
             agent_id=agent_id,

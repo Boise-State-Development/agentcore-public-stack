@@ -71,13 +71,16 @@ def table(monkeypatch):
         yield ddb.Table(TABLE)
 
 
-async def _file(agent_id=AGENT, reporter=REPORTER, reason="broken", note="It errors out"):
+async def _file(
+    agent_id=AGENT, reporter=REPORTER, reason="broken", note="It errors out", session_id=None
+):
     return await submit_report(
         agent_id,
         reporter_id=reporter,
         reporter_name=f"Name of {reporter}",
         reason=reason,
         note=note,
+        session_id=session_id,
     )
 
 
@@ -234,6 +237,71 @@ async def test_the_queue_is_oldest_first(table):
 
     ordered = await list_open_reports()
     assert [r.created_at for r in ordered] == sorted(r.created_at for r in ordered)
+
+
+# ── the attached conversation (opt-in) ───────────────────────────────────────────────
+# The reference is optional context, but the *unticking* case is a consent withdrawal and
+# is the one worth pinning: a stale sessionId left behind on an amendment would mean a user
+# cannot take back a conversation they already shared.
+@pytest.mark.asyncio
+async def test_an_attached_conversation_is_stored_on_the_report(table):
+    await _file(session_id="sess-123")
+
+    item = table.get_item(
+        Key={"PK": f"AST#{AGENT}", "SK": f"REPORT#{report_id_for(AGENT, REPORTER)}"}
+    )["Item"]
+    assert item["sessionId"] == "sess-123"
+    assert (await list_reports_for_agent(AGENT))[0].session_id == "sess-123"
+
+
+@pytest.mark.asyncio
+async def test_a_report_with_no_conversation_stores_no_reference(table):
+    await _file()
+
+    item = table.get_item(
+        Key={"PK": f"AST#{AGENT}", "SK": f"REPORT#{report_id_for(AGENT, REPORTER)}"}
+    )["Item"]
+    assert "sessionId" not in item
+    assert (await list_reports_for_agent(AGENT))[0].session_id is None
+
+
+@pytest.mark.asyncio
+async def test_amending_without_the_conversation_withdraws_the_reference(table):
+    """Unticking the box on a second submission must remove what the first one shared."""
+    await _file(session_id="sess-123")
+    await _file(note="Actually, keep me out of it", session_id=None)
+
+    item = table.get_item(
+        Key={"PK": f"AST#{AGENT}", "SK": f"REPORT#{report_id_for(AGENT, REPORTER)}"}
+    )["Item"]
+    assert "sessionId" not in item, "an amendment must not keep the withdrawn conversation"
+    assert (await list_reports_for_agent(AGENT))[0].session_id is None
+
+
+@pytest.mark.asyncio
+async def test_amending_can_swap_the_attached_conversation(table):
+    await _file(session_id="sess-123")
+    await _file(session_id="sess-456")
+
+    reports = await list_reports_for_agent(AGENT)
+    assert len(reports) == 1
+    assert reports[0].session_id == "sess-456"
+
+
+@pytest.mark.asyncio
+async def test_a_report_filed_after_a_resolution_starts_from_a_clean_reference(table):
+    """Path 3 (overwrite-a-closed-one) must not inherit the old row's conversation."""
+    await _file(session_id="sess-123")
+    await resolve_report(
+        AGENT, report_id_for(AGENT, REPORTER), state="resolved", resolved_by="Admin", note=None
+    )
+
+    await _file(reason="suggestion", note="It should also do X")
+
+    reports = await list_reports_for_agent(AGENT)
+    assert len(reports) == 1
+    assert reports[0].reason == "suggestion"
+    assert reports[0].session_id is None
 
 
 # ── reports never outlive their Agent ────────────────────────────────────────────────

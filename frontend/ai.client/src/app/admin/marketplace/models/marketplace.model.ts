@@ -15,6 +15,7 @@ import {
   ListingState,
   LISTING_STATE_CLASSES,
   LISTING_STATE_LABELS,
+  ReportReason,
 } from '../../../agents/models/store.model';
 
 /**
@@ -318,8 +319,13 @@ export interface RoleAgentPinsUpdateRequest {
 /**
  * Why an agent was reported. A fixed set so the queue sorts by severity without anyone
  * reading every note; `inappropriate` is the one that should page a human.
+ *
+ * Re-exported from the user-facing model rather than restated. It *was* restated, and the
+ * two copies drifted the moment `suggestion` was added for the in-conversation feedback
+ * link: the reporter's dialog offered a reason the admin queue's own type did not admit.
+ * One declaration, in the file the submit side already reads from.
  */
-export type ReportReason = 'inaccurate' | 'broken' | 'inappropriate' | 'other';
+export type { ReportReason };
 
 /**
  * A report's own tiny lifecycle. Deliberately **not** a mirror of `ListingState`: a
@@ -350,6 +356,14 @@ export interface AdminReportRow {
   reporterName: string;
   reason: ReportReason;
   note?: string;
+  /**
+   * The conversation the reporter opted to attach, when they filed from inside one.
+   *
+   * A reference to look up, not a transcript — nothing on this surface reads the
+   * conversation. Absent is a normal state (they declined, or filed from the store page),
+   * so the row must not imply anything was withheld.
+   */
+  sessionId?: string;
   state: ReportState;
   createdAt: string;
   resolvedAt?: string;
