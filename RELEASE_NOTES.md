@@ -1,3 +1,36 @@
+# Release Notes — v1.12.3
+
+**Release Date:** August 1, 2026
+**Previous Release:** v1.12.2 (August 1, 2026)
+
+---
+
+> 🖥️ **Frontend only** — run `frontend-deploy.yml`. No CDK deploy, no backend change, no configuration change, no data migration.
+
+---
+
+## Highlights
+
+Removes a spurious error dialog that appeared on **every page load for every user** in any environment where Memory Spaces is turned off — which today means production.
+
+The underlying 404 was correct and intentional. Memory Spaces is deliberately hidden in production, and the way it hides is by returning 404 across its whole API surface, so the feature can be switched off without being torn out. The app already understood that: it read the 404 as "feature unavailable" and quietly dropped the sidebar entry. What it did not do was tell the global error handler to stay quiet, so the feature hid itself and then popped a dialog naming an endpoint nobody was meant to see.
+
+Nothing about the feature's availability changes. Memory Spaces remains off in production.
+
+## Fixed
+
+- **No more `404 /memory/spaces` dialog.** `SUPPRESS_ERROR_TOAST` is now set on every Memory Spaces request. Genuine failures still surface — they always went through `MemorySpaceService`'s own error state, which the Memory Spaces pages render inline and in context; the generic dialog was a duplicate of that even when the feature was on (#819)
+
+## Why it appeared now
+
+The switch that hides Memory Spaces in production is applied at **deploy** time, and 1.12.0's CDK deploy rolled back. The first deploy to actually carry it into production was 1.12.1. So the dialog is not a regression in 1.12.2 — it is the first time the production kill switch has been live, and this is the rough edge it exposed.
+
+## Verification note
+
+This fix is invisible in any environment where Memory Spaces is **enabled**, including dev, because nothing 404s there. It is covered by unit tests that pin the interceptor contract directly rather than by a manual check.
+
+---
+
 # Release Notes — v1.12.2
 
 **Release Date:** August 1, 2026
