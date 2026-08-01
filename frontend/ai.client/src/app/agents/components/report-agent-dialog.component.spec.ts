@@ -119,4 +119,61 @@ describe('ReportAgentDialogComponent', () => {
       expect(closedWith).toEqual([undefined]);
     });
   });
+
+  /**
+   * Dismiss-on-click is bound to the overlay, not the backdrop — the backdrop is painted
+   * underneath a full-screen container, so a handler there can never fire.
+   *
+   * The drag case is the one that earns a test. Selecting text in the note and releasing
+   * outside the panel delivers a click on the overlay (both ends of the drag resolve to
+   * that common ancestor), and dismissing there would discard an unsent report.
+   */
+  describe('dismissing by clicking outside', () => {
+    const overlay = {} as EventTarget;
+    const insidePanel = {} as EventTarget;
+
+    function press(component: ReportAgentDialogComponent, target: EventTarget): void {
+      component.onOverlayMouseDown({ target, currentTarget: overlay } as unknown as MouseEvent);
+    }
+
+    function release(component: ReportAgentDialogComponent, target: EventTarget): void {
+      component.onOverlayClick({ target, currentTarget: overlay } as unknown as MouseEvent);
+    }
+
+    it('closes when the press and the release both land on the overlay', () => {
+      const component = build({ sessionId: 'sess-123' });
+      press(component, overlay);
+      release(component, overlay);
+
+      expect(closedWith).toEqual([undefined]);
+    });
+
+    it('stays open when the click lands inside the panel', () => {
+      const component = build();
+      press(component, insidePanel);
+      release(component, insidePanel);
+
+      expect(closedWith).toHaveLength(0);
+    });
+
+    it('stays open when a drag starts in the panel and ends outside it', () => {
+      // The text-selection case. Losing a typed report to a stray mouseup would be the
+      // worst possible reading of the gesture.
+      const component = build();
+      press(component, insidePanel);
+      release(component, overlay);
+
+      expect(closedWith).toHaveLength(0);
+    });
+
+    it('does not stay armed after a drag that began in the panel', () => {
+      const component = build();
+      press(component, insidePanel);
+      release(component, overlay);
+      // A bare click with no fresh press must not inherit the previous gesture's arming.
+      release(component, overlay);
+
+      expect(closedWith).toHaveLength(0);
+    });
+  });
 });
