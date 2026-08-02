@@ -157,10 +157,19 @@ ENV DOCLING_ARTIFACTS_PATH=/opt/ml/models/docling-artifacts \
 # 5. Copy Your Handler Code
 COPY backend/src/apis/app_api/documents/ingestion/ ${LAMBDA_TASK_ROOT}
 
-# 6. Copy shared embeddings module (required by ingestion/embeddings/bedrock_embeddings.py)
-# The ingestion embeddings re-export from apis.shared.embeddings, so we need the
-# full apis.shared.embeddings package available in LAMBDA_TASK_ROOT.
+# 6. Copy the apis.shared modules the handler's import closure reaches.
+# Keep this list COMPLETE — it must cover the whole closure, including
+# function-local imports (handler.py reaches status.py exactly that way,
+# and status.py is what needs timestamps.py). A module the closure reaches
+# but this list omits raises ModuleNotFoundError on every invocation;
+# backend/tests/supply_chain/test_lambda_image_imports.py enforces it.
+# When adding a COPY here, also add the path to the rag-ingestion
+# SOURCE_DIRS/MANIFESTS in scripts/build/build-one.sh so the content-hash
+# tag notices changes.
+#   embeddings/   — ingestion/embeddings/bedrock_embeddings.py re-exports it
+#   timestamps.py — ingestion/status.py imports utc_now_iso
 COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
 COPY backend/src/apis/shared/embeddings/ ${LAMBDA_TASK_ROOT}/apis/shared/embeddings/
 RUN touch ${LAMBDA_TASK_ROOT}/apis/__init__.py
 

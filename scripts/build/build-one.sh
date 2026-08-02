@@ -92,10 +92,13 @@ case "$SERVICE" in
             "backend/src/apis/app_api/documents/ingestion"
             "backend/src/apis/shared/embeddings"
         )
-        # shared/__init__.py is a single file, hashed as a manifest.
-        # The requirements.lock lives inside the first source-dir
-        # already, so it doesn't need a separate --manifest entry.
-        MANIFESTS=("backend/src/apis/shared/__init__.py")
+        # shared/__init__.py and shared/timestamps.py are single files,
+        # hashed as manifests. The requirements.lock lives inside the
+        # first source-dir already, so it doesn't need its own entry.
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/timestamps.py"
+        )
         # The RAG ingestion Lambda is arm64 (see the rag-ingestion CDK
         # construct), and the Dockerfile installs arm64 torch wheels.
         # Build for arm64 — an amd64 image fails the arm64 Lambda at
@@ -119,10 +122,15 @@ case "$SERVICE" in
             "backend/src/apis/shared/sync_policies"
             "backend/src/apis/shared/oauth"
             "backend/src/apis/shared/embeddings"
+            "backend/src/apis/shared/assistants"
         )
-        # shared/__init__.py hashed as a manifest (same as rag-ingestion);
+        # Single-file COPYs hashed as manifests (same as rag-ingestion);
         # kb_sync/requirements.txt lives inside the first source dir.
-        MANIFESTS=("backend/src/apis/shared/__init__.py")
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/dynamo_errors.py"
+        )
         # Both kb-sync Lambdas are arm64 (see the kb-sync CDK construct).
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/kb-sync/image-tag"
@@ -140,10 +148,15 @@ case "$SERVICE" in
             "backend/src/apis/shared/scheduled_prompts"
             "backend/src/apis/shared/sessions_bff"
             "backend/src/apis/shared/sessions"
+            "backend/src/apis/shared/storage"
+            "backend/src/apis/shared/observability"
         )
-        # shared/__init__.py hashed as a manifest (same as kb-sync/rag-ingestion);
+        # Single-file COPYs hashed as manifests (same as kb-sync/rag-ingestion);
         # the dispatcher's requirements.txt lives inside its own source dir.
-        MANIFESTS=("backend/src/apis/shared/__init__.py")
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/errors.py"
+        )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).
         PLATFORM="linux/arm64"
