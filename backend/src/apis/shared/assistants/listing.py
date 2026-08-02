@@ -71,6 +71,8 @@ LISTING_STATES: Tuple[str, ...] = (
 #   taken_down        → changes_requested  admin annotates an already-delisted listing
 #   in_review         → private            author withdraws a pending submission
 #   changes_requested → private            author withdraws one that was never live
+#   taken_down        → private            author shelves a delisted agent (so it can be
+#                                          deleted — see below)
 #   published         → withdrawal_requested author ASKS to pull a live listing
 #   changes_requested → withdrawal_requested author ASKS to pull one that is *still* live
 #   withdrawal_requested → changes_requested admin declines; it goes back where it came from
@@ -87,8 +89,37 @@ LISTING_STATES: Tuple[str, ...] = (
 # listing unilaterally, with no admin ever seeing it — the D2 review queue makes
 # publication stop for a human, and unpublication should not be a side door around that.
 # Withdrawal is now a request an admin acts on (see §5.1 of the version-snapshots spec).
-# The edges an author still owns alone are the pre-publication ones: ``private → in_review``
-# and withdrawing a *pending* submission (``in_review``/``changes_requested`` → ``private``).
+# The edges an author still owns alone are the ones where nothing is on the shelf:
+# ``private → in_review``, withdrawing a *pending* submission
+# (``in_review``/``changes_requested`` → ``private``), and shelving one an admin has already
+# pulled (``taken_down → private``). None of them removes anything users can currently see.
+#
+# ⚠️ ``taken_down → private`` was absent, and its absence was load-bearing for nothing.
+# The stated reason was audit: the takedown record (``review_note``/``reviewed_by``/
+# ``reviewed_at``) lives on the listing block itself, so letting an author reach ``private``
+# lets them reach ``delete_assistant`` — which is refused for every state *except* ``private``
+# — and take the record with them.
+#
+# That protection never held. ``taken_down → in_review → private`` was always walkable by the
+# author alone (``submit_listing`` then ``withdraw_listing``: after a takedown
+# ``published_version`` is cleared, so ``is_on_shelf`` is False and the withdrawal resolves to
+# ``private`` immediately rather than to a request). The record was already erasable in three
+# author-only steps; all the missing edge bought was that the middle step posted a submission
+# to the D2 review queue that the author intended to withdraw a moment later. It taxed admins
+# to protect nothing.
+#
+# So the edge is added and the audit question is named honestly rather than half-defended: if
+# a takedown record must outlive the Agent, it needs a row that is not the Agent's own listing
+# block, and no arrangement of this table can supply that. What the delete guard actually
+# earns — and still earns — is that nothing *live or pending* is ever deleted out from under
+# the store: ``published``, ``withdrawal_requested`` and ``in_review`` all still refuse, so
+# unpublication stays an explicit act rather than a side effect of a delete.
+#
+# The edge is safe in the direction that matters. ``private`` is already an author target, and
+# ``is_on_shelf`` hardcodes ``taken_down`` to False, so this can never route to
+# ``withdrawal_requested`` and can never pull something off a shelf it is not on. Getting back
+# *into* the store is unchanged: ``private → in_review → published``, approval still the only
+# door.
 #
 # ⚠️ ``changes_requested`` covers two different listings — one that was never published, and
 # one that *was* and is still serving while the author revises it (``review_listing``
@@ -109,7 +140,7 @@ ALLOWED_TRANSITIONS: Dict[Optional[str], Set[str]] = {
     "in_review": {"published", "changes_requested", "private"},
     "changes_requested": {"in_review", "private", "withdrawal_requested"},
     "published": {"taken_down", "changes_requested", "withdrawal_requested"},
-    "taken_down": {"in_review", "changes_requested"},
+    "taken_down": {"in_review", "changes_requested", "private"},
     "withdrawal_requested": {"private", "published", "changes_requested", "taken_down"},
 }
 

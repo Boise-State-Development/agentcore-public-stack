@@ -585,6 +585,31 @@ class TestWithdraw:
         assert resp.status_code == 200
         assert resp.json()["state"] == "private"
 
+    def test_withdrawing_a_taken_down_listing_is_immediate(self, app, make_user, _no_writes):
+        """The route an author needs to delete a delisted agent, and it used to 400.
+
+        ``delete_assistant`` accepts only ``private``, and its refusal told the author of a
+        taken-down agent to "take it back to private first" — but ``taken_down → private`` was
+        not an edge, so this endpoint refused and the advice was for a door that did not
+        exist. The workaround was to resubmit for review and withdraw the submission a moment
+        later: a junk entry in the D2 queue as the price of a delete.
+
+        Immediate rather than a request because an admin has already pulled it. There is
+        nothing left to ask for, and routing it to ``withdrawal_requested`` would park a
+        listing nobody can see in the review queue.
+        """
+        assistant = _make_assistant(
+            listing=AgentListing(
+                state="taken_down", category="Teaching", publisherId="user-user-001"
+            )
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).delete("/agents/ast-001/listing")
+
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "private"
+
     def test_a_second_request_on_an_already_requested_listing_is_refused(
         self, app, make_user, _no_writes
     ):
