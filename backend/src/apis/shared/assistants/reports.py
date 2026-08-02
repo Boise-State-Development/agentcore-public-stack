@@ -50,11 +50,15 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from .models import AgentReport, ReportReason
+from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
 _SK_PREFIX = "REPORT#"
+
+# GSI6. Named once so the two queries and their "it isn't there" logs cannot drift apart.
+_REPORTS_INDEX = "AgentReportsIndex"
 
 # The single open-queue partition (D15). One partition is correct here and would not be
 # for the directory: the queue is bounded by how fast admins work, it is read only by the
@@ -302,15 +306,29 @@ async def list_open_reports(limit: int = 200) -> List[AgentReport]:
     Oldest-first because this is a work queue, not a feed: the report that has waited
     longest is the one to triage next. It cannot return a resolved report, because a
     resolved report has no key in this index.
+
+    **An absent index degrades to an empty queue.** GSI6 can legitimately not exist yet
+    (see ``apis.shared.dynamo_errors``), and an admin console that renders "nothing to
+    triage" is a better failure than one that renders an error page. This read is the
+    right place for that: the *writes* above still fail loudly, so a report filed while
+    the index is missing is still stored — it simply arrives in the queue once GSI6 does.
     """
     from boto3.dynamodb.conditions import Key
+    from botocore.exceptions import ClientError
 
-    response = _table().query(
-        IndexName="AgentReportsIndex",
-        KeyConditionExpression=Key("GSI6_PK").eq(_OPEN_PK),
-        ScanIndexForward=True,
-        Limit=limit,
-    )
+    try:
+        response = _table().query(
+            IndexName=_REPORTS_INDEX,
+            KeyConditionExpression=Key("GSI6_PK").eq(_OPEN_PK),
+            ScanIndexForward=True,
+            Limit=limit,
+        )
+    except ClientError as e:
+        if is_missing_index_error(e):
+            log_missing_index(_REPORTS_INDEX, "the admin problem-report queue")
+            return []
+        raise
+
     return [_to_report(item) for item in response.get("Items", [])]
 
 
@@ -318,14 +336,25 @@ async def count_open_reports() -> int:
     """How many reports await triage — the D10 nav badge.
 
     ``Select=COUNT`` so the badge never pays to project rows nobody renders.
+
+    Degrades to ``0`` on a missing index, matching ``list_open_reports`` — a badge and the
+    queue it links to disagreeing would be worse than either being empty.
     """
     from boto3.dynamodb.conditions import Key
+    from botocore.exceptions import ClientError
 
-    response = _table().query(
-        IndexName="AgentReportsIndex",
-        KeyConditionExpression=Key("GSI6_PK").eq(_OPEN_PK),
-        Select="COUNT",
-    )
+    try:
+        response = _table().query(
+            IndexName=_REPORTS_INDEX,
+            KeyConditionExpression=Key("GSI6_PK").eq(_OPEN_PK),
+            Select="COUNT",
+        )
+    except ClientError as e:
+        if is_missing_index_error(e):
+            log_missing_index(_REPORTS_INDEX, "the admin problem-report badge")
+            return 0
+        raise
+
     return int(response.get("Count", 0))
 
 

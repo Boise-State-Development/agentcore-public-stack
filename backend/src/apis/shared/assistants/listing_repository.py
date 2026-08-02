@@ -30,11 +30,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .models import AgentListing
 from .serialization import from_ddb, to_ddb_safe
+from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
 
 logger = logging.getLogger(__name__)
 
 # Attributes this module owns. Nothing else writes them.
 _GSI5_ATTRS = ("GSI5_PK", "GSI5_SK")
+
+# GSI5. Named once so the query and the "it isn't there" log cannot drift apart.
+_STORE_INDEX = "AgentDirectoryIndex"
 
 
 def _table():
@@ -219,11 +223,17 @@ async def query_store(
     ``ScanIndexForward=False`` gives newest-first, since ``GSI5_SK`` is
     ``CREATED#{created_at}``. There is no popularity sort — the store front is the
     manual ranking lever instead (see the spec's ranking caveat).
+
+    **An absent index degrades to an empty shelf**, on the same reasoning as a malformed
+    cursor below: GSI5 can legitimately not exist yet, and this read is not important
+    enough to 500 over when it doesn't. See ``apis.shared.dynamo_errors`` for the deploy
+    states that produce it and for the production incident that made it worth handling.
     """
     from boto3.dynamodb.conditions import Key
+    from botocore.exceptions import ClientError
 
     params: Dict[str, Any] = {
-        "IndexName": "AgentDirectoryIndex",
+        "IndexName": _STORE_INDEX,
         "KeyConditionExpression": Key("GSI5_PK").eq(f"LISTED#{category}"),
         "ScanIndexForward": False,
         "Limit": limit,
@@ -233,7 +243,14 @@ async def query_store(
         if decoded:
             params["ExclusiveStartKey"] = decoded
 
-    response = _table().query(**params)
+    try:
+        response = _table().query(**params)
+    except ClientError as e:
+        if is_missing_index_error(e):
+            log_missing_index(_STORE_INDEX, "the agent store browse")
+            return [], None
+        raise
+
     items = [from_ddb(item) for item in response.get("Items", [])]
     next_cursor = _encode_cursor(response.get("LastEvaluatedKey"))
     return items, next_cursor
