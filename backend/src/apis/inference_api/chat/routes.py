@@ -11,8 +11,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
-import time
 from typing import AsyncGenerator, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,6 +25,7 @@ from apis.shared.errors import (
     ErrorCode,
     build_conversational_error_event,
 )
+from apis.inference_api.runtime_health import ping_payload
 from apis.shared.feature_flags import agents_enabled, skills_enabled
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.models.managed_models import list_managed_models
@@ -944,22 +943,20 @@ async def stream_conversational_message(
 async def ping():
     """Health check endpoint (required by AgentCore Runtime).
 
-    AgentCore's idle reaper requires ``time_of_last_update`` (int epoch
-    seconds) alongside ``status``. When the field is absent the platform
-    reaps the microVM at ``idleRuntimeSessionTimeout`` even mid-stream,
-    regardless of the reported status (bedrock-agentcore-sdk-python#471).
+    AgentCore's idle reaper reads ``time_of_last_update`` (int epoch seconds)
+    alongside ``status`` and terminates the microVM once
+    ``now - time_of_last_update`` exceeds ``idleRuntimeSessionTimeout``.
 
-    We do not run the SDK's async-task busy tracking here (that's the
-    deferred ``async_mode`` work), so we cannot report ``HealthyBusy``.
-    Returning a fresh timestamp on every ping keeps the session alive
-    while the runtime data plane is polling us, which is the documented
-    mitigation for the silent mid-generation reap.
+    The payload is built by ``apis.inference_api.runtime_health``, which
+    reports ``HealthyBusy`` with a refreshing timestamp while a turn is in
+    flight — preserving the mid-stream reap protection this endpoint gained
+    in PR #338 (bedrock-agentcore-sdk-python#471) — and ``Healthy`` with a
+    *frozen* timestamp once the container is idle, so the reaper can
+    actually fire. Returning a fresh timestamp unconditionally, as this
+    handler previously did, made every microVM immortal until
+    ``maxLifetime``; see that module's docstring for the measured cost.
     """
-    return {
-        "status": "Healthy",
-        "time_of_last_update": int(time.time()),
-        "version": os.environ.get("APP_VERSION", "unknown"),
-    }
+    return ping_payload()
 
 
 async def _resolve_accessible_skill_ids(current_user: User) -> list[str]:
