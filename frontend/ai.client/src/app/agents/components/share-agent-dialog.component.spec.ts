@@ -234,4 +234,43 @@ describe('ShareAgentDialogComponent', () => {
       expect(updateAssistant).toHaveBeenCalledWith('ast-test', { visibility: 'SHARED' });
     });
   });
+
+  /**
+   * `canWithdraw` mirrors the backend transition table, and it drifted from it.
+   *
+   * `taken_down` was excluded with a comment saying the machine allowed no author edge out
+   * of it — true when written. But delete accepts only `private`, and its refusal told the
+   * author to "take it back to private first", so the author of a taken-down agent was sent
+   * to a button this component did not render. Backend edge and button have to land together
+   * or the fix is invisible from the only seat that matters.
+   */
+  describe('canWithdraw', () => {
+    it('offers an exit from a taken-down listing', () => {
+      (component as any).listing.set({ state: 'taken_down' });
+
+      expect((component as any).canWithdraw()).toBe(true);
+      // Not "Withdraw" — an admin already pulled it, so there is nothing to withdraw from.
+      expect((component as any).withdrawLabel()).toBe('Remove listing');
+    });
+
+    it.each(['in_review', 'changes_requested', 'published'] as const)(
+      'still offers it from %s',
+      (state) => {
+        (component as any).listing.set({ state });
+        expect((component as any).canWithdraw()).toBe(true);
+      },
+    );
+
+    it.each(['private', 'withdrawal_requested'] as const)('offers nothing from %s', (state) => {
+      // `private` is already the destination. `withdrawal_requested` is a request the author
+      // has made and cannot make twice — the backend refuses it with a 400, and offering the
+      // button anyway would walk them into that error.
+      (component as any).listing.set({ state });
+      expect((component as any).canWithdraw()).toBe(false);
+    });
+
+    it('offers nothing when the agent was never submitted', () => {
+      expect((component as any).canWithdraw()).toBe(false);
+    });
+  });
 });

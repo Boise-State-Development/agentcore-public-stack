@@ -455,6 +455,12 @@ async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
     Neither act revokes anything retroactively: people who pinned it keep their pin,
     conversations underway keep running, and the agent stays reachable by direct link
     because ``visibility`` is a separate axis. It is a delisting, not a recall.
+
+    ``taken_down`` resolves to the immediate branch, and that is the point of the
+    ``taken_down → private`` edge: an admin has already pulled it, so there is nothing left to
+    request. Before the edge existed this raised, and an author who simply wanted to delete a
+    delisted agent had to resubmit it for review — posting to the D2 queue purely to withdraw
+    a moment later — because ``delete_assistant`` accepts only ``private``.
     """
     assistant = await _load_for_author(agent_id, user)
     if not assistant.listing:
@@ -522,12 +528,13 @@ async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
         )
         return listing
 
-    # Pre-publication withdrawal: nothing is on the shelf, so this is immediate. The
-    # unindex is belt-and-braces for a listing whose pointer outlived its key.
+    # Nothing is on the shelf, so this is immediate — either a pre-publication withdrawal or
+    # an author shelving something an admin already took down. The unindex is belt-and-braces
+    # for a listing whose pointer outlived its key.
     await _unindex_version(agent_id, assistant.listing.published_version)
     listing = assistant.listing.model_copy(update={"state": target, "published_version": None})
     await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
-    logger.info(f"📭 Agent {agent_id} submission withdrawn by its owner")
+    logger.info(f"📭 Agent {agent_id} withdrawn to private by its owner (from {current})")
     return listing
 
 
