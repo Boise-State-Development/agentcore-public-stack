@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from apis.shared.audit import ALL_ACTIONS, TARGET_APP_ROLE, AuditRepository
 from apis.shared.audit.repository import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from apis.shared.auth import User, require_admin
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,7 @@ async def list_for_target(
             target_type, target_id, limit=limit, cursor=start_key
         )
     except Exception:
-        logger.exception(f"Failed to read audit history for {target_id}")
+        logger.exception(f"Failed to read audit history for {scrub_log(target_id)}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Audit log is unavailable.",
@@ -158,7 +159,7 @@ async def list_for_actor(
             actor_user_id, limit=limit, cursor=start_key
         )
     except Exception:
-        logger.exception(f"Failed to read audit history for actor {actor_user_id}")
+        logger.exception(f"Failed to read audit history for actor {scrub_log(actor_user_id)}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Audit log is unavailable.",

@@ -86,6 +86,7 @@ from apis.shared.assistants.publishers import (
 )
 from apis.shared.auth import User, require_admin_scope
 from apis.shared.feature_flags import agent_marketplace_enabled
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -377,7 +378,7 @@ async def list_agent_report_history_endpoint(
             reports=rows, open_count=len([r for r in rows if r.state == "open"])
         )
     except Exception as e:
-        logger.error(f"Error listing reports for agent {agent_id}: {e}", exc_info=True)
+        logger.error(f"Error listing reports for agent {scrub_log(agent_id)}: {scrub_log(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list reports: {str(e)}")
 
 
@@ -407,7 +408,7 @@ async def resolve_agent_report(
     except ReportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     except Exception as e:
-        logger.error(f"Error resolving report {report_id}: {e}", exc_info=True)
+        logger.error(f"Error resolving report {scrub_log(report_id)}: {scrub_log(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to resolve report: {str(e)}")
 
 

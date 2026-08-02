@@ -34,6 +34,12 @@ import { AgentListingRowComponent } from '../components/agent-listing-row.compon
   selector: 'app-agent-pinned',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [AgentsTabsComponent, AgentListingRowComponent, NgIcon, RouterLink],
+  // The empty state renders <ng-icon name="heroBookmark" />, and ng-icons resolves that
+  // name from a registration rather than from the import. Both symbols were imported and
+  // neither was ever called, so the glyph silently rendered as nothing — CodeQL surfaced
+  // it as two unused imports, which is what a missing registration looks like from the
+  // outside. Matches how discover.page.ts registers its own icons.
+  providers: [provideIcons({ heroBookmark })],
   template: `
     <div class="min-h-dvh">
       <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
