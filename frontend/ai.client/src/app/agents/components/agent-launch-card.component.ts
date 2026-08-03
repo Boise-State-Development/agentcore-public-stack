@@ -14,15 +14,14 @@ import {
   heroArrowRight,
   heroCheck,
   heroCheckBadge,
-  heroCheckCircle,
   heroLockClosed,
   heroNoSymbol,
   heroPlus,
   heroXMark,
 } from '@ng-icons/heroicons/outline';
-import { Agent, AgentCapability, AgentRunnability } from '../models/agent.model';
+import { Agent, AgentRunnability } from '../models/agent.model';
 import { ListingPublisher } from '../models/store.model';
-import { runnabilityIcon, runnabilityMessage } from '../models/runnability';
+import { runnabilityMessage } from '../models/runnability';
 import { AgentIconComponent } from './agent-icon.component';
 import { AgentPinService } from '../services/agent-pin.service';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
@@ -48,7 +47,6 @@ export interface AgentLaunchCardView {
   emoji?: string;
   iconUrl?: string;
   starters: string[];
-  capabilities?: AgentCapability[];
   /**
    * Whether this agent is in the store, which gates the two store affordances — the
    * Add/Added pill and the link to the detail page. A private agent has no detail page
@@ -58,16 +56,13 @@ export interface AgentLaunchCardView {
   listed: boolean;
 }
 
-/** Chips beyond this fold into a "+N more"; the detail page is where the full list lives. */
-const MAX_VISIBLE_CAPABILITIES = 4;
-
 /**
  * Projects the loaded record into the card's view.
  *
- * `Agent` rather than `Assistant` on purpose: tagline, publisher, capabilities and
- * category exist only on the Agent read shape, and the session page already fetches it
- * (`loadAgentBindings`) to lock the chat-input pickers. Reading the card from the same
- * response keeps one source instead of two half-populated ones.
+ * `Agent` rather than `Assistant` on purpose: tagline, publisher and category exist only
+ * on the Agent read shape, and the session page already fetches it (`loadAgentBindings`)
+ * to lock the chat-input pickers. Reading the card from the same response keeps one
+ * source instead of two half-populated ones.
  */
 export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
   return {
@@ -81,7 +76,6 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
     emoji: agent.emoji,
     iconUrl: agent.iconUrl,
     starters: agent.starters ?? [],
-    capabilities: agent.capabilities,
     listed: agent.listing?.state === 'published',
   };
 }
@@ -91,9 +85,13 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
  * width.
  *
  * Deliberately the same reading order as the page the user tapped through to get here:
- * tile, name, tagline, publisher, what it can reach, what to ask. The shelf sells on the
- * tagline and the detail page on "what it can access"; both used to vanish at the exact
- * moment the user was deciding what to type.
+ * tile, name, tagline, who made it, what to ask. The shelf sells on the tagline, which
+ * used to vanish at the exact moment the user was deciding what to type.
+ *
+ * What it deliberately does *not* carry is inventory: the capability chips and the green
+ * "ready to run" line both restated, at the moment of typing, something the user had
+ * already been told on the way in. Only the *blocked* half of D6 survives — "you can't
+ * run this and here is what's missing" is news; "this works" is not.
  *
  * ⚠️ The tile is `app-agent-icon` and must stay that way. The card this replaced hashed the
  * **first letter of the name** into its own 26-gradient palette while every other surface
@@ -104,9 +102,9 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
  * Starters are **buttons**, unlike the detail page's read-only list: the chat has real
  * composer prefill behind `starterSelected`, so here there is a lever to attach them to.
  *
- * The footer's run line is the one thing the store cannot tell you (D6) and the header's
- * pill is the one action it can — kept apart so state never sits where an action is
- * expected.
+ * The footer's blocked line is the one thing the store cannot tell you (D6) and the
+ * header's pill is the one action it can — kept apart so state never sits where an action
+ * is expected.
  */
 @Component({
   selector: 'app-agent-launch-card',
@@ -117,7 +115,6 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
       heroArrowRight,
       heroCheck,
       heroCheckBadge,
-      heroCheckCircle,
       heroLockClosed,
       heroNoSymbol,
       heroPlus,
@@ -158,22 +155,26 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
                 <p class="mt-0.5 text-sm/6 text-gray-600 dark:text-gray-400">{{ subtitle() }}</p>
               }
 
-              @if (attribution().length) {
+              @if (author() || v.categoryLabel) {
                 <p
-                  class="mt-0.5 flex flex-wrap items-center gap-x-2 text-sm/6 text-gray-500 dark:text-gray-400"
+                  class="mt-1 flex flex-wrap items-center gap-x-1.5 text-sm/6 text-gray-500 dark:text-gray-400"
                 >
-                  @for (part of attribution(); track part; let first = $first) {
-                    @if (!first) {
-                      <span aria-hidden="true">·</span>
-                    }
+                  @if (author(); as who) {
+                    <span>By</span>
                     <span
                       [class]="
-                        first && v.publisher?.verified
+                        v.publisher?.verified
                           ? 'font-semibold text-blue-600 dark:text-blue-400'
-                          : ''
+                          : 'font-medium text-gray-700 dark:text-gray-300'
                       "
-                      >{{ part }}</span
+                      >{{ who }}</span
                     >
+                  }
+                  @if (v.categoryLabel) {
+                    @if (author()) {
+                      <span aria-hidden="true">·</span>
+                    }
+                    <span>{{ v.categoryLabel }}</span>
                   }
                 </p>
               }
@@ -233,27 +234,6 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
             </div>
           </div>
 
-          <!-- What it can reach (D6's first half; the second is the run line below) -->
-          @if (visibleCapabilities().length) {
-            <ul class="mt-3.5 flex flex-wrap gap-1.5">
-              @for (capability of visibleCapabilities(); track capability.label) {
-                <li
-                  class="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2.5 py-1 text-xs/5 font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-                >
-                  <span class="size-1.5 rounded-full bg-gray-400 dark:bg-gray-500" aria-hidden="true"></span>
-                  {{ capability.label }}
-                </li>
-              }
-              @if (hiddenCapabilityCount() > 0) {
-                <li
-                  class="inline-flex items-center rounded-full px-2.5 py-1 text-xs/5 font-medium text-gray-500 dark:text-gray-400"
-                >
-                  +{{ hiddenCapabilityCount() }} more
-                </li>
-              }
-            </ul>
-          }
-
           @if (v.starters.length) {
             <div class="mt-5">
               <h3
@@ -283,25 +263,16 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
           }
         </div>
 
-        @if (runnability() || v.listed) {
+        @if (blockedText() || v.listed) {
           <div
             class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-gray-200 bg-gray-50 px-5 py-2.5 dark:border-gray-700 dark:bg-gray-900/40"
           >
-            @if (runnability(); as r) {
+            @if (blockedText(); as message) {
               <p
-                class="flex items-start gap-1.5 text-sm/6 font-medium"
-                [class]="
-                  r.state === 'ready'
-                    ? 'text-emerald-700 dark:text-emerald-400'
-                    : 'text-rose-700 dark:text-rose-400'
-                "
+                class="flex items-start gap-1.5 text-sm/6 font-medium text-rose-700 dark:text-rose-400"
               >
-                <ng-icon
-                  [name]="runnabilityIconName()"
-                  class="mt-1 size-4 shrink-0"
-                  aria-hidden="true"
-                />
-                <span>{{ runnabilityText() }}</span>
+                <ng-icon name="heroNoSymbol" class="mt-1 size-4 shrink-0" aria-hidden="true" />
+                <span>{{ message }}</span>
               </p>
             } @else {
               <span></span>
@@ -340,6 +311,9 @@ export class AgentLaunchCardComponent {
    * D6, when the caller has it. Advisory and deliberately optional: the card is fully
    * usable without it, so a surface that cannot answer "will this run for me?" — or one
    * where the question is meaningless, like the author's own preview — simply omits it.
+   *
+   * A `ready` verdict renders nothing: passing it is still worth doing, because the card
+   * is where a *blocked* one has to surface.
    */
   readonly runnability = input<AgentRunnability | null>(null);
 
@@ -377,31 +351,22 @@ export class AgentLaunchCardComponent {
   });
 
   /**
-   * Publisher · category, with the owner as the fallback attribution. Assembled as a
-   * list so the separator is never rendered against an empty half.
+   * Who stands behind the agent: the publisher when it has one, the owner otherwise. The
+   * department outranks the person on a published agent — that is the name the reader is
+   * being asked to trust, and the individual who happens to hold the record is noise.
    */
-  readonly attribution = computed(() => {
+  readonly author = computed(() => {
     const v = this.view();
-    const who = v.publisher?.label?.trim() || v.ownerName?.trim();
-    return [who, v.categoryLabel?.trim()].filter((part): part is string => !!part);
+    return v.publisher?.label?.trim() || v.ownerName?.trim() || '';
   });
 
-  readonly visibleCapabilities = computed(
-    () => this.view().capabilities?.slice(0, MAX_VISIBLE_CAPABILITIES) ?? [],
-  );
-
-  readonly hiddenCapabilityCount = computed(() =>
-    Math.max(0, (this.view().capabilities?.length ?? 0) - MAX_VISIBLE_CAPABILITIES),
-  );
-
-  readonly runnabilityText = computed(() => {
+  /**
+   * The blocked half of D6 only. "Ready to run for you." was a green line saying nothing
+   * happened; this one names a missing grant, which the user can act on.
+   */
+  readonly blockedText = computed(() => {
     const r = this.runnability();
-    return r ? runnabilityMessage(r) : '';
-  });
-
-  readonly runnabilityIconName = computed(() => {
-    const r = this.runnability();
-    return r ? runnabilityIcon(r) : 'heroCheckCircle';
+    return r && r.state !== 'ready' ? runnabilityMessage(r) : '';
   });
 
   isPinned(): boolean {

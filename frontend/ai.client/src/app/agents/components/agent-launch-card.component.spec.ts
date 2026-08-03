@@ -48,6 +48,12 @@ describe('AgentLaunchCardComponent', () => {
   const text = (fixture: { nativeElement: HTMLElement }) =>
     fixture.nativeElement.textContent ?? '';
 
+  /** The attribution line, span by span: `['By', 'A. Author', '·', 'Advising']`. */
+  const attribution = (fixture: { nativeElement: HTMLElement }) =>
+    Array.from(fixture.nativeElement.querySelectorAll('h2 ~ p:last-of-type span')).map((s) =>
+      (s.textContent ?? '').trim(),
+    );
+
   // ── identity (the reason this component exists) ─────────────────────────────────
   it('draws the same tile the store draws, from the agent id', () => {
     // The card this replaced hashed the first letter of the NAME into its own palette,
@@ -83,34 +89,21 @@ describe('AgentLaunchCardComponent', () => {
         categoryLabel: 'Advising',
       }),
     );
-    expect(text(published)).toContain("Registrar's Office");
-    expect(text(published)).toContain('Advising');
+    // The spans are laid out with `gap-x`, so `textContent` runs them together — read the
+    // attribution line as the parts it is actually built from.
+    expect(attribution(published)).toEqual(['By', "Registrar's Office", '·', 'Advising']);
+    expect(text(published)).not.toContain('A. Author');
     expect(published.nativeElement.querySelector('ng-icon[name="heroCheckBadge"]')).toBeTruthy();
 
     const plain = create(view({ ownerName: 'A. Author' }));
-    expect(text(plain)).toContain('A. Author');
+    expect(attribution(plain)).toEqual(['By', 'A. Author']);
     expect(plain.nativeElement.querySelector('ng-icon[name="heroCheckBadge"]')).toBeNull();
   });
 
-  // ── capabilities ────────────────────────────────────────────────────────────────
-  it('folds capabilities past the fourth into a count', () => {
-    const fixture = create(
-      view({
-        capabilities: [
-          { label: 'Catalog', kind: 'knowledge_base' },
-          { label: 'Course Search', kind: 'tool' },
-          { label: 'Calendar', kind: 'tool' },
-          { label: 'Policy Library', kind: 'knowledge_base' },
-          { label: 'Web search', kind: 'tool' },
-          { label: 'Notes', kind: 'memory_space' },
-        ],
-      }),
-    );
-
-    expect(text(fixture)).toContain('Catalog');
-    expect(text(fixture)).toContain('Policy Library');
-    expect(text(fixture)).not.toContain('Notes');
-    expect(text(fixture)).toContain('+2 more');
+  it('drops the "By" when there is only a category to show', () => {
+    // A bare "By" with nothing after it reads as a rendering failure.
+    const fixture = create(view({ categoryLabel: 'Advising' }));
+    expect(attribution(fixture)).toEqual(['Advising']);
   });
 
   // ── starters are buttons here, unlike the detail page ───────────────────────────
@@ -155,16 +148,20 @@ describe('AgentLaunchCardComponent', () => {
   });
 
   // ── D6 ──────────────────────────────────────────────────────────────────────────
-  it('renders the run line only when runnability resolved', () => {
+  it('stays silent when the agent runs fine', () => {
+    // The card is read at the moment of typing; "this works" is not news there, and the
+    // footer it used to force open pushed the starters up for nothing.
     const unknown = create(view({ listed: false }), null);
     expect(text(unknown)).not.toContain('Ready to run');
+    expect(unknown.nativeElement.querySelector('.border-t')).toBeNull();
 
     const ready = create(view({ listed: false }), {
       agentId: 'ast-1',
       state: 'ready',
       missing: [],
     });
-    expect(text(ready)).toContain('Ready to run for you.');
+    expect(text(ready)).not.toContain('Ready to run');
+    expect(ready.nativeElement.querySelector('.border-t')).toBeNull();
   });
 
   it('names what is missing when the agent is blocked', () => {

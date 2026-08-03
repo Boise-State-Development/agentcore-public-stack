@@ -44,6 +44,7 @@ from apis.shared.assistants.role_pins import (
     put_role_pins,
 )
 from apis.shared.auth import User
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.rbac.admin_service import get_app_role_admin_service
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,7 @@ async def get_role_agent_pins(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error loading default pins for role {role_id}: {e}", exc_info=True)
+        logger.error(f"Error loading default pins for role {scrub_log(role_id)}: {scrub_log(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to load default pins: {str(e)}")
 
 
@@ -120,7 +121,7 @@ async def put_role_agent_pins(
         role = await _load_role(role_id)
         await put_role_pins(role_id, request.pins, updated_by=admin.user_id)
         logger.info(
-            f"Admin {admin.email} set {len(request.pins)} default pin(s) on role {role_id}",
+            f"Admin {scrub_log(admin.email)} set {len(request.pins)} default pin(s) on role {scrub_log(role_id)}",
             extra={
                 "event": "role_agent_pins_updated",
                 "role_id": role_id,
@@ -137,5 +138,5 @@ async def put_role_agent_pins(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error saving default pins for role {role_id}: {e}", exc_info=True)
+        logger.error(f"Error saving default pins for role {scrub_log(role_id)}: {scrub_log(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to save default pins: {str(e)}")

@@ -33,6 +33,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import logging
 
+from apis.inference_api.runtime_health import InvocationActivityMiddleware
 from apis.shared.middleware.agentcore_context import AgentCoreContextMiddleware
 
 # Set up logging
@@ -141,6 +142,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Tracks in-flight work so `GET /ping` can report `HealthyBusy` while a turn
+# is streaming and `Healthy` — with a frozen `time_of_last_update` — once the
+# container is idle, which is what arms AgentCore's idle reaper. Added last so
+# it is the outermost layer: the counter must span the whole response,
+# including GZip's framing of the SSE body, not just the handler call.
+app.add_middleware(InvocationActivityMiddleware)
+logger.info("Added AgentCore Runtime activity tracking middleware")
 
 # Import routers
 #from health.health import router as health_router

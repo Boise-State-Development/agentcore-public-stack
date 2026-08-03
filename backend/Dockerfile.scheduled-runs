@@ -25,14 +25,21 @@ COPY backend/src/lambdas/scheduled_runs_dispatcher/requirements.txt /tmp/require
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Application code — namespace-package layout mirrors backend/src for the
-# apis.shared modules the handlers import. If a handler needs more, COPY
-# it here AND add the path to the scheduled-runs SOURCE_DIRS in
-# scripts/build/build-one.sh so the content-hash tag notices changes.
+# apis.shared modules the handlers import. This must cover the handlers'
+# whole import closure, including function-local imports (those still run
+# on invocation); backend/tests/supply_chain/test_lambda_image_imports.py
+# enforces it. When adding a COPY here, also add the path to the
+# scheduled-runs SOURCE_DIRS in scripts/build/build-one.sh so the
+# content-hash tag notices changes.
 COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+COPY backend/src/apis/shared/errors.py ${LAMBDA_TASK_ROOT}/apis/shared/errors.py
 COPY backend/src/apis/shared/harness/ ${LAMBDA_TASK_ROOT}/apis/shared/harness/
 COPY backend/src/apis/shared/scheduled_prompts/ ${LAMBDA_TASK_ROOT}/apis/shared/scheduled_prompts/
 COPY backend/src/apis/shared/sessions_bff/ ${LAMBDA_TASK_ROOT}/apis/shared/sessions_bff/
 COPY backend/src/apis/shared/sessions/ ${LAMBDA_TASK_ROOT}/apis/shared/sessions/
+# sessions/metadata.py lazily reaches these on its storage + EMF paths.
+COPY backend/src/apis/shared/storage/ ${LAMBDA_TASK_ROOT}/apis/shared/storage/
+COPY backend/src/apis/shared/observability/ ${LAMBDA_TASK_ROOT}/apis/shared/observability/
 
 # The two handlers themselves, as plain top-level modules.
 COPY backend/src/lambdas/scheduled_runs_dispatcher/dispatcher.py ${LAMBDA_TASK_ROOT}/dispatcher.py

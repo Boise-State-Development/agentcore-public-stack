@@ -69,6 +69,45 @@ def test_author_may_withdraw_a_pending_submission_outright():
         assert_transition(state, "private")
 
 
+def test_author_may_shelve_a_taken_down_listing():
+    """``taken_down → private``, and it is an author edge (both gates, not just the table).
+
+    Added because ``delete_assistant`` refuses every state but ``private`` while telling the
+    author of a taken-down agent to "take it back to private first" — advice for a door that
+    did not exist. The only route out was ``taken_down → in_review → private``: resubmit for
+    review purely to withdraw it a moment later, posting to the D2 queue to get somewhere the
+    author was already allowed to be.
+    """
+    assert_transition("taken_down", "private")
+    assert_author_target("private")
+
+
+def test_shelving_a_takedown_does_not_become_a_withdrawal_request():
+    """A takedown is already off the shelf, so there is nothing left to ask an admin for.
+
+    ``withdraw_listing`` picks its target with ``is_on_shelf``, which hardcodes ``taken_down``
+    to False whatever the pointer says. Asserted here because the new edge would be a real
+    hazard if that were not true: routing a taken-down listing to ``withdrawal_requested``
+    would park it in the admin queue forever over a listing nobody can see.
+    """
+    assert is_on_shelf("taken_down", None) is False
+    assert is_on_shelf("taken_down", 7) is False, "a stale pointer must not resurrect it"
+    with pytest.raises(ListingTransitionError):
+        assert_transition("taken_down", "withdrawal_requested")
+
+
+def test_shelving_a_takedown_is_not_a_way_back_into_the_store():
+    """The new edge must not shorten the route to ``published``.
+
+    ``taken_down → private`` is only useful if it stays a dead end for publication: from
+    ``private`` the author still has to submit and an admin still has to approve. If this ever
+    fails, the edge became a laundering step — pull it rather than patching the assertion.
+    """
+    assert ALLOWED_TRANSITIONS["private"] == {"in_review"}
+    with pytest.raises(ListingTransitionError):
+        assert_transition("private", "published")
+
+
 def test_a_live_listing_can_only_be_requested_down():
     """§5.1 — an author cannot pull a live listing unilaterally.
 

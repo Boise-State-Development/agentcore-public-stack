@@ -1,0 +1,89 @@
+{
+  "tables": {
+    "api-keys": [
+      "KeyHashIndex"
+    ],
+    "app-roles": [
+      "JwtRoleMappingIndex",
+      "ModelRoleMappingIndex",
+      "SkillOwnerIndex",
+      "ToolRoleMappingIndex"
+    ],
+    "audit-log": [
+      "ActorIndex",
+      "RecentIndex"
+    ],
+    "auth-providers": [
+      "EnabledProvidersIndex"
+    ],
+    "bff-sessions": [
+      "HeadlessGrantUserIndex"
+    ],
+    "fine-tuning-access": [],
+    "fine-tuning-jobs": [
+      "StatusIndex"
+    ],
+    "managed-models": [
+      "ModelIdIndex"
+    ],
+    "memory-spaces": [
+      "MemberIndex",
+      "OwnerIndex"
+    ],
+    "oauth-providers": [
+      "EnabledProvidersIndex"
+    ],
+    "oauth-user-tokens": [
+      "ProviderUsersIndex"
+    ],
+    "oidc-state": [],
+    "quota-events": [
+      "TierEventIndex"
+    ],
+    "rag-assistants": [
+      "AgentDirectoryIndex",
+      "AgentReportsIndex",
+      "DueSyncIndex",
+      "OwnerStatusIndex",
+      "SharedWithIndex",
+      "VisibilityStatusIndex"
+    ],
+    "sessions-metadata": [
+      "DueScheduleIndex",
+      "SessionLookupIndex",
+      "SessionRecencyIndex",
+      "UserTimestampIndex"
+    ],
+    "shared-conversations": [
+      "OwnerShareIndex",
+      "SessionShareIndex"
+    ],
+    "system-cost-rollup": [],
+    "system-prompts": [],
+    "user-artifacts": [
+      "SessionIndex"
+    ],
+    "user-cost-summary": [
+      "PeriodCostIndex"
+    ],
+    "user-file-uploads": [
+      "SessionIndex"
+    ],
+    "user-menu-links": [],
+    "user-quotas": [
+      "AppRoleAssignmentIndex",
+      "AssignmentTypeIndex",
+      "RoleAssignmentIndex",
+      "UserAssignmentIndex",
+      "UserOverrideIndex"
+    ],
+    "user-settings": [],
+    "users": [
+      "EmailDomainIndex",
+      "EmailIndex",
+      "StatusLoginIndex",
+      "UserIdIndex"
+    ],
+    "voice-ticket-replay": []
+  }
+}
