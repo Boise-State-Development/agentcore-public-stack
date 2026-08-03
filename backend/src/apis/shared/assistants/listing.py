@@ -64,6 +64,7 @@ LISTING_STATES: Tuple[str, ...] = (
 #   changes_requested → in_review          author resubmits after addressing the note
 #   taken_down        → in_review          author resubmits after addressing the takedown
 #                                          (the takedown dialog promises exactly this)
+#   published         → in_review          author submits an UPDATE to a live listing
 #   in_review         → published          admin approves
 #   in_review         → changes_requested  admin requests changes, with a reason
 #   published         → taken_down         admin delists, with a reason
@@ -90,6 +91,19 @@ LISTING_STATES: Tuple[str, ...] = (
 # The edges an author still owns alone are the pre-publication ones: ``private → in_review``
 # and withdrawing a *pending* submission (``in_review``/``changes_requested`` → ``private``).
 #
+# ⚠️ ``published → in_review`` is how an author ships an UPDATE, and its absence used to make
+# a published listing a dead end. Version snapshots mean an author's edits land on the draft
+# and reach nobody until a new version is approved, so the only way to get a fix in front of
+# users is to submit again — and from ``published`` there was no edge to submit along. The
+# author's alternatives were to request withdrawal (taking their own listing off the shelf to
+# fix a typo) or to wait for an admin to send it back with ``request_changes``. Neither is a
+# thing a working author should have to do, and the second one isn't even theirs to start.
+#
+# This is not a second door into the store. Submitting an update leaves ``published_version``
+# and its index key exactly where they are (``submit_listing``), so the previously approved
+# snapshot keeps serving; approval of the new one is still the only thing that changes what
+# users get. What it does open is the reverse edge — see ``author_cancel_target``.
+#
 # ⚠️ ``changes_requested`` covers two different listings — one that was never published, and
 # one that *was* and is still serving while the author revises it (``review_listing``
 # deliberately does not unpublish). Only the first may walk ``→ private`` alone; the second
@@ -108,10 +122,18 @@ ALLOWED_TRANSITIONS: Dict[Optional[str], Set[str]] = {
     "private": {"in_review"},
     "in_review": {"published", "changes_requested", "private"},
     "changes_requested": {"in_review", "private", "withdrawal_requested"},
-    "published": {"taken_down", "changes_requested", "withdrawal_requested"},
+    "published": {"in_review", "taken_down", "changes_requested", "withdrawal_requested"},
     "taken_down": {"in_review", "changes_requested"},
     "withdrawal_requested": {"private", "published", "changes_requested", "taken_down"},
 }
+
+# States a submission can be made *from* while the listing is already on the shelf — and
+# therefore the states cancelling that submission can return it to.
+#
+# ``published`` is the ordinary update. ``changes_requested`` is the one that is easy to
+# forget: an admin who requests changes on a live listing deliberately does not unpublish it
+# (``review_listing``), so that author is also updating something users can currently see.
+UPDATE_ORIGIN_STATES: Set[str] = {"published", "changes_requested"}
 
 # States an author may drive. Everything else is the reviewer's (``require_admin``).
 #
@@ -120,6 +142,12 @@ ALLOWED_TRANSITIONS: Dict[Optional[str], Set[str]] = {
 # because "an author cannot pull a live listing" deserves a real gate and not just an absent
 # edge in the table. Both checks run on the author path: the table says the move is legal at
 # all, this says the author is allowed to be the one making it.
+#
+# ⚠️ ``published`` and ``changes_requested`` stay out even though an author cancelling an
+# update lands on one of them. Widening this set would be the wrong fix by a mile: from
+# ``in_review`` the author would then be able to walk their *own first submission* to
+# ``published``. That act is narrow, has its own gate, and derives its target from the
+# recorded origin rather than accepting one — see ``author_cancel_target``.
 AUTHOR_TARGET_STATES: Set[str] = {"in_review", "private", "withdrawal_requested"}
 
 # Listing states whose Agent is live in the store.
@@ -204,6 +232,48 @@ def assert_author_target(target: str) -> None:
         raise ListingAuthorityError(
             f"Moving a listing to '{target}' is a reviewer's decision, not the author's."
         )
+
+
+def author_cancel_target(submitted_from: Optional[str]) -> str:
+    """Where cancelling a pending *update* puts the listing back, or raise.
+
+    An author with a live listing who submits an update and then changes their mind is doing
+    something the ordinary withdraw path gets badly wrong: it reads "there is something on
+    the shelf" and turns their cancellation into a ``withdrawal_requested`` — a request to
+    pull the whole listing, sitting in an admin's queue, when all they wanted was to take
+    back an edit. So cancelling an update is its own act, and this is where its target comes
+    from.
+
+    **Returns the target rather than checking one.** The caller has no business choosing
+    here: the only safe answer is the state the submission came *from*, and a function that
+    validated a proposed target would let a caller propose ``published`` for a listing that
+    was in ``changes_requested`` — silently discarding an outstanding change request, and
+    publishing something no admin approved. That is the identical trap ``withdrawal_from``
+    exists to close on the withdrawal path (see ``ALLOWED_TRANSITIONS``), so it is closed the
+    same way: record the origin on the way in, and read it on the way out.
+
+    ``in_review → published`` is not a door into the store here for the same reason declining
+    a withdrawal isn't: the listing never left. ``submit_listing`` leaves ``published_version``
+    and its index key untouched, so this returns the record to what the store was already
+    serving. Approval remains the only edge that *changes* what users get.
+
+    ⚠️ Raising when ``submitted_from`` is absent is load-bearing, not defensive. Absent means
+    "this submission was not an update to a live listing" — a first submission, or one from
+    ``private``/``taken_down`` — and those cancel to ``private`` down the ordinary path. If
+    this ever answered a default instead, a first-time submission could walk itself into
+    ``published`` without a reviewer, which is the one thing the machine must never allow.
+    """
+    if submitted_from is None:
+        raise ListingAuthorityError(
+            "This submission is not an update to a live listing, so there is nothing to "
+            "return it to. Withdraw it instead."
+        )
+    if submitted_from not in UPDATE_ORIGIN_STATES:
+        raise ListingAuthorityError(
+            f"A submission from '{submitted_from}' is not an update to a live listing; "
+            "cancelling it cannot put it back there."
+        )
+    return submitted_from
 
 
 def is_published(state: Optional[str]) -> bool:

@@ -38,6 +38,12 @@ export type ListingStatusPart = 'all' | 'badge' | 'note';
       }
 
       @if (showNote()) {
+        @if (stillLive()) {
+          <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
+            {{ stillLive() }}
+          </p>
+        }
+
         @if (note(); as text) {
           <div
             class="mt-2 rounded-2xl border px-3 py-2 text-xs/5"
@@ -83,6 +89,27 @@ export class ListingStatusComponent {
   });
 
   readonly note = computed(() => this.listing()?.reviewNote?.trim() || null);
+
+  /**
+   * The sentence that stops the badge from lying, or `null`.
+   *
+   * "In review" and "Changes requested" both describe a *submission*, and an author whose
+   * agent is in the store reads them as a statement about their listing — that it came
+   * down, or is about to. Neither is true: submitting an update leaves the approved version
+   * serving, and requesting changes on a live listing deliberately does not unpublish it.
+   * The pointer is what tells them apart, which is why `publishedVersion` is on the wire.
+   */
+  readonly stillLive = computed(() => {
+    const l = this.listing();
+    if (!l?.publishedVersion) return null;
+    if (l.state === 'in_review') {
+      return 'Your published version stays in the store, unchanged, until this update is approved.';
+    }
+    if (l.state === 'changes_requested') {
+      return 'Your published version is still in the store while you make these changes.';
+    }
+    return null;
+  });
 
   /**
    * Who wrote the note depends on the state, and mislabelling it is worse than not

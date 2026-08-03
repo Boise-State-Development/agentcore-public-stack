@@ -89,6 +89,21 @@ export interface AgentListingBlock {
   reviewNote?: string;
   /** Append-only log of admin presentation edits (D13). */
   adminEdits?: AdminEdit[];
+  /**
+   * Which snapshot the store is serving, or absent when nothing is published.
+   *
+   * Read here as a fact about *now*: a listing back `in_review` with this set is an
+   * update over something users can still see, and the UI has to say so — "In review"
+   * alone reads as "not live", which is wrong and alarming for an author whose agent is.
+   */
+  publishedVersion?: number;
+  /**
+   * Where a pending update came from, and therefore where cancelling it puts it back.
+   *
+   * ⚠️ Meaningful only while `state === 'in_review'` — an earlier cycle can leave a value
+   * behind, and the backend says so on the field. Every read here gates on the state.
+   */
+  submittedFrom?: ListingState;
 }
 
 /** Author submits an Agent for review (D2). */

@@ -185,4 +185,20 @@ describe('SubmitListingDialogComponent — category preselection', () => {
 
     expect(component.category()).toBe('');
   });
+
+  // ── an update is not a first appearance ────────────────────────────────────────
+  it('knows an update from a submission by what is published, not by state', async () => {
+    // A listing an admin sent back for changes keeps serving while the author revises it,
+    // so the state name alone gets this wrong. Promising "an admin reviews this before it
+    // appears in the store" to someone whose agent is already in the store reads as though
+    // submitting had taken it down.
+    const update = build({
+      listing: { state: 'changes_requested', category: 'Teaching', publishedVersion: 2 },
+    });
+    expect(update.isUpdate()).toBe(true);
+
+    const neverPublished = build({ listing: { state: 'changes_requested', category: 'Teaching' } });
+    expect(neverPublished.isUpdate()).toBe(false);
+    expect(neverPublished.isResubmission()).toBe(true);
+  });
 });

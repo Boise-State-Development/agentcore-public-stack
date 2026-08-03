@@ -74,11 +74,21 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
         <div class="flex items-start justify-between gap-3 px-6 pt-5">
           <div class="min-w-0">
             <h2 id="submit-listing-title" class="text-lg/7 font-semibold text-gray-900 dark:text-white">
-              {{ isResubmission() ? 'Submit again for review' : 'Submit to the marketplace' }}
+              @if (isUpdate()) {
+                Submit an update
+              } @else {
+                {{ isResubmission() ? 'Submit again for review' : 'Submit to the marketplace' }}
+              }
             </h2>
             <p id="submit-listing-description" class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-              An admin reviews <span class="font-medium">{{ data.agentName }}</span> before it
-              appears in the store. You'll see their decision here.
+              @if (isUpdate()) {
+                An admin reviews your changes before they reach anyone. The version of
+                <span class="font-medium">{{ data.agentName }}</span> in the store stays live and
+                unchanged until they approve.
+              } @else {
+                An admin reviews <span class="font-medium">{{ data.agentName }}</span> before it
+                appears in the store. You'll see their decision here.
+              }
             </p>
           </div>
           <button
@@ -230,9 +240,14 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
             }
 
             <p class="mt-5 text-xs/5 text-gray-500 dark:text-gray-400">
-              You'll be credited as the publisher. An admin may reattribute the listing to a
-              department or the university at approval — that changes the name shown with it in
-              Discover and nothing about who can run it.
+              @if (data.listing) {
+                This keeps whoever the listing is already credited to.
+              } @else {
+                You'll be credited as the publisher.
+              }
+              An admin may reattribute the listing to a department or the university at
+              approval — that changes the name shown with it in Discover and nothing about who
+              can run it.
             </p>
 
             @if (error(); as message) {
@@ -292,6 +307,16 @@ export class SubmitListingDialogComponent implements OnInit {
   readonly taglineMax = TAGLINE_MAX;
 
   readonly isResubmission = computed(() => !!this.data.listing);
+
+  /**
+   * A resubmission over something users can currently see — which changes what the dialog
+   * can honestly promise. "An admin reviews this before it appears in the store" is false
+   * for a listing already in the store, and reads as though submitting took it down.
+   *
+   * `publishedVersion` is the fact, not the state name: a listing an admin sent back for
+   * changes keeps serving while the author revises it.
+   */
+  readonly isUpdate = computed(() => !!this.data.listing?.publishedVersion);
 
   readonly canSubmit = computed(
     () =>
