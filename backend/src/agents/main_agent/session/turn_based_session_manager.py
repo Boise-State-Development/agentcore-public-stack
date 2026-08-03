@@ -187,14 +187,23 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         self._valid_cutoff_indices = []
         self._all_messages_for_summary = []
 
-        # The cutoff cache is also re-derived per turn in `update_after_turn`
-        # so it stays correct even when messages load via hooks after init
-        # (the AgentCoreMemory path leaves `agent.messages` empty here on
-        # subsequent turns of an existing session — `_is_new_session` is True
-        # because `read_session()` doesn't find the SDK's session metadata
-        # event). The init-time pass below is still needed to apply prior
-        # checkpoint state (skip + summary prepend + truncation) to messages
-        # the SDK *did* load.
+        # The cutoff cache is also re-derived per turn in `update_after_turn`,
+        # so it stays correct regardless of what `super().initialize()` loaded.
+        #
+        # `agent.messages` is normally populated by now: the SDK takes its
+        # RESTORE branch on any subsequent turn of an existing session, on a
+        # cold container as readily as a warm one. That branch needs
+        # `read_session()` and `read_agent()` to both return non-None, which
+        # holds because `persistence_mode` defaults to FULL (turn 1 writes the
+        # SESSION and AGENT metadata events these look up) and `agent_id` is
+        # always Strands' default `"default"` — we never pass one. All three
+        # reads are `list_events` calls against AgentCore Memory keyed on
+        # memory/actor/session, so restore carries no in-process state and does
+        # not depend on the agent cache. The `Restore @init` line logged just
+        # above reports what actually landed.
+        #
+        # The empty case is still reachable — a genuinely new session, or a
+        # restore that returned nothing — so the guard stays.
         if not agent.messages:
             return
 

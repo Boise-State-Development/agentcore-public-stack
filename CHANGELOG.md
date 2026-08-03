@@ -20,7 +20,7 @@ Feature release built around two things that were quietly costing us. A publishe
 
 ### ⚡ Performance
 
-- **AgentCore microVMs are reaped when idle instead of running to `maxLifetime`.** `/ping` returned a fresh `time_of_last_update` on every ~2s poll, so reported idle time never exceeded ~2s and the 900s `idleRuntimeSessionTimeout` could never fire. The payload moves to `apis/inference_api/runtime_health.py`, which reports `HealthyBusy` during a turn and `Healthy` with a **frozen** timestamp once idle. Measured in prod: mean microVM life stepped from 21.5–33.6 min to 488–496 min at the deploy of #338; July burned 71,954 microVM-hours at 1.23% CPU utilization for 9,568 turns. **Operators:** this shrinks the warm-microVM pool, so cold starts become more common — see the deployment notes on cloud conversation continuity (#827)
+- **AgentCore microVMs are reaped when idle instead of running to `maxLifetime`.** `/ping` returned a fresh `time_of_last_update` on every ~2s poll, so reported idle time never exceeded ~2s and the 900s `idleRuntimeSessionTimeout` could never fire. The payload moves to `apis/inference_api/runtime_health.py`, which reports `HealthyBusy` during a turn and `Healthy` with a **frozen** timestamp once idle. Measured in prod: mean microVM life stepped from 21.5–33.6 min to 488–496 min at the deploy of #338; July burned 71,954 microVM-hours at 1.23% CPU utilization for 9,568 turns. **Operators:** this shrinks the warm-microVM pool, so cold starts become more common; conversation history is unaffected, since it restores from AgentCore Memory at agent init independently of the microVM (#827)
 
 ### 🐛 Fixed
 
