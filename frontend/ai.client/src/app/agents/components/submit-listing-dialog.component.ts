@@ -156,15 +156,27 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
               <p class="text-xs/5 text-gray-500 dark:text-gray-400">
                 Where it appears in Discover. An admin may move it.
               </p>
+              <!--
+                ⚠️ The selection lives on the options ([selected]), NOT as [value] on the
+                select. The category list arrives from an await in ngOnInit, so on the first
+                render the preselected category names an option that does not exist yet:
+                setting select.value matches nothing, the browser silently resets to index 0,
+                and when the options finally render it displays the first one. The author then
+                sees a category they never chose — reading as though submitting had moved
+                their listing — while the signal still holds the right value underneath.
+                Binding on the option instead resolves as each one renders, which is exactly
+                when the value becomes matchable.
+              -->
               <select
                 id="listing-category"
-                [value]="category()"
                 (change)="onCategoryChange($event)"
                 class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
               >
-                <option value="" disabled>Choose a category…</option>
+                <option value="" disabled [selected]="!category()">Choose a category…</option>
                 @for (option of categories(); track option.id) {
-                  <option [value]="option.id">{{ option.label }}</option>
+                  <option [value]="option.id" [selected]="option.id === category()">
+                    {{ option.label }}
+                  </option>
                 }
               </select>
               @if (!categories().length) {

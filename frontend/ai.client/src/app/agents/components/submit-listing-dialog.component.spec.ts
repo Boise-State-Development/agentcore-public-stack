@@ -201,4 +201,72 @@ describe('SubmitListingDialogComponent — category preselection', () => {
     expect(neverPublished.isUpdate()).toBe(false);
     expect(neverPublished.isResubmission()).toBe(true);
   });
+
+  /**
+   * ⚠️ Asserts the **rendered** select, not `category()`.
+   *
+   * Every other test here reads the signal, and the signal was never the broken half — which
+   * is how a live desync survived a describe block named for exactly this behaviour. The
+   * picker showed `Administration` on a `Student Support` listing (verified in dev), because
+   * `categories()` resolves after the first render and a `[value]` on the select had nothing
+   * to match yet. The author saw a shelf they never chose.
+   *
+   * The ordering below is the test, and it is subtler than "options load late". The whole
+   * form sits behind `@if (loading())`, so the select never renders with an empty list —
+   * select and options render together, in one pass, and Angular applies an element's own
+   * bindings before it creates that element's children. A `[value]` on the select therefore
+   * lands while the select still has no options, and the browser drops it. Binding on the
+   * options cannot lose that race, because the option *is* the thing being created.
+   *
+   * So: first render (loading, no form), flush the load, second render (the real one).
+   */
+  it('shows the author the shelf their listing is already on', async () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: DialogRef, useValue: { close: () => undefined } },
+        {
+          provide: DIALOG_DATA,
+          useValue: {
+            agentId: 'ast-001',
+            agentName: 'Policy Lookup',
+            listing: { state: 'published', category: 'Student Support', publishedVersion: 2 },
+          },
+        },
+        {
+          provide: AgentListingService,
+          useValue: {
+            // Deliberately not first in the list: the bug selects index 0, so a category
+            // that sorts first would let it pass.
+            loadCategories: async () => [
+              { id: 'Administration', label: 'Administration' },
+              { id: 'Teaching', label: 'Teaching' },
+              { id: 'Student Support', label: 'Student Support' },
+            ],
+            preflight: async (): Promise<ListingPreflight> => ({
+              agentId: 'ast-001',
+              exposedSkills: [],
+              blockReason: null,
+              requiresPublic: false,
+              reachability: 'everyone',
+            }),
+            submit: async () => ({ listing: { state: 'in_review' } }),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(SubmitListingDialogComponent);
+    fixture.detectChanges();
+    // A macrotask, not `whenStable` — the component's loads are bare promises, and the
+    // form stays behind `loading()` until they settle.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    const select: HTMLSelectElement =
+      fixture.nativeElement.querySelector('#listing-category');
+    expect(select.value).toBe('Student Support');
+    expect(select.options[select.selectedIndex].text.trim()).toBe('Student Support');
+    expect(fixture.componentInstance.category()).toBe('Student Support');
+  });
 });
