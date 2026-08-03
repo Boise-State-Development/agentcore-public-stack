@@ -256,6 +256,44 @@ An author can still take an Agent **private before it is ever published** — th
 `private → in_review` and `in_review → private` (withdraw a pending submission)
 edges are unchanged. The new constraint applies only once something is live.
 
+### 5.1a Updating a live listing — added 2026-08-01
+
+**The gap this closes was created by §3 and missed by §5.1.** Once the store serves a
+snapshot, an author's edits reach nobody until a new version is approved — so submitting
+again is the *only* way to ship a fix. But `published` had no edge to `in_review`, and
+§5.1 had just removed `published → private`. A published author's routes to their own
+users were: request withdrawal (take the listing off the shelf to fix a typo, and wait
+for an admin to grant it), or wait for an admin to send it back with `request_changes`,
+which is not theirs to start. In practice a live listing was a dead end.
+
+```
+published → in_review     author submits an UPDATE to a live listing
+```
+
+This is not a second door into the store. `submit_listing` carries `publishedVersion`
+and its index key through untouched, so the approved snapshot keeps serving for the whole
+review; approval still promotes `submittedVersion` and is still the only edge that changes
+what users get.
+
+**Cancelling an update is its own act**, and the reverse edge is the subtle half.
+Withdrawal picks its target from `is_on_shelf`, so an author cancelling a pending update
+was read as an author asking to delist — a request they never made, parked in an admin's
+queue. So a submission made over something already on the shelf records where it came
+from (`AgentListing.submittedFrom`), and cancelling returns it there:
+
+```
+in_review → published            author cancels an update to a live listing
+in_review → changes_requested    ...one submitted while a change request was outstanding
+```
+
+Both are legal edges already; what makes them safe is that the target is *derived from the
+recorded origin* rather than accepted from a caller (`listing.author_cancel_target`), and
+that the origin is absent for any submission not over a live listing. That is the exact
+mechanism — and the exact reasoning — behind `withdrawal_from` in §5.1: assuming
+`published` would discard an outstanding change request and publish something no admin
+approved. `AUTHOR_TARGET_STATES` deliberately does **not** gain `published`; widening it
+would let an author walk their own unreviewed first submission into the store.
+
 ### 5.2 Delete is refused while a listing exists
 
 `delete_assistant` gains a listing check and refuses when `listing.state` is anything

@@ -193,6 +193,26 @@ class AgentListing(BaseModel):
             "free of a second door into the store."
         ),
     )
+    submitted_from: Optional[ListingState] = Field(
+        None,
+        alias="submittedFrom",
+        description=(
+            "Set only while a submission is an *update to a listing that is already on the "
+            "shelf*, and names the state it came from, so cancelling it restores exactly "
+            "that. The withdrawal-path twin of ``withdrawal_from``, and for the same reason: "
+            "two states can be live (``published``, and a ``changes_requested`` listing that "
+            "was published before the admin sent it back), so assuming ``published`` would "
+            "discard an outstanding change request and publish something no admin approved.\n\n"
+            "Absent means the submission is not over a live listing — a first submission, or "
+            "one from ``private``/``taken_down`` — which cancels to ``private`` instead. That "
+            "distinction is what keeps an author from walking their own first submission into "
+            "``published``; see ``listing.author_cancel_target``.\n\n"
+            "Meaningful only while ``state == in_review``, and every submission rewrites it, "
+            "so a value an earlier cycle left behind is never read. Any new reader must gate "
+            "on the state as well — the field answers 'where did the pending submission come "
+            "from?', which is not a question a listing with no pending submission has."
+        ),
+    )
     submitted_version: Optional[int] = Field(
         None,
         alias="submittedVersion",

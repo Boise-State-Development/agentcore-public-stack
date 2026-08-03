@@ -13,6 +13,7 @@ import { ConfigService } from '../../services/config.service';
 import { AgentService } from '../services/agent.service';
 import { AgentListingService } from '../services/agent-listing.service';
 import { ShareEntry } from '../../assistants/models/assistant.model';
+import { AgentListingBlock } from '../models/store.model';
 
 /** Network-bound doubles. None of the behaviour under test reaches them. */
 function baseProviders(overrides: {
@@ -232,6 +233,84 @@ describe('ShareAgentDialogComponent', () => {
       await (isolated as any).onSave();
 
       expect(updateAssistant).toHaveBeenCalledWith('ast-test', { visibility: 'SHARED' });
+    });
+  });
+
+  /**
+   * The marketplace controls, which have to mirror the backend transition table exactly —
+   * a button the machine refuses is a dead click, and a missing button is a dead end.
+   *
+   * The dead end is why these exist: `published` was absent from `canSubmit`, so an author
+   * whose agent was live had no way to ship a fix. Their edits land on the draft and reach
+   * nobody until a new version is approved, and the only routes out were to request
+   * withdrawal (taking their own listing down over a typo) or to wait for an admin.
+   */
+  describe('marketplace controls', () => {
+    function withListing(listing: Partial<AgentListingBlock> | undefined) {
+      (component as any).listing.set(
+        listing
+          ? ({
+              state: 'published',
+              category: 'Teaching',
+              publisherId: 'user-user-001',
+              ...listing,
+            } as AgentListingBlock)
+          : undefined,
+      );
+      return component as any;
+    }
+
+    it('offers an update on a published listing', () => {
+      const c = withListing({ state: 'published', publishedVersion: 2 });
+      expect(c.canSubmit()).toBe(true);
+      expect(c.submitLabel()).toBe('Submit an update');
+    });
+
+    it('calls a first submission what it is', () => {
+      const c = withListing(undefined);
+      expect(c.canSubmit()).toBe(true);
+      expect(c.submitLabel()).toBe('Submit to marketplace');
+    });
+
+    it('offers nothing to submit while a submission is already pending', () => {
+      expect(withListing({ state: 'in_review' }).canSubmit()).toBe(false);
+    });
+
+    it('offers nothing to submit while a withdrawal is awaiting a decision', () => {
+      // `withdrawal_requested → in_review` is not an edge; the admin decides first.
+      expect(withListing({ state: 'withdrawal_requested', publishedVersion: 2 }).canSubmit()).toBe(
+        false,
+      );
+    });
+
+    it('calls taking back a pending update a cancellation, not a withdrawal', () => {
+      // ⚠️ The author is taking back an edit, and the listing goes on serving the version
+      // it always was. "Withdraw submission" reads as though the live listing were at
+      // stake, and the confirm copy behind it promised an admin review that never happens.
+      const c = withListing({
+        state: 'in_review',
+        publishedVersion: 2,
+        submittedFrom: 'published',
+      });
+      expect(c.hasPendingUpdate()).toBe(true);
+      expect(c.withdrawLabel()).toBe('Cancel update');
+    });
+
+    it('still calls a first submission a withdrawal', () => {
+      const c = withListing({ state: 'in_review' });
+      expect(c.hasPendingUpdate()).toBe(false);
+      expect(c.withdrawLabel()).toBe('Withdraw submission');
+    });
+
+    it('does not read a stale origin left behind by an earlier cycle', () => {
+      // `submittedFrom` is meaningful only while `in_review`; approval does not clear it.
+      const c = withListing({
+        state: 'published',
+        publishedVersion: 3,
+        submittedFrom: 'published',
+      });
+      expect(c.hasPendingUpdate()).toBe(false);
+      expect(c.withdrawLabel()).toBe('Request withdrawal');
     });
   });
 
