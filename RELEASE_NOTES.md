@@ -1,3 +1,151 @@
+# Release Notes — v1.13.0
+
+**Release Date:** August 2, 2026
+**Previous Release:** v1.12.3 (August 1, 2026)
+
+---
+
+> 🖥️ **Backend + frontend deploy** — run `backend.yml`, then `frontend-deploy.yml`. **No CDK deploy**, no new AWS resources, no configuration change, no data migration. There are zero `infrastructure/lib/` changes in this release, so `platform.yml` has nothing to apply.
+
+---
+
+## Highlights
+
+Two things in this release were quietly costing us, in opposite currencies.
+
+A **published Agent listing was a dead end**. Version snapshots made what users run immutable — which is the point — but they also meant an author's edits landed on a draft that reached nobody, and `published` had no edge back into review. Fixing a typo meant asking for the Agent to be taken off the shelf. This release adds the update path: authors submit an update to a live listing, and the approved version keeps serving every user for the entire review.
+
+Meanwhile the **AgentCore Runtime's idle reaper had been disabled since May** — not by configuration, but by our own `/ping` handler, which refreshed its idle timestamp on every poll and so reported a microVM as busy forever. Every microVM ran its full 8-hour `maxLifetime` no matter how long ago its last turn ended. In July that was 71,954 microVM-hours at 1.23% CPU utilization to serve 9,568 turns — **73% of the platform bill**. The handler now reports the contract AgentCore actually reads.
+
+Alongside those, **three Lambda images that had been failing at import on every single invocation** are fixed — document ingestion and scheduled KB sync both come back — and the DynamoDB GSI limit that took production down on 2026-08-01 gains a pre-merge CI guard so no future release can repeat it.
+
+---
+
+## Shipping an update to a live listing
+
+An author with a published Agent could not get a change to their own users. Their edits went to the draft; the store served the approved snapshot. The only routes were to request withdrawal — taking the Agent off the shelf to fix a typo — or to wait for an admin to send it back with `request_changes`, which is not the author's to start.
+
+The listing state machine now has a `published → in_review` edge.
+
+This is not a second door into the store. `submit_listing` carries `published_version` and its index key through untouched, so the approved snapshot keeps serving for the whole review, and approval remains the only edge that changes what users get. `AUTHOR_TARGET_STATES` deliberately does **not** gain `published` — widening it would let an author walk their own unreviewed first submission onto the shelf.
+
+Cancelling an update is the subtle half. Withdrawal picks its target from `is_on_shelf`, so cancelling a pending update previously read as the author asking to delist — a request they never made, parked in an admin's queue. A submission made over something already on the shelf now records its origin, and cancelling derives the target from that rather than accepting one. Assuming `published` instead would discard an outstanding change request and publish something no admin approved.
+
+### Backend
+- `apis/shared/assistants/listing.py` — `published → in_review` in `ALLOWED_TRANSITIONS`; `AgentListing.submittedFrom` records a submission's origin state
+- `apis/app_api/agent_designer/services/listing_service.py` — cancel derives its target from `submitted_from`, the same mechanism as `withdrawal_from`; an author's silence on `publisherId` now keeps the listing's **current** publisher rather than resolving back to their individual profile, so an update no longer silently undoes a D12 reattribution
+- `apis/shared/assistants/models.py` — `publishedVersion` and `submittedFrom` on the wire
+
+### Frontend
+- `share-agent-dialog.component.ts` / `submit-listing-dialog.component.ts` — "Submit an update" / "Cancel update" wording, driven by whether a listing is already live
+- `listing-status.component.ts` — a line on the status badge stating that the published version stays live during review
+
+### Test Coverage
+226+ lines in `test_agent_listing.py` and 105+ in `test_agent_listing_state_machine.py`, plus SPA specs for both dialogs.
+
+---
+
+## The idle reaper, re-armed
+
+`/ping` returned `time_of_last_update: int(time.time())` on every poll. AgentCore measures idleness as `now - time_of_last_update` and polls roughly every two seconds — so the reported idle time was never more than about 2 seconds, and the 900-second `idleRuntimeSessionTimeout` could never fire. Every microVM instead ran to `maxLifetime`: 8 hours, however long ago its last turn finished.
+
+The cost is measurable and large. Mean microVM life stepped from 21.5–33.6 minutes (May 13–14) to 488–496 minutes from May 28 onward, exactly at the deploy of #338 which introduced the moving timestamp. July: 9,568 turns, 71,954 microVM-hours, 1.23% CPU utilization, 217,806 GB-hours — about $2,058, or 73% of the platform bill. On August 1, 88 of 89 microVMs served exactly one turn and then sat idle for eight hours.
+
+### Backend
+- `apis/inference_api/runtime_health.py` (new) — reports the contract the upstream SDK implements: `HealthyBusy` while a turn is in flight, `Healthy` with a **frozen** timestamp once idle, so idle time actually accrues and the reaper fires on schedule
+- `apis/inference_api/main.py` — registers `InvocationActivityMiddleware`, which is **pure ASGI rather than `BaseHTTPMiddleware`**. The unit of work is the streamed SSE body, not the handler call: `BaseHTTPMiddleware` hands back control the moment the handler returns a `StreamingResponse`, before the agent has produced a token. A pure-ASGI `await self.app(...)` does not return until the body is fully sent, so `try/finally` spans the real turn and cannot leak the counter on client disconnect or handler error
+
+Two deliberate deviations from the upstream SDK, both protecting #338's original fix:
+
+- The timestamp refreshes on every poll **while busy** rather than freezing at turn start, so a turn running past `idleRuntimeSessionTimeout` is never reaped mid-stream even if the platform reads only the timestamp and ignores the status (`bedrock-agentcore-sdk-python#471`)
+- Transitions are stamped by `enter()`/`exit()` rather than sampled when a poll happens to observe them. The SDK infers them inside its ping handler, so a turn shorter than the poll interval is never seen as activity — leaving the idle clock running from process start, which can strand a just-served session one poll away from a reap
+
+### Infrastructure
+None. The runtime uses AWS's default lifecycle values; this was never a configuration problem.
+
+### Test Coverage
+268 lines in `test_runtime_health.py` covering the ping contract, busy/idle transitions, and the middleware's `try/finally` spanning the streamed body.
+
+---
+
+## Three Lambda images were failing at import
+
+`apis/shared/timestamps.py` landed in `8544d87a` and is imported by `documents/ingestion/status.py`, but neither `Dockerfile.rag-ingestion` nor `Dockerfile.kb-sync` copied it. Both images had been raising `ModuleNotFoundError` on **every invocation** ever since — rag-ingestion and both kb-sync Lambdas at a 100% error rate in dev since roughly 2026-07-27, and in prod since the 2026-08-01 18:46 UTC deploy.
+
+Nothing surfaced it. The S3 events fired, the crawler staged its markdown correctly, and the container died at import before any handler code ran. Documents simply sat at `uploading` forever, and scheduled KB sync stopped running.
+
+Two more gaps of the same shape were already present and are closed here:
+
+- **kb-sync** omitted `assistants/` and `dynamo_errors.py`, reached from `document_service.soft_delete_document` through a `try/except ImportError` that logs "boto3 is required" and returns `None` — so the worker's miss-eviction path silently no-opped rather than crashing
+- **scheduled-runs** omitted `errors.py`, `storage/` and `observability/`, reached from `sessions/metadata.py`
+
+### Test Coverage
+216 lines in `test_lambda_image_imports.py`, which walks each image's real import graph from its handler entrypoints and fails on anything not COPYed. It deliberately does **not** distinguish module-level imports from function-local ones — `handler.py` reaches `status.py` via a function-local import, so a module-level-only check would pass the very bug this fixes. It also resolves bare module names against each image's flattened COPY root, without which the walk never enters `status.py` at all.
+
+---
+
+## A CI guard for the GSI limit that took prod down
+
+Release 1.12.0 added two GSIs to the existing `{prefix}-rag-assistants` table in a single CloudFormation update. DynamoDB's `UpdateTable` API permits exactly one GSI creation or deletion per call, so the update failed and CloudFormation rolled back every other resource in the deploy with it — including a brand-new audit-log table. `backend.yml` and `frontend-deploy.yml` succeeded independently, leaving production running new code against old infrastructure with the agent store returning 500. Recovery took two more patch releases.
+
+Dev could not have caught it. The two indexes reached `develop` in separate merges, so dev got a platform deploy for each and never saw them collapse into one update. Only an environment that jumps a whole release at once is exposed — which means no amount of soak time would have surfaced it.
+
+The limit applies to `UpdateTable` only; `CreateTable` accepts any number of indexes, which is why the new audit-log table's two GSIs were never the problem. The right question is therefore *"does any **existing** table gain more than one GSI?"*, not *"are there new indexes?"*.
+
+- `infrastructure/gsi-inventory.json` — a committed, synth-generated inventory of every DynamoDB table and its indexes
+- `infrastructure/test/gsi-update-limit.test.ts` — synthesizes `PlatformStack` and fails if the committed inventory has drifted from the CDK code, so the inventory can never go stale silently. Regenerate with `UPDATE_GSI_INVENTORY=1 npx jest gsi-update-limit`
+- `scripts/release/check-gsi-update-limit.mjs` — dependency-free diff of the inventory between `origin/main` and the PR. Exempts tables present only on the branch (`CreateTable`) and tables dropped entirely (`DeleteTable`); counts creations and deletions together, since the API limit is one GSI *operation* per update, not one addition
+- `.github/workflows/gsi-update-limit.yml` — runs on PRs into `main` only. Diffs two committed JSON files: no `npm install`, no CDK synth, a couple of seconds
+
+Verified by replaying the real incident: the 1.12.0 inventory delta fails the check naming both indexes, the 1.12.1/1.12.2 split passes, and the new audit-log table is correctly exempt.
+
+> **Note for this release only:** the automated check reports **SKIPPED**, because `main` has no `gsi-inventory.json` to diff against until this release lands. The prerequisite was verified by hand instead — there are **zero** `infrastructure/lib/` changes in this release, so no table gains or loses any index. From 1.13.1 onward the check runs for real.
+
+---
+
+## Bug fixes
+
+- **The submit dialog showed authors the wrong category.** The listing's category was preselected into `category()`, but the select rendered `Administration` — the first option — so an author updating a `Student Support` listing saw a shelf they never chose, reading as though submitting had moved it. The cause is `[value]` on the `<select>`: the whole form sits behind `@if (loading())`, so the select and its options render in one pass, and Angular applies an element's own bindings before creating its children. `select.value` was set while the select still had no options, the browser dropped it, and the first option won. Binding `[selected]` on the options cannot lose that race. Display-only — `category()` held the right value throughout, so submissions always sent the correct shelf. The hazard ran the other way: an author who *wanted* `Administration`, saw it already selected, and submitted something else. Pre-existing but only reachable from `changes_requested` and `taken_down` until this release made updating a live listing the common path (#828)
+- **The agent store and admin problem-report queue no longer return 500 when a GSI is absent.** An absent index is a legitimate transient deploy state, not a programming error — CloudFormation reports success while a GSI is still `CREATING`, deploys can roll back, and `platform.yml` and `backend.yml` are separate workflows that can land out of order. All three converged on 2026-08-01, and the agent store returned 500 to every user for the two releases it took to repair the infrastructure — in the release that opened the store's navigation to GA. Both reads now catch the missing-index case specifically, log at WARNING with the index name, and return an empty result with no cursor. The match is narrow on purpose: catching every `ValidationException` would hide malformed key conditions and bad cursors behind a permanently empty surface, and catching every `ClientError` would turn throttling into "there is nothing here". `DueSyncIndex` on the KB-sync dispatcher is deliberately left loud — a background sweep that silently returns nothing means scheduled syncs stop with only a warning. Writes and admin mutations are untouched and still fail loudly (#822)
+- **Deleting a taken-down Agent no longer requires a round trip through the review queue.** `delete_assistant` refuses every listing state but `private` and told the author of a taken-down Agent to "take it back to private first" — advice for a door that did not exist. The only route out was to resubmit for review and withdraw a moment later: a junk entry in the admin queue as the price of a delete. The edge is added rather than the refusal reworded, because the audit-grounds justification never held — `taken_down → in_review → private` was always walkable by the author alone. Safe in the direction that matters: `is_on_shelf` hardcodes `taken_down` to `False`, so this can never route to `withdrawal_requested` or pull something off a shelf it is not on, and approval is still the only door into the store (#824)
+- **`heroBookmark` had nothing to resolve to** on the Pinned page's empty state — `pinned.page.ts` imported `provideIcons` and `heroBookmark` and called neither, and the SPA registers icons per-component with no root-level registration (#815)
+
+---
+
+## The agent launch card, simplified
+
+The card is read at the moment of typing, and two of its blocks were restating things the user had already been told on the way in: the capability chips duplicated the detail page's "what it can access", and "Ready to run for you." was a green line announcing that nothing happened. Both are gone, along with `capabilities` on the view model — the projection was its only writer.
+
+Only the blocked half survives. "You can't run this and here is what's missing" is news a user can act on; "this works" is not. The footer bar now renders only for a blocked verdict or the Agent details link, so a healthy private Agent has no footer at all.
+
+Attribution reads "By &lt;name&gt;" rather than a bare name, which under a description read as a caption instead of an author. The name carries the weight and "By" stays muted, so the eye lands on who made it. A verified publisher keeps its treatment and still outranks `ownerName` outright — on a published departmental Agent the name to trust is the department, not whoever holds the record. The "By" is dropped when there is no name at all, so a category-only Agent never renders a dangling preposition (#825)
+
+---
+
+## 🔒 Security
+
+Ten `py/log-injection` findings CodeQL raised against the 1.12.0 delta are closed, plus three adjacent findings that turned out to be real defects rather than dead code (the missing icon registration and the `_ROLE_GATED_KINDS` drift above).
+
+`scrub_log` (`apis/shared/security/log_sanitize.py`) already existed and was used in six files; the marketplace, audit and role-pin code shipped without adopting it. Path parameters — `agent_id`, `role_id`, `target_id`, `report_id`, `actor_user_id` — and exception text now pass through it before reaching a log message. A percent-encoded `%0A` in a path segment survives URL decoding, and most of these sites sit in `except` blocks where the value was never validated, so a forged log line was reachable.
+
+Scope note: only the message f-strings are scrubbed, not the `extra={...}` structured fields CodeQL also flags. `logging.basicConfig` formats records as `%(asctime)s - %(name)s - %(levelname)s - %(message)s`, so `extra` is never rendered — scrubbing it would corrupt the stored value for any future handler that *does* read it, and buy nothing against injection. `tool_filter.py` had the flagged warning twice in two near-identical methods and CodeQL reported one; both are fixed, since leaving the other would be arbitrary (#815)
+
+---
+
+## 🚀 Deployment notes
+
+1. **`backend.yml`** — required. Ships app-api, inference-api, rag-ingestion, kb-sync (dispatcher + worker) and scheduled-runs. The three Dockerfile closure fixes only take effect once these images are rebuilt and the Lambda code is updated.
+2. **`frontend-deploy.yml`** — required, for the submit/share dialogs, the listing status badge, the launch card and the Pinned page icon.
+3. **`platform.yml`** — **not required.** There are no `infrastructure/lib/` changes in this release.
+
+**What to watch after the deploy:**
+
+- **Document ingestion and KB sync recover on their own.** Documents stuck at `uploading` were never ingested; re-upload or re-trigger a sync for anything staged during the outage window (dev from ~2026-07-27, prod from 2026-08-01 18:46 UTC). No data was lost — the crawler staged its markdown correctly throughout; only the handler never ran.
+- **Expect microVM count and cost to drop sharply**, and **watch conversation continuity closely.** Sessions idle for 900 seconds are now reaped instead of held for 8 hours, which is the intended behavior — but it shrinks the pool of warm microVMs, so cold starts become substantially more common. That matters here because multi-turn continuity in the cloud path rides the **in-process agent cache** in `apis/inference_api/chat/service.py`: on a cold container the SDK's restore branch does not re-load conversation history from AgentCore Memory (`_is_new_session` is `True` on subsequent turns, so `list_messages` never runs), and the model can answer without the prior turns.
+  This release does not *introduce* that dependency, and does not obviously worsen it: nothing forwards `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` today — not the BFF chat proxy, not `shared/harness/runner.py` — so turns already land on an arbitrary microVM rather than the conversation's own. The interaction is nonetheless **unverified under the new reaping cadence**, and it is the one thing to watch after this deploy. Roll back by reverting #827 if users report the model losing the thread mid-conversation; the durable fix is app-owned rehydration, tracked separately.
+
+---
+
 # Release Notes — v1.12.3
 
 **Release Date:** August 1, 2026
