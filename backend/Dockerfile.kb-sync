@@ -23,14 +23,24 @@ COPY backend/src/apis/app_api/kb_sync/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Application code — namespace-package layout mirrors backend/src.
-# Keep this surface minimal: apis.shared domains the handlers import,
-# plus the kb_sync package itself. If a handler needs more, COPY it
-# here AND add the path to the kb-sync SOURCE_DIRS in
-# scripts/build/build-one.sh so the content-hash tag notices changes.
+# Keep this surface minimal but COMPLETE: it must cover the handlers'
+# whole import closure, including function-local imports (those still run
+# on invocation). A module the closure reaches but this list omits either
+# kills every cold start or — worse — trips a `except ImportError` branch
+# and silently no-ops. backend/tests/supply_chain/test_lambda_image_imports.py
+# enforces the closure. When adding a COPY here, also add the path to the
+# kb-sync SOURCE_DIRS/MANIFESTS in scripts/build/build-one.sh so the
+# content-hash tag notices changes.
 COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
+COPY backend/src/apis/shared/dynamo_errors.py ${LAMBDA_TASK_ROOT}/apis/shared/dynamo_errors.py
 COPY backend/src/apis/shared/sync_policies/ ${LAMBDA_TASK_ROOT}/apis/shared/sync_policies/
 COPY backend/src/apis/shared/oauth/ ${LAMBDA_TASK_ROOT}/apis/shared/oauth/
 COPY backend/src/apis/shared/embeddings/ ${LAMBDA_TASK_ROOT}/apis/shared/embeddings/
+# assistants/ — document_service verifies assistant ownership via
+# get_assistant before soft-deleting; the worker's miss-eviction path
+# (_delete_missing_web_document) goes through it.
+COPY backend/src/apis/shared/assistants/ ${LAMBDA_TASK_ROOT}/apis/shared/assistants/
 COPY backend/src/apis/app_api/file_sources/ ${LAMBDA_TASK_ROOT}/apis/app_api/file_sources/
 COPY backend/src/apis/app_api/documents/ ${LAMBDA_TASK_ROOT}/apis/app_api/documents/
 COPY backend/src/apis/app_api/web_sources/ ${LAMBDA_TASK_ROOT}/apis/app_api/web_sources/

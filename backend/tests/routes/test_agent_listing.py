@@ -505,6 +505,129 @@ class TestSubmit:
         assert resp.json()["listing"]["state"] == "in_review"
         assert resp.json()["listing"]["reviewNote"] == "Please add a tagline."
 
+    def test_a_published_listing_can_be_updated(self, app, make_user, _no_writes):
+        """The gap this closes: a published listing had no way to ship a fix.
+
+        Version snapshots put the author's edits on the draft, so submitting again is the
+        only route to users — and ``published`` had no edge to submit along. The author's
+        alternatives were to request withdrawal (taking their own listing off the shelf to
+        fix a typo) or to wait for an admin to send it back, which is not theirs to start.
+        """
+        assistant = _make_assistant(
+            bindings=[],
+            listing=AgentListing(
+                state="published",
+                category="Teaching",
+                publisherId="user-user-001",
+                publishedVersion=2,
+            ),
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit", json={"category": "Teaching"}
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["listing"]["state"] == "in_review"
+
+    def test_updating_a_live_listing_keeps_the_approved_version_serving(
+        self, app, make_user, _no_writes
+    ):
+        """⚠️ The half that makes the new edge safe rather than a second door.
+
+        Submitting an update must change nothing users can see: the approved snapshot keeps
+        its pointer *and* its index key for the whole review, and only approval swaps them.
+        """
+        assistant = _make_assistant(
+            bindings=[],
+            listing=AgentListing(
+                state="published",
+                category="Teaching",
+                publisherId="user-user-001",
+                publishedVersion=2,
+            ),
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            TestClient(app).post("/agents/ast-001/listing/submit", json={"category": "Teaching"})
+
+        written = _no_writes.call_args.args[1]
+        assert written.published_version == 2, "an update must not unpublish"
+        assert written.submitted_version == 1
+        _no_writes.set_version_index.assert_not_awaited()
+
+    @pytest.mark.parametrize("origin", ["published", "changes_requested"])
+    def test_an_update_records_where_it_can_be_cancelled_back_to(
+        self, app, make_user, _no_writes, origin
+    ):
+        """Recorded on the way in, because ``in_review`` cannot say where it came from."""
+        assistant = _make_assistant(
+            bindings=[],
+            listing=AgentListing(
+                state=origin,
+                category="Teaching",
+                publisherId="user-user-001",
+                publishedVersion=2,
+            ),
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            TestClient(app).post("/agents/ast-001/listing/submit", json={"category": "Teaching"})
+
+        assert _no_writes.call_args.args[1].submitted_from == origin
+
+    @pytest.mark.parametrize(
+        "listing",
+        [
+            None,
+            AgentListing(state="private", category="Teaching", publisherId="user-user-001"),
+            AgentListing(
+                state="changes_requested", category="Teaching", publisherId="user-user-001"
+            ),
+        ],
+        ids=["first-submission", "private", "changes-requested-never-published"],
+    )
+    def test_a_submission_over_nothing_live_records_no_origin(
+        self, app, make_user, _no_writes, listing
+    ):
+        """Absent is what routes these down the ordinary withdraw path, to ``private``.
+
+        ``changes_requested`` is in here twice on purpose — with a published version it is
+        an update, without one it is a draft, and only the pointer tells them apart.
+        """
+        mock_auth_user(app, make_user())
+        with _owner(_make_assistant(bindings=[], listing=listing)):
+            TestClient(app).post("/agents/ast-001/listing/submit", json={"category": "Teaching"})
+
+        assert _no_writes.call_args.args[1].submitted_from is None
+
+    def test_an_update_keeps_the_publisher_an_admin_assigned(self, app, make_user, _no_writes):
+        """⚠️ An author's silence must not undo a D12 reattribution.
+
+        The submit dialog never sends ``publisherId``, so every update arrives with none —
+        and resolving that to the author's individual profile would quietly re-credit a
+        departmental listing to a person, on every update, for as long as they kept
+        shipping. Re-checking eligibility instead would 403 them out of their own listing.
+        """
+        assistant = _make_assistant(
+            bindings=[],
+            listing=AgentListing(
+                state="published",
+                category="Teaching",
+                publisherId="pub-registrar",
+                publishedVersion=2,
+            ),
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).post(
+                "/agents/ast-001/listing/submit", json={"category": "Teaching"}
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["listing"]["publisherId"] == "pub-registrar"
+
     def test_cannot_resubmit_an_agent_already_in_review(self, app, make_user, _no_writes):
         assistant = _make_assistant(
             bindings=[],
@@ -585,6 +708,31 @@ class TestWithdraw:
         assert resp.status_code == 200
         assert resp.json()["state"] == "private"
 
+    def test_withdrawing_a_taken_down_listing_is_immediate(self, app, make_user, _no_writes):
+        """The route an author needs to delete a delisted agent, and it used to 400.
+
+        ``delete_assistant`` accepts only ``private``, and its refusal told the author of a
+        taken-down agent to "take it back to private first" — but ``taken_down → private`` was
+        not an edge, so this endpoint refused and the advice was for a door that did not
+        exist. The workaround was to resubmit for review and withdraw the submission a moment
+        later: a junk entry in the D2 queue as the price of a delete.
+
+        Immediate rather than a request because an admin has already pulled it. There is
+        nothing left to ask for, and routing it to ``withdrawal_requested`` would park a
+        listing nobody can see in the review queue.
+        """
+        assistant = _make_assistant(
+            listing=AgentListing(
+                state="taken_down", category="Teaching", publisherId="user-user-001"
+            )
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).delete("/agents/ast-001/listing")
+
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "private"
+
     def test_a_second_request_on_an_already_requested_listing_is_refused(
         self, app, make_user, _no_writes
     ):
@@ -599,6 +747,84 @@ class TestWithdraw:
             resp = TestClient(app).delete("/agents/ast-001/listing")
 
         assert resp.status_code == 400
+
+    @pytest.mark.parametrize("origin", ["published", "changes_requested"])
+    def test_cancelling_a_pending_update_returns_it_to_its_origin(
+        self, app, make_user, _no_writes, origin
+    ):
+        """⚠️ Not a withdrawal request. The author wants their edit back, not a delisting.
+
+        Read by "is something on the shelf?" alone — which is all this endpoint used to ask
+        — this became a request to pull a live listing nobody asked to pull, sitting in an
+        admin's queue. ``changes_requested`` is the case that must not collapse to
+        ``published``: the outstanding change request is still outstanding.
+        """
+        assistant = _make_assistant(
+            listing=AgentListing(
+                state="in_review",
+                category="Teaching",
+                publisherId="user-user-001",
+                publishedVersion=2,
+                submittedVersion=3,
+                submittedFrom=origin,
+            )
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).delete("/agents/ast-001/listing")
+
+        assert resp.status_code == 200
+        assert resp.json()["state"] == origin
+        assert resp.json()["submittedFrom"] is None, "the origin has done its job"
+
+    def test_cancelling_an_update_leaves_the_store_exactly_as_it_was(
+        self, app, make_user, _no_writes
+    ):
+        """The published version never moved, so there is nothing to restore."""
+        assistant = _make_assistant(
+            listing=AgentListing(
+                state="in_review",
+                category="Teaching",
+                publisherId="user-user-001",
+                publishedVersion=2,
+                submittedVersion=3,
+                submittedFrom="published",
+            )
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            TestClient(app).delete("/agents/ast-001/listing")
+
+        written = _no_writes.call_args.args[1]
+        assert written.published_version == 2
+        # ⚠️ ``submittedVersion`` is the high-water mark ``_latest_version`` reads to decide
+        # whether another snapshot exists. Clearing it here would hide the rollback control
+        # for exactly the versions this author just cut.
+        assert written.submitted_version == 3
+        _no_writes.set_version_index.assert_not_awaited()
+
+    def test_a_pending_submission_with_no_live_version_still_withdraws_to_private(
+        self, app, make_user, _no_writes
+    ):
+        """The origin is only half the discriminator; the pointer is the other half.
+
+        A listing whose published version went away has nothing to cancel back *to*, and
+        landing it in ``published`` would claim a version the store cannot serve.
+        """
+        assistant = _make_assistant(
+            listing=AgentListing(
+                state="in_review",
+                category="Teaching",
+                publisherId="user-user-001",
+                submittedFrom="published",
+            )
+        )
+        mock_auth_user(app, make_user())
+        with _owner(assistant):
+            resp = TestClient(app).delete("/agents/ast-001/listing")
+
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "private"
 
     def test_withdrawing_an_unsubmitted_agent_is_404(self, app, make_user, _no_writes):
         mock_auth_user(app, make_user())

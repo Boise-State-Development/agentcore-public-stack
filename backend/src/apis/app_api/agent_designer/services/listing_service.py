@@ -37,6 +37,7 @@ from apis.shared.assistants.listing import (
     ListingTransitionError,
     assert_author_target,
     assert_transition,
+    author_cancel_target,
     gsi5_keys,
     is_listed,
     is_on_shelf,
@@ -293,14 +294,26 @@ async def _exposed_skills(assistant: Assistant) -> List[SkillExposure]:
 
 
 # ── publisher resolution (D12) ───────────────────────────────────────────────────────
-async def _resolve_proposed_publisher(user: User, publisher_id: Optional[str]) -> str:
+async def _resolve_proposed_publisher(
+    user: User, publisher_id: Optional[str], *, current: Optional[str] = None
+) -> str:
     """The publisher an author may propose, defaulting to their own individual profile.
 
     Eligibility is checked *here*, on the author's proposal path only. An admin may set
     any publisher on any listing regardless of it (D12) — see ``patch_listing_presentation``,
     which deliberately does not call this.
+
+    ⚠️ ``current`` — the attribution the listing already carries — wins over the individual
+    default, and deliberately skips the eligibility check. An admin who reattributed a
+    listing to a department made a D12 decision; resolving an author's *silence* back to
+    their personal profile would undo it on every update, invisibly, and re-checking
+    eligibility would instead 403 the author out of updating their own listing. Neither is
+    the author proposing anything. An explicit ``publisher_id`` is still a proposal and is
+    still checked.
     """
     if not publisher_id:
+        if current:
+            return current
         profile = await ensure_individual_profile(user.user_id, user.name)
         return profile.id
 
@@ -354,7 +367,17 @@ async def preflight_listing(
 async def submit_listing(
     agent_id: str, user: User, request: SubmitListingRequest
 ) -> Tuple[AgentListing, List[SkillExposure]]:
-    """Author submits an Agent for review (D2), after the D7 checks pass."""
+    """Author submits an Agent for review (D2), after the D7 checks pass.
+
+    Also how an author ships an **update** to a listing that is already live. Since version
+    snapshots, edits to a published Agent land on the draft and reach nobody until a new
+    version is approved, so submitting again is the only way to get a change in front of
+    users — and it is the same act, with the same checks, whatever the listing's state.
+
+    A submission over a live listing changes nothing users can see. ``published_version``
+    and its index key are carried through untouched, so the approved snapshot keeps serving
+    for the whole review; only approval swaps it.
+    """
     assistant = await _load_for_author(agent_id, user)
     await _validate_category(request.category)
 
@@ -368,7 +391,11 @@ async def submit_listing(
     await _memory_space_block(assistant, user)
     _visibility_block(assistant, consented=request.make_public)
     exposed = await _exposed_skills(assistant)
-    publisher_id = await _resolve_proposed_publisher(user, request.publisher_id)
+    publisher_id = await _resolve_proposed_publisher(
+        user,
+        request.publisher_id,
+        current=assistant.listing.publisher_id if assistant.listing else None,
+    )
 
     now = _now()
     previous = assistant.listing
@@ -408,6 +435,20 @@ async def submit_listing(
         # its index key and keeps serving until an admin promotes the new one, so the shelf
         # never goes blank while a review is pending.
         published_version=previous.published_version if previous else None,
+        # Where to put it back if the author cancels — recorded here rather than inferred at
+        # cancel time, when ``in_review`` no longer says which state this came from. Set only
+        # when the listing is on the shelf *now*, because that is the case where cancelling
+        # must not fall through to ``private``: the ordinary withdraw path would read a live
+        # listing and turn "take back my edit" into a request to pull the whole thing.
+        #
+        # The only on-shelf states that can reach here are ``published`` and
+        # ``changes_requested`` — ``in_review`` has no self-loop, and the other two are not
+        # live — which is exactly ``UPDATE_ORIGIN_STATES``, the set the cancel path accepts.
+        submitted_from=(
+            previous.state
+            if previous and is_on_shelf(previous.state, previous.published_version)
+            else None
+        ),
         # A resubmission carries its review history forward; the note stays visible until
         # the reviewer replaces it, so the author keeps the context they are acting on.
         reviewed_at=previous.reviewed_at if previous else None,
@@ -441,9 +482,9 @@ async def submit_listing(
 
 
 async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
-    """Author withdraws — immediately if nothing is live, as a *request* if something is.
+    """Author withdraws — cancelling an update, pulling a draft, or *asking* to delist.
 
-    **The same endpoint, two different acts, and the listing state decides which.** Before
+    **The same endpoint, three different acts, and the listing decides which.** Before
     publication, withdrawing is the author's alone: a pending submission is their own work
     and pulling it costs nobody anything. Once a listing is live, other people have pinned
     it, so removal becomes something an admin sees — the same reasoning that makes
@@ -452,9 +493,22 @@ async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
     ("take this down"), and making them pick the right verb for their listing's state is
     asking them to know the state machine.
 
-    Neither act revokes anything retroactively: people who pinned it keep their pin,
+    The third act is the one that is easy to miss. An author with a live listing who submits
+    an **update** and then changes their mind is not asking for anything to come down — they
+    want their edit back. Read by "is something on the shelf?" alone, that cancellation turns
+    into a request to delist a listing nobody asked to delist, parked in an admin's queue. So
+    a pending update cancels back to the state it was submitted from and the listing carries
+    on serving the version it always was; see ``author_cancel_target``.
+
+    No act here revokes anything retroactively: people who pinned it keep their pin,
     conversations underway keep running, and the agent stays reachable by direct link
     because ``visibility`` is a separate axis. It is a delisting, not a recall.
+
+    ``taken_down`` resolves to the immediate branch, and that is the point of the
+    ``taken_down → private`` edge: an admin has already pulled it, so there is nothing left to
+    request. Before the edge existed this raised, and an author who simply wanted to delete a
+    delisted agent had to resubmit it for review — posting to the D2 queue purely to withdraw
+    a moment later — because ``delete_assistant`` accepts only ``private``.
     """
     assistant = await _load_for_author(agent_id, user)
     if not assistant.listing:
@@ -476,6 +530,48 @@ async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
             "it stays in the store until they do.",
             status_code=400,
         )
+
+    # ── cancelling a pending update ──────────────────────────────────────────────────
+    #
+    # Checked before the live/not-live split below, because that split answers the wrong
+    # question for this case: the listing *is* on the shelf, but the thing being withdrawn
+    # is the submission sitting on top of it, not the listing underneath.
+    #
+    # ``submitted_from`` is the whole discriminator. It is written only when a submission
+    # was made over something already on the shelf, so its presence means "there is a live
+    # version this can go back to" and its absence means the ordinary paths below are right.
+    # ``is_on_shelf`` is still asked, so a pointer that lost its version cannot cancel into
+    # a ``published`` state with nothing published.
+    if (
+        current == "in_review"
+        and assistant.listing.submitted_from
+        and is_on_shelf(assistant.listing.submitted_from, assistant.listing.published_version)
+    ):
+        try:
+            target = author_cancel_target(assistant.listing.submitted_from)
+            assert_transition(current, target)
+        except ListingTransitionError as e:  # pragma: no cover - both edges are in the table
+            raise ListingError(str(e), status_code=400) from e
+        except ListingAuthorityError as e:  # pragma: no cover - guarded by the branch itself
+            raise ListingError(str(e), status_code=403) from e
+
+        now = _now()
+        # Nothing is unindexed and ``published_version`` is untouched: the update never
+        # reached the store, so there is nothing to undo there.
+        #
+        # ⚠️ ``submitted_version`` deliberately stays. It is not just "what is awaiting
+        # review" — ``_latest_version`` reads it as the high-water mark that tells the admin
+        # Listings table another snapshot exists, and clearing it here would hide the
+        # rollback control for exactly the versions this author just cut.
+        listing = assistant.listing.model_copy(
+            update={"state": target, "submitted_from": None}
+        )
+        await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
+        logger.info(
+            f"↩️ Agent {agent_id} pending update cancelled by its owner; listing returns "
+            f"to {target} still serving v{assistant.listing.published_version}"
+        )
+        return listing
 
     # A live listing can only be *requested* down; anything else goes straight to private.
     #
@@ -522,12 +618,15 @@ async def withdraw_listing(agent_id: str, user: User) -> AgentListing:
         )
         return listing
 
-    # Pre-publication withdrawal: nothing is on the shelf, so this is immediate. The
-    # unindex is belt-and-braces for a listing whose pointer outlived its key.
+    # Nothing is on the shelf, so this is immediate — either a pre-publication withdrawal or
+    # an author shelving something an admin already took down. The unindex is belt-and-braces
+    # for a listing whose pointer outlived its key.
     await _unindex_version(agent_id, assistant.listing.published_version)
-    listing = assistant.listing.model_copy(update={"state": target, "published_version": None})
+    listing = assistant.listing.model_copy(
+        update={"state": target, "published_version": None, "submitted_from": None}
+    )
     await write_listing(agent_id, listing, assistant.created_at, updated_at=now)
-    logger.info(f"📭 Agent {agent_id} submission withdrawn by its owner")
+    logger.info(f"📭 Agent {agent_id} withdrawn to private by its owner (from {current})")
     return listing
 
 

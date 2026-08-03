@@ -7,6 +7,7 @@ from agents.main_agent.config.constants import Prefixes
 from agents.main_agent.tools.tool_registry import ToolRegistry
 from apis.shared.tools.injected import INJECTED_TOOL_IDS
 from apis.shared.tools.scoped_ids import base_tool_id
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ class ToolFilter:
                 # agent's tools as extra_tools - never in the registry.
                 pass
             else:
-                logger.warning(f"Tool '{tool_id}' is not a known tool id, skipping")
+                logger.warning(f"Tool '{scrub_log(tool_id)}' is not a known tool id, skipping")
 
         logger.info(f"Local tools enabled: {len(filtered_tools)}")
         logger.info(f"Gateway tools enabled: {len(gateway_tool_ids)}")
@@ -155,7 +156,7 @@ class ToolFilter:
                 # normal path — not a missing tool.
                 injected_tool_ids.append(tool_id)
             else:
-                logger.warning(f"Tool '{tool_id}' is not a known tool id, skipping")
+                logger.warning(f"Tool '{scrub_log(tool_id)}' is not a known tool id, skipping")
 
         logger.info(f"Local tools enabled: {len(filtered_tools)}")
         logger.info(f"Gateway tools enabled: {len(gateway_tool_ids)}")

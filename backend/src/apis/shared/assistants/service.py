@@ -16,6 +16,7 @@ from typing import List, Optional, Tuple
 
 from .models import AgentBinding, AgentModelConfig, Assistant
 from .serialization import from_ddb, to_ddb_safe
+from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
 from apis.shared.timestamps import to_iso, utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -853,8 +854,14 @@ async def _list_user_assistants_cloud(
         return all_assistants, next_page_token
 
     except ClientError as e:
-        error_code = e.response.get("Error", {}).get("Code", "Unknown")
-        logger.error(f"Failed to list user assistants from DynamoDB: {error_code} - {e}")
+        # Already fail-soft for every ``ClientError``; the missing-index case is split out
+        # only so the log names the index rather than leaving someone to decode a botocore
+        # repr while a deploy is half-landed.
+        if is_missing_index_error(e):
+            log_missing_index("OwnerStatusIndex", "this user's own agents")
+        else:
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            logger.error(f"Failed to list user assistants from DynamoDB: {error_code} - {e}")
         return [], None
     except Exception as e:
         logger.error(f"Failed to list user assistants from DynamoDB: {e}", exc_info=True)
@@ -898,6 +905,12 @@ def _assert_listing_allows_delete(existing) -> None:
         return
     # The message names the path forward rather than just refusing — an author who is told
     # "no" without being told "do this instead" files a ticket.
+    #
+    # ⚠️ Naming a path puts this string under the state machine's authority, and it drifted:
+    # ``taken_down`` was told to "take it back to private" while ``ALLOWED_TRANSITIONS`` had
+    # no ``taken_down → private`` edge, so the advice was for a door that did not exist.
+    # ``test_every_refusal_names_a_transition_the_machine_allows`` now derives the claim from
+    # the table, so the next divergence fails a test instead of reaching an author.
     nudge = (
         "Request withdrawal first, then delete it once an admin has removed it from the store."
         if state in ("published", "withdrawal_requested")
@@ -917,10 +930,19 @@ async def delete_assistant(assistant_id: str, owner_id: str) -> bool:
     the same unilateral removal that ``withdrawal_requested`` exists to stop, except
     irreversible and taking the review history with it.
 
-    ``taken_down`` is covered deliberately: an author must not be able to delete their way
-    out of a takedown record. So is ``withdrawal_requested`` — a pending request is not a
-    granted one. Only ``private`` (or no listing at all) may be deleted, which is reachable
-    from every other state through the normal paths.
+    What this earns is that **nothing live or pending is deleted out from under the store**:
+    ``published`` refuses, ``withdrawal_requested`` refuses because a requested withdrawal is
+    not a granted one, and ``in_review`` refuses because a reviewer is mid-decision. Only
+    ``private`` (or no listing at all) may be deleted, and reaching ``private`` is an explicit
+    act — so unpublication can never be a side effect of a delete.
+
+    ⚠️ What it does **not** earn, despite an earlier claim here, is that an author cannot
+    delete their way out of a takedown record. ``taken_down`` still refuses, but the author
+    now walks ``taken_down → private`` and deletes — and before that edge existed they walked
+    ``taken_down → in_review → private`` and deleted, which cost them one junk entry in the
+    review queue and cost the record exactly nothing. The takedown note lives on the listing
+    block, so it dies with the Agent either way. Making that survive needs a row that is not
+    the Agent's own, not a missing edge in ``ALLOWED_TRANSITIONS``.
 
     Args:
         assistant_id: Assistant identifier
@@ -1432,9 +1454,12 @@ async def list_shared_with_user(user_email: str) -> List[Assistant]:
         return assistants
 
     except ClientError as e:
-        error_code = e.response.get("Error", {}).get("Code", "Unknown")
-        if error_code == "ResourceNotFoundException":
-            logger.debug(f"SharedWithIndex GSI not found - sharing feature may not be deployed yet")
+        # The "not deployed yet" case used to be matched on ``ResourceNotFoundException``,
+        # which real DynamoDB never raises for a missing *index* — it raises
+        # ``ValidationException``, so that branch only ever fired under moto and the
+        # intended debug-level path logged at ERROR in production instead.
+        if is_missing_index_error(e):
+            log_missing_index("SharedWithIndex", "agents shared with this user")
         else:
             logger.error(f"Error listing shared assistants: {e}")
         return []

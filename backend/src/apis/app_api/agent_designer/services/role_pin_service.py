@@ -59,9 +59,15 @@ from apis.app_api.agent_designer.services.agent_detail import (
 
 logger = logging.getLogger(__name__)
 
-# What a role's ``effective_permissions`` can actually decide. ``memory_space`` is absent
-# because a role does not grant memory spaces — people do, per space.
-_ROLE_GATED_KINDS = ("tool", "skill")
+# What a role's ``effective_permissions`` can actually decide, as (binding kind,
+# permission axis) pairs. ``memory_space`` is absent because a role does not grant memory
+# spaces — people do, per space (see ``_MEMORY_NOTE``, applied separately below).
+#
+# Read by the loop in ``role_pin_runnability``. It previously stated the kinds here and
+# then re-stated them as a literal at the loop, so the documented rule and the enforced
+# rule were two objects that could drift; CodeQL flagged the constant as unused, which is
+# what that drift looks like from the outside.
+_ROLE_GATED_KINDS = (("tool", "tools"), ("skill", "skills"))
 
 _MEMORY_NOTE = (
     "Binds a memory space, which is granted per person — this check cannot decide it for "
@@ -100,7 +106,7 @@ async def _diff_against_role(
         notes.append(_MEMORY_NOTE)
 
     labels = await _labels_by_kind(assistant, admin_user)
-    for kind, axis in (("tool", "tools"), ("skill", "skills")):
+    for kind, axis in _ROLE_GATED_KINDS:
         of_kind = [b for b in bindings if b.kind == kind]
         if not of_kind:
             continue

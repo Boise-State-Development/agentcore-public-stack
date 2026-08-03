@@ -15,12 +15,15 @@ from apis.shared.assistants.listing import (
     LISTED_STATES,
     LISTING_STATES,
     PENDING_DECISION_STATES,
+    UPDATE_ORIGIN_STATES,
     ListingAuthorityError,
     ListingTransitionError,
     assert_author_target,
     assert_transition,
+    author_cancel_target,
     gsi5_keys,
     is_listed,
+    is_on_shelf,
     is_published,
 )
 
@@ -50,10 +53,59 @@ def test_resubmit_after_takedown():
     assert_transition("taken_down", "in_review")
 
 
+def test_a_published_listing_can_be_updated():
+    """Since version snapshots, submitting again is the *only* way to change what users get.
+
+    Edits to a published Agent land on the draft, so without this edge a published listing
+    was a dead end: the author's choices were to request withdrawal (taking their own
+    listing down to fix a typo) or to wait for an admin to send it back.
+    """
+    assert_transition("published", "in_review")
+
+
 def test_author_may_withdraw_a_pending_submission_outright():
     """Before publication, withdrawing is the author's alone — nobody else has it yet."""
     for state in ("in_review", "changes_requested"):
         assert_transition(state, "private")
+
+
+def test_author_may_shelve_a_taken_down_listing():
+    """``taken_down → private``, and it is an author edge (both gates, not just the table).
+
+    Added because ``delete_assistant`` refuses every state but ``private`` while telling the
+    author of a taken-down agent to "take it back to private first" — advice for a door that
+    did not exist. The only route out was ``taken_down → in_review → private``: resubmit for
+    review purely to withdraw it a moment later, posting to the D2 queue to get somewhere the
+    author was already allowed to be.
+    """
+    assert_transition("taken_down", "private")
+    assert_author_target("private")
+
+
+def test_shelving_a_takedown_does_not_become_a_withdrawal_request():
+    """A takedown is already off the shelf, so there is nothing left to ask an admin for.
+
+    ``withdraw_listing`` picks its target with ``is_on_shelf``, which hardcodes ``taken_down``
+    to False whatever the pointer says. Asserted here because the new edge would be a real
+    hazard if that were not true: routing a taken-down listing to ``withdrawal_requested``
+    would park it in the admin queue forever over a listing nobody can see.
+    """
+    assert is_on_shelf("taken_down", None) is False
+    assert is_on_shelf("taken_down", 7) is False, "a stale pointer must not resurrect it"
+    with pytest.raises(ListingTransitionError):
+        assert_transition("taken_down", "withdrawal_requested")
+
+
+def test_shelving_a_takedown_is_not_a_way_back_into_the_store():
+    """The new edge must not shorten the route to ``published``.
+
+    ``taken_down → private`` is only useful if it stays a dead end for publication: from
+    ``private`` the author still has to submit and an admin still has to approve. If this ever
+    fails, the edge became a laundering step — pull it rather than patching the assertion.
+    """
+    assert ALLOWED_TRANSITIONS["private"] == {"in_review"}
+    with pytest.raises(ListingTransitionError):
+        assert_transition("private", "published")
 
 
 def test_a_live_listing_can_only_be_requested_down():
@@ -85,6 +137,59 @@ def test_author_target_states_gate_the_authors_own_moves():
     for reviewer_only in ("published", "changes_requested", "taken_down"):
         with pytest.raises(ListingAuthorityError):
             assert_author_target(reviewer_only)
+
+
+# ── cancelling a pending update ──────────────────────────────────────────────────────
+@pytest.mark.parametrize("origin", sorted(UPDATE_ORIGIN_STATES))
+def test_cancelling_an_update_returns_it_to_where_it_came_from(origin):
+    """Not to ``published`` — the twin of ``withdrawal_from``, for the identical reason.
+
+    A ``changes_requested`` listing that was published before the admin sent it back is
+    live, so its author is updating something users can see. Cancelling that into
+    ``published`` would discard the outstanding change request *and* publish a listing no
+    admin approved.
+    """
+    assert author_cancel_target(origin) == origin
+    assert_transition("in_review", origin)
+
+
+def test_cancelling_a_first_submission_has_nowhere_to_return_to():
+    """⚠️ The assertion that keeps this from being a second door into the store.
+
+    ``None`` means the submission was not an update to a live listing. If this answered a
+    default instead of raising, an author could walk their own unreviewed first submission
+    into ``published``.
+    """
+    with pytest.raises(ListingAuthorityError):
+        author_cancel_target(None)
+
+
+@pytest.mark.parametrize(
+    "state", [s for s in LISTING_STATES if s not in UPDATE_ORIGIN_STATES]
+)
+def test_only_an_on_shelf_origin_can_be_cancelled_back_to(state):
+    with pytest.raises(ListingAuthorityError):
+        author_cancel_target(state)
+
+
+def test_every_cancel_target_is_reachable_from_in_review():
+    """The gate returns a target rather than validating one, so the table must accept it.
+
+    If an origin were ever added here without the matching edge, cancelling would raise a
+    transition error from inside a path the author is entitled to walk.
+    """
+    for origin in UPDATE_ORIGIN_STATES:
+        assert origin in ALLOWED_TRANSITIONS["in_review"]
+
+
+def test_every_update_origin_is_a_state_that_can_be_on_the_shelf():
+    """The other half of the contract, and what the service branch keys on.
+
+    Cancelling *back into* a state that can never be live would put the record in a state
+    claiming a published version it does not have.
+    """
+    for origin in UPDATE_ORIGIN_STATES:
+        assert is_on_shelf(origin, 3), f"{origin} can never be live; it cannot be an origin"
 
 
 # ── the edges that must not exist ────────────────────────────────────────────────────

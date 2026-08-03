@@ -4,6 +4,55 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.13.0] - 2026-08-02
+
+Feature release built around two things that were quietly costing us. A published Agent listing stops being a dead end — authors can **ship an update to a live listing** while the approved version keeps serving, instead of taking their Agent off the shelf to fix a typo. And the AgentCore Runtime's **idle reaper is armed again**: a `/ping` handler that refreshed its own idle timestamp on every poll had kept every microVM alive for its full 8-hour `maxLifetime` since May, which measured out to 73% of the platform bill. Alongside those, three Lambda images that had been failing at import on every invocation are fixed — scheduled KB sync and document ingestion both come back — and the DynamoDB GSI limit that took production down on 2026-08-01 now has a pre-merge CI guard. Backend and frontend deploy only; **no CDK deploy, no data migration**.
+
+### 🚀 Added
+
+- **Authors can submit an update to a published listing.** The listing state machine gains `published → in_review`, and the approved snapshot keeps serving for the whole review — approval remains the only edge that changes what users get. A submission made over something already on the shelf records its origin (`AgentListing.submittedFrom`), so cancelling an update no longer reads as a withdrawal request and no longer parks a delist nobody asked for in the admin queue. `AUTHOR_TARGET_STATES` deliberately does not gain `published` (#828)
+- **Pre-merge guard for DynamoDB's one-GSI-per-`UpdateTable` limit** — `infrastructure/gsi-inventory.json` (synth-generated, committed) plus `scripts/release/check-gsi-update-limit.mjs` and `.github/workflows/gsi-update-limit.yml`, which fail any PR into `main` where a table existing on both sides needs more than one index operation. New tables (`CreateTable`) and dropped tables are exempt; creations and deletions are counted together. `infrastructure/test/gsi-update-limit.test.ts` fails if the inventory drifts from the CDK code (#823)
+- **`taken_down → private`**, so `delete_assistant`'s refusal names a transition that actually exists. The route out was previously `taken_down → in_review → private` — walkable by the author alone, so the missing edge protected nothing and only taxed admins with a junk review-queue entry per delete (#824)
+
+### ✨ Improved
+
+- **The agent launch card drops what the user was already told.** Capability chips (duplicated from the detail page) and the "Ready to run for you." confirmation are gone, along with `capabilities` on the view model; the footer bar now renders only for a blocked verdict or the Agent details link. Attribution reads "By &lt;name&gt;" rather than a bare name, with a verified publisher still outranking `ownerName` (#825)
+
+### ⚡ Performance
+
+- **AgentCore microVMs are reaped when idle instead of running to `maxLifetime`.** `/ping` returned a fresh `time_of_last_update` on every ~2s poll, so reported idle time never exceeded ~2s and the 900s `idleRuntimeSessionTimeout` could never fire. The payload moves to `apis/inference_api/runtime_health.py`, which reports `HealthyBusy` during a turn and `Healthy` with a **frozen** timestamp once idle. Measured in prod: mean microVM life stepped from 21.5–33.6 min to 488–496 min at the deploy of #338; July burned 71,954 microVM-hours at 1.23% CPU utilization for 9,568 turns. **Operators:** this shrinks the warm-microVM pool, so cold starts become more common — see the deployment notes on cloud conversation continuity (#827)
+
+### 🐛 Fixed
+
+- **Document ingestion and scheduled KB sync were failing 100% of invocations.** `apis/shared/timestamps.py` is imported by `documents/ingestion/status.py` but was never COPYed into `Dockerfile.rag-ingestion` or `Dockerfile.kb-sync`, so both containers died at import before any handler ran — dev since ~2026-07-27, prod since the 2026-08-01 18:46 UTC deploy. Nothing surfaced it: S3 events fired, the crawler staged its markdown, and documents simply sat at `uploading` forever. Two more closure gaps of the same shape are closed (kb-sync missing `assistants/` + `dynamo_errors.py`; scheduled-runs missing `errors.py`, `storage/`, `observability/`) (#826)
+- **The agent store and admin problem-report queue no longer 500 when a GSI is absent.** An absent index is a legitimate transient deploy state — CloudFormation reports success while a GSI is still `CREATING`, deploys roll back, and `platform.yml`/`backend.yml` can land out of order. Both reads now log at WARNING with the index name and return an empty result with no cursor. The match is deliberately narrow (error code *and* message shape) so malformed key conditions and throttling still fail loudly; `DueSyncIndex` is left loud on purpose, and writes are untouched (#822)
+- **The submit dialog showed the author the wrong category.** The listing's category was preselected into `category()` but the select rendered `Administration` — the first option. `[value]` on the `<select>` was applied before its `@if`-gated options existed, so the browser dropped it; binding `[selected]` on the options cannot lose that race. Display-only — submissions always sent the correct shelf — but an author who wanted `Administration` saw it already selected and submitted something else (#828)
+- **An update no longer silently undoes a D12 reattribution** — an author's silence on `publisherId` keeps the listing's current publisher instead of resolving back to their individual profile (#828)
+- **`heroBookmark` had nothing to resolve to** on the Pinned page's empty state. `pinned.page.ts` imported `provideIcons` and `heroBookmark` without calling either, and the SPA registers icons per-component (#815)
+- **`_ROLE_GATED_KINDS` documented a rule the loop re-stated as a literal.** The constant now carries the pairs and the loop reads it, so the two can no longer drift (#815)
+
+### 🔒 Security
+
+- **Ten `py/log-injection` findings closed** against the 1.12.0 delta. Path parameters (`agent_id`, `role_id`, `target_id`, `report_id`, `actor_user_id`) and exception text in the marketplace, audit and role-pin code now pass through the existing `scrub_log` (`apis/shared/security/log_sanitize.py`) before reaching a log message — a percent-encoded `%0A` survives URL decoding, and most sites sit in `except` blocks where the value was never validated. `tool_filter.py`'s duplicate of the flagged warning is fixed too, though CodeQL reported only one (#815)
+
+### 🔧 CI/CD
+
+- `gsi-update-limit.yml` runs on PRs into `main` only — the sole branch exposed to the aggregate. Diffs two committed JSON files, so no `npm install` and no CDK synth (#823)
+- `scripts/build/build-one.sh` hash inputs kept in lockstep with the Dockerfile COPY sets, so the content-hash tag notices future changes to the newly-copied paths (#826)
+
+### 📚 Docs
+
+- The `cutting-a-release` skill gains a §1 prerequisite covering the GSI limit, why an incremental environment cannot reveal it, how to split a release, and the recovery mechanics — including why PR 2 must not be stacked on PR 1 (#823)
+- `docs/specs/agent-version-snapshots.md` documents the `published → in_review` edge and the cancel-derivation rule (#828)
+
+### 🧪 Test Coverage
+
+- `test_runtime_health.py` (268 lines) — ping contract, busy/idle transitions, and the pure-ASGI middleware's `try/finally` spanning the streamed SSE body rather than the handler call
+- `test_dynamo_missing_index.py` (352 lines) — missing-index degradation across both accepted error codes (real DynamoDB raises `ValidationException`, moto raises `ResourceNotFoundException`)
+- `test_lambda_image_imports.py` (216 lines) — walks each image's real import graph from its handler entrypoints and fails on anything not COPYed. Deliberately does not distinguish module-level from function-local imports; a module-level-only check passes the very bug #826 fixes
+- `test_agent_listing.py` (+226), `test_agent_listing_state_machine.py` (+105) — the update path, and `test_every_refusal_names_a_transition_the_machine_allows`, which derives each refusal's advice from `ALLOWED_TRANSITIONS`
+- `test_log_sanitize.py` (73 lines); `submit-listing-dialog.component.spec.ts` asserts the **rendered** select rather than the signal, which is how the category bug survived a test block named for the behaviour
+
 ## [1.12.3] - 2026-08-01
 
 Frontend patch. Stops the Memory Spaces kill switch from surfacing an error dialog while it does its job. No backend, infrastructure or configuration changes.
