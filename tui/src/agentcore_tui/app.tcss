@@ -1,0 +1,180 @@
+/* AgentCore TUI stylesheet.
+ *
+ * Aesthetic direction: technical/utilitarian. Left rule-marks instead of chat
+ * bubbles, generous vertical rhythm, and no decoration that does not carry
+ * information. Colours come from Textual theme variables so every built-in
+ * theme (including ansi-dark / ansi-light for limited terminals) stays legible.
+ */
+
+Screen {
+    layers: base overlay;
+    background: $background;
+}
+
+#transcript {
+    padding: 1 2 0 2;
+    scrollbar-size-vertical: 1;
+}
+
+/* ------------------------------------------------------------------ messages */
+
+/* `height: auto` is load-bearing. Textual containers (Vertical) default to
+ * `height: 1fr`, which makes each message expand to fill the transcript's
+ * viewport instead of sizing to its content. The scroll container's virtual
+ * size then never exceeds one screen, max_scroll_y stays 0, and everything
+ * past the first screenful is clipped and unreachable — long answers look
+ * like they stopped mid-sentence. Every widget between #transcript and the
+ * text needs to size to content for the transcript to scroll. */
+.message {
+    width: 100%;
+    height: auto;
+    margin-bottom: 1;
+}
+
+.message-role {
+    text-style: bold;
+    padding-left: 1;
+    height: auto;
+}
+
+.user-message {
+    border-left: thick $primary;
+    padding: 0 1;
+    height: auto;
+}
+
+.user-message .message-role {
+    color: $primary;
+}
+
+.assistant-message {
+    border-left: thick $accent;
+    padding: 0 1;
+    height: auto;
+}
+
+.assistant-message .message-role {
+    color: $accent;
+}
+
+/* The Markdown widget adds its own block spacing; strip the outer padding so
+ * prose lines up with the role label above it. */
+.assistant-message Markdown {
+    padding: 0;
+    margin: 0;
+    height: auto;
+    background: transparent;
+}
+
+.assistant-message MarkdownFence {
+    margin: 1 0;
+    height: auto;
+}
+
+.reasoning {
+    margin: 0 0 1 0;
+    height: auto;
+    color: $text-muted;
+}
+
+.reasoning Markdown {
+    background: transparent;
+    height: auto;
+    color: $text-muted;
+}
+
+/* System / error notices rendered inline in the transcript. */
+.notice {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: thick $warning;
+    color: $text-muted;
+}
+
+.notice.-error {
+    border-left: thick $error;
+    color: $error;
+}
+
+.notice-hint {
+    color: $text-muted;
+    text-style: italic;
+    height: auto;
+}
+
+/* ------------------------------------------------------------------- composer */
+
+#composer-area {
+    dock: bottom;
+    height: auto;
+    max-height: 14;
+    padding: 0 2 1 2;
+    background: $background;
+}
+
+#composer {
+    border: round $primary;
+    height: auto;
+    max-height: 10;
+    padding: 0 1;
+    background: $surface;
+}
+
+#composer:focus {
+    border: round $accent;
+}
+
+/* $text-muted resolves to `auto 60%`, which `color` accepts but `border` does
+ * not — borders need a concrete color, so use a surface-derived one. */
+#composer.-busy {
+    border: round $surface-lighten-3;
+}
+
+#status-bar {
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+    background: $panel;
+}
+
+#status-bar.-error {
+    color: $error;
+}
+
+#status-bar.-busy {
+    color: $accent;
+}
+
+/* --------------------------------------------------------------- model picker */
+
+ModelPicker {
+    align: center middle;
+}
+
+ModelPicker > #picker-frame {
+    width: 80;
+    max-width: 90%;
+    height: auto;
+    max-height: 20;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+
+ModelPicker #picker-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+ModelPicker OptionList {
+    height: auto;
+    max-height: 12;
+    background: transparent;
+}
+
+ModelPicker #picker-help {
+    color: $text-muted;
+    margin-top: 1;
+}
