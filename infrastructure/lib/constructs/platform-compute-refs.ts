@@ -45,6 +45,8 @@ export interface PlatformComputeRefs {
   userPool: cognito.IUserPool;
   bffAppClient: cognito.IUserPoolClient;
   bffAppClientSecret: secretsmanager.ISecret;
+  /** Public PKCE client for the terminal client; undefined when disabled. */
+  cliAppClient?: cognito.IUserPoolClient;
   cognitoDomain: cognito.UserPoolDomain;
   cognitoIssuerUrl: string;        // resolved at synth from userPool ref
   cognitoDomainUrl: string;        // resolved at synth from cognitoDomain

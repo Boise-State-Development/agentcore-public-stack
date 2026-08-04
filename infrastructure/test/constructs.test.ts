@@ -157,7 +157,8 @@ describe('CognitoConstruct', () => {
     new CognitoConstruct(stack, 'Cog', { config: createMockConfig() });
     const t = Template.fromStack(stack);
     t.resourceCountIs('AWS::Cognito::UserPool', 1);
-    t.resourceCountIs('AWS::Cognito::UserPoolClient', 1);
+    // BFF (confidential) + CLI (public PKCE).
+    t.resourceCountIs('AWS::Cognito::UserPoolClient', 2);
     t.resourceCountIs('AWS::Cognito::UserPoolDomain', 1);
   });
 });

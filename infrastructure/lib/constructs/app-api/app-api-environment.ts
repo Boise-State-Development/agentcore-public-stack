@@ -72,6 +72,8 @@ export interface AppApiSsmParams {
   bffCookieDataKeySecretArn: string;
   cognitoBFFAppClientId: string;
   cognitoBFFAppClientSecretArn: string;
+  /** Public PKCE client id for the terminal client; '' when disabled. */
+  cognitoCLIAppClientId: string;
   // Voice
   voiceTicketReplayTableName: string;
   voiceTicketReplayTableArn: string;
@@ -189,6 +191,7 @@ export function resolveAppApiParams(
     bffCookieDataKeySecretArn: refs.bffCookieDataKeySecret.secretArn,
     cognitoBFFAppClientId: refs.bffAppClient.userPoolClientId,
     cognitoBFFAppClientSecretArn: refs.bffAppClientSecret.secretArn,
+    cognitoCLIAppClientId: refs.cliAppClient?.userPoolClientId ?? '',
     // Voice
     voiceTicketReplayTableName: refs.voiceTicketReplayTable.tableName,
     voiceTicketReplayTableArn: refs.voiceTicketReplayTable.tableArn,
@@ -266,6 +269,9 @@ export function buildAppApiEnvironment(
     DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME: params.systemPromptsTableName,
     COGNITO_USER_POOL_ID: params.cognitoUserPoolId,
     COGNITO_APP_CLIENT_ID: params.cognitoAppClientId,
+    // Empty when the CLI client is disabled; the backend treats '' as "no
+    // Bearer clients configured" and keeps cookie-only behaviour.
+    COGNITO_CLI_APP_CLIENT_ID: params.cognitoCLIAppClientId,
     COGNITO_ISSUER_URL: params.cognitoIssuerUrl,
     COGNITO_DOMAIN_URL: params.cognitoDomainUrl,
     COGNITO_REGION: config.awsRegion,

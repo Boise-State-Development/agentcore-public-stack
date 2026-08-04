@@ -33,6 +33,8 @@ export class CognitoConstruct extends Construct {
   public readonly userPool: cognito.UserPool;
   public readonly bffAppClient: cognito.UserPoolClient;
   public readonly bffAppClientSecret: secretsmanager.Secret;
+  /** Public PKCE client for the terminal client; undefined when disabled. */
+  public readonly cliAppClient?: cognito.UserPoolClient;
   public readonly cognitoDomain: cognito.UserPoolDomain;
 
   constructor(scope: Construct, id: string, props: CognitoConstructProps) {
@@ -132,6 +134,56 @@ export class CognitoConstruct extends Construct {
         domainPrefix: config.cognito.domainPrefix || config.projectPrefix,
       },
     });
+
+    // Public client for the terminal client. No secret, so PKCE is mandatory
+    // (Cognito enforces this for public clients on the code grant).
+    //
+    // Both `localhost` and `127.0.0.1` forms are registered for every port:
+    // Cognito permits http for either, and which one a browser hands back can
+    // differ by platform. Cognito matches the redirect URI exactly, so an
+    // unregistered host/port combination fails with redirect_mismatch.
+    //
+    // Federated IdPs are deliberately the SAME list as the BFF client. Note
+    // that providers added later through the admin UI are attached to a single
+    // client id (COGNITO_APP_CLIENT_ID) by CognitoIdentityProviderService, so
+    // that service must fan out across both clients or CLI login will silently
+    // not offer newly added providers.
+    if (config.cognito.cliClient?.enabled) {
+      const cliCallbackUrls = (config.cognito.cliClient.callbackPorts ?? []).flatMap((port) => [
+        `http://localhost:${port}/callback`,
+        `http://127.0.0.1:${port}/callback`,
+      ]);
+
+      this.cliAppClient = this.userPool.addClient('CognitoCLIAppClient', {
+        userPoolClientName: getResourceName(config, 'cli-app-client'),
+        generateSecret: false,
+        authFlows: { userSrp: false, custom: false },
+        oAuth: {
+          flows: { authorizationCodeGrant: true },
+          scopes: [
+            cognito.OAuthScope.OPENID,
+            cognito.OAuthScope.PROFILE,
+            cognito.OAuthScope.EMAIL,
+          ],
+          callbackUrls: cliCallbackUrls,
+          // Loopback logout targets keep `agentcore-tui logout` able to end the
+          // hosted-UI session rather than only dropping local tokens.
+          logoutUrls: cliCallbackUrls,
+        },
+        preventUserExistenceErrors: true,
+        supportedIdentityProviders: bffSupportedIdentityProviders,
+        // Revocation lets `logout` invalidate the refresh token server-side,
+        // not just delete it from the local keyring.
+        enableTokenRevocation: true,
+      });
+
+      new ssm.StringParameter(this, 'CognitoCLIAppClientIdParameter', {
+        parameterName: `/${config.projectPrefix}/auth/cognito/cli-app-client-id`,
+        stringValue: this.cliAppClient.userPoolClientId,
+        description: 'Cognito CLI (public, PKCE) app client ID',
+        tier: ssm.ParameterTier.STANDARD,
+      });
+    }
 
     // SSM publications
     new ssm.StringParameter(this, 'CognitoUserPoolIdParameter', {
