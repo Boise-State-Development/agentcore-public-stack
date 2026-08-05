@@ -31,21 +31,30 @@ describe('PromptCacheObservabilityConstruct', () => {
   it('dashboard graphs the EMF namespace metrics and queries the runtime log group', () => {
     const dashboards = t.findResources('AWS::CloudWatch::Dashboard');
     const body = JSON.stringify(Object.values(dashboards)[0].Properties.DashboardBody);
-    for (const metric of ['CacheReadTokens', 'CacheWriteTokens', 'AvoidableMiss', 'WastedUsd']) {
+    for (const metric of [
+      'CacheReadTokens',
+      'CacheWriteTokens',
+      'AvoidableMiss',
+      'PartialMiss',
+      'PartialMissUsd',
+      'WastedUsd',
+      'SessionPartialMissUsd',
+    ]) {
       expect(body).toContain(metric);
     }
     expect(body).toContain('AgentCoreStack/PromptCache');
     expect(body).toContain(`/aws/bedrock-agentcore/runtimes/${MOCK_PREFIX}`);
     expect(body).toContain('cacheStatus');
+    // The alarm can only say a session crossed the line; this widget says which.
+    expect(body).toContain('sessionId');
   });
 
-  it('creates exactly two alarms, both NOT_BREACHING on missing data (kill-switch tolerant)', () => {
-    t.resourceCountIs('AWS::CloudWatch::Alarm', 2);
+  it('creates three alarms, all NOT_BREACHING on missing data (kill-switch tolerant)', () => {
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 3);
     const alarms = Object.values(t.findResources('AWS::CloudWatch::Alarm'));
     for (const alarm of alarms) {
       expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
       expect(alarm.Properties.Namespace).toBe('AgentCoreStack/PromptCache');
-      expect(alarm.Properties.Statistic).toBe('Sum');
       // Console-only: no SNS wiring yet anywhere in the stack.
       expect(alarm.Properties.AlarmActions).toBeUndefined();
     }
@@ -55,6 +64,7 @@ describe('PromptCacheObservabilityConstruct', () => {
     t.hasResourceProperties('AWS::CloudWatch::Alarm', {
       AlarmName: `${MOCK_PREFIX}-prompt-cache-avoidable-miss`,
       MetricName: 'AvoidableMiss',
+      Statistic: 'Sum',
       Threshold: 50,
       EvaluationPeriods: 3,
       ComparisonOperator: 'GreaterThanThreshold',
@@ -62,6 +72,33 @@ describe('PromptCacheObservabilityConstruct', () => {
     t.hasResourceProperties('AWS::CloudWatch::Alarm', {
       AlarmName: `${MOCK_PREFIX}-prompt-cache-wasted-usd`,
       MetricName: 'WastedUsd',
+      Statistic: 'Sum',
+      Threshold: 5,
+    });
+  });
+
+  it('alarms on one session accumulating $5 of partial-miss waste', () => {
+    // The fleet sums above cannot see a single conversation spending $0.43 a
+    // turn for five days — this is the alarm that would have caught the
+    // motivating incident, on its second day.
+    t.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: `${MOCK_PREFIX}-prompt-cache-session-partial-miss`,
+      MetricName: 'SessionPartialMissUsd',
+      // Cumulative per session, so Maximum (not Sum) answers "is any single
+      // session over the line", and the period is the 24h the spec asks for.
+      Statistic: 'Maximum',
+      Period: 86400,
+      Threshold: 5,
+      EvaluationPeriods: 1,
+      ComparisonOperator: 'GreaterThanThreshold',
+    });
+  });
+
+  it('holds the session threshold at $5 in production too', () => {
+    // Unlike the fleet alarms, this one is not traffic-scaled: $5 of waste in
+    // one conversation is the same problem in dev and in prod.
+    synth(true).hasResourceProperties('AWS::CloudWatch::Alarm', {
+      MetricName: 'SessionPartialMissUsd',
       Threshold: 5,
     });
   });

@@ -157,6 +157,12 @@ class SessionCostAnatomy(BaseModel):
     total_cache_read_tokens: int = Field(0, alias="totalCacheReadTokens")
     total_cache_write_tokens: int = Field(0, alias="totalCacheWriteTokens")
     avoidable_miss_count: int = Field(0, alias="avoidableMissCount")
+    # Calls that read a leading segment and re-wrote the rest of the prefix
+    # against a live cache entry — the shape that hid inside `hit` until the
+    # 2026-08-05 compaction spiral. `partialMissUsd` is a subset of
+    # `wastedUsd` (same split discipline as the agent-switch fields below).
+    partial_miss_count: int = Field(0, alias="partialMissCount")
+    partial_miss_usd: float = Field(0.0, alias="partialMissUsd")
     wasted_usd: float = Field(0.0, alias="wastedUsd")
     # #756 — the subset of the two figures above that an Agent switch explains.
     # Deliberately a *split*, not a deduction: the totals still carry every dollar

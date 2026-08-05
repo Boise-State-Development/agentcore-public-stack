@@ -29,9 +29,13 @@ spend, and the plan has to hold both levers in frame.
 
 1. **Unexplained-waste share of model spend** = (partial-miss + avoidable-miss
    dollars, net of `agentSwitched` re-writes) ÷ total model spend. Today:
-   unknown — the instrument is #833 PR-1. Provisional target: **< 5%**.
-   This is the number that says the *prefix-stability* and *payload* work is
-   done.
+   still unknown, but no longer unmeasurable — #833 PR-1 built the instrument
+   (`partial_miss` on every `C#` row, `PartialMiss`/`PartialMissUsd` EMF,
+   `partialMissCount`/`partialMissUsd` session rollups). Baseline is the first
+   full week of prod traffic after it deploys; note the numerator only counts
+   calls written *after* deploy — nothing is backfilled, so the incident's own
+   56 rows still read `hit`. Provisional target: **< 5%**. This is the number
+   that says the *prefix-stability* and *payload* work is done.
 2. **Cost per weekly-active-user, trend** — flat-or-down while usage grows.
    This is the number that says the platform scales. (Absolute totals are
    understated ~20% by legacy missing-cost rows — see the #836 validation —
@@ -44,7 +48,7 @@ spend, and the plan has to hold both levers in frame.
 
 | # | workstream | what it protects | authority | state |
 |---|---|---|---|---|
-| W1 | **Measurement** | every other row of this table | #833 PR-1 (`partial_miss`), cohort scan §4.1, dashboards #699/#700 | PR-1 unbuilt — **critical path** |
+| W1 | **Measurement** | every other row of this table | #833 PR-1 (`partial_miss`), cohort scan §4.1, dashboards #699/#700 | **PR-1 built** (`feature/partial-miss-cache-status`) — G0 clears on deploy; cohort scan §4.1 next |
 | W2 | **Prefix stability** | don't rewrite what didn't change | #834 bypass fix → #833 PR-2/3/4 → #835 v2 (gated) | specs open, nothing built |
 | W3 | **Payload boundedness** | nothing unbounded enters the prefix | #836 offload · tool-search strategy · workspace tools (PR-1 built) · S3 share-offload | offload PRs unbuilt; citations baseline probe required first |
 | W4 | **Demand governance** | bound the blast radius of any failure | quota-cooldown spec · #833 PR-5 (earlier warnings, per-session notice) | drafted; PR-5 unbuilt |
@@ -76,7 +80,11 @@ graph LR
 Gate summary — each is a *measurement with a decision attached*, not a date:
 
 - **G0** — nothing else in W1–W3 is credibly evaluable before `partial_miss`
-  exists. Build it first.
+  exists. **Built**; the gate clears when it is deployed and has produced a
+  baseline week, since an instrument nobody has read yet proves nothing. It
+  also ships the first *per-session* alarm ($5 of partial-miss waste in 24h) —
+  the fleet sums it sits beside never saw the incident that motivated any of
+  this.
 - **G1** — the bypass→cache-write causality is confounded in observational
   data (#834 §3 says so itself). The single-builder experiment settles it.
 - **G2** — #835 §7 lists the falsifiable go criteria (cohort >3% of sessions
