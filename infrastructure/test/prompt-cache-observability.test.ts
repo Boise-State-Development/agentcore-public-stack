@@ -4,6 +4,12 @@ import { Template } from 'aws-cdk-lib/assertions';
 import { PromptCacheObservabilityConstruct } from '../lib/constructs/observability/prompt-cache-observability-construct';
 import { createMockConfig, MOCK_ACCOUNT, MOCK_PREFIX, MOCK_REGION } from './helpers/mock-config';
 
+// The shape the AgentCore service actually uses: runtime *id* (with its
+// AWS-assigned suffix) + endpoint qualifier. Deliberately NOT the project
+// prefix — querying that name is the bug this fixture guards against.
+const MOCK_RUNTIME_LOG_GROUP =
+  `/aws/bedrock-agentcore/runtimes/${MOCK_PREFIX}_agentcore_runtime-AbC123XyZ0-DEFAULT`;
+
 function synth(production: boolean): Template {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, 'Test', {
@@ -12,6 +18,7 @@ function synth(production: boolean): Template {
   const config = createMockConfig({ production });
   new PromptCacheObservabilityConstruct(stack, 'PromptCacheObservability', {
     config,
+    runtimeLogGroupName: MOCK_RUNTIME_LOG_GROUP,
   });
   return Template.fromStack(stack);
 }
@@ -43,7 +50,9 @@ describe('PromptCacheObservabilityConstruct', () => {
       expect(body).toContain(metric);
     }
     expect(body).toContain('AgentCoreStack/PromptCache');
-    expect(body).toContain(`/aws/bedrock-agentcore/runtimes/${MOCK_PREFIX}`);
+    // Must be the runtime's own group, not a prefix-named one — the latter
+    // exists in no account and silently returns zero rows.
+    expect(body).toContain(MOCK_RUNTIME_LOG_GROUP);
     expect(body).toContain('cacheStatus');
     // The alarm can only say a session crossed the line; this widget says which.
     expect(body).toContain('sessionId');
