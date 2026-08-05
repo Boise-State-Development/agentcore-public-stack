@@ -377,14 +377,14 @@ def _derive_cache_observability(
     Reads a small window of the session's most recent ``C#`` cost rows (one GSI
     query) and derives:
 
-    - ``cacheStatus``: first_write | hit | miss_ttl_expired | miss_avoidable
-      | uncached (see ``apis.shared.observability.CacheStatus``).
+    - ``cacheStatus``: first_write | hit | partial_miss | miss_ttl_expired |
+      miss_avoidable | uncached (see ``apis.shared.observability.CacheStatus``).
     - ``cacheGapSeconds``: whole seconds since the previous call, when known.
     - ``cachePrefixGapSeconds``: seconds since the last call with the *same*
       prefix, when that is a different (older) call than the previous one.
-    - ``wastedUsd``: for avoidable misses, the re-written previously-cached
-      prefix priced at the cache-write premium over the cache-read rate,
-      using this row's own pricingSnapshot.
+    - ``wastedUsd``: for avoidable and partial misses, the re-written
+      previously-cached prefix priced at the cache-write premium over the
+      cache-read rate, using this row's own pricingSnapshot.
 
     ⚠️ The predecessor that decides ``miss_avoidable`` vs ``miss_ttl_expired``
     is the last call with the **same toolConfig + system-prompt fingerprints**,
@@ -509,6 +509,7 @@ def _derive_cache_observability(
             cache_write_tokens=cache_write,
             previous_cached_prefix_tokens=prev_cached_prefix,
             pricing_snapshot=_extract_pricing_dict(message_metadata),
+            cache_read_tokens=cache_read,
         )
 
         result: Dict[str, Any] = {
@@ -559,6 +560,16 @@ def _derive_cache_observability(
                 result.get("cachePrefixGapSeconds", result.get("cacheGapSeconds")),
                 cache_write, wasted_usd,
             )
+        elif status is CacheStatus.PARTIAL_MISS:
+            # Logged at the same level as its full-miss sibling: the dollars are
+            # the same, and this is the shape that spent 90% of a user's monthly
+            # quota while every row said `hit`.
+            logger.warning(
+                "🔥 Partial prompt-cache miss: session=%s gap=%ss cacheRead=%d "
+                "cacheWrite=%d (%.1fx) wasted=$%.6f",
+                session_id, result.get("cacheGapSeconds"), cache_read, cache_write,
+                (cache_write / cache_read) if cache_read else 0.0, wasted_usd,
+            )
         return result
 
     except Exception as e:
@@ -594,6 +605,7 @@ def _emit_cache_metrics(
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
             avoidable_miss=status == CacheStatus.MISS_AVOIDABLE.value,
+            partial_miss=status == CacheStatus.PARTIAL_MISS.value,
             wasted_usd=cache_observability.get("wastedUsd") or 0.0,
             model_id=message_metadata.model_info.model_id if message_metadata.model_info else None,
             session_id=session_id,
@@ -1540,11 +1552,20 @@ async def _bump_session_aggregates(
 
       - ``ADD totalCost :c``  — concurrent-safe across overlapping turns.
       - ``ADD totalCacheReadTokens / totalCacheWriteTokens / avoidableMissCount
-        / wastedUsd`` — per-session cache-efficiency rollups so lists and
-        admin views can show a cache-efficiency ratio without scanning the
-        session's cost rows.
+        / partialMissCount / wastedUsd / partialMissUsd`` — per-session
+        cache-efficiency rollups so lists and admin views can show a
+        cache-efficiency ratio without scanning the session's cost rows.
+        ``partialMissUsd`` is a *subset* of ``wastedUsd``, never a deduction:
+        the totals carry every wasted dollar and the split says which failure
+        shape produced them.
       - ``SET lastContextTokens :t, contextWindow :w`` — last-write-wins,
         which is the right behavior for "most recent turn."
+
+    The update returns the bumped counters (``ReturnValues="UPDATED_NEW"``),
+    which is the only place the session's *running* partial-miss waste is
+    known — that running total is what the session-accumulation alarm reads
+    (``SessionPartialMissUsd``). A fleet-wide sum cannot see one conversation
+    quietly spending a user's month at $0.43 a turn.
 
     The session row's SK encodes ``lastMessageAt`` so we don't know it
     directly; query the ``SessionLookupIndex`` GSI once to find it. Any
@@ -1597,38 +1618,82 @@ async def _bump_session_aggregates(
         cache_write = token_usage.cache_write_input_tokens or 0 if token_usage else 0
         observability = cache_observability or {}
         is_avoidable_miss = observability.get("cacheStatus") == "miss_avoidable"
+        is_partial_miss = observability.get("cacheStatus") == "partial_miss"
         wasted_usd = observability.get("wastedUsd") or 0.0
+        wasted_decimal = Decimal(str(_coerce_cost_total(wasted_usd)))
 
         update_parts_add = [
             "totalCost :c",
             "totalCacheReadTokens :cacheRead",
             "totalCacheWriteTokens :cacheWrite",
             "avoidableMissCount :avoidableMiss",
+            "partialMissCount :partialMiss",
             "wastedUsd :wasted",
+            "partialMissUsd :partialWasted",
         ]
         values[":cacheRead"] = int(cache_read)
         values[":cacheWrite"] = int(cache_write)
         values[":avoidableMiss"] = 1 if is_avoidable_miss else 0
+        values[":partialMiss"] = 1 if is_partial_miss else 0
         # wastedUsd comes from our own compute_wasted_usd (finite, rounded),
         # but coerce defensively — a bad value must not break the bump.
-        values[":wasted"] = Decimal(str(_coerce_cost_total(wasted_usd)))
+        values[":wasted"] = wasted_decimal
+        # A split of :wasted, not a deduction from it.
+        values[":partialWasted"] = wasted_decimal if is_partial_miss else Decimal("0")
 
         update_expression = (
             "ADD " + ", ".join(update_parts_add) + " SET " + ", ".join(update_parts_set)
         )
 
-        table.update_item(
+        response = table.update_item(
             Key={"PK": f"USER#{user_id}", "SK": sk},
             UpdateExpression=update_expression,
             ExpressionAttributeValues=values,
+            ReturnValues="UPDATED_NEW",
         )
         logger.debug(
             "bumped session aggregates for %s: +$%.6f, lastContextTokens=%d",
             session_id, cost_value, input_tokens,
         )
+
+        _emit_session_cache_rollup_metrics(session_id, response)
     except Exception as e:
         # Non-fatal — lazy backfill compensates on next read.
         logger.debug("bump_session_aggregates failed (will be backfilled on read): %s", e)
+
+
+def _emit_session_cache_rollup_metrics(
+    session_id: str,
+    update_response: Optional[Dict[str, Any]],
+) -> None:
+    """Emit the session's running partial-miss waste. Never raises.
+
+    Reads the ``UPDATED_NEW`` attributes the rollup bump just returned, so no
+    extra DynamoDB call. Silent when the session has no partial-miss waste —
+    which is almost every session, and a metric that is 99% zeros makes the
+    ``Maximum``-statistic alarm read as noise.
+    """
+    try:
+        from apis.shared.observability import (
+            emit_session_cache_rollup,
+            prompt_cache_observability_enabled,
+        )
+
+        if not prompt_cache_observability_enabled():
+            return
+
+        attributes = (update_response or {}).get("Attributes") or {}
+        partial_usd = float(attributes.get("partialMissUsd") or 0)
+        if partial_usd <= 0:
+            return
+
+        emit_session_cache_rollup(
+            session_id=session_id,
+            partial_miss_usd=partial_usd,
+            partial_miss_count=int(attributes.get("partialMissCount") or 0),
+        )
+    except Exception as e:  # noqa: BLE001 - metrics must never break the write path
+        logger.debug("Session cache rollup emission skipped: %s", e)
 
 
 async def _backfill_session_aggregates(

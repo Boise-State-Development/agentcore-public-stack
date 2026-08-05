@@ -126,13 +126,21 @@ async def get_session_cost_anatomy(
 
     Returns one row per model call — timestamp, input/cacheRead/cacheWrite/
     output tokens, cost, derived cacheStatus (first_write | hit |
-    miss_ttl_expired | miss_avoidable | uncached), and the prompt-cache
-    prefix fingerprint hashes (toolConfig / system prompt / history) — plus
-    session-level rollups (cache efficiency, avoidable-miss count, wastedUsd).
+    partial_miss | miss_ttl_expired | miss_avoidable | uncached), and the
+    prompt-cache prefix fingerprint hashes (toolConfig / system prompt /
+    history) — plus session-level rollups (cache efficiency, avoidable-miss
+    and partial-miss counts, wastedUsd).
 
     This is the forensic view for diagnosing avoidable prompt-cache
     re-writes: on a miss_avoidable row, diff its fingerprint hashes against
     the previous row's to see which prefix component changed.
+
+    ⚠️ **A `partial_miss` row costs like a miss even though it read from
+    cache.** It means a leading segment (typically tools + system) hit while
+    the rest of the prefix was re-written against a live entry — the shape
+    that spent 90% of one user's monthly quota while every row read `hit`.
+    Its dollars are in `wastedUsd`; `partialMissUsd` / `partialMissCount`
+    name the subset.
 
     ⚠️ **Check `agentSwitched` before treating a miss as a regression.** An
     `@`-mention hands one turn to a different Agent, which genuinely re-writes

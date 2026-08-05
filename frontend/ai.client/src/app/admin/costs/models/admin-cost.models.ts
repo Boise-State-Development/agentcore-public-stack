@@ -100,6 +100,12 @@ export interface AdminCostDashboard {
 export type CacheStatus =
   | 'first_write'
   | 'hit'
+  /**
+   * Read a leading prefix segment, re-wrote the rest against a live cache
+   * entry. Costs like a miss despite the nonzero read — this is the shape
+   * that used to be reported as `hit` with zero waste.
+   */
+  | 'partial_miss'
   | 'miss_ttl_expired'
   | 'miss_avoidable'
   | 'uncached';
@@ -157,6 +163,12 @@ export interface SessionCostAnatomy {
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
   avoidableMissCount: number;
+  /**
+   * Calls that hit a leading prefix segment and re-wrote the rest.
+   * `partialMissUsd` is a subset of `wastedUsd`, never deducted from it.
+   */
+  partialMissCount: number;
+  partialMissUsd: number;
   wastedUsd: number;
   /**
    * The subset of the two figures above that an Agent switch explains (#756).

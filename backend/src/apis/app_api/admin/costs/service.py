@@ -321,7 +321,10 @@ class AdminCostService:
         Get the per-model-call cost anatomy for one session.
 
         Reads every C# cost record for the session (chronological) and maps
-        each to a SessionCallRow with token splits, cost, derived cacheStatus,
+        each to a SessionCallRow with token splits, cost, derived cacheStatus
+        (including `partial_miss` — a call that read a leading segment and
+        re-wrote the rest of the prefix, which costs like a miss and used to
+        be reported as a hit),
         and the prompt-cache prefix fingerprints — the data needed to see
         where a session's spend went and which prefix component broke the
         cache on a miss. Rows written before this feature shipped simply lack
@@ -340,6 +343,8 @@ class AdminCostService:
         total_cache_read = 0
         total_cache_write = 0
         avoidable_misses = 0
+        partial_misses = 0
+        partial_miss_usd = 0.0
         wasted_usd = 0.0
         agent_switch_misses = 0
         agent_switch_usd = 0.0
@@ -376,6 +381,9 @@ class AdminCostService:
                 if agent_switched:
                     agent_switch_misses += 1
                     agent_switch_usd += row_wasted
+            elif cache_status == "partial_miss":
+                partial_misses += 1
+                partial_miss_usd += row_wasted
             wasted_usd += row_wasted
 
             gap_raw = record.get("cacheGapSeconds")
@@ -410,7 +418,8 @@ class AdminCostService:
 
         logger.info(
             f"Session cost anatomy: {len(calls)} calls, "
-            f"{avoidable_misses} avoidable misses, wasted=${wasted_usd:.4f}"
+            f"{avoidable_misses} avoidable misses, {partial_misses} partial misses, "
+            f"wasted=${wasted_usd:.4f}"
         )
 
         return SessionCostAnatomy(
@@ -420,6 +429,8 @@ class AdminCostService:
             total_cache_read_tokens=total_cache_read,
             total_cache_write_tokens=total_cache_write,
             avoidable_miss_count=avoidable_misses,
+            partial_miss_count=partial_misses,
+            partial_miss_usd=round(partial_miss_usd, 6),
             wasted_usd=round(wasted_usd, 6),
             agent_switch_miss_count=agent_switch_misses,
             agent_switch_usd=round(agent_switch_usd, 6),
