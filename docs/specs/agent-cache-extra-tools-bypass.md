@@ -162,6 +162,27 @@ injected-tool state fresh.
 - Because injected tools are rebuilt per request anyway, a cached agent must
   have its bound tools **refreshed** on a hit, or the cached closures must be
   provably equivalent under the key. Decide which; do not leave it implicit.
+  **Decided (arm 1): equivalence, proven at the key — cached tools are never
+  refreshed on a hit.** Eligibility *is* the proof, so the predicate has to
+  stay conservative: a family only joins `KEY_DESCRIBED_INJECTED_TOOL_IDS`
+  once every value its factory closes over is a key element. Refresh-on-hit
+  was rejected because it re-introduces per-turn work on the path whose whole
+  purpose is to skip it, and because "rebuild the tools but keep the agent"
+  is a third state to reason about on top of hazards 2 and 3.
+
+**Which families are already eligible** (read off the factories while building
+arm 1, so the next promotion is mechanical rather than another audit):
+
+| family | captures | eligible? |
+|---|---|---|
+| `ARTIFACT` | session, user | **yes — shipped in arm 1** |
+| `WORD_DOCUMENT` / `EXCEL_SPREADSHEET` / `POWERPOINT_PRESENTATION` | session, user | yes on identical reasoning — held back only so the experiment measures one variable |
+| `WORKSPACE` | session, user | same |
+| `SPREADSHEET` | session, user, **`assistant_id`** | no — needs the key + snapshot work above |
+| Memory-Space | user, email, **resolved binding** | no — and not gated on `enabled_tools`, so it can never be represented by an id; callers pass it as a separate veto |
+
+So four of the six families are a one-line change to that frozenset once the
+artifact arm reads clean; only spreadsheets need the key extended.
 
 **Validate with an experiment, not more observational data.** The §3 numbers
 cannot separate the bypass from the workload. Enable caching for one builder
@@ -175,6 +196,15 @@ case is latency, which is still worth having.
 cohort; p50/p95 time-to-first-token; `initialize()` invocations per turn (should
 approach 1 per *session* for treated sessions, not 1 per turn); and the #741
 aliasing guard test staying green under concurrent siblings.
+
+**How to read them, now that the instruments exist.** The cold-write rate is
+`partial_miss` + `miss_avoidable` from
+`docs/specs/compaction-over-threshold-cache-spiral.md` PR-1 (#838) — that gate
+is the reason PR-1 shipped first, and note it counts only calls written *after*
+that deploy, so the pre/post comparison needs a clean cutover date rather than
+a look back at history. `initialize()` per turn comes from the structured
+`agent_cache outcome=hit|miss` logs arm 1 adds; group by `session` in Logs
+Insights and the treated cohort should trend toward one miss per session.
 
 ## 7. Non-goals
 
