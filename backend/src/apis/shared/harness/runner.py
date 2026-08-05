@@ -16,6 +16,7 @@ as an A2A server, its advertised ``capabilities`` MUST include
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import uuid
@@ -37,6 +38,55 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_SECONDS = 300.0
 
 OnEvent = Callable[[str, Dict[str, Any]], Awaitable[None]]
+
+# ============================================================
+# Runtime session affinity
+# ============================================================
+
+# AgentCore pins an invocation to a microVM by runtime session id. Send the
+# same one for every turn of a conversation and those turns land on the same
+# container; omit it and AWS assigns a fresh one per call, so anything held in
+# process — notably the agent cache — is cold every turn.
+RUNTIME_SESSION_ID_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
+
+# Kill switch. Default ON; only the literal string "false" disables it — an
+# empty or unset value stays enabled (workflow env vars can materialize as "").
+# Turning it off restores per-call runtime sessions exactly.
+AGENTCORE_SESSION_AFFINITY_ENABLED_ENV = "AGENTCORE_RUNTIME_SESSION_AFFINITY_ENABLED"
+
+
+def runtime_session_affinity_enabled() -> bool:
+    """Whether conversations pin their AgentCore runtime session."""
+    return os.environ.get(AGENTCORE_SESSION_AFFINITY_ENABLED_ENV, "").lower() != "false"
+
+
+def runtime_session_id_for(session_id: str) -> str:
+    """Deterministic AgentCore runtime session id for one conversation.
+
+    Hashed rather than passed through because the runtime session id has a
+    charset and a **33-character minimum**, and our session ids meet neither
+    reliably (they range from short prefixed strings to UUIDs). A hash is
+    always valid, always the same for a given conversation — which is the
+    whole point, since affinity requires byte-identical values across turns —
+    and keeps our identifiers out of an AWS-side one.
+    """
+    digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+    return f"sid-{digest}"  # 68 chars, [a-z0-9-] — inside the 33..128 window
+
+
+def apply_runtime_session_header(
+    headers: Dict[str, str], session_id: Optional[str]
+) -> Dict[str, str]:
+    """Add the affinity header to ``headers`` when we know the conversation.
+
+    Mutates and returns ``headers`` so callers stay one-liners. A missing
+    ``session_id`` or a disabled kill switch is a no-op, which degrades to
+    exactly the pre-affinity behavior rather than failing the turn.
+    """
+    if not session_id or not runtime_session_affinity_enabled():
+        return headers
+    headers[RUNTIME_SESSION_ID_HEADER] = runtime_session_id_for(session_id)
+    return headers
 
 
 def _build_http_client(timeout_seconds: float) -> httpx.AsyncClient:
@@ -177,10 +227,13 @@ async def run_agent_headless(
             async with client.stream(
                 "POST",
                 url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {bearer}",
-                },
+                headers=apply_runtime_session_header(
+                    {
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {bearer}",
+                    },
+                    session_id,
+                ),
                 json=payload,
             ) as response:
                 if response.status_code >= 400:

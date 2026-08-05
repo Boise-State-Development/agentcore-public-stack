@@ -15,15 +15,20 @@ access token — to inference-api, which accepts Cognito Bearer tokens via
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.harness.runner import build_invocations_url
+from apis.shared.harness.runner import (
+    apply_runtime_session_header,
+    build_invocations_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +78,27 @@ async def chat_stream(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {current_user.raw_token}",
     }
+
+    # Pin this conversation to one microVM so inference-api's in-process caches
+    # survive between turns. Measured in dev: without it every turn is an agent
+    # cache miss and pays a full `initialize()` (~7.5-8.1s/turn); with it, turns
+    # after the first hit and run ~3.1s. It does NOT change the prompt-cache
+    # token split — that was already stable — so this is a latency fix, not a
+    # cost one (docs/specs/agent-cache-extra-tools-bypass.md §6 read).
+    #
+    # This is the one place that has to look inside the body, which the proxy
+    # otherwise relays verbatim. Read-only and best-effort: a body that isn't
+    # JSON, or carries no session_id, simply goes unpinned rather than failing
+    # the turn — schema validation still belongs to inference-api.
+    session_id: Optional[str] = None
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, dict):
+            raw = parsed.get("session_id")
+            session_id = raw if isinstance(raw, str) and raw else None
+    except (ValueError, TypeError):
+        logger.debug("chat proxy: body is not JSON; skipping runtime-session pinning")
+    apply_runtime_session_header(headers, session_id)
 
     # Forward OAuth2CallbackUrl when the SPA supplies it. Inference-api's
     # AgentCoreContextMiddleware reads this header to scope the on-tool

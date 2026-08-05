@@ -84,6 +84,21 @@ async def run_turn(
     return "ok"
 
 
+def read_cost_rows(prefix: str, region: str, session_id: str) -> list:
+    """This session's `C#` rows, chronological."""
+    import boto3
+    from boto3.dynamodb.conditions import Key
+
+    table = boto3.resource("dynamodb", region_name=region).Table(f"{prefix}-sessions-metadata")
+    return table.query(
+        IndexName="SessionLookupIndex",
+        KeyConditionExpression=(
+            Key("GSI_PK").eq(f"SESSION#{session_id}") & Key("GSI_SK").begins_with("C#")
+        ),
+        ScanIndexForward=True,
+    )["Items"]
+
+
 def read_outcomes(log_group: str, region: str, session_id: str, since_epoch: int) -> List[str]:
     """agent_cache hit/miss for one session, deduped (the runtime double-logs)."""
     import boto3
@@ -155,9 +170,13 @@ async def main() -> int:
         )
         statuses = []
         for i in range(args.turns):
+            # Salt turn 1 per arm. Without this the second arm inherits the
+            # first's Bedrock cache entry (identical priming bytes → same
+            # prefix) and its write column reads 0 for reasons that have
+            # nothing to do with pinning — the confound in the first run.
             prompt = (
-                build_priming_prompt(args.priming_chars) if i == 0
-                else TURN_PROMPTS[i % len(TURN_PROMPTS)]
+                f"Reference set {session_id}.\n" + build_priming_prompt(args.priming_chars)
+                if i == 0 else TURN_PROMPTS[i % len(TURN_PROMPTS)]
             )
             started = time.monotonic()
             status = await run_turn(
@@ -185,6 +204,16 @@ async def main() -> int:
         print(f"  turns ok:    {ok}/{len(data['statuses'])}")
         print(f"  agent_cache: {'/'.join(outcomes) or '(no lines found)'}")
         print(f"  hits:        {hits} of {len(outcomes)}")
+        rows = read_cost_rows(args.prefix, args.region, data["session_id"])
+        tr = tw = 0
+        print(f"  {'turn':>6} {'cacheStatus':<14} {'read':>8} {'write':>8}")
+        for i, r in enumerate(rows, 1):
+            u = r.get("tokenUsage") or {}
+            cr = int(u.get("cacheReadInputTokens") or 0)
+            cw = int(u.get("cacheWriteInputTokens") or 0)
+            tr += cr; tw += cw
+            print(f"  {i:>6} {str(r.get('cacheStatus')):<14} {cr:>8,} {cw:>8,}")
+        print(f"  totals: read={tr:,} write={tw:,} ratio={tw / max(tr, 1):.3f} write:read")
         for s in data["statuses"]:
             if s != "ok":
                 print(f"  error: {s[:200]}")
