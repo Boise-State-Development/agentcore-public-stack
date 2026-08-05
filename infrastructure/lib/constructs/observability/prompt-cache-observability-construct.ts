@@ -6,6 +6,18 @@ import { AppConfig, getResourceName } from '../../config';
 
 export interface PromptCacheObservabilityConstructProps {
   config: AppConfig;
+  /**
+   * The log group the AgentCore Runtime actually writes to, from
+   * `InferenceAgentCoreConstruct.runtimeLogGroupName`.
+   *
+   * Must be passed, not derived: the group is service-created and named
+   * after the runtime *id* (AWS-assigned suffix), which is only knowable
+   * from the runtime resource. This construct previously guessed
+   * `/aws/bedrock-agentcore/runtimes/<prefix>` — a group nothing writes to,
+   * so both Logs Insights widgets below returned empty results and read as
+   * "no traffic" rather than "wrong query".
+   */
+  runtimeLogGroupName: string;
 }
 
 /**
@@ -42,7 +54,7 @@ export class PromptCacheObservabilityConstruct extends Construct {
   ) {
     super(scope, id);
 
-    const { config } = props;
+    const { config, runtimeLogGroupName } = props;
 
     // Must match the default of EMF_NAMESPACE in emf.py.
     const namespace = 'AgentCoreStack/PromptCache';
@@ -179,12 +191,11 @@ export class PromptCacheObservabilityConstruct extends Construct {
     dashboard.addWidgets(
       new cloudwatch.LogQueryWidget({
         title: 'Model Calls by cacheStatus (inference-api)',
-        // The runtime log group is defined by the inference-api
-        // construct with this deterministic name; referenced by name
-        // (not typed ref) since a dashboard widget creates no CFN
-        // dependency. app-api's ECS log group is auto-named, so its
-        // (much smaller) share of emissions isn't queried here.
-        logGroupNames: [`/aws/bedrock-agentcore/runtimes/${config.projectPrefix}`],
+        // Referenced by name (not a typed LogGroup ref) since a dashboard
+        // widget creates no CFN dependency. app-api's ECS log group is
+        // auto-named, so its (much smaller) share of emissions isn't
+        // queried here.
+        logGroupNames: [runtimeLogGroupName],
         queryLines: [
           'filter ispresent(cacheStatus)',
           'stats count(*) as calls by cacheStatus',
@@ -198,7 +209,7 @@ export class PromptCacheObservabilityConstruct extends Construct {
     dashboard.addWidgets(
       new cloudwatch.LogQueryWidget({
         title: 'Sessions by partial-miss waste (which session did the alarm mean?)',
-        logGroupNames: [`/aws/bedrock-agentcore/runtimes/${config.projectPrefix}`],
+        logGroupNames: [runtimeLogGroupName],
         // sessionId is a log property, not a metric dimension (unbounded
         // cardinality), so the alarm says *that* a session crossed the line
         // and this widget says *which*.
