@@ -51,6 +51,7 @@ from apis.shared.tools.injected import (
     SPREADSHEET_TOOL_IDS,
     WORD_DOCUMENT_TOOL_IDS,
     WORKSPACE_TOOL_IDS,
+    injected_tools_are_key_described,
 )
 from apis.shared.user_settings.repository import UserSettingsRepository
 
@@ -1092,6 +1093,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_type=effective_agent_type,
                 is_resume=False,
                 accessible_skill_ids=effective_skill_ids,
+                # This path builds no injected tools, but shares a cache slot
+                # with the real turns that do. Read the slot; never seed it.
+                cache_write=False,
             )
             payload = await dispatch_app_tool_call(
                 agent,
@@ -1140,6 +1144,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_type=effective_agent_type,
                 is_resume=False,
                 accessible_skill_ids=effective_skill_ids,
+                # Same partial-toolset hazard as app_tool_call above.
+                cache_write=False,
             )
             payload = dispatch_app_context_update(
                 agent,
@@ -2009,10 +2015,24 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,
-            ) + _build_memory_tools(
+            )
+
+            memory_tools = _build_memory_tools(
                 agent_memory=agent_memory,
                 user_id=user_id,
                 user_email=current_user.email,
+            )
+            extra_tools = extra_tools + memory_tools
+
+            # Can this turn's agent be cached despite carrying injected tools?
+            # Only when every builder that fired closes over values the cache
+            # key already carries (session, user, enabled_tools). Derived from
+            # the same `effective_enabled_tools` that goes into the key below —
+            # passing the request's list here instead would let the predicate
+            # and the key disagree about which builders ran.
+            extra_tools_key_described = injected_tools_are_key_described(
+                enabled_tools=effective_enabled_tools,
+                has_memory_binding=bool(memory_tools),
             )
 
             agent = await get_agent(
@@ -2031,6 +2051,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 extra_tools=extra_tools,
                 is_resume=False,
                 accessible_skill_ids=effective_skill_ids,
+                extra_tools_key_described=extra_tools_key_described,
             )
 
         # Resume requests must target interrupts that the cached agent

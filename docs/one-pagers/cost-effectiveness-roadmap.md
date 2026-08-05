@@ -49,7 +49,7 @@ spend, and the plan has to hold both levers in frame.
 | # | workstream | what it protects | authority | state |
 |---|---|---|---|---|
 | W1 | **Measurement** | every other row of this table | #833 PR-1 (`partial_miss`), cohort scan §4.1, dashboards #699/#700 | **PR-1 merged (#838) and live in dev**; prod awaits a release, and that is when the baseline clock starts. Cohort scan §4.1 next |
-| W2 | **Prefix stability** | don't rewrite what didn't change | #834 bypass fix → #833 PR-2/3/4 → #835 v2 (gated) | specs open, nothing built |
+| W2 | **Prefix stability** | don't rewrite what didn't change | #834 bypass fix → #833 PR-2/3/4 → #835 v2 (gated) | **#834 arm 1 merged (#839)** — artifacts only, the G1 experiment; rest of #834 and all of #833 PR-2/3/4 unbuilt |
 | W3 | **Payload boundedness** | nothing unbounded enters the prefix | #836 offload · tool-search strategy · workspace tools (PR-1 built) · S3 share-offload | offload PRs unbuilt; citations baseline probe required first |
 | W4 | **Demand governance** | bound the blast radius of any failure | quota-cooldown spec · #833 PR-5 (earlier warnings, per-session notice) | drafted; PR-5 unbuilt |
 | W5 | **Infrastructure economics** | the 73% of the bill that isn't tokens | reaper #827 (shipped) + open follow-ups: session-id forwarding, `StopRuntimeSession` | follow-ups un-specced — **gap** |
@@ -89,6 +89,12 @@ Gate summary — each is a *measurement with a decision attached*, not a date:
   this.
 - **G1** — the bypass→cache-write causality is confounded in observational
   data (#834 §3 says so itself). The single-builder experiment settles it.
+  **The arm is built** (`create_artifact` only, kill switch
+  `AGENT_CACHE_INJECTED_TOOLS_ENABLED`); the gate clears on its read: treated
+  cohort's within-TTL cold-write rate (now `partial_miss` + `miss_avoidable`
+  from G0), p50/p95 TTFT, and `initialize()` per turn → per *session*. If the
+  cold-write rate doesn't move, the prompt-cache theory is wrong and the
+  remaining case is latency — still worth having, but it re-prices W2.
 - **G2** — #835 §7 lists the falsifiable go criteria (cohort >3% of sessions
   or >15% of spend, or residual waste >$50/mo post-triage). Defer is a
   respectable outcome: the invariants persist as review criteria.
