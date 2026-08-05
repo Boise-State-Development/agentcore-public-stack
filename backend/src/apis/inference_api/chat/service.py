@@ -105,6 +105,18 @@ def _create_cache_key(
 _agent_cache: dict = {}
 _CACHE_MAX_SIZE = 100
 
+# Kill switch for caching agents that carry key-described injected tools
+# (docs/specs/agent-cache-extra-tools-bypass.md). Default ON; only the literal
+# string "false" disables it — an empty or unset value stays enabled, because
+# workflow env vars can materialize as "". Setting it to "false" restores the
+# blanket `if extra_tools` bypass exactly.
+AGENT_CACHE_INJECTED_TOOLS_ENABLED_ENV = "AGENT_CACHE_INJECTED_TOOLS_ENABLED"
+
+
+def agent_cache_injected_tools_enabled() -> bool:
+    """Whether agents carrying key-described injected tools may be cached."""
+    return os.environ.get(AGENT_CACHE_INJECTED_TOOLS_ENABLED_ENV, "").lower() != "false"
+
 
 def _is_paused_on_interrupt(agent: BaseAgent) -> bool:
     """Return True if the wrapped Strands agent is mid-interrupt.
@@ -210,6 +222,8 @@ async def get_agent(
     mantle_region: Optional[str] = None,
     is_resume: bool = False,
     accessible_skill_ids: Optional[List[str]] = None,
+    extra_tools_key_described: bool = False,
+    cache_write: bool = True,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -233,6 +247,16 @@ async def get_agent(
         inference_params: Canonical-name -> value map for inference params.
             When provided, supersedes the legacy ``temperature``/``max_tokens``
             kwargs (the explicit dict wins on key conflicts).
+        extra_tools_key_described: Whether every tool in ``extra_tools``
+            closes over only values this cache key already carries. Callers
+            derive it with ``injected_tools_are_key_described``; the default
+            (False) keeps the historical bypass, so any caller that has not
+            reasoned about its closures gets the safe behavior.
+        cache_write: Whether this caller may *populate* the cache. Read stays
+            allowed either way. Set False by callers that build a partial
+            toolset for a session whose real turns build more — otherwise they
+            would seed the shared slot with an agent missing those tools, and
+            the next real turn would cache-hit into it.
 
     Returns:
         BaseAgent subclass instance (cached or newly created)
@@ -276,7 +300,16 @@ async def get_agent(
         skills_hash=skills_hash,
     )
 
-    if not extra_tools and cache_key in _agent_cache:
+    # Whether this turn's injected tools (if any) let it use the cache at all.
+    # `extra_tools` used to veto the cache outright, standing in for "this agent
+    # captured something the key doesn't describe". True for two families; for
+    # the rest it cost 76% of sessions a full `initialize()` + AgentCore Memory
+    # restore on every turn (docs/specs/agent-cache-extra-tools-bypass.md).
+    cacheable = not extra_tools or (
+        extra_tools_key_described and agent_cache_injected_tools_enabled()
+    )
+
+    if cacheable and cache_key in _agent_cache:
         cached = _agent_cache[cache_key]
         # Defense in depth: a non-resume request should never be served a
         # paused agent. If we ever desync the cache key between the original
@@ -294,10 +327,23 @@ async def get_agent(
             del _agent_cache[cache_key]
         else:
             logger.debug("✅ Agent cache hit")
+            # Experiment instrument (spec §6): "initialize() invocations per
+            # turn" should approach 1 per *session* for treated sessions, not 1
+            # per turn. A cache hit is exactly the turn that skips initialize(),
+            # so counting these against misses over the same session id measures
+            # the gate. INFO and structured, so Logs Insights can group it.
+            logger.info(
+                "agent_cache outcome=hit injected_tools=%s session=%s",
+                bool(extra_tools), scrub_log(session_id),
+            )
             return cached
 
     # Cache miss - create new agent
     logger.debug("⚠️ Agent cache miss - creating new instance")
+    logger.info(
+        "agent_cache outcome=miss injected_tools=%s cacheable=%s session=%s",
+        bool(extra_tools), cacheable, scrub_log(session_id),
+    )
 
     # Create agent via the type registry. Both "chat" and "skill" resolve to
     # ChatAgent (Skills v2 retired the SkillAgent subclass); a "skill" turn just
@@ -347,9 +393,20 @@ async def get_agent(
         if resolved_agent_type != "voice" and accessible_skill_ids is not None:
             agent._construction_snapshot["enabled_skills"] = list(accessible_skill_ids)
 
-    # Don't cache agents with context-bound extra_tools
-    if extra_tools:
+    # Don't cache agents whose context-bound extra_tools captured anything the
+    # key doesn't describe — a cached agent holds the *old* closures, so reuse
+    # is only safe when those are provably equivalent under this key. That is
+    # the decision spec §6 asks to be explicit about: cached tools are NOT
+    # refreshed on a hit; eligibility is proven at the key instead.
+    if not cacheable:
         logger.debug("⏭️ Skipping cache for agent with extra_tools")
+        return agent
+
+    # Caller builds a partial toolset for a slot that real turns fill more
+    # completely (the MCP App dispatch paths). Reading is fine — a properly
+    # built agent is strictly better — but writing would poison the slot.
+    if not cache_write:
+        logger.debug("⏭️ Not populating cache from a partial-toolset caller")
         return agent
 
     # Add to cache with LRU eviction

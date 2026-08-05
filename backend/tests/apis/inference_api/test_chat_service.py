@@ -376,3 +376,175 @@ async def test_adoption_does_not_reach_across_sessions(mock_freshness_hash):
 
     assert b.agent.messages == [], "a different session adopted someone else's conversation"
     assert a.agent.messages is not b.agent.messages
+
+
+# ============================================================
+# #834 — narrowing the `extra_tools` agent-cache bypass
+# ============================================================
+
+
+class TestInjectedToolCacheEligibility:
+    """`get_agent` used to refuse the cache for *any* per-request tool.
+
+    That predicate stands for "this agent captured something the key doesn't
+    describe" — true for spreadsheets (`assistant_id`) and Memory Spaces (the
+    resolved binding), and false for the rest, which close over only session and
+    user. Both are already key elements, so the cached closures are equivalent
+    and the bypass was pure cost: 76% of sessions paid a full `initialize()` +
+    AgentCore Memory restore every turn
+    (docs/specs/agent-cache-extra-tools-bypass.md §1–§2).
+
+    These pin the narrowed predicate, one builder at a time per that spec's §6.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_artifact_turn_now_caches_and_the_next_turn_hits(
+        self, mock_create_agent, mock_freshness_hash
+    ):
+        first = await service.get_agent(
+            session_id="s", user_id="u",
+            enabled_tools=["create_artifact"],
+            extra_tools=[object()],
+            extra_tools_key_described=True,
+        )
+        second = await service.get_agent(
+            session_id="s", user_id="u",
+            enabled_tools=["create_artifact"],
+            extra_tools=[object()],
+            extra_tools_key_described=True,
+        )
+
+        assert second is first, "the artifact turn rebuilt its agent"
+        assert mock_create_agent.call_count == 1, "initialize() ran twice for one session"
+
+    @pytest.mark.asyncio
+    async def test_a_turn_that_captured_something_unkeyed_still_bypasses(
+        self, mock_create_agent, mock_freshness_hash
+    ):
+        """Spreadsheet tools close over `assistant_id`, which is not in the key —
+        a cached agent could answer against the wrong assistant's corpus."""
+        for _ in range(2):
+            await service.get_agent(
+                session_id="s", user_id="u",
+                enabled_tools=["analyze_spreadsheet"],
+                extra_tools=[object()],
+                extra_tools_key_described=False,
+            )
+
+        assert mock_create_agent.call_count == 2, "cached an agent with unkeyed captures"
+
+    @pytest.mark.asyncio
+    async def test_callers_that_do_not_declare_get_the_old_safe_behavior(
+        self, mock_create_agent, mock_freshness_hash
+    ):
+        """The parameter defaults to False: a caller that has not reasoned about
+        its closures must not be opted in by omission."""
+        for _ in range(2):
+            await service.get_agent(
+                session_id="s", user_id="u", extra_tools=[object()]
+            )
+
+        assert mock_create_agent.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_the_kill_switch_restores_the_blanket_bypass(
+        self, mock_create_agent, mock_freshness_hash, monkeypatch
+    ):
+        monkeypatch.setenv("AGENT_CACHE_INJECTED_TOOLS_ENABLED", "false")
+        for _ in range(2):
+            await service.get_agent(
+                session_id="s", user_id="u",
+                enabled_tools=["create_artifact"],
+                extra_tools=[object()],
+                extra_tools_key_described=True,
+            )
+
+        assert mock_create_agent.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_an_empty_flag_value_stays_enabled(
+        self, mock_create_agent, mock_freshness_hash, monkeypatch
+    ):
+        # Workflow env vars can materialize as "" — that must not read as off.
+        monkeypatch.setenv("AGENT_CACHE_INJECTED_TOOLS_ENABLED", "")
+        for _ in range(2):
+            await service.get_agent(
+                session_id="s", user_id="u",
+                enabled_tools=["create_artifact"],
+                extra_tools=[object()],
+                extra_tools_key_described=True,
+            )
+
+        assert mock_create_agent.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_partial_toolset_caller_may_read_the_slot_but_never_seed_it(
+        self, mock_create_agent, mock_freshness_hash
+    ):
+        """The regression this narrowing would otherwise introduce.
+
+        The MCP App dispatch paths call `get_agent` with NO injected tools but
+        the same cache key as the session's real turns. Before the narrowing they
+        could not collide, because artifact turns never cached. Now they share a
+        slot — so if an App call seeded it first, the next real turn would
+        cache-hit an agent with no `create_artifact` and silently lose the tool
+        for the rest of the session.
+        """
+        app_call = await service.get_agent(
+            session_id="s", user_id="u",
+            enabled_tools=["create_artifact"],
+            cache_write=False,
+        )
+        real_turn = await service.get_agent(
+            session_id="s", user_id="u",
+            enabled_tools=["create_artifact"],
+            extra_tools=[object()],
+            extra_tools_key_described=True,
+        )
+
+        assert real_turn is not app_call, "a real turn inherited the App path's toolless agent"
+
+        # …and once a real turn owns the slot, the App path reuses it rather
+        # than building a throwaway.
+        assert await service.get_agent(
+            session_id="s", user_id="u",
+            enabled_tools=["create_artifact"],
+            cache_write=False,
+        ) is real_turn
+
+    @pytest.mark.asyncio
+    async def test_a_newly_cacheable_agent_still_shares_the_session_conversation(
+        self, mock_freshness_hash
+    ):
+        """#741's invariant, under more concurrent siblings.
+
+        Caching agents that never cached before means more instances alive per
+        session, so the aliasing guard gets *more* load, not less — §5 hazard 2.
+        """
+        store: list[dict] = []
+
+        with patch.object(service, "create_agent") as mock:
+            mock.side_effect = lambda **kwargs: _fake_agent_with_messages(
+                system_prompt=kwargs.get("system_prompt"), restored=store
+            )
+
+            artifact_turn = await service.get_agent(
+                session_id="s", user_id="u",
+                enabled_tools=["create_artifact"],
+                extra_tools=[object()],
+                extra_tools_key_described=True,
+            )
+            artifact_turn.agent.messages.append({"role": "user", "t": 1})
+            store.append({"role": "user", "t": 1})
+
+            # An `@`-mention: different system prompt → different slot, second
+            # live Agent for the same session.
+            mentioned = await service.get_agent(
+                session_id="s", user_id="u",
+                enabled_tools=["create_artifact"],
+                system_prompt="You are the mentioned Agent.",
+                extra_tools=[object()],
+                extra_tools_key_described=True,
+            )
+
+        assert mentioned.agent.messages, "the second live Agent forked the conversation"

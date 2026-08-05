@@ -1,6 +1,9 @@
 # The `extra_tools` agent-cache bypass — 76% of sessions rebuild their Agent every turn
 
-**Status:** Issue write-up / fix direction. No branch.
+**Status:** Arm 1 built (`feature/agent-cache-artifact-builder`) — the §6
+single-builder experiment, `create_artifact` only, behind
+`AGENT_CACHE_INJECTED_TOOLS_ENABLED`. Remaining families and the key/snapshot
+work in §6 are unbuilt. See §5 hazard 4, found while building arm 1.
 **Found while:** measuring document-conversation cost (2026-08-03) — see
 `docs/specs/document-context-offload.md`, defect 4
 **Related:** [[project-prod-cache-write-premium]] · #741 (history fork) · #751
@@ -127,6 +130,20 @@ Three hazards, all documented in the code and all previously paid for:
    state). Anything a manager loads once and holds must be aliased or re-read
    per turn. Caching agents that currently never cache moves more state into
    that category — including whatever the injected tools captured.
+
+4. **Callers that share a cache slot but build a different toolset.** Found
+   while building arm 1, not anticipated above. The MCP App dispatch paths
+   (`app_tool_call`, `app_context_update` —
+   [routes.py:1081](../../backend/src/apis/inference_api/chat/routes.py:1081))
+   call `get_agent` with **no** `extra_tools` but otherwise the same key as the
+   session's real turns. They could not collide before, because injected-tool
+   turns never cached; the moment one does, whichever caller reaches the slot
+   first wins — and if that is an App call, every later real turn cache-hits an
+   agent missing its injected tools and silently loses them for the session.
+   Arm 1 closes this with a `cache_write=False` flag on those two callers (read
+   the slot, never seed it). **Any future caller of `get_agent` that builds a
+   partial toolset needs the same treatment** — this is the generalization of
+   hazard 3, and it is a *tool-loss* bug, not a staleness one.
 
 Hazard 3 is the real work: today the bypass *is* the mechanism that keeps
 injected-tool state fresh.
