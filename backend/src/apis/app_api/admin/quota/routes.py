@@ -623,7 +623,10 @@ async def get_events(
     Args:
         user_id: Filter by user ID (optional)
         tier_id: Filter by tier ID (optional)
-        event_type: Filter by event type (warning, block, reset, override_applied)
+        event_type: Filter by event type (warning, block, reset,
+            override_applied, session_notice). A `session_notice` row means a
+            single conversation reached the tier's session share of the
+            monthly limit — its `metadata.session_id` names which one.
         limit: Maximum number of events to return (default: 50)
         admin_user: Authenticated admin user
         service: Quota admin service

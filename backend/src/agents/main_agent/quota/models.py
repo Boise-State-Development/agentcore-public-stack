@@ -1,7 +1,7 @@
 """Core domain models for quota management system."""
 
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from typing import Optional, Literal, Dict, Any
+from typing import Optional, Literal, Dict, Any, List
 from enum import Enum
 from decimal import Decimal
 
@@ -45,6 +45,26 @@ class QuotaTier(BaseModel):
         description="Percentage at which warnings start"
     )
 
+    # Rungs *below* the soft limit, so a user burning a month-long budget in
+    # days hears about it days ahead instead of hours ahead (#833 PR-5).
+    # None → the platform default (50% and 75%); an explicit empty list opts
+    # the tier out and leaves only softLimitPercentage + 90%.
+    early_warning_percentages: Optional[List[Decimal]] = Field(
+        default=None,
+        alias="earlyWarningPercentages",
+        description="Extra warning percentages below the soft limit (default 50 and 75); [] disables them"
+    )
+
+    # Share of the monthly limit at which a *single conversation* is called
+    # out to the user ("this conversation has used $X of your $Y"). 0 disables.
+    session_notice_percentage: Decimal = Field(
+        default=Decimal("25.0"),
+        alias="sessionNoticePercentage",
+        ge=0,
+        le=100,
+        description="Percentage of the monthly limit one session must reach to trigger a session notice (0 disables)"
+    )
+
     # Hard limit behavior (warn or block)
     action_on_limit: Literal["block", "warn"] = Field(
         default="block",
@@ -57,7 +77,13 @@ class QuotaTier(BaseModel):
     updated_at: str = Field(..., alias="updatedAt")
     created_by: str = Field(..., alias="createdBy")
 
-    @field_validator('monthly_cost_limit', 'daily_cost_limit', 'soft_limit_percentage', mode='before')
+    @field_validator(
+        'monthly_cost_limit',
+        'daily_cost_limit',
+        'soft_limit_percentage',
+        'session_notice_percentage',
+        mode='before',
+    )
     @classmethod
     def convert_to_decimal(cls, v):
         """Convert float/int to Decimal for DynamoDB compatibility"""
@@ -67,6 +93,19 @@ class QuotaTier(BaseModel):
             return Decimal(str(v))
         if isinstance(v, str):
             return Decimal(v)
+        return v
+
+    @field_validator('early_warning_percentages', mode='before')
+    @classmethod
+    def convert_percentage_list(cls, v):
+        """Same Decimal coercion, elementwise. `[]` is meaningful (opt-out)."""
+        if v is None:
+            return v
+        if isinstance(v, (list, tuple)):
+            return [
+                Decimal(str(item)) if isinstance(item, (int, float, str)) else item
+                for item in v
+            ]
         return v
 
 
@@ -133,7 +172,9 @@ class QuotaEvent(BaseModel):
     event_id: str = Field(..., alias="eventId")
     user_id: str = Field(..., alias="userId")
     tier_id: str = Field(..., alias="tierId")
-    event_type: Literal["warning", "block", "reset", "override_applied"] = Field(
+    event_type: Literal[
+        "warning", "block", "reset", "override_applied", "session_notice"
+    ] = Field(
         ...,
         alias="eventType"
     )
@@ -170,12 +211,40 @@ class QuotaCheckResult(BaseModel):
     quota_limit: Optional[Decimal] = Field(None, alias="quotaLimit")
     percentage_used: Decimal = Field(default=Decimal("0.0"), alias="percentageUsed")
     remaining: Optional[Decimal] = None
-    warning_level: Optional[Literal["none", "80%", "90%"]] = Field(
+    # Free-form since #833 PR-5: the ladder is tier-configurable, so the set
+    # of labels is open ("50%", "75%", the tier's own soft limit, "90%").
+    warning_level: Optional[str] = Field(
         default="none",
         alias="warningLevel"
     )
 
-    @field_validator('current_usage', 'quota_limit', 'percentage_used', 'remaining', mode='before')
+    # Per-session runway. Populated only when this turn's session has itself
+    # reached the tier's session-notice share of the monthly limit — the
+    # signal the incident session never produced (it spent 90% of a month's
+    # budget while every per-user warning stayed quiet until the last day).
+    session_id: Optional[str] = Field(default=None, alias="sessionId")
+    session_cost: Optional[Decimal] = Field(default=None, alias="sessionCost")
+    session_percentage_of_limit: Optional[Decimal] = Field(
+        default=None,
+        alias="sessionPercentageOfLimit",
+        description="The session's lifetime cost as a percentage of the monthly limit",
+    )
+    session_notice_threshold: Optional[Decimal] = Field(
+        default=None,
+        alias="sessionNoticeThreshold",
+        description="The configured share (percent) that this session crossed",
+    )
+
+    @field_validator(
+        'current_usage',
+        'quota_limit',
+        'percentage_used',
+        'remaining',
+        'session_cost',
+        'session_percentage_of_limit',
+        'session_notice_threshold',
+        mode='before',
+    )
     @classmethod
     def convert_to_decimal(cls, v):
         """Convert float/int to Decimal for DynamoDB compatibility"""

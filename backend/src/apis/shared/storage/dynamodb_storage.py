@@ -731,6 +731,68 @@ class DynamoDBStorage(MetadataStorage):
         except ClientError as e:
             raise Exception(f"Failed to get top users by cost: {e}")
 
+    async def get_user_session_costs(
+        self,
+        user_id: str,
+        active_since: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get one user's session rows with their denormalized cost aggregates.
+
+        Reads the session metadata rows directly (``PK = USER#<id>``,
+        ``SK begins_with S#``) with a projection, so this is a bounded query
+        per user rather than a table scan. Used by the admin "most expensive
+        conversations" view, which fans this out over the period's top-cost
+        users.
+
+        Args:
+            user_id: The owning user.
+            active_since: Optional ISO date/timestamp — drop sessions whose
+                ``lastMessageAt`` is older. Applied client-side because
+                ``lastMessageAt`` is not part of the key.
+
+        Returns:
+            Session dicts with cost/context aggregates, unsorted.
+        """
+        from boto3.dynamodb.conditions import Key
+
+        try:
+            items: List[Dict[str, Any]] = []
+            last_evaluated_key = None
+            while True:
+                query_kwargs: Dict[str, Any] = {
+                    "KeyConditionExpression": (
+                        Key("PK").eq(f"USER#{user_id}") & Key("SK").begins_with("S#")
+                    ),
+                    "ProjectionExpression": (
+                        "sessionId, userId, title, totalCost, lastMessageAt, "
+                        "createdAt, messageCount, lastContextTokens, "
+                        "partialMissCount, partialMissUsd, deleted"
+                    ),
+                }
+                if last_evaluated_key:
+                    query_kwargs["ExclusiveStartKey"] = last_evaluated_key
+                response = self.sessions_metadata_table.query(**query_kwargs)
+                items.extend(response.get("Items", []))
+                last_evaluated_key = response.get("LastEvaluatedKey")
+                if not last_evaluated_key:
+                    break
+
+            results = []
+            for item in items:
+                item_float = self._convert_decimal_to_float(item)
+                if item_float.get("deleted"):
+                    continue
+                if active_since:
+                    last_message_at = item_float.get("lastMessageAt") or ""
+                    if last_message_at < active_since:
+                        continue
+                results.append(item_float)
+            return results
+
+        except ClientError as e:
+            raise Exception(f"Failed to get session costs for user: {e}")
+
     # ============================================================
     # SystemCostRollup Table Methods
     # ============================================================

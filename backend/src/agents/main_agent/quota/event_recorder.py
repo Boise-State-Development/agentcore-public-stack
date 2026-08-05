@@ -106,6 +106,68 @@ class QuotaEventRecorder:
         except Exception as e:
             logger.error(f"Failed to record warning event: {e}")
 
+    async def record_session_notice_if_needed(
+        self,
+        user: User,
+        tier: QuotaTier,
+        session_id: str,
+        session_cost: float,
+        limit: float,
+        session_percentage: float,
+        assignment_id: Optional[str] = None
+    ):
+        """
+        Record that one conversation has reached the tier's session-notice
+        share of the monthly limit.
+
+        Deduped the same way warnings are — at most one per hour — but keyed
+        on the *session*, so a second runaway conversation in the same hour
+        still gets its own event. The durable record is what lets support
+        answer "when did this conversation get expensive?" after the fact;
+        the live SSE notice is emitted every turn while over the share, like
+        ``quota_warning``.
+        """
+        recent_notice = await self.repository.get_recent_event(
+            user_id=user.user_id,
+            event_type="session_notice",
+            within_minutes=60
+        )
+
+        if recent_notice and recent_notice.metadata:
+            if recent_notice.metadata.get("session_id") == session_id:
+                logger.debug(
+                    f"Skipping duplicate session notice for session {session_id}"
+                )
+                return
+
+        event = QuotaEvent(
+            event_id=str(uuid.uuid4()),
+            user_id=user.user_id,
+            tier_id=tier.tier_id,
+            event_type="session_notice",
+            current_usage=session_cost,
+            quota_limit=limit,
+            percentage_used=session_percentage,
+            timestamp=datetime.now(timezone.utc).isoformat() + 'Z',
+            metadata={
+                "session_id": session_id,
+                "session_cost": str(session_cost),
+                "tier_name": tier.tier_name,
+                "assignment_id": assignment_id,
+                "user_name": user.name,
+                "user_roles": user.roles
+            }
+        )
+
+        try:
+            await self.repository.record_event(event)
+            logger.info(
+                f"Recorded session notice for user {user.user_id} "
+                f"(session share: {session_percentage:.1f}%)"
+            )
+        except Exception as e:
+            logger.error(f"Failed to record session notice event: {e}")
+
     async def record_override_applied(
         self,
         user: User,

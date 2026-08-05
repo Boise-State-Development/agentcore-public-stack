@@ -43,6 +43,28 @@ export interface QuotaWarningEvent {
 }
 
 /**
+ * Per-session quota notice from the stream.
+ *
+ * Emitted when THIS conversation's lifetime cost reaches the tier's
+ * configured share of the monthly limit (default 25%), independent of where
+ * the user sits on the per-user warning ladder. A single runaway thread can
+ * spend most of a month's budget while `quota_warning` stays quiet until the
+ * day the block lands — which is exactly what happened in the 2026-08-05
+ * incident this event was added for.
+ */
+export interface QuotaSessionNoticeEvent {
+  type: 'quota_session_notice';
+  sessionId: string;
+  /** This conversation's lifetime cost in dollars. */
+  sessionCost: number;
+  quotaLimit: number;
+  sessionPercentageOfLimit: number;
+  /** The configured share the session crossed. */
+  thresholdPercentage: number;
+  message: string;
+}
+
+/**
  * Quota exceeded event from the stream
  */
 export interface QuotaExceededEvent {
@@ -321,6 +343,7 @@ export type StreamEventType =
   | 'metadata'
   | 'reasoning'
   | 'quota_warning'
+  | 'quota_session_notice'
   | 'quota_exceeded'
   | 'stream_error'
   | 'citation'
@@ -345,6 +368,7 @@ export type StreamEventData =
   | MetadataEvent
   | ReasoningEvent
   | QuotaWarningEvent
+  | QuotaSessionNoticeEvent
   | QuotaExceededEvent
   | StreamErrorEvent
   | ConversationalStreamErrorEvent

@@ -8,6 +8,7 @@ import {
   validateToolUseEvent,
   validateToolResultEvent,
   validateQuotaWarningEvent,
+  validateQuotaSessionNoticeEvent,
   validateQuotaExceededEvent,
   validateConversationalStreamError,
   validateCitation,
@@ -272,6 +273,39 @@ describe('stream-parser-core', () => {
         quotaLimit: 10,
         percentageUsed: 80
       })).toBe(false);
+    });
+  });
+
+  describe('validateQuotaSessionNoticeEvent', () => {
+    const valid = {
+      type: 'quota_session_notice',
+      sessionId: 'session-1',
+      sessionCost: 7.58,
+      quotaLimit: 30,
+      sessionPercentageOfLimit: 25.3,
+      thresholdPercentage: 25,
+      message: 'This conversation has used $7.58 of your $30.00 monthly quota.'
+    };
+
+    it('should return true for valid event', () => {
+      expect(validateQuotaSessionNoticeEvent(valid)).toBe(true);
+    });
+
+    it('should return false for null/undefined', () => {
+      expect(validateQuotaSessionNoticeEvent(null)).toBe(false);
+      expect(validateQuotaSessionNoticeEvent(undefined)).toBe(false);
+    });
+
+    it('should return false for wrong type', () => {
+      expect(validateQuotaSessionNoticeEvent({ ...valid, type: 'quota_warning' })).toBe(false);
+    });
+
+    it('should return false without a session id to scope it to', () => {
+      expect(validateQuotaSessionNoticeEvent({ ...valid, sessionId: '' })).toBe(false);
+    });
+
+    it('should return false for non-number cost', () => {
+      expect(validateQuotaSessionNoticeEvent({ ...valid, sessionCost: '7.58' })).toBe(false);
     });
   });
 

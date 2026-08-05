@@ -176,6 +176,53 @@ class SessionCostAnatomy(BaseModel):
     cache_efficiency: Optional[float] = Field(None, alias="cacheEfficiency")
 
 
+class TopSessionCost(BaseModel):
+    """One conversation in the "most expensive sessions" list.
+
+    ``totalCost`` is the session's **lifetime** cost — the denormalized
+    aggregate ``_bump_session_aggregates`` maintains on the session row —
+    not its cost within the requested period. A runaway conversation is
+    usually a single long thread that spans period boundaries (the incident
+    session opened 2026-07-30 and blocked a quota on 2026-08-04), so
+    lifetime is the number support wants; ``period`` scopes *which* sessions
+    are listed (those active in it), not how their cost is summed.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId")
+    user_id: str = Field(..., alias="userId")
+    title: Optional[str] = None
+    total_cost: float = Field(..., alias="totalCost")
+    last_message_at: Optional[str] = Field(None, alias="lastMessageAt")
+    created_at: Optional[str] = Field(None, alias="createdAt")
+    message_count: Optional[int] = Field(None, alias="messageCount")
+    last_context_tokens: Optional[int] = Field(None, alias="lastContextTokens")
+    # Per-session prompt-cache rollups, when present — a runaway session with
+    # a high partialMissUsd is a platform bug, not a heavy user.
+    partial_miss_count: Optional[int] = Field(None, alias="partialMissCount")
+    partial_miss_usd: Optional[float] = Field(None, alias="partialMissUsd")
+    # The user's share for the period, so a support view can say "this one
+    # conversation is 90% of their month" without a second call.
+    user_period_cost: Optional[float] = Field(None, alias="userPeriodCost")
+    share_of_user_period: Optional[float] = Field(None, alias="shareOfUserPeriod")
+
+
+class TopSessionsResponse(BaseModel):
+    """Most expensive conversations for a period, cost-sorted."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    period: str
+    sessions: List[TopSessionCost]
+    # How the list was assembled, stated rather than implied: the scan starts
+    # from the period's top-cost users, so a session belonging to a user
+    # outside `usersScanned` is not in this list.
+    users_scanned: int = Field(0, alias="usersScanned")
+    truncated: bool = Field(
+        False,
+        description="True when more users had period cost than were scanned",
+    )
+
+
 class AdminCostDashboard(BaseModel):
     """Complete admin cost dashboard response combining all metrics."""
     model_config = ConfigDict(populate_by_name=True)

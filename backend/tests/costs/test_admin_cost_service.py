@@ -424,3 +424,131 @@ class TestGetDashboard:
         mock_storage.get_daily_trends.assert_awaited_once_with(
             start_date="2025-06-01", end_date="2025-06-15"
         )
+
+
+# ── get_top_sessions ─────────────────────────────────────────────────────────
+
+
+class TestGetTopSessions:
+    """The admin half of #833 PR-5: find a runaway conversation before the
+    user calls about a spent quota.
+
+    Assembled by fanning out over the period's top-cost users rather than
+    scanning sessions-metadata — a session can only be expensive if its owner
+    is — so these tests pin both the ranking and the honesty of the
+    truncation reporting.
+    """
+
+    @pytest.fixture
+    def _users_and_sessions(self, mock_storage):
+        mock_storage.get_top_users_by_cost.return_value = [
+            {"userId": "user-1", "totalCost": 30.45},
+            {"userId": "user-2", "totalCost": 4.0},
+        ]
+
+        sessions = {
+            "user-1": [
+                {
+                    "sessionId": "runaway",
+                    "title": "Essay edits",
+                    "totalCost": 36.5,
+                    "lastMessageAt": "2026-08-04T22:31:43Z",
+                    "partialMissCount": 48,
+                    "partialMissUsd": 20.98,
+                },
+                {
+                    "sessionId": "ordinary",
+                    "totalCost": 0.12,
+                    "lastMessageAt": "2026-08-02T10:00:00Z",
+                },
+                # Legacy row whose aggregates were never backfilled — unknown,
+                # not zero, so it must not be listed as a $0 session.
+                {"sessionId": "legacy", "lastMessageAt": "2026-08-01T10:00:00Z"},
+            ],
+            "user-2": [
+                {
+                    "sessionId": "middling",
+                    "totalCost": 3.5,
+                    "lastMessageAt": "2026-08-03T10:00:00Z",
+                },
+            ],
+        }
+        mock_storage.get_user_session_costs = AsyncMock(
+            side_effect=lambda user_id, active_since=None: sessions.get(user_id, [])
+        )
+        return mock_storage
+
+    @pytest.mark.asyncio
+    async def test_ranks_sessions_by_cost_across_users(self, service, _users_and_sessions):
+        result = await service.get_top_sessions(period="2026-08")
+
+        assert [s.session_id for s in result.sessions] == [
+            "runaway", "middling", "ordinary",
+        ]
+        assert result.sessions[0].total_cost == 36.5
+        assert result.users_scanned == 2
+        assert result.truncated is False
+
+    @pytest.mark.asyncio
+    async def test_skips_sessions_without_a_known_cost(self, service, _users_and_sessions):
+        result = await service.get_top_sessions(period="2026-08")
+
+        assert "legacy" not in [s.session_id for s in result.sessions]
+
+    @pytest.mark.asyncio
+    async def test_carries_cache_waste_and_user_share(self, service, _users_and_sessions):
+        result = await service.get_top_sessions(period="2026-08")
+
+        runaway = result.sessions[0]
+        assert runaway.partial_miss_usd == 20.98
+        assert runaway.user_period_cost == 30.45
+        # Lifetime cost over a single period's spend can exceed 100% — the
+        # conversation started before the period did, which is the shape this
+        # view exists to catch.
+        assert runaway.share_of_user_period == pytest.approx(119.87, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_scopes_the_session_query_to_the_period(self, service, _users_and_sessions):
+        await service.get_top_sessions(period="2026-08")
+
+        _users_and_sessions.get_user_session_costs.assert_awaited_with(
+            user_id="user-2", active_since="2026-08-01"
+        )
+
+    @pytest.mark.asyncio
+    async def test_min_cost_filters_rows(self, service, _users_and_sessions):
+        result = await service.get_top_sessions(period="2026-08", min_cost=1.0)
+
+        assert [s.session_id for s in result.sessions] == ["runaway", "middling"]
+
+    @pytest.mark.asyncio
+    async def test_truncation_is_reported_not_implied(self, service, mock_storage):
+        # One more user than the scan depth asks for.
+        mock_storage.get_top_users_by_cost.return_value = [
+            {"userId": "user-1", "totalCost": 10.0},
+            {"userId": "user-2", "totalCost": 5.0},
+        ]
+        mock_storage.get_user_session_costs = AsyncMock(return_value=[])
+
+        result = await service.get_top_sessions(period="2026-08", users_to_scan=1)
+
+        assert result.truncated is True
+        assert result.users_scanned == 1
+
+    @pytest.mark.asyncio
+    async def test_one_unreadable_user_does_not_empty_the_list(self, service, mock_storage):
+        mock_storage.get_top_users_by_cost.return_value = [
+            {"userId": "broken", "totalCost": 10.0},
+            {"userId": "user-2", "totalCost": 5.0},
+        ]
+
+        async def _sessions(user_id, active_since=None):
+            if user_id == "broken":
+                raise Exception("throttled")
+            return [{"sessionId": "kept", "totalCost": 2.0}]
+
+        mock_storage.get_user_session_costs = AsyncMock(side_effect=_sessions)
+
+        result = await service.get_top_sessions(period="2026-08")
+
+        assert [s.session_id for s in result.sessions] == ["kept"]

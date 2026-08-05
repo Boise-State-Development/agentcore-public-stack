@@ -14,6 +14,25 @@ export interface QuotaWarning {
 }
 
 /**
+ * Interface representing a per-session quota notice from the SSE stream.
+ *
+ * Answers a different question than QuotaWarning: not "how much of your
+ * month is gone" but "how much of your month has THIS conversation spent".
+ * A single long thread can be most of a monthly budget while the per-user
+ * percentage still looks unremarkable — the failure mode that spent a
+ * faculty user's quota in five days.
+ */
+export interface QuotaSessionNotice {
+  type: 'quota_session_notice';
+  sessionId: string;
+  sessionCost: number;
+  quotaLimit: number;
+  sessionPercentageOfLimit: number;
+  thresholdPercentage: number;
+  message: string;
+}
+
+/**
  * Interface representing a quota exceeded event from the SSE stream.
  * This is sent when the user has exceeded their usage limit and the
  * response is streamed as an assistant message for better UX.
@@ -45,11 +64,17 @@ export class QuotaWarningService {
   /** The current quota exceeded state, null if not exceeded */
   private quotaExceededSignal = signal<QuotaExceeded | null>(null);
 
+  /** The current per-session notice, null if this conversation is not heavy */
+  private sessionNoticeSignal = signal<QuotaSessionNotice | null>(null);
+
   /** Timestamp when the warning was received */
   private warningTimestampSignal = signal<Date | null>(null);
 
   /** Whether the user has dismissed the current warning */
   private isDismissedSignal = signal<boolean>(false);
+
+  /** Whether the user has dismissed the current session notice */
+  private isSessionNoticeDismissedSignal = signal<boolean>(false);
 
   // =========================================================================
   // Public Readonly Signals
@@ -61,9 +86,31 @@ export class QuotaWarningService {
   /** The quota exceeded state */
   readonly quotaExceeded = this.quotaExceededSignal.asReadonly();
 
+  /** The active per-session notice */
+  readonly sessionNotice = this.sessionNoticeSignal.asReadonly();
+
   /** Whether there's a visible warning to show */
   readonly hasVisibleWarning = computed(() => {
     return this.activeWarningSignal() !== null && !this.isDismissedSignal();
+  });
+
+  /** Whether there's a visible per-session notice to show.
+   *  Suppressed once the quota is actually exceeded — at that point the
+   *  exceeded state is the message that matters. */
+  readonly hasVisibleSessionNotice = computed(() => {
+    return (
+      this.sessionNoticeSignal() !== null &&
+      !this.isSessionNoticeDismissedSignal() &&
+      this.quotaExceededSignal() === null
+    );
+  });
+
+  /** Formatted session cost against the quota (e.g. "$7.58 of $30.00") */
+  readonly formattedSessionUsage = computed(() => {
+    const notice = this.sessionNoticeSignal();
+    if (!notice) return '';
+
+    return `$${notice.sessionCost.toFixed(2)} of $${notice.quotaLimit.toFixed(2)}`;
   });
 
   /** Whether quota has been exceeded (for UI to show special styling) */
@@ -153,6 +200,37 @@ export class QuotaWarningService {
   }
 
   /**
+   * Set the per-session notice from the SSE stream.
+   *
+   * The backend re-emits this every turn while the conversation is over the
+   * share, so a dismissal only sticks until the number moves — the same
+   * contract as the per-user warning. Switching conversations clears it
+   * (see clearSessionNotice) rather than showing one thread's cost above
+   * another thread's composer.
+   */
+  setSessionNotice(notice: QuotaSessionNotice): void {
+    const current = this.sessionNoticeSignal();
+    if (
+      current?.sessionId !== notice.sessionId ||
+      current?.sessionCost !== notice.sessionCost
+    ) {
+      this.sessionNoticeSignal.set(notice);
+      this.isSessionNoticeDismissedSignal.set(false);
+    }
+  }
+
+  /** Dismiss the current session notice */
+  dismissSessionNotice(): void {
+    this.isSessionNoticeDismissedSignal.set(true);
+  }
+
+  /** Clear session-notice state (e.g. when switching conversations) */
+  clearSessionNotice(): void {
+    this.sessionNoticeSignal.set(null);
+    this.isSessionNoticeDismissedSignal.set(false);
+  }
+
+  /**
    * Set quota exceeded state from the SSE stream
    *
    * @param exceeded - The quota exceeded event data
@@ -171,10 +249,11 @@ export class QuotaWarningService {
   }
 
   /**
-   * Clear all quota state (warnings and exceeded)
+   * Clear all quota state (warnings, session notice, and exceeded)
    */
   clearAll(): void {
     this.clearWarning();
+    this.clearSessionNotice();
     this.clearQuotaExceeded();
   }
 

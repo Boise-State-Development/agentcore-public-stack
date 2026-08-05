@@ -20,6 +20,7 @@ import {
   SystemSummaryCardComponent,
 } from './components/system-summary-card.component';
 import { TopUsersTableComponent } from './components/top-users-table.component';
+import { TopSessionsTableComponent } from './components/top-sessions-table.component';
 import { CostTrendsChartComponent } from './components/cost-trends-chart.component';
 import { ModelBreakdownComponent } from './components/model-breakdown.component';
 
@@ -35,6 +36,7 @@ import { ModelBreakdownComponent } from './components/model-breakdown.component'
     PeriodSelectorComponent,
     SystemSummaryCardComponent,
     TopUsersTableComponent,
+    TopSessionsTableComponent,
     CostTrendsChartComponent,
     ModelBreakdownComponent,
   ],
@@ -202,6 +204,18 @@ import { ModelBreakdownComponent } from './components/model-breakdown.component'
               (loadMore)="onLoadMoreUsers()"
             />
           </div>
+
+          <!-- Most expensive conversations -->
+          <div class="mt-8">
+            <app-top-sessions-table
+              [sessions]="topSessions()"
+              [loading]="loadingTopSessions()"
+              [truncated]="topSessionsTruncated()"
+              [hasLoaded]="topSessionsLoaded()"
+              (load)="onLoadTopSessions()"
+              (sessionClick)="onSessionClick($event)"
+            />
+          </div>
         }
     </div>
   `,
@@ -217,11 +231,18 @@ export class AdminCostsPage implements OnInit {
   selectedPeriod = this.stateService.selectedPeriod;
   topUsers = this.stateService.topUsers;
   topUsersCount = this.stateService.topUsersCount;
+  topSessions = this.stateService.topSessions;
+  topSessionsTruncated = this.stateService.topSessionsTruncated;
+  loadingTopSessions = this.stateService.loadingTopSessions;
   trends = this.stateService.trends;
   modelUsage = this.stateService.modelUsage;
 
   // Session-id lookup for the cost-anatomy drill-down
   sessionLookupId = signal('');
+
+  // The expensive-conversations scan is on demand (one query per scanned
+  // user), so the table needs to tell "not loaded yet" from "nothing found".
+  topSessionsLoaded = signal(false);
 
   // Track pagination state for top users
   private topUsersLimit = signal(20);
@@ -269,6 +290,10 @@ export class AdminCostsPage implements OnInit {
 
   onPeriodChange(period: string): void {
     this.stateService.setPeriod(period);
+    // The expensive-conversations list is period-scoped; drop it rather than
+    // leave last period's rows under a new period's heading.
+    this.topSessionsLoaded.set(false);
+    this.stateService.topSessions.set([]);
     this.loadDashboard();
   }
 
@@ -282,6 +307,19 @@ export class AdminCostsPage implements OnInit {
 
   onUserClick(userId: string): void {
     this.router.navigate(['/admin/users', userId]);
+  }
+
+  async onLoadTopSessions(): Promise<void> {
+    try {
+      await this.stateService.loadTopSessions({ limit: 25 });
+      this.topSessionsLoaded.set(true);
+    } catch {
+      // Error is handled by state service
+    }
+  }
+
+  onSessionClick(sessionId: string): void {
+    this.router.navigate(['/admin/costs/sessions', sessionId]);
   }
 
   onInspectSession(): void {

@@ -11,6 +11,8 @@ from typing import Optional, List
 from apis.shared.storage.dynamodb_storage import DynamoDBStorage
 from .models import (
     TopUserCost,
+    TopSessionCost,
+    TopSessionsResponse,
     SystemCostSummary,
     ModelUsageSummary,
     TierUsageSummary,
@@ -315,6 +317,114 @@ class AdminCostService:
         except Exception as e:
             logger.error(f"Error getting daily trends: {e}")
             raise
+
+    async def get_top_sessions(
+        self,
+        period: Optional[str] = None,
+        limit: int = 25,
+        users_to_scan: int = 50,
+        min_cost: Optional[float] = None,
+    ) -> TopSessionsResponse:
+        """
+        Get the most expensive conversations for a period.
+
+        Support's counterpart to the per-session notice the user now sees:
+        spot a runaway conversation before the user calls (#833 PR-5).
+
+        **How it is assembled, and why not a scan.** There is no index on
+        session cost, and adding a GSI to sessions-metadata is a deploy
+        hazard for one admin view. Instead this walks the period's top-cost
+        users (``PeriodCostIndex``, already sorted) and queries each one's
+        session rows — bounded, index-backed, and correct for the question
+        being asked: a session can only be expensive if its owner is. The
+        response says how many users were scanned and whether more had cost,
+        so a truncated list never reads as "these are all of them".
+
+        Args:
+            period: Billing period (YYYY-MM). Defaults to current month.
+            limit: Maximum sessions to return.
+            users_to_scan: How many top-cost users to fan out over.
+            min_cost: Optional floor on a session's lifetime cost.
+        """
+        period = period or self._get_current_period()
+        period_start, _ = self._get_period_date_range(period)
+
+        top_users = await self.storage.get_top_users_by_cost(
+            period=period,
+            limit=users_to_scan + 1,
+        )
+        truncated = len(top_users) > users_to_scan
+        top_users = top_users[:users_to_scan]
+
+        rows: List[TopSessionCost] = []
+        for user_data in top_users:
+            user_id = user_data.get("userId")
+            if not user_id:
+                continue
+            user_period_cost = float(user_data.get("totalCost") or 0.0)
+
+            try:
+                sessions = await self.storage.get_user_session_costs(
+                    user_id=user_id,
+                    active_since=period_start,
+                )
+            except Exception as e:
+                # One unreadable user must not empty the whole list.
+                logger.warning(f"Skipping sessions for a user in top-sessions: {e}")
+                continue
+
+            for session in sessions:
+                total_cost = session.get("totalCost")
+                if total_cost is None:
+                    # Legacy row whose aggregates have never been backfilled —
+                    # it is not zero-cost, it is unknown, so say nothing.
+                    continue
+                total_cost = float(total_cost)
+                if min_cost is not None and total_cost < min_cost:
+                    continue
+
+                partial_usd = session.get("partialMissUsd")
+                rows.append(TopSessionCost(
+                    session_id=session.get("sessionId", ""),
+                    user_id=user_id,
+                    title=session.get("title"),
+                    total_cost=round(total_cost, 6),
+                    last_message_at=session.get("lastMessageAt"),
+                    created_at=session.get("createdAt"),
+                    message_count=(
+                        int(session["messageCount"])
+                        if session.get("messageCount") is not None else None
+                    ),
+                    last_context_tokens=(
+                        int(session["lastContextTokens"])
+                        if session.get("lastContextTokens") is not None else None
+                    ),
+                    partial_miss_count=(
+                        int(session["partialMissCount"])
+                        if session.get("partialMissCount") is not None else None
+                    ),
+                    partial_miss_usd=(
+                        round(float(partial_usd), 6) if partial_usd is not None else None
+                    ),
+                    user_period_cost=round(user_period_cost, 6),
+                    share_of_user_period=(
+                        round(total_cost / user_period_cost * 100, 2)
+                        if user_period_cost > 0 else None
+                    ),
+                ))
+
+        rows.sort(key=lambda r: r.total_cost, reverse=True)
+        logger.info(
+            f"Top sessions for period: {len(rows)} candidates across "
+            f"{len(top_users)} users, returning {min(limit, len(rows))}"
+        )
+
+        return TopSessionsResponse(
+            period=period,
+            sessions=rows[:limit],
+            users_scanned=len(top_users),
+            truncated=truncated,
+        )
 
     async def get_session_cost_anatomy(self, session_id: str) -> SessionCostAnatomy:
         """

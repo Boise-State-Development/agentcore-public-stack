@@ -14,6 +14,18 @@ from agents.main_agent.quota.resolver import QuotaResolver
 from agents.main_agent.quota.checker import QuotaChecker
 from agents.main_agent.quota.event_recorder import QuotaEventRecorder
 from agents.main_agent.quota.models import QuotaCheckResult
+# The warning ladder lives one package over (importing it back from here
+# would be circular), but this is the module the spec points readers at, so
+# re-export the knobs.
+from agents.main_agent.quota.thresholds import (  # noqa: F401
+    CRITICAL_WARNING_PERCENTAGE,
+    DEFAULT_EARLY_WARNING_PERCENTAGES,
+    DEFAULT_SESSION_NOTICE_PERCENTAGE,
+    QUOTA_RUNWAY_ENABLED_ENV,
+    quota_runway_enabled,
+    resolve_warning_thresholds,
+    select_warning_level,
+)
 from apis.shared.costs.aggregator import CostAggregator
 
 logger = logging.getLogger(__name__)
@@ -117,6 +129,39 @@ class QuotaWarningEvent(BaseModel):
         return f"event: quota_warning\ndata: {json.dumps(self.model_dump(by_alias=True, exclude_none=True))}\n\n"
 
 
+class QuotaSessionNoticeEvent(BaseModel):
+    """SSE event for "this one conversation is expensive".
+
+    Fires when a single session's lifetime cost reaches the tier's
+    ``sessionNoticePercentage`` share of the monthly limit (default 25%),
+    independent of where the user sits on the per-user warning ladder. In the
+    2026-08-05 incident this signal would have reached the user on Aug 1 —
+    three days before any per-user warning fired, and four before the block.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = "quota_session_notice"
+    session_id: str = Field(..., alias="sessionId")
+    session_cost: float = Field(..., alias="sessionCost", description="This session's cost in dollars")
+    quota_limit: float = Field(..., alias="quotaLimit")
+    session_percentage_of_limit: float = Field(
+        ...,
+        alias="sessionPercentageOfLimit",
+        description="Session cost as a percentage of the monthly limit",
+    )
+    threshold_percentage: float = Field(
+        ...,
+        alias="thresholdPercentage",
+        description="The configured share this session crossed",
+    )
+    message: str = Field(..., description="User-friendly notice message")
+
+    def to_sse_format(self) -> str:
+        """Convert to SSE event format"""
+        import json
+        return f"event: quota_session_notice\ndata: {json.dumps(self.model_dump(by_alias=True, exclude_none=True))}\n\n"
+
+
 class QuotaExceededEvent(BaseModel):
     """SSE event for quota exceeded (hard limit reached).
 
@@ -183,6 +228,40 @@ def build_quota_warning_event(result: QuotaCheckResult) -> Optional[QuotaWarning
         percentageUsed=float(result.percentage_used),
         remaining=float(result.remaining) if result.remaining else 0.0,
         message=f"You have used {result.warning_level} of your quota (${float(result.current_usage):.2f} / ${float(result.quota_limit):.2f})"
+    )
+
+
+def build_quota_session_notice_event(
+    result: QuotaCheckResult
+) -> Optional[QuotaSessionNoticeEvent]:
+    """Build the per-session notice SSE event, if this turn earned one.
+
+    The checker only populates the session fields when the session has
+    crossed the tier's share, so this is a pure projection — no threshold
+    logic is duplicated here.
+    """
+    if not result.session_id or result.session_cost is None:
+        return None
+    if not result.quota_limit:
+        return None
+
+    session_cost = float(result.session_cost)
+    limit = float(result.quota_limit)
+    share = float(result.session_percentage_of_limit or 0.0)
+    # Almost every tier is monthly (and the incident's was), but a daily tier
+    # must not be told its budget is a month's.
+    period_word = "daily" if result.tier and result.tier.period_type == "daily" else "monthly"
+
+    return QuotaSessionNoticeEvent(
+        sessionId=result.session_id,
+        sessionCost=session_cost,
+        quotaLimit=limit,
+        sessionPercentageOfLimit=share,
+        thresholdPercentage=float(result.session_notice_threshold or 0.0),
+        message=(
+            f"This conversation has used ${session_cost:.2f} of your "
+            f"${limit:.2f} {period_word} quota."
+        ),
     )
 
 

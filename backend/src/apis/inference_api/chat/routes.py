@@ -33,6 +33,7 @@ from apis.shared.quota import (
     QuotaExceededEvent,
     build_no_quota_configured_event,
     build_quota_exceeded_event,
+    build_quota_session_notice_event,
     build_quota_warning_event,
     get_quota_checker,
     is_quota_enforcement_enabled,
@@ -1305,6 +1306,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     # Check quota if enforcement is enabled
     quota_warning_event = None
+    quota_session_notice_event = None
     quota_exceeded_event = None
     if is_quota_enforcement_enabled() and not is_resume and not is_continuation:
         try:
@@ -1325,6 +1327,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 quota_warning_event = build_quota_warning_event(quota_result)
                 if quota_warning_event:
                     logger.info("Quota warning for user")
+
+                # Independent of the per-user ladder: is THIS conversation
+                # eating the month? (#833 PR-5 — the incident session spent
+                # 90% of a user's quota while every per-user warning stayed
+                # quiet until the day the block landed.)
+                quota_session_notice_event = build_quota_session_notice_event(quota_result)
+                if quota_session_notice_event:
+                    logger.info("Quota session notice for user")
 
         except Exception as e:
             # Log error but don't block request - fail open for quota errors
@@ -2126,6 +2136,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Yield quota warning event first if applicable
             if quota_warning_event:
                 yield quota_warning_event.to_sse_format()
+
+            # …then the per-session notice. Separate surface, separate
+            # dismissal: "your month is 80% gone" and "this thread is a
+            # quarter of your month" are different actions for the user.
+            if quota_session_notice_event:
+                yield quota_session_notice_event.to_sse_format()
 
             # Yield citation events BEFORE the agent stream starts
             # This allows the UI to display sources immediately

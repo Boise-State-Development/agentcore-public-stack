@@ -120,6 +120,10 @@
                   <p class="mt-1 text-sm/6 text-gray-900 dark:text-white">{{ info.tier.softLimitPercentage }}%</p>
                 </div>
                 <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Conversation Notice</h4>
+                  <p class="mt-1 text-sm/6 text-gray-900 dark:text-white">{{ info.tier.sessionNoticePercentage ?? 25 }}%</p>
+                </div>
+                <div>
                   <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Action on Limit</h4>
                   <p class="mt-1">
                     @if (info.tier.actionOnLimit === 'block') {

@@ -1,5 +1,25 @@
 import { TestBed } from '@angular/core/testing';
-import { QuotaWarningService, QuotaWarning, QuotaExceeded } from './quota-warning.service';
+import {
+  QuotaWarningService,
+  QuotaWarning,
+  QuotaExceeded,
+  QuotaSessionNotice,
+} from './quota-warning.service';
+
+function makeSessionNotice(
+  overrides: Partial<QuotaSessionNotice> = {},
+): QuotaSessionNotice {
+  return {
+    type: 'quota_session_notice',
+    sessionId: 'session-1',
+    sessionCost: 7.58,
+    quotaLimit: 30,
+    sessionPercentageOfLimit: 25.3,
+    thresholdPercentage: 25,
+    message: 'This conversation has used $7.58 of your $30.00 monthly quota.',
+    ...overrides,
+  };
+}
 
 describe('QuotaWarningService', () => {
   let service: QuotaWarningService;
@@ -190,10 +210,67 @@ describe('QuotaWarningService', () => {
 
       service.setWarning(warning);
       service.setQuotaExceeded(exceeded);
+      service.setSessionNotice(makeSessionNotice());
       service.clearAll();
 
       expect(service.activeWarning()).toBeNull();
       expect(service.quotaExceeded()).toBeNull();
+      expect(service.sessionNotice()).toBeNull();
+    });
+  });
+
+  describe('setSessionNotice', () => {
+    it('should set the notice and make it visible', () => {
+      const notice = makeSessionNotice();
+
+      service.setSessionNotice(notice);
+
+      expect(service.sessionNotice()).toEqual(notice);
+      expect(service.hasVisibleSessionNotice()).toBe(true);
+      expect(service.formattedSessionUsage()).toBe('$7.58 of $30.00');
+    });
+
+    it('should keep a dismissal until the cost moves', () => {
+      service.setSessionNotice(makeSessionNotice());
+      service.dismissSessionNotice();
+      expect(service.hasVisibleSessionNotice()).toBe(false);
+
+      // Same conversation, same cost — the backend re-emits every turn while
+      // over the share, and that must not undo the user's dismissal.
+      service.setSessionNotice(makeSessionNotice());
+      expect(service.hasVisibleSessionNotice()).toBe(false);
+
+      // A more expensive turn is new information, so it comes back.
+      service.setSessionNotice(makeSessionNotice({ sessionCost: 9.12 }));
+      expect(service.hasVisibleSessionNotice()).toBe(true);
+    });
+
+    it('should resurface for a different conversation', () => {
+      service.setSessionNotice(makeSessionNotice());
+      service.dismissSessionNotice();
+
+      service.setSessionNotice(makeSessionNotice({ sessionId: 'session-2' }));
+
+      expect(service.hasVisibleSessionNotice()).toBe(true);
+    });
+
+    it('should yield to the quota-exceeded state', () => {
+      service.setSessionNotice(makeSessionNotice());
+      service.setQuotaExceeded({
+        type: 'quota_exceeded',
+        currentUsage: 30,
+        quotaLimit: 30,
+        percentageUsed: 100,
+        periodType: 'monthly',
+        resetInfo: 'Resets on 1st',
+        message: 'Quota exceeded'
+      });
+
+      expect(service.hasVisibleSessionNotice()).toBe(false);
+    });
+
+    it('should return empty formatted usage with no notice', () => {
+      expect(service.formattedSessionUsage()).toBe('');
     });
   });
 
