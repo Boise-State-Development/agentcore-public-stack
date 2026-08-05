@@ -79,12 +79,23 @@ async def chat_stream(
         "Authorization": f"Bearer {current_user.raw_token}",
     }
 
-    # Pin this conversation to one microVM so inference-api's in-process caches
-    # survive between turns. Measured in dev: without it every turn is an agent
-    # cache miss and pays a full `initialize()` (~7.5-8.1s/turn); with it, turns
-    # after the first hit and run ~3.1s. It does NOT change the prompt-cache
-    # token split — that was already stable — so this is a latency fix, not a
-    # cost one (docs/specs/agent-cache-extra-tools-bypass.md §6 read).
+    # Pin this conversation to one microVM so the container it lands on stays
+    # warm across turns. Measured in dev, steady-state turns:
+    #
+    #   no pinning, agent-cache miss     ~7.6s
+    #   pinned, agent-cache miss         ~4.8s   ← warm container alone
+    #   pinned, agent-cache hit          ~3.9s   ← + a reused Agent
+    #
+    # Note what that split means: most of the win is the **warm container**,
+    # which every session gets, not the agent-cache hit, which only cacheable
+    # ones get. An earlier note here credited the whole ~7.6→~3.9s to the
+    # cache; that conflated the two, and the honest read is that this header
+    # helps 100% of traffic while the agent cache adds ~19% on top for the
+    # subset that can use it.
+    #
+    # It does NOT change the prompt-cache token split — that was already
+    # stable — so this is a latency fix, not a cost one
+    # (docs/specs/agent-cache-extra-tools-bypass.md §8).
     #
     # This is the one place that has to look inside the body, which the proxy
     # otherwise relays verbatim. Read-only and best-effort: a body that isn't

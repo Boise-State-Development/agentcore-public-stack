@@ -55,7 +55,7 @@ spend, and the plan has to hold both levers in frame.
 |---|---|---|---|---|
 | W1 | **Measurement** | every other row of this table | #833 PR-1 (`partial_miss`), cohort scan §4.1, dashboards #699/#700 | **PR-1 merged (#838) and live in dev**; prod awaits a release, and that is when the baseline clock starts. Cohort scan §4.1 next |
 | W2 | **Prefix stability** | don't rewrite what didn't change | #833 PR-2/3/4 → #835 v2 (gated) | #833 PR-2/3/4 unbuilt. ⚠️ **#834 has left this row** — G1 disproved its prefix-cost thesis; it is a latency fix and now lives in W6 |
-| W6 | **Turn latency** | time-to-answer, not tokens | #834 (bypass narrowing + family promotion) · #841 (runtime session affinity) | #841 open — ~60%/turn measured; #834 arm 1 merged (#839) but inert until #841 lands |
+| W6 | **Turn latency** | time-to-answer, not tokens | #834 (bypass narrowing + family promotion) · #841 (runtime session affinity) | **#841 merged and verified in dev** — steady-state turns ~7.6s → ~3.9s. Split: warm container ~7.6→4.8s (all sessions), reused Agent ~4.8→3.9s (cacheable only). #839's treatment arm now equals the ceiling |
 | W3 | **Payload boundedness** | nothing unbounded enters the prefix | #836 offload · tool-search strategy · workspace tools (PR-1 built) · S3 share-offload | offload PRs unbuilt; citations baseline probe required first |
 | W4 | **Demand governance** | bound the blast radius of any failure | quota-cooldown spec · #833 PR-5 (earlier warnings, per-session notice) | drafted; PR-5 unbuilt |
 | W5 | **Infrastructure economics** | the 73% of the bill that isn't tokens | reaper #827 (shipped) + open follow-ups: ~~session-id forwarding~~, `StopRuntimeSession` | session-id forwarding **done for a different reason** (#841, W6) — it was filed here as a reaper follow-up and turned out to be the binding constraint on the agent cache; `StopRuntimeSession` still un-specced — **gap** |
@@ -130,9 +130,9 @@ between sessions. **Update a row here in the PR that changes it.**
 | #833 PR-3 byte stability | unbuilt | investigation first, then G2 |
 | #833 PR-4 memory pinning | unbuilt | eval-harness owner (changes model-visible context) |
 | #833 PR-5 quota runway | **ready — unblocked by every gate** | nothing |
-| #834 arm 1 (artifacts) | ✅ merged #839 — correct but inert | #841 |
-| #841 runtime session affinity | PR open | review; hot-spotting under load unproven |
-| #834 four more families | held | #841 landing **+ a prod read**; justified on latency now, not cost |
+| #834 arm 1 (artifacts) | ✅ merged #839 — **live and hitting** since #841 | nothing |
+| #841 runtime session affinity | ✅ merged, verified in dev | prod read; hot-spotting under load still unproven |
+| #834 four more families | held | a prod read. ⚠️ marginal value is now measured at **~19%** (the reused-Agent share), not the full latency win — re-judge whether it earns the risk |
 | #834 spreadsheets | unbuilt | `assistant_id` into cache key + `PausedTurnSnapshot` |
 | #834 Memory-Space tools | unbuilt | binding descriptor into cache key |
 | #835 compaction v2 | unbuilt | G2 |
@@ -140,7 +140,7 @@ between sessions. **Update a row here in the PR that changes it.**
 | eval harness (quality veto) | **unowned** | an owner |
 | replay harness (#833 §4.2) | partially built — `experiment_agent_cache_arms.py` + `probe_runtime_session_affinity.py` drive real arms against dev; does not yet replay a recorded session's event stream | an owner for the rest |
 | §4.1 cohort scan | not run | nothing — cheap, read-only |
-| prompt-cache dashboard Logs Insights widgets | **broken** | one-line CDK fix: they query `/aws/bedrock-agentcore/runtimes/{prefix}`, but the real group is named by runtime *id* + `-DEFAULT`. Never returned data since #697; #838 copied the bug |
+| prompt-cache dashboard Logs Insights widgets | ✅ fixed (#843) | platform.yml deploy to take effect |
 
 ## Shared assets — build once, name an owner
 
