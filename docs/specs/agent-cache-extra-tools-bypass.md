@@ -295,3 +295,39 @@ does not clear #833 PR-3**. And the first affinity probe appeared to show a
 cost win too — that was run-order confound (both arms primed with identical
 bytes, so the second inherited the first's Bedrock entry), caught only by
 re-running with salted priming. Any future arm comparison must salt.
+
+### 8.4 Post-merge verification (2026-08-05, after #839 + #841 deployed to dev)
+
+Re-ran the arm experiment through the **shipped** code path rather than a
+hand-rolled probe. The arms separate exactly as designed:
+
+| arm | tools | agent_cache | steady-state turns |
+|---|---|---|---|
+| control | `create_word_document` (unpromoted) | miss/miss/miss/miss | 4.8s, 5.0s, 4.7s |
+| treatment | `create_artifact` (promoted) | miss/**hit/hit/hit** | 4.0s, 4.0s, 3.7s |
+| ceiling | none | miss/**hit/hit/hit** | 3.7s, 3.8s, 4.1s |
+
+**Treatment now equals ceiling.** A session carrying a promoted injected tool
+performs identically to one carrying no injected tools at all — arm 1 delivers
+its full theoretical benefit, and the bypass predicate still correctly excludes
+the unpromoted family.
+
+**The attribution splits, and the earlier headline was too generous to the
+agent cache.** §8.2 reported ~7.6s → ~3.1s and credited it to pinning. With a
+control arm that has affinity but *no* cache hit, the two mechanisms separate:
+
+- **warm container alone**: ~7.6s → ~4.8s — the larger share, and every
+  session gets it, cacheable or not
+- **reused Agent on top**: ~4.8s → ~3.9s — roughly 19% more, only for
+  sessions the predicate admits
+
+That is better news overall (most of the win is fleet-wide) and *worse* news
+for the remaining #834 work: **promoting the other four families buys the ~19%
+marginal delta, not the whole win.** Still worth doing; no longer headline.
+
+*Rigour note:* the control-vs-treatment comparison is within a single run and
+is solid. The ~7.6s figure comes from a different run at a different time, so
+treat the warm-container share as indicative rather than measured to the tenth
+of a second. Prod numbers will differ again — dev has essentially no
+concurrency, which is precisely the condition under which microVM pinning
+looks best.
