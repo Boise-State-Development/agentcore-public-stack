@@ -48,7 +48,7 @@ spend, and the plan has to hold both levers in frame.
 
 | # | workstream | what it protects | authority | state |
 |---|---|---|---|---|
-| W1 | **Measurement** | every other row of this table | #833 PR-1 (`partial_miss`), cohort scan §4.1, dashboards #699/#700 | **PR-1 built** (`feature/partial-miss-cache-status`) — G0 clears on deploy; cohort scan §4.1 next |
+| W1 | **Measurement** | every other row of this table | #833 PR-1 (`partial_miss`), cohort scan §4.1, dashboards #699/#700 | **PR-1 merged (#838) and live in dev**; prod awaits a release, and that is when the baseline clock starts. Cohort scan §4.1 next |
 | W2 | **Prefix stability** | don't rewrite what didn't change | #834 bypass fix → #833 PR-2/3/4 → #835 v2 (gated) | specs open, nothing built |
 | W3 | **Payload boundedness** | nothing unbounded enters the prefix | #836 offload · tool-search strategy · workspace tools (PR-1 built) · S3 share-offload | offload PRs unbuilt; citations baseline probe required first |
 | W4 | **Demand governance** | bound the blast radius of any failure | quota-cooldown spec · #833 PR-5 (earlier warnings, per-session notice) | drafted; PR-5 unbuilt |
@@ -80,8 +80,10 @@ graph LR
 Gate summary — each is a *measurement with a decision attached*, not a date:
 
 - **G0** — nothing else in W1–W3 is credibly evaluable before `partial_miss`
-  exists. **Built**; the gate clears when it is deployed and has produced a
-  baseline week, since an instrument nobody has read yet proves nothing. It
+  exists. **Merged (#838), live in dev.** The gate clears on a *prod* baseline
+  week — dev traffic is not the fleet, and nothing is backfilled, so the clock
+  starts at the release, not at the merge. An instrument nobody has read yet
+  proves nothing. It
   also ships the first *per-session* alarm ($5 of partial-miss waste in 24h) —
   the fleet sums it sits beside never saw the incident that motivated any of
   this.
