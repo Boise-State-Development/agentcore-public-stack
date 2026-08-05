@@ -58,7 +58,7 @@ spend, and the plan has to hold both levers in frame.
 | W6 | **Turn latency** | time-to-answer, not tokens | #834 (bypass narrowing + family promotion) · #841 (runtime session affinity) | #841 open — ~60%/turn measured; #834 arm 1 merged (#839) but inert until #841 lands |
 | W3 | **Payload boundedness** | nothing unbounded enters the prefix | #836 offload · tool-search strategy · workspace tools (PR-1 built) · S3 share-offload | offload PRs unbuilt; citations baseline probe required first |
 | W4 | **Demand governance** | bound the blast radius of any failure | quota-cooldown spec · #833 PR-5 (earlier warnings, per-session notice) | drafted; PR-5 unbuilt |
-| W5 | **Infrastructure economics** | the 73% of the bill that isn't tokens | reaper #827 (shipped) + open follow-ups: ~~session-id forwarding~~, `StopRuntimeSession` | session-id forwarding **done for a different reason** (#841, W6) — it was filed here as a reaper follow-up and turned out to be the binding constraint on the agent cache; `StopRuntimeSession` still un-specced — **gap** |
+| W5 | **Infrastructure economics** | the 73% of the bill that isn't tokens | reaper #827 (shipped) + open follow-ups: ~~session-id forwarding~~, `StopRuntimeSession`, **runtime log retention** | session-id forwarding **done for a different reason** (#841, W6) — filed here as a reaper follow-up, turned out to be the binding constraint on the agent cache. `StopRuntimeSession` still un-specced. New (#843): retention on service-created runtime log groups is **unmanaged** — CDK declared a group nothing wrote to, so nothing has ever governed the real ones; dev alone carries several in the hundreds of MB, one at 615 MB — **gap** |
 
 W4 is deliberately independent: it must protect users even when W1–W3 fail,
 because the spiral incident showed a platform bug can spend a user's whole
@@ -176,6 +176,16 @@ between sessions. **Update a row here in the PR that changes it.**
    shrinks the prefix that instability re-writes, making W2 waste look
    smaller without being fixed. Arm-separated attribution (#833 §4.2) exists
    precisely for this — never quote a combined number as a single fix's win.
+4. **W6's latency win may bill against W5** (added 2026-08-05, unexamined).
+   Runtime session affinity (#841) pins a conversation to a microVM so its
+   in-process caches survive. Nobody has checked what that does to microVM
+   *lifetime* or *concurrency* — and AgentCore Runtime memory is ~73% of the
+   AWS bill, so an infra cost here could exceed the token-side wins the rest
+   of this page chases. The reaper work (#827) has the instrument: `/ping`
+   access logs measure microVM lifetime, baseline 18–50 min post-fix. **Re-run
+   that measurement after #841 reaches prod**, and treat a large lifetime
+   increase as a reason to revisit, not as noise. This is the first tension on
+   this list where two of our own workstreams may pull against each other.
 
 ## Review cadence
 
