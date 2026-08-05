@@ -43,16 +43,22 @@ spend, and the plan has to hold both levers in frame.
 3. **Runtime-memory minutes per active session** — the infra lever's
    equivalent of metric 1. Baseline exists from the reaper work (post-#827
    microVM lifetimes 18–50 min vs 480–520 before).
+4. **p50/p95 turn latency** (added 2026-08-05, when W6 appeared). Not
+   originally here because this page was scoped to spend — but G1 found the
+   platform paying a full `initialize()` on ~76% of turns, and cost-only
+   metrics are blind to that. Dev baseline: ~7.5–8.1s unpinned vs ~3.1s
+   pinned; prod baseline pending #841.
 
-## Five workstreams
+## Workstreams
 
 | # | workstream | what it protects | authority | state |
 |---|---|---|---|---|
 | W1 | **Measurement** | every other row of this table | #833 PR-1 (`partial_miss`), cohort scan §4.1, dashboards #699/#700 | **PR-1 merged (#838) and live in dev**; prod awaits a release, and that is when the baseline clock starts. Cohort scan §4.1 next |
-| W2 | **Prefix stability** | don't rewrite what didn't change | #834 bypass fix → #833 PR-2/3/4 → #835 v2 (gated) | **#834 arm 1 merged (#839)** — artifacts only, the G1 experiment; rest of #834 and all of #833 PR-2/3/4 unbuilt |
+| W2 | **Prefix stability** | don't rewrite what didn't change | #833 PR-2/3/4 → #835 v2 (gated) | #833 PR-2/3/4 unbuilt. ⚠️ **#834 has left this row** — G1 disproved its prefix-cost thesis; it is a latency fix and now lives in W6 |
+| W6 | **Turn latency** | time-to-answer, not tokens | #834 (bypass narrowing + family promotion) · #841 (runtime session affinity) | #841 open — ~60%/turn measured; #834 arm 1 merged (#839) but inert until #841 lands |
 | W3 | **Payload boundedness** | nothing unbounded enters the prefix | #836 offload · tool-search strategy · workspace tools (PR-1 built) · S3 share-offload | offload PRs unbuilt; citations baseline probe required first |
 | W4 | **Demand governance** | bound the blast radius of any failure | quota-cooldown spec · #833 PR-5 (earlier warnings, per-session notice) | drafted; PR-5 unbuilt |
-| W5 | **Infrastructure economics** | the 73% of the bill that isn't tokens | reaper #827 (shipped) + open follow-ups: session-id forwarding, `StopRuntimeSession` | follow-ups un-specced — **gap** |
+| W5 | **Infrastructure economics** | the 73% of the bill that isn't tokens | reaper #827 (shipped) + open follow-ups: ~~session-id forwarding~~, `StopRuntimeSession` | session-id forwarding **done for a different reason** (#841, W6) — it was filed here as a reaper follow-up and turned out to be the binding constraint on the agent cache; `StopRuntimeSession` still un-specced — **gap** |
 
 W4 is deliberately independent: it must protect users even when W1–W3 fail,
 because the spiral incident showed a platform bug can spend a user's whole
@@ -62,9 +68,11 @@ quota (equity note: with a working cache that user's month was ~$10, not $30).
 
 ```mermaid
 graph LR
-  PR1["G0 · #833 PR-1<br/>partial_miss instrument"] --> BYP["#834 bypass fix"]
+  PR1["G0 · #833 PR-1<br/>partial_miss instrument"] --> BYP["#834 arm 1 ✅ #839"]
   PR1 --> TRI["#833 PR-2 summary cap<br/>+ PR-4 memory pinning"]
-  BYP --> G1{"G1 · bypass causality:<br/>create_artifact<br/>single-builder experiment"}
+  BYP --> G1{"G1 ✅ DECIDED<br/>cost thesis disproven;<br/>latency win instead"}
+  G1 --> AFF["#841 runtime session affinity<br/>(the missing prerequisite)"]
+  AFF --> FAM["promote 4 more families<br/>— on latency, after a prod read"]
   TRI --> SCAN["cohort scan<br/>(#833 §4.1)"]
   BYP --> SCAN
   SCAN --> G2{"G2 · compaction v2<br/>go / no-go (#835 §7)"}
@@ -87,14 +95,17 @@ Gate summary — each is a *measurement with a decision attached*, not a date:
   also ships the first *per-session* alarm ($5 of partial-miss waste in 24h) —
   the fleet sums it sits beside never saw the incident that motivated any of
   this.
-- **G1** — the bypass→cache-write causality is confounded in observational
-  data (#834 §3 says so itself). The single-builder experiment settles it.
-  **The arm is built** (`create_artifact` only, kill switch
-  `AGENT_CACHE_INJECTED_TOOLS_ENABLED`); the gate clears on its read: treated
-  cohort's within-TTL cold-write rate (now `partial_miss` + `miss_avoidable`
-  from G0), p50/p95 TTFT, and `initialize()` per turn → per *session*. If the
-  cold-write rate doesn't move, the prompt-cache theory is wrong and the
-  remaining case is latency — still worth having, but it re-prices W2.
+- **G1 — DECIDED 2026-08-05 (#834 §8): the prompt-cache theory is wrong.**
+  With the agent cache fully working the token split is *identical* to the
+  bypassed arm (write:read 0.336 either way). The cold-write rate did not
+  move, so by this gate's own falsifiable criterion the cost thesis fails and
+  the remaining case is latency — which is worth ~**60% of every turn** after
+  the first. Two consequences: **#834 moved out of W2 into W6**, and the
+  binding constraint turned out to be one nobody had named — nothing forwarded
+  the AgentCore runtime session id, so the cache could not hit at all (#841).
+  Arm 1 was correct and inert. *Also recorded: the first probe appeared to
+  show a cost win; that was run-order confound. Any future arm comparison must
+  salt its priming text per arm.*
 - **G2** — #835 §7 lists the falsifiable go criteria (cohort >3% of sessions
   or >15% of spend, or residual waste >$50/mo post-triage). Defer is a
   respectable outcome: the invariants persist as review criteria.
@@ -105,13 +116,43 @@ Gate summary — each is a *measurement with a decision attached*, not a date:
 Independent of all gates: #833 PR-5 (quota runway) and the W5 follow-ups —
 cheap, and they don't wait on measurement.
 
+## Arc ledger — every work item and what blocks it
+
+The workstream table above is a map; this is the checklist. The five-row view
+cannot hold five distinct blocking conditions across ~15 items, and "held until
+the artifact arm reads clean" is exactly the kind of condition that gets lost
+between sessions. **Update a row here in the PR that changes it.**
+
+| item | state | blocked on |
+|---|---|---|
+| #833 PR-1 `partial_miss` | ✅ merged #838, live in dev | prod release for the baseline |
+| #833 PR-2 summary cap | unbuilt | eval-harness owner (changes model-visible context) |
+| #833 PR-3 byte stability | unbuilt | investigation first, then G2 |
+| #833 PR-4 memory pinning | unbuilt | eval-harness owner (changes model-visible context) |
+| #833 PR-5 quota runway | **ready — unblocked by every gate** | nothing |
+| #834 arm 1 (artifacts) | ✅ merged #839 — correct but inert | #841 |
+| #841 runtime session affinity | PR open | review; hot-spotting under load unproven |
+| #834 four more families | held | #841 landing **+ a prod read**; justified on latency now, not cost |
+| #834 spreadsheets | unbuilt | `assistant_id` into cache key + `PausedTurnSnapshot` |
+| #834 Memory-Space tools | unbuilt | binding descriptor into cache key |
+| #835 compaction v2 | unbuilt | G2 |
+| #836 offload PRs 1–3 | unbuilt | G3 citations probe |
+| eval harness (quality veto) | **unowned** | an owner |
+| replay harness (#833 §4.2) | partially built — `experiment_agent_cache_arms.py` + `probe_runtime_session_affinity.py` drive real arms against dev; does not yet replay a recorded session's event stream | an owner for the rest |
+| §4.1 cohort scan | not run | nothing — cheap, read-only |
+| prompt-cache dashboard Logs Insights widgets | **broken** | one-line CDK fix: they query `/aws/bedrock-agentcore/runtimes/{prefix}`, but the real group is named by runtime *id* + `-DEFAULT`. Never returned data since #697; #838 copied the bug |
+
 ## Shared assets — build once, name an owner
 
 - **The quality-veto eval harness.** Three specs describe it (#833 §4.3, #835
   §8, #836 eval §2); it must be built **once** — synthetic corpus + paired
   per-family tasks + arm runner — with offload's version (the most fully
   designed) as the base and the long-session continuity families added for
-  compaction. Unowned today; assign before any W2/W3 build PR merges.
+  compaction. Unowned today; assign before any W2/W3 build PR **that changes
+  model-visible context** merges. (Narrowed 2026-08-05: as written this rule
+  said *any* W2/W3 build PR, which #839 would have violated — but #833 §4.3
+  explicitly exempts changes that alter no model-visible bytes, and #839 and
+  #841 are both in that class. The rule was overbroad, not the merges.)
 - **The replay harness** (#833 §4.2): deterministic re-run of a session's
   event stream through an arm, asserting predicted vs. actual cache
   reads/writes per turn. Same owner as above.

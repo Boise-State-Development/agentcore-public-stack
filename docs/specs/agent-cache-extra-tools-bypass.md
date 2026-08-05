@@ -1,9 +1,12 @@
 # The `extra_tools` agent-cache bypass — 76% of sessions rebuild their Agent every turn
 
-**Status:** Arm 1 built (`feature/agent-cache-artifact-builder`) — the §6
-single-builder experiment, `create_artifact` only, behind
-`AGENT_CACHE_INJECTED_TOOLS_ENABLED`. Remaining families and the key/snapshot
-work in §6 are unbuilt. See §5 hazard 4, found while building arm 1.
+**Status:** Arm 1 merged (#839). **G1 read complete — see §8.** The §3
+prompt-cache thesis is **disproven**; the win is latency (~60%/turn), and it
+required a prerequisite this spec never identified: nothing forwarded the
+AgentCore runtime session id, so the agent cache could not hit at all
+(#841). Remaining families and the key/snapshot work in §6 are unbuilt and
+should now be justified on latency. See §5 hazard 4, found while building
+arm 1.
 **Found while:** measuring document-conversation cost (2026-08-03) — see
 `docs/specs/document-context-offload.md`, defect 4
 **Related:** [[project-prod-cache-write-premium]] · #741 (history fork) · #751
@@ -68,6 +71,15 @@ document strip is the worked example: a bug that looks like "only bites after a
 15-minute idle gap" actually fires on turn 2 for four out of five attachment
 conversations. Any future defect on the `initialize()` path inherits the same
 amplification.
+
+> **DISPROVEN, 2026-08-05 (G1).** The prompt-cache claim below did not
+> survive its own experiment. With the agent cache fully working, the token
+> split is **identical** to the bypassed arm — write:read 0.336 either way,
+> 7,231 vs 7,229 tokens written. Rebuilding the `Agent` every turn costs
+> **latency, not cache writes**, because the restore path was already
+> producing a byte-stable prefix. §6's falsifiable branch fired exactly as
+> written. The measured latency case is in §8; the paragraph below is kept
+> as the hypothesis that was tested, not as a finding.
 
 **Suspected, not established — prompt-cache re-writes.** Comparing
 turn-opening calls where the gap was 60–300s (inside the 5-minute Bedrock TTL,
@@ -218,3 +230,68 @@ Insights and the treated cohort should trend toward one miss per session.
   off default-on spreadsheet tools would shrink the blast radius while removing
   capability users have — treating the symptom, and a product decision that
   doesn't belong in a caching fix.
+
+## 8. G1 read — measured 2026-08-05
+
+Two controlled experiments against dev, driven through the real runtime by the
+headless harness (`backend/scripts/experiment_agent_cache_arms.py`,
+`backend/scripts/probe_runtime_session_affinity.py`). Dev never accumulates
+enough observational traffic for the §3 comparison to be re-run honestly, and
+a controlled A/B answers the causal question better anyway.
+
+### 8.1 The arm experiment: the agent cache never hit at all
+
+Three arms differing by one variable, no redeploy needed — `create_word_document`
+(injected, unpromoted) vs `create_artifact` (injected, promoted) vs no injected
+tools (the ceiling, always eligible):
+
+| arm | agent_cache | write:read |
+|---|---|---|
+| control | miss/miss/miss/miss | 0.34 |
+| treatment | miss/miss/miss/miss | 0.34 |
+| ceiling | miss/miss/miss/miss | 0.34 |
+
+**Zero hits in every arm — including the ceiling**, which predates all of this
+work. The logs read `injected_tools=True cacheable=True … outcome=miss`: arm 1's
+predicate fires correctly, the agent is cached, and it is gone by the next turn.
+
+### 8.2 The cause: no microVM affinity
+
+AgentCore routes an invocation to a microVM by runtime session id. Nothing in
+the repo forwarded one — `run_agent_headless` sent only Content-Type and
+Authorization, and no other caller referenced the header — so AWS assigned a
+fresh runtime session per call and a process-local cache was cold by
+construction. A two-arm probe differing **only** by that header:
+
+| | agent_cache | turn 1 | turns 2–4 | write:read |
+|---|---|---|---|---|
+| unpinned | miss/miss/miss/miss | 7.9s | 7.2s, 8.0s, 7.5s | 0.336 |
+| pinned | miss/**hit/hit/hit** | 7.2s | **3.1s, 3.1s, 3.1s** | 0.336 |
+
+Fixed in #841. Note pinned turn 1 is itself a miss and stays slow — a warm
+Bedrock cache cannot produce a speedup that appears exactly when the agent
+cache starts hitting, which is what makes the latency attribution clean.
+
+### 8.3 What this settles
+
+- **The prompt-cache thesis (§3) is disproven.** Identical splits with the
+  cache working and not working. The restore path was already byte-stable.
+- **The latency case is real and large**: ~60% off every turn after the first,
+  for the 76% cohort. §6 called this outcome in advance — *"the remaining case
+  is latency, which is still worth having."*
+- **Arm 1 was not wasted, but it was inert**: a correct predicate gated behind
+  a prerequisite nobody had identified. Nothing it enables mattered until #841.
+- **Promoting the remaining four families is still worth doing — for latency.**
+  It should follow #841 landing *and* a read showing hits in prod, not just dev.
+- **This spec belongs to a latency/performance workstream**, not to the
+  roadmap's W2 (prefix stability). Filed there on a cost thesis that no longer
+  holds.
+
+**Caveats, stated so nobody over-reads this.** One run per arm, 4 turns, ~7.5k
+prefix, 20s gaps, one model, in dev — where concurrency and microVM reuse odds
+differ from prod. The incident that motivated the sibling spec ran ~200k of
+prefix, where restore cost and byte-stability may behave differently; **this
+does not clear #833 PR-3**. And the first affinity probe appeared to show a
+cost win too — that was run-order confound (both arms primed with identical
+bytes, so the second inherited the first's Bedrock entry), caught only by
+re-running with salted priming. Any future arm comparison must salt.
