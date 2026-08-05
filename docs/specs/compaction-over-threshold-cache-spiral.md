@@ -1,6 +1,8 @@
 # Compaction over-threshold cache spiral — stop paying a full prefix re-write on every turn
 
-**Status:** Draft (no branch yet)
+**Status:** PR-1 shipped (#838, merged 2026-08-05 — see "As shipped" under §3
+PR-1, which differs from what this section originally specified). PR-2 through
+PR-5 unbuilt.
 **Motivating incident:** prod, 2026-08-05 analysis. One faculty user exhausted
 their $30/month quota in 5 days on a **single conversation** (session
 `c94a3172-e1fb-4a1d-b375-6e51a56c75ad`, an essay-editing session created
@@ -67,9 +69,10 @@ paid by one user's quota.**
 
 Five distinct problems compound. Each is independently fixable.
 
-### D1 — `cacheStatus` calls a 95% prefix miss a "hit"
+### D1 — `cacheStatus` calls a 95% prefix miss a "hit" — FIXED (#838)
 
-[prompt_cache.py:116](../../backend/src/apis/shared/observability/prompt_cache.py:116):
+As it stood in
+[prompt_cache.py](../../backend/src/apis/shared/observability/prompt_cache.py):
 
 ```python
 if cache_read_tokens > 0:
@@ -153,6 +156,13 @@ prove (byte stability then only matters on genuine cold starts, which are
 observable via `cacheGapSeconds`). PR-2 is independent of it — an unbounded
 summary breaks the threshold math regardless of who assembles the prefix.
 
+That sequencing held: its first arm (`create_artifact` only — that spec's §6
+experiment) is open as #839, and PR-1's `partial_miss` is how it gets read.
+Note the arm covers artifacts, **not** the `analyze_spreadsheet` /
+`list_spreadsheets` pair the incident session actually had enabled (D3), so it
+does not yet change this session's turn shape — spreadsheets need the cache key
+extended first.
+
 ### PR-1 — observability: classify partial prefix misses (ship first)
 
 - In `classify_cache_status`, before the `cache_read_tokens > 0` early return:
@@ -176,6 +186,48 @@ summary breaks the threshold math regardless of who assembles the prefix.
 **Acceptance:** replaying the incident session's 56 `C#` rows through the
 classifier yields ≥ 47 `partial_miss` with wastedUsd ≈ $20 ± 15%; fleet EMF
 dashboards show the new status; no change to any request sent to Bedrock.
+
+**As shipped (#838).** The bullets above are the design; three things changed
+while building it, and the acceptance criteria only hold *with* those changes.
+Recorded here because §3 as originally written would produce a different
+classifier — and because PR-2..PR-5 and the §4.2 arms read this instrument.
+
+1. **Two conditions the bullet omits.** The predicate also requires
+   `cache_read_tokens > 0` and a same-prefix gap inside the TTL:
+   - Without the read condition, `write > 3 × 0` is trivially true, so every
+     zero-read call would be stolen from `miss_avoidable`. The *read* is what
+     makes a miss partial.
+   - Without the TTL gate, a re-write after the entry legitimately expired is
+     booked as waste — the #753 mistake that made the previous metric
+     untrustworthy. It also breaks the acceptance number: the incident's 8
+     post->1h-gap calls join the other 48, giving 56 classifications and ~$24,
+     outside the ±15% band. With the gate: 48 and $20.98. The cost of the gate
+     is under-reporting when no same-prefix predecessor sits in the 10-row
+     lookback (`gap_seconds=None` → stays `hit`), which is the deliberate
+     direction.
+2. **The session alarm is cumulative-per-session, not trailing-24h.**
+   "Any session whose trailing `partial_miss` waste exceeds $5 in 24h" is not
+   directly expressible: `sessionId` cannot be a metric dimension (unbounded
+   cardinality). Shipped as `SessionPartialMissUsd` — the session's running
+   `partialMissUsd`, emitted from the rollup bump's own `UPDATED_NEW` return —
+   alarmed on `Maximum > 5` over a 24h period, which reads as "a session at or
+   over $5 was active in the last day" and clears when it goes quiet. A Logs
+   Insights widget names which session.
+3. **Constant is `PARTIAL_MISS_WRITE_READ_RATIO`** (not `PARTIAL_MISS_RATIO`),
+   value 3, in the module this section names.
+
+**The incident's implied prices, for the §4.2 replay harness.** §1's "$2.50/MTok
+write premium" is the write *price*: $27.39 ÷ 10.95M write tokens. The read side
+is ~$0.20/MTok, so the premium `compute_wasted_usd` charges is **$2.30/MTok** —
+which is what makes the per-call figure $0.437 (190k × 2.30/1M) and the session
+$20.98. Any replay that assumes a standard Sonnet snapshot ($3.75/$0.30) prices
+the same incident at ~$31 and will look like a regression against §1.
+
+**No backfill.** Rows written before the deploy keep whatever status they were
+given, so the incident session's own 56 rows still read `hit`. §4.4's standing
+regression case works forward from the deploy, not backward, and the fleet
+baseline in the roadmap's metric 1 starts at the first prod release — dev
+deployment alone does not start that clock.
 
 ### PR-2 — bound the compaction summary
 
