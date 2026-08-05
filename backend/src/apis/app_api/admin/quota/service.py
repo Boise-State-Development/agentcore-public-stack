@@ -58,6 +58,11 @@ class QuotaAdminService:
             daily_cost_limit=Decimal(str(tier_data.daily_cost_limit)) if tier_data.daily_cost_limit else None,
             period_type=tier_data.period_type,
             soft_limit_percentage=Decimal(str(tier_data.soft_limit_percentage)),
+            early_warning_percentages=(
+                [Decimal(str(p)) for p in tier_data.early_warning_percentages]
+                if tier_data.early_warning_percentages is not None else None
+            ),
+            session_notice_percentage=Decimal(str(tier_data.session_notice_percentage)),
             action_on_limit=tier_data.action_on_limit,
             enabled=tier_data.enabled,
             created_at=now,
@@ -97,10 +102,18 @@ class QuotaAdminService:
         update_dict = updates.model_dump(by_alias=True, exclude_none=True)
 
         # Convert float values to Decimal for DynamoDB
-        if "monthlyCostLimit" in update_dict:
-            update_dict["monthlyCostLimit"] = Decimal(str(update_dict["monthlyCostLimit"]))
-        if "dailyCostLimit" in update_dict:
-            update_dict["dailyCostLimit"] = Decimal(str(update_dict["dailyCostLimit"]))
+        for numeric_field in (
+            "monthlyCostLimit",
+            "dailyCostLimit",
+            "softLimitPercentage",
+            "sessionNoticePercentage",
+        ):
+            if numeric_field in update_dict:
+                update_dict[numeric_field] = Decimal(str(update_dict[numeric_field]))
+        if "earlyWarningPercentages" in update_dict:
+            update_dict["earlyWarningPercentages"] = [
+                Decimal(str(p)) for p in update_dict["earlyWarningPercentages"]
+            ]
 
         # Note: updatedAt is added by the repository layer
 

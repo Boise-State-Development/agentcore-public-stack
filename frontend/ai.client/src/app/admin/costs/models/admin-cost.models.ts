@@ -183,6 +183,40 @@ export interface SessionCostAnatomy {
   cacheEfficiency: number | null;
 }
 
+/**
+ * One conversation in the "most expensive sessions" list.
+ *
+ * ⚠️ `totalCost` is the session's **lifetime** cost, not its cost within the
+ * requested period — a runaway thread usually spans period boundaries, and
+ * that whole-conversation number is the one support acts on. The period
+ * selects which sessions are listed, not how their dollars are summed.
+ */
+export interface TopSessionCost {
+  sessionId: string;
+  userId: string;
+  title?: string | null;
+  totalCost: number;
+  lastMessageAt?: string | null;
+  createdAt?: string | null;
+  messageCount?: number | null;
+  lastContextTokens?: number | null;
+  /** Prompt-cache waste booked to this session — a platform problem, not a heavy user. */
+  partialMissCount?: number | null;
+  partialMissUsd?: number | null;
+  userPeriodCost?: number | null;
+  shareOfUserPeriod?: number | null;
+}
+
+/** Most expensive conversations for a period, cost-sorted. */
+export interface TopSessionsResponse {
+  period: string;
+  sessions: TopSessionCost[];
+  /** How many top-cost users were fanned out over to build this list. */
+  usersScanned: number;
+  /** True when more users had period cost than were scanned. */
+  truncated: boolean;
+}
+
 // ========== API Request Options ==========
 
 export interface DashboardRequestOptions {
@@ -196,6 +230,13 @@ export interface TopUsersRequestOptions {
   limit?: number;
   minCost?: number;
   tierId?: string;
+}
+
+export interface TopSessionsRequestOptions {
+  period?: string;
+  limit?: number;
+  usersToScan?: number;
+  minCost?: number;
 }
 
 export interface TrendsRequestOptions {

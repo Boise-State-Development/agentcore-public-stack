@@ -398,6 +398,12 @@ export class InferenceAgentCoreConstruct extends Construct {
         // Authentication
         ENABLE_QUOTA_ENFORCEMENT: 'true',
 
+        // Quota runway (#833 PR-5): earlier warning rungs (50%/75%) plus the
+        // per-session `quota_session_notice`. Default ON — set to 'false' to
+        // fall back to the soft-limit/90% pair and silence the session
+        // notice, which is the kill switch for both halves at once.
+        QUOTA_RUNWAY_ENABLED: 'true',
+
         // Directories
         UPLOAD_DIR: '/tmp/uploads',
         OUTPUT_DIR: '/tmp/output',

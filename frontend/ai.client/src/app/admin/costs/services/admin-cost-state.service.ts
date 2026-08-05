@@ -8,6 +8,8 @@ import {
   ModelUsageSummary,
   DashboardRequestOptions,
   TopUsersRequestOptions,
+  TopSessionCost,
+  TopSessionsRequestOptions,
   TrendsRequestOptions,
 } from '../models';
 
@@ -27,6 +29,9 @@ export class AdminCostStateService {
 
   dashboard = signal<AdminCostDashboard | null>(null);
   topUsers = signal<TopUserCost[]>([]);
+  topSessions = signal<TopSessionCost[]>([]);
+  /** True when more users had period cost than the fan-out scanned. */
+  topSessionsTruncated = signal(false);
   systemSummary = signal<SystemCostSummary | null>(null);
   trends = signal<CostTrend[]>([]);
   modelUsage = signal<ModelUsageSummary[]>([]);
@@ -35,6 +40,7 @@ export class AdminCostStateService {
 
   loading = signal(false);
   loadingTopUsers = signal(false);
+  loadingTopSessions = signal(false);
   loadingTrends = signal(false);
 
   error = signal<string | null>(null);
@@ -122,6 +128,40 @@ export class AdminCostStateService {
       throw error;
     } finally {
       this.loadingTopUsers.set(false);
+    }
+  }
+
+  /**
+   * Load the period's most expensive conversations.
+   *
+   * Deliberately not part of `loadDashboard`: the fan-out costs one query
+   * per scanned user, so it is loaded on demand rather than on every visit
+   * to the page.
+   */
+  async loadTopSessions(options: TopSessionsRequestOptions = {}): Promise<void> {
+    this.loadingTopSessions.set(true);
+    this.error.set(null);
+
+    try {
+      const period = options.period ?? this.selectedPeriod();
+
+      if (period === DEMO_PERIOD) {
+        this.topSessions.set([]);
+        this.topSessionsTruncated.set(false);
+        return;
+      }
+
+      const response = await this.http
+        .getTopSessions({ ...options, period })
+        .toPromise();
+
+      this.topSessions.set(response?.sessions ?? []);
+      this.topSessionsTruncated.set(response?.truncated ?? false);
+    } catch (error: any) {
+      this.error.set(error.message || 'Failed to load top sessions');
+      throw error;
+    } finally {
+      this.loadingTopSessions.set(false);
     }
   }
 

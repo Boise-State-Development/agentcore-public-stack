@@ -33,6 +33,7 @@ import type {
   ReasoningEvent,
   ToolResultEventData,
   QuotaWarningEvent,
+  QuotaSessionNoticeEvent,
   QuotaExceededEvent,
   StreamErrorEvent,
   ConversationalStreamErrorEvent,
@@ -80,6 +81,7 @@ export interface StreamParserCallbacks {
 
   // Quota events
   onQuotaWarning?: (data: QuotaWarningEvent) => void;
+  onQuotaSessionNotice?: (data: QuotaSessionNoticeEvent) => void;
   onQuotaExceeded?: (data: QuotaExceededEvent) => void;
 
   // OAuth consent required (external MCP tool needs user authorization)
@@ -312,6 +314,27 @@ export function validateQuotaWarningEvent(data: unknown): data is QuotaWarningEv
     typeof event.currentUsage === 'number' &&
     typeof event.quotaLimit === 'number' &&
     typeof event.percentageUsed === 'number'
+  );
+}
+
+/**
+ * Validate QuotaSessionNoticeEvent structure
+ */
+export function validateQuotaSessionNoticeEvent(
+  data: unknown,
+): data is QuotaSessionNoticeEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<QuotaSessionNoticeEvent>;
+
+  return (
+    event.type === 'quota_session_notice' &&
+    typeof event.sessionId === 'string' &&
+    event.sessionId.length > 0 &&
+    typeof event.sessionCost === 'number' &&
+    typeof event.quotaLimit === 'number'
   );
 }
 
@@ -659,6 +682,12 @@ export function processStreamEvent(
       case 'quota_warning':
         if (validateQuotaWarningEvent(data)) {
           callbacks.onQuotaWarning?.(data);
+        }
+        break;
+
+      case 'quota_session_notice':
+        if (validateQuotaSessionNoticeEvent(data)) {
+          callbacks.onQuotaSessionNotice?.(data);
         }
         break;
 

@@ -57,7 +57,7 @@ spend, and the plan has to hold both levers in frame.
 | W2 | **Prefix stability** | don't rewrite what didn't change | #833 PR-2/3/4 → #835 v2 (gated) | #833 PR-2/3/4 unbuilt. ⚠️ **#834 has left this row** — G1 disproved its prefix-cost thesis; it is a latency fix and now lives in W6 |
 | W6 | **Turn latency** | time-to-answer, not tokens | #834 (bypass narrowing + family promotion) · #841 (runtime session affinity) | **#841 merged and verified in dev** — steady-state turns ~7.6s → ~3.9s. Split: warm container ~7.6→4.8s (all sessions), reused Agent ~4.8→3.9s (cacheable only). #839's treatment arm now equals the ceiling |
 | W3 | **Payload boundedness** | nothing unbounded enters the prefix | #836 offload · tool-search strategy · workspace tools (PR-1 built) · S3 share-offload | offload PRs unbuilt; citations baseline probe required first |
-| W4 | **Demand governance** | bound the blast radius of any failure | quota-cooldown spec · #833 PR-5 (earlier warnings, per-session notice) | drafted; PR-5 unbuilt |
+| W4 | **Demand governance** | bound the blast radius of any failure | quota-cooldown spec · #833 PR-5 (earlier warnings, per-session notice) | **PR-5 built 2026-08-05** — 50%/75% rungs, `quota_session_notice`, admin top-sessions view; cooldown-windows spec still drafted only |
 | W5 | **Infrastructure economics** | the 73% of the bill that isn't tokens | reaper #827 (shipped) + open follow-ups: ~~session-id forwarding~~, `StopRuntimeSession` | session-id forwarding **done for a different reason** (#841, W6) — it was filed here as a reaper follow-up and turned out to be the binding constraint on the agent cache; `StopRuntimeSession` still un-specced — **gap** |
 
 W4 is deliberately independent: it must protect users even when W1–W3 fail,
@@ -113,8 +113,15 @@ Gate summary — each is a *measurement with a decision attached*, not a date:
   the current document path can even see. Every offload quality comparison
   inherits its baseline from this probe.
 
-Independent of all gates: #833 PR-5 (quota runway) and the W5 follow-ups —
-cheap, and they don't wait on measurement.
+Independent of all gates: #833 PR-5 (quota runway — **built 2026-08-05**) and
+the W5 follow-ups — cheap, and they don't wait on measurement. PR-5 also
+returned a finding the gates did not ask for: replayed against the incident's
+recorded rows, earlier *per-user* rungs move the first warning by only ~6
+hours, because the spend was concentrated in one conversation. The runway
+comes from the per-session notice (Aug 1 vs. a block on Aug 4). Read that as a
+caution for W4 generally — user-level thresholds are the wrong instrument for
+a single-session failure, and a cooldown-window design should be judged the
+same way.
 
 ## Arc ledger — every work item and what blocks it
 
@@ -129,7 +136,7 @@ between sessions. **Update a row here in the PR that changes it.**
 | #833 PR-2 summary cap | unbuilt | eval-harness owner (changes model-visible context) |
 | #833 PR-3 byte stability | unbuilt | investigation first, then G2 |
 | #833 PR-4 memory pinning | unbuilt | eval-harness owner (changes model-visible context) |
-| #833 PR-5 quota runway | **ready — unblocked by every gate** | nothing |
+| #833 PR-5 quota runway | ✅ built 2026-08-05 — earlier rungs + `quota_session_notice` + admin top-sessions; acceptance replay in CI over the incident's own rows | prod release. ⚠️ the replay moved the spec's own number: the extra rungs buy ~6h, the **session notice** is what buys the 3.9 days |
 | #834 arm 1 (artifacts) | ✅ merged #839 — **live and hitting** since #841 | nothing |
 | #841 runtime session affinity | ✅ merged, verified in dev | prod read; hot-spotting under load still unproven |
 | #834 four more families | held | a prod read. ⚠️ marginal value is now measured at **~19%** (the reused-Agent share), not the full latency win — re-judge whether it earns the risk |

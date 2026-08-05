@@ -1,8 +1,9 @@
 # Compaction over-threshold cache spiral — stop paying a full prefix re-write on every turn
 
 **Status:** PR-1 shipped (#838, merged 2026-08-05 — see "As shipped" under §3
-PR-1, which differs from what this section originally specified). PR-2 through
-PR-5 unbuilt.
+PR-1, which differs from what this section originally specified). PR-5 built
+2026-08-05 (quota runway — see "As shipped" under §3 PR-5; its acceptance
+replay moved one of §3's own numbers). PR-2 through PR-4 unbuilt.
 **Motivating incident:** prod, 2026-08-05 analysis. One faculty user exhausted
 their $30/month quota in 5 days on a **single conversation** (session
 `c94a3172-e1fb-4a1d-b375-6e51a56c75ad`, an essay-editing session created
@@ -134,12 +135,19 @@ re-writes the system+history segments whenever extraction lands new records —
 including records extracted *from the very conversation in progress*. Small
 next to D2/D3, but it breaks the prefix at an earlier cachePoint when it fires.
 
-### D5 — quota warnings gave the user no runway
+### D5 — quota warnings gave the user no runway — FIXED (PR-5)
 
 All four warning events (80%, 90%) fired on Aug 4 — the same day the `block`
 landed. Tier config (`softLimitPercentage: 80`) means a user in a pathological
 session gets hours of notice on a month-long budget. Nothing surfaces "this
 one conversation has cost $28."
+
+Fixed by the ladder + `quota_session_notice` in §3 PR-5. Replayed against the
+incident's own rows, the notice reaches the user on Aug 1 — 3.9 days before
+the block, and 2.5 days before the earliest per-user warning. The extra 50%/75%
+rungs, by themselves, would only have bought ~6 hours here (see "As shipped"
+point 2); the per-session signal is the one that carries the runway, because
+the defect was never that the *user* was overspending.
 
 ## 3. Fix plan
 
@@ -302,6 +310,59 @@ count 0 after the fix; the byte-stability regression test is in CI.
 
 **Acceptance:** replaying the incident's cost curve emits 50%/75% warnings on
 Aug 2–3 (two days of runway instead of hours) and a session notice on Aug 1.
+
+**As shipped.** Built as specified, with one design decision the bullets left
+open and one acceptance number that moved when it met the real rows. The
+replay is a test, not a claim: `backend/tests/shared/test_quota_runway.py`
+runs it over `tests/fixtures/quota_incident_cost_curve.json` — a content-free
+projection (timestamp + `cost.total`) of the incident session's 105 `C#`
+rows, read from prod on 2026-08-05. Its August 1–4 slice is 56 calls summing
+to $30.45, which is §1's figure, so the fixture is anchored to the same
+denominator this document uses everywhere else.
+
+1. **The session notice reads the session's *lifetime* cost, not its cost in
+   the calendar period.** `totalCost` on the session row is what
+   `_bump_session_aggregates` already maintains, and it is also the honest
+   number: this conversation opened 2026-07-30 and had spent $6.06 — 20% of
+   a monthly budget — before August began. Replayed both ways, lifetime cost
+   crosses the 25% share at **2026-08-01T00:16Z** (meeting the criterion),
+   while period-scoped cost would not cross until **2026-08-02T22:57Z**. A
+   period-scoped notice would have hidden, for a full day, exactly the
+   conversation it exists to surface. Cost: one `SessionLookupIndex` query
+   per turn, only for tiers with a notice share configured, swallowed on
+   failure.
+2. **The 50%/75% rungs land a day later than §3 predicted, and buy ~6 hours,
+   not two days.** Measured against the user's August period usage: 50%
+   crosses 2026-08-03T19:40Z and 75% crosses 2026-08-04T01:20Z (both
+   2026-08-03 in the deployment's own timezone), versus 80% at
+   2026-08-04T01:28Z and the limit reached at 2026-08-04T22:31Z. The spend
+   was concentrated enough that halving the trigger barely moves the clock —
+   §4.1's warning that "some §1 numbers will move" applies to §3's estimates
+   too. **The runway in this incident comes from the session notice** (~3.9
+   days ahead of the block), and the extra rungs are cheap insurance for the
+   diffuse case rather than the fix. The replay asserts both sets of days, so
+   a regression has to argue with the recorded rows.
+3. **Everything is tier-configurable, and one knob was already broken.**
+   `earlyWarningPercentages` (default `[50, 75]`, `[]` opts out) and
+   `sessionNoticePercentage` (default 25, 0 disables) join
+   `softLimitPercentage` on `QuotaTier`; the ladder always keeps the tier's
+   soft limit and 90%, so this is strictly additive. `QuotaTierUpdate` did
+   not carry `softLimitPercentage` or `actionOnLimit` while the SPA's edit
+   form sent them — an admin editing a tier silently kept the old values —
+   fixed alongside the new fields. Only `sessionNoticePercentage` gets a form
+   control; the rung list stays API-level.
+4. **The admin view is a fan-out, not a scan.** `GET /admin/costs/top-sessions`
+   walks the period's top-cost users (`PeriodCostIndex`, already sorted) and
+   queries each one's session rows — a session can only be expensive if its
+   owner is. No new GSI on sessions-metadata (one admin view does not justify
+   that deploy hazard), no table scan. The response carries `usersScanned` /
+   `truncated` so a bounded list never reads as exhaustive, and each row
+   carries `partialMissUsd` so a *platform* problem is distinguishable from a
+   heavy user at a glance.
+5. **A durable `session_notice` quota event** is recorded on first crossing
+   (deduped per session per hour, like warnings), so support can answer "when
+   did this conversation get expensive?" after the fact — the live SSE notice
+   alone leaves no record.
 
 ### Deferred (tracked, not this epic)
 
