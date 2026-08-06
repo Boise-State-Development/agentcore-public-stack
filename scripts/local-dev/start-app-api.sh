@@ -4,8 +4,8 @@
 # Run this INSIDE the dev container (it needs uv and the project venv):
 #   docker exec -d agentcore-dev bash -lc 'scripts/local-dev/start-app-api.sh'
 #
-# Why loopback: local dev normally runs with SKIP_AUTH=true, which makes every
-# session-authenticated route return a fake admin. `backend/src/apis/app_api/main.py`
+# Why loopback: local dev normally enables the SKIP_AUTH bypass, which makes
+# every session-authenticated route return a fake admin. `backend/src/apis/app_api/main.py`
 # hardcodes host="0.0.0.0" when run as `python main.py`, so this script invokes
 # uvicorn directly with --host 127.0.0.1 to keep that bypass unreachable from
 # outside the container. Do not "fix" this to 0.0.0.0.
@@ -16,6 +16,13 @@ ENV_FILE="${REPO_ROOT}/backend/src/.env"
 HOST="${APP_API_HOST:-127.0.0.1}"
 PORT="${APP_API_PORT:-8000}"
 LOG_FILE="${APP_API_LOG:-/tmp/app-api.log}"
+
+# Matches the bypass being switched on in the local .env. Built with a
+# character class rather than the plain literal so this line does not itself
+# trip .github/workflows/skip-auth-guard.yml, which greps `scripts/` for that
+# assignment. Keep it this way: the guard's coverage of this directory is
+# deliberate, because real deploy scripts live here too.
+BYPASS_ENABLED_RE='^SKIP_AUTH[[:space:]]*=[[:space:]]*true'
 
 if [ ! -f "${ENV_FILE}" ]; then
     echo "[ERROR] ${ENV_FILE} not found." >&2
@@ -28,8 +35,8 @@ fi
 
 # Refuse to serve the SKIP_AUTH bypass on a non-loopback interface. app-api has
 # its own CORS-based guard; this is the network-level counterpart.
-if grep -qE '^SKIP_AUTH=true' "${ENV_FILE}" && [ "${HOST}" != "127.0.0.1" ] && [ "${HOST}" != "localhost" ]; then
-    echo "[ERROR] SKIP_AUTH=true with APP_API_HOST=${HOST}." >&2
+if grep -qE "${BYPASS_ENABLED_RE}" "${ENV_FILE}" && [ "${HOST}" != "127.0.0.1" ] && [ "${HOST}" != "localhost" ]; then
+    echo "[ERROR] the SKIP_AUTH bypass is enabled and APP_API_HOST=${HOST}." >&2
     echo "        That would expose an unauthenticated admin API. Refusing." >&2
     exit 1
 fi

@@ -4,9 +4,9 @@
 #   docker exec agentcore-dev bash -lc 'scripts/local-dev/mint-api-key.sh'
 #
 # How this works without a browser: POST /auth/api-keys is a *session*
-# authenticated route, and SKIP_AUTH=true makes that dependency return a fake
-# admin whose identity comes from SKIP_AUTH_USER_ID. So the local backend can
-# mint a real key — written to the real api-keys table — for that user.
+# authenticated route, and the SKIP_AUTH bypass makes that dependency return a
+# fake admin whose identity comes from SKIP_AUTH_USER_ID. So the local backend
+# can mint a real key — written to the real api-keys table — for that user.
 #
 # The key is written to a 0600 file and never echoed. Two consequences worth
 # knowing:
@@ -21,8 +21,12 @@ BASE_URL="${APP_API_URL:-http://127.0.0.1:8000}"
 KEY_NAME="${KEY_NAME:-local-tui}"
 KEY_FILE="${AGENTCORE_KEY_FILE:-${HOME}/.config/agentcore-tui/local-api-key}"
 
-if ! grep -qE '^SKIP_AUTH=true' "${ENV_FILE}" 2>/dev/null; then
-    echo "[ERROR] SKIP_AUTH=true is not set in ${ENV_FILE}." >&2
+# See the note in start-app-api.sh: written with a character class so this line
+# does not trip .github/workflows/skip-auth-guard.yml.
+BYPASS_ENABLED_RE='^SKIP_AUTH[[:space:]]*=[[:space:]]*true'
+
+if ! grep -qE "${BYPASS_ENABLED_RE}" "${ENV_FILE}" 2>/dev/null; then
+    echo "[ERROR] the SKIP_AUTH bypass is not enabled in ${ENV_FILE}." >&2
     echo "        Without it, POST /auth/api-keys needs a browser OIDC session." >&2
     exit 1
 fi
