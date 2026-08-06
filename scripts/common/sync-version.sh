@@ -49,6 +49,10 @@ PYPROJECT="${REPO_ROOT}/backend/pyproject.toml"
 FE_PKG="${REPO_ROOT}/frontend/ai.client/package.json"
 INFRA_PKG="${REPO_ROOT}/infrastructure/package.json"
 README="${REPO_ROOT}/README.md"
+# TUI client (optional: guarded everywhere so branches without tui/ still work)
+TUI_PYPROJECT="${REPO_ROOT}/tui/pyproject.toml"
+TUI_INIT="${REPO_ROOT}/tui/src/agentcore_tui/__init__.py"
+TUI_UV_LOCK="${REPO_ROOT}/tui/uv.lock"
 
 CHECK_MODE=false
 if [ "${1:-}" = "--check" ]; then
@@ -91,6 +95,20 @@ fi
 # Convert SemVer prerelease to PEP 440 for comparison (e.g., 1.0.0-beta.16 → 1.0.0b16)
 PEP440_VERSION=$(echo "${VERSION}" | sed -E 's/-alpha\./a/; s/-beta\./b/; s/-rc\./rc/')
 
+# TUI client versions (empty when the tui/ tree is not present)
+TUI_VER=""
+TUI_INIT_VER=""
+TUI_UV_LOCK_VER=""
+if [ -f "${TUI_PYPROJECT}" ]; then
+    TUI_VER=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${TUI_PYPROJECT}" | head -1 || echo "")
+fi
+if [ -f "${TUI_INIT}" ]; then
+    TUI_INIT_VER=$(sed -n 's/^__version__[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${TUI_INIT}" | head -1 || echo "")
+fi
+if [ -f "${TUI_UV_LOCK}" ]; then
+    TUI_UV_LOCK_VER=$(awk -F'"' '/name = "agentcore-tui"/{f=1} f && /^version = /{print $2; exit}' "${TUI_UV_LOCK}" || echo "")
+fi
+
 if [ "${CHECK_MODE}" = true ]; then
     echo "Checking manifests against VERSION=${VERSION}..."
     sync_or_check "${PYPROJECT}" "${PY_VER}" "backend/pyproject.toml"
@@ -100,6 +118,13 @@ if [ "${CHECK_MODE}" = true ]; then
     sync_or_check "${README}" "${README_CURRENT_VER}" "README.md (current release)"
     if [ -f "${UV_LOCK}" ]; then
         sync_or_check "${UV_LOCK}" "${UV_LOCK_VER}" "backend/uv.lock" "${PEP440_VERSION}"
+    fi
+    if [ -f "${TUI_PYPROJECT}" ]; then
+        sync_or_check "${TUI_PYPROJECT}" "${TUI_VER}" "tui/pyproject.toml"
+        sync_or_check "${TUI_INIT}" "${TUI_INIT_VER}" "tui/src/agentcore_tui/__init__.py"
+    fi
+    if [ -f "${TUI_UV_LOCK}" ]; then
+        sync_or_check "${TUI_UV_LOCK}" "${TUI_UV_LOCK_VER}" "tui/uv.lock" "${PEP440_VERSION}"
     fi
 
     if [ ${errors} -gt 0 ]; then
@@ -116,6 +141,16 @@ echo "Syncing VERSION=${VERSION} into manifests..."
 
 sed_inplace "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" "${PYPROJECT}"
 echo -e "${GREEN}[UPDATED]${NC} backend/pyproject.toml"
+
+if [ -f "${TUI_PYPROJECT}" ]; then
+    sed_inplace "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" "${TUI_PYPROJECT}"
+    echo -e "${GREEN}[UPDATED]${NC} tui/pyproject.toml"
+fi
+
+if [ -f "${TUI_INIT}" ]; then
+    sed_inplace "s/^__version__ = \"[^\"]*\"/__version__ = \"${VERSION}\"/" "${TUI_INIT}"
+    echo -e "${GREEN}[UPDATED]${NC} tui/src/agentcore_tui/__init__.py"
+fi
 
 # package.json: replace only the FIRST `"version": "..."` (the top-level key).
 # awk instead of GNU sed's `0,/re/` address, which BSD sed rejects.
@@ -151,6 +186,10 @@ echo -e "\nRegenerating lockfiles..."
 if command -v uv &>/dev/null; then
     (cd "${REPO_ROOT}/backend" && uv lock)
     echo -e "${GREEN}[UPDATED]${NC} backend/uv.lock"
+    if [ -f "${TUI_PYPROJECT}" ]; then
+        (cd "${REPO_ROOT}/tui" && uv lock)
+        echo -e "${GREEN}[UPDATED]${NC} tui/uv.lock"
+    fi
 else
     echo -e "${RED}[SKIP]${NC} backend/uv.lock (uv not installed — run: curl -LsSf https://astral.sh/uv/install.sh | sh)"
 fi

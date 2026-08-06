@@ -85,6 +85,13 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     cognito: {
       domainPrefix: MOCK_PREFIX,
       passwordMinLength: 8,
+      // `loadConfig()` always populates this (enabled, with default ports), so
+      // the mock has to as well or constructs skip the CLI client and tests
+      // assert against a shape production never produces.
+      cliClient: {
+        enabled: true,
+        callbackPorts: [8976, 8977, 8978],
+      },
     },
     tags: { ManagedBy: 'CDK', Environment: 'test' },
   };

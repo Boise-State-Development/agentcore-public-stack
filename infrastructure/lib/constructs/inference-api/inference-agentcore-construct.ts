@@ -235,6 +235,15 @@ export class InferenceAgentCoreConstruct extends Construct {
     // when the chat proxy on app-api forwards them to /invocations.
     const cognitoAppClientId = props.refs.bffAppClient.userPoolClientId;
 
+    // The terminal client authenticates directly with a Cognito access token
+    // from its own public PKCE client, so that client id must also be allowed
+    // here or /invocations 401s before the handler ever runs. `allowedClients`
+    // (not `allowedAudience`) because Cognito access tokens carry `client_id`.
+    const allowedClientIds = [
+      cognitoAppClientId,
+      ...(props.refs.cliAppClient ? [props.refs.cliAppClient.userPoolClientId] : []),
+    ];
+
     // Construct Cognito OIDC discovery URL
     const cognitoDiscoveryUrl = `https://cognito-idp.${config.awsRegion}.amazonaws.com/${cognitoUserPoolId}/.well-known/openid-configuration`;
 
@@ -282,7 +291,7 @@ export class InferenceAgentCoreConstruct extends Construct {
       authorizerConfiguration: {
         customJwtAuthorizer: {
           discoveryUrl: cognitoDiscoveryUrl,
-          allowedClients: [cognitoAppClientId],
+          allowedClients: allowedClientIds,
         },
       },
       roleArn: runtimeExecutionRole.roleArn,

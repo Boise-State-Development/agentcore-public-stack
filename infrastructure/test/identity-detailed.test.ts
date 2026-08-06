@@ -98,6 +98,61 @@ describe('CognitoConstruct — detailed', () => {
   it('persists client secret in Secrets Manager', () => {
     t.resourceCountIs('AWS::SecretsManager::Secret', 1);
   });
+
+  describe('CLI app client', () => {
+    it('is a public client with no secret', () => {
+      t.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        ClientName: 'test-project-cli-app-client',
+        GenerateSecret: false,
+      });
+    });
+
+    it('registers both loopback hosts for every callback port', () => {
+      // Cognito matches redirect URIs exactly and does not treat the port as
+      // variable for loopback (RFC 8252 says it should), so every host/port
+      // pair the CLI might bind has to be registered up front.
+      const clients = t.findResources('AWS::Cognito::UserPoolClient');
+      const cli = Object.values(clients).find(
+        (r: any) => r.Properties.ClientName === 'test-project-cli-app-client',
+      ) as any;
+      const callbacks: string[] = cli.Properties.CallbackURLs;
+      for (const port of [8976, 8977, 8978]) {
+        expect(callbacks).toContain(`http://localhost:${port}/callback`);
+        expect(callbacks).toContain(`http://127.0.0.1:${port}/callback`);
+      }
+    });
+
+    it('enables token revocation so logout can invalidate refresh tokens', () => {
+      t.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        ClientName: 'test-project-cli-app-client',
+        EnableTokenRevocation: true,
+      });
+    });
+
+    it('accepts the same identity providers as the BFF client', () => {
+      // A federated user must be able to sign in from the CLI too. Providers
+      // added later through the admin UI are attached to a single client id,
+      // so that service has to fan out or CLI login silently loses them.
+      const clients = Object.values(
+        t.findResources('AWS::Cognito::UserPoolClient'),
+      ) as any[];
+      const bff = clients.find(
+        (r) => r.Properties.ClientName === 'test-project-bff-app-client',
+      );
+      const cli = clients.find(
+        (r) => r.Properties.ClientName === 'test-project-cli-app-client',
+      );
+      expect(cli.Properties.SupportedIdentityProviders).toEqual(
+        bff.Properties.SupportedIdentityProviders,
+      );
+    });
+
+    it('publishes its client ID to SSM', () => {
+      t.hasResourceProperties('AWS::SSM::Parameter', {
+        Name: '/test-project/auth/cognito/cli-app-client-id',
+      });
+    });
+  });
 });
 
 describe('OAuthTablesConstruct — detailed', () => {
