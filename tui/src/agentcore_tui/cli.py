@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 
 from . import __version__
+from .auth import delete_refresh_token, describe_stored_session, load_refresh_token
 from .config import (
     ENV_API_KEY,
     ENV_BASE_URL,
@@ -86,7 +87,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
 
-    login = subparsers.add_parser("login", parents=[common], help="Store an API key in the OS keyring")
+    login = subparsers.add_parser("login", parents=[common], help="Sign in (browser SSO, or store an API key)")
+    login.add_argument(
+        "--sso",
+        action="store_true",
+        help="Sign in through the browser with OIDC + PKCE instead of pasting an API key",
+    )
+    login.add_argument(
+        "--provider",
+        dest="provider",
+        default=None,
+        help="Jump straight to a federated identity provider by id (skips the chooser)",
+    )
     login.add_argument(
         "--api-key",
         dest="api_key",
@@ -107,6 +119,69 @@ def _print_error(exc: AgentCoreTuiError) -> None:
 
 
 def _command_login(args: argparse.Namespace) -> int:
+    if getattr(args, "sso", False):
+        return _command_login_sso(args)
+    return _command_login_api_key(args)
+
+
+def _command_login_sso(args: argparse.Namespace) -> int:
+    """Interactive browser sign-in via authorization-code + PKCE."""
+    import asyncio
+
+    from .auth import perform_login
+
+    config = resolve_config(base_url=args.base_url, config_file=args.config_file, use_keyring=False)
+    if not config.sso_configured:
+        missing = []
+        if not config.base_url:
+            missing.append("base URL")
+        if not config.cognito_domain_url:
+            missing.append("cognito_domain_url")
+        if not config.cli_client_id:
+            missing.append("cli_client_id")
+        print(f"error: SSO is not configured — missing {', '.join(missing)}.", file=sys.stderr)
+        print(f"       Add them to {args.config_file or config_path()}:", file=sys.stderr)
+        print('         cognito_domain_url = "https://<prefix>.auth.<region>.amazoncognito.com"', file=sys.stderr)
+        print('         cli_client_id = "<from SSM /<prefix>/auth/cognito/cli-app-client-id>"', file=sys.stderr)
+        return 2
+
+    print(f"Signing in to {config.base_url}")
+    print("A browser window will open. Complete sign-in there, then return here.")
+
+    async def run() -> int:
+        outcome, url = await perform_login(
+            base_url=config.base_url,
+            domain_url=config.cognito_domain_url or "",
+            client_id=config.cli_client_id or "",
+            ports=config.callback_ports,
+            identity_provider=getattr(args, "provider", None),
+        )
+        # Printed unconditionally: browser launch fails silently on headless
+        # hosts, over SSH, and in some WSL setups.
+        print(f"\nIf no browser opened, visit:\n  {url}\n")
+        claims = _describe_identity(outcome.tokens.access_token)
+        print(f"Signed in{claims}.")
+        print(f"Access token valid for {outcome.tokens.seconds_remaining // 60} minutes.")
+        if outcome.refresh_token_stored:
+            print("Session saved to the OS keyring; it will renew automatically.")
+        else:
+            reason = outcome.keyring_error or "no refresh token issued"
+            print(f"warning: session not saved ({reason}). You will need to sign in again next time.")
+        return 0
+
+    return asyncio.run(run())
+
+
+def _describe_identity(access_token: str) -> str:
+    """A short ' as <email>' suffix, when the token says so."""
+    from .auth import decode_claims
+
+    claims = decode_claims(access_token)
+    who = claims.get("email") or claims.get("username") or claims.get("sub")
+    return f" as {who}" if isinstance(who, str) and who else ""
+
+
+def _command_login_api_key(args: argparse.Namespace) -> int:
     config = resolve_config(base_url=args.base_url, config_file=args.config_file, use_keyring=False)
     if not config.base_url:
         print(
@@ -143,11 +218,46 @@ def _command_logout(args: argparse.Namespace) -> int:
     if not config.base_url:
         print(f"error: no base URL. Pass --base-url, or set {ENV_BASE_URL}.", file=sys.stderr)
         return 2
+
+    removed_any = False
+
+    # SSO session first: revoke server-side so the refresh token is dead even if
+    # a copy leaked, then drop the local one.
+    sso_token, _ = load_refresh_token(config.base_url)
+    if sso_token:
+        if config.cognito_domain_url and config.cli_client_id:
+            import asyncio
+
+            from .auth import CognitoOidcClient, OidcConfig
+
+            async def revoke() -> bool:
+                oidc_config = OidcConfig(
+                    domain_url=config.cognito_domain_url or "",
+                    client_id=config.cli_client_id or "",
+                    redirect_uri="",
+                )
+                async with CognitoOidcClient(oidc_config) as client:
+                    return await client.revoke(sso_token)
+
+            print(
+                "Revoked the session with the identity provider."
+                if asyncio.run(revoke())
+                else "warning: could not revoke server-side; clearing locally anyway."
+            )
+        else:
+            print("warning: SSO config missing, so the session could not be revoked server-side.")
+        delete_refresh_token(config.base_url)
+        print("Removed the stored SSO session.")
+        removed_any = True
+
     if delete_key_from_keyring(config.base_url):
-        print(f"Removed the stored key for {config.base_url}.")
-        return 0
-    print(f"No stored key found for {config.base_url}.")
-    return 1
+        print(f"Removed the stored API key for {config.base_url}.")
+        removed_any = True
+
+    if not removed_any:
+        print(f"Nothing stored for {config.base_url}.")
+        return 1
+    return 0
 
 
 def _describe_key(config: Config) -> str:
@@ -166,6 +276,9 @@ def _command_status(args: argparse.Namespace) -> int:
     print(f"API key     : {_describe_key(config)}")
     print(f"model       : {config.model_id}")
     print(f"max tokens  : {config.max_tokens:,}")
+    print(f"sso         : {'configured' if config.sso_configured else 'not configured'}")
+    if config.sso_configured:
+        print(f"sso session : {describe_stored_session(config.base_url)}")
     print(f"log file    : {log_path(args.log_file)}")
     print(f"log content : {'yes' if content_logging_enabled() else f'no (set {ENV_LOG_CONTENT}=1)'}")
     if config.keyring_unavailable_reason:

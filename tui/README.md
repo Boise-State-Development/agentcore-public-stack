@@ -88,15 +88,57 @@ uv run agentcore-tui
 
 ## First run
 
+There are two ways to authenticate. Which one you use depends on what your
+deployment has enabled.
+
+### Browser SSO (OIDC + PKCE)
+
+```bash
+agentcore-tui login --sso
+```
+
+Opens your real browser at the Cognito hosted UI, you sign in normally (SSO and
+MFA both apply), and the CLI receives the authorization code on a loopback
+listener. No client secret is involved — the CLI is a public client and uses
+PKCE (RFC 7636) instead, following RFC 8252 for native apps.
+
+Jump straight to a federated provider and skip the chooser:
+
+```bash
+agentcore-tui login --sso --provider ms-entra-id
+```
+
+Requires two settings, because Cognito exposes no unauthenticated discovery
+endpoint for them:
+
+```toml
+cognito_domain_url = "https://<prefix>.auth.<region>.amazoncognito.com"
+cli_client_id = "<from SSM /<prefix>/auth/cognito/cli-app-client-id>"
+```
+
+Only the **refresh token** is persisted, in the OS keyring. The access token is
+held in memory and renewed automatically; the id token is not stored at all.
+`logout` revokes the refresh token with Cognito before clearing it locally, so
+it stops working even if a copy leaked.
+
+The loopback ports are fixed (`8976`, `8977`, `8978`, tried in order) rather than
+ephemeral. Cognito matches redirect URIs byte-for-byte and does not honour RFC
+8252's rule that loopback ports be treated as variable, so only ports registered
+on the app client can be used. Override with `callback_ports` if your deployment
+registered different ones.
+
+### API key
+
 ```bash
 agentcore-tui login --base-url https://your-host/api
 ```
 
 You will be prompted for the key without echo, so it never lands in your shell
-history. The key goes into your OS keyring; only the base URL is written to the
-config file.
+history. Create one in the web app under **Settings → API Keys**; the raw value
+is shown exactly once, keys expire after 90 days, and creating a new key revokes
+the previous one.
 
-Then:
+Either way:
 
 ```bash
 agentcore-tui
@@ -105,8 +147,8 @@ agentcore-tui
 Check your setup at any time:
 
 ```bash
-agentcore-tui status     # resolved config (key never printed) + health probe
-agentcore-tui logout     # remove the stored key
+agentcore-tui status     # resolved config, SSO session state, health probe
+agentcore-tui logout     # revoke + clear stored credentials
 ```
 
 The base URL is the app-api root. On a CloudFront deployment that usually ends
