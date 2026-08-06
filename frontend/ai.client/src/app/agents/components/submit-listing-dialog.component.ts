@@ -74,11 +74,21 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
         <div class="flex items-start justify-between gap-3 px-6 pt-5">
           <div class="min-w-0">
             <h2 id="submit-listing-title" class="text-lg/7 font-semibold text-gray-900 dark:text-white">
-              {{ isResubmission() ? 'Submit again for review' : 'Submit to the marketplace' }}
+              @if (isUpdate()) {
+                Submit an update
+              } @else {
+                {{ isResubmission() ? 'Submit again for review' : 'Submit to the marketplace' }}
+              }
             </h2>
             <p id="submit-listing-description" class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-              An admin reviews <span class="font-medium">{{ data.agentName }}</span> before it
-              appears in the store. You'll see their decision here.
+              @if (isUpdate()) {
+                An admin reviews your changes before they reach anyone. The version of
+                <span class="font-medium">{{ data.agentName }}</span> in the store stays live and
+                unchanged until they approve.
+              } @else {
+                An admin reviews <span class="font-medium">{{ data.agentName }}</span> before it
+                appears in the store. You'll see their decision here.
+              }
             </p>
           </div>
           <button
@@ -146,15 +156,27 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
               <p class="text-xs/5 text-gray-500 dark:text-gray-400">
                 Where it appears in Discover. An admin may move it.
               </p>
+              <!--
+                ⚠️ The selection lives on the options ([selected]), NOT as [value] on the
+                select. The category list arrives from an await in ngOnInit, so on the first
+                render the preselected category names an option that does not exist yet:
+                setting select.value matches nothing, the browser silently resets to index 0,
+                and when the options finally render it displays the first one. The author then
+                sees a category they never chose — reading as though submitting had moved
+                their listing — while the signal still holds the right value underneath.
+                Binding on the option instead resolves as each one renders, which is exactly
+                when the value becomes matchable.
+              -->
               <select
                 id="listing-category"
-                [value]="category()"
                 (change)="onCategoryChange($event)"
                 class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
               >
-                <option value="" disabled>Choose a category…</option>
+                <option value="" disabled [selected]="!category()">Choose a category…</option>
                 @for (option of categories(); track option.id) {
-                  <option [value]="option.id">{{ option.label }}</option>
+                  <option [value]="option.id" [selected]="option.id === category()">
+                    {{ option.label }}
+                  </option>
                 }
               </select>
               @if (!categories().length) {
@@ -230,9 +252,14 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
             }
 
             <p class="mt-5 text-xs/5 text-gray-500 dark:text-gray-400">
-              You'll be credited as the publisher. An admin may reattribute the listing to a
-              department or the university at approval — that changes the name shown with it in
-              Discover and nothing about who can run it.
+              @if (data.listing) {
+                This keeps whoever the listing is already credited to.
+              } @else {
+                You'll be credited as the publisher.
+              }
+              An admin may reattribute the listing to a department or the university at
+              approval — that changes the name shown with it in Discover and nothing about who
+              can run it.
             </p>
 
             @if (error(); as message) {
@@ -292,6 +319,16 @@ export class SubmitListingDialogComponent implements OnInit {
   readonly taglineMax = TAGLINE_MAX;
 
   readonly isResubmission = computed(() => !!this.data.listing);
+
+  /**
+   * A resubmission over something users can currently see — which changes what the dialog
+   * can honestly promise. "An admin reviews this before it appears in the store" is false
+   * for a listing already in the store, and reads as though submitting took it down.
+   *
+   * `publishedVersion` is the fact, not the state name: a listing an admin sent back for
+   * changes keeps serving while the author revises it.
+   */
+  readonly isUpdate = computed(() => !!this.data.listing?.publishedVersion);
 
   readonly canSubmit = computed(
     () =>

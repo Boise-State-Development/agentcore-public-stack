@@ -3,7 +3,6 @@ import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecr_assets from 'aws-cdk-lib/aws-ecr-assets';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as xray from 'aws-cdk-lib/aws-xray';
 import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
@@ -69,6 +68,15 @@ export class InferenceAgentCoreConstruct extends Construct {
    * which would chicken-and-egg on a same-stack first deploy.
    */
   public readonly runtimeEndpointUrl: string;
+  /**
+   * The log group the runtime actually writes to.
+   *
+   * Bedrock AgentCore creates this itself, named after the runtime *id*
+   * (which carries an AWS-assigned suffix) plus the endpoint qualifier —
+   * NOT after our project prefix. Exposed so dashboards elsewhere in the
+   * stack query the group that has data in it.
+   */
+  public readonly runtimeLogGroupName: string;
 
   constructor(scope: Construct, id: string, props: InferenceAgentCoreConstructProps) {
     super(scope, id);
@@ -399,6 +407,12 @@ export class InferenceAgentCoreConstruct extends Construct {
         // Authentication
         ENABLE_QUOTA_ENFORCEMENT: 'true',
 
+        // Quota runway (#833 PR-5): earlier warning rungs (50%/75%) plus the
+        // per-session `quota_session_notice`. Default ON — set to 'false' to
+        // fall back to the soft-limit/90% pair and silence the session
+        // notice, which is the kill switch for both halves at once.
+        QUOTA_RUNWAY_ENABLED: 'true',
+
         // Directories
         UPLOAD_DIR: '/tmp/uploads',
         OUTPUT_DIR: '/tmp/output',
@@ -441,11 +455,23 @@ export class InferenceAgentCoreConstruct extends Construct {
     // Observability: CloudWatch Log Group for Runtime
     // ============================================================
 
-    const runtimeLogGroup = new logs.LogGroup(this, 'AgentCoreRuntimeLogGroup', {
-      logGroupName: `/aws/bedrock-agentcore/runtimes/${config.projectPrefix}`,
-      retention: logs.RetentionDays.ONE_MONTH,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
+    // The runtime's log group is created by the AgentCore service, not by us,
+    // and is named after the runtime *id* + endpoint qualifier — e.g.
+    // `/aws/bedrock-agentcore/runtimes/<prefix>_agentcore_runtime-Z6D3HsHKs6-DEFAULT`.
+    //
+    // We used to declare a LogGroup at `/aws/bedrock-agentcore/runtimes/<prefix>`
+    // and point every Logs Insights widget at it. Nothing ever wrote there:
+    // measured in dev, that group held **0 bytes** while the service's own group
+    // held 229 MB, so all three widgets returned empty results and read as
+    // "no errors" / "no traffic" rather than as a broken query. Removing it also
+    // drops a retention policy that never applied to anything.
+    //
+    // ⚠️ Retention on the real group is therefore unmanaged (service-created
+    // groups can't take a CDK retention setting), which is a live cost item —
+    // dev alone carries several such groups in the hundreds of MB. Tracked as a
+    // W5 follow-up in docs/one-pagers/cost-effectiveness-roadmap.md.
+    this.runtimeLogGroupName =
+      `/aws/bedrock-agentcore/runtimes/${this.runtime.attrAgentRuntimeId}-DEFAULT`;
 
     // NOTE: X-Ray TransactionSearchConfig is an account-level singleton.
     // It cannot be created via CloudFormation if it already exists.
@@ -592,7 +618,7 @@ export class InferenceAgentCoreConstruct extends Construct {
       }),
       new cloudwatch.LogQueryWidget({
         title: 'Recent Runtime Errors',
-        logGroupNames: [runtimeLogGroup.logGroupName],
+        logGroupNames: [this.runtimeLogGroupName],
         queryLines: [
           'fields @timestamp, @message',
           'filter @message like /(?i)error|exception|traceback/',
@@ -697,7 +723,7 @@ export class InferenceAgentCoreConstruct extends Construct {
     });
 
     new cdk.CfnOutput(this, 'RuntimeLogGroupName', {
-      value: runtimeLogGroup.logGroupName,
+      value: this.runtimeLogGroupName,
       description: 'CloudWatch Log Group for AgentCore Runtime',
       exportName: `${config.projectPrefix}-AgentCoreRuntimeLogGroup`,
     });

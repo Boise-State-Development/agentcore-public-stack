@@ -65,6 +65,26 @@ describe('ListingStatusComponent', () => {
     expect(text).not.toContain('reviewer');
   });
 
+  // ── "in review" must not read as "off the shelf" ────────────────────────────────
+  it('says the published version stays live while an update is reviewed', () => {
+    // Without this the badge lies by omission: an author shipping a fix to a live agent
+    // sees "In review" and reasonably concludes their listing came down. It did not —
+    // the approved snapshot keeps serving until the update is approved.
+    const fixture = create(block({ state: 'in_review', publishedVersion: 2 }));
+    expect(fixture.nativeElement.textContent).toContain('stays in the store');
+  });
+
+  it('says the same while a live listing is being revised', () => {
+    // Requesting changes on a published listing deliberately does not unpublish it.
+    const fixture = create(block({ state: 'changes_requested', publishedVersion: 2 }));
+    expect(fixture.nativeElement.textContent).toContain('still in the store');
+  });
+
+  it('claims nothing about a first submission that has never been published', () => {
+    const fixture = create(block({ state: 'in_review' }));
+    expect(fixture.nativeElement.textContent).not.toContain('store');
+  });
+
   it('surfaces the D13 admin-edit trail with a date', () => {
     const fixture = create(
       block({ adminEdits: [{ field: 'category', at: '2026-07-24T10:00:00Z', by: 'Dana' }] }),

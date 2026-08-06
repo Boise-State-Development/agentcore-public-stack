@@ -13,6 +13,7 @@ import {
 import {
   QuotaWarningService,
   QuotaWarning,
+  QuotaSessionNotice,
   QuotaExceeded,
 } from '../../../services/quota/quota-warning.service';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
@@ -437,6 +438,8 @@ export class StreamParserService {
       onCitation: (data) => this.handleCitation(state, data),
 
       onQuotaWarning: (data) => this.quotaWarningService.setWarning(data as QuotaWarning),
+      onQuotaSessionNotice: (data) =>
+        this.quotaWarningService.setSessionNotice(data as QuotaSessionNotice),
       onQuotaExceeded: (data) => this.quotaWarningService.setQuotaExceeded(data as QuotaExceeded),
 
       onOAuthRequired: (data: OAuthRequiredEvent) => {

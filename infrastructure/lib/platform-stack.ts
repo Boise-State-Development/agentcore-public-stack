@@ -665,13 +665,11 @@ export class PlatformStack extends cdk.Stack {
     });
 
     // ============================================================
-    // Prompt-cache observability — cross-service dashboard + alarms
-    // over the EMF metrics both APIs emit (PR #697 follow-up).
-    // Metric-namespace-based, so no typed refs are needed.
+    // Prompt-cache observability moved into the compute-wiring phase: its
+    // Logs Insights widgets need the runtime's real log group name, which
+    // only the Runtime resource knows (service-created, named after the
+    // AWS-assigned runtime id). See wireComputeLayer below.
     // ============================================================
-    new PromptCacheObservabilityConstruct(this, 'PromptCacheObservability', {
-      config,
-    });
   }
 
   /**
@@ -771,6 +769,15 @@ export class PlatformStack extends cdk.Stack {
       codeInterpreterId: this.agentCoreCodeInterpreterId,
       browserArn: this.agentCoreBrowserArn,
       browserId: this.agentCoreBrowserId,
+    });
+
+    // Cross-service dashboard + alarms over the EMF metrics both APIs emit
+    // (PR #697, extended by #838). Constructed here rather than alongside the
+    // other platform-level observability because it needs the runtime's log
+    // group name from the construct above.
+    new PromptCacheObservabilityConstruct(this, 'PromptCacheObservability', {
+      config: this._config,
+      runtimeLogGroupName: inferenceApi.runtimeLogGroupName,
     });
 
     const sagemakerPrivateSubnetIds = this.vpc.privateSubnets

@@ -639,17 +639,46 @@ export class ShareAgentDialogComponent {
 
   /**
    * Submittable states, mirroring the backend transition table: never submitted,
-   * withdrawn (`private`), returned (`changes_requested`) or delisted (`taken_down`).
-   * `in_review` and `published` are absent — there is nothing to submit.
+   * withdrawn (`private`), returned (`changes_requested`), delisted (`taken_down`) — and
+   * `published`, which is how an author ships an **update**.
+   *
+   * `published` belongs here because edits to a published agent land on the draft and
+   * reach nobody until a new version is approved: submitting again is the only route to
+   * users.
+   *
+   * The two absences are the two states with a decision already pending: `in_review` has a
+   * submission in the queue, and `withdrawal_requested` is waiting on an admin who may yet
+   * take the listing down — neither has an edge to `in_review`, so a button here would be a
+   * dead click.
    */
   protected readonly canSubmit = computed(() => {
     const state = this.listingState();
-    return !state || state === 'private' || state === 'changes_requested' || state === 'taken_down';
+    return state !== 'in_review' && state !== 'withdrawal_requested';
   });
 
-  protected readonly submitLabel = computed(() =>
-    this.listingState() ? 'Submit again' : 'Submit to marketplace',
-  );
+  /**
+   * True while the thing being submitted (or already submitted) sits on top of a version
+   * users can currently see. `changes_requested` counts: an admin who requests changes on
+   * a live listing deliberately leaves it published while the author revises.
+   */
+  private updatesLiveListing(state: ListingState | undefined): boolean {
+    return (
+      !!this.listing()?.publishedVersion &&
+      (state === 'published' || state === 'changes_requested' || state === 'in_review')
+    );
+  }
+
+  /** A submission sitting on top of a listing users can see — cancellable, not withdrawable. */
+  protected readonly hasPendingUpdate = computed(() => {
+    const l = this.listing();
+    return l?.state === 'in_review' && !!l.submittedFrom && this.updatesLiveListing(l.state);
+  });
+
+  protected readonly submitLabel = computed(() => {
+    const state = this.listingState();
+    if (!state) return 'Submit to marketplace';
+    return this.updatesLiveListing(state) ? 'Submit an update' : 'Submit again';
+  });
 
   /**
    * `taken_down` is present now: the machine gained a `taken_down → private` author edge.
@@ -685,8 +714,14 @@ export class ShareAgentDialogComponent {
   /**
    * "Request withdrawal" on a live listing, not "Unpublish" (§5.1) — the author no longer
    * owns that edge, and "Unpublish" promised an outcome the button cannot deliver.
+   *
+   * A pending *update* is the third case and needs its own word: the author is taking back
+   * an edit, not asking for anything to come down, and the listing goes on serving what it
+   * always was. Labelling that "Withdraw submission" would read as though the live listing
+   * were at stake.
    */
   protected readonly withdrawLabel = computed(() => {
+    if (this.hasPendingUpdate()) return 'Cancel update';
     switch (this.listingState()) {
       case 'published':
         return 'Request withdrawal';
@@ -857,6 +892,27 @@ export class ShareAgentDialogComponent {
 
   protected async onWithdrawListing(): Promise<void> {
     const name = this.data.agent.name;
+    // A pending update is a different act with a different outcome, and it is neither
+    // destructive nor a request: the listing keeps serving its approved version either way.
+    // Confirmed anyway, because the edit being taken back is work the author may not have
+    // saved anywhere else — they resubmit from the draft, they do not get the snapshot back.
+    if (this.hasPendingUpdate()) {
+      const cancelRef = this.dialog.open<boolean>(ConfirmationDialogComponent, {
+        data: {
+          title: 'Cancel this update?',
+          message:
+            `The version of "${name}" in the store now stays live and unchanged — this ` +
+            'only takes back the update waiting for review. Your edits stay on the agent, ' +
+            'so you can submit again whenever you want.',
+          confirmText: 'Cancel update',
+          cancelText: 'Keep it in review',
+        } as ConfirmationDialogData,
+      });
+      if (!(await firstValueFrom(cancelRef.closed))) return;
+      await this.runWithdraw(`Could not cancel the update to "${name}".`);
+      return;
+    }
+
     const published = this.isPublished();
     const takenDown = this.isTakenDown();
     const confirmRef = this.dialog.open<boolean>(ConfirmationDialogComponent, {
@@ -891,19 +947,28 @@ export class ShareAgentDialogComponent {
 
     if (!(await firstValueFrom(confirmRef.closed))) return;
 
+    await this.runWithdraw(
+      published ? `Could not request withdrawal of "${name}".` : `Could not withdraw "${name}".`,
+    );
+  }
+
+  /**
+   * The one call all three acts make (§5.1) — cancel an update, withdraw a submission, or
+   * request a delisting. Which one it was is the backend's to decide from the listing, so
+   * the SPA sends the same DELETE and reflects whatever state comes back.
+   *
+   * `fallback` is used only when the error carries no `detail`. The backend's own message
+   * names the actual reason, and replacing it with a generic line has bitten this feature
+   * before — it told authors to "try again" for something retrying could never fix.
+   */
+  private async runWithdraw(fallback: string): Promise<void> {
     this.listingBusy.set(true);
     this.listingError.set(null);
     try {
       this.listing.set(await this.listingService.withdraw(this.data.agent.assistantId));
     } catch (err) {
       const detail = (err as { error?: { detail?: unknown } })?.error?.detail;
-      this.listingError.set(
-        typeof detail === 'string'
-          ? detail
-          : published
-            ? `Could not request withdrawal of "${name}".`
-            : `Could not withdraw "${name}".`,
-      );
+      this.listingError.set(typeof detail === 'string' ? detail : fallback);
     } finally {
       this.listingBusy.set(false);
     }

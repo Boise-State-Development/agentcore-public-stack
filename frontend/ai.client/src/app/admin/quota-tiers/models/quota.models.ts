@@ -18,6 +18,13 @@ export enum QuotaEventType {
   BLOCK = 'block',
   RESET = 'reset',
   OVERRIDE_APPLIED = 'override_applied',
+  /**
+   * A single conversation reached the tier's session-notice share of the
+   * monthly limit. `metadata.session_id` names which one, and
+   * `currentUsage` is that conversation's cost — not the user's period
+   * total, as it is on every other event type.
+   */
+  SESSION_NOTICE = 'session_notice',
 }
 
 export type PeriodType = 'daily' | 'monthly';
@@ -39,6 +46,17 @@ export interface QuotaTier {
 
   // Soft limits
   softLimitPercentage: number;
+  /**
+   * Warning rungs below the soft limit. Absent means the platform default
+   * (50% and 75%); an empty array opts the tier out of them.
+   */
+  earlyWarningPercentages?: number[] | null;
+  /**
+   * Share of the monthly limit at which a SINGLE conversation is called out
+   * to the user (default 25%, 0 disables) — the per-session runway that the
+   * per-user percentages above are blind to.
+   */
+  sessionNoticePercentage?: number;
   actionOnLimit: ActionOnLimit;
 
   // Metadata
@@ -56,6 +74,8 @@ export interface QuotaTierCreate {
   dailyCostLimit?: number;
   periodType: PeriodType;
   softLimitPercentage?: number;
+  earlyWarningPercentages?: number[] | null;
+  sessionNoticePercentage?: number;
   actionOnLimit?: ActionOnLimit;
   enabled?: boolean;
 }
@@ -67,6 +87,8 @@ export interface QuotaTierUpdate {
   dailyCostLimit?: number;
   periodType?: PeriodType;
   softLimitPercentage?: number;
+  earlyWarningPercentages?: number[] | null;
+  sessionNoticePercentage?: number;
   actionOnLimit?: ActionOnLimit;
   enabled?: boolean;
 }

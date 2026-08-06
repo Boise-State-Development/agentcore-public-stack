@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+
+from apis.shared.harness.runner import apply_runtime_session_header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -86,10 +88,13 @@ async def proxy_call(
     target_url = proxy_routes._build_invocations_url(
         proxy_routes._inference_api_url()
     )
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {current_user.raw_token}",
-    }
+    headers = apply_runtime_session_header(
+        {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {current_user.raw_token}",
+        },
+        body.session_id,
+    )
 
     client = proxy_routes._build_upstream_client()
     try:
@@ -190,10 +195,13 @@ async def update_context(
     target_url = proxy_routes._build_invocations_url(
         proxy_routes._inference_api_url()
     )
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {current_user.raw_token}",
-    }
+    headers = apply_runtime_session_header(
+        {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {current_user.raw_token}",
+        },
+        body.session_id,
+    )
 
     client = proxy_routes._build_upstream_client()
     try:

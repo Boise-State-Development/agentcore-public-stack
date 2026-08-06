@@ -33,6 +33,7 @@ from apis.shared.quota import (
     QuotaExceededEvent,
     build_no_quota_configured_event,
     build_quota_exceeded_event,
+    build_quota_session_notice_event,
     build_quota_warning_event,
     get_quota_checker,
     is_quota_enforcement_enabled,
@@ -51,6 +52,7 @@ from apis.shared.tools.injected import (
     SPREADSHEET_TOOL_IDS,
     WORD_DOCUMENT_TOOL_IDS,
     WORKSPACE_TOOL_IDS,
+    injected_tools_are_key_described,
 )
 from apis.shared.user_settings.repository import UserSettingsRepository
 
@@ -1092,6 +1094,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_type=effective_agent_type,
                 is_resume=False,
                 accessible_skill_ids=effective_skill_ids,
+                # This path builds no injected tools, but shares a cache slot
+                # with the real turns that do. Read the slot; never seed it.
+                cache_write=False,
             )
             payload = await dispatch_app_tool_call(
                 agent,
@@ -1140,6 +1145,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_type=effective_agent_type,
                 is_resume=False,
                 accessible_skill_ids=effective_skill_ids,
+                # Same partial-toolset hazard as app_tool_call above.
+                cache_write=False,
             )
             payload = dispatch_app_context_update(
                 agent,
@@ -1299,6 +1306,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     # Check quota if enforcement is enabled
     quota_warning_event = None
+    quota_session_notice_event = None
     quota_exceeded_event = None
     if is_quota_enforcement_enabled() and not is_resume and not is_continuation:
         try:
@@ -1319,6 +1327,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 quota_warning_event = build_quota_warning_event(quota_result)
                 if quota_warning_event:
                     logger.info("Quota warning for user")
+
+                # Independent of the per-user ladder: is THIS conversation
+                # eating the month? (#833 PR-5 — the incident session spent
+                # 90% of a user's quota while every per-user warning stayed
+                # quiet until the day the block landed.)
+                quota_session_notice_event = build_quota_session_notice_event(quota_result)
+                if quota_session_notice_event:
+                    logger.info("Quota session notice for user")
 
         except Exception as e:
             # Log error but don't block request - fail open for quota errors
@@ -2009,10 +2025,24 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,
-            ) + _build_memory_tools(
+            )
+
+            memory_tools = _build_memory_tools(
                 agent_memory=agent_memory,
                 user_id=user_id,
                 user_email=current_user.email,
+            )
+            extra_tools = extra_tools + memory_tools
+
+            # Can this turn's agent be cached despite carrying injected tools?
+            # Only when every builder that fired closes over values the cache
+            # key already carries (session, user, enabled_tools). Derived from
+            # the same `effective_enabled_tools` that goes into the key below —
+            # passing the request's list here instead would let the predicate
+            # and the key disagree about which builders ran.
+            extra_tools_key_described = injected_tools_are_key_described(
+                enabled_tools=effective_enabled_tools,
+                has_memory_binding=bool(memory_tools),
             )
 
             agent = await get_agent(
@@ -2031,6 +2061,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 extra_tools=extra_tools,
                 is_resume=False,
                 accessible_skill_ids=effective_skill_ids,
+                extra_tools_key_described=extra_tools_key_described,
             )
 
         # Resume requests must target interrupts that the cached agent
@@ -2105,6 +2136,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Yield quota warning event first if applicable
             if quota_warning_event:
                 yield quota_warning_event.to_sse_format()
+
+            # …then the per-session notice. Separate surface, separate
+            # dismissal: "your month is 80% gone" and "this thread is a
+            # quarter of your month" are different actions for the user.
+            if quota_session_notice_event:
+                yield quota_session_notice_event.to_sse_format()
 
             # Yield citation events BEFORE the agent stream starts
             # This allows the UI to display sources immediately
