@@ -10,19 +10,6 @@ export interface CognitoConfig {
   // COGNITO is always included; entries here are added on top.
   supportedIdentityProviders?: string[];
   passwordMinLength?: number;  // Override default 8
-  // Public app client for the terminal client (CLI), which authenticates via
-  // authorization-code + PKCE with a loopback redirect (RFC 8252). Separate
-  // from the BFF client because that one is confidential: PKCE against it
-  // would still require its secret, which must never ship in a CLI.
-  //
-  // Cognito matches redirect URIs byte-for-byte and does NOT honour RFC 8252's
-  // "treat the port as variable for loopback" rule, so every port the CLI may
-  // bind has to be registered up front. Several are registered so a port
-  // conflict is recoverable.
-  cliClient?: {
-    enabled: boolean;
-    callbackPorts: number[];
-  };
 }
 
 export interface AppConfig {
@@ -447,18 +434,6 @@ export function loadConfig(scope: cdk.App): AppConfig {
       passwordMinLength: parseIntEnv(process.env.CDK_COGNITO_PASSWORD_MIN_LENGTH)
         || scope.node.tryGetContext('cognito')?.passwordMinLength
         || 8,
-      cliClient: {
-        enabled: parseBooleanEnv(process.env.CDK_COGNITO_CLI_CLIENT_ENABLED)
-          ?? scope.node.tryGetContext('cognito')?.cliClient?.enabled
-          ?? true,
-        callbackPorts: (
-          process.env.CDK_COGNITO_CLI_CALLBACK_PORTS?.split(',')
-            .map((p) => parseInt(p.trim(), 10))
-            .filter((p) => Number.isInteger(p) && p > 1024 && p < 65536)
-          || scope.node.tryGetContext('cognito')?.cliClient?.callbackPorts
-          || [8976, 8977, 8978]
-        ),
-      },
     },
     frontend: {
       certificateArn: process.env.CDK_FRONTEND_CERTIFICATE_ARN || scope.node.tryGetContext('frontend').certificateArn,

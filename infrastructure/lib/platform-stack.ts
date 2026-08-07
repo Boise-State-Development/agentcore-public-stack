@@ -149,8 +149,6 @@ export class PlatformStack extends cdk.Stack {
   public readonly userPool: cognito.IUserPool;
   public readonly bffAppClient: cognito.IUserPoolClient;
   public readonly bffAppClientSecret: secretsmanager.ISecret;
-  /** Public PKCE client for the terminal client; undefined when disabled. */
-  public readonly cliAppClient?: cognito.IUserPoolClient;
   public readonly cognitoDomain: cognito.UserPoolDomain;
 
   // ── Data tables
@@ -309,7 +307,6 @@ export class PlatformStack extends cdk.Stack {
     this.userPool = cognitoConstruct.userPool;
     this.bffAppClient = cognitoConstruct.bffAppClient;
     this.bffAppClientSecret = cognitoConstruct.bffAppClientSecret;
-    this.cliAppClient = cognitoConstruct.cliAppClient;
     this.cognitoDomain = cognitoConstruct.cognitoDomain;
 
     // MCP user-identity forwarding — optional Cognito Pre-Token-Generation v2
@@ -701,7 +698,6 @@ export class PlatformStack extends cdk.Stack {
       userPool: this.userPool,
       bffAppClient: this.bffAppClient,
       bffAppClientSecret: this.bffAppClientSecret,
-      cliAppClient: this.cliAppClient,
       cognitoDomain: this.cognitoDomain,
       cognitoIssuerUrl: `https://cognito-idp.${this._config.awsRegion}.amazonaws.com/${this.userPool.userPoolId}`,
       cognitoDomainUrl: `https://${this.cognitoDomain.domainName}.auth.${this._config.awsRegion}.amazoncognito.com`,
