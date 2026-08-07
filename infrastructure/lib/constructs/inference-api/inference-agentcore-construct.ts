@@ -235,15 +235,6 @@ export class InferenceAgentCoreConstruct extends Construct {
     // when the chat proxy on app-api forwards them to /invocations.
     const cognitoAppClientId = props.refs.bffAppClient.userPoolClientId;
 
-    // The terminal client authenticates directly with a Cognito access token
-    // from its own public PKCE client, so that client id must also be allowed
-    // here or /invocations 401s before the handler ever runs. `allowedClients`
-    // (not `allowedAudience`) because Cognito access tokens carry `client_id`.
-    const allowedClientIds = [
-      cognitoAppClientId,
-      ...(props.refs.cliAppClient ? [props.refs.cliAppClient.userPoolClientId] : []),
-    ];
-
     // Construct Cognito OIDC discovery URL
     const cognitoDiscoveryUrl = `https://cognito-idp.${config.awsRegion}.amazonaws.com/${cognitoUserPoolId}/.well-known/openid-configuration`;
 
@@ -291,7 +282,7 @@ export class InferenceAgentCoreConstruct extends Construct {
       authorizerConfiguration: {
         customJwtAuthorizer: {
           discoveryUrl: cognitoDiscoveryUrl,
-          allowedClients: allowedClientIds,
+          allowedClients: [cognitoAppClientId],
         },
       },
       roleArn: runtimeExecutionRole.roleArn,
@@ -407,11 +398,21 @@ export class InferenceAgentCoreConstruct extends Construct {
         // Authentication
         ENABLE_QUOTA_ENFORCEMENT: 'true',
 
-        // Quota runway (#833 PR-5): earlier warning rungs (50%/75%) plus the
-        // per-session `quota_session_notice`. Default ON — set to 'false' to
-        // fall back to the soft-limit/90% pair and silence the session
-        // notice, which is the kill switch for both halves at once.
-        QUOTA_RUNWAY_ENABLED: 'true',
+        // ⚠️ NO ROOM FOR NEW VARIABLES HERE — see the assertion in
+        // test/inference-agentcore-construct.test.ts. `AWS::BedrockAgentCore::Runtime`
+        // caps EnvironmentVariables at 50 and this construct is AT the cap.
+        // Adding one more fails CloudFormation's *changeset validation* — after
+        // synth, after tsc, after jest, after CI is green. It broke the dev
+        // Platform Stack deploy on 2026-08-05 (`maximum size: [50], found: [51]`,
+        // adding QUOTA_RUNWAY_ENABLED for #833 PR-5).
+        //
+        // To add a flag you must first free a slot: retire a dead variable, or
+        // fold several booleans into one delimited FEATURE_FLAGS value. A
+        // code-level flag that reads `os.environ` and defaults ON needs no entry
+        // here at all — that is why QUOTA_RUNWAY_ENABLED is absent and the quota
+        // runway is still on. Setting such a flag to a non-default value in a
+        // deployed environment requires an out-of-band Runtime update until a
+        // slot is freed.
 
         // Directories
         UPLOAD_DIR: '/tmp/uploads',

@@ -75,9 +75,8 @@ describe('PlatformStack', () => {
       template.resourceCountIs('AWS::Cognito::UserPool', 1);
     });
 
-    it('creates Cognito user pool clients', () => {
-      // Two: the confidential BFF client and the public CLI client.
-      template.resourceCountIs('AWS::Cognito::UserPoolClient', 2);
+    it('creates Cognito user pool client', () => {
+      template.resourceCountIs('AWS::Cognito::UserPoolClient', 1);
     });
 
     it('creates Cognito domain', () => {

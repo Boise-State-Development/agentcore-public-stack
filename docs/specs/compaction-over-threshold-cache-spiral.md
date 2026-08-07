@@ -1,9 +1,10 @@
 # Compaction over-threshold cache spiral — stop paying a full prefix re-write on every turn
 
-**Status:** PR-1 shipped (#838, merged 2026-08-05 — see "As shipped" under §3
-PR-1, which differs from what this section originally specified). PR-5 built
-2026-08-05 (quota runway — see "As shipped" under §3 PR-5; its acceptance
-replay moved one of §3's own numbers). PR-2 through PR-4 unbuilt.
+**Status:** PR-1 shipped (#838). PR-5 shipped (#845 — see "As shipped" under
+§3 PR-5; its acceptance replay moved one of §3's own numbers). PR-2 through
+PR-4 unbuilt. **§4.1's adversarial re-scan is run** (2026-08-05, results
+inline below): D2 and D3 both reproduce on sessions other than the incident's,
+and the harm is already multi-user.
 **Motivating incident:** prod, 2026-08-05 analysis. One faculty user exhausted
 their $30/month quota in 5 days on a **single conversation** (session
 `c94a3172-e1fb-4a1d-b375-6e51a56c75ad`, an essay-editing session created
@@ -88,6 +89,10 @@ incident is its worst single-session expression.
 
 ### D2 — the compaction summary is a log, not a compression, and is unbounded
 
+*Confirmed fleet-wide 2026-08-05 (§4.1): 15 sessions already exceed the budget
+PR-2 proposes, and the largest summary in prod — 174,952 chars — belongs to a
+different user's conversation, not this incident's.*
+
 `_retrieve_session_summaries`
 ([turn_based_session_manager.py:612](../../backend/src/agents/main_agent/session/turn_based_session_manager.py:612))
 fetches up to `maxResults=100` LTM records and `update_after_turn` joins **all
@@ -101,6 +106,11 @@ under — the session can *never* compact below 100k, so `Threshold exceeded`
 fires every turn forever.
 
 ### D3 — the restored prefix is not byte-stable turn-to-turn
+
+*Confirmed fleet-wide 2026-08-05 (§4.1): the checkpoint/anchor coordinate
+mismatch appears on 199 of 1,238 rows carrying both, never in the opposite
+direction — so it is a coordinate-system defect, not this session's history
+shape.*
 
 Proven by the token accounting (11k reads at 60s gaps, same tool/system
 hashes), not yet root-caused to the byte. Two anomalies point the way:
@@ -126,14 +136,29 @@ on genuine cold starts. The bypass converts a cold-start-only defect into an
 every-turn tax. Both fixes are needed: the bypass fix makes instability *rare*,
 the byte-stability fix makes it *harmless*.
 
-### D4 — a secondary buster: the system prompt mutates mid-session
+### D4 — the system prompt mutates mid-session — **the most general defect here**
 
 `systemPromptHash` changed between each day's visit *and* twice mid-burst
 (cache read dropped 11,278 → 8,929 both times). The memory-augmented system
 prompt (UserPreference / SemanticFact retrievals, 10 records each, per turn)
 re-writes the system+history segments whenever extraction lands new records —
-including records extracted *from the very conversation in progress*. Small
-next to D2/D3, but it breaks the prefix at an earlier cachePoint when it fires.
+including records extracted *from the very conversation in progress*.
+
+**Re-ranked 2026-08-05.** This section previously read "small next to D2/D3."
+That judgement was made *inside* one incident, where it was true. Measured
+across all 2,483 multi-call prod conversations
+(`docs/one-pagers/fleet-prefix-spend-anatomy.md`), `systemPromptHash` changes
+on **4.6% of call-to-call transitions, affecting 12.3% of multi-turn
+conversations** — against 0.6% / 2.8% for `toolConfigHash`, which says the
+ordering contract is holding and the memory retrieval is what moves. $53.39 of
+cache-write spend landed on the call immediately after such a flip.
+
+D2 and D3 are bounded to conversations long enough to compact. **D4 is not
+bounded at all** — it applies to every conversation belonging to a user with
+extracted memories, at any length. It is also the cheapest fix in this
+document (freeze the retrieved blocks for the visit; PR-4). Rank it
+accordingly: it is not a footnote to the spiral, it is the one defect here
+that every conversation pays.
 
 ### D5 — quota warnings gave the user no runway — FIXED (PR-5)
 
@@ -409,6 +434,59 @@ the offload validation doc) must:
   conditional-TTL-policy magnitudes from the first pass. Assume some §1
   numbers will move; the plan survives if the *shape* (writes dominate,
   history segment never hits) survives.
+
+#### Results — run 2026-08-05
+
+Method: `backend/scripts/scan_fleet_prefix_spend.py --sections cohort`
+(read-only, content-free; summary text is measured, never printed or
+persisted). The fleet-wide half of the same scan is written up separately in
+`docs/one-pagers/fleet-prefix-spend-anatomy.md`.
+
+**Denominator, stated once:** 3,048 session rows carry a `totalCost`; **760
+(20.0%) do not** and are excluded as *unknown*, never as $0 — the exact
+understatement the offload validation warned about, still unfixed. Recorded
+session spend: $786.83.
+
+| question | answer |
+|---|---|
+| sessions over `COMPACTION_TOKEN_THRESHOLD` | **49 (1.63%)**, $172.46 — **21.9%** of recorded session spend |
+| …median over-threshold session | $1.22 (the cohort's spend is carried by ~5 conversations) |
+| …**and** write:read > 3 (the spiral's actual shape) | **2 sessions, $43.98 (5.6%)** |
+| persisted summaries, non-empty | 47 · median 20,118 chars · **max 174,952 (~43.7k tokens)** |
+| …over PR-2's 8k-token budget | **15 (31.9%)**, holding $137.20 |
+| `truncationAnchor` ≠ `checkpoint` | **199 of 1,238 rows (16.1%)**; 8 of 23 over-threshold sessions |
+
+**D2 reproduces, and the incident is not the worst case.** Session
+`3a8f3b20…` carries a **174,952-char** summary — larger than the incident's
+164,991 — on a $20.37 conversation belonging to a different user. The ratchet
+is visible in the data: median summary length rises from ~20k chars at 0–9
+summarized turns to 34k at 10–19, and max from 34k → 175k (correlation 0.46,
+n=47 — directional, small buckets). Note the floor: even at **zero**
+summarized turns the median summary is 20,534 chars. It starts large and only
+grows.
+
+**D3 reproduces and is not session-specific.** The anchor exceeds the
+checkpoint on 199 rows and is *never* below it — consistent with §2's reading
+that one coordinate is window-relative and the other absolute. The three
+largest over-threshold sessions sit at 34/68, 32/62, 32/57.
+
+**The harm is already multi-user.** Five distinct users have `block` events
+recorded (11 of 12 blocks in July 2026), and four of those five appear in the
+top six over-threshold spenders. The incident user has **no** `block` event
+because an admin granted a **$30 → $60 override on 2026-08-04, reason "bug
+caused quota to be reached"** — so §3's "Deferred: quota credit for the
+affected user" was already actioned in prod, by hand, and this document did
+not know it. D5's phrase "the same day the `block` landed" should read *the
+day the quota was exhausted*: that session kept spending into 2026-08-05 and
+reached $35.43 against a $30 limit.
+
+**What did not survive.** Nothing in §1's shape. What moved is the *framing*:
+sized as a share of today's sessions the cohort is 1.63%, which reads small —
+but the platform is at its lowest traffic ever, the ratchet is monotonic in
+conversation age rather than in fleet volume, and the conditional rate is the
+honest one: **of conversations that get long enough to compact at all, 32%
+already exceed the budget PR-2 proposes.** Ranking this epic on cohort share
+would defer a mechanism that has already cost six users their quota.
 
 ### 4.2 Cost outcome: arm-separated attribution, not a before/after blur
 
