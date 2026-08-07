@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from agentcore_tui import cli, keyring_store
+from agentcore_tui import cli
 from agentcore_tui.client.device_auth import DeviceAuthorization, DeviceSession
 from agentcore_tui.config import ENV_API_KEY, ENV_BASE_URL, read_config_file
 from agentcore_tui.errors import ConfigError, DeviceAuthDeniedError
@@ -273,10 +273,9 @@ class TestLoginSso:
 class TestLogout:
     @pytest.fixture(autouse=True)
     def no_real_keyring(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Logout touches three services. Stub them all, or tests hit the host."""
+        """Logout touches two services. Stub both, or tests hit the host."""
         monkeypatch.setattr(cli, "delete_key_from_keyring", lambda _: False)
         monkeypatch.setattr(cli, "delete_session_from_keyring", lambda _: False)
-        monkeypatch.setattr(keyring_store, "delete", lambda *_a: False)
 
     def test_reports_removal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         monkeypatch.setattr(cli, "delete_key_from_keyring", lambda _: True)
@@ -289,25 +288,6 @@ class TestLogout:
         exit_code = cli.main(["logout", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
         assert exit_code == 0
         assert "Removed the stored session" in capsys.readouterr().out
-
-    def test_clears_a_refresh_token_left_by_the_reverted_build(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Nothing writes that service any more, but an upgrading user may hold
-        one, and leaving a live refresh token behind on an explicit logout would
-        be wrong."""
-        asked: list[str] = []
-
-        def fake_delete(service: str, _base_url: str) -> bool:
-            asked.append(service)
-            return service == keyring_store.LEGACY_SSO_SERVICE
-
-        monkeypatch.setattr(keyring_store, "delete", fake_delete)
-        exit_code = cli.main(["logout", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
-
-        assert exit_code == 0
-        assert keyring_store.LEGACY_SSO_SERVICE in asked
-        assert "older version" in capsys.readouterr().out
 
     def test_reports_when_there_was_nothing_to_remove(self, tmp_path: Path) -> None:
         exit_code = cli.main(["logout", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])

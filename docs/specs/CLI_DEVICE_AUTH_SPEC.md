@@ -339,9 +339,17 @@ current occupancy; it sends a final per-call `metadata` instead. Consequences:
    the `--provider` flag. `CredentialSource.SSO_SESSION` became `BFF_SESSION` and
    `BearerAuth` was deleted rather than left as a seam: it existed for a CLI that
    minted its own tokens, which is the design #850 reverted. `AuthProvider` is
-   the seam; a provider is not. The retired keyring service survives as
-   `LEGACY_SSO_SERVICE`, read only by `logout`, so an upgrading user does not
-   silently keep a live refresh token.
+   the seam; a provider is not.
+
+   No migration path was kept for the retired `agentcore-tui-sso` keyring
+   service, and that is deliberate. The package has never been published, the
+   PKCE login existed on this branch for about one day, and the revert deleted
+   the Cognito app client — so any refresh token still sitting in a developer's
+   keyring is already unusable, because Cognito rejects a refresh for a client
+   that no longer exists. A `LEGACY_SSO_SERVICE` constant would have implied a
+   released user base that does not exist. Clear a stale entry by hand if you
+   have one:
+   `python3 -c "import keyring; keyring.delete_password('agentcore-tui-sso', '<base-url>')"`.
 4. **Turn wiring** — see the open question below.
 5. **`cancel()` must interrupt server-side** — `TurnController.cancel()` is local
    only today. Against the agent endpoint it must also

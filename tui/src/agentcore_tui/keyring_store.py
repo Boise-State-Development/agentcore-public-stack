@@ -13,12 +13,6 @@ revoking one cannot disturb the other:
 ``agentcore-tui-session``    Sealed BFF sessions (CLI device auth)
 ============================ =========================================
 
-A third service, ``agentcore-tui-sso``, held OIDC refresh tokens for the CLI
-Cognito client that was reverted in #850. It is still *deleted* on logout so a
-user upgrading from that build does not leave a live refresh token in their
-keyring, but nothing writes it any more. Remove ``LEGACY_SSO_SERVICE`` once no
-one can plausibly be carrying one.
-
 Every operation degrades rather than raising on read. ``keyring`` raises on
 Linux hosts with no Secret Service — headless servers, containers, CI — and
 that must fall back to environment variables instead of crashing. Writes are
@@ -42,11 +36,6 @@ API_KEY_SERVICE = APP_NAME
 #: Keyring service for sealed BFF sessions from the CLI device-auth flow.
 #: Separate from API keys so revoking one credential cannot disturb the other.
 SESSION_SERVICE = f"{APP_NAME}-session"
-
-#: Retired: OIDC refresh tokens for the reverted CLI Cognito client (#850).
-#: Read and deleted on logout only, so an upgrading user does not silently keep
-#: a live refresh token. Never written.
-LEGACY_SSO_SERVICE = f"{APP_NAME}-sso"
 
 
 def account_for(base_url: str) -> str:

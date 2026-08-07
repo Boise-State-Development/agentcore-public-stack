@@ -284,18 +284,11 @@ class TestBannerResolution:
 class TestSessionKeyringAccessors:
     """The sealed session is stored under its own keyring *service*.
 
-    Separate from API keys so revoking one credential cannot disturb the other,
-    and separate from the retired SSO service so an upgrade does not read a
-    refresh token as if it were a session.
+    Separate from API keys so revoking one credential cannot disturb the other.
     """
 
-    def test_the_three_services_are_distinct(self) -> None:
-        services = {
-            keyring_store.API_KEY_SERVICE,
-            keyring_store.SESSION_SERVICE,
-            keyring_store.LEGACY_SSO_SERVICE,
-        }
-        assert len(services) == 3
+    def test_the_two_services_are_distinct(self) -> None:
+        assert keyring_store.API_KEY_SERVICE != keyring_store.SESSION_SERVICE
 
     def test_save_and_load_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
         vault: dict[tuple[str, str], str] = {}

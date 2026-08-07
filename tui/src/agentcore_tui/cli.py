@@ -266,15 +266,6 @@ def _command_logout(args: argparse.Namespace) -> int:
         print(f"Removed the stored API key for {config.base_url}.")
         removed_any = True
 
-    # Anyone who ran the reverted PKCE build (#850) may still hold a Cognito
-    # refresh token. Nothing writes that service any more, but leaving a live
-    # refresh token behind on an explicit logout would be wrong.
-    from . import keyring_store
-
-    if keyring_store.delete(keyring_store.LEGACY_SSO_SERVICE, config.base_url):
-        print("Removed a refresh token left by an older version.")
-        removed_any = True
-
     if not removed_any:
         print(f"Nothing stored for {config.base_url}.")
         return 1
