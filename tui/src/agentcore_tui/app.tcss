@@ -104,6 +104,144 @@ Screen {
     height: auto;
 }
 
+/* ------------------------------------------------------- agent-stream content */
+
+/* Everything in this section sets `height: auto` for the reason documented on
+ * `.message` above: a `1fr` container between #transcript and its text stops
+ * the transcript from ever being scrollable. */
+
+/* Tool calls. A dim left rule while running, accent once it succeeded, error
+ * colour if it failed — so a glance down the transcript shows where work
+ * happened and whether any of it broke. */
+.tool-call {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: thick $surface-lighten-2;
+    color: $text-muted;
+}
+
+.tool-call.-finished {
+    border-left: thick $success;
+}
+
+.tool-call.-error {
+    border-left: thick $error;
+    color: $error;
+}
+
+.tool-call-header {
+    height: auto;
+    text-style: bold;
+    padding-left: 1;
+}
+
+.tool-call-detail {
+    height: auto;
+    margin: 0;
+    color: $text-muted;
+}
+
+.tool-call-args,
+.tool-call-result {
+    height: auto;
+    color: $text-muted;
+}
+
+/* Collapsible renders its own contents container; it needs to size to content
+ * too or the pane clips its body when expanded. */
+.tool-call-detail Contents,
+.citations-detail Contents {
+    height: auto;
+}
+
+/* Citations. */
+.citations {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: thick $secondary;
+    color: $text-muted;
+}
+
+.citations .message-role {
+    color: $secondary;
+}
+
+.citation-source {
+    height: auto;
+    color: $text-muted;
+}
+
+.citations-detail {
+    height: auto;
+    margin: 0;
+}
+
+/* Quota. Warnings inherit `.notice`'s warning rule; a hard stop adds
+ * `.-error`, which `.notice.-error` already colours. */
+.quota-notice {
+    height: auto;
+}
+
+.quota-notice .message-role {
+    color: $warning;
+    height: auto;
+}
+
+.quota-notice.-error .message-role {
+    color: $error;
+}
+
+/* Compaction is informational, not a warning — a muted rule keeps it from
+ * reading as something that went wrong. */
+.compaction-notice {
+    height: auto;
+    border-left: thick $surface-lighten-2;
+}
+
+/* Artifacts. */
+.artifact-card {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: thick $success;
+}
+
+.artifact-card .message-role {
+    color: $success;
+}
+
+.artifact-title {
+    height: auto;
+    text-style: bold;
+    color: $text;
+}
+
+/* Interrupts are actionable, not failures. */
+.interrupt-notice {
+    height: auto;
+    border-left: thick $primary;
+    color: $text;
+}
+
+.interrupt-notice .message-role {
+    color: $primary;
+    height: auto;
+}
+
+/* The consent URL must survive a copy-paste, so it is not wrapped or styled
+ * into something a terminal will not linkify. */
+.interrupt-url {
+    height: auto;
+    color: $accent;
+    text-style: underline;
+    padding: 1 0;
+}
+
 /* ------------------------------------------------------------------- composer */
 
 #composer-area {
