@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentcore_tui.client.auth import ApiKeyAuth, AuthProvider, BearerAuth, NoAuth
+from agentcore_tui.client.auth import ApiKeyAuth, AuthProvider, NoAuth, SessionAuth
 from agentcore_tui.client.endpoints import Endpoints
 from agentcore_tui.credentials import CAPABILITIES, Capability, CredentialSource, resolve_source
 
@@ -21,9 +21,9 @@ class TestResolution:
     def test_an_api_key_resolves_to_api_key(self) -> None:
         assert resolve_source(base_url="https://h", api_key="k") is CredentialSource.API_KEY
 
-    def test_a_stored_session_resolves_to_sso(self) -> None:
+    def test_a_stored_session_resolves_to_a_bff_session(self) -> None:
         source = resolve_source(base_url="https://h", api_key=None, session_probe=lambda _: True)
-        assert source is CredentialSource.SSO_SESSION
+        assert source is CredentialSource.BFF_SESSION
 
     def test_nothing_stored_resolves_to_none(self) -> None:
         source = resolve_source(base_url="https://h", api_key=None, session_probe=lambda _: False)
@@ -31,9 +31,12 @@ class TestResolution:
 
     def test_api_key_currently_wins_over_a_session(self) -> None:
         """Not because it is better — a session is strictly more capable — but
-        because no bearer transport exists yet, so selecting a session would
-        select a path that cannot issue a request. Flip this, and this test,
-        when the app-api bearer branch lands."""
+        because the only transport built today is converse.py, which speaks
+        POST /chat/api-converse, and that endpoint authenticates with X-API-Key
+        and nothing else. Preferring a session would select a credential the
+        working transport cannot present.
+
+        Flip this, and this test, when client/agent_stream.py lands."""
         source = resolve_source(base_url="https://h", api_key="k", session_probe=lambda _: True)
         assert source is CredentialSource.API_KEY
 
@@ -47,7 +50,7 @@ class TestUsability:
     def test_none_is_not_usable(self) -> None:
         assert CredentialSource.NONE.usable is False
 
-    @pytest.mark.parametrize("source", [CredentialSource.API_KEY, CredentialSource.SSO_SESSION])
+    @pytest.mark.parametrize("source", [CredentialSource.API_KEY, CredentialSource.BFF_SESSION])
     def test_real_credentials_are_usable(self, source: CredentialSource) -> None:
         assert source.usable is True
 
@@ -67,7 +70,7 @@ class TestCapabilities:
 
     def test_a_session_reaches_everything(self) -> None:
         for capability in Capability:
-            assert CredentialSource.SSO_SESSION.can(capability) is True
+            assert CredentialSource.BFF_SESSION.can(capability) is True
 
     def test_no_credential_reaches_nothing(self) -> None:
         for capability in Capability:
@@ -102,33 +105,51 @@ class TestEndpoints:
         """Ids are client-minted, so a caller could supply anything."""
         assert Endpoints("https://h").session("a/b?c") == "https://h/sessions/a%2Fb%3Fc"
 
+    def test_device_auth_endpoints(self) -> None:
+        endpoints = Endpoints("https://h/api/")
+        assert endpoints.cli_authorize == "https://h/api/auth/cli/authorize"
+        assert endpoints.cli_token == "https://h/api/auth/cli/token"
+        assert endpoints.auth_session == "https://h/api/auth/session"
+
+    def test_there_is_no_verify_url_builder(self) -> None:
+        """`/auth/cli/verify` is deliberately absent.
+
+        The server returns `verification_uri_complete`, derived from its own
+        `BFF_AUTH_CALLBACK_URL`. A client that built the URL itself would send
+        users to the wrong host on any deployment whose routing differs, and
+        would silently stop working when the server's derivation changed.
+        """
+        assert not hasattr(Endpoints("https://h"), "cli_verify")
+
 
 class TestAuthProviders:
     async def test_api_key_sets_the_header_app_api_expects(self) -> None:
         assert await ApiKeyAuth("secret").headers() == {"X-API-Key": "secret"}
 
-    async def test_bearer_awaits_its_supplier_each_time(self) -> None:
-        """Caching would keep sending a token after it expired."""
-        tokens = iter(["first", "second"])
+    async def test_session_sends_the_bff_scheme_the_middleware_looks_for(self) -> None:
+        """`BFF`, not `Bearer`.
 
-        async def supply() -> str:
-            return next(tokens)
-
-        auth = BearerAuth(supply)
-        assert await auth.headers() == {"Authorization": "Bearer first"}
-        assert await auth.headers() == {"Authorization": "Bearer second"}
+        `sealed_session_from_header` in app-api's SessionRefreshMiddleware
+        matches on this scheme. Sending `Bearer` would fall through to the
+        no-credential path and 401.
+        """
+        assert await SessionAuth("sealed").headers() == {"Authorization": "BFF sealed"}
 
     async def test_no_auth_sends_nothing(self) -> None:
         assert await NoAuth().headers() == {}
 
     def test_sources_are_reported(self) -> None:
         assert ApiKeyAuth("k").source is CredentialSource.API_KEY
-        assert BearerAuth(lambda: None).source is CredentialSource.SSO_SESSION  # type: ignore[arg-type,return-value]
+        assert SessionAuth("sealed").source is CredentialSource.BFF_SESSION
         assert NoAuth().source is CredentialSource.NONE
 
     def test_the_key_never_appears_in_a_repr(self) -> None:
         assert "secret" not in repr(ApiKeyAuth("secret"))
 
-    @pytest.mark.parametrize("provider", [ApiKeyAuth("k"), NoAuth()])
+    def test_the_sealed_session_never_appears_in_a_repr(self) -> None:
+        """It is a bearer credential for the whole account."""
+        assert "sealed-value" not in repr(SessionAuth("sealed-value"))
+
+    @pytest.mark.parametrize("provider", [ApiKeyAuth("k"), NoAuth(), SessionAuth("s")])
     def test_implementations_satisfy_the_protocol(self, provider: object) -> None:
         assert isinstance(provider, AuthProvider)

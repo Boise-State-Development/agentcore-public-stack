@@ -14,15 +14,17 @@ from pathlib import Path
 import httpx
 
 from . import __version__
-from .auth import delete_refresh_token, describe_stored_session, load_refresh_token
 from .config import (
     ENV_API_KEY,
     ENV_BASE_URL,
     Config,
     config_path,
     delete_key_from_keyring,
+    delete_session_from_keyring,
+    load_session_from_keyring,
     resolve_config,
     save_key_to_keyring,
+    save_session_to_keyring,
     write_config_file,
 )
 from .errors import AgentCoreTuiError
@@ -105,17 +107,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
 
-    login = subparsers.add_parser("login", parents=[common], help="Sign in (browser SSO, or store an API key)")
+    login = subparsers.add_parser("login", parents=[common], help="Sign in through the browser, or store an API key")
     login.add_argument(
         "--sso",
         action="store_true",
-        help="Sign in through the browser with OIDC + PKCE instead of pasting an API key",
-    )
-    login.add_argument(
-        "--provider",
-        dest="provider",
-        default=None,
-        help="Jump straight to a federated identity provider by id (skips the chooser)",
+        help="Sign in through the browser instead of pasting an API key. Gets a real session, so tools, memory and conversations work.",
     )
     login.add_argument(
         "--api-key",
@@ -124,7 +120,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="API key value. Omit to be prompted without echo, which keeps it out of your shell history.",
     )
 
-    subparsers.add_parser("logout", parents=[common], help="Remove the stored API key")
+    subparsers.add_parser("logout", parents=[common], help="Remove stored credentials for this deployment")
     subparsers.add_parser("status", parents=[common], help="Show resolved configuration and check connectivity")
 
     return parser
@@ -143,60 +139,74 @@ def _command_login(args: argparse.Namespace) -> int:
 
 
 def _command_login_sso(args: argparse.Namespace) -> int:
-    """Interactive browser sign-in via authorization-code + PKCE."""
+    """Sign in through the browser using app-api's device-authorization flow.
+
+    No local HTTP server and no redirect: the client polls. That is what makes
+    it work from a container or over SSH, where a loopback redirect cannot be
+    received and Cognito would refuse a variable port anyway.
+    """
     import asyncio
 
-    from .auth import perform_login
+    from .client.device_auth import DeviceAuthClient
 
     config = resolve_config(base_url=args.base_url, config_file=args.config_file, use_keyring=False)
-    if not config.sso_configured:
-        missing = []
-        if not config.base_url:
-            missing.append("base URL")
-        if not config.cognito_domain_url:
-            missing.append("cognito_domain_url")
-        if not config.cli_client_id:
-            missing.append("cli_client_id")
-        print(f"error: SSO is not configured — missing {', '.join(missing)}.", file=sys.stderr)
-        print(f"       Add them to {args.config_file or config_path()}:", file=sys.stderr)
-        print('         cognito_domain_url = "https://<prefix>.auth.<region>.amazoncognito.com"', file=sys.stderr)
-        print('         cli_client_id = "<from SSM /<prefix>/auth/cognito/cli-app-client-id>"', file=sys.stderr)
+    if not config.base_url:
+        print(f"error: no base URL. Pass --base-url, or set {ENV_BASE_URL}.", file=sys.stderr)
         return 2
 
-    print(f"Signing in to {config.base_url}")
-    print("A browser window will open. Complete sign-in there, then return here.")
-
     async def run() -> int:
-        outcome, url = await perform_login(
-            base_url=config.base_url,
-            domain_url=config.cognito_domain_url or "",
-            client_id=config.cli_client_id or "",
-            ports=config.callback_ports,
-            identity_provider=getattr(args, "provider", None),
-        )
-        # Printed unconditionally: browser launch fails silently on headless
-        # hosts, over SSH, and in some WSL setups.
-        print(f"\nIf no browser opened, visit:\n  {url}\n")
-        claims = _describe_identity(outcome.tokens.access_token)
-        print(f"Signed in{claims}.")
-        print(f"Access token valid for {outcome.tokens.seconds_remaining // 60} minutes.")
-        if outcome.refresh_token_stored:
-            print("Session saved to the OS keyring; it will renew automatically.")
-        else:
-            reason = outcome.keyring_error or "no refresh token issued"
-            print(f"warning: session not saved ({reason}). You will need to sign in again next time.")
+        async with DeviceAuthClient(config.base_url) as client:
+            authorization = await client.authorize()
+
+            print(f"Signing in to {config.base_url}\n")
+            print(f"  Your code:  {authorization.user_code}")
+            print(f"  Open:       {authorization.verification_uri_complete}\n")
+            # Printed before any attempt to launch a browser, and
+            # unconditionally: launching fails silently on headless hosts, over
+            # SSH, and in some WSL setups, and the URL is the only way through.
+            if _try_open_browser(authorization.verification_uri_complete):
+                print("Opened your browser. ", end="")
+            print("Waiting for you to approve the sign-in...")
+
+            try:
+                session = await client.poll_for_session(authorization, on_progress=_print_countdown)
+            except KeyboardInterrupt:
+                # The grant expires on its own, so there is nothing to clean up
+                # server-side. Say so rather than leaving the user wondering.
+                print("\naborted; the code will expire on its own", file=sys.stderr)
+                return 130
+            finally:
+                _clear_countdown()
+
+        save_session_to_keyring(config.base_url, session.session)
+        written = write_config_file({"base_url": config.base_url}, args.config_file)
+        who = session.username or session.user_id or "your account"
+        print(f"Signed in as {who}.")
+        print(f"Session stored in the OS keyring; valid for about {session.expires_in // 3600} hours of inactivity.")
+        print(f"Wrote base URL to {written}.")
+        print("Run `agentcore-tui` to start chatting.")
         return 0
 
     return asyncio.run(run())
 
 
-def _describe_identity(access_token: str) -> str:
-    """A short ' as <email>' suffix, when the token says so."""
-    from .auth import decode_claims
+def _try_open_browser(url: str) -> bool:
+    """Best-effort browser launch. Never raises, and never blocks the flow."""
+    import webbrowser
 
-    claims = decode_claims(access_token)
-    who = claims.get("email") or claims.get("username") or claims.get("sub")
-    return f" as {who}" if isinstance(who, str) and who else ""
+    try:
+        return webbrowser.open(url)
+    except Exception:  # pragma: no cover - platform dependent
+        return False
+
+
+def _print_countdown(_wait_seconds: int, remaining_seconds: int) -> None:
+    """Overwrite one line with the time left, so polling is visibly alive."""
+    print(f"\r  {remaining_seconds // 60}m {remaining_seconds % 60:02d}s left to approve...  ", end="", flush=True)
+
+
+def _clear_countdown() -> None:
+    print("\r" + " " * 44 + "\r", end="", flush=True)
 
 
 def _command_login_api_key(args: argparse.Namespace) -> int:
@@ -232,6 +242,15 @@ def _command_login_api_key(args: argparse.Namespace) -> int:
 
 
 def _command_logout(args: argparse.Namespace) -> int:
+    """Remove every credential stored for this deployment.
+
+    Local only, deliberately. There is no client-side revocation call: the
+    sealed session is opaque to this client, and app-api exposes logout as a
+    cookie-clearing route the CLI has no cookie for. Dropping the local copy is
+    what a CLI can honestly do; the session then lapses on its TTL. Anyone
+    needing immediate server-side revocation should sign out in the web app,
+    which invalidates the underlying session record.
+    """
     config = resolve_config(base_url=args.base_url, config_file=args.config_file, use_keyring=False)
     if not config.base_url:
         print(f"error: no base URL. Pass --base-url, or set {ENV_BASE_URL}.", file=sys.stderr)
@@ -239,37 +258,21 @@ def _command_logout(args: argparse.Namespace) -> int:
 
     removed_any = False
 
-    # SSO session first: revoke server-side so the refresh token is dead even if
-    # a copy leaked, then drop the local one.
-    sso_token, _ = load_refresh_token(config.base_url)
-    if sso_token:
-        if config.cognito_domain_url and config.cli_client_id:
-            import asyncio
-
-            from .auth import CognitoOidcClient, OidcConfig
-
-            async def revoke() -> bool:
-                oidc_config = OidcConfig(
-                    domain_url=config.cognito_domain_url or "",
-                    client_id=config.cli_client_id or "",
-                    redirect_uri="",
-                )
-                async with CognitoOidcClient(oidc_config) as client:
-                    return await client.revoke(sso_token)
-
-            print(
-                "Revoked the session with the identity provider."
-                if asyncio.run(revoke())
-                else "warning: could not revoke server-side; clearing locally anyway."
-            )
-        else:
-            print("warning: SSO config missing, so the session could not be revoked server-side.")
-        delete_refresh_token(config.base_url)
-        print("Removed the stored SSO session.")
+    if delete_session_from_keyring(config.base_url):
+        print(f"Removed the stored session for {config.base_url}.")
         removed_any = True
 
     if delete_key_from_keyring(config.base_url):
         print(f"Removed the stored API key for {config.base_url}.")
+        removed_any = True
+
+    # Anyone who ran the reverted PKCE build (#850) may still hold a Cognito
+    # refresh token. Nothing writes that service any more, but leaving a live
+    # refresh token behind on an explicit logout would be wrong.
+    from . import keyring_store
+
+    if keyring_store.delete(keyring_store.LEGACY_SSO_SERVICE, config.base_url):
+        print("Removed a refresh token left by an older version.")
         removed_any = True
 
     if not removed_any:
@@ -286,17 +289,24 @@ def _describe_key(config: Config) -> str:
     return f"present ({len(config.api_key)} chars, from {source})"
 
 
+def _describe_session(base_url: str) -> str:
+    """Whether a sealed session is held. Presence only — see the probe's note."""
+    sealed, unavailable = load_session_from_keyring(base_url)
+    if sealed:
+        return f"present ({len(sealed)} chars, in the OS keyring)"
+    return f"none ({unavailable})" if unavailable else "none"
+
+
 def _command_status(args: argparse.Namespace) -> int:
     config = resolve_config(base_url=args.base_url, model_id=args.model_id, config_file=args.config_file)
     print(f"agentcore-tui {__version__}")
     print(f"config file : {args.config_file or config_path()}")
     print(f"base URL    : {config.base_url or 'missing'}")
+    print(f"credential  : {config.credential_source.label}")
     print(f"API key     : {_describe_key(config)}")
+    print(f"session     : {_describe_session(config.base_url) if config.base_url else 'none'}")
     print(f"model       : {config.model_id}")
     print(f"max tokens  : {config.max_tokens:,}")
-    print(f"sso         : {'configured' if config.sso_configured else 'not configured'}")
-    if config.sso_configured:
-        print(f"sso session : {describe_stored_session(config.base_url)}")
     print(f"log file    : {log_path(args.log_file)}")
     print(f"log content : {'yes' if content_logging_enabled() else f'no (set {ENV_LOG_CONTENT}=1)'}")
     if config.keyring_unavailable_reason:

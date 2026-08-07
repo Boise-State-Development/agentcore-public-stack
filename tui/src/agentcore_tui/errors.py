@@ -112,3 +112,54 @@ class ConnectionFailedError(AgentCoreTuiError):
             hint="Check the base URL and your network or VPN. Set it with `agentcore-tui login --base-url ...`.",
         )
         self.base_url = base_url
+
+
+class DeviceAuthError(AgentCoreTuiError):
+    """Base for failures of the CLI device-authorization flow.
+
+    Separate from :class:`ApiError` because none of these is really about an
+    HTTP status. The server reports every non-success poll as a 400 carrying an
+    RFC 8628 ``error`` code, so the code is the diagnosis and the status says
+    nothing. Each subclass names one outcome the user can act on differently.
+    """
+
+
+class DeviceAuthDeniedError(DeviceAuthError):
+    """The user declined the sign-in in the browser (``access_denied``)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The sign-in was declined in the browser",
+            hint="Run `agentcore-tui login --sso` again and choose Approve if you meant to sign in.",
+        )
+
+
+class DeviceAuthExpiredError(DeviceAuthError):
+    """The grant lapsed before approval (``expired_token``, or our deadline).
+
+    Ten minutes is the server's window. Reaching it almost always means the
+    browser step was never completed, so the hint says that rather than
+    suggesting a retry alone.
+    """
+
+    def __init__(self, message: str = "The sign-in request expired before it was approved") -> None:
+        super().__init__(
+            message,
+            hint="Codes are valid for about 10 minutes. Run `agentcore-tui login --sso` and complete the browser step.",
+        )
+
+
+class DeviceAuthRejectedError(DeviceAuthError):
+    """``invalid_grant`` — unknown device code, or one already claimed.
+
+    Also the response to polling with a code that has already been exchanged,
+    since the sealed session is handed out exactly once. That is a correct
+    server response to an incorrect client, so it is worth distinguishing from
+    a plain expiry.
+    """
+
+    def __init__(self, message: str = "This sign-in request is no longer valid") -> None:
+        super().__init__(
+            message,
+            hint="Each code can be used once. Run `agentcore-tui login --sso` to start a new sign-in.",
+        )

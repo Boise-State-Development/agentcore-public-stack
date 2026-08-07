@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentcore_tui import config as config_module
+from agentcore_tui import keyring_store
 from agentcore_tui.config import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODELS,
@@ -37,7 +38,7 @@ class TestConfigProperties:
         assert not Config(base_url="https://h").is_complete
         assert not Config(credential_source=CredentialSource.API_KEY).is_complete
         assert Config(base_url="https://h", credential_source=CredentialSource.API_KEY).is_complete
-        assert Config(base_url="https://h", api_key=None, credential_source=CredentialSource.SSO_SESSION).is_complete
+        assert Config(base_url="https://h", api_key=None, credential_source=CredentialSource.BFF_SESSION).is_complete
 
     def test_an_api_key_alone_does_not_make_it_complete(self) -> None:
         """The field is set but the discriminant was never resolved, which is
@@ -46,7 +47,7 @@ class TestConfigProperties:
 
     def test_capabilities_follow_the_credential(self) -> None:
         api_key = Config(base_url="https://h", credential_source=CredentialSource.API_KEY)
-        session = Config(base_url="https://h", credential_source=CredentialSource.SSO_SESSION)
+        session = Config(base_url="https://h", credential_source=CredentialSource.BFF_SESSION)
         assert api_key.can(Capability.CHAT) is True
         assert api_key.can(Capability.SESSIONS) is False
         assert session.can(Capability.SESSIONS) is True
@@ -278,3 +279,57 @@ class TestBannerResolution:
         env = {"AGENTCORE_BANNER": "1"}
         resolved = resolve_config(config_file=config_file, env=env, use_keyring=False, banner=False)
         assert resolved.banner is False
+
+
+class TestSessionKeyringAccessors:
+    """The sealed session is stored under its own keyring *service*.
+
+    Separate from API keys so revoking one credential cannot disturb the other,
+    and separate from the retired SSO service so an upgrade does not read a
+    refresh token as if it were a session.
+    """
+
+    def test_the_three_services_are_distinct(self) -> None:
+        services = {
+            keyring_store.API_KEY_SERVICE,
+            keyring_store.SESSION_SERVICE,
+            keyring_store.LEGACY_SSO_SERVICE,
+        }
+        assert len(services) == 3
+
+    def test_save_and_load_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        vault: dict[tuple[str, str], str] = {}
+        monkeypatch.setattr(
+            keyring_store,
+            "store",
+            lambda service, base_url, secret, hint: vault.__setitem__((service, base_url), secret),
+        )
+        monkeypatch.setattr(
+            keyring_store,
+            "load",
+            lambda service, base_url: (vault.get((service, base_url)), None),
+        )
+
+        config_module.save_session_to_keyring("https://h", "sealed")
+
+        assert vault == {(keyring_store.SESSION_SERVICE, "https://h"): "sealed"}
+        assert config_module.load_session_from_keyring("https://h") == ("sealed", None)
+
+    def test_saving_a_session_does_not_suggest_an_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unlike the API key.
+
+        A sealed session is equivalent to being signed in and rotates on every
+        sign-in, so telling users to export it would be advice to leave a live
+        credential in their shell history and process table.
+        """
+        hints: list[str] = []
+        monkeypatch.setattr(keyring_store, "store", lambda service, base_url, secret, hint: hints.append(hint))
+        config_module.save_session_to_keyring("https://h", "sealed")
+        assert "AGENTCORE_" not in hints[0]
+        assert "keyring" in hints[0]
+
+    def test_delete_targets_the_session_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked: list[tuple[str, str]] = []
+        monkeypatch.setattr(keyring_store, "delete", lambda service, base_url: bool(asked.append((service, base_url))))
+        config_module.delete_session_from_keyring("https://h")
+        assert asked == [(keyring_store.SESSION_SERVICE, "https://h")]

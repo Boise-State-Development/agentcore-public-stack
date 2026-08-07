@@ -34,6 +34,31 @@ class Endpoints:
     def health(self) -> str:
         return self._join("health")
 
+    # -- CLI device authorization --------------------------------------------
+    #
+    # This is app-api's own flow, not Cognito's: Cognito does not support RFC
+    # 8628. Both are pre-authentication by necessity, so neither takes an auth
+    # header. `verify` is deliberately absent — it is opened in the user's
+    # browser from the `verification_uri_complete` the server returns, and the
+    # client must never construct that URL itself.
+
+    @property
+    def cli_authorize(self) -> str:
+        """Start a device authorization and get a device code plus a user code."""
+        return self._join("auth/cli/authorize")
+
+    @property
+    def cli_token(self) -> str:
+        """Poll for the sealed session. RFC 8628 semantics: 400 means "not yet"."""
+        return self._join("auth/cli/token")
+
+    # -- session -------------------------------------------------------------
+
+    @property
+    def auth_session(self) -> str:
+        """Who the current credential belongs to. Used to confirm a sign-in."""
+        return self._join("auth/session")
+
     # -- chat ----------------------------------------------------------------
 
     @property

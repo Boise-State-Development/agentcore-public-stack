@@ -41,7 +41,7 @@ and none reads a cookie. So the integration point is one branch in one
 middleware — not `get_current_user_from_session`, despite its docstring.
 
 **Landed so far:** the **entire backend**, deployed and verified end-to-end
-against `dev.boisestateai` on 2026-08-07 — domain layer, repository, service,
+against `dev.boisestate.ai` on 2026-08-07 — domain layer, repository, service,
 the three `/auth/cli/*` routes, the device branch in `GET /auth/callback`, rate
 limiting, and the `SessionRefreshMiddleware` header branch (141 tests). On the
 TUI side, the agent-stream SSE dialect (`client/agent_events.py`) and the
@@ -54,14 +54,22 @@ after deploy" section. **No infrastructure deploy was required** — grants live
 the existing BFF sessions table, so there is no CDK grants table and
 `platform.yml` never ran.
 
-**Still pending:** the CLI's own device-polling flow, the `/chat/stream`
-transport, deleting the dead PKCE package, and wiring the dialect into a turn.
-Task list and two open design questions are in the spec.
+**Still pending:** the `/chat/stream` transport and wiring the dialect into a
+turn. The device-polling flow is **done and proven live** (`client/device_auth.py`
++ `SessionAuth`), and the dead PKCE package is gone. Task list and two open design
+questions are in the spec.
 
-**Dead code awaiting removal:** `tui/src/agentcore_tui/auth/` (OIDC + PKCE,
-~600 lines) and the "Browser SSO" section of `tui/README.md`. The `AuthProvider`
-seam in `client/auth.py` survives; it gains a `SessionAuth` and `BearerAuth`
-becomes unused.
+**Dead code removed:** `tui/src/agentcore_tui/auth/` and `tests/test_auth.py`
+(1,314 lines), plus `cognito_domain_url`, `cli_client_id`, `callback_ports`,
+`sso_configured` and `--provider`. `BearerAuth` went too — it existed for a CLI
+that minted its own tokens, which is the design #850 reverted. `AuthProvider` is
+the seam; a provider is not.
+
+**Known gap:** the devcontainer has **no keyring backend**
+(`keyring.backends.fail.Keyring`), so `login --sso` completes the flow and then
+fails at storage. API keys have an env-var fallback; sessions deliberately have
+none, so the failure is loud. Options are written up in the spec under "Open: no
+keyring in a container" and the choice has not been made.
 
 ## Test fixtures written from types will not save you
 
@@ -124,7 +132,7 @@ Facts established by research, worth not rediscovering:
 tui/src/agentcore_tui/
 ├── cli.py            argparse entry: chat, login [--sso], logout, status
 ├── config.py         CLI flags > env > TOML file > keyring > defaults
-├── credentials.py    which credential is held (API key / SSO) + capabilities
+├── credentials.py    which credential is held (API key / BFF session) + capabilities
 ├── keyring_store.py  OS keyring access; owns APP_NAME
 ├── state.py          local bookkeeping the client writes (banner version)
 ├── conversation.py   domain: Message + ConversationStore
@@ -134,13 +142,15 @@ tui/src/agentcore_tui/
 ├── logging_setup.py  rotating file log; content redacted unless opted in
 ├── app.py            bindings, screen stack, palette, startup (~145 lines)
 ├── app.tcss          stylesheet
-├── client/           endpoints.py (URLs), auth.py (AuthProvider),
-│                     converse.py (transport), events.py (SSE dialect)
+├── client/           endpoints.py (URLs), auth.py (AuthProvider seam +
+│                     ApiKeyAuth/SessionAuth), device_auth.py (CLI sign-in),
+│                     converse.py + events.py (api-converse),
+│                     agent_events.py (agent-stream dialect)
 ├── screens/          chat.py, model_picker.py, splash.py
 └── widgets/          transcript messages, composer, status bar
 ```
 
-483 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+484 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.
@@ -155,7 +165,11 @@ real captured agent stream.
   dialect. `events.py` is the api-converse dialect (11 events); the agent stream
   (~35) is a **sibling** dialect module, not an extension of it.
 - Ask `Config.credential_source` / `Config.can(Capability.X)`, never `api_key`.
-  Under SSO there is no API key and the client is still fully configured.
+  When signed in there is no API key and the client is still fully configured.
+  `resolve_source` still prefers an API key over a session, and that is
+  *temporary*: the only transport built is `converse.py`, which can only present
+  `X-API-Key`. Flip it when `client/agent_stream.py` lands — the test asserting
+  the precedence explains why.
 - `TurnController.cancel()` is where `POST /sessions/{id}/interrupt` belongs.
   Cancelling only the local stream leaves the server generating and holding the
   session lease.

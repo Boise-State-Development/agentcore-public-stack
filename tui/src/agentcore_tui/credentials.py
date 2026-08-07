@@ -1,8 +1,9 @@
 """What the client uses to prove who it is, and what that buys.
 
-Phase 1 has exactly one answer: an API key. Phase 2 adds a second: an OIDC
-session. They are **not** interchangeable, and that asymmetry is the reason this
-module exists rather than a boolean somewhere.
+Phase 1 has exactly one answer: an API key. Phase 2 adds a second: a real BFF
+session, obtained by app-api's own device-authorization flow. They are **not**
+interchangeable, and that asymmetry is the reason this module exists rather than
+a boolean somewhere.
 
 ``POST /chat/api-converse`` is the only API-key endpoint in all of app-api, and
 it is a bare Bedrock Converse wrapper — no tools, no memory, no server-side
@@ -12,8 +13,8 @@ authenticated?" is the wrong question; "which credential do I hold, and what can
 it reach?" is the right one.
 
 Before this existed, ``Config.is_complete`` meant "an API key is present". Under
-OIDC an absent API key is *normal*, and a correctly signed-in user would have
-been shown the not-configured help text.
+a session an absent API key is *normal*, and a correctly signed-in user would
+have been shown the not-configured help text.
 """
 
 from __future__ import annotations
@@ -47,8 +48,10 @@ class CredentialSource(StrEnum):
     NONE = "none"
     #: An API key in the keyring, the environment, or (with a warning) the config file.
     API_KEY = "api_key"
-    #: An OIDC session: a refresh token in the keyring, exchanged for bearer tokens.
-    SSO_SESSION = "sso_session"
+    #: A real BFF session obtained by the CLI device-authorization flow and
+    #: presented as `Authorization: BFF <sealed>`. Not an OIDC token: the client
+    #: never talks to Cognito, and the value is opaque to it.
+    BFF_SESSION = "bff_session"
 
     @property
     def usable(self) -> bool:
@@ -60,7 +63,7 @@ class CredentialSource(StrEnum):
         return {
             CredentialSource.NONE: "not signed in",
             CredentialSource.API_KEY: "API key",
-            CredentialSource.SSO_SESSION: "SSO session",
+            CredentialSource.BFF_SESSION: "signed in",
         }[self]
 
     def can(self, capability: Capability) -> bool:
@@ -73,23 +76,26 @@ class CredentialSource(StrEnum):
 CAPABILITIES: dict[CredentialSource, frozenset[Capability]] = {
     CredentialSource.NONE: frozenset(),
     CredentialSource.API_KEY: frozenset({Capability.CHAT}),
-    CredentialSource.SSO_SESSION: frozenset({Capability.CHAT, Capability.AGENT, Capability.SESSIONS, Capability.CATALOG}),
+    CredentialSource.BFF_SESSION: frozenset({Capability.CHAT, Capability.AGENT, Capability.SESSIONS, Capability.CATALOG}),
 }
 
-#: Probes whether a stored SSO session exists for a base URL.
+#: Probes whether a stored BFF session exists for a base URL.
 SessionProbe = Callable[[str], bool]
 
 
 def _keyring_session_probe(base_url: str) -> bool:
-    """Default probe: is there a refresh token in the keyring for this host?
+    """Default probe: is there a sealed session in the keyring for this host?
 
-    Imported lazily to keep ``config`` free of a dependency on ``auth``, and
-    because the keyring import itself is slow and fails on headless hosts.
+    Cheap on purpose — presence, not validity. The client cannot decrypt a
+    sealed session to check its expiry, so the only real test is a request, and
+    that is too expensive for a startup path. A stale session therefore shows as
+    signed in until the first 401, which is the same behaviour a browser has
+    with an expired cookie.
     """
-    from .auth.tokens import load_refresh_token
+    from . import keyring_store
 
-    token, _unavailable = load_refresh_token(base_url)
-    return bool(token)
+    session, _unavailable = keyring_store.load(keyring_store.SESSION_SERVICE, base_url)
+    return bool(session)
 
 
 def resolve_source(
@@ -100,11 +106,17 @@ def resolve_source(
 ) -> CredentialSource:
     """Decide which credential this client will present.
 
-    An API key wins over a stored session today. That is not because it is
-    better — a session is strictly more capable — but because no bearer
-    transport exists yet, so choosing a session would select a path that cannot
-    issue a request. Flip this when the app-api bearer branch lands; the test
-    asserting the precedence is the place to record that decision.
+    An API key still wins over a stored session, and that is now a *temporary*
+    inversion of merit rather than a permanent one. A session is strictly more
+    capable — it reaches the agent, sessions and catalogs that an API key cannot
+    — but the only transport built today is ``converse.py``, which speaks
+    ``POST /chat/api-converse``, and that endpoint authenticates with
+    ``X-API-Key`` and nothing else. Preferring a session would therefore select
+    a credential the working transport cannot present.
+
+    **Flip this when ``client/agent_stream.py`` lands.** The test asserting this
+    precedence is the place that records the decision, so changing the order
+    means changing a test that explains why.
     """
     if not base_url:
         # Without a host, no credential can be used against anything.
@@ -113,5 +125,5 @@ def resolve_source(
         return CredentialSource.API_KEY
     probe = session_probe or _keyring_session_probe
     if probe(base_url):
-        return CredentialSource.SSO_SESSION
+        return CredentialSource.BFF_SESSION
     return CredentialSource.NONE

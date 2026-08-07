@@ -72,7 +72,7 @@ class TestBoot:
         """The regression this discriminant exists to prevent: under OIDC there
         is no API key, and a correctly signed-in user must not be shown setup
         help."""
-        config = make_config(api_key=None, credential_source=CredentialSource.SSO_SESSION)
+        config = make_config(api_key=None, credential_source=CredentialSource.BFF_SESSION)
         app = build_app(ok_handler(), config=config)
         async with app.run_test() as pilot:
             await pilot.pause()

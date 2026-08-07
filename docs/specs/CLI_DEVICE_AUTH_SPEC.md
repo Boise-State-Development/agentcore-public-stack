@@ -1,7 +1,8 @@
 # CLI Device Authorization
 
 **Status:** backend **complete, deployed, and verified end-to-end against
-`dev.boisestateai`** (2026-08-07); TUI client partly built, auth leg not started
+`dev.boisestate.ai`** (2026-08-07). TUI **auth leg done and proven live**; the
+`/chat/stream` transport and the turn wiring remain.
 **Audience:** platform maintainers, auth owners
 **Supersedes:** the CLI-as-OAuth-client approach reverted in #850
 **Branch:** `feature/tui-client` — backend landed in `ecf58181`
@@ -24,12 +25,12 @@ branch. Per-layer detail in the task list below.
 transcript widgets that render what it carries. Neither needs auth, which is why
 they were built first.
 
-**Not started:** the CLI's own device-polling flow, deleting the dead PKCE
-package, and wiring the new dialect into a turn. Detail in "What is left in the
-TUI" below.
+**Not started:** the `/chat/stream` transport and wiring the dialect into a
+turn. The CLI's device-polling flow and the deletion of the dead PKCE package are
+**done**. Detail in "What is left in the TUI" below.
 
 **The backend is no longer just "tested" — it is proven.** All seven steps of
-"Verifying after a deploy" were executed against `dev.boisestateai` on
+"Verifying after a deploy" were executed against `dev.boisestate.ai` on
 2026-08-07, including the browser leg. Results are recorded inline in that
 section. Nothing failed. The one-line summary: a CLI-obtained sealed session
 reaches `/auth/session`, `/models`, `/sessions` and a full tool-using turn on
@@ -313,15 +314,34 @@ current occupancy; it sends a final per-call `metadata` instead. Consequences:
 
 1. **Transport** — `client/agent_stream.py`: a module pairing the `/chat/stream`
    payload shape with the dialect above, mirroring what `converse.py` does for
-   `events.py`. Needs a session, so it comes after the auth leg.
-2. **Auth leg** — device polling against `POST /auth/cli/authorize` and
-   `POST /auth/cli/token`; a `SessionAuth` on the existing `AuthProvider` seam in
-   `client/auth.py` that sends `Authorization: BFF <sealed>`; store the sealed
-   value in the OS keyring alongside the API key (`keyring_store.py`).
-   `BearerAuth` becomes unused.
-3. **Delete the dead PKCE package** — `tui/src/agentcore_tui/auth/` (~600 lines,
-   60 tests in `tests/test_auth.py`) and the "Browser SSO (OIDC + PKCE)" section
-   of `tui/README.md`. Keep the `AuthProvider` seam.
+   `events.py`. **This is now the next thing**: the auth leg below is done, so
+   there is a session to carry.
+2. ~~**Auth leg**~~ — **done.** `client/device_auth.py` (`DeviceAuthClient`,
+   `DeviceAuthorization`, `DeviceSession`) drives
+   `POST /auth/cli/authorize` → poll `POST /auth/cli/token`; `SessionAuth` on the
+   existing `AuthProvider` seam sends `Authorization: BFF <sealed>`; the sealed
+   value is stored under its own keyring service (`agentcore-tui-session`).
+   Proven live: authorize → 19 polls at the advertised 5s interval with no
+   `slow_down` → claimed, then `GET /models` returned 200 on the header alone.
+   29 tests, no sockets and no real waiting (`sleep` and `clock` are injected).
+   Three things in there are load-bearing:
+   * an **unknown** `error` code is terminal, not "keep waiting" — treating it as
+     pending polls a dead grant for the full ten minutes and then reports a
+     timeout instead of what the server said;
+   * `slow_down` widens the interval **permanently**, because the server
+     throttles from the *previous* poll's timestamp: a client that reverts to its
+     original interval can be told to slow down forever;
+   * the loop never sleeps past the deadline, so an expiry is reported when it
+     happens rather than an interval later.
+3. ~~**Delete the dead PKCE package**~~ — **done.** `tui/src/agentcore_tui/auth/`
+   and `tests/test_auth.py` removed (1,314 lines), along with
+   `cognito_domain_url`, `cli_client_id`, `callback_ports`, `sso_configured` and
+   the `--provider` flag. `CredentialSource.SSO_SESSION` became `BFF_SESSION` and
+   `BearerAuth` was deleted rather than left as a seam: it existed for a CLI that
+   minted its own tokens, which is the design #850 reverted. `AuthProvider` is
+   the seam; a provider is not. The retired keyring service survives as
+   `LEGACY_SSO_SERVICE`, read only by `logout`, so an upgrading user does not
+   silently keep a live refresh token.
 4. **Turn wiring** — see the open question below.
 5. **`cancel()` must interrupt server-side** — `TurnController.cancel()` is local
    only today. Against the agent endpoint it must also
@@ -331,6 +351,28 @@ current occupancy; it sends a final per-call `metadata` instead. Consequences:
    there saying so.
 6. **Never transparently retry a stream** — a reopen double-runs the turn and
    corrupts memory. Surface the failure instead.
+
+### Open: no keyring in a container, and this is where we develop
+
+`login --sso` completes the flow and then **fails at storage** inside the
+devcontainer, because the image has no Secret Service — `keyring.get_keyring()`
+returns `keyring.backends.fail.Keyring`. That is the environment this project's
+own local-dev loop runs in, so the feature is currently unusable exactly where it
+is most convenient to use.
+
+API keys already have a fallback for this (`AGENTCORE_API_KEY`, and a
+plaintext-config-file path flagged by `Config.api_key_from_plaintext_file`).
+Sessions deliberately have neither, which is why the failure is loud rather than
+silent. Three ways out, none yet chosen:
+
+* **An env var** (`AGENTCORE_SESSION`), consistent with the API key. Cost: a live
+  session credential in the process table and shell history.
+* **A 0600 file** in the config dir, used only when the keyring is unavailable.
+  Precedent inside this repo (`api_key_from_plaintext_file`) and outside it
+  (`gh`, `aws`, `kubectl` all do this). Cost: a credential at rest on disk.
+* **Leave it.** Containers use an API key; sessions are for real terminals.
+  Cost: the agent, sessions and catalogues stay unreachable from the devcontainer.
+
 
 ### Open question 1: how to wire the dialect into a turn
 
@@ -382,7 +424,7 @@ Keep the protocol uniformly async, for the reason its docstring already gives.
 
 ## Verified after deploy — 2026-08-07
 
-All seven steps below were executed against `https://dev.boisestateai` after a
+All seven steps below were executed against `https://dev.boisestate.ai` after a
 `backend.yml` code deploy of `8a616d43`. **Every one passed.** No infrastructure
 deploy was needed, exactly as predicted.
 
@@ -401,7 +443,7 @@ environment; the ✅ notes record what the deployment actually did.
    whose routing does not put `/auth/cli/verify` beside `/auth/callback` needs
    `BFF_CLI_VERIFICATION_URL` set explicitly.
    → ✅ 200 with all six fields; `expires_in` 600, `interval` 5. The derivation
-   landed on `https://dev.boisestateai/api/auth/cli/verify`, so **no
+   landed on `https://dev.boisestate.ai/api/auth/cli/verify`, so **no
    `BFF_CLI_VERIFICATION_URL` override is needed on this deployment.**
 3. **Poll once before approving.** `POST /auth/cli/token` with the `device_code`
    → expect HTTP **400** with `{"error": "authorization_pending"}`. Poll again

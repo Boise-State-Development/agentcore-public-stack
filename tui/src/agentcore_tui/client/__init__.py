@@ -8,8 +8,9 @@ the agent stream is a *second* dialect module beside it, not an extension of it.
 
 from __future__ import annotations
 
-from .auth import ApiKeyAuth, AuthProvider, BearerAuth, NoAuth
+from .auth import ApiKeyAuth, AuthProvider, NoAuth, SessionAuth
 from .converse import ApiConverseClient, CompletedTurn, message_payloads
+from .device_auth import DeviceAuthClient, DeviceAuthorization, DeviceSession
 from .endpoints import Endpoints
 from .events import (
     ContentBlockStart,
@@ -33,11 +34,13 @@ __all__ = [
     "ApiConverseClient",
     "ApiKeyAuth",
     "AuthProvider",
-    "BearerAuth",
     "CompletedTurn",
     "ContentBlockStart",
     "ContentBlockStop",
     "ConverseEvent",
+    "DeviceAuthClient",
+    "DeviceAuthorization",
+    "DeviceSession",
     "Done",
     "Endpoints",
     "ErrorEvent",
@@ -48,6 +51,7 @@ __all__ = [
     "ReasoningDelta",
     "ReasoningStart",
     "ReasoningStop",
+    "SessionAuth",
     "TextDelta",
     "TurnAccumulator",
     "UnknownEvent",

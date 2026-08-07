@@ -42,15 +42,8 @@ KEYRING_SERVICE = keyring_store.API_KEY_SERVICE
 ENV_BASE_URL = "AGENTCORE_BASE_URL"
 ENV_API_KEY = "AGENTCORE_API_KEY"
 ENV_MODEL_ID = "AGENTCORE_MODEL_ID"
-ENV_COGNITO_DOMAIN = "AGENTCORE_COGNITO_DOMAIN_URL"
-ENV_CLI_CLIENT_ID = "AGENTCORE_CLI_CLIENT_ID"
 ENV_BANNER = "AGENTCORE_BANNER"
 
-#: Loopback ports registered on the CLI app client by CDK. Cognito matches
-#: redirect URIs byte-for-byte and does not honour RFC 8252's variable-port
-#: rule, so these must agree with `cognito.cliClient.callbackPorts` in
-#: infrastructure config.
-DEFAULT_CALLBACK_PORTS: tuple[int, ...] = (8976, 8977, 8978)
 
 #: Bedrock model IDs known to this codebase. These mirror the platform's own
 #: defaults (``agents/main_agent/config/constants.py``) so the picker is useful
@@ -93,14 +86,6 @@ class Config:
     api_key_from_plaintext_file: bool = False
     #: Set when the OS keyring exists but could not be read.
     keyring_unavailable_reason: str | None = None
-    # -- SSO (authorization-code + PKCE against the public CLI app client) ----
-    #: Cognito hosted-UI domain, e.g. https://<prefix>.auth.<region>.amazoncognito.com
-    cognito_domain_url: str | None = None
-    #: Public CLI app client id; SSM /<prefix>/auth/cognito/cli-app-client-id
-    cli_client_id: str | None = None
-    #: Loopback ports registered on that client. Cognito matches redirect URIs
-    #: exactly, so only these can be bound.
-    callback_ports: tuple[int, ...] = DEFAULT_CALLBACK_PORTS
     # -- startup banner ------------------------------------------------------
     #: Master switch. Defaults to *off* here but to *on* in
     #: :func:`resolve_config`, which is the only path production takes. A
@@ -113,13 +98,8 @@ class Config:
     #: Which credential this client will present. Resolved by
     #: :func:`resolve_config`; the dataclass default is NONE so a
     #: directly-constructed Config is explicit about being unauthenticated.
-    #: Never infer this from ``api_key`` being set — under SSO it will not be.
+    #: Never infer this from ``api_key`` being set — when signed in it will not be.
     credential_source: CredentialSource = CredentialSource.NONE
-
-    @property
-    def sso_configured(self) -> bool:
-        """True when there is enough configuration to attempt an SSO login."""
-        return bool(self.base_url and self.cognito_domain_url and self.cli_client_id)
 
     @property
     def is_complete(self) -> bool:
@@ -179,6 +159,32 @@ def save_key_to_keyring(base_url: str, api_key: str) -> None:
 def delete_key_from_keyring(base_url: str) -> bool:
     """Remove a stored API key. Returns False when there was nothing to remove."""
     return keyring_store.delete(keyring_store.API_KEY_SERVICE, base_url)
+
+
+def load_session_from_keyring(base_url: str) -> tuple[str | None, str | None]:
+    """Return ``(sealed_session, unavailable_reason)`` from the OS keyring."""
+    return keyring_store.load(keyring_store.SESSION_SERVICE, base_url)
+
+
+def save_session_to_keyring(base_url: str, sealed_session: str) -> None:
+    """Persist a sealed BFF session, or raise ConfigError.
+
+    No environment-variable fallback is offered in the hint, unlike the API key.
+    A sealed session is equivalent to being signed in and rotates on every
+    sign-in, so telling users to export it into their shell would be advice to
+    put a live credential in their process table and history.
+    """
+    keyring_store.store(
+        keyring_store.SESSION_SERVICE,
+        base_url,
+        sealed_session,
+        hint="A working OS keyring is required to stay signed in. On headless Linux, install a Secret Service provider such as gnome-keyring.",
+    )
+
+
+def delete_session_from_keyring(base_url: str) -> bool:
+    """Remove a stored session. Returns False when there was nothing to remove."""
+    return keyring_store.delete(keyring_store.SESSION_SERVICE, base_url)
 
 
 # ---------------------------------------------------------------------------
@@ -294,27 +300,6 @@ def _as_models(raw: object) -> tuple[str, ...] | None:
     return entries or None
 
 
-def _as_ports(raw: object) -> tuple[int, ...]:
-    """Parse `callback_ports`, falling back to the CDK-registered defaults.
-
-    A port not registered on the app client cannot be used — Cognito rejects the
-    redirect — so a bad value here is worth an error rather than a silent
-    fallback.
-    """
-    if raw is None:
-        return DEFAULT_CALLBACK_PORTS
-    if not isinstance(raw, (list, tuple)):
-        raise ConfigError("Config value `callback_ports` must be a list of integers")
-    ports: list[int] = []
-    for item in raw:
-        if isinstance(item, bool) or not isinstance(item, int):
-            raise ConfigError(f"Config value `callback_ports` must contain integers, got {item!r}")
-        if not (1024 < item < 65536):
-            raise ConfigError(f"Config value `callback_ports` entry {item} is outside 1025-65535")
-        ports.append(item)
-    return tuple(ports) or DEFAULT_CALLBACK_PORTS
-
-
 def resolve_config(
     *,
     base_url: str | None = None,
@@ -380,9 +365,6 @@ def resolve_config(
         timeout_seconds=_as_float(file_settings.get("timeout_seconds"), "timeout_seconds") or DEFAULT_TIMEOUT_SECONDS,
         api_key_from_plaintext_file=from_plaintext,
         keyring_unavailable_reason=keyring_reason,
-        cognito_domain_url=(_as_str(environ.get(ENV_COGNITO_DOMAIN)) or _as_str(file_settings.get("cognito_domain_url"))),
-        cli_client_id=(_as_str(environ.get(ENV_CLI_CLIENT_ID)) or _as_str(file_settings.get("cli_client_id"))),
-        callback_ports=_as_ports(file_settings.get("callback_ports")),
         banner=resolved_banner or force_banner,
         force_banner=force_banner,
         credential_source=resolve_source(

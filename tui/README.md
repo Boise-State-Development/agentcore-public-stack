@@ -91,41 +91,55 @@ uv run agentcore-tui
 There are two ways to authenticate. Which one you use depends on what your
 deployment has enabled.
 
-### Browser SSO (OIDC + PKCE)
+### Browser sign-in (recommended)
 
 ```bash
-agentcore-tui login --sso
+agentcore-tui login --sso --base-url https://your-host/api
 ```
 
-Opens your real browser at the Cognito hosted UI, you sign in normally (SSO and
-MFA both apply), and the CLI receives the authorization code on a loopback
-listener. No client secret is involved — the CLI is a public client and uses
-PKCE (RFC 7636) instead, following RFC 8252 for native apps.
+Prints a short code and a URL, opens your browser if it can, and waits:
 
-Jump straight to a federated provider and skip the chooser:
+```
+Signing in to https://your-host/api
 
-```bash
-agentcore-tui login --sso --provider ms-entra-id
+  Your code:  Y4GN-WKY3
+  Open:       https://your-host/api/auth/cli/verify?user_code=Y4GN-WKY3
+
+Opened your browser. Waiting for you to approve the sign-in...
+  9m 41s left to approve...
 ```
 
-Requires two settings, because Cognito exposes no unauthenticated discovery
-endpoint for them:
+You sign in normally in the browser — SSO and MFA both apply, because it is the
+same login page the web app uses. Approve, and the CLI picks up a **real
+platform session**. That is what unlocks conversations, the model and tool
+catalogues, memory, and the tool-using agent; an API key reaches none of those.
 
-```toml
-cognito_domain_url = "https://<prefix>.auth.<region>.amazoncognito.com"
-cli_client_id = "<from SSM /<prefix>/auth/cognito/cli-app-client-id>"
-```
+The URL is always printed, even when a browser opens, because launching one
+fails silently over SSH and on headless hosts. You can open it on a different
+device — a phone, or your laptop while the CLI runs in a container.
 
-Only the **refresh token** is persisted, in the OS keyring. The access token is
-held in memory and renewed automatically; the id token is not stored at all.
-`logout` revokes the refresh token with Cognito before clearing it locally, so
-it stops working even if a copy leaked.
+Configuration: **just the base URL.** Nothing else to set up.
 
-The loopback ports are fixed (`8976`, `8977`, `8978`, tried in order) rather than
-ephemeral. Cognito matches redirect URIs byte-for-byte and does not honour RFC
-8252's rule that loopback ports be treated as variable, so only ports registered
-on the app client can be used. Override with `callback_ports` if your deployment
-registered different ones.
+Two consequences of how this works, both deliberate:
+
+- **The CLI never talks to your identity provider.** It has no client id, no
+  client secret, and no redirect URI, because it is not an OAuth client. It asks
+  app-api to start a sign-in and then polls for the result, so the credential it
+  ends up holding is one app-api minted. Cognito needs no configuration at all.
+- **There is no loopback listener,** so nothing needs to bind a port or receive
+  a redirect. This is why it works unchanged inside a container, over SSH, and
+  in WSL — the cases where a redirect-based flow cannot work, since Cognito
+  matches redirect URIs byte-for-byte and does not honour RFC 8252's rule that
+  loopback ports be treated as variable.
+
+The session is stored in the OS keyring and stays alive as long as you keep
+using it — the server slides its expiry on each request, exactly as it does for
+a browser tab. When it does lapse, sign in again; there is no refresh token to
+rotate.
+
+`logout` clears the local copy. It cannot revoke server-side — the session value
+is opaque to the CLI — so sign out in the web app if you need it dead
+immediately.
 
 ### API key
 
@@ -147,8 +161,8 @@ agentcore-tui
 Check your setup at any time:
 
 ```bash
-agentcore-tui status     # resolved config, SSO session state, health probe
-agentcore-tui logout     # revoke + clear stored credentials
+agentcore-tui status     # resolved config, credential state, health probe
+agentcore-tui logout     # clear stored credentials for this deployment
 ```
 
 The base URL is the app-api root. On a CloudFront deployment that usually ends
@@ -517,9 +531,8 @@ The version is kept in step with the monorepo `VERSION` file by
 
 Phase 2 is where this gets interesting. Every rich surface on app-api — the
 tool-using agent (`POST /chat/stream`), sessions, the tool catalogue, cost
-dashboards, assistants — is authenticated with an OIDC browser session, not an
-API key. Adding a loopback PKCE login (open the browser, catch the redirect on
-`127.0.0.1`, keep the session in the OS keyring) is what unlocks:
+dashboards, assistants — is authenticated with a platform session, not an API
+key. `login --sso` now obtains one, which is what unlocks:
 
 - The real agent, with tools, MCP servers, and memory
 - Persistent sessions shared with the web UI
