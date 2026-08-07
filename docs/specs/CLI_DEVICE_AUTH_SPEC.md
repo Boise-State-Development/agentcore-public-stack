@@ -1,7 +1,7 @@
 # CLI Device Authorization
 
-**Status:** backend **complete and pushed**; TUI client partly built, auth leg
-not started
+**Status:** backend **complete, deployed, and verified end-to-end against
+`dev.boisestateai`** (2026-08-07); TUI client partly built, auth leg not started
 **Audience:** platform maintainers, auth owners
 **Supersedes:** the CLI-as-OAuth-client approach reverted in #850
 **Branch:** `feature/tui-client` — backend landed in `ecf58181`
@@ -27,6 +27,14 @@ they were built first.
 **Not started:** the CLI's own device-polling flow, deleting the dead PKCE
 package, and wiring the new dialect into a turn. Detail in "What is left in the
 TUI" below.
+
+**The backend is no longer just "tested" — it is proven.** All seven steps of
+"Verifying after a deploy" were executed against `dev.boisestateai` on
+2026-08-07, including the browser leg. Results are recorded inline in that
+section. Nothing failed. The one-line summary: a CLI-obtained sealed session
+reaches `/auth/session`, `/models`, `/sessions` and a full tool-using turn on
+`POST /chat/stream`, and is indistinguishable in the table from a session a
+browser minted.
 
 **No infrastructure change is required.** Verified rather than assumed: grants
 live in the existing BFF sessions table, and app-api's task role already holds an
@@ -261,6 +269,46 @@ transcript through `run_test` so the stylesheet is parsed and exercised.
 updates the record and calls `refresh_from_record()` — there is no second copy of
 the state to keep in step.
 
+### Validated against the real stream — and it found a bug
+
+Both modules above were written from the SPA's types and the SSE table in
+`CLAUDE.MD`. Neither is the wire. During the end-to-end verification a real turn
+was captured off `POST /chat/stream` (claude-haiku-4-5, `calculator` enabled) and
+replayed through `parse_agent_event()`. That capture is now
+`tui/tests/fixtures/live_agent_stream.sse`, asserted by
+`tui/tests/test_agent_stream_live_replay.py` (10 tests).
+
+Three claims the dialect rests on held up on real bytes: 17 of the capture's 41
+frames are Strands passthrough (`event` ×14, `message` ×3), `metadata` fired 3
+times for one turn, and two assistant messages opened and closed so the answer is
+the last non-empty one (`162708`, correct).
+
+**The bug it found:** `init_event_loop` and `start_event_loop` parsed as
+`UnknownEvent`. They are Strands event-loop lifecycle frames with empty payloads;
+`start_event_loop` fires once per LLM call, so a tool turn emits several. Neither
+source the dialect was written from names them, because the SPA drops them
+through its `switch` default rather than listing them — so **no fixture could
+have caught this.** Fixed as a `LIFECYCLE_EVENT_NAMES` set resolving to
+`IgnoredEvent(reason="lifecycle")`, kept separate from
+`PASSTHROUGH_EVENT_NAMES` because the reasons differ and the reason is the part
+worth keeping: passthrough frames are dropped because they *duplicate* content
+(consuming them doubles the answer), these because they carry none.
+
+**Not a bug, but load-bearing for whoever renders usage:** the stream carries
+**no `metadata_summary` at all.** `stream_coordinator.py` deliberately swallows
+it (`continue`, in the `metadata_summary` branch) because Strands'
+`accumulated_usage` sums each call's full context and therefore overstates
+current occupancy; it sends a final per-call `metadata` instead. Consequences:
+
+* `AgentTurnAccumulator.usage` is the **last LLM call's context size**, not the
+  turn's token total. In the capture that is 3360 in / 5 out, where the turn
+  actually consumed 3286 + 3360 in and 57 + 5 out.
+* That is exactly right for a context-window percentage — it is what the SPA's
+  context badge uses — and **wrong as a "tokens used" or cost figure.** Label it
+  as context wherever it lands in the status bar.
+* `MetadataSummary` and `_turn_usage` are therefore unreachable on this path.
+  Keep them (a future server may send one) but do not rely on them.
+
 ### Still to do
 
 1. **Transport** — `client/agent_stream.py`: a module pairing the `/chat/stream`
@@ -332,15 +380,19 @@ Keep the protocol uniformly async, for the reason its docstring already gives.
 
 ---
 
-## Verifying after a deploy
+## Verified after deploy — 2026-08-07
 
-Nothing below needs new infrastructure — a normal `backend.yml` code deploy is
-enough, since the only changed surfaces are app-api's container and the routes it
-registers.
+All seven steps below were executed against `https://dev.boisestateai` after a
+`backend.yml` code deploy of `8a616d43`. **Every one passed.** No infrastructure
+deploy was needed, exactly as predicted.
+
+Each step keeps its original instructions so it can be re-run on another
+environment; the ✅ notes record what the deployment actually did.
 
 1. **Confirm the routes are live.**
    `curl -s https://<host>/api/openapi.json | jq '.paths | keys | map(select(startswith("/auth/cli")))'`
    should list `/auth/cli/authorize`, `/auth/cli/verify`, `/auth/cli/token`.
+   → ✅ all three.
 2. **Mint a grant.** `curl -XPOST https://<host>/api/auth/cli/authorize` →
    expect `device_code`, `user_code`, `verification_uri`,
    `verification_uri_complete`, `expires_in`, `interval`. Check
@@ -348,32 +400,69 @@ registers.
    `BFF_AUTH_CALLBACK_URL` by swapping the last path segment, so a deployment
    whose routing does not put `/auth/cli/verify` beside `/auth/callback` needs
    `BFF_CLI_VERIFICATION_URL` set explicitly.
+   → ✅ 200 with all six fields; `expires_in` 600, `interval` 5. The derivation
+   landed on `https://dev.boisestateai/api/auth/cli/verify`, so **no
+   `BFF_CLI_VERIFICATION_URL` override is needed on this deployment.**
 3. **Poll once before approving.** `POST /auth/cli/token` with the `device_code`
    → expect HTTP **400** with `{"error": "authorization_pending"}`. Poll again
    immediately → expect `{"error": "slow_down"}`.
+   → ✅ both. The throttle-from-the-*previous*-poll ordering behaves live.
 4. **The browser leg (the untested part).** Open `verification_uri_complete`.
    Expect a Cognito redirect, a normal sign-in, then a "You're signed in" page.
    Confirm in devtools that this response sets **no** cookies — that is the
    invariant the whole no-cookie design rests on, and it is the thing most likely
    to have been broken by a proxy or CloudFront behaviour rewriting headers.
+   → ✅ completed by a human; no cookies set. Neither CloudFront nor the ALB
+   rewrites the response.
 5. **Claim.** Poll again → expect HTTP 200 with `session`, `expires_in`,
    `user_id`, `username`. Poll a third time → expect 400 `invalid_grant`; the
    value is single-use.
+   → ✅ 200 with all four (`expires_in` 28783), then 400 `invalid_grant`.
 6. **Use it.**
    `curl -H "Authorization: BFF <session>" https://<host>/api/auth/session`
    should return the user. Then try a state-changing request (e.g.
    `POST /api/sessions`) — a **403 with a CSRF message here means the
    `bff_session_from_header` exemption is not reaching `CSRFMiddleware`**, which
    is the single most likely integration failure. Check middleware ordering.
+   → ✅ `/auth/session` returned the user with `roles: ["system_admin"]`.
+   `POST /memory/search` with **no** CSRF token returned 200, so the exemption
+   reaches `CSRFMiddleware`. Both endpoints 401 without the header, so the
+   middleware branch is doing the work rather than something else letting the
+   request through. `GET /models` and `GET /sessions` also served the header.
 7. **Check the table.** Grant items appear under
    `PK = DEVICE-GRANT#<sha256>` and `PK = DEVICE-USERCODE#<code>` in the BFF
    sessions table, both carrying `ttl`. The device code itself must not appear
    anywhere in plaintext.
+   → ✅ both items present with `SK = META` and the same `ttl`, so DynamoDB
+   reaps them together. A full-table scan confirmed **the raw device code
+   appears nowhere**; only `device_code_hash` does. The grant recorded the whole
+   lifecycle (`created_at` → `approved_at` → `claimed_at`, `poll_count` 4,
+   `status: claimed`), and its `session_id` matched a real `SESSION#` item —
+   the CLI's session is an ordinary BFF session, which was the point.
 
 Rollback is a redeploy of the previous image: the routes vanish and nothing else
 changes, because no existing code path was modified except the two middleware
 branches, both of which are inert without a `BFF` header.
 
+### Also confirmed live, beyond the checklist
+
+* **Rate-limit keying is what the Tasks section claims.** The table showed
+  `RATE#cli-authorize:<client-ip>` and `RATE#cli-verify:<client-ip>` alongside
+  `RATE#cli-token:<device-code-hash>` — per-IP for the two browser-reachable
+  routes, per-flow for polling. Note the `SK` bucket width differs per route
+  (`WIN#<now // window>`, so `now // 300` for authorize/verify and `now // 60`
+  for token); an absent row usually means the window's `ttl` (`window * 2`)
+  lapsed and DynamoDB reaped it, not that the limiter is missing. Reaping is
+  lazy and unordered, so expired rows can outlive newer ones.
+* **`verify` is genuinely not a user-code existence oracle.** A code that
+  existed and was already claimed and a code that never existed return
+  **byte-identical** responses ("That code has expired", same sha256). Only
+  syntactically invalid input differs ("That code doesn't look right"), which
+  leaks nothing about existence — it is a typo hint.
+  ⚠️ When re-testing this, build the "nonexistent" code from
+  `USER_CODE_ALPHABET` (`CDFGHJKMNPQRTVWXY34679`). An obvious probe like
+  `ZZZZ-ZZZZ` or `AAAA-AAAA` fails the *shape* check instead and returns the
+  other page, which looks exactly like an oracle and is not one.
 
 ## Facts worth not rediscovering
 

@@ -40,15 +40,52 @@ Why this is small: `SessionRefreshMiddleware` resolves the cookie and attaches a
 and none reads a cookie. So the integration point is one branch in one
 middleware — not `get_current_user_from_session`, despite its docstring.
 
-**Landed so far:** the device-grant domain layer
-(`apis/shared/auth/device_grants/`, 33 tests). Repository, service, routes,
-middleware branch, CDK table and the TUI client are pending — task list is in the
-spec.
+**Landed so far:** the **entire backend**, deployed and verified end-to-end
+against `dev.boisestateai` on 2026-08-07 — domain layer, repository, service,
+the three `/auth/cli/*` routes, the device branch in `GET /auth/callback`, rate
+limiting, and the `SessionRefreshMiddleware` header branch (141 tests). On the
+TUI side, the agent-stream SSE dialect (`client/agent_events.py`) and the
+transcript widgets that render it (`widgets/agent_content.py`) are done, since
+neither needs auth.
+
+All seven verification steps passed, including the browser leg and the
+no-cookie invariant. Results are recorded step-by-step in the spec's "Verified
+after deploy" section. **No infrastructure deploy was required** — grants live in
+the existing BFF sessions table, so there is no CDK grants table and
+`platform.yml` never ran.
+
+**Still pending:** the CLI's own device-polling flow, the `/chat/stream`
+transport, deleting the dead PKCE package, and wiring the dialect into a turn.
+Task list and two open design questions are in the spec.
 
 **Dead code awaiting removal:** `tui/src/agentcore_tui/auth/` (OIDC + PKCE,
 ~600 lines) and the "Browser SSO" section of `tui/README.md`. The `AuthProvider`
 seam in `client/auth.py` survives; it gains a `SessionAuth` and `BearerAuth`
 becomes unused.
+
+## Test fixtures written from types will not save you
+
+The agent-stream dialect was built from the SPA's `stream-parser-types.ts` and
+the SSE table in `CLAUDE.MD`, with 87 tests. It still shipped a bug: Strands'
+`init_event_loop` / `start_event_loop` frames parsed as `UnknownEvent`, because
+the SPA drops them through its `switch` default instead of naming them, so
+neither source mentions them and no fixture could contain them.
+
+It was found in minutes by replaying one real captured turn. That capture is now
+`tui/tests/fixtures/live_agent_stream.sse` with
+`tui/tests/test_agent_stream_live_replay.py` asserting on it. **When you touch a
+wire dialect, capture a real response and replay it** — the SPA's handled-event
+set is not the server's sent-event set, and only the wire knows the difference.
+
+Two things that capture also pinned down, both worth not rediscovering:
+
+* **`metadata_summary` never reaches the client.** `stream_coordinator.py`
+  swallows it on purpose (Strands' `accumulated_usage` sums each call's full
+  context and overstates occupancy) and sends a final per-call `metadata`
+  instead. So `AgentTurnAccumulator.usage` is the **last call's context size**,
+  not the turn's token total — correct for a context-% badge, wrong as a
+  "tokens used" figure. Label it accordingly.
+* **`metadata` fires per LLM call.** A one-tool turn emitted three.
 
 ## The auth situation (read before touching auth)
 
@@ -103,9 +140,10 @@ tui/src/agentcore_tui/
 └── widgets/          transcript messages, composer, status bar
 ```
 
-337 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+483 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
-app at all, and real loopback round-trips for the OAuth receiver.
+app at all, real loopback round-trips for the OAuth receiver, and one replay of a
+real captured agent stream.
 
 **Architecture rules that exist for Phase 2 and should not be relaxed:**
 

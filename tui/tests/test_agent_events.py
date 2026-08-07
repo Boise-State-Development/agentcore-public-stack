@@ -18,6 +18,7 @@ import json
 import pytest
 
 from agentcore_tui.client.agent_events import (
+    LIFECYCLE_EVENT_NAMES,
     PASSTHROUGH_EVENT_NAMES,
     TOOL_RESULT_PREVIEW_CHARS,
     AgentTurnAccumulator,
@@ -98,6 +99,50 @@ class TestPassthroughIsIgnored:
             parsed = ev(name, {"toolUseId": "t1", "html": "<div/>"})
             assert isinstance(parsed, IgnoredEvent)
             assert parsed.reason == "no terminal rendering"
+
+
+class TestLifecycleFramesAreIgnored:
+    """Strands' event-loop frames, found by replaying a live capture.
+
+    Neither source the dialect was written from names them, so fixtures could
+    not have caught this: they arrived as ``UnknownEvent`` against the real
+    server. See ``LIFECYCLE_EVENT_NAMES``.
+    """
+
+    @pytest.mark.parametrize("name", sorted(LIFECYCLE_EVENT_NAMES))
+    def test_lifecycle_frames_are_ignored(self, name: str) -> None:
+        parsed = ev(name, {})
+        assert isinstance(parsed, IgnoredEvent)
+        assert parsed.name == name
+
+    @pytest.mark.parametrize("name", sorted(LIFECYCLE_EVENT_NAMES))
+    def test_lifecycle_frames_are_not_unknown(self, name: str) -> None:
+        assert not isinstance(ev(name, {}), UnknownEvent)
+
+    @pytest.mark.parametrize("name", sorted(LIFECYCLE_EVENT_NAMES))
+    def test_reason_distinguishes_them_from_passthrough(self, name: str) -> None:
+        """They carry nothing; passthrough frames carry a duplicate.
+
+        Same disposal, different reason — and the reason is what stops someone
+        later deciding one of these is safe to 'handle'.
+        """
+        assert ev(name, {}).reason == "lifecycle"
+
+    def test_lifecycle_and_passthrough_sets_are_disjoint(self) -> None:
+        assert not (LIFECYCLE_EVENT_NAMES & PASSTHROUGH_EVENT_NAMES)
+
+    def test_start_event_loop_fires_per_call_and_folds_to_nothing(self) -> None:
+        """A tool turn emits several. None may touch the answer."""
+        acc = fold(
+            ev("init_event_loop", {}),
+            ev("start_event_loop", {}),
+            MessageStart(),
+            TextDelta(index=0, text="42"),
+            MessageStop(),
+            ev("start_event_loop", {}),
+            Done(),
+        )
+        assert acc.text == "42"
 
 
 # =====================================================================

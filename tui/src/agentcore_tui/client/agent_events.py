@@ -47,6 +47,26 @@ from ..usage import Usage
 #: consuming them duplicates assistant output. See the module docstring.
 PASSTHROUGH_EVENT_NAMES = frozenset({"event", "message", "result"})
 
+#: Strands event-loop lifecycle frames. They carry no content at all — the
+#: payload is `{}` — and mark where the agent's loop opened and where each
+#: model call began (`start_event_loop` fires once per LLM call, so a tool turn
+#: emits several). Dropped for the same reason the SPA drops them: nothing to
+#: render.
+#:
+#: Kept separate from :data:`PASSTHROUGH_EVENT_NAMES` because the reason
+#: differs, and the reason is the thing worth preserving: passthrough frames are
+#: dropped because they *duplicate* content a typed event already carries, so
+#: consuming them doubles the answer. These are dropped because they carry
+#: nothing. Merging the sets would lose that distinction the next time someone
+#: reads it and decides to "handle" one of them.
+#:
+#: Found by replaying a live `/chat/stream` capture, not by fixtures: neither
+#: source the dialect was written from (the SPA's `stream-parser-types.ts`, the
+#: SSE table in `CLAUDE.MD`) mentions either frame, because the SPA ignores them
+#: via its `switch` default rather than naming them.
+LIFECYCLE_EVENT_NAMES = frozenset({"init_event_loop", "start_event_loop"})
+
+
 #: How much of a tool result to retain. Terminal transcripts are the wrong place
 #: for a 200KB search dump, and the full text is not needed after rendering.
 TOOL_RESULT_PREVIEW_CHARS = 2000
@@ -474,6 +494,9 @@ def parse_agent_event(name: str, data: str) -> AgentEvent:
 
     if resolved in PASSTHROUGH_EVENT_NAMES:
         return IgnoredEvent(name=resolved)
+
+    if resolved in LIFECYCLE_EVENT_NAMES:
+        return IgnoredEvent(name=resolved, reason="lifecycle")
 
     match resolved:
         case "message_start":
