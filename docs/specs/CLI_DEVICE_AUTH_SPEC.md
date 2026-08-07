@@ -1,6 +1,7 @@
 # CLI Device Authorization
 
-**Status:** in progress — domain layer landed, everything else pending
+**Status:** in progress — backend complete through the routes layer; middleware
+branch and TUI client pending
 **Audience:** platform maintainers, auth owners
 **Supersedes:** the CLI-as-OAuth-client approach reverted in #850
 
@@ -61,8 +62,18 @@ session lease.
 
 So a CLI holding a valid sealed session value needs **one new resolution branch
 in one middleware**. No route changes. No dependency changes. No MCP
-implications. CSRF stays dormant because `CSRFMiddleware` only enforces when a
-session cookie is present.
+implications.
+
+CSRF needs one small change, not none. `CSRFMiddleware` gates on
+`request.state.bff_session` being set — **not** on cookie presence, despite
+what an earlier draft of this document claimed. Attaching a session from a
+header therefore drags every state-changing CLI request into CSRF enforcement,
+where it fails for want of a double-submit token it cannot hold. The middleware
+sets `request.state.bff_session_from_header` and `CSRFMiddleware` exempts it.
+That is correct rather than merely expedient: CSRF depends on the browser
+attaching a credential to a cross-site request by itself, which is true of
+cookies and false of headers — a hostile page cannot set `Authorization`
+cross-origin without the server allowing it through CORS preflight.
 
 The sealed value is an AES-GCM envelope over the session id under a
 Secrets-Manager-held derived key, deliberately portable so any Fargate task can
@@ -113,6 +124,8 @@ blocked the previous approach in a containerised dev environment.
 | `device_code` at rest | SHA-256 hashed | A leaked grant table must yield nothing claimable. Plain SHA-256, not a KDF: the input is 256 bits of machine entropy, so a slow hash would only add latency per poll. |
 | What approval records | `session_id` only, never a sealed value | Sealing needs the codec key from Secrets Manager, so the table is not a credential store. |
 | Expiry | Checked in application code | DynamoDB TTL deletion is asynchronous and documented as lagging up to 48h, so an expired row stays readable. |
+| Storage | Items live in the **BFF sessions table** under `DEVICE-GRANT#` / `DEVICE-USERCODE#` prefixes | Follows `apis.shared.harness.grants`, which already keeps `HEADLESS-GRANT#` items there. The classification argument is easier here: that module pins Cognito refresh tokens, whereas a grant holds a hash and a `session_id`. No new table, no new IAM grant, and **no infrastructure deploy before the feature works**. `DEVICE_GRANTS_TABLE_NAME` moves them to a dedicated table as a config change. |
+| Orphaned CLI sessions | Deleted when approval fails at the callback | On the device path nobody holds the freshly minted session — the browser deliberately gets no cookie and the CLI can no longer claim it — so leaving it would strand a live credential until its 8h TTL. |
 
 **User-visible consequence of the session-ownership choice:** signing out in the
 browser does **not** sign out the CLI, and vice versa. This matches `gh` and
@@ -135,26 +148,52 @@ becoming a guessing amplifier.
 - [x] **Domain layer** — `apis/shared/auth/device_grants/models.py`:
       `DeviceGrant`, `GrantStatus`, code generation, normalisation, hashing,
       state machine, poll throttle. 33 tests.
-- [ ] **Repository** — DynamoDB persistence. Needs lookup by `device_code_hash`
-      (poll) *and* by `user_code` (browser approval); a second item keyed
-      `USERCODE#<code>` pointing at the hash avoids a GSI.
-- [ ] **Service** — create / approve / single-use claim, with the claim being a
-      conditional update so two concurrent polls cannot both receive the value.
-- [ ] **Routes** — `POST /auth/cli/authorize`, `GET /auth/cli/verify`,
-      `POST /auth/cli/token`, plus the `state_data.device_code` branch in the
-      existing `GET /auth/callback` (`app_api/auth/bff/routes.py:293`). Add
-      `device_code` to `OIDCStateData` (`apis/shared/auth/state_store.py:14`).
-- [ ] **Middleware branch** — header fallback in `SessionRefreshMiddleware`.
-      Must not re-emit or clear cookies on the header path.
-- [ ] **CDK** — a grants table with a `ttl` attribute. Requires a
-      `platform.yml` deploy before the feature works.
-- [ ] **Rate limiting** — on `/auth/cli/verify` (user-code guessing) and
-      `/auth/cli/token` (poll abuse).
+- [x] **Repository** — `device_grants/repository.py`. Grant keyed
+      `DEVICE-GRANT#<device_code_hash>`; a pointer item
+      `DEVICE-USERCODE#<user_code>` holds the hash so the browser lookup needs
+      no GSI. Both written in one `TransactWriteItems`, so a user-code
+      collision fails loudly instead of retargeting another CLI's grant, and
+      a partial create is impossible. Readers deliberately do **not** hide
+      expired rows — RFC 8628 needs `expired_token` distinguished from an
+      unknown grant. 33 tests.
+- [x] **Service** — `device_grants/service.py`. `authorize` / `approve` /
+      `deny` / `lookup_pending` / `poll`. 42 tests. The ordering inside `poll`
+      is the load-bearing part:
+      1. throttle from the *previous* poll's stamp, writing this one after, so
+         a client ignoring `interval` never advances past `slow_down`;
+      2. read the session and seal **before** claiming, so a revoked session
+         or an unreachable Secrets Manager fails non-destructively;
+      3. claim last, and return only what the claim returns — the losing poll
+         has by then sealed a valid value and must discard it.
+- [x] **Routes** — `POST /auth/cli/authorize`, `GET /auth/cli/verify`,
+      `POST /auth/cli/token` in `app_api/auth/bff/cli_routes.py`, browser
+      screens in `bff/pages.py`, plus the device branch in `GET /auth/callback`.
+      24 tests. Two deviations from this spec's original wording:
+      the `OIDCStateData` field is named **`device_user_code`**, because it
+      carries the *user* code (the server never sees the device code in the
+      clear); and `verify` reports unknown, expired, and already-answered
+      codes identically, so the endpoint is not a user-code existence oracle.
+- [x] **Rate limiting** — reuses `apis/shared/rate_limit.py`. `authorize` and
+      `verify` are keyed per client IP; `token` is keyed on the device-code
+      hash so one aggressive client cannot exhaust the budget for everyone
+      behind a shared egress address. Note the limiter is **fail-open** by
+      design, so it is a backstop, not a primary control.
+- [x] **Middleware branch** — `sealed_session_from_header` +
+      `Authorization: BFF <sealed>` fallback in `SessionRefreshMiddleware`.
+      Cookie takes precedence, so no existing request's path changes. The
+      header path never writes or clears cookies, but it *does* still slide
+      the DDB TTL — an active CLI keeps its session alive like an active
+      browser. Also required the `CSRFMiddleware` exemption described above
+      (`bff_session_from_header`), which this spec originally said was
+      unnecessary. 23 tests.
 - [ ] **TUI** — replace the PKCE flow with device polling; delete
       `tui/src/agentcore_tui/auth/` (~600 lines, 60 tests) and the
       "Browser SSO (OIDC + PKCE)" section of `tui/README.md`. Keep
       `client/auth.py`'s `AuthProvider` seam and add a `SessionAuth`
       implementation; `BearerAuth` becomes unused.
+- ~~**CDK** — a grants table with a `ttl` attribute.~~ **Not needed.** Grants
+      live in the existing BFF sessions table (see the Storage decision
+      above), so there is no `platform.yml` deploy blocking this feature.
 
 ## Facts worth not rediscovering
 
@@ -172,3 +211,22 @@ becoming a guessing amplifier.
   users lack `custom:provider_sub`.
 - The dev environment is prefix `dev-boisestateai-v2`, API base
   `https://dev.boisestate.ai/api`.
+- `tests/routes/test_pbt_auth_sweep.py` sweeps **every** registered route and
+  asserts 401 when unauthenticated. All three `/auth/cli/*` routes had to be
+  added to its `PUBLIC_ROUTE_PATTERNS` allowlist with justification. Any new
+  public route needs the same, or the full suite goes red.
+- FastAPI rejects `-> Union[HTMLResponse, RedirectResponse]` at import time
+  ("Invalid args for response field"). A route returning either must be
+  annotated `-> Response`, as `bff_callback` is.
+- `CSRFMiddleware` keys off `request.state.bff_session`, **not** the cookie.
+  Any future way of populating that state must decide explicitly whether it is
+  CSRF-relevant. `.kiro/steering/terminal-client.md` still carries the older,
+  incorrect "only enforces when a session cookie is present" wording and should
+  be corrected when the TUI work lands.
+- `pytest.ini` sets `--disable-warnings`, so warning summaries are hidden. To
+  see them: `pytest -o addopts="--import-mode=importlib"`.
+- Backend `mypy` is pinned to `python_version = "3.10"` in
+  `backend/pyproject.toml` while the project requires 3.13, so every `StrEnum`
+  degrades to `str` and produces spurious errors. `mypy --python-version 3.13`
+  is clean apart from the `boto3`-untyped set the rest of the codebase already
+  reports. Unrelated one-line fix, not gated in CI.

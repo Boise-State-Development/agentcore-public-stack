@@ -2,10 +2,35 @@
 refreshes the underlying Cognito access token, and stashes the resulting
 `SessionRecord` on `request.state.bff_session` for downstream dependencies.
 
-Dormant by default: when the request has no `__Host-bff_session` cookie (the
-state during Phases 2–5), this is a fast pass-through. When `BFFConfig` is
-not enabled (env vars unset, e.g. local dev or pre-Phase-1 environments),
-the middleware short-circuits before doing any work.
+Dormant by default: when the request carries neither a `__Host-bff_session`
+cookie nor an `Authorization: BFF <sealed>` header, this is a fast
+pass-through. When `BFFConfig` is not enabled (env vars unset, e.g. local
+dev or pre-Phase-1 environments), the middleware short-circuits before
+doing any work.
+
+Two ways in, one resolution path:
+
+*Cookie* — the browser. Unchanged behaviour: the cookie may be re-emitted
+with a slid `Max-Age`, or cleared when it proves unrecoverable.
+
+*Header* — the terminal client, which cannot receive a redirect and so
+cannot hold a cookie (see `docs/specs/CLI_DEVICE_AUTH_SPEC.md`). It
+presents the sealed value it obtained from `POST /auth/cli/token` as
+`Authorization: BFF <sealed>`. Because that value is an AES-GCM envelope
+portable across tasks by design, `_resolve_session` handles it verbatim —
+no new crypto, no new storage — and every downstream consumer reads
+`request.state.bff_session` rather than a cookie, so nothing else changes.
+
+**The header path never writes or clears cookies.** A CLI has no cookie
+jar, and emitting `Set-Cookie` for a request that merely carried a header
+would let it mutate an unrelated browser session. It does still slide the
+DDB TTL: an active CLI keeps its session alive like an active browser.
+
+Note that CSRF is *not* automatically dormant on the header path.
+`CSRFMiddleware` gates on `request.state.bff_session` being set, not on
+cookie presence, so this middleware also publishes
+`request.state.bff_session_from_header` for it to exempt. See the comment
+at that assignment for why exempting is correct.
 
 Refresh-storm coalescing: the per-session `asyncio.Lock` from
 `sessions_bff.lock` ensures multiple concurrent requests for the same
@@ -49,6 +74,30 @@ from apis.shared.sessions_bff.repository import SessionRepository
 from apis.shared.sessions_bff.single_flight import resolve_once
 
 logger = logging.getLogger(__name__)
+
+#: Authorization scheme the terminal client uses to present a sealed
+#: session. Deliberately not `Bearer`: a BFF session value is not a token,
+#: and reusing `Bearer` would make it ambiguous with the JWT that
+#: `/invocations` accepts upstream — where `get_current_user_trusted`
+#: decodes without verifying, because AgentCore's authorizer already
+#: validated it. Nothing on app-api may drift into that shape.
+SESSION_HEADER_SCHEME = "bff"
+
+
+def sealed_session_from_header(request: Request) -> Optional[str]:
+    """Extract the sealed session value from `Authorization: BFF <sealed>`.
+
+    Returns None for a missing header, any other scheme (notably `Bearer`,
+    so those requests keep falling through untouched), or an empty value.
+    """
+    raw = request.headers.get("authorization")
+    if not raw:
+        return None
+    scheme, _, value = raw.partition(" ")
+    if scheme.strip().lower() != SESSION_HEADER_SCHEME:
+        return None
+    value = value.strip()
+    return value or None
 
 
 class SessionRefreshMiddleware(BaseHTTPMiddleware):
@@ -120,32 +169,62 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         cookie_value = request.cookies.get(SESSION_COOKIE_NAME)
-        if not cookie_value:
-            # No BFF cookie — Bearer-token requests, anonymous health checks,
-            # static assets. Pass through untouched.
+        # Cookie takes precedence. Browser traffic is the common case and
+        # must behave exactly as it did before this branch existed, so the
+        # header is only consulted when no cookie is present — meaning no
+        # existing request's path can change.
+        from_header = False
+        sealed_value = cookie_value
+        if not sealed_value:
+            sealed_value = sealed_session_from_header(request)
+            from_header = sealed_value is not None
+
+        if not sealed_value:
+            # Neither a BFF cookie nor a BFF header — Bearer-token requests,
+            # anonymous health checks, static assets. Pass through untouched.
             return await call_next(request)
 
-        record, clear_cookie = await self._resolve_session(cookie_value)
+        record, clear_cookie = await self._resolve_session(sealed_value)
         renewal_max_age: Optional[int] = None
         if record is not None:
             request.state.bff_session = record
+            # Tells CSRFMiddleware which credential carried this request. It
+            # gates on `bff_session` being set, NOT on cookie presence, so
+            # without this flag every state-changing header request would be
+            # rejected for a missing CSRF token it cannot hold.
+            #
+            # Exempting is correct, not merely convenient: CSRF exists
+            # because browsers attach cookies to cross-site requests on
+            # their own. An `Authorization` header is never attached
+            # automatically — a hostile page cannot set it cross-origin
+            # without the server allowing it through CORS preflight — so a
+            # header-authenticated request cannot be forged that way.
+            request.state.bff_session_from_header = from_header
             request.state.bff_csrf_token = CSRFHelper.derive_token(
                 record.csrf_secret, record.session_id
             )
             # Decide whether this request should slide the session forward.
             # `_maybe_slide` writes DDB if past the throttle window and returns
             # the cookie Max-Age to re-emit (or None to leave the existing
-            # cookie alone).
+            # cookie alone). On the header path we still want the DDB slide
+            # and simply discard the Max-Age below.
             renewal_max_age = await self._maybe_slide(record)
 
         response = await call_next(request)
+
+        # Header path: no cookies in, no cookies out. Returning here skips
+        # both the clear and the re-emit. Clearing would be worse than
+        # pointless — a request that merely carried a header would strip an
+        # unrelated browser session's cookies from the same client.
+        if from_header:
+            return response
 
         if clear_cookie:
             self._clear_cookies(response)
         elif renewal_max_age is not None and record is not None:
             self._reemit_cookies(
                 response,
-                sealed_session_value=cookie_value,
+                sealed_session_value=sealed_value,
                 csrf_token=request.state.bff_csrf_token,
                 max_age_seconds=renewal_max_age,
             )

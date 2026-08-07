@@ -175,6 +175,7 @@ logger.info("Added BFF session-refresh + CSRF middlewares (dormant until cookie 
 # Import routers
 from apis.app_api.health import router as health_router
 from apis.app_api.auth.routes import router as auth_router
+from apis.app_api.auth.bff import cli_router as bff_cli_auth_router
 from apis.app_api.auth.bff import router as bff_auth_router
 from apis.app_api.auth.api_keys.routes import router as api_keys_router
 from apis.app_api.sessions.routes import router as sessions_router
@@ -211,6 +212,7 @@ from apis.app_api.schedules.routes import router as schedules_router
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(bff_auth_router)  # BFF Token Handler auth routes (Phase 3, dormant until SPA cutover)
+app.include_router(bff_cli_auth_router)  # CLI device-authorization flow (/auth/cli/*)
 app.include_router(api_keys_router)
 app.include_router(sessions_router)
 app.include_router(admin_router)

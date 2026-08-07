@@ -29,6 +29,10 @@ from fastapi.responses import JSONResponse
 from starlette.responses import RedirectResponse
 
 from apis.shared.auth.dependencies import get_current_user_from_session
+from apis.shared.auth.device_grants.service import (
+    ApprovalOutcome,
+    DeviceGrantService,
+)
 from apis.shared.auth.models import User
 from apis.shared.auth.state_store import OIDCStateData, create_state_store
 from apis.shared.users.repository import UserRepository
@@ -48,6 +52,7 @@ from apis.shared.sessions_bff.repository import SessionRepository
 
 from .config import BFFAuthConfig
 from .cookies import clear_session_cookies, set_session_cookies
+from .pages import device_approved_page, device_problem_page
 from .token_exchange import (
     IdTokenClaims,
     TokenExchangeError,
@@ -81,6 +86,7 @@ _AUTHORIZE_SCOPES = "openid email profile"
 _state_store = None
 _repository: Optional[SessionRepository] = None
 _user_sync_service: Optional[UserSyncService] = None
+_device_grant_service: Optional[DeviceGrantService] = None
 
 
 def _get_state_store():
@@ -88,6 +94,19 @@ def _get_state_store():
     if _state_store is None:
         _state_store = create_state_store()
     return _state_store
+
+
+def _get_device_grant_service() -> DeviceGrantService:
+    """Lazy-init the device-grant service.
+
+    Lives here rather than in `cli_routes` so the callback's device branch and
+    the CLI routes share one instance — and so `_reset_for_tests` has a single
+    place to drop it. `cli_routes` imports this getter.
+    """
+    global _device_grant_service
+    if _device_grant_service is None:
+        _device_grant_service = DeviceGrantService()
+    return _device_grant_service
 
 
 def _get_repository(config: BFFAuthConfig) -> SessionRepository:
@@ -129,10 +148,11 @@ def _get_cookie_codec(config: BFFAuthConfig) -> CookieCodec:
 
 def _reset_for_tests() -> None:
     """Drop the lazy singletons — only used by the test suite."""
-    global _state_store, _repository, _user_sync_service
+    global _state_store, _repository, _user_sync_service, _device_grant_service
     _state_store = None
     _repository = None
     _user_sync_service = None
+    _device_grant_service = None
     _reset_default_codec_for_tests()
 
 
@@ -380,6 +400,23 @@ async def bff_callback(
     # login.
     await _sync_user_from_id_token(claims)
 
+    # ─── Device-authorization branch ───────────────────────────────────
+    # A `device_user_code` in the state means this round-trip was started by
+    # `GET /auth/cli/verify` on behalf of a terminal, not by the SPA. The
+    # session row above is the *CLI's* session; hand it to the waiting CLI by
+    # approving the grant, and return without writing cookies.
+    #
+    # No cookies is the whole point. Writing them would log this browser in
+    # as a side effect of approving a terminal, and would leave the browser
+    # and the CLI sharing one session row — two holders of one refresh token,
+    # which is exactly what tumbles on the next Cognito rotation.
+    if state_data is not None and state_data.device_user_code:
+        return await _complete_device_authorization(
+            user_code=state_data.device_user_code,
+            session_id=session_id,
+            user_id=claims.sub,
+        )
+
     codec = _get_cookie_codec(config)
     sealed = codec.seal(CookiePayload(session_id=session_id))
     csrf_token = CSRFHelper.derive_token(csrf_secret, session_id)
@@ -435,6 +472,69 @@ async def _sync_user_from_id_token(claims: IdTokenClaims) -> None:
         )
     except Exception as exc:
         logger.warning("BFF callback user-sync skipped: %s", exc)
+
+
+async def _complete_device_authorization(
+    *, user_code: str, session_id: str, user_id: str
+) -> Response:
+    """Hand the freshly minted session to a waiting CLI. Sets no cookies.
+
+    Called from the callback when the OIDC state carries a device user code.
+    On any failure the session row is deleted: nobody holds it — the browser
+    is deliberately not given a cookie for it, and the CLI will never receive
+    it — so leaving it would strand a live credential until its TTL.
+    """
+    service = _get_device_grant_service()
+    if not service.enabled:
+        logger.error("Device callback reached with device grants unconfigured")
+        await _discard_orphan_session(session_id)
+        return device_problem_page(
+            "Sign-in isn't available",
+            "Command-line sign-in is not configured on this deployment.",
+        )
+
+    try:
+        outcome = await service.approve(
+            user_code=user_code, session_id=session_id, user_id=user_id
+        )
+    except Exception as exc:
+        logger.error("Device grant approval failed: %s", exc)
+        await _discard_orphan_session(session_id)
+        return device_problem_page(
+            "Something went wrong",
+            "We couldn't complete the sign-in. Start a new one from your "
+            "terminal and try again.",
+        )
+
+    if outcome is not ApprovalOutcome.APPROVED:
+        # NOT_FOUND / EXPIRED / ALREADY_RESOLVED. The grant was answerable
+        # when /verify checked it, so this is a slow sign-in that crossed the
+        # deadline, or a duplicate tab finishing second.
+        logger.info("Device grant not approved at callback: %s", outcome)
+        await _discard_orphan_session(session_id)
+        return device_problem_page(
+            "That sign-in request expired",
+            "Device codes are valid for a few minutes. Start a new sign-in "
+            "from your terminal and try again.",
+        )
+
+    logger.info("Device authorization completed for user %s", user_id)
+    return device_approved_page()
+
+
+async def _discard_orphan_session(session_id: str) -> None:
+    """Delete a session row that no client will ever hold.
+
+    Best-effort: the DynamoDB TTL is the backstop, so a failure here is worth
+    a log line and nothing more.
+    """
+    config = BFFAuthConfig.from_env()
+    try:
+        await _get_repository(config).delete(session_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to delete orphaned device session %s: %s", session_id, exc
+        )
 
 
 def _redirect_with_cookies_cleared(

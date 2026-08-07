@@ -10,8 +10,13 @@ These routes are deliberately separated from the existing `/auth/providers`
 endpoint in `apis.app_api.auth.routes` so the BFF flow can be enabled,
 versioned, and (eventually) renamed without touching the public provider
 listing the SPA already depends on.
+
+`cli_router` adds the device-authorization flow (`/auth/cli/*`) the terminal
+client uses to obtain one of these same sessions without a browser redirect
+it can receive.
 """
 
+from .cli_routes import router as cli_router
 from .routes import router
 
-__all__ = ["router"]
+__all__ = ["cli_router", "router"]

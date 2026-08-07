@@ -23,6 +23,13 @@ class OIDCStateData:
     # before storage — a path that fails the allowlist is dropped, never
     # round-tripped to the browser.
     return_to: Optional[str] = None
+    # Set only by `GET /auth/cli/verify`. Carries the *user* code (not the
+    # device code, which the server never sees in the clear) of the device
+    # grant this browser round-trip is approving. Its presence is what makes
+    # the callback take the device branch: mint the session, approve the
+    # grant, and set NO cookies. Server-side only and one-time-use, like the
+    # rest of the state row.
+    device_user_code: Optional[str] = None
 
 
 class StateStore(ABC):
@@ -171,6 +178,8 @@ class DynamoDBStateStore(StateStore):
                     item['provider_id'] = data.provider_id
                 if data.return_to:
                     item['return_to'] = data.return_to
+                if data.device_user_code:
+                    item['device_user_code'] = data.device_user_code
 
             # Use expiresAt as TTL attribute (DynamoDB will auto-delete)
             self.table.put_item(Item=item)
@@ -242,6 +251,7 @@ class DynamoDBStateStore(StateStore):
                 nonce=item.get('nonce'),
                 provider_id=item.get('provider_id'),
                 return_to=item.get('return_to'),
+                device_user_code=item.get('device_user_code'),
             )
             return True, data
             

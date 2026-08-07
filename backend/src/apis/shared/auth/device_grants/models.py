@@ -196,5 +196,10 @@ class DeviceTokenResponse(BaseModel):
 class DevicePendingResponse(BaseModel):
     """Not yet approved. ``error`` uses RFC 8628 codes so clients can branch."""
 
-    error: str = Field(..., description="authorization_pending | slow_down | expired_token | access_denied")
+    error: str = Field(
+        ...,
+        description=(
+            "authorization_pending | slow_down | expired_token | access_denied " "| invalid_grant (unknown device code, or one already claimed)"
+        ),
+    )
     error_description: str = Field(..., description="Human-readable explanation")
