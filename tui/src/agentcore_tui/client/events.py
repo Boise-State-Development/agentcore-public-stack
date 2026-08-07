@@ -25,6 +25,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..usage import Usage
+
 
 class ConverseEvent:
     """Base class for a parsed SSE event."""
@@ -76,35 +78,6 @@ class ContentBlockStop(ConverseEvent):
 @dataclass(frozen=True, slots=True)
 class MessageStop(ConverseEvent):
     stop_reason: str = "end_turn"
-
-
-@dataclass(frozen=True, slots=True)
-class Usage:
-    """Token counts for one turn. Cache fields are absent on some models."""
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_input_tokens: int | None = None
-    cache_write_input_tokens: int | None = None
-
-    @property
-    def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
-
-    @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> Usage:
-        def as_int(value: Any) -> int:
-            return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-        def as_opt_int(value: Any) -> int | None:
-            return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-        return cls(
-            input_tokens=as_int(payload.get("inputTokens")),
-            output_tokens=as_int(payload.get("outputTokens")),
-            cache_read_input_tokens=as_opt_int(payload.get("cacheReadInputTokens")),
-            cache_write_input_tokens=as_opt_int(payload.get("cacheWriteInputTokens")),
-        )
 
 
 @dataclass(frozen=True, slots=True)

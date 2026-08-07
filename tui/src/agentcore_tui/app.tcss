@@ -147,6 +147,47 @@ Screen {
     color: $accent;
 }
 
+/* --------------------------------------------------------------------- splash */
+
+/* Opaque, not translucent: this covers a half-built chat screen, and letting
+ * that show through reads as a rendering fault rather than a backdrop. */
+Splash {
+    background: $background;
+    align: center middle;
+}
+
+/* The mascot is offset horizontally across the full width, so it must not be
+ * centred or constrained — `width: auto` keeps the offset animation measuring
+ * the art rather than a stretched container. */
+Splash #splash-mascot {
+    width: auto;
+    height: auto;
+    color: $accent;
+    text-style: bold;
+}
+
+Splash #splash-wordmark {
+    width: auto;
+    height: auto;
+    color: $primary;
+    text-style: bold;
+    margin-top: 1;
+}
+
+Splash #splash-subtitle {
+    width: auto;
+    height: auto;
+    color: $text-muted;
+}
+
+Splash #splash-hint {
+    width: auto;
+    height: auto;
+    color: $text-muted;
+    text-style: italic;
+    margin-top: 1;
+}
+
 /* --------------------------------------------------------------- model picker */
 
 ModelPicker {

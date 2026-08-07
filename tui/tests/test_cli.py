@@ -59,6 +59,16 @@ class TestArgumentParsing:
     def test_absent_api_key_normalises_to_none(self) -> None:
         assert self.parse(["status"]).api_key is None
 
+    def test_banner_flag_is_tri_state(self) -> None:
+        """None means "decide from state", so absent must not become False."""
+        assert self.parse([]).banner is None
+        assert self.parse(["--banner"]).banner is True
+        assert self.parse(["--no-banner"]).banner is False
+
+    def test_banner_and_no_banner_together_is_rejected(self) -> None:
+        with pytest.raises(SystemExit):
+            self.parse(["--banner", "--no-banner"])
+
 
 class TestLogin:
     def test_stores_key_in_keyring_and_url_in_config(

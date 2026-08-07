@@ -31,18 +31,20 @@ from pathlib import Path
 
 from platformdirs import user_config_path
 
+from . import keyring_store
+from .credentials import Capability, CredentialSource, SessionProbe, resolve_source
 from .errors import ConfigError
+from .keyring_store import APP_NAME
 
-APP_NAME = "agentcore-tui"
-
-#: Keyring service under which API keys are stored.
-KEYRING_SERVICE = "agentcore-tui"
+#: Kept as a re-export: callers imported this from here before it moved.
+KEYRING_SERVICE = keyring_store.API_KEY_SERVICE
 
 ENV_BASE_URL = "AGENTCORE_BASE_URL"
 ENV_API_KEY = "AGENTCORE_API_KEY"
 ENV_MODEL_ID = "AGENTCORE_MODEL_ID"
 ENV_COGNITO_DOMAIN = "AGENTCORE_COGNITO_DOMAIN_URL"
 ENV_CLI_CLIENT_ID = "AGENTCORE_CLI_CLIENT_ID"
+ENV_BANNER = "AGENTCORE_BANNER"
 
 #: Loopback ports registered on the CLI app client by CDK. Cognito matches
 #: redirect URIs byte-for-byte and does not honour RFC 8252's variable-port
@@ -99,6 +101,20 @@ class Config:
     #: Loopback ports registered on that client. Cognito matches redirect URIs
     #: exactly, so only these can be bound.
     callback_ports: tuple[int, ...] = DEFAULT_CALLBACK_PORTS
+    # -- startup banner ------------------------------------------------------
+    #: Master switch. Defaults to *off* here but to *on* in
+    #: :func:`resolve_config`, which is the only path production takes. A
+    #: directly-constructed Config — tests, or anything embedding this client —
+    #: therefore gets no animation it did not ask for.
+    banner: bool = False
+    #: Set by ``--banner`` to replay it regardless of what state records.
+    force_banner: bool = False
+    # -- credentials ---------------------------------------------------------
+    #: Which credential this client will present. Resolved by
+    #: :func:`resolve_config`; the dataclass default is NONE so a
+    #: directly-constructed Config is explicit about being unauthenticated.
+    #: Never infer this from ``api_key`` being set — under SSO it will not be.
+    credential_source: CredentialSource = CredentialSource.NONE
 
     @property
     def sso_configured(self) -> bool:
@@ -106,21 +122,29 @@ class Config:
         return bool(self.base_url and self.cognito_domain_url and self.cli_client_id)
 
     @property
-    def converse_url(self) -> str:
-        """Absolute URL of the api-converse endpoint."""
-        return f"{self.base_url.rstrip('/')}/chat/api-converse"
-
-    @property
     def is_complete(self) -> bool:
-        """True when there is enough configuration to make a request."""
-        return bool(self.base_url) and bool(self.api_key)
+        """True when there is enough configuration to make a request.
+
+        Asks the credential discriminant rather than checking ``api_key``: an
+        absent API key is normal for an SSO session, and testing the field
+        directly would tell a signed-in user they are not configured.
+        """
+        return bool(self.base_url) and self.credential_source.usable
+
+    def can(self, capability: Capability) -> bool:
+        """True when the resolved credential can reach ``capability``.
+
+        Lets the UI disable a feature it cannot serve instead of issuing a
+        request that is certain to 401.
+        """
+        return self.credential_source.can(capability)
 
     def missing(self) -> list[str]:
         """Names of the required settings that are absent."""
         gaps = []
         if not self.base_url:
             gaps.append("base URL")
-        if not self.api_key:
+        if not self.credential_source.usable:
             gaps.append("API key")
         return gaps
 
@@ -133,48 +157,28 @@ class Config:
 # Keyring access
 # ---------------------------------------------------------------------------
 #
-# `keyring` raises on Linux hosts with no Secret Service (headless servers,
-# containers, CI). That must degrade to env vars rather than crash, so every
-# call site catches broadly and reports the reason instead of propagating.
-
-
-def _keyring_username(base_url: str) -> str:
-    """Keyring account name — the base URL, so multiple deployments coexist."""
-    return base_url.rstrip("/") or "default"
+# Thin wrappers over :mod:`agentcore_tui.keyring_store`, which owns the
+# degradation behaviour shared with the SSO token store.
 
 
 def load_key_from_keyring(base_url: str) -> tuple[str | None, str | None]:
     """Return ``(api_key, unavailable_reason)`` from the OS keyring."""
-    try:
-        import keyring
-
-        return keyring.get_password(KEYRING_SERVICE, _keyring_username(base_url)), None
-    except Exception as exc:  # pragma: no cover - depends on host keyring
-        return None, f"{type(exc).__name__}: {exc}"
+    return keyring_store.load(keyring_store.API_KEY_SERVICE, base_url)
 
 
 def save_key_to_keyring(base_url: str, api_key: str) -> None:
     """Persist an API key to the OS keyring, or raise ConfigError."""
-    try:
-        import keyring
-
-        keyring.set_password(KEYRING_SERVICE, _keyring_username(base_url), api_key)
-    except Exception as exc:
-        raise ConfigError(
-            f"Could not write to the OS keyring ({type(exc).__name__}).",
-            hint=f"Set {ENV_API_KEY} in your environment instead.",
-        ) from exc
+    keyring_store.store(
+        keyring_store.API_KEY_SERVICE,
+        base_url,
+        api_key,
+        hint=f"Set {ENV_API_KEY} in your environment instead.",
+    )
 
 
 def delete_key_from_keyring(base_url: str) -> bool:
     """Remove a stored API key. Returns False when there was nothing to remove."""
-    try:
-        import keyring
-
-        keyring.delete_password(KEYRING_SERVICE, _keyring_username(base_url))
-        return True
-    except Exception:
-        return False
+    return keyring_store.delete(keyring_store.API_KEY_SERVICE, base_url)
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +263,28 @@ def _as_int(raw: object, name: str, default: int) -> int:
     return raw
 
 
+def _as_bool(raw: object, name: str) -> bool | None:
+    """Parse a boolean from TOML (real bool) or an env var (string).
+
+    Env vars are strings, so the usual spellings are accepted. An unrecognised
+    value is an error rather than a silent False — `AGENTCORE_BANNER=off`
+    quietly meaning "on" is exactly the kind of thing nobody debugs.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        lowered = raw.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        if not lowered:
+            return None
+    raise ConfigError(f"Config value `{name}` must be a boolean, got {raw!r}")
+
+
 def _as_models(raw: object) -> tuple[str, ...] | None:
     if raw is None:
         return None
@@ -297,6 +323,9 @@ def resolve_config(
     config_file: Path | None = None,
     env: dict[str, str] | None = None,
     use_keyring: bool = True,
+    banner: bool | None = None,
+    force_banner: bool = False,
+    session_probe: SessionProbe | None = None,
 ) -> Config:
     """Merge every configuration source into a single :class:`Config`.
 
@@ -329,6 +358,16 @@ def resolve_config(
     if resolved_model not in models:
         models = (resolved_model, *models)
 
+    # `--banner` implies the banner is wanted, so it also overrides a config
+    # file or env var that switched it off.
+    resolved_banner = banner
+    if resolved_banner is None:
+        resolved_banner = _as_bool(environ.get(ENV_BANNER), ENV_BANNER)
+    if resolved_banner is None:
+        resolved_banner = _as_bool(file_settings.get("banner"), "banner")
+    if resolved_banner is None:
+        resolved_banner = True
+
     return Config(
         base_url=resolved_base,
         api_key=resolved_key,
@@ -344,4 +383,11 @@ def resolve_config(
         cognito_domain_url=(_as_str(environ.get(ENV_COGNITO_DOMAIN)) or _as_str(file_settings.get("cognito_domain_url"))),
         cli_client_id=(_as_str(environ.get(ENV_CLI_CLIENT_ID)) or _as_str(file_settings.get("cli_client_id"))),
         callback_ports=_as_ports(file_settings.get("callback_ports")),
+        banner=resolved_banner or force_banner,
+        force_banner=force_banner,
+        credential_source=resolve_source(
+            base_url=resolved_base,
+            api_key=resolved_key,
+            session_probe=session_probe,
+        ),
     )

@@ -8,9 +8,11 @@ from collections.abc import AsyncIterator, Callable
 import httpx
 import pytest
 
-from agentcore_tui.client import ApiConverseClient, ChatMessage
+from agentcore_tui.client import ApiConverseClient
+from agentcore_tui.conversation import Message
 from agentcore_tui.client.events import ConverseEvent, Done, ErrorEvent, MessageStop, TextDelta, TurnAccumulator
 from agentcore_tui.config import Config
+from agentcore_tui.credentials import CredentialSource
 from agentcore_tui.errors import (
     AuthError,
     BadRequestError,
@@ -21,14 +23,14 @@ from agentcore_tui.errors import (
     UpstreamError,
 )
 
-from .conftest import BASE_URL, MODEL_ID, sse_body, sse_response, text_stream
+from .conftest import BASE_URL, MODEL_ID, make_config, sse_body, sse_response, text_stream
 
 ClientFactory = Callable[[Callable[[httpx.Request], httpx.Response]], ApiConverseClient]
 
-HELLO = [ChatMessage(role="user", content="hello")]
+HELLO = [Message(role="user", content="hello")]
 
 
-async def drain(client: ApiConverseClient, messages: list[ChatMessage] | None = None) -> list[ConverseEvent]:
+async def drain(client: ApiConverseClient, messages: list[Message] | None = None) -> list[ConverseEvent]:
     """Collect every event from one streamed turn."""
     return [event async for event in client.stream(messages or HELLO)]
 
@@ -36,11 +38,11 @@ async def drain(client: ApiConverseClient, messages: list[ChatMessage] | None = 
 class TestConstruction:
     def test_requires_base_url(self) -> None:
         with pytest.raises(ConfigError, match="base URL"):
-            ApiConverseClient(Config(base_url="", api_key="k"))
+            ApiConverseClient(make_config(base_url=""))
 
     def test_requires_api_key(self) -> None:
         with pytest.raises(ConfigError, match="API key"):
-            ApiConverseClient(Config(base_url=BASE_URL, api_key=None))
+            ApiConverseClient(make_config(api_key=None, credential_source=CredentialSource.NONE))
 
     async def test_does_not_close_an_injected_client(self, config: Config) -> None:
         """Callers that supply a client keep ownership of its lifecycle."""
@@ -88,9 +90,9 @@ class TestRequestShape:
             return sse_response(text_stream(["ok"]))
 
         history = [
-            ChatMessage(role="user", content="first"),
-            ChatMessage(role="assistant", content="reply"),
-            ChatMessage(role="user", content="second"),
+            Message(role="user", content="first"),
+            Message(role="assistant", content="reply"),
+            Message(role="user", content="second"),
         ]
         await drain(make_client(handler), history)
 
@@ -116,10 +118,7 @@ class TestRequestShape:
             captured.update(json.loads(request.content))
             return sse_response(text_stream(["ok"]))
 
-        config = Config(
-            base_url=BASE_URL,
-            api_key="k",
-            model_id=MODEL_ID,
+        config = make_config(
             temperature=0.25,
             top_p=0.9,
             max_tokens=256,

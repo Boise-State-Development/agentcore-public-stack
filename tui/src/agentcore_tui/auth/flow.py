@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from ..config import DEFAULT_CALLBACK_PORTS as CONFIG_CALLBACK_PORTS
 from ..errors import AgentCoreTuiError
 from .loopback import LoopbackReceiver
 from .oidc import AuthorizationError, CognitoOidcClient, OidcConfig, build_authorize_url
@@ -24,7 +25,11 @@ from .tokens import TokenSet, load_refresh_token, save_refresh_token
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CALLBACK_PORTS = (8976, 8977, 8978)
+#: Re-exported from :mod:`agentcore_tui.config`, which is the single definition.
+#: These must agree with `cognito.cliClient.callbackPorts` in the CDK config —
+#: Cognito matches redirect URIs byte-for-byte and does not honour RFC 8252's
+#: variable-port rule, so an unregistered port simply cannot be used.
+DEFAULT_CALLBACK_PORTS = CONFIG_CALLBACK_PORTS
 
 
 class StateMismatchError(AgentCoreTuiError):

@@ -21,6 +21,7 @@ from httpx_sse import aconnect_sse
 
 from .. import __version__
 from ..config import Config
+from ..conversation import Message
 from ..errors import (
     AuthError,
     BadRequestError,
@@ -31,7 +32,10 @@ from ..errors import (
     UpstreamError,
 )
 from ..logging_setup import redact
-from .events import ConverseEvent, ErrorEvent, Metadata, MessageStop, TextDelta, Usage, parse_event
+from ..usage import Usage
+from .auth import ApiKeyAuth, AuthProvider
+from .endpoints import Endpoints
+from .events import ConverseEvent, ErrorEvent, Metadata, MessageStop, TextDelta, parse_event
 
 logger = logging.getLogger(__name__)
 
@@ -56,15 +60,14 @@ _KNOWN_EVENT_NAMES = frozenset(
 )
 
 
-@dataclass(frozen=True, slots=True)
-class ChatMessage:
-    """One turn of conversation history, in the shape the endpoint expects."""
+def message_payloads(messages: Sequence[Message]) -> list[dict[str, str]]:
+    """Domain messages in the shape this endpoint expects.
 
-    role: str
-    content: str
-
-    def to_payload(self) -> dict[str, str]:
-        return {"role": self.role, "content": self.content}
+    Here rather than on :class:`~agentcore_tui.conversation.Message` so the
+    domain type carries no endpoint's wire format. A second endpoint with a
+    different message shape gets its own mapping beside its own client.
+    """
+    return [{"role": message.role, "content": message.content} for message in messages]
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,14 +109,32 @@ def _server_detail(response: httpx.Response) -> str:
 
 
 class ApiConverseClient:
-    """Talks to ``POST {base_url}/chat/api-converse``."""
+    """Talks to ``POST {base_url}/chat/api-converse``.
 
-    def __init__(self, config: Config, *, client: httpx.AsyncClient | None = None) -> None:
+    ``auth`` and ``endpoints`` are injectable so the transport concerns are not
+    welded to ``Config``: this client keeps Config only for the sampling
+    parameters that genuinely are configuration (model, token ceiling,
+    temperature, timeout).
+    """
+
+    def __init__(
+        self,
+        config: Config,
+        *,
+        auth: AuthProvider | None = None,
+        endpoints: Endpoints | None = None,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
         if not config.base_url:
             raise ConfigError("No base URL configured", hint="Run `agentcore-tui login --base-url https://your-host/api`.")
-        if not config.api_key:
-            raise ConfigError("No API key configured", hint="Run `agentcore-tui login` to store a key.")
+        if auth is None:
+            if not config.api_key:
+                raise ConfigError("No API key configured", hint="Run `agentcore-tui login` to store a key.")
+            auth = ApiKeyAuth(config.api_key)
+
         self._config = config
+        self._auth = auth
+        self._endpoints = endpoints or Endpoints(config.base_url)
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(
@@ -138,18 +159,19 @@ class ApiConverseClient:
 
     # -- request construction ------------------------------------------------
 
-    def _headers(self) -> dict[str, str]:
-        # A fresh dict every call: httpx_sse mutates the mapping it is given.
+    async def _headers(self) -> dict[str, str]:
+        # A fresh dict every call: httpx_sse mutates the mapping it is given,
+        # and the auth provider may have refreshed a token since the last one.
         return {
-            "X-API-Key": self._config.api_key or "",
+            **await self._auth.headers(),
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         }
 
-    def _payload(self, messages: Sequence[ChatMessage], *, model_id: str | None, stream: bool) -> dict[str, Any]:
+    def _payload(self, messages: Sequence[Message], *, model_id: str | None, stream: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model_id": model_id or self._config.model_id,
-            "messages": [message.to_payload() for message in messages],
+            "messages": message_payloads(messages),
             "stream": stream,
             "max_tokens": self._config.max_tokens,
         }
@@ -180,7 +202,7 @@ class ApiConverseClient:
 
     async def stream(
         self,
-        messages: Sequence[ChatMessage],
+        messages: Sequence[Message],
         *,
         model_id: str | None = None,
     ) -> AsyncIterator[ConverseEvent]:
@@ -192,7 +214,7 @@ class ApiConverseClient:
         server has already committed a 200 by then.
         """
         target = model_id or self._config.model_id
-        url = self._config.converse_url
+        url = self._endpoints.api_converse
         payload = self._payload(messages, model_id=target, stream=True)
 
         prompt_chars = sum(len(message.content) for message in messages)
@@ -212,7 +234,7 @@ class ApiConverseClient:
         text_chars = 0
 
         try:
-            async with aconnect_sse(self._client, "POST", url, json=payload, headers=self._headers()) as source:
+            async with aconnect_sse(self._client, "POST", url, json=payload, headers=await self._headers()) as source:
                 # aconnect_sse does not raise_for_status, so check before
                 # iterating — aiter_sse() would fail on the content-type of an
                 # error body and mask the real cause.
@@ -273,7 +295,7 @@ class ApiConverseClient:
 
     async def complete(
         self,
-        messages: Sequence[ChatMessage],
+        messages: Sequence[Message],
         *,
         model_id: str | None = None,
     ) -> CompletedTurn:
@@ -282,7 +304,7 @@ class ApiConverseClient:
         payload = self._payload(messages, model_id=target, stream=False)
 
         try:
-            response = await self._client.post(self._config.converse_url, json=payload, headers=self._headers())
+            response = await self._client.post(self._endpoints.api_converse, json=payload, headers=await self._headers())
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
             raise ConnectionFailedError(self._config.base_url, str(exc) or type(exc).__name__) from exc
         except httpx.HTTPError as exc:

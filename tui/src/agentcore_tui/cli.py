@@ -79,6 +79,24 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Terminal client for the AgentCore platform. Run with no arguments to start chatting.",
     )
     parser.add_argument("--version", action="version", version=f"agentcore-tui {__version__}")
+    # Banner flags are on the root parser only: they affect the chat UI, which
+    # is the no-subcommand path. A mutually exclusive group means
+    # `--banner --no-banner` is rejected rather than silently resolved.
+    banner_flags = parser.add_mutually_exclusive_group()
+    banner_flags.add_argument(
+        "--banner",
+        dest="banner",
+        action="store_true",
+        default=None,
+        help="Replay the startup banner, even if it has already been shown for this version",
+    )
+    banner_flags.add_argument(
+        "--no-banner",
+        dest="banner",
+        action="store_false",
+        default=None,
+        help="Suppress the startup banner for this run (set `banner = false` in the config file to disable it permanently)",
+    )
     # NB: no `parser.set_defaults()` for the shared dests. `set_defaults`
     # rewrites `action.default` on every matching action, and `parents=[common]`
     # shares those Action *instances* with the subparsers — so setting a default
@@ -303,7 +321,16 @@ def _command_chat(args: argparse.Namespace) -> int:
     # Imported lazily so `login`/`status` do not pay Textual's import cost.
     from .app import ChatApp
 
-    config = resolve_config(base_url=args.base_url, model_id=args.model_id, config_file=args.config_file)
+    # `--banner` both enables and forces: asking for it implies wanting to see
+    # it now, not "enable it for the next version bump".
+    banner = getattr(args, "banner", None)
+    config = resolve_config(
+        base_url=args.base_url,
+        model_id=args.model_id,
+        config_file=args.config_file,
+        banner=banner,
+        force_banner=banner is True,
+    )
     ChatApp(config).run()
     return 0
 
@@ -314,7 +341,7 @@ def _normalise(args: argparse.Namespace) -> argparse.Namespace:
     Shared flags default to SUPPRESS so a subcommand cannot overwrite a value
     given before it; the cost is that absent flags have no attribute at all.
     """
-    for name in ("base_url", "model_id", "config_file", "api_key", "command", "log_level", "log_file"):
+    for name in ("base_url", "model_id", "config_file", "api_key", "command", "log_level", "log_file", "banner"):
         if not hasattr(args, name):
             setattr(args, name, None)
     return args

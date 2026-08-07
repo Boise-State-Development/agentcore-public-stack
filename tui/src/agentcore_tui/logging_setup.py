@@ -25,7 +25,7 @@ from pathlib import Path
 
 from platformdirs import user_log_path
 
-from .config import APP_NAME
+from .keyring_store import APP_NAME
 
 ENV_LOG_LEVEL = "AGENTCORE_LOG_LEVEL"
 ENV_LOG_FILE = "AGENTCORE_LOG_FILE"

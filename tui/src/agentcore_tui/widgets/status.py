@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual.widgets import Static
 
-from ..client.events import Usage
+from ..usage import Usage
 
 
 def _short_model(model_id: str) -> str:

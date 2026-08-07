@@ -215,11 +215,39 @@ temperature = 0.7
 max_tokens = 4096
 top_p = 0.9
 timeout_seconds = 300
+
+# Startup banner. Shown once per installed version, then not again until you
+# upgrade. Set to false to never show it; `--banner` replays it on demand.
+banner = true
 ```
 
 `api_key` in this file is honoured for environments with no keyring, but the
 client warns on startup because it is plain text on disk. `agentcore-tui login`
 never writes it there.
+
+### Startup banner
+
+The banner runs once per installed version. Which version was last shown is
+recorded in a state file, kept separate from the config file so launching the
+client never rewrites something you hand-edit:
+
+| OS | Path |
+|---|---|
+| Linux | `~/.local/state/agentcore-tui/state.json` |
+| macOS | `~/Library/Application Support/agentcore-tui/state.json` |
+| Windows | `%LOCALAPPDATA%\agentcore-tui\state.json` |
+
+| Control | Effect |
+|---|---|
+| `--banner` | Replay it now, even if already seen for this version |
+| `--no-banner` | Skip it for this run |
+| `banner = false` | Never show it |
+| `AGENTCORE_BANNER=0` | Same, via the environment |
+| `TEXTUAL_ANIMATIONS=none` | Show the static frame, no motion |
+
+Any key or click skips it, and it never blocks startup — the composer is focused
+and ready underneath while it plays. If the state file cannot be written (a
+read-only home, for instance) the only consequence is that the banner replays.
 
 ## Troubleshooting
 
@@ -434,15 +462,53 @@ tui/
 └── src/agentcore_tui/
     ├── cli.py                   # argparse entrypoint: chat, login, logout, status
     ├── config.py                # config file + env + keyring resolution
+    ├── credentials.py           # which credential is held, and what it can reach
+    ├── keyring_store.py         # OS keyring access + the app-identity constant
+    ├── state.py                 # local bookkeeping the client writes (banner version)
+    ├── conversation.py          # domain: Message + ConversationStore
+    ├── turn.py                  # one in-flight turn, behind a TurnSink protocol
+    ├── usage.py                 # token counts, shared by wire/domain/view
     ├── errors.py                # typed errors, each with an actionable hint
-    ├── app.py                   # the Textual App and turn lifecycle
+    ├── app.py                   # bindings, screen stack, palette, startup
     ├── app.tcss                 # stylesheet
     ├── client/
-    │   ├── converse.py          # HTTP/SSE transport, error mapping
-    │   └── events.py            # typed SSE events + turn accumulator
-    ├── screens/model_picker.py
+    │   ├── endpoints.py         # every app-api URL
+    │   ├── auth.py              # AuthProvider: ApiKeyAuth / BearerAuth / NoAuth
+    │   ├── converse.py          # api-converse transport + payload shape
+    │   └── events.py            # api-converse SSE dialect + turn accumulator
+    ├── screens/
+    │   ├── chat.py              # the chat screen (implements TurnSink)
+    │   ├── model_picker.py
+    │   └── splash.py            # startup banner (art lives in module constants)
     └── widgets/                 # transcript messages, composer, status bar
 ```
+
+### How it fits together
+
+Four layers, each testable without the one above it:
+
+```
+screens/  ── view. Implements TurnSink; owns no conversation state.
+turn.py   ── one in-flight turn. Event dispatch is a registry, not a match.
+client/   ── transport. endpoints + auth are separate from any one endpoint.
+conversation.py, usage.py, credentials.py ── domain. No Textual, no httpx.
+```
+
+Rules worth keeping as this grows:
+
+- **State does not live on the App.** `ConversationStore` is App-owned and passed
+  to screens, so a conversation list and the chat screen read one conversation
+  rather than two copies.
+- **A new feature area is a new `Screen`**, sharing the store — not more widgets
+  on the App. `app.py` stays at wiring size.
+- **A second endpoint is a module in `client/`** pairing its payload shape with
+  its event dialect. `events.py` is the api-converse dialect; the agent stream is
+  a *sibling* dialect, not an extension of it — it has roughly 35 event types to
+  api-converse's 11.
+- **Ask `credential_source`, never `api_key`,** to decide what the client can do.
+  `Config.can(Capability.SESSIONS)` exists so the UI can disable a feature rather
+  than issue a request that is certain to 401.
+
 
 The version is kept in step with the monorepo `VERSION` file by
 `scripts/common/sync-version.sh`.

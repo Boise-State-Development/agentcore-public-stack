@@ -18,49 +18,68 @@ API-key authenticated `POST /chat/api-converse`. Verified end to end against a
 local app-api pointed at the `dev-boisestateai-v2` tables, on both Bedrock and
 Mantle (OpenAI-wire) models.
 
-**Phase 2 — auth groundwork written, not deployed.**
-- CDK: a public Cognito app client for the CLI, its id added to the AgentCore
-  Runtime's `allowedClients`, and `COGNITO_CLI_APP_CLIENT_ID` exposed to app-api.
-- Backend: `CognitoIdentityProviderService` now fans federated IdPs across every
-  app client, not just one.
-- TUI: full OIDC + PKCE login flow (`login --sso`).
+**Phase 2 — direction changed. See #[[file:docs/specs/CLI_DEVICE_AUTH_SPEC.md]].**
 
-**Blocked on:** deploying `platform.yml` so the client exists. Until then no real
-token can be obtained, so the SSO path is unit-tested but never yet run for real.
+The original plan gave the CLI its own public Cognito app client and had it call
+the AgentCore Runtime directly with a PKCE-minted token. That was **reverted**
+(PR #850) after deploying it revealed the cost: `/chat/stream` forwards the BFF
+session's token upstream, and the agent forwards *that* to MCP servers which
+validate it in-app. A CLI-minted token would therefore reach external MCP
+servers that may pin `client_id` to the BFF client — servers deployed outside
+this repository, so the work could not be bounded. A second app client also
+carried a permanent tax (bearer branch, IdP fan-out with no resync, a separate
+refresh path with no `SECRET_HASH`).
 
-**Not started:** the app-api Bearer branch (see Auth below), and everything that
-depends on it — sessions/history, model discovery, the tool-using agent.
+**The replacement:** the CLI obtains a **real BFF session** via an app-api device
+authorization flow and presents it as `Authorization: BFF <sealed>`. It never
+talks to Cognito. The token seen downstream is always BFF-minted, so MCP is
+unaffected and **no Cognito configuration changes at all**.
+
+Why this is small: `SessionRefreshMiddleware` resolves the cookie and attaches a
+`SessionRecord` to `request.state.bff_session`; every consumer reads that record
+and none reads a cookie. So the integration point is one branch in one
+middleware — not `get_current_user_from_session`, despite its docstring.
+
+**Landed so far:** the device-grant domain layer
+(`apis/shared/auth/device_grants/`, 33 tests). Repository, service, routes,
+middleware branch, CDK table and the TUI client are pending — task list is in the
+spec.
+
+**Dead code awaiting removal:** `tui/src/agentcore_tui/auth/` (OIDC + PKCE,
+~600 lines) and the "Browser SSO" section of `tui/README.md`. The `AuthProvider`
+seam in `client/auth.py` survives; it gains a `SessionAuth` and `BearerAuth`
+becomes unused.
 
 ## The auth situation (read before touching auth)
 
-`get_current_user_from_session` (`apis/shared/auth/dependencies.py:217`) is
-**cookie-only**. It never reads the `Authorization` header, and its docstring
-says so deliberately: "External Bearer callers were retired in the BFF
-migration." The only API-key endpoint in all of app-api is
-`POST /chat/api-converse`, which is a bare Bedrock Converse wrapper — **no
-tools, no memory, no session persistence**.
+`get_current_user_from_session` (`apis/shared/auth/dependencies.py:217`) does
+**not** read the request. It consumes `request.state.bff_session`, which
+`SessionRefreshMiddleware` populates. Its docstring says "External Bearer callers
+were retired in the BFF migration" — true, but the useful consequence is that
+adding a *session* resolution path costs one middleware branch and changes no
+route.
 
-The real agent is `POST /chat/stream` → inference-api `/invocations`.
-`/invocations` *does* accept `Authorization: Bearer` via
-`get_current_user_trusted`, but that decodes with `verify_signature: False`
-because AgentCore's JWT authorizer validates upstream. **Do not reuse
-`get_current_user_trusted` on app-api** — there is no upstream check there, so a
-Bearer branch needs real `CognitoJWTValidator` verification, taught to accept the
-CLI client id alongside `COGNITO_BFF_APP_CLIENT_ID`.
+The only API-key endpoint in all of app-api is `POST /chat/api-converse`, which
+is a bare Bedrock Converse wrapper — **no tools, no memory, no session
+persistence**. Everything richer is session-authenticated.
+
+`/invocations` accepts `Authorization: Bearer` via `get_current_user_trusted`,
+which decodes with `verify_signature: False` because AgentCore's JWT authorizer
+validates upstream. **Do not reuse `get_current_user_trusted` on app-api** —
+there is no upstream check there.
 
 Facts established by research, worth not rediscovering:
 - Cognito matches `redirect_uri` **byte-for-byte** and does **not** honour RFC
-  8252's "treat the loopback port as variable" rule. Ports must be pre-registered
-  on the app client; ephemeral ports are impossible. Hence the fixed
-  `8976/8977/8978`, registered for both `localhost` and `127.0.0.1`.
-- Cognito does **not** support the device authorization grant (RFC 8628). AWS's
-  own guidance is to build it with Lambda + API Gateway + DynamoDB. Don't.
-- The BFF app client is confidential (`generateSecret: true`), so PKCE against it
-  would still need the secret. That is why the CLI has its own public client.
-- Federated IdPs are created **at runtime by admins**, not in CDK, and there is
-  no resync mechanism. That is why the fan-out exists.
-- CSRF needs no work for a Bearer client: `CSRFMiddleware` only enforces when a
+  8252's "treat the loopback port as variable" rule. Loopback redirects are a
+  dead end from a container, which is one reason the device flow polls instead.
+- Cognito does **not** support the device authorization grant (RFC 8628). The
+  flow in the spec is app-api's own, reusing the existing BFF login.
+- The BFF app client is confidential (`generateSecret: true`), so the code
+  exchange must happen in app-api, never in the CLI.
+- CSRF needs no work for a header client: `CSRFMiddleware` only enforces when a
   session cookie is present.
+- The sealed session value is an AES-GCM envelope under a Secrets-Manager key,
+  portable across tasks by design — which is what makes handing it to a CLI safe.
 
 ## Layout
 
@@ -68,19 +87,43 @@ Facts established by research, worth not rediscovering:
 tui/src/agentcore_tui/
 ├── cli.py            argparse entry: chat, login [--sso], logout, status
 ├── config.py         CLI flags > env > TOML file > keyring > defaults
+├── credentials.py    which credential is held (API key / SSO) + capabilities
+├── keyring_store.py  OS keyring access; owns APP_NAME
+├── state.py          local bookkeeping the client writes (banner version)
+├── conversation.py   domain: Message + ConversationStore
+├── turn.py           one in-flight turn, behind the TurnSink protocol
+├── usage.py          token counts, shared by wire/domain/view
 ├── errors.py         typed errors, each carrying an actionable `hint`
 ├── logging_setup.py  rotating file log; content redacted unless opted in
-├── app.py            the Textual App and turn lifecycle
+├── app.py            bindings, screen stack, palette, startup (~145 lines)
 ├── app.tcss          stylesheet
-├── client/           api-converse transport (converse.py) + SSE events
-├── auth/             OIDC + PKCE: pkce, tokens, oidc, loopback, flow
-├── screens/          model picker
+├── client/           endpoints.py (URLs), auth.py (AuthProvider),
+│                     converse.py (transport), events.py (SSE dialect)
+├── screens/          chat.py, model_picker.py, splash.py
 └── widgets/          transcript messages, composer, status bar
 ```
 
-189 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
-`run_test()` pilot for the UI, and real loopback round-trips for the OAuth
-receiver.
+337 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+`run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
+app at all, and real loopback round-trips for the OAuth receiver.
+
+**Architecture rules that exist for Phase 2 and should not be relaxed:**
+
+- Conversation state lives in `ConversationStore` (App-owned, passed to screens),
+  never on the App. A second screen reaching `app._history` is what this replaced.
+- A new feature area is a new `Screen` sharing the store, not more widgets on the
+  App. `app.py` stays at wiring size.
+- A second endpoint is a module in `client/` pairing payload shape with event
+  dialect. `events.py` is the api-converse dialect (11 events); the agent stream
+  (~35) is a **sibling** dialect module, not an extension of it.
+- Ask `Config.credential_source` / `Config.can(Capability.X)`, never `api_key`.
+  Under SSO there is no API key and the client is still fully configured.
+- `TurnController.cancel()` is where `POST /sessions/{id}/interrupt` belongs.
+  Cancelling only the local stream leaves the server generating and holding the
+  session lease.
+- Gotcha: `ConversationStore` defines `__len__`, so an empty store is **falsy**.
+  Use `store if store is not None else ...`, never `store or ...` — that bug
+  silently handed each screen a private copy of the conversation.
 
 ## Environment (this will waste your time otherwise)
 
@@ -182,17 +225,23 @@ bash scripts/common/sync-version.sh --check
 
 ## When Phase 2 resumes
 
-1. Deploy `platform.yml`. **Do not `cdk deploy` locally** — `cdk.context.json`
-   has `projectPrefix: "agentcore"` with `domainName`/`awsAccount`/
-   `certificateArn` blank; the real values come from GitHub Variables via
-   `load-env.sh`, and deploying with blanks risks replacing live CloudFront/ALB/
-   Route53 resources.
-2. Set `cognito_domain_url` and `cli_client_id` in the TUI config, then run
-   `agentcore-tui login --sso` for the first real token.
-3. Prove agent chat straight to `/invocations` with that Bearer token — this
-   needs no backend change and is the cheapest validation of the whole approach.
-4. Add the app-api Bearer branch, which unlocks `/sessions`, history, `/models`,
-   and `/tools`.
+Task list and rationale live in
+#[[file:docs/specs/CLI_DEVICE_AUTH_SPEC.md]]. Order:
+
+1. Repository + service for device grants (DynamoDB; lookup by
+   `device_code_hash` for polls and by `user_code` for browser approval).
+   The claim must be a conditional update so two concurrent polls cannot both
+   receive the session value.
+2. Routes — `/auth/cli/authorize`, `/auth/cli/verify`, `/auth/cli/token`, plus a
+   `state_data.device_code` branch in the existing `GET /auth/callback`.
+3. The middleware header branch. Must not re-emit or clear cookies on that path.
+4. CDK grants table, then a `platform.yml` deploy.
+5. TUI client: device polling, and delete the `auth/` package.
+
+**Do not `cdk deploy` locally** — `cdk.context.json` has
+`projectPrefix: "agentcore"` with `domainName`/`awsAccount`/`certificateArn`
+blank; the real values come from GitHub Variables via `load-env.sh`, and
+deploying with blanks risks replacing live CloudFront/ALB/Route53 resources.
 
 For the agent stream itself, **reuse `apis/shared/harness/sse.py`** —
 `iter_sse_events()` is a correct parser for that stream and

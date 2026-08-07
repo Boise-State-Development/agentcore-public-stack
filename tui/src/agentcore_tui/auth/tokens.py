@@ -18,9 +18,10 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from .. import keyring_store
 from ..errors import ConfigError
 
-KEYRING_SERVICE = "agentcore-tui-sso"
+KEYRING_SERVICE = keyring_store.SSO_SERVICE
 
 #: Refresh a little early rather than discovering expiry mid-request.
 EXPIRY_SKEW_SECONDS = 120
@@ -85,48 +86,30 @@ class TokenSet:
 # Persistence
 # ---------------------------------------------------------------------------
 #
-# Keyed by base URL so one machine can hold sessions for several deployments.
-# Every call degrades rather than raising: headless Linux hosts, containers, and
-# CI often have no Secret Service, and `agentcore-tui status` should be able to
-# say so instead of crashing.
-
-
-def _account(base_url: str) -> str:
-    return base_url.rstrip("/") or "default"
+# Keyed by base URL so one machine can hold sessions for several deployments,
+# and stored under a service distinct from API keys so revoking one credential
+# cannot disturb the other. The degradation behaviour lives in
+# :mod:`agentcore_tui.keyring_store`, shared with the API-key store.
 
 
 def save_refresh_token(base_url: str, refresh_token: str) -> None:
     """Persist a refresh token, or raise ConfigError with a usable hint."""
-    try:
-        import keyring
-
-        keyring.set_password(KEYRING_SERVICE, _account(base_url), refresh_token)
-    except Exception as exc:
-        raise ConfigError(
-            f"Could not write the refresh token to the OS keyring ({type(exc).__name__}).",
-            hint="Without a keyring the session cannot be remembered; you will need to log in each time.",
-        ) from exc
+    keyring_store.store(
+        KEYRING_SERVICE,
+        base_url,
+        refresh_token,
+        hint="Without a keyring the session cannot be remembered; you will need to log in each time.",
+    )
 
 
 def load_refresh_token(base_url: str) -> tuple[str | None, str | None]:
     """Return ``(refresh_token, unavailable_reason)``."""
-    try:
-        import keyring
-
-        return keyring.get_password(KEYRING_SERVICE, _account(base_url)), None
-    except Exception as exc:  # pragma: no cover - depends on host keyring
-        return None, f"{type(exc).__name__}: {exc}"
+    return keyring_store.load(KEYRING_SERVICE, base_url)
 
 
 def delete_refresh_token(base_url: str) -> bool:
     """Remove a stored refresh token. False when there was nothing to remove."""
-    try:
-        import keyring
-
-        keyring.delete_password(KEYRING_SERVICE, _account(base_url))
-        return True
-    except Exception:
-        return False
+    return keyring_store.delete(KEYRING_SERVICE, base_url)
 
 
 def describe_stored_session(base_url: str) -> str:
