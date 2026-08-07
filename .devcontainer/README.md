@@ -20,6 +20,7 @@ For agent execution rules and the workspace-path map, see
 | Docker CLI (client only)     | 29.4.3     | sha256-verified static binary             |
 | Docker buildx (CLI plugin)   | 0.30.1     | sha256-verified GitHub release            |
 | Playwright chromium runtime  | n/a        | Apt deps for Playwright 1.59.x            |
+| OS keyring (gnome-keyring)   | n/a        | Apt, from the base image's snapshot       |
 
 > All artifacts downloaded over the network during the build are verified
 > against either a pinned sha256 or a PGP signature. Apt packages installed

@@ -127,7 +127,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # of backend/Dockerfile.app-api and backend/Dockerfile.inference-api.
 #
 # Pass 1 — Core developer tooling, build chain, locale, networking utils.
-# Pass 2 — Playwright 1.59.x runtime libs and fonts for chromium on
+# Pass 2 — A real OS keyring. `agentcore-tui login --sso` stores a live
+#          platform session, and the alternative to a keyring is a credential
+#          in plaintext on disk or in an environment variable. gnome-keyring
+#          provides the SecretService D-Bus interface that Python's `keyring`
+#          package selects automatically, so it needs no client-side code:
+#          without these three packages `keyring.get_keyring()` returns
+#          `backends.fail.Keyring` and every write raises. `dbus-x11` is for
+#          `dbus-launch` — a container has no session bus of its own.
+#          Unlocked per container start by `scripts/local-dev/keyring-init.sh`.
+# Pass 3 — Playwright 1.59.x runtime libs and fonts for chromium on
 #          Ubuntu 24.04, sourced from microsoft/playwright nativeDeps.ts
 #          (ubuntu24.04-x64 chromium + tools).
 # -----------------------------------------------------------------------------
@@ -140,6 +149,8 @@ RUN set -eux; \
         libssl-dev libffi-dev zlib1g-dev \
         locales tzdata \
         vim-tiny nano openssh-client iputils-ping dnsutils; \
+    apt-get install -y --no-install-recommends \
+        gnome-keyring libsecret-1-0 dbus-x11; \
     apt-get install -y --no-install-recommends \
         libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
         libcairo2 libcups2t64 libdbus-1-3 libdrm2 libgbm1 \
@@ -295,6 +306,31 @@ RUN set -eux; \
     install -d -m 0755 -o "${USERNAME}" -g "${USERNAME}" "${PLAYWRIGHT_BROWSERS_PATH}"
 
 # -----------------------------------------------------------------------------
+# Rejoin the container's D-Bus session on every shell
+# -----------------------------------------------------------------------------
+# In /etc/profile.d, NOT in ~/.bashrc, and the distinction is load-bearing:
+# `docker exec ... bash -lc '...'` starts a *non-interactive login* shell, and
+# Ubuntu's stock ~/.bashrc returns on its fourth line when the shell is not
+# interactive. Anything appended there is unreachable for every scripted
+# `docker exec` in this repo's docs. /etc/profile.d/*.sh is sourced by
+# /etc/profile for login shells whether interactive or not.
+#
+# Without this, each exec is a fresh process tree with no bus address, Python's
+# `keyring` cannot reach the Secret Service, and it silently selects
+# `backends.fail.Keyring` — which presents as "no keyring is installed" even
+# though it is. Written by scripts/local-dev/keyring-init.sh.
+RUN set -eux; \
+    { \
+      echo '# Rejoin the D-Bus session started by scripts/local-dev/keyring-init.sh.'; \
+      echo '# See the devcontainer Dockerfile for why this is not in ~/.bashrc.'; \
+      echo 'if [ -r "$HOME/.cache/dbus-session" ]; then'; \
+      echo '    . "$HOME/.cache/dbus-session"'; \
+      echo '    export DBUS_SESSION_BUS_ADDRESS'; \
+      echo 'fi'; \
+    } > /etc/profile.d/10-agentcore-dbus.sh; \
+    chmod 0644 /etc/profile.d/10-agentcore-dbus.sh
+
+# -----------------------------------------------------------------------------
 # User-level shell setup
 # -----------------------------------------------------------------------------
 USER ${USERNAME}
@@ -323,6 +359,7 @@ RUN set -eux; \
       echo 'fi'; \
       echo 'export PS1="\\[\\033[01;32m\\]\\u@devcontainer\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ "'; \
     } >> "/home/${USERNAME}/.bashrc"
+
 
 # -----------------------------------------------------------------------------
 # Image labels

@@ -360,26 +360,53 @@ current occupancy; it sends a final per-call `metadata` instead. Consequences:
 6. **Never transparently retry a stream** — a reopen double-runs the turn and
    corrupts memory. Surface the failure instead.
 
-### Open: no keyring in a container, and this is where we develop
+### The container needs its keyring switched on
 
-`login --sso` completes the flow and then **fails at storage** inside the
-devcontainer, because the image has no Secret Service — `keyring.get_keyring()`
-returns `keyring.backends.fail.Keyring`. That is the environment this project's
-own local-dev loop runs in, so the feature is currently unusable exactly where it
-is most convenient to use.
+`login --sso` stores a live platform session, so it needs somewhere encrypted to
+put it. A container has no login session, therefore no D-Bus session bus and no
+unlocked keyring, and Python's `keyring` then selects `backends.fail.Keyring` and
+raises on every write — which presents as "no keyring is installed" even after
+the packages are in the image.
 
-API keys already have a fallback for this (`AGENTCORE_API_KEY`, and a
-plaintext-config-file path flagged by `Config.api_key_from_plaintext_file`).
-Sessions deliberately have neither, which is why the failure is loud rather than
-silent. Three ways out, none yet chosen:
+Resolved by giving the devcontainer a real one rather than weakening where the
+credential goes. Plaintext-on-disk and environment-variable fallbacks were both
+considered and rejected: they would have made the container the least safe place
+to sign in, and it is the place we sign in most.
 
-* **An env var** (`AGENTCORE_SESSION`), consistent with the API key. Cost: a live
-  session credential in the process table and shell history.
-* **A 0600 file** in the config dir, used only when the keyring is unavailable.
-  Precedent inside this repo (`api_key_from_plaintext_file`) and outside it
-  (`gh`, `aws`, `kubectl` all do this). Cost: a credential at rest on disk.
-* **Leave it.** Containers use an API key; sessions are for real terminals.
-  Cost: the agent, sessions and catalogues stay unreachable from the devcontainer.
+* `.devcontainer/Dockerfile` installs `gnome-keyring libsecret-1-0 dbus-x11`,
+  which is enough for `keyring` to select its `SecretService` backend with **no
+  client-side code at all** — `config.save_session_to_keyring` and friends work
+  unchanged.
+* `scripts/local-dev/keyring-init.sh` starts the bus and unlocks the keyring with
+  a passphrase the developer types. The passphrase is never stored; a passphrase
+  in a file would sit next to the thing it encrypts.
+* The Dockerfile writes the bus-address rejoin to **`/etc/profile.d/`**, not
+  `~/.bashrc`. `docker exec ... bash -lc '...'` is a *non-interactive* login
+  shell and Ubuntu's stock `~/.bashrc` returns on its fourth line for exactly
+  that case, so anything appended there is unreachable from every scripted exec
+  in this repo's docs. (Worth knowing: the Dockerfile's pre-existing `~/.bashrc`
+  PATH block has the same problem.)
+
+Verified in a clean container built from the changed image: `fail.Keyring` before
+init, `SecretService.Keyring` after, a session written in one `docker exec` and
+read in another, `agentcore-tui status` reporting `credential  : signed in`, the
+value absent from the keyring file on disk, and the session still readable after
+a `docker restart` when `~/.local/share/keyrings` is a named volume.
+
+Three traps found while building it, each of which produced a *working* keyring
+inside the script and a broken one in the next command:
+
+1. **`--components=secrets` is mandatory.** Without it the daemon starts but
+   never claims `org.freedesktop.secrets`, so there is no Secret Service to find.
+2. **The daemon must `--daemonize`.** Backgrounding with `&` dies with the
+   `docker exec`, and because `org.freedesktop.secrets` is D-Bus *activatable*,
+   the next request spawns a replacement that never received a passphrase — so
+   the collection is locked. `setsid` is not a substitute: it detaches the
+   process before it reads the passphrase from the pipe.
+3. **A stale bus address outlives its daemon.** The socket file in `/tmp`
+   survives a container restart, so testing `[ -S "$socket" ]` reuses a dead bus.
+   Liveness has to be a real `ListNames` call.
+
 
 
 ### Open question 1: how to wire the dialect into a turn

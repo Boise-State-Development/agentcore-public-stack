@@ -65,11 +65,31 @@ questions are in the spec.
 that minted its own tokens, which is the design #850 reverted. `AuthProvider` is
 the seam; a provider is not.
 
-**Known gap:** the devcontainer has **no keyring backend**
-(`keyring.backends.fail.Keyring`), so `login --sso` completes the flow and then
-fails at storage. API keys have an env-var fallback; sessions deliberately have
-none, so the failure is loud. Options are written up in the spec under "Open: no
-keyring in a container" and the choice has not been made.
+**Container keyring:** the image now ships one. A container has no login session,
+so `keyring` used to select `backends.fail.Keyring` and `login --sso` completed
+the flow only to fail at storage. `.devcontainer/Dockerfile` installs
+`gnome-keyring libsecret-1-0 dbus-x11` and
+`scripts/local-dev/keyring-init.sh` unlocks it with a passphrase you type once
+per container start — run it with `-it`, it prompts. No TUI code changed; the
+`SecretService` backend is selected automatically. Plaintext-file and env-var
+fallbacks were rejected: they would make the container the least safe place to
+sign in, and it is where we sign in most.
+
+Three traps, each of which yields a working keyring in one command and a broken
+one in the next — details in the spec:
+
+- `gnome-keyring-daemon` needs **`--components=secrets`** or it never claims
+  `org.freedesktop.secrets`.
+- It needs **`--daemonize`**; `&` dies with the `docker exec`, and since the
+  service is D-Bus-activatable the next request spawns a *locked* replacement.
+  `setsid` is not a substitute — it detaches before the passphrase is read.
+- A stale bus socket **file** survives a container restart, so liveness must be a
+  real `ListNames` call, not `[ -S "$socket" ]`.
+
+The bus-address rejoin lives in **`/etc/profile.d/`**, not `~/.bashrc`:
+`bash -lc` is a non-interactive login shell and Ubuntu's stock `~/.bashrc`
+returns early for exactly that. The Dockerfile's pre-existing `~/.bashrc` PATH
+block has the same latent problem.
 
 ## Test fixtures written from types will not save you
 
