@@ -28,15 +28,18 @@ from textual.widgets import Footer, Header
 
 from ..client import AgentStreamClient, ApiConverseClient
 from ..client.agent_events import ToolCallRecord
+from ..client.catalog import CatalogClient, ConversationSummary, HistoryMessage, Model
 from ..client.auth import SessionAuth
 from ..config import Config, config_path, load_session_from_keyring
-from ..conversation import ConversationStore
+from ..conversation import ConversationStore, Message
 from ..credentials import CredentialSource
-from ..errors import ConfigError
+from ..errors import AgentCoreTuiError, ConfigError
 from ..turn import FLUSH_INTERVAL, AgentClientSupplier, AgentTurnController, BaseTurnController, ClientSupplier, TurnController
 from ..usage import Usage
 from ..widgets import AssistantMessage, Composer, Notice, StatusBar, ToolCall, UserMessage
-from .model_picker import ModelPicker
+from .conversations import ConversationList
+from .model_picker import ModelChoice, ModelPicker
+from .tool_picker import ToolPicker
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,8 @@ class ChatScreen(Screen[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("ctrl+n", "new_conversation", "New chat"),
         Binding("f2", "choose_model", "Model"),
+        Binding("f3", "choose_tools", "Tools"),
+        Binding("f4", "conversations", "Chats"),
         # priority so it fires while the composer has focus; `check_action`
         # withdraws it when idle so Esc keeps its normal behaviour then.
         Binding("escape", "cancel_turn", "Stop", priority=True),
@@ -77,6 +82,10 @@ class ChatScreen(Screen[None]):
         self._pending: AssistantMessage | None = None
         self._flush_timer: Timer | None = None
         self._tool_widgets: dict[str, ToolCall] = {}
+        self._catalog: CatalogClient | None = None
+        self._agent_supplier = agent_client_supplier
+        #: None means "every tool my role grants". Narrowed by the tool picker.
+        self._enabled_tools: list[str] | None = None
 
         # Which controller depends on which credential is held, because the two
         # endpoints accept different ones and neither accepts both. A session
@@ -84,21 +93,7 @@ class ChatScreen(Screen[None]):
         # wrapper. Either supplier can be injected, so tests drive both dialects
         # without a credential or a keyring.
         self._agent_mode = agent_client_supplier is not None or (client_supplier is None and config.credential_source is CredentialSource.BFF_SESSION)
-        self._turn: BaseTurnController[Any]
-        if self._agent_mode:
-            self._turn = AgentTurnController(
-                self._store,
-                self,
-                client_supplier=agent_client_supplier or self._agent_client_or_create,
-                max_tokens=config.max_tokens,
-            )
-        else:
-            self._turn = TurnController(
-                self._store,
-                self,
-                client_supplier=client_supplier or self._client_or_create,
-                max_tokens=config.max_tokens,
-            )
+        self._turn: BaseTurnController[Any] = self._build_controller()
 
     # -- accessors -----------------------------------------------------------
 
@@ -212,6 +207,9 @@ class ChatScreen(Screen[None]):
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._catalog is not None:
+            await self._catalog.aclose()
+            self._catalog = None
 
     # -- client --------------------------------------------------------------
 
@@ -229,15 +227,30 @@ class ChatScreen(Screen[None]):
         config object that `status` prints.
         """
         if self._client is None:
-            sealed, unavailable = load_session_from_keyring(self._config.base_url)
-            if not sealed:
-                raise ConfigError(
-                    "No stored session",
-                    hint=f"Run `agentcore-tui login --sso`. ({unavailable})" if unavailable else "Run `agentcore-tui login --sso`.",
-                )
-            self._client = AgentStreamClient(self._config, auth=SessionAuth(sealed))
+            self._client = AgentStreamClient(self._config, auth=SessionAuth(self._sealed_session()))
         assert isinstance(self._client, AgentStreamClient)
         return self._client
+
+    def _catalog_or_create(self) -> CatalogClient:
+        """The JSON API client, for catalogues and conversations.
+
+        Separate from the stream client and separately cached: they have
+        different timeouts (a turn may be quiet for minutes; a list should not
+        be) and a model change invalidates only the stream client.
+        """
+        if self._catalog is None:
+            self._catalog = CatalogClient(self._config.base_url, auth=SessionAuth(self._sealed_session()))
+        return self._catalog
+
+    def _sealed_session(self) -> str:
+        """The stored session, or a ConfigError naming the fix."""
+        sealed, unavailable = load_session_from_keyring(self._config.base_url)
+        if not sealed:
+            raise ConfigError(
+                "No stored session",
+                hint=f"Run `agentcore-tui login --sso`. ({unavailable})" if unavailable else "Run `agentcore-tui login --sso`.",
+            )
+        return sealed
 
     async def _discard_client(self) -> None:
         """Drop the cached client so the next turn rebuilds it.
@@ -388,24 +401,169 @@ class ChatScreen(Screen[None]):
 
     @work
     async def action_choose_model(self) -> None:
-        """Open the model picker and adopt the selection."""
-        chosen = await self.app.push_screen_wait(ModelPicker(self._config.models, self._config.model_id))
-        if not chosen or chosen == self._config.model_id:
+        """Open the model picker, populated from the server's catalogue."""
+        models: list[Model] = []
+        error = ""
+        if self._agent_mode:
+            try:
+                models = await self._catalog_or_create().models()
+            except AgentCoreTuiError as exc:
+                # The picker still opens: "System Default" is a working choice
+                # and is more useful than a dead keybinding.
+                error = f"Could not load models: {exc.message}"
+                logger.warning("model catalogue unavailable: %s", exc)
+        else:
+            error = "Sign in with `agentcore-tui login --sso` to see your deployment's models."
+
+        chosen = await self.app.push_screen_wait(ModelPicker(models, current=self._config.model_id, error=error))
+        if chosen is None:
+            return
+        if chosen.model_id == self._config.model_id and chosen.provider == self._config.provider:
             return
         await self.set_model(chosen)
-        self.notify(f"Model set to {chosen}", timeout=5)
+        self.notify(f"Model set to {chosen.model_id or 'System Default'}", timeout=5)
 
-    async def set_model(self, model_id: str) -> None:
-        """Switch models for subsequent turns."""
-        self._config = self._config.with_model(model_id)
-        self._turn = TurnController(
+    @work
+    async def action_choose_tools(self) -> None:
+        """Open the tool picker, then apply and persist the choice."""
+        if not self._agent_mode:
+            self.notify(
+                "Tools need a signed-in session. Run `agentcore-tui login --sso`.",
+                title="Not available",
+                severity="warning",
+                timeout=8,
+            )
+            return
+
+        try:
+            tools = await self._catalog_or_create().tools()
+        except AgentCoreTuiError as exc:
+            self.notify(exc.message, title="Could not load tools", severity="error", timeout=8)
+            return
+
+        decisions = await self.app.push_screen_wait(ToolPicker(tools))
+        if decisions is None:
+            return
+
+        enabled = sorted(tool_id for tool_id, on in decisions.items() if on)
+        # Apply first, persist second: the turn the user is about to take matters
+        # more than the record of the preference, and a failed save should not
+        # discard a choice they can see.
+        self._set_enabled_tools(enabled)
+        try:
+            await self._catalog_or_create().save_tool_preferences(decisions)
+        except AgentCoreTuiError as exc:
+            self.notify(
+                f"Applied for this session, but not saved: {exc.message}",
+                title="Preferences not saved",
+                severity="warning",
+                timeout=8,
+            )
+        self.notify(f"{len(enabled)} of {len(decisions)} tools enabled", timeout=5)
+
+    @work
+    async def action_conversations(self) -> None:
+        """Browse the user's conversations and open one."""
+        if not self._agent_mode:
+            self.notify(
+                "Saved conversations need a signed-in session. Run `agentcore-tui login --sso`.",
+                title="Not available",
+                severity="warning",
+                timeout=8,
+            )
+            return
+        await self.app.push_screen_wait(ConversationList(self._catalog_or_create, on_open=self._adopt_conversation))
+
+    async def _adopt_conversation(self, summary: ConversationSummary, messages: list[HistoryMessage]) -> None:
+        """Replace the transcript with a stored conversation.
+
+        The store's id changes with its contents, so the next turn continues the
+        conversation the user is now looking at rather than the one they left.
+        """
+        restored: list[Message] = []
+        for message in messages:
+            # Only the two roles the transcript can render, and only messages
+            # with prose: a tool-call-only block has nothing to show here.
+            if message.role == "user" and message.text.strip():
+                restored.append(Message(role="user", content=message.text))
+            elif message.role == "assistant" and message.text.strip():
+                restored.append(Message(role="assistant", content=message.text))
+        self._store.adopt(summary.session_id, restored, title=summary.title)
+
+        await self.transcript.remove_children()
+        self._tool_widgets.clear()
+        self._pending = None
+        for restored_message in restored:
+            if restored_message.role == "user":
+                await self.transcript.mount(UserMessage(restored_message.content))
+                continue
+            assistant = AssistantMessage(self._config.model_id)
+            await self.transcript.mount(assistant)
+            await assistant.append_text(restored_message.content)
+
+        dropped = len(messages) - len(restored)
+        if dropped > 0:
+            # Tool calls and attachments are stored as their own blocks; saying
+            # so is better than a transcript that silently disagrees with the
+            # web app's.
+            await self.transcript.mount(
+                Notice(
+                    f"{dropped} earlier item(s) are not shown — tool calls and attachments render in the web app.",
+                )
+            )
+
+        self.sub_title = summary.title
+        self.status.set_turns(self._store.turns)
+        self.status.set_state("Ready")
+        self.transcript.scroll_end(animate=False)
+        logger.info("adopted conversation %s with %d message(s)", summary.session_id, len(restored))
+
+    async def set_model(self, choice: ModelChoice | str) -> None:
+        """Switch models for subsequent turns.
+
+        Accepts a bare id for callers that predate the provider pairing, but a
+        :class:`ModelChoice` is what the picker returns and what carries the
+        provider the inference API needs.
+        """
+        if isinstance(choice, str):
+            choice = ModelChoice(model_id=choice, provider=None)
+        self._config = self._config.with_model(choice.model_id, choice.provider)
+        self._turn = self._build_controller()
+        await self._discard_client()
+        self.status.set_model(choice.model_id or "System Default")
+
+    def _build_controller(self) -> BaseTurnController[Any]:
+        """The one place a controller is constructed.
+
+        `set_model` used to build a `TurnController` unconditionally, which would
+        silently swap the agent for the Converse path on a model change. Both
+        call sites go through here so the dialect is decided once.
+        """
+        if self._agent_mode:
+            return AgentTurnController(
+                self._store,
+                self,
+                client_supplier=self._agent_supplier or self._agent_client_or_create,
+                max_tokens=self._config.max_tokens,
+                enabled_tools=self._enabled_tools,
+            )
+        return TurnController(
             self._store,
             self,
             client_supplier=self._supplied_client or self._client_or_create,
             max_tokens=self._config.max_tokens,
         )
-        await self._discard_client()
-        self.status.set_model(model_id)
+
+    def _set_enabled_tools(self, tool_ids: list[str] | None) -> None:
+        """Apply a tool selection to subsequent turns.
+
+        ``None`` restores "every tool my role grants"; a list narrows it, and an
+        empty list means none. Rebuilds the controller because the selection is
+        constructor state — cheap, since a controller holds only in-flight data
+        and no turn is running when this is reachable.
+        """
+        self._enabled_tools = tool_ids
+        self._turn = self._build_controller()
 
     # -- palette -------------------------------------------------------------
 
@@ -413,6 +571,8 @@ class ChatScreen(Screen[None]):
         """Chat-specific palette entries, contributed to the App's palette."""
         yield SystemCommand("New conversation", "Clear the transcript and start over", self.action_new_conversation)
         yield SystemCommand("Change model", "Pick which model answers the next turn", self.action_choose_model)
+        yield SystemCommand("Choose tools", "Pick which tools the agent may use", self.action_choose_tools)
+        yield SystemCommand("Conversations", "Browse, open, rename or delete saved conversations", self.action_conversations)
 
         if self._turn.busy:
             yield SystemCommand("Stop response", "Abandon the turn in flight", self.action_cancel_turn)

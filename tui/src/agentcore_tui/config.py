@@ -76,6 +76,13 @@ class Config:
     # repr=False so an accidental log/traceback of the config never leaks the key.
     api_key: str | None = field(default=None, repr=False)
     model_id: str = DEFAULT_MODEL_ID
+    #: The provider that serves ``model_id``, sent alongside it as the web UI
+    #: does. ``None`` is safe: inference-api falls back to the model's registered
+    #: provider (``input_data.provider or registry_provider``), so a Mantle-served
+    #: model works either way. Sending it makes the choice explicit rather than
+    #: dependent on registry state, and disambiguates an id served by two
+    #: providers. With no ``model_id`` either, this is "System Default".
+    provider: str | None = None
     models: tuple[str, ...] = DEFAULT_MODELS
     system_prompt: str | None = None
     temperature: float | None = None
@@ -128,9 +135,14 @@ class Config:
             gaps.append("API key")
         return gaps
 
-    def with_model(self, model_id: str) -> Config:
-        """Return a copy using a different model."""
-        return replace(self, model_id=model_id)
+    def with_model(self, model_id: str, provider: str | None = None) -> Config:
+        """Return a copy using a different model.
+
+        ``provider`` is accepted alongside the id because the two are one
+        decision: changing the model without changing the provider is how you
+        ask a Bedrock endpoint for an OpenAI-wire model.
+        """
+        return replace(self, model_id=model_id, provider=provider)
 
 
 # ---------------------------------------------------------------------------

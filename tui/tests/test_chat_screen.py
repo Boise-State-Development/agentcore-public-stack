@@ -34,6 +34,7 @@ from .conftest import (
     make_config,
     ok_handler,
     rendered_text,
+    sample_models,
     run_command,
     send,
     sse_body,
@@ -491,7 +492,9 @@ class TestPaletteCommands:
 
 
 class TestModelPicker:
-    async def test_picker_lists_models_and_preselects_the_active_one(self) -> None:
+    async def test_picker_lists_models_with_their_providers(self) -> None:
+        """The provider is shown because it is what actually gets sent, and it is
+        the difference between two similarly-named models."""
         from textual.widgets import OptionList
 
         from agentcore_tui.screens import ModelPicker
@@ -499,14 +502,77 @@ class TestModelPicker:
         app = build_app(ok_handler())
         async with app.run_test() as pilot:
             await pilot.pause()
-            picker = ModelPicker((MODEL_ID, MODEL_B), MODEL_ID)
+            picker = ModelPicker(sample_models(), current=MODEL_ID)
             app.push_screen(picker)
             await pilot.pause()
 
             option_list = picker.query_one("#picker-list", OptionList)
-            assert option_list.option_count == 2
-            # The active model is pre-highlighted so Enter is a no-op, not a surprise.
-            assert option_list.highlighted == 0
+            # Two models plus the System Default row.
+            assert option_list.option_count == 3
+            # The active model is pre-highlighted so Enter is a no-op, not a
+            # surprise. Index 1 because System Default occupies index 0.
+            assert option_list.highlighted == 1
+
+    async def test_selecting_a_model_returns_its_provider_too(self) -> None:
+        """The pair is one decision.
+
+        Not a crash-avoidance measure — the server resolves a missing provider
+        from its registry — but sending it pins the turn to the provider the
+        catalogue advertised, instead of to registry state at request time.
+        """
+        from textual.widgets import OptionList
+
+        from agentcore_tui.screens.model_picker import ModelChoice, ModelPicker
+
+        app = build_app(ok_handler())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            picker = ModelPicker(sample_models(), current=MODEL_ID)
+            result: list[ModelChoice | None] = []
+            app.push_screen(picker, callback=result.append)
+            await pilot.pause()
+
+            picker.query_one("#picker-list", OptionList).highlighted = 2
+            await pilot.press("enter")
+            await pilot.pause()
+
+        assert result == [ModelChoice(model_id=MODEL_B, provider="mantle")]
+
+    async def test_system_default_sends_neither_field(self) -> None:
+        from textual.widgets import OptionList
+
+        from agentcore_tui.screens.model_picker import SYSTEM_DEFAULT, ModelPicker
+
+        app = build_app(ok_handler())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            picker = ModelPicker(sample_models(), current=MODEL_ID)
+            result: list[object] = []
+            app.push_screen(picker, callback=result.append)
+            await pilot.pause()
+
+            picker.query_one("#picker-list", OptionList).highlighted = 0
+            await pilot.press("enter")
+            await pilot.pause()
+
+        assert result == [SYSTEM_DEFAULT]
+        assert SYSTEM_DEFAULT.is_system_default
+
+    async def test_an_empty_catalogue_still_offers_system_default(self) -> None:
+        """A failed `/models` fetch must not leave a dead keybinding."""
+        from textual.widgets import OptionList
+
+        from agentcore_tui.screens import ModelPicker
+
+        app = build_app(ok_handler())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            picker = ModelPicker([], current="", error="Could not load models: boom")
+            app.push_screen(picker)
+            await pilot.pause()
+
+            assert picker.query_one("#picker-list", OptionList).option_count == 1
+            assert "Could not load models" in rendered_text(app)
 
 
 class TestTranscriptGrowth:

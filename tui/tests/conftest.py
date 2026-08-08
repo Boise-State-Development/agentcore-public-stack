@@ -33,6 +33,7 @@ from agentcore_tui.client import ApiConverseClient
 from agentcore_tui.config import Config
 from agentcore_tui.credentials import CredentialSource
 from agentcore_tui.client.agent_events import ToolCallRecord
+from agentcore_tui.client.catalog import Model
 from agentcore_tui.usage import Usage
 
 BASE_URL = "https://example.test/api"
@@ -312,3 +313,16 @@ def rendered_text(app: ChatApp) -> str:
 
     lines = ["".join(fragments).replace("\xa0", " ").rstrip() for _, fragments in sorted(rows.items())]
     return "\n".join(lines)
+
+
+def sample_models() -> list[Model]:
+    """Two models on *different providers*.
+
+    The provider difference is the point: this deployment serves Claude through
+    `bedrock` and Gemma/GPT through `mantle`, so a fixture with one provider
+    could not catch a client that drops the field.
+    """
+    return [
+        Model(model_id=MODEL_ID, provider="bedrock", name="Claude Haiku 4.5", provider_name="Bedrock", max_input_tokens=200_000),
+        Model(model_id=MODEL_B, provider="mantle", name="GPT-5.4", provider_name="Mantle", max_input_tokens=272_000),
+    ]

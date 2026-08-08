@@ -60,7 +60,7 @@ class TestWiring:
         async with app.run_test() as pilot:
             await pilot.pause()
             await send(pilot, app, "remember this")
-            app.push_screen(ModelPicker(("m",), "m"))
+            app.push_screen(ModelPicker([], current="m"))
             await pilot.pause()
             assert [message.content for message in app.store][0] == "remember this"
 
@@ -96,7 +96,7 @@ class TestCommandPalette:
         app = build_app(ok_handler())
         async with app.run_test() as pilot:
             await pilot.pause()
-            picker = ModelPicker(("m",), "m")
+            picker = ModelPicker([], current="m")
             app.push_screen(picker)
             await pilot.pause()
             titles = [command.title for command in app.get_system_commands(picker)]

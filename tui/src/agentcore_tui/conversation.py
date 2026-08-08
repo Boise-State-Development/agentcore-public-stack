@@ -176,3 +176,17 @@ class ConversationStore:
         self._title = None
         self._session_id = new_session_id()
         return self._session_id
+
+    def adopt(self, session_id: str, messages: Sequence[Message], *, title: str | None = None) -> None:
+        """Become an existing server-side conversation.
+
+        The counterpart to :meth:`reset`: that one walks away from a
+        conversation, this one walks into one. Both the id *and* the messages
+        have to change together — adopting the history while keeping the local id
+        would send the next turn to a conversation the user is not looking at,
+        and adopting the id without the history would show an empty transcript
+        for a conversation the server has messages for.
+        """
+        self._session_id = session_id
+        self._messages = list(messages)
+        self._title = title or None

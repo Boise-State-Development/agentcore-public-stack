@@ -10,6 +10,16 @@ from __future__ import annotations
 
 from .agent_stream import AgentStreamClient
 from .auth import ApiKeyAuth, AuthProvider, NoAuth, SessionAuth
+from .catalog import (
+    CatalogClient,
+    ConversationSummary,
+    HistoryMessage,
+    Model,
+    Page,
+    Skill,
+    SystemPromptOption,
+    Tool,
+)
 from .converse import ApiConverseClient, CompletedTurn, message_payloads
 from .device_auth import DeviceAuthClient, DeviceAuthorization, DeviceSession
 from .endpoints import Endpoints
@@ -33,6 +43,14 @@ from .events import (
 
 __all__ = [
     "AgentStreamClient",
+    "Tool",
+    "SystemPromptOption",
+    "Skill",
+    "Page",
+    "Model",
+    "HistoryMessage",
+    "ConversationSummary",
+    "CatalogClient",
     "ApiConverseClient",
     "ApiKeyAuth",
     "AuthProvider",

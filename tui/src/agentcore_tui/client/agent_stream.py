@@ -170,13 +170,26 @@ class AgentStreamClient:
         `enabled_tools`, where **absent means "every tool my role grants" and an
         empty list means "none"**. Sending `[]` to mean "unset" would silently
         disable the agent's tools.
+
+        `model_id` and `provider` are sent **together**, matching the web UI.
+        Omitting the provider is not an error — inference-api resolves it from the
+        managed-model registry (`input_data.provider or registry_provider`) — but
+        sending it pins the choice to what the catalogue said at selection time
+        rather than to registry state at request time. Omitting both is "System
+        Default".
         """
         payload: dict[str, Any] = {
             "session_id": session_id,
             "message": message,
         }
-        if model_id or self._config.model_id:
-            payload["model_id"] = model_id or self._config.model_id
+        target = model_id or self._config.model_id
+        if target:
+            payload["model_id"] = target
+            # Only when we actually know it, because a guessed provider is
+            # worse than none: absent lets the server resolve the model's own,
+            # while a wrong one routes to a provider that has never heard of it.
+            if self._config.provider:
+                payload["provider"] = self._config.provider
         if self._config.max_tokens:
             payload["max_tokens"] = self._config.max_tokens
         if self._config.system_prompt:

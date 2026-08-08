@@ -100,13 +100,26 @@ class TestEndpoints:
         assert endpoints.chat_stream == "https://h/api/chat/stream"
         assert endpoints.sessions == "https://h/api/sessions"
         assert endpoints.models == "https://h/api/models"
-        assert endpoints.tools == "https://h/api/tools"
+        # Trailing slash on purpose: the router mounts `/tools/` and the bare
+        # path answers 307, which httpx would follow but which costs a round trip
+        # on every catalogue read.
+        assert endpoints.tools == "https://h/api/tools/"
+        assert endpoints.skills == "https://h/api/skills/"
+        assert endpoints.system_prompts == "https://h/api/system-prompts/"
+        assert endpoints.tool_preferences == "https://h/api/tools/preferences"
+        assert endpoints.skill_preferences == "https://h/api/skills/preferences"
+        assert endpoints.generate_title == "https://h/api/chat/generate-title"
+        assert endpoints.sessions_bulk_delete == "https://h/api/sessions/bulk-delete"
 
     def test_session_sub_paths(self) -> None:
         endpoints = Endpoints("https://h/api")
         assert endpoints.session("abc") == "https://h/api/sessions/abc"
         assert endpoints.session_messages("abc") == "https://h/api/sessions/abc/messages"
         assert endpoints.session_interrupt("abc") == "https://h/api/sessions/abc/interrupt"
+        assert endpoints.session_metadata("abc") == "https://h/api/sessions/abc/metadata"
+        assert endpoints.session_read("abc") == "https://h/api/sessions/abc/read"
+        assert endpoints.session_unread("abc") == "https://h/api/sessions/abc/unread"
+        assert endpoints.session_pending_interrupts("abc") == "https://h/api/sessions/abc/pending-interrupts"
 
     def test_session_ids_are_url_encoded(self) -> None:
         """Ids are client-minted, so a caller could supply anything."""
