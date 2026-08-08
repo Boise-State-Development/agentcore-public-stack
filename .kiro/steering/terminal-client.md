@@ -54,10 +54,31 @@ after deploy" section. **No infrastructure deploy was required** — grants live
 the existing BFF sessions table, so there is no CDK grants table and
 `platform.yml` never ran.
 
-**Still pending:** the `/chat/stream` transport and wiring the dialect into a
-turn. The device-polling flow is **done and proven live** (`client/device_auth.py`
-+ `SessionAuth`), and the dead PKCE package is gone. Task list and two open design
-questions are in the spec.
+**Still pending:** nothing in the original plan. The device-polling flow, the
+`/chat/stream` transport and the turn wiring are all **done and proven live**
+against `dev.boisestate.ai` — a signed-in terminal runs tool-using agent turns,
+and a second turn answered from server-side memory with only one message sent.
+Optional follow-ups are listed at the end of the spec.
+
+**Two dialects, one machinery.** `BaseTurnController` owns the delta buffers and
+`flush()`, the busy flag, `begin`/`finish`, and the `stream()` skeleton that must
+never raise. `TurnController` (api-converse) and `AgentTurnController`
+(`/chat/stream`) subclass it and own only what differs: which accumulator, which
+handlers, how the stream opens, what a finished turn means, and whether cancel
+has anything to tell the server. `screens/chat.py` picks one from
+`config.credential_source`, so signing in switches the terminal to the agent.
+
+Do not collapse these into one class with conditionals. The accumulators disagree
+about what `.text` means — the agent's is the **last** assistant message, since
+each tool round trip closes one and opens another — so a shared `complete()`
+would need a branch for the difference that matters most.
+
+**`TurnSink` gained exactly two methods**, `on_tool(record)` and `on_title`.
+`on_tool` takes the mutable `ToolCallRecord` the accumulator folds into, not the
+event, so the widget and the fold are the same object; callers key on
+`tool_use_id` and call `refresh_from_record()` rather than re-mounting. Everything
+else the agent carries (citations, artifacts, quota, compaction, interrupts) goes
+through `on_notice`, because all of it is end-of-turn fact rather than live state.
 
 **Dead code removed:** `tui/src/agentcore_tui/auth/` and `tests/test_auth.py`
 (1,314 lines), plus `cognito_domain_url`, `cli_client_id`, `callback_ports`,
@@ -156,7 +177,8 @@ tui/src/agentcore_tui/
 ├── keyring_store.py  OS keyring access; owns APP_NAME
 ├── state.py          local bookkeeping the client writes (banner version)
 ├── conversation.py   domain: Message + ConversationStore
-├── turn.py           one in-flight turn, behind the TurnSink protocol
+├── turn.py           BaseTurnController + TurnController/AgentTurnController,
+│                     behind the TurnSink protocol
 ├── usage.py          token counts, shared by wire/domain/view
 ├── errors.py         typed errors, each carrying an actionable `hint`
 ├── logging_setup.py  rotating file log; content redacted unless opted in
@@ -165,12 +187,12 @@ tui/src/agentcore_tui/
 ├── client/           endpoints.py (URLs), auth.py (AuthProvider seam +
 │                     ApiKeyAuth/SessionAuth), device_auth.py (CLI sign-in),
 │                     converse.py + events.py (api-converse),
-│                     agent_events.py (agent-stream dialect)
+│                     agent_stream.py + agent_events.py (the agent)
 ├── screens/          chat.py, model_picker.py, splash.py
 └── widgets/          transcript messages, composer, status bar
 ```
 
-484 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+553 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.
@@ -186,13 +208,18 @@ real captured agent stream.
   (~35) is a **sibling** dialect module, not an extension of it.
 - Ask `Config.credential_source` / `Config.can(Capability.X)`, never `api_key`.
   When signed in there is no API key and the client is still fully configured.
-  `resolve_source` still prefers an API key over a session, and that is
-  *temporary*: the only transport built is `converse.py`, which can only present
-  `X-API-Key`. Flip it when `client/agent_stream.py` lands — the test asserting
-  the precedence explains why.
-- `TurnController.cancel()` is where `POST /sessions/{id}/interrupt` belongs.
+  `resolve_source` now prefers a **session** over an API key, because a session
+  is strictly more capable and a transport for it exists. An API-key-only user
+  still gets the Converse path.
+- `is_complete` says a credential exists, not that this screen can chat. Those
+  came apart once already: the screen reported "Ready" and then failed the first
+  message telling the user to run a login they had just run. If you add a
+  transport, add its check to `ChatScreen.on_mount`.
+- `AgentTurnController._interrupt_server()` is where
+  `POST /sessions/{id}/interrupt` lives, and it must stay on the cancel path.
   Cancelling only the local stream leaves the server generating and holding the
-  session lease.
+  session lease. It returns a bool and never raises, because a failure there
+  would replace a clean "Stopped" with a traceback.
 - Gotcha: `ConversationStore` defines `__len__`, so an empty store is **falsy**.
   Use `store if store is not None else ...`, never `store or ...` — that bug
   silently handed each screen a private copy of the conversation.

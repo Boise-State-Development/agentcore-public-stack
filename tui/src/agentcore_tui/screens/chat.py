@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from textual import work
 from textual.app import ComposeResult, SystemCommand
@@ -26,17 +26,25 @@ from textual.screen import Screen
 from textual.timer import Timer
 from textual.widgets import Footer, Header
 
-from ..client import ApiConverseClient
-from ..config import Config, config_path
+from ..client import AgentStreamClient, ApiConverseClient
+from ..client.agent_events import ToolCallRecord
+from ..client.auth import SessionAuth
+from ..config import Config, config_path, load_session_from_keyring
 from ..conversation import ConversationStore
-from ..turn import FLUSH_INTERVAL, ClientSupplier, TurnController
+from ..credentials import CredentialSource
+from ..errors import ConfigError
+from ..turn import FLUSH_INTERVAL, AgentClientSupplier, AgentTurnController, BaseTurnController, ClientSupplier, TurnController
 from ..usage import Usage
-from ..widgets import AssistantMessage, Composer, Notice, StatusBar, UserMessage
+from ..widgets import AssistantMessage, Composer, Notice, StatusBar, ToolCall, UserMessage
 from .model_picker import ModelPicker
 
 logger = logging.getLogger(__name__)
 
 WELCOME = "Ask anything. Enter sends; Alt+Enter (or Ctrl+O) starts a new line."
+
+#: Shown instead of WELCOME when the agent is reachable, because the difference
+#: is the whole point of signing in.
+WELCOME_AGENT = "Ask anything — tools, memory and your saved conversations are available. Enter sends; Alt+Enter starts a new line."
 
 
 class ChatScreen(Screen[None]):
@@ -56,6 +64,7 @@ class ChatScreen(Screen[None]):
         *,
         store: ConversationStore | None = None,
         client_supplier: ClientSupplier | None = None,
+        agent_client_supplier: AgentClientSupplier | None = None,
     ) -> None:
         super().__init__()
         self._config = config
@@ -63,16 +72,33 @@ class ChatScreen(Screen[None]):
         # defines __len__, so an empty one is falsy and `or` would silently
         # replace the App's shared store with a private copy on every launch.
         self._store = store if store is not None else ConversationStore()
-        self._client: ApiConverseClient | None = None
+        self._client: ApiConverseClient | AgentStreamClient | None = None
         self._supplied_client = client_supplier
         self._pending: AssistantMessage | None = None
         self._flush_timer: Timer | None = None
-        self._turn = TurnController(
-            self._store,
-            self,
-            client_supplier=client_supplier or self._client_or_create,
-            max_tokens=config.max_tokens,
-        )
+        self._tool_widgets: dict[str, ToolCall] = {}
+
+        # Which controller depends on which credential is held, because the two
+        # endpoints accept different ones and neither accepts both. A session
+        # reaches the agent; an API key reaches only the stateless Converse
+        # wrapper. Either supplier can be injected, so tests drive both dialects
+        # without a credential or a keyring.
+        self._agent_mode = agent_client_supplier is not None or (client_supplier is None and config.credential_source is CredentialSource.BFF_SESSION)
+        self._turn: BaseTurnController[Any]
+        if self._agent_mode:
+            self._turn = AgentTurnController(
+                self._store,
+                self,
+                client_supplier=agent_client_supplier or self._agent_client_or_create,
+                max_tokens=config.max_tokens,
+            )
+        else:
+            self._turn = TurnController(
+                self._store,
+                self,
+                client_supplier=client_supplier or self._client_or_create,
+                max_tokens=config.max_tokens,
+            )
 
     # -- accessors -----------------------------------------------------------
 
@@ -82,7 +108,7 @@ class ChatScreen(Screen[None]):
         return self._store
 
     @property
-    def turn(self) -> TurnController:
+    def turn(self) -> BaseTurnController[Any]:
         """The turn controller. Public so tests need no private access."""
         return self._turn
 
@@ -119,6 +145,17 @@ class ChatScreen(Screen[None]):
             await self._show_setup_help()
             return
 
+        # `is_complete` only says a credential exists. Whether *this screen* can
+        # chat is a narrower question: the API-key transport needs a key, and
+        # asking it later produced a screen that said "Ready" and then failed on
+        # the first message telling the user to run a login they had already run.
+        #
+        # Skipped when a supplier was injected, which is a test providing its own
+        # transport and therefore its own answer to "can we chat".
+        if not self._agent_mode and self._supplied_client is None and not self._config.api_key:
+            await self._show_no_chat_transport()
+            return
+
         if self._config.api_key_from_plaintext_file:
             self.notify(
                 f"Your API key is stored in plain text in {config_path()}. Prefer `agentcore-tui login`, which uses the OS keyring.",
@@ -128,8 +165,30 @@ class ChatScreen(Screen[None]):
             )
 
         self.composer.focus()
-        await self.transcript.mount(Notice(WELCOME))
+        await self.transcript.mount(Notice(WELCOME_AGENT if self._agent_mode else WELCOME))
         self.status.set_state("Ready")
+
+    async def _show_no_chat_transport(self) -> None:
+        """Signed in, but this screen cannot use a session to chat.
+
+        Reachable when a credential resolves to something the selected transport
+        cannot present. Says so plainly instead of blaming the credential the
+        user already supplied.
+        """
+        self.composer.submit_enabled = False
+        self.composer.disabled = True
+        await self.transcript.mount(
+            Notice(
+                f"Signed in, but chat needs a credential this build can send ({self._config.credential_source.label}).",
+                hint=(
+                    "Run `agentcore-tui login --sso` for a session, or store an API key with "
+                    "`agentcore-tui login`.\n"
+                    f"Config file: {config_path()}"
+                ),
+                error=True,
+            )
+        )
+        self.status.set_state("No chat transport", error=True)
 
     async def _show_setup_help(self) -> None:
         """Explain exactly what is missing and how to supply it."""
@@ -159,6 +218,25 @@ class ChatScreen(Screen[None]):
     def _client_or_create(self) -> ApiConverseClient:
         if self._client is None:
             self._client = ApiConverseClient(self._config)
+        assert isinstance(self._client, ApiConverseClient)
+        return self._client
+
+    def _agent_client_or_create(self) -> AgentStreamClient:
+        """Build the agent transport, reading the session at first use.
+
+        The sealed session is read from the keyring here rather than held on
+        Config, so it is fetched once per client and never travels through the
+        config object that `status` prints.
+        """
+        if self._client is None:
+            sealed, unavailable = load_session_from_keyring(self._config.base_url)
+            if not sealed:
+                raise ConfigError(
+                    "No stored session",
+                    hint=f"Run `agentcore-tui login --sso`. ({unavailable})" if unavailable else "Run `agentcore-tui login --sso`.",
+                )
+            self._client = AgentStreamClient(self._config, auth=SessionAuth(sealed))
+        assert isinstance(self._client, AgentStreamClient)
         return self._client
 
     async def _discard_client(self) -> None:
@@ -198,6 +276,25 @@ class ChatScreen(Screen[None]):
         self.transcript.scroll_end(animate=False)
         if error:
             self.notify(message, title="Error", severity="error", timeout=10)
+
+    async def on_tool(self, record: ToolCallRecord) -> None:
+        """Mount a widget the first time a tool is seen, then refresh it.
+
+        Keyed on ``tool_use_id``: the controller reports the same record several
+        times as the call progresses, and mounting per call would stack
+        duplicates of a single invocation.
+        """
+        widget = self._tool_widgets.get(record.tool_use_id)
+        if widget is None:
+            widget = ToolCall(record)
+            self._tool_widgets[record.tool_use_id] = widget
+            await self.transcript.mount(widget, before=self._pending)
+        else:
+            widget.refresh_from_record()
+        self.transcript.scroll_end(animate=False)
+
+    async def on_title(self, title: str) -> None:
+        self.sub_title = title
 
     # -- turn lifecycle ------------------------------------------------------
 

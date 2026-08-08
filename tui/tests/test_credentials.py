@@ -29,15 +29,22 @@ class TestResolution:
         source = resolve_source(base_url="https://h", api_key=None, session_probe=lambda _: False)
         assert source is CredentialSource.NONE
 
-    def test_api_key_currently_wins_over_a_session(self) -> None:
-        """Not because it is better — a session is strictly more capable — but
-        because the only transport built today is converse.py, which speaks
-        POST /chat/api-converse, and that endpoint authenticates with X-API-Key
-        and nothing else. Preferring a session would select a credential the
-        working transport cannot present.
+    def test_a_session_now_wins_over_an_api_key(self) -> None:
+        """Flipped when `client/agent_stream.py` landed.
 
-        Flip this, and this test, when client/agent_stream.py lands."""
+        A session is strictly more capable — it reaches the tool-using agent,
+        the conversation list and the catalogues, none of which an API key can
+        touch. The old order was mechanical, not a judgement: the only transport
+        that existed spoke `/chat/api-converse`, which accepts `X-API-Key` and
+        nothing else, so preferring a session would have selected a credential
+        no transport could present.
+        """
         source = resolve_source(base_url="https://h", api_key="k", session_probe=lambda _: True)
+        assert source is CredentialSource.BFF_SESSION
+
+    def test_an_api_key_is_still_used_when_there_is_no_session(self) -> None:
+        """Flipping the order must not strand API-key-only users."""
+        source = resolve_source(base_url="https://h", api_key="k", session_probe=lambda _: False)
         assert source is CredentialSource.API_KEY
 
     def test_the_probe_receives_the_base_url(self) -> None:

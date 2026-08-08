@@ -24,22 +24,30 @@ and Linux.
 
 ## What it does today
 
-This is Phase 1. It talks to the API-key authenticated `/chat/api-converse`
-endpoint on app-api, which is a direct Bedrock Converse wrapper. That means you
-get:
+There are two paths, and which one you get depends on how you sign in.
 
-- Streaming responses rendered as live Markdown, with syntax-highlighted code
-- Multi-turn conversation with full history sent on each turn
-- Extended-thinking (reasoning) output in a separate collapsible pane
-- Per-turn token usage, including prompt-cache hits
-- Model switching, RBAC-enforced server-side
-- Server-side cost tracking and quota enforcement, identical to the web UI
+**Signed in (`login --sso`) — the agent.** Talks to the session-authenticated
+`/chat/stream`, the same endpoint the web app uses:
 
-**What it does not do yet.** The API-key endpoint has no access to tools,
-memory, sessions, or assistants — those live behind the cookie-authenticated
-agent path. So there is no tool use, no persistent conversation storage, no
-file upload, and no session list. Conversations exist only in the running
-process; quitting discards them. See [Roadmap](#roadmap).
+- The real agent, with **tools** (they appear in the transcript as they run),
+  MCP servers, and memory
+- **Server-side conversations**, so history survives quitting and is shared with
+  the web app — each turn sends only your new message
+- Streaming Markdown with syntax-highlighted code
+- Extended-thinking output in a separate collapsible pane
+- A live context-window gauge
+- `Esc` stops a turn *server-side*, so it stops burning tokens
+- RBAC, cost tracking and quota enforcement identical to the web UI
+
+**API key only (`login`) — single-turn chat.** Talks to `/chat/api-converse`, a
+direct Bedrock Converse wrapper. Streaming, multi-turn-by-resending, reasoning
+and usage all work, but that endpoint has no access to tools, memory, sessions or
+assistants, and conversations exist only in the running process.
+
+**What neither does yet:** file upload, a conversation-list screen, a tool
+picker, and artifact rendering (a terminal cannot frame an iframe — the agent
+reports that an artifact exists and points you at the web app). See
+[Roadmap](#roadmap).
 
 ## Install
 
@@ -529,12 +537,16 @@ The version is kept in step with the monorepo `VERSION` file by
 
 ## Roadmap
 
-Phase 2 is where this gets interesting. Every rich surface on app-api — the
-tool-using agent (`POST /chat/stream`), sessions, the tool catalogue, cost
-dashboards, assistants — is authenticated with a platform session, not an API
-key. `login --sso` now obtains one, which is what unlocks:
+Every rich surface on app-api — the tool-using agent (`POST /chat/stream`),
+sessions, the tool catalogue, cost dashboards, assistants — is authenticated with
+a platform session, not an API key. `login --sso` obtains one, and the chat
+interface now uses it:
 
-- The real agent, with tools, MCP servers, and memory
-- Persistent sessions shared with the web UI
+- ✅ **The real agent**, with tools, MCP servers, and memory. Sign in and chat;
+  tool calls appear in the transcript as they run, and the conversation continues
+  across turns because history lives on the server rather than in the request.
+- ✅ **Conversations shared with the web app** — same session id, same memory.
 - Model discovery via `GET /models` instead of a hand-maintained list
+- A tool picker, so `enabled_tools` is yours to choose rather than always "all"
+- A conversation-list screen, now that `/sessions` is reachable
 - Cost and quota dashboards in the terminal

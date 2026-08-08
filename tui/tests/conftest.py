@@ -32,6 +32,7 @@ from agentcore_tui.app import ChatApp
 from agentcore_tui.client import ApiConverseClient
 from agentcore_tui.config import Config
 from agentcore_tui.credentials import CredentialSource
+from agentcore_tui.client.agent_events import ToolCallRecord
 from agentcore_tui.usage import Usage
 
 BASE_URL = "https://example.test/api"
@@ -138,6 +139,8 @@ class RecordingSink:
     usages: list[Usage | None] = field(default_factory=list)
     states: list[tuple[str, bool, bool]] = field(default_factory=list)
     notices: list[tuple[str, str, bool]] = field(default_factory=list)
+    tools: list[ToolCallRecord] = field(default_factory=list)
+    titles: list[str] = field(default_factory=list)
 
     async def on_text(self, chunk: str) -> None:
         self.text += chunk
@@ -153,6 +156,14 @@ class RecordingSink:
 
     async def on_notice(self, message: str, *, hint: str = "", error: bool = False) -> None:
         self.notices.append((message, hint, error))
+
+    async def on_tool(self, record: ToolCallRecord) -> None:
+        # Records the object, not a copy: the accumulator mutates it in place, so
+        # a copy here would hide exactly the aliasing the design depends on.
+        self.tools.append(record)
+
+    async def on_title(self, title: str) -> None:
+        self.titles.append(title)
 
     @property
     def state_labels(self) -> list[str]:

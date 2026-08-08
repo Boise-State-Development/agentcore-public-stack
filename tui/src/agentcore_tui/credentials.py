@@ -106,24 +106,27 @@ def resolve_source(
 ) -> CredentialSource:
     """Decide which credential this client will present.
 
-    An API key still wins over a stored session, and that is now a *temporary*
-    inversion of merit rather than a permanent one. A session is strictly more
-    capable — it reaches the agent, sessions and catalogs that an API key cannot
-    — but the only transport built today is ``converse.py``, which speaks
-    ``POST /chat/api-converse``, and that endpoint authenticates with
-    ``X-API-Key`` and nothing else. Preferring a session would therefore select
-    a credential the working transport cannot present.
+    **A session wins over an API key.** It is strictly more capable: it reaches
+    the tool-using agent, the conversation list and the model and tool
+    catalogues, none of which an API key can touch. The API key's single
+    endpoint, ``/chat/api-converse``, is a bare Converse wrapper with no tools,
+    no memory and no server-side session.
 
-    **Flip this when ``client/agent_stream.py`` lands.** The test asserting this
-    precedence is the place that records the decision, so changing the order
-    means changing a test that explains why.
+    This order was inverted until ``client/agent_stream.py`` existed, and the
+    reason was purely mechanical rather than a judgement about merit: the only
+    transport built spoke ``/chat/api-converse``, which authenticates with
+    ``X-API-Key`` and nothing else, so preferring a session would have selected
+    a credential no transport could present. That constraint is gone.
+
+    A held API key is not ignored — it stays available for anyone who wants the
+    cheaper path — it simply no longer *outranks* being signed in.
     """
     if not base_url:
         # Without a host, no credential can be used against anything.
         return CredentialSource.NONE
-    if api_key:
-        return CredentialSource.API_KEY
     probe = session_probe or _keyring_session_probe
     if probe(base_url):
         return CredentialSource.BFF_SESSION
+    if api_key:
+        return CredentialSource.API_KEY
     return CredentialSource.NONE

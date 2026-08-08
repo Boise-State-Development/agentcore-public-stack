@@ -16,8 +16,13 @@ import json
 import httpx
 import pytest
 
+from agentcore_tui.app import ChatApp
+from agentcore_tui.client import AgentStreamClient
+from agentcore_tui.client.auth import SessionAuth
+from agentcore_tui.config import Config
 from agentcore_tui.credentials import CredentialSource
-from agentcore_tui.widgets import AssistantMessage, Notice, StatusBar, UserMessage
+from agentcore_tui.turn import AgentTurnController, TurnController
+from agentcore_tui.widgets import AssistantMessage, Notice, StatusBar, ToolCall, UserMessage
 
 from .conftest import (
     MODEL_B,
@@ -39,6 +44,134 @@ from .conftest import (
 
 def unconfigured() -> object:
     return make_config(base_url="", api_key=None, credential_source=CredentialSource.NONE)
+
+
+def build_agent_app(handler: Handler, *, config: Config | None = None) -> ChatApp:
+    """A ChatApp driven through the *agent* transport, backed by MockTransport.
+
+    Uses the agent factory seam so no session and no keyring are involved: the
+    screen only needs a supplier, not a credential.
+    """
+    resolved = config if config is not None else make_config(api_key=None, credential_source=CredentialSource.BFF_SESSION)
+
+    def factory(cfg: Config) -> AgentStreamClient:
+        return AgentStreamClient(
+            cfg,
+            auth=SessionAuth("sealed-test"),
+            client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+
+    return ChatApp(resolved, agent_client_factory=factory)
+
+
+def agent_turn(text: str = "Hello", *, tools: bool = False) -> bytes:
+    """An agent-dialect turn, optionally with one tool round trip."""
+    frames: list[tuple[str, dict[str, object] | None]] = [
+        ("init_event_loop", {}),
+        ("session_title", {"type": "session_title", "sessionId": "s", "title": "A chat"}),
+        ("message_start", {"role": "assistant"}),
+    ]
+    if tools:
+        frames += [
+            ("tool_use", {"toolUseId": "t1", "name": "calculator", "input": {"expression": "2+2"}}),
+            ("tool_result", {"toolUseId": "t1", "content": [{"text": "Result: 4"}], "status": "success"}),
+            ("message_start", {"role": "assistant"}),
+        ]
+    frames += [
+        ("content_block_delta", {"contentBlockIndex": 0, "type": "text", "text": text}),
+        ("message_stop", {"stopReason": "end_turn"}),
+        ("metadata", {"usage": {"inputTokens": 50, "outputTokens": 5}, "contextWindow": 200000}),
+        ("done", {}),
+    ]
+    return sse_body(frames)
+
+
+class TestAgentMode:
+    """The session-native path: the screen talks to the tool-using agent."""
+
+    async def test_a_session_selects_the_agent_controller(self) -> None:
+        config = make_config(api_key=None, credential_source=CredentialSource.BFF_SESSION)
+        app = build_agent_app(lambda _r: sse_response(agent_turn()), config=config)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.chat.turn, AgentTurnController)
+
+    async def test_an_api_key_still_selects_the_converse_controller(self) -> None:
+        app = build_app(ok_handler())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.chat.turn, TurnController)
+
+    async def test_the_welcome_mentions_what_a_session_unlocks(self) -> None:
+        """The difference is the whole point of signing in."""
+        app = build_agent_app(lambda _r: sse_response(agent_turn()))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert "tools, memory" in rendered_text(app)
+
+    async def test_a_turn_renders_and_is_recorded(self) -> None:
+        app = build_agent_app(lambda _r: sse_response(agent_turn("4")))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await send(pilot, app, "what is 2+2")
+            assert app.chat.store.messages[-1].content == "4"
+            assert app.chat.query(AssistantMessage)
+
+    async def test_a_tool_call_mounts_exactly_one_widget(self) -> None:
+        """The controller reports the same record several times as the call
+        progresses; mounting per report would stack duplicates."""
+        app = build_agent_app(lambda _r: sse_response(agent_turn("4", tools=True)))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await send(pilot, app, "what is 2+2")
+            assert len(app.chat.query(ToolCall)) == 1
+
+    async def test_the_tool_widget_shows_the_finished_call(self) -> None:
+        app = build_agent_app(lambda _r: sse_response(agent_turn("4", tools=True)))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await send(pilot, app, "what is 2+2")
+            text = rendered_text(app)
+            assert "calculator" in text
+
+    async def test_the_session_title_becomes_the_sub_title(self) -> None:
+        app = build_agent_app(lambda _r: sse_response(agent_turn()))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await send(pilot, app, "hi")
+            assert app.chat.sub_title == "A chat"
+
+    async def test_the_prompt_is_sent_alone_against_the_session_id(self) -> None:
+        """Regression guard on the payload shape from the screen's own path."""
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return sse_response(agent_turn())
+
+        app = build_agent_app(handler)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await send(pilot, app, "just this")
+
+        body = json.loads(captured[0].content)
+        assert body["message"] == "just this"
+        assert body["session_id"] == app.chat.store.session_id
+        assert "messages" not in body
+
+
+class TestNoChatTransport:
+    async def test_a_credential_the_transport_cannot_send_is_reported_honestly(self) -> None:
+        """The bug this replaced: the screen said "Ready", then the first message
+        failed telling the user to run a login they had already run."""
+        config = make_config(api_key=None, credential_source=CredentialSource.API_KEY)
+        app = ChatApp(config)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.chat.composer.disabled is True
+            text = rendered_text(app)
+            assert "Signed in, but chat needs" in text
+            assert "No chat transport" in text
 
 
 class TestBoot:

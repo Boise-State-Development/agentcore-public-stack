@@ -22,7 +22,7 @@ from textual.binding import Binding, BindingType
 from textual.screen import Screen
 
 from . import __version__
-from .client import ApiConverseClient
+from .client import AgentStreamClient, ApiConverseClient
 from .config import Config
 from .conversation import ConversationStore
 from .logging_setup import active_log_path
@@ -32,6 +32,7 @@ from .state import record_banner_shown, should_show_banner
 logger = logging.getLogger(__name__)
 
 ClientFactory = Callable[[Config], ApiConverseClient]
+AgentClientFactory = Callable[[Config], AgentStreamClient]
 
 
 class ChatApp(App[None]):
@@ -51,10 +52,17 @@ class ChatApp(App[None]):
         Binding("f1", "command_palette", "Palette", show=False, priority=True),
     ]
 
-    def __init__(self, config: Config, *, client_factory: ClientFactory | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        *,
+        client_factory: ClientFactory | None = None,
+        agent_client_factory: AgentClientFactory | None = None,
+    ) -> None:
         super().__init__()
         self._config = config
         self._client_factory = client_factory
+        self._agent_client_factory = agent_client_factory
         self._store = ConversationStore()
         self._chat: ChatScreen | None = None
 
@@ -74,7 +82,16 @@ class ChatApp(App[None]):
             if self._client_factory is not None:
                 factory = self._client_factory
                 supplier = lambda: factory(self.chat.config)  # noqa: E731 - one-line adapter
-            self._chat = ChatScreen(self._config, store=self._store, client_supplier=supplier)
+            agent_supplier = None
+            if self._agent_client_factory is not None:
+                agent_factory = self._agent_client_factory
+                agent_supplier = lambda: agent_factory(self.chat.config)  # noqa: E731 - one-line adapter
+            self._chat = ChatScreen(
+                self._config,
+                store=self._store,
+                client_supplier=supplier,
+                agent_client_supplier=agent_supplier,
+            )
         return self._chat
 
     @property

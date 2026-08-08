@@ -1,8 +1,9 @@
 # CLI Device Authorization
 
-**Status:** backend **complete, deployed, and verified end-to-end against
-`dev.boisestate.ai`** (2026-08-07). TUI **auth leg done and proven live**; the
-`/chat/stream` transport and the turn wiring remain.
+**Status:** **complete and proven live end to end** against
+`dev.boisestate.ai`. The backend was verified 2026-08-07; the TUI's auth leg and
+its session-native chat on 2026-08-08. A signed-in terminal now runs tool-using
+agent turns with server-side memory.
 **Audience:** platform maintainers, auth owners
 **Supersedes:** the CLI-as-OAuth-client approach reverted in #850
 **Branch:** `feature/tui-client` — backend landed in `ecf58181`
@@ -25,9 +26,12 @@ branch. Per-layer detail in the task list below.
 transcript widgets that render what it carries. Neither needs auth, which is why
 they were built first.
 
-**Not started:** the `/chat/stream` transport and wiring the dialect into a
-turn. The CLI's device-polling flow and the deletion of the dead PKCE package are
-**done**. Detail in "What is left in the TUI" below.
+**Everything in the original task list is done.** The last two pieces — the
+`/chat/stream` transport and the turn wiring — landed 2026-08-08 and were verified
+against the deployment: a two-turn conversation where the second turn
+(*"what number did you just calculate?"*) was answered correctly from **one
+message**, with no transcript sent. That is server-side memory working through the
+terminal client. Detail in "What is left in the TUI" below.
 
 **The backend is no longer just "tested" — it is proven.** All seven steps of
 "Verifying after a deploy" were executed against `dev.boisestate.ai` on
@@ -312,53 +316,38 @@ current occupancy; it sends a final per-call `metadata` instead. Consequences:
 
 ### Still to do
 
-1. **Transport** — `client/agent_stream.py`: a module pairing the `/chat/stream`
-   payload shape with the dialect above, mirroring what `converse.py` does for
-   `events.py`. **This is now the next thing**: the auth leg below is done, so
-   there is a session to carry.
-2. ~~**Auth leg**~~ — **done.** `client/device_auth.py` (`DeviceAuthClient`,
-   `DeviceAuthorization`, `DeviceSession`) drives
-   `POST /auth/cli/authorize` → poll `POST /auth/cli/token`; `SessionAuth` on the
-   existing `AuthProvider` seam sends `Authorization: BFF <sealed>`; the sealed
-   value is stored under its own keyring service (`agentcore-tui-session`).
-   Proven live: authorize → 19 polls at the advertised 5s interval with no
-   `slow_down` → claimed, then `GET /models` returned 200 on the header alone.
-   29 tests, no sockets and no real waiting (`sleep` and `clock` are injected).
-   Three things in there are load-bearing:
-   * an **unknown** `error` code is terminal, not "keep waiting" — treating it as
-     pending polls a dead grant for the full ten minutes and then reports a
-     timeout instead of what the server said;
-   * `slow_down` widens the interval **permanently**, because the server
-     throttles from the *previous* poll's timestamp: a client that reverts to its
-     original interval can be told to slow down forever;
-   * the loop never sleeps past the deadline, so an expiry is reported when it
-     happens rather than an interval later.
-3. ~~**Delete the dead PKCE package**~~ — **done.** `tui/src/agentcore_tui/auth/`
-   and `tests/test_auth.py` removed (1,314 lines), along with
-   `cognito_domain_url`, `cli_client_id`, `callback_ports`, `sso_configured` and
-   the `--provider` flag. `CredentialSource.SSO_SESSION` became `BFF_SESSION` and
-   `BearerAuth` was deleted rather than left as a seam: it existed for a CLI that
-   minted its own tokens, which is the design #850 reverted. `AuthProvider` is
-   the seam; a provider is not.
+1. ~~**Transport**~~ — **done.** `client/agent_stream.py` (`AgentStreamClient`)
+   pairs the `/invocations` payload with the agent dialect. 30 tests. Three
+   things in it are load-bearing:
+   * the payload carries **one** message against `session_id`, because history
+     lives in AgentCore Memory — sending the transcript would replay every
+     previous turn on top of the server's own copy;
+   * `enabled_tools` distinguishes **absent** ("every tool my role grants") from
+     **empty** ("none"), so it is omitted rather than sent as `null` or `[]`;
+   * `auth` is a **required** constructor argument. There is no API-key path to
+     this endpoint, and deriving the wrong credential would produce a 401 that
+     reads as an expired session rather than as a programming error.
+2. ~~**Auth leg**~~ — **done.** See above.
+3. ~~**Delete the dead PKCE package**~~ — **done.** See above.
+4. ~~**Turn wiring**~~ — **done.** See "Resolved: how the dialect is wired into a
+   turn" below. `screens/chat.py` selects the controller from
+   `config.credential_source`, so a signed-in user gets the agent and an
+   API-key user keeps the Converse path.
+5. ~~**`cancel()` must interrupt server-side**~~ — **done.**
+   `AgentTurnController._interrupt_server()` calls
+   `POST /sessions/{id}/interrupt` before reporting "Stopped", and the UI shows a
+   transitional "Stopping..." because that is a network round trip. The
+   interrupt returns a bool and never raises: it runs on the cancel path, where
+   a second failure would replace a clean "Stopped" with a traceback.
+6. ~~**Never transparently retry a stream**~~ — **done, and tested.** There is no
+   retry logic in `agent_stream.py` at all, and a test asserts exactly one
+   request is made for a failing turn.
 
-   No migration path was kept for the retired `agentcore-tui-sso` keyring
-   service, and that is deliberate. The package has never been published, the
-   PKCE login existed on this branch for about one day, and the revert deleted
-   the Cognito app client — so any refresh token still sitting in a developer's
-   keyring is already unusable, because Cognito rejects a refresh for a client
-   that no longer exists. A `LEGACY_SSO_SERVICE` constant would have implied a
-   released user base that does not exist. Clear a stale entry by hand if you
-   have one:
-   `python3 -c "import keyring; keyring.delete_password('agentcore-tui-sso', '<base-url>')"`.
-4. **Turn wiring** — see the open question below.
-5. **`cancel()` must interrupt server-side** — `TurnController.cancel()` is local
-   only today. Against the agent endpoint it must also
-   `POST /sessions/{id}/interrupt`, or the server keeps generating and holds the
-   session lease, locking the user out of their own conversation. The call
-   belongs in `TurnController`, not the screen; there is already a docstring
-   there saying so.
-6. **Never transparently retry a stream** — a reopen double-runs the turn and
-   corrupts memory. Surface the failure instead.
+**Remaining, and all optional:** adopt the richer agent widgets in place of the
+notices `complete()` currently emits for citations, artifacts, quota and
+compaction (see "Resolved: the callbacks `TurnSink` gained"); a tool picker so
+`enabled_tools` is user-controlled rather than always "all"; and a conversation
+list screen, which is now reachable because `/sessions` works with the session.
 
 ### The container needs its keyring switched on
 
@@ -409,53 +398,50 @@ inside the script and a broken one in the next command:
 
 
 
-### Open question 1: how to wire the dialect into a turn
+### Resolved: how the dialect is wired into a turn
 
-`TurnController` is currently single-dialect in two ways that both need a
-decision, and the right answer depends on the transport, which is why this was
-left alone rather than guessed at:
+Decided with the transport in hand, and neither of the two shapes the question
+offered. The machinery is **extracted into `BaseTurnController`** and each dialect
+gets a subclass that owns only what genuinely differs.
 
-* `begin()` hardcodes `self._accumulator = TurnAccumulator()`.
-* `_handlers` is typed `dict[type[ConverseEvent], EventHandler]`.
+Shared, and therefore written once: the delta buffers and `flush()`, the busy
+flag, `begin()`, `finish()`, and the `stream()` skeleton that must never raise.
+Per-dialect: which accumulator to build, which handlers to register, how to open
+the stream, what a finished turn means, and whether cancelling has anything to
+tell the server.
 
-The registry itself already works for both dialects, since the event classes are
-distinct types. Two viable shapes:
+Why not the alternatives the question listed:
 
-**(a) Generalise `TurnController`.** Inject an accumulator factory and widen the
-handler mapping to a common base. One controller, one buffering/flush
-implementation, one place where cancel lives. Risk: a class serving two dialects
-accumulates conditionals, and the accumulators expose different properties
-(`AgentTurnAccumulator.text` is the *last* message; `TurnAccumulator.text` is
-everything).
+* **One class with conditionals** would grow a branch per difference, and the
+  differences are not cosmetic — the accumulators disagree about what `.text`
+  means (the agent's is the *last* assistant message, because each tool round
+  trip closes one and opens another; concatenating is right for converse).
+* **Two independent classes** would duplicate the buffer/flush logic, which is
+  the genuinely shared part and the one most likely to drift unnoticed.
 
-**(b) A sibling `AgentTurnController`.** Mirrors the sibling-dialect decision and
-keeps each controller honest about its own stream. Risk: duplicating the
-buffer/flush logic, which is genuinely shared and easy to let drift.
+`TurnController` keeps its name and its constructor, so the api-converse path and
+its tests were untouched. `AgentTurnController` adds what only the agent has:
+the prompt goes alone against `store.session_id`, a turn can *pause* for consent
+rather than fail, a turn can be *blocked* by quota before it runs, and cancelling
+calls `POST /sessions/{id}/interrupt`.
 
-The steering doc's phrasing ("the list that grows to ~35 entries") reads as (a),
-but it was written before the accumulators diverged. Whoever picks this up should
-decide with the transport in hand.
+### Resolved: the callbacks `TurnSink` gained
 
-### Open question 2: `TurnSink` needs new callbacks
+Two, not the seven the question sketched:
 
-`TurnSink` is five methods covering text, reasoning, usage, state and notices.
-The agent stream carries six more kinds of thing, each with a widget already
-built and unused. Suggested additions, but the naming and granularity are
-genuinely open:
+| Added | Why it must be incremental |
+|---|---|
+| `on_tool(record)` | A tool runs for seconds. Showing it only at the end is the difference between "working" and "frozen". Takes the **record**, not the event — the accumulator mutates that object in place and the widget holds the same one, so there is no second copy to drift. Callers key on `tool_use_id` and refresh rather than re-mount. |
+| `on_title(title)` | Sets the screen's sub-title, and may arrive after the answer. |
 
-| Event | Widget | Note |
-|---|---|---|
-| `tool_use` / `tool_result` / `tool_progress` | `ToolCall` | Mount on first sight, then `refresh_from_record()`. Do **not** re-mount per event. |
-| `citation` | `Citations` | Batch them: mount once at end of turn, not one widget per citation. |
-| `quota_*` | `QuotaNotice` (or `quota_notice_for`) | `QuotaExceeded` means the turn never ran — the UI should not show a pending assistant message. |
-| `compaction` | `CompactionNotice` | Sum the deltas; one notice per turn, not per event. |
-| `artifact` | `ArtifactCard` | Dedupe by id, highest version — the accumulator already does. |
-| `oauth_required` / `tool_approval_required` | `InterruptNotice` | The turn is paused, not failed. Do not report it as an error. |
-| `session_title` | — | Set `screen.sub_title` / the header. May arrive **after** `done`. |
-
-Keep the protocol uniformly async, for the reason its docstring already gives.
-
----
+Everything else the agent carries — citations, artifacts, quota, compaction,
+interrupts — is reported through the existing `on_notice`, because all of them
+are end-of-turn facts rather than live state, and a notice is what the dedicated
+widgets already render. Citations are **batched into one notice per turn** rather
+than one per excerpt. The richer widgets in `widgets/agent_content.py`
+(`Citations`, `QuotaNotice`, `CompactionNotice`, `ArtifactCard`,
+`InterruptNotice`) remain available and can be adopted without changing the
+protocol, which is why the protocol stopped at two.
 
 ## Verified after deploy — 2026-08-07
 
