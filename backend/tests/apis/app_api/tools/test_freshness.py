@@ -21,6 +21,14 @@ def _tool(updated_at: datetime):
     return SimpleNamespace(updated_at=updated_at)
 
 
+def _catalog_tool(tool_id: str, is_public: bool = False):
+    return SimpleNamespace(tool_id=tool_id, is_public=is_public)
+
+
+def _repo_with_tools(*tools):
+    return SimpleNamespace(list_tools=AsyncMock(return_value=list(tools)))
+
+
 @pytest.mark.asyncio
 async def test_empty_tool_list_returns_empty_hash():
     assert await freshness.get_freshness_hash([]) == ""
@@ -160,6 +168,69 @@ async def test_repository_error_falls_back_to_last_known_value():
     ):
         # With invalidate cleared the cache entry, we should return None on error.
         assert await freshness.get_tool_updated_at("gmail") is None
+
+
+@pytest.mark.asyncio
+async def test_public_tool_ids_returns_only_flagged_tools():
+    repo = _repo_with_tools(
+        _catalog_tool("create_word_document", is_public=True),
+        _catalog_tool("gmail_employee", is_public=False),
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        assert await freshness.get_public_tool_ids() == {"create_word_document"}
+
+
+@pytest.mark.asyncio
+async def test_one_read_fills_both_id_snapshots():
+    """The two snapshots share a catalog read and can't disagree about it."""
+    repo = _repo_with_tools(
+        _catalog_tool("create_word_document", is_public=True),
+        _catalog_tool("gmail_employee", is_public=False),
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        public = await freshness.get_public_tool_ids()
+        every = await freshness.get_all_tool_ids()
+
+    assert repo.list_tools.await_count == 1
+    assert public == {"create_word_document"}
+    assert every == {"create_word_document", "gmail_employee"}
+
+
+@pytest.mark.asyncio
+async def test_invalidate_refetches_public_ids():
+    """An admin toggling isPublic must be visible without waiting out the TTL."""
+    repo = _repo_with_tools(_catalog_tool("create_word_document", is_public=False))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        assert await freshness.get_public_tool_ids() == frozenset()
+
+    freshness.invalidate("create_word_document")
+
+    repo = _repo_with_tools(_catalog_tool("create_word_document", is_public=True))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        assert await freshness.get_public_tool_ids() == {"create_word_document"}
+
+
+@pytest.mark.asyncio
+async def test_public_ids_repository_error_does_not_raise():
+    """Authorization must not break on a transient DB blip."""
+    repo = SimpleNamespace(list_tools=AsyncMock(side_effect=RuntimeError("boom")))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        assert await freshness.get_public_tool_ids() == frozenset()
 
 
 @pytest.mark.asyncio

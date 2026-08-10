@@ -33,11 +33,14 @@ class ToolAccessService:
         """
         Get the set of tool IDs the user is allowed to use.
 
+        Delegates to ``AppRoleService.get_accessible_tools`` so this surface
+        reads the same role-grant ∪ public-tool union as every other gate
+        rather than keeping a second, narrower copy of the rule.
+
         Returns:
             Set of tool IDs. Contains "*" if user has wildcard access.
         """
-        permissions = await self.app_role_service.resolve_user_permissions(user)
-        return set(permissions.tools)
+        return set(await self.app_role_service.get_accessible_tools(user))
 
     async def can_access_tool(self, user: User, tool_id: str) -> bool:
         """
@@ -50,14 +53,7 @@ class ToolAccessService:
         Returns:
             True if user has access to the tool
         """
-        allowed_tools = await self.get_user_allowed_tools(user)
-
-        # Wildcard grants access to all tools
-        if "*" in allowed_tools:
-            return True
-
-        # Check if specific tool is in allowed set
-        return tool_id in allowed_tools
+        return await self.app_role_service.can_access_tool(user, tool_id)
 
     async def filter_allowed_tools(
         self,
