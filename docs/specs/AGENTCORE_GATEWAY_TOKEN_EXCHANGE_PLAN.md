@@ -1,8 +1,90 @@
 # AgentCore Gateway Token Exchange — Implementation Plan
 
-**Status:** Proposed
+**Status:** Phases 1–4 delivered, with one central design change — see the correction below before using this document.
 **Audience:** Boise State auth owners, token-service maintainers, AgentCore platform maintainers, MCP server owners
 **Goal:** Let BoiseState.ai call existing campus MCP servers and APIs as the signed-in user without teaching every service to validate Cognito tokens or changing legacy APIs that already trust token-service JWTs.
+
+---
+
+## CORRECTION — the Gateway does not perform the exchange
+
+Read this first. Most of the sections below were written before the design was
+tested, and they describe a mechanism AWS does not offer. They are kept for the
+reasoning and the contracts, which are still accurate, but any instruction to
+configure a Gateway target with a token-exchange grant is wrong.
+
+**AgentCore Gateway cannot perform an RFC 8693 exchange.** Its outbound OAuth
+credential provider supports exactly two grants:
+
+```
+OAuthGrantType = ['CLIENT_CREDENTIALS', 'AUTHORIZATION_CODE']
+```
+
+Verified against the `bedrock-agentcore-control` service model across three
+installed SDK versions; the string `TOKEN_EXCHANGE` appears nowhere in the API
+model. A `create-gateway-target` call specifying it fails validation. (The
+platform's `GatewayOAuthGrantType.TOKEN_EXCHANGE` enum value and its
+`_GRANT_TYPE_TO_AWS` mapping are dead code for the same reason.)
+
+Separately, a Gateway with `AWS_IAM` inbound auth never receives the user's
+token, so it would have nothing to exchange even if the grant existed.
+
+**What shipped instead: the agent runtime performs the exchange.**
+
+```text
+Inference API / Agent
+  |  has the user's Cognito access token from the BFF session
+  |  exchanges it at token-service POST /v2/oauth/token
+  |  (agents/main_agent/integrations/token_exchange.py)
+  v
+Campus MCP server, called DIRECTLY as an external MCP server
+  |  Authorization: Bearer <token-service JWT>
+  v
+Legacy campus API
+```
+
+Campus MCP servers are registered as **external MCP servers**
+(`protocol: mcp_external`), not as Gateway targets. The tool carries a
+`token_exchange_audience` — the token-service applicationId — and the runtime
+resolves a token per `(user, audience)` on demand.
+
+Consequences for anyone following this plan:
+
+| This document says | Reality |
+|---|---|
+| Register targets with OAuth + Token Exchange grant (§4A, line ~529) | Not possible. Register as an external MCP server with `token_exchange_audience`. |
+| Phase 1 (Gateway inbound JWT) gates the work | It does not. The runtime holds the user's token regardless of Gateway inbound auth. Phase 1 remains undone and unnecessary for this path. |
+| Phase 3 must produce a token-service OBO credential provider | Not needed. No AgentCore Identity provider participates. |
+| Gateway validates the inbound Cognito JWT for this flow | The Gateway is not in this path at all. |
+
+**Why Phase 1 was abandoned:** a Gateway's `authorizerType` is immutable after
+creation — the control plane rejects the change with "Authorizer type cannot be
+updated for an existing gateway". Reaching `CUSTOM_JWT` needs a new Gateway plus
+target re-registration and a cutover. Since the runtime-side exchange removed the
+need, it was not pursued.
+
+**Onboarding a new campus MCP server** (the current, working path):
+
+1. Register the application in token-service to get a signing key and an
+   audience name; register its roles there if it needs role checks.
+2. Add that applicationId to the exchange client's `ClientAudienceAllowlist`.
+3. Deploy the platform with `CDK_TOKEN_EXCHANGE_URL` and
+   `CDK_TOKEN_EXCHANGE_CLIENT_ID` set, and populate the
+   `<prefix>-token-exchange-client` secret.
+4. Register the server in the admin UI as **MCP External Server**, MCP auth type
+   **None**, with **Token exchange audience** set to the applicationId.
+5. The MCP server must validate the token-service JWT itself. With a Lambda
+   Function URL at `AuthType: NONE` that in-app check is the only gate — accept a
+   *list* of RSA public keys (they are per-application and rotated), and validate
+   issuer, audience, `exp` and `nbf`.
+
+**Known limitation:** revocation does not propagate. Subject-token validation is
+offline, so a Cognito token revoked before its expiry is still exchangeable.
+Bounded by `min(MaxTokenLifetimeSeconds, remaining subject lifetime)` — 600s in
+dev.
+
+---
+
 
 ## Decision summary
 
@@ -15,8 +97,8 @@ The first implementation will:
 3. Accept the user's enriched Cognito **access token** as the subject token.
 4. Authenticate AgentCore/BoiseState.ai as an approved confidential client.
 5. Issue the same token-service JWT format that existing campus APIs already accept.
-6. Register token-service as an AgentCore Identity custom OAuth provider with OBO enabled.
-7. Register campus MCP servers through the existing `mcp` Gateway plugin type using OAuth + Token Exchange.
+6. ~~Register token-service as an AgentCore Identity custom OAuth provider with OBO enabled.~~ **Not done and not needed** — no AgentCore Identity provider participates. See the correction above.
+7. ~~Register campus MCP servers through the existing `mcp` Gateway plugin type using OAuth + Token Exchange.~~ **Superseded** — servers are registered as external MCP servers with a `token_exchange_audience`, and the runtime performs the exchange.
 8. Keep current application-role filtering for initial tool access. Add finer Gateway Policy controls in a later phase.
 
 **OBO** means **On Behalf Of**: BoiseState.ai proves both which trusted application is calling and which authenticated employee it is acting for.
@@ -59,19 +141,19 @@ This plan covers a different case: a server or legacy API that already trusts to
   - a credential-provider ARN
   - OAuth scopes
   - `grant_type = token_exchange`
-- `GatewayTargetService` already maps that configuration to AgentCore's `OAUTH` + `TOKEN_EXCHANGE` target configuration.
+- `GatewayTargetService` maps that configuration to AgentCore's `OAUTH` + `TOKEN_EXCHANGE` target configuration — **but this is dead code**: AWS's `OAuthGrantType` has no `TOKEN_EXCHANGE` value, so such a target cannot be created. Selecting it in the admin UI fails API validation.
 - AgentCore Identity connector provisioning already handles custom OAuth providers, client credentials, and discovery metadata.
 
 ### Missing today
 
 - token-service does not accept a Cognito access token. Its existing handler accepts an Entra authorization code or refresh token and then issues a token-service JWT.
-- `AgentCoreRegistrar` does not provision `onBehalfOfTokenExchangeConfig` on a credential provider.
+- `AgentCoreRegistrar` does not provision `onBehalfOfTokenExchangeConfig` on a credential provider — and does not need to. This was listed as a gap on the assumption the Gateway would exchange; it cannot, so nothing consumes such a provider.
 - The centralized Gateway uses `AWS_IAM` inbound authorization.
 - The agent's Gateway MCP client signs requests with SigV4.
 - Because the current Gateway receives IAM identity rather than a user JWT, it has no user subject token to exchange and no user claims for Cedar policy evaluation.
 - There is no admin policy-management layer for AgentCore Gateway Policy.
 
-The existing “Token Exchange” target option is therefore necessary but not sufficient by itself.
+The existing “Token Exchange” target option turned out to be unusable rather than merely insufficient: AgentCore has no such grant. See the correction at the top.
 
 ## Proposed request flow
 
@@ -84,29 +166,34 @@ BoiseState.ai BFF
   |  Browser holds only __Host-bff_session
   |  Server holds and refreshes Cognito tokens
   v
-Inference API / Agent
+Inference API / Agent                        <-- THE EXCHANGE CLIENT
   |  Cognito access token contains stable employee/sample ID
-  |  Calls Gateway with that user access token
-  v
-AgentCore Gateway
-  |  1. Validates the inbound Cognito JWT
-  |  2. Identifies the selected MCP tool/target
-  |  3. Sends an RFC 8693 OBO request to token-service
+  |  1. Looks up the tool's token_exchange_audience
+  |  2. Sends an RFC 8693 request to token-service (per user+audience, cached)
   v
 Token-service POST /v2/oauth/token
-  |  1. Authenticates the AgentCore client
+  |  1. Authenticates the calling application (HTTP Basic)
   |  2. Validates the Cognito subject token
   |  3. Reads the stable employee/sample ID
-  |  4. Resolves target application roles
-  |  5. Issues a short-lived token-service JWT for that target
+  |  4. Resolves target application roles from USERROLE records
+  |  5. Issues a short-lived token-service JWT for that target, stamped `act`
   v
-AgentCore Gateway
+Inference API / Agent
   |  Adds Authorization: Bearer <token-service JWT>
+  |  Calls the MCP server directly (external MCP server, no Gateway)
   v
 Campus MCP server / legacy API
   |  Validates the token it already understands
   |  Performs final business authorization
 ```
+
+> **Superseded diagram.** An earlier version of this plan put AgentCore Gateway
+> in the middle, validating the inbound Cognito JWT and performing the exchange.
+> The Gateway has no token-exchange grant, so that flow is not implementable —
+> see the correction at the top. The Gateway still fronts SigV4 Lambda tools
+> (`arxiv`, `policy-search`, `cludo-search`); it is simply not part of the
+> user-identity path.
+
 
 ## Trust and responsibility boundaries
 
@@ -256,7 +343,7 @@ Cognito access token makes every Gateway call fail authorization. (The
 `travel-auth` MCP server documents this same trap for its PyJWT check, where
 `JWT_AUDIENCE` is deliberately left unset.)
 
-## Phase 1 — Gateway spike and anonymous Directory tool
+## Phase 1 — Gateway spike and anonymous Directory tool  — *inbound JWT NOT done, and not required*
 
 **Goal:** Prove the Gateway JWT-auth path works end-to-end and deploy a working `directory_search` tool *before* investing in token-service changes. This front-loads the riskiest unknowns (Gateway authorizer behavior, agent bearer-token wiring, MCP target connectivity) and gives you a working tool to show for it.
 
@@ -365,9 +452,11 @@ Build a simple Lambda that receives the MCP tool invocation from Gateway, transl
 
 Because `directory_search` is `[AllowAnonymous]` on the Directory API, no Authorization header is needed. The wrapper is trivial.
 
-### 1D. Observe the OBO request format (optional but recommended)
+### 1D. Observe the OBO request format (MOOT — Gateway never sends one)
 
-If Gateway is configured with a dummy OAuth OBO provider (pointing at a request-logging endpoint like a RequestBin or a Lambda that logs and returns 400), you can observe exactly what AgentCore sends as the token-exchange request. This tells you:
+**Not applicable.** This step assumed AgentCore issues token-exchange requests. It has no token-exchange grant, so there is no request format to observe. The exchange request is built by the runtime (`agents/main_agent/integrations/token_exchange.py`), where its shape is defined in code rather than discovered.
+
+Retained only to record what the step was for:
 
 - The exact `grant_type` value AgentCore uses.
 - Whether it sends `subject_token_type` and `audience`.
@@ -411,7 +500,7 @@ connectivity independently of any auth work.
 proceed against a proven transport path.** What remains gated on the Gateway
 migration is only the *authenticated* Directory endpoints.
 
-## Phase 2 — Add the isolated token-service v2 exchange endpoint
+## Phase 2 — Add the isolated token-service v2 exchange endpoint  — *DELIVERED*
 
 Implement a new feature module and leave the existing Entra authorization-code and refresh handlers unchanged.
 
@@ -492,7 +581,7 @@ For the pilot, duplicating the existing application lookup, role lookup, and sig
 - Dev deployment before production.
 - Fast rollback by disabling the v2 feature.
 
-## Phase 3 — Add OBO support to AgentCore connector provisioning
+## Phase 3 — Add OBO support to AgentCore connector provisioning  — *DROPPED, unnecessary*
 
 Extend the existing custom OAuth connector model rather than creating a new tool or plugin protocol.
 
@@ -507,12 +596,12 @@ Primary code areas:
 Add connector configuration for:
 
 - OAuth mode: user federation, client credentials, or OBO token exchange.
-- OBO grant type: initially `TOKEN_EXCHANGE`.
+- ~~OBO grant type: initially `TOKEN_EXCHANGE`.~~ **Not available** — AWS supports only `CLIENT_CREDENTIALS` and `AUTHORIZATION_CODE`.
 - Client authentication method: initially client-secret basic.
 - Optional actor-token settings only if token-service later requires them.
 - OAuth discovery URL or explicit authorization-server metadata.
 
-For token-service, the AgentCore provider input should include the equivalent of:
+**Superseded — this provider is not created and the payload below would be rejected** (`onBehalfOfTokenExchangeConfig.grantType: TOKEN_EXCHANGE` is not a valid value). Kept to show what was intended:
 
 ```json
 {
@@ -543,24 +632,51 @@ Use the exact AWS SDK shape supported by the repository's pinned boto3 version. 
 - Credential rotation requires the full client ID/secret pair, as it does today.
 - Delete remains idempotent.
 
-## Phase 4 — Wire authenticated Directory tools end-to-end
+## Phase 4 — Wire authenticated Directory tools end-to-end  — *DELIVERED, via external MCP not Gateway*
 
-With Gateway JWT auth proven (Phase 1), token-service accepting OBO exchanges (Phase 2), and the AgentCore OBO connector registered (Phase 3), this phase connects the final dots: upgrade the Directory Gateway target to use OBO credentials and add the authenticated tool endpoints.
+**Delivered**, but not as written below. Phase 1 (Gateway inbound JWT) and Phase 3
+(AgentCore OBO connector) turned out not to be prerequisites, because the Gateway
+cannot perform the exchange — see the correction at the top of this document. The
+runtime performs it, and the Directory server is registered as an external MCP
+server rather than a Gateway target.
 
-### 4A. Upgrade Directory target to OAuth OBO
+### 4A. Register the Directory server as an external MCP server
 
-Update the existing `campus-directory` Gateway target registration from `GATEWAY_IAM_ROLE` to OAuth token exchange:
+The `campus-directory` **Gateway target has been retired.** Directory is reachable
+one way only, and that way carries user identity. Registration in the admin UI:
 
 ```text
-Protocol:             MCP Gateway (AgentCore)
-Target name:          campus-directory
-Endpoint URL:         <Directory API Lambda/API-Gateway URL>
-Listing mode:         Default
-Outbound credential:  OAuth
-Credential provider:  <token-service OBO provider ARN from Phase 3>
-Grant type:           Token Exchange
-OAuth scopes:         (empty — Directory uses role claims)
+Protocol:                 MCP External Server        (NOT MCP Gateway)
+Server URL:               <Directory MCP Lambda Function URL>/mcp
+Transport:                Streamable HTTP
+Authentication:           None      <-- required; SigV4 and Bearer both want
+                                        the Authorization header
+Token exchange audience:  <token-service applicationId for the target app>
+Forward auth token:       unchecked  <-- mutually exclusive with the above
+Required OAuth provider:  None
 ```
+
+The runtime exchanges the user's Cognito access token for a token-service JWT
+scoped to that audience and sends it as the bearer. No Gateway, no AgentCore
+Identity provider, no credential provider ARN.
+
+> **Superseded — do not use.** The original instruction was:
+> `Outbound credential: OAuth` / `Credential provider: <token-service OBO provider
+> ARN from Phase 3>` / `Grant type: Token Exchange`. AgentCore Gateway has no
+> token-exchange grant (`OAuthGrantType` is `CLIENT_CREDENTIALS` and
+> `AUTHORIZATION_CODE` only), so such a target cannot be created.
+
+Two traps found while doing this for real:
+
+- **Whitespace in the audience silently disables delegated identity.** A pasted
+  value with a leading space made token-service refuse every exchange on an
+  ordinal allowlist comparison, while the tool still returned plausible data
+  because the endpoint it called allowed anonymous access. The audience is now
+  normalised on the way in.
+- **"Available Tools" is a filter, not a definition.** Entries there annotate and
+  restrict the tools a server already exposes; adding a name does not create one.
+  A non-empty list also means *only* the listed tools are offered.
+
 
 ### 4B. Add authenticated tools to the MCP Lambda wrapper
 
@@ -794,8 +910,8 @@ The current admin UI stores per-tool approval flags but does not manage Cedar po
 8. Implement token-service v2 exchange endpoint behind a disabled feature flag (Phase 2).
 9. Deploy to token-service development environment.
 10. Test direct RFC 8693 exchange with a non-production Cognito token and Directory audience.
-11. Add AgentCore OBO provider support in the platform (Phase 3).
-12. Register a development token-service OBO provider.
+11. ~~Add AgentCore OBO provider support in the platform (Phase 3).~~ Dropped — no AgentCore Identity provider participates.
+12. ~~Register a development token-service OBO provider.~~ Dropped for the same reason.
 13. Upgrade Directory Gateway target to OAuth OBO credentials (Phase 4A).
 14. Add `directory_get_me` and `directory_get_pending` to the MCP Lambda wrapper (Phase 4B).
 15. Validate: `directory_get_me` returns the calling user's own entry (identity flows end-to-end).

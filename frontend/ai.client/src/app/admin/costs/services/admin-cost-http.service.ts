@@ -11,6 +11,8 @@ import {
   CostTrend,
   DashboardRequestOptions,
   TopUsersRequestOptions,
+  TopSessionsRequestOptions,
+  TopSessionsResponse,
   TrendsRequestOptions,
   SessionCostAnatomy,
 } from '../models';
@@ -70,6 +72,31 @@ export class AdminCostHttpService {
     }
 
     return this.http.get<TopUserCost[]>(`${this.baseUrl()}/top-users`, { params });
+  }
+
+  /**
+   * Get the most expensive conversations for a period.
+   *
+   * The support-side counterpart to the per-session quota notice: spot a
+   * runaway conversation before the user calls about a spent quota.
+   */
+  getTopSessions(options: TopSessionsRequestOptions = {}): Observable<TopSessionsResponse> {
+    let params = new HttpParams();
+
+    if (options.period) {
+      params = params.set('period', options.period);
+    }
+    if (options.limit !== undefined) {
+      params = params.set('limit', options.limit);
+    }
+    if (options.usersToScan !== undefined) {
+      params = params.set('usersToScan', options.usersToScan);
+    }
+    if (options.minCost !== undefined) {
+      params = params.set('minCost', options.minCost);
+    }
+
+    return this.http.get<TopSessionsResponse>(`${this.baseUrl()}/top-sessions`, { params });
   }
 
   /**

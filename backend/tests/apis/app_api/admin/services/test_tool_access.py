@@ -7,8 +7,8 @@ admin-managed MCP-external and A2A tools, which only exist in
 DynamoDB.
 """
 
+from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock, patch
-from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +16,7 @@ from apis.shared.tools import freshness
 from apis.app_api.admin.services.tool_access import ToolAccessService
 from apis.shared.auth.models import User
 from apis.shared.rbac.models import UserEffectivePermissions
+from apis.shared.rbac.service import AppRoleService
 
 
 @pytest.fixture(autouse=True)
@@ -46,16 +47,32 @@ def _permissions(tools, app_roles=("admin",)) -> UserEffectivePermissions:
 
 
 def _service(permissions: UserEffectivePermissions) -> ToolAccessService:
+    """A ToolAccessService over fixed permissions but the *real* grant rule.
+
+    Only ``resolve_user_permissions`` is stubbed; the methods that decide
+    what those permissions grant are bound from the real ``AppRoleService``
+    so these tests exercise the actual role-grant ∪ public-tool union
+    instead of a hand-written copy of it.
+    """
     role_service = AsyncMock()
     role_service.resolve_user_permissions = AsyncMock(return_value=permissions)
+    role_service.get_accessible_tools = MethodType(
+        AppRoleService.get_accessible_tools, role_service
+    )
+    role_service._tool_grant_set = MethodType(
+        AppRoleService._tool_grant_set, role_service
+    )
     return ToolAccessService(app_role_service=role_service)
 
 
-def _patch_catalog(tool_ids):
+def _patch_catalog(tool_ids, public_ids=()):
     """Patch the repository.list_tools call that backs freshness snapshot."""
     repo = SimpleNamespace(
         list_tools=AsyncMock(
-            return_value=[SimpleNamespace(tool_id=tid) for tid in tool_ids]
+            return_value=[
+                SimpleNamespace(tool_id=tid, is_public=tid in public_ids)
+                for tid in tool_ids
+            ]
         )
     )
     return patch(

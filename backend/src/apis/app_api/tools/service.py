@@ -423,6 +423,7 @@ class ToolCatalogService:
             for k in (
                 "forward_auth_token",
                 "requires_oauth_provider",
+                "token_exchange_audience",
                 "mcp_config",
                 "protocol",
                 "mcp_gateway_config",
@@ -432,10 +433,20 @@ class ToolCatalogService:
             await self.repository.get_tool(tool_id) if needs_existing else None
         )
 
-        # Pre-validate auth config if relevant fields are being updated
+        # Pre-validate auth config if relevant fields are being updated.
+        #
+        # token_exchange_audience belongs here as much as the other two: all
+        # three compete for the Authorization header. Omitting it let an edit
+        # add an audience to a tool that already forwarded the OIDC token, or
+        # combine one with a non-'none' MCP auth type — rules create enforces
+        # and update silently did not. The runtime happens to prefer the
+        # exchanged token, so the result was a broken tool rather than a leaked
+        # credential, but a validation rule that holds on one path and not the
+        # other is worse than no rule.
         if existing and (
             "forward_auth_token" in updates
             or "requires_oauth_provider" in updates
+            or "token_exchange_audience" in updates
             or "mcp_config" in updates
         ):
             # Build a preview of the updated tool for validation
@@ -446,6 +457,9 @@ class ToolCatalogService:
                 protocol=existing.protocol,
                 forward_auth_token=updates.get("forward_auth_token", existing.forward_auth_token),
                 requires_oauth_provider=updates.get("requires_oauth_provider", existing.requires_oauth_provider),
+                token_exchange_audience=updates.get(
+                    "token_exchange_audience", existing.token_exchange_audience
+                ),
                 mcp_config=updates.get("mcp_config", existing.mcp_config),
             )
             self._validate_auth_config(preview)

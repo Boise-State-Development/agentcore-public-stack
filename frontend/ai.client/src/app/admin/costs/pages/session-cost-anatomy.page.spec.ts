@@ -13,6 +13,8 @@ const MOCK_ANATOMY: SessionCostAnatomy = {
   totalCacheReadTokens: 20_000,
   totalCacheWriteTokens: 5_000,
   avoidableMissCount: 1,
+  partialMissCount: 0,
+  partialMissUsd: 0,
   wastedUsd: 0.03,
   agentSwitchMissCount: 0,
   agentSwitchUsd: 0,
@@ -158,6 +160,18 @@ describe('SessionCostAnatomyPage', () => {
     expect(page.getStatusClass('miss_ttl_expired')).toContain('bg-yellow-100');
     expect(page.getStatusClass('miss_avoidable')).toContain('bg-red-100');
     expect(page.getStatusClass('uncached')).toContain('bg-gray-100');
+    // Its own colour, between hit and miss: it read from cache and still
+    // wasted money, so neither green nor red would be honest.
+    expect(page.getStatusClass('partial_miss')).toContain('bg-orange-100');
+  });
+
+  it('labels a partial miss as a miss, not a hit', () => {
+    const fixture = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY)));
+    const page = fixture.componentInstance;
+
+    expect(page.getStatusLabel('partial_miss')).toBe('Miss (Partial)');
+    expect(page.getStatusLabel('miss_avoidable')).toBe('Miss (Avoidable)');
+    expect(page.getStatusLabel('hit')).toBe('Hit');
   });
 
   // ── #756 — explained vs unexplained avoidable misses ──────────────────────────

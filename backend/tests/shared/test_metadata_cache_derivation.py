@@ -3,6 +3,7 @@
 cache-efficiency counters ``_bump_session_aggregates`` adds to the session row.
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -238,6 +239,33 @@ class TestDeriveCacheObservability:
         assert result["cacheStatus"] == "miss_avoidable"
         assert result["cacheGapSeconds"] == 60
 
+    def test_partial_miss_when_a_sliver_read_masks_a_prefix_rewrite(self):
+        # The compaction-spiral shape: the previous call cached 11k + 190k, and
+        # this one reads back only the 11k tools+system segment while re-writing
+        # the whole history 60s later. Before `partial_miss` this row said
+        # `hit` / $0.00 — 56 times, for $27 of writes.
+        table = _FakeTable([_prev_row(seconds_ago=60, cache_read=11_278, cache_write=190_000)])
+        result = self._derive(table, _metadata(cache_read=11_278, cache_write=190_000))
+
+        assert result["cacheStatus"] == "partial_miss"
+        assert result["cacheGapSeconds"] == 60
+        # The 11,278 tokens it did read come off the previously-cached cap.
+        assert result["wastedUsd"] == round((190_000 / 1_000_000) * 3.45, 6)
+
+    def test_a_healthy_turn_reading_its_prefix_is_still_a_hit(self):
+        table = _FakeTable([_prev_row(seconds_ago=60, cache_read=190_000, cache_write=4_000)])
+        result = self._derive(table, _metadata(cache_read=190_000, cache_write=4_000))
+
+        assert result["cacheStatus"] == "hit"
+        assert result["wastedUsd"] == 0.0
+
+    def test_a_partial_miss_after_a_cold_gap_is_not_charged_as_waste(self):
+        table = _FakeTable([_prev_row(seconds_ago=3600, cache_read=11_278, cache_write=190_000)])
+        result = self._derive(table, _metadata(cache_read=11_278, cache_write=190_000))
+
+        assert result["cacheStatus"] == "hit"
+        assert result["wastedUsd"] == 0.0
+
     def test_failure_returns_empty_never_raises(self):
         class _Boom:
             def query(self, **kwargs):
@@ -302,6 +330,131 @@ class TestBumpSessionAggregatesCacheCounters:
         assert values[":cacheRead"] == 0
         assert values[":cacheWrite"] == 0
         assert values[":avoidableMiss"] == 0
+        assert values[":partialMiss"] == 0
+
+    @pytest.mark.asyncio
+    async def test_partial_misses_roll_up_as_a_split_of_the_wasted_total(
+        self, session_lookup
+    ):
+        table = _FakeTable()
+        meta = _metadata(cache_read=11_278, cache_write=190_000)
+        await self._bump(table, meta, {"cacheStatus": "partial_miss", "wastedUsd": 0.437})
+
+        expr = table.update_kwargs["UpdateExpression"]
+        values = table.update_kwargs["ExpressionAttributeValues"]
+        assert "partialMissCount :partialMiss" in expr
+        assert "partialMissUsd :partialWasted" in expr
+        assert values[":partialMiss"] == 1
+        assert values[":avoidableMiss"] == 0
+        # A subset, not a deduction: the dollars are in both.
+        assert values[":wasted"] == Decimal("0.437")
+        assert values[":partialWasted"] == Decimal("0.437")
+
+    @pytest.mark.asyncio
+    async def test_an_avoidable_miss_contributes_no_partial_miss_dollars(
+        self, session_lookup
+    ):
+        table = _FakeTable()
+        await self._bump(
+            table, _metadata(cache_write=5000), {"cacheStatus": "miss_avoidable", "wastedUsd": 0.02}
+        )
+        values = table.update_kwargs["ExpressionAttributeValues"]
+        assert values[":partialMiss"] == 0
+        assert values[":wasted"] == Decimal("0.02")
+        assert values[":partialWasted"] == Decimal("0")
+
+
+class TestSessionPartialMissAccumulation:
+    """The running per-session total the $5/24h alarm reads.
+
+    The incident spent $27 over five days at ~$0.43 a turn — never enough to
+    step a fleet-wide sum. The rollup bump is the only place that knows the
+    session's cumulative figure, so it emits it from the values the update
+    already returns rather than paying for another read.
+    """
+
+    @pytest.fixture
+    def session_lookup(self, monkeypatch):
+        async def _fake_get_session(session_id, user_id, table):
+            return {"SK": f"S#{session_id}"}
+
+        monkeypatch.setattr(md, "_get_session_by_gsi", _fake_get_session)
+
+    class _ReturningTable(_FakeTable):
+        def __init__(self, attributes):
+            super().__init__()
+            self._attributes = attributes
+
+        def update_item(self, **kwargs):
+            self.update_kwargs = kwargs
+            return {"Attributes": self._attributes}
+
+    @pytest.fixture
+    def emf_output(self):
+        """Capture the EMF logger's stdout lines.
+
+        Not capsys: the logger binds its handler to sys.stdout at import time,
+        before capsys swaps it out.
+        """
+        import io
+        import logging
+
+        from apis.shared.observability import emf
+
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        emf._emf_logger.addHandler(handler)
+        try:
+            yield stream
+        finally:
+            emf._emf_logger.removeHandler(handler)
+
+    async def _bump(self, table, observability):
+        await md._bump_session_aggregates(
+            session_id="sess-1",
+            user_id="user-1",
+            message_metadata=_metadata(cache_read=11_278, cache_write=190_000),
+            table=table,
+            cache_observability=observability,
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_bump_asks_for_the_updated_counters(self, session_lookup):
+        table = self._ReturningTable({"partialMissUsd": Decimal("0")})
+        await self._bump(table, {"cacheStatus": "partial_miss", "wastedUsd": 0.437})
+        assert table.update_kwargs["ReturnValues"] == "UPDATED_NEW"
+
+    @pytest.mark.asyncio
+    async def test_emits_the_running_total_once_a_session_has_partial_miss_waste(
+        self, session_lookup, emf_output
+    ):
+        table = self._ReturningTable(
+            {"partialMissUsd": Decimal("6.11"), "partialMissCount": Decimal(14)}
+        )
+        await self._bump(table, {"cacheStatus": "partial_miss", "wastedUsd": 0.437})
+
+        record = json.loads(emf_output.getvalue().strip())
+        assert record["SessionPartialMissUsd"] == 6.11
+        assert record["sessionId"] == "sess-1"
+        assert record["sessionPartialMissCount"] == 14
+
+    @pytest.mark.asyncio
+    async def test_stays_silent_for_a_session_with_no_partial_miss_waste(
+        self, session_lookup, emf_output
+    ):
+        # Almost every session. A metric that is 99% zeros makes the
+        # Maximum-statistic alarm read as noise.
+        table = self._ReturningTable({"partialMissUsd": Decimal("0")})
+        await self._bump(table, {"cacheStatus": "hit", "wastedUsd": 0.0})
+        assert emf_output.getvalue() == ""
+
+    @pytest.mark.asyncio
+    async def test_a_table_that_returns_nothing_is_not_an_error(self, session_lookup):
+        # `_FakeTable` (and an older table client) returns no Attributes.
+        table = _FakeTable()
+        await self._bump(table, {"cacheStatus": "partial_miss", "wastedUsd": 0.437})
+        assert table.update_kwargs is not None
 
 
 class TestKillSwitch:

@@ -1,13 +1,26 @@
 import { Component, ChangeDetectionStrategy, inject, computed } from '@angular/core';
 import { QuotaWarningService } from '../../services/quota/quota-warning.service';
+import { SessionService } from '../../session/services/session/session.service';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroExclamationTriangle, heroXMark } from '@ng-icons/heroicons/outline';
+import {
+  heroChatBubbleLeftRight,
+  heroExclamationTriangle,
+  heroXMark,
+} from '@ng-icons/heroicons/outline';
 
 /**
  * Subtle quota warning indicator component
  *
  * Displays a compact warning message above the chat input when the user
- * approaches their usage quota. Shows at 80% (warning) and 90%+ (critical).
+ * approaches their usage quota. Rungs are tier-configurable and now start
+ * at 50% (see the quota runway in
+ * docs/specs/compaction-over-threshold-cache-spiral.md §3 PR-5).
+ *
+ * Also renders the **per-session** notice — "this conversation has used $X
+ * of your $Y" — which answers a different question than the per-user
+ * warning and is dismissible on its own. It is scoped to the conversation
+ * it describes: the SPA can stream several sessions at once, and one
+ * thread's cost must never appear above another thread's composer.
  *
  * Features:
  * - Compact tab-like design that sits on top of the chat input
@@ -19,8 +32,30 @@ import { heroExclamationTriangle, heroXMark } from '@ng-icons/heroicons/outline'
   selector: 'app-quota-warning-banner',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon],
-  providers: [provideIcons({ heroExclamationTriangle, heroXMark })],
+  providers: [
+    provideIcons({ heroChatBubbleLeftRight, heroExclamationTriangle, heroXMark }),
+  ],
   template: `
+    @if (showSessionNotice()) {
+      <div class="flex justify-center">
+        <div
+          class="inline-flex items-center gap-1.5 px-3 py-1 text-xs rounded-t-lg border border-b-0 animate-fade-in bg-white dark:bg-slate-800 border-gray-300 text-gray-700 dark:border-gray-600 dark:text-gray-300"
+          role="status"
+          [attr.aria-live]="'polite'"
+        >
+          <ng-icon name="heroChatBubbleLeftRight" class="size-3 shrink-0" />
+          <span class="font-medium">{{ sessionNoticeText() }}</span>
+          <button
+            type="button"
+            (click)="dismissSessionNotice($event)"
+            class="p-0.5 -mr-1 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+            aria-label="Dismiss conversation cost notice"
+          >
+            <ng-icon name="heroXMark" class="size-3" />
+          </button>
+        </div>
+      </div>
+    }
     @if (quotaWarningService.hasVisibleWarning()) {
       <div class="flex justify-center">
         <div
@@ -72,6 +107,29 @@ import { heroExclamationTriangle, heroXMark } from '@ng-icons/heroicons/outline'
 })
 export class QuotaWarningBannerComponent {
   protected quotaWarningService = inject(QuotaWarningService);
+  private sessionService = inject(SessionService);
+
+  /** Only show the notice on the conversation it describes. */
+  protected showSessionNotice = computed(() => {
+    if (!this.quotaWarningService.hasVisibleSessionNotice()) return false;
+
+    const notice = this.quotaWarningService.sessionNotice();
+    const viewedSessionId = this.sessionService.currentSession().sessionId;
+    return !!notice && notice.sessionId === viewedSessionId;
+  });
+
+  /** Compact per-session notice text */
+  protected sessionNoticeText = computed(() => {
+    const notice = this.quotaWarningService.sessionNotice();
+    if (!notice) return '';
+
+    return `This conversation: ${this.quotaWarningService.formattedSessionUsage()} of your quota`;
+  });
+
+  dismissSessionNotice(event: Event): void {
+    event.stopPropagation();
+    this.quotaWarningService.dismissSessionNotice();
+  }
 
   /** Compact message text */
   messageText = computed(() => {

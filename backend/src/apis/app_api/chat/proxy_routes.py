@@ -15,15 +15,20 @@ access token — to inference-api, which accepts Cognito Bearer tokens via
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.harness.runner import build_invocations_url
+from apis.shared.harness.runner import (
+    apply_runtime_session_header,
+    build_invocations_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +78,38 @@ async def chat_stream(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {current_user.raw_token}",
     }
+
+    # Pin this conversation to one microVM so the container it lands on stays
+    # warm across turns. Measured in dev, steady-state turns:
+    #
+    #   no pinning, agent-cache miss     ~7.6s
+    #   pinned, agent-cache miss         ~4.8s   ← warm container alone
+    #   pinned, agent-cache hit          ~3.9s   ← + a reused Agent
+    #
+    # Note what that split means: most of the win is the **warm container**,
+    # which every session gets, not the agent-cache hit, which only cacheable
+    # ones get. An earlier note here credited the whole ~7.6→~3.9s to the
+    # cache; that conflated the two, and the honest read is that this header
+    # helps 100% of traffic while the agent cache adds ~19% on top for the
+    # subset that can use it.
+    #
+    # It does NOT change the prompt-cache token split — that was already
+    # stable — so this is a latency fix, not a cost one
+    # (docs/specs/agent-cache-extra-tools-bypass.md §8).
+    #
+    # This is the one place that has to look inside the body, which the proxy
+    # otherwise relays verbatim. Read-only and best-effort: a body that isn't
+    # JSON, or carries no session_id, simply goes unpinned rather than failing
+    # the turn — schema validation still belongs to inference-api.
+    session_id: Optional[str] = None
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, dict):
+            raw = parsed.get("session_id")
+            session_id = raw if isinstance(raw, str) and raw else None
+    except (ValueError, TypeError):
+        logger.debug("chat proxy: body is not JSON; skipping runtime-session pinning")
+    apply_runtime_session_header(headers, session_id)
 
     # Forward OAuth2CallbackUrl when the SPA supplies it. Inference-api's
     # AgentCoreContextMiddleware reads this header to scope the on-tool

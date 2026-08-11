@@ -30,7 +30,12 @@ import {
  * The forensic view for prompt-cache diagnostics — each call row carries its
  * cache status and prefix-fingerprint hashes, and the hash that flipped
  * between consecutive calls names the cache-buster (the diagnosis on
- * `miss_avoidable` rows).
+ * `miss_avoidable` and `partial_miss` rows).
+ *
+ * A `partial_miss` row is the one to read carefully: it *did* read from cache,
+ * so it looks healthy at a glance, but the read is a leading segment (tools +
+ * system) against a re-write of everything after it. Its Read column stays
+ * flat turn after turn while Write tracks the whole conversation.
  */
 @Component({
   selector: 'app-session-cost-anatomy',
@@ -151,6 +156,21 @@ import {
             >
               {{ formatCurrency(anatomyResource.value().wastedUsd, 4) }}
             </p>
+            <!--
+              Partial misses read from cache, so they used to be invisible here
+              (reported as hits, $0 wasted) while costing as much as a full
+              miss. Named under the total rather than in a tile of their own:
+              the dollars are the headline, the shape is the explanation.
+            -->
+            @if (anatomyResource.value().partialMissCount > 0) {
+              <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                {{ formatCurrency(anatomyResource.value().partialMissUsd, 4) }} from
+                <span class="font-medium"
+                  >{{ anatomyResource.value().partialMissCount }} partial
+                  {{ anatomyResource.value().partialMissCount === 1 ? 'miss' : 'misses' }}</span
+                >
+              </p>
+            }
           </div>
           <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
             <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -198,6 +218,8 @@ import {
                     class="text-sm/6 text-gray-700 dark:text-gray-300"
                     [class.bg-red-50]="row.call.cacheStatus === 'miss_avoidable'"
                     [class.dark:bg-red-900/10]="row.call.cacheStatus === 'miss_avoidable'"
+                    [class.bg-orange-50]="row.call.cacheStatus === 'partial_miss'"
+                    [class.dark:bg-orange-900/10]="row.call.cacheStatus === 'partial_miss'"
                   >
                     <td class="px-3 py-2 sm:pl-4">
                       <button
@@ -431,6 +453,8 @@ export class SessionCostAnatomyPage {
         return `${base} bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300`;
       case 'miss_avoidable':
         return `${base} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`;
+      case 'partial_miss':
+        return `${base} bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300`;
       case 'uncached':
       default:
         return `${base} bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300`;
@@ -447,6 +471,8 @@ export class SessionCostAnatomyPage {
         return 'Miss (TTL)';
       case 'miss_avoidable':
         return 'Miss (Avoidable)';
+      case 'partial_miss':
+        return 'Miss (Partial)';
       case 'uncached':
         return 'Uncached';
       default:

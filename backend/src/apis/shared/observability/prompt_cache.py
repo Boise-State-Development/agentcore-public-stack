@@ -16,6 +16,13 @@ measurable:
   the previous call's row.
 - ``compute_wasted_usd`` prices the avoidable portion of a re-write.
 
+A nonzero read is *not* proof the prefix was cached: the 2026-08-05 compaction
+spiral read an 11k tools+system segment while re-writing 190k of history on
+every one of 56 calls, and the classifier called all 56 a ``hit`` with
+``wastedUsd = 0``. ``partial_miss`` (see ``PARTIAL_MISS_WRITE_READ_RATIO``)
+is the status that separates "read the prefix, wrote the tail" from "read a
+sliver, wrote the prefix."
+
 Pure functions only — no AWS calls — so they are unit-testable and safe to
 import from any package (agents/, app_api, inference_api all may import
 ``apis.shared``).
@@ -48,6 +55,20 @@ def prompt_cache_observability_enabled() -> bool:
 # the re-write was unavoidable.
 CACHE_TTL_SECONDS = 300
 
+# How many times larger than the cache *read* a cache *write* has to be before
+# a nonzero read stops meaning "the prefix was cached" and starts meaning "a
+# small leading segment was cached and everything after it was re-written".
+#
+# A healthy steady-state turn reads the whole prior prefix and writes only the
+# appended tail, so write ≪ read. The compaction spiral (prod, 2026-08-05)
+# inverted that: 11k read (the tools + system segments) against 190k written
+# (the entire conversation history) on every turn, 18:1 — and every one of
+# those calls was classified `hit`. Ratio 3 sits far above any normal turn's
+# write:read and far below the ratios the failure mode produces, so it
+# separates the two without a tuning exercise. Raising it under-reports;
+# lowering it starts catching ordinary long-tail turns.
+PARTIAL_MISS_WRITE_READ_RATIO = 3
+
 
 class CacheStatus(str, Enum):
     """Derived per-call prompt-cache outcome.
@@ -57,8 +78,13 @@ class CacheStatus(str, Enum):
       says no cache existed yet (the previous call was ``uncached``, e.g.
       the prompt was below the model's minimum cacheable prefix, so there
       was nothing to read from).
-    - ``hit``: tokens were read from cache (``cacheReadInputTokens > 0``).
-      Partial re-writes of a changed suffix still count as hits.
+    - ``hit``: tokens were read from cache and the write alongside them is
+      the ordinary appended tail (see ``partial_miss`` for the other case).
+    - ``partial_miss``: tokens *were* read, but the write dwarfs the read
+      (``> PARTIAL_MISS_WRITE_READ_RATIO ×``) while the entry that served the
+      read was still live — a leading segment hit and the rest of the prefix
+      was re-written. Costs as much as a full miss and used to hide inside
+      ``hit``; the bug class ``miss_avoidable`` catches for a *cold* prefix.
     - ``miss_ttl_expired``: nothing read, cache re-written, and the gap since
       the previous call exceeded the cache TTL — unavoidable.
     - ``miss_avoidable``: nothing read, cache re-written, previous call had a
@@ -70,6 +96,7 @@ class CacheStatus(str, Enum):
 
     FIRST_WRITE = "first_write"
     HIT = "hit"
+    PARTIAL_MISS = "partial_miss"
     MISS_TTL_EXPIRED = "miss_ttl_expired"
     MISS_AVOIDABLE = "miss_avoidable"
     UNCACHED = "uncached"
@@ -113,6 +140,24 @@ def classify_cache_status(
             prefix), so no cache entry existed for this call to read.
     """
     if cache_read_tokens > 0:
+        # A read proves *something* was cached — but not that the prefix was.
+        # When the write dwarfs the read against a live entry, most of the
+        # prefix was re-written at the write premium and only a leading
+        # segment hit. That is waste, and calling it a `hit` is what let the
+        # compaction spiral run for 56 calls with `wastedUsd = 0`.
+        #
+        # Gated on the TTL for the same reason `miss_avoidable` is: past the
+        # TTL the entry is gone and re-writing it is unavoidable, so a stale
+        # or unknown gap (`None` — no same-prefix predecessor in the lookback
+        # window) stays a `hit`. Under-reporting keeps the metric trustworthy;
+        # crying wolf is what made the old one useless (#753).
+        if (
+            previous_call_exists
+            and cache_write_tokens > PARTIAL_MISS_WRITE_READ_RATIO * cache_read_tokens
+            and gap_seconds is not None
+            and gap_seconds <= CACHE_TTL_SECONDS
+        ):
+            return CacheStatus.PARTIAL_MISS
         return CacheStatus.HIT
     if cache_write_tokens <= 0:
         return CacheStatus.UNCACHED
@@ -134,14 +179,21 @@ def compute_wasted_usd(
     cache_write_tokens: int,
     previous_cached_prefix_tokens: Optional[int],
     pricing_snapshot: Optional[Mapping[str, Any]],
+    cache_read_tokens: int = 0,
 ) -> float:
     """USD wasted by an avoidable cache re-write; 0.0 for every other status.
+
+    Prices ``miss_avoidable`` and ``partial_miss`` identically — both re-wrote
+    prefix bytes that a live cache entry already held, and the dollars are the
+    same whether the wasted share is 100% or 95%.
 
     The waste is the re-written portion of the prefix that was already cached
     on the previous call (``min(cacheWrite, previous cacheRead + cacheWrite)``;
     falls back to the full cacheWrite when the previous split is unknown),
     priced at the cache-write premium over the cache-read rate the tokens
-    *should* have cost.
+    *should* have cost. On a ``partial_miss`` the tokens this call actually
+    read come off the previously-cached cap first — they were served from
+    cache, so they cannot also have been re-written.
 
     Args:
         cache_status: Result of :func:`classify_cache_status`.
@@ -149,8 +201,11 @@ def compute_wasted_usd(
         previous_cached_prefix_tokens: Previous call's cacheRead + cacheWrite
             token total, or None when unavailable.
         pricing_snapshot: The row's ``pricingSnapshot`` dict (camelCase keys).
+        cache_read_tokens: ``cacheReadInputTokens`` for this call; only
+            meaningful for ``partial_miss``, which is the sole status that
+            reads and re-writes in the same call.
     """
-    if cache_status is not CacheStatus.MISS_AVOIDABLE:
+    if cache_status not in (CacheStatus.MISS_AVOIDABLE, CacheStatus.PARTIAL_MISS):
         return 0.0
     if not pricing_snapshot or cache_write_tokens <= 0:
         return 0.0
@@ -164,6 +219,9 @@ def compute_wasted_usd(
 
     rewritten = cache_write_tokens
     if previous_cached_prefix_tokens is not None and previous_cached_prefix_tokens > 0:
-        rewritten = min(cache_write_tokens, previous_cached_prefix_tokens)
+        previously_cached = previous_cached_prefix_tokens
+        if cache_status is CacheStatus.PARTIAL_MISS:
+            previously_cached = max(0, previously_cached - max(0, cache_read_tokens))
+        rewritten = min(cache_write_tokens, previously_cached)
 
     return (rewritten / 1_000_000) * premium_per_mtok

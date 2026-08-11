@@ -17,6 +17,7 @@ import json
 from apis.shared.auth import User, require_admin_scope
 from .models import (
     TopUserCost,
+    TopSessionsResponse,
     SystemCostSummary,
     ModelUsageSummary,
     TierUsageSummary,
@@ -115,6 +116,70 @@ async def get_cost_dashboard(
         )
 
 
+@router.get("/top-sessions", response_model=TopSessionsResponse)
+async def get_top_sessions(
+    period: Optional[str] = Query(
+        None,
+        description="Period (YYYY-MM), defaults to current month",
+        pattern=r"^\d{4}-\d{2}$"
+    ),
+    limit: int = Query(25, ge=1, le=200, description="Maximum sessions to return"),
+    users_to_scan: int = Query(
+        50,
+        ge=1,
+        le=500,
+        alias="usersToScan",
+        description="How many of the period's top-cost users to fan out over"
+    ),
+    min_cost: Optional[float] = Query(
+        None,
+        alias="minCost",
+        ge=0,
+        description="Only include sessions whose lifetime cost is at least this"
+    ),
+    admin_user: User = Depends(require_costs_admin),
+    service: AdminCostService = Depends(get_cost_service)
+):
+    """
+    Get the most expensive conversations for a period, cost-sorted.
+
+    The support-side counterpart to the per-session quota notice: a runaway
+    conversation is visible here before the user calls about a spent quota
+    (#833 PR-5). Each row links to the session's cost anatomy
+    (`/costs/sessions/{id}/calls`), and carries the session's
+    `partialMissCount` / `partialMissUsd` so a *platform* problem is
+    distinguishable from a heavy user at a glance.
+
+    ⚠️ **`totalCost` is the session's lifetime cost, not its cost within
+    `period`.** `period` selects which sessions are listed (those active in
+    it) and which users are scanned; the dollars are the whole conversation,
+    which is the number that matters for a thread that spans months. The
+    response's `usersScanned` / `truncated` say how deep the scan went — a
+    session whose owner sits outside the scanned users is not listed.
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 500 if server error
+    """
+    logger.info("Admin requesting top sessions by cost")
+
+    try:
+        return await service.get_top_sessions(
+            period=period,
+            limit=limit,
+            users_to_scan=users_to_scan,
+            min_cost=min_cost,
+        )
+    except Exception as e:
+        logger.error(f"Error getting top sessions: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve top sessions"
+        )
+
+
 @router.get("/sessions/{session_id}/calls", response_model=SessionCostAnatomy)
 async def get_session_cost_anatomy(
     session_id: str,
@@ -126,13 +191,21 @@ async def get_session_cost_anatomy(
 
     Returns one row per model call — timestamp, input/cacheRead/cacheWrite/
     output tokens, cost, derived cacheStatus (first_write | hit |
-    miss_ttl_expired | miss_avoidable | uncached), and the prompt-cache
-    prefix fingerprint hashes (toolConfig / system prompt / history) — plus
-    session-level rollups (cache efficiency, avoidable-miss count, wastedUsd).
+    partial_miss | miss_ttl_expired | miss_avoidable | uncached), and the
+    prompt-cache prefix fingerprint hashes (toolConfig / system prompt /
+    history) — plus session-level rollups (cache efficiency, avoidable-miss
+    and partial-miss counts, wastedUsd).
 
     This is the forensic view for diagnosing avoidable prompt-cache
     re-writes: on a miss_avoidable row, diff its fingerprint hashes against
     the previous row's to see which prefix component changed.
+
+    ⚠️ **A `partial_miss` row costs like a miss even though it read from
+    cache.** It means a leading segment (typically tools + system) hit while
+    the rest of the prefix was re-written against a live entry — the shape
+    that spent 90% of one user's monthly quota while every row read `hit`.
+    Its dollars are in `wastedUsd`; `partialMissUsd` / `partialMissCount`
+    name the subset.
 
     ⚠️ **Check `agentSwitched` before treating a miss as a regression.** An
     `@`-mention hands one turn to a different Agent, which genuinely re-writes

@@ -23,6 +23,18 @@ class QuotaTierCreate(BaseModel):
     daily_cost_limit: Optional[float] = Field(None, alias="dailyCostLimit", gt=0)
     period_type: Literal["daily", "monthly"] = Field(default="monthly", alias="periodType")
     soft_limit_percentage: float = Field(default=80.0, alias="softLimitPercentage", ge=0, le=100)
+    early_warning_percentages: Optional[List[float]] = Field(
+        None,
+        alias="earlyWarningPercentages",
+        description="Warning rungs below the soft limit; omit for the platform default (50, 75), [] to disable",
+    )
+    session_notice_percentage: float = Field(
+        default=25.0,
+        alias="sessionNoticePercentage",
+        ge=0,
+        le=100,
+        description="Share of the monthly limit at which a single conversation is called out (0 disables)",
+    )
     action_on_limit: Literal["block", "warn"] = Field(default="block", alias="actionOnLimit")
     enabled: bool = True
 
@@ -36,6 +48,17 @@ class QuotaTierUpdate(BaseModel):
     monthly_cost_limit: Optional[float] = Field(None, alias="monthlyCostLimit", gt=0)
     daily_cost_limit: Optional[float] = Field(None, alias="dailyCostLimit", gt=0)
     period_type: Optional[Literal["daily", "monthly"]] = Field(None, alias="periodType")
+    # Warning configuration. soft_limit_percentage and action_on_limit were
+    # absent here while the SPA's edit form sent them, so an admin editing a
+    # tier silently kept the old values — fixed alongside the new knobs.
+    soft_limit_percentage: Optional[float] = Field(None, alias="softLimitPercentage", ge=0, le=100)
+    early_warning_percentages: Optional[List[float]] = Field(
+        None, alias="earlyWarningPercentages"
+    )
+    session_notice_percentage: Optional[float] = Field(
+        None, alias="sessionNoticePercentage", ge=0, le=100
+    )
+    action_on_limit: Optional[Literal["block", "warn"]] = Field(None, alias="actionOnLimit")
     enabled: Optional[bool] = None
 
 
