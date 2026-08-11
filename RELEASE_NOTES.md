@@ -1,3 +1,184 @@
+# Release Notes — v1.14.0
+
+**Release Date:** August 11, 2026
+**Previous Release:** v1.13.0 (August 2, 2026)
+
+---
+
+> 🏗️ **CDK deploy required.** Run `platform.yml` first, then `backend.yml`, then `frontend-deploy.yml`. `infrastructure/lib/` changed in three places this release (runtime log-group wiring, one environment variable removed, new prompt-cache widgets and alarm). **No data migration, no GSI changes** — `infrastructure/gsi-inventory.json` is byte-identical to `main`.
+
+---
+
+## Highlights
+
+The platform gets an interface that isn't a browser. **`agentcore-tui`** is a terminal chat client — streaming, model picker, command palette, keyring-backed auth — shipped as its own `uv` project so it installs with `uvx agentcore-tui` without touching this repo.
+
+The rest of the release is the cost-effectiveness arc turning into shipped code. **Conversations now pin to a microVM**, which roughly halves steady-state turn latency for *every* session: AgentCore routes by runtime session id, nothing was forwarding one, and consecutive turns of a single conversation kept landing on cold containers. **Prompt-cache observability learns to name `partial_miss`** — the classification that had been reporting 90% of a burned monthly quota as a green `hit`. And **quota warnings gain a runway**: earlier rungs, plus a per-conversation cost notice for the case the old ladder structurally could not catch, where one conversation spends most of a user's month.
+
+One correctness fix is worth reading even if you skip the rest. **`isPublic` on a tool granted nothing.** It was read by the admin picker and by nothing that enforces access, so three document-builder tools listed for every user in production and then refused at use — including on public marketplace agents that bind them.
+
+---
+
+## A terminal client
+
+The platform's first non-browser interface. `tui/` is a standalone `uv` project — not part of the backend's dependency graph — built on Textual 8.2.8 and talking to the API-key authenticated `/chat/api-converse` endpoint. It is distributable on its own: `uvx agentcore-tui`.
+
+This is Phase 1. It chats, streams, switches models, and reports usage.
+
+### Client
+- `client/converse.py` / `client/events.py` — streaming SSE with typed events, and typed **actionable** errors mapped from the endpoint's HTTP contract: 401, 403, 429, 400 and 502, plus mid-stream failures that arrive as events rather than status codes
+- `config.py` — resolution across CLI flags, environment, a TOML file and the OS keyring, degrading gracefully on hosts with no keyring backend rather than refusing to start
+- `logging_setup.py` — rotating file logs with prompt content **redacted** unless `AGENTCORE_LOG_CONTENT=1`; the API key is never logged at any level
+
+### Interface
+- `app.py` / `widgets/` — live Markdown rendering with delta coalescing, a collapsible reasoning pane, token and usage status bar, and cancel-in-flight
+- `screens/model_picker.py` — model picker on F2; curated command palette on F1 (new conversation, change model, copy last response or transcript, theme, log path)
+- `cli.py` — `chat`, `login` (getpass + keyring), `logout`, `status` (health probe)
+
+### Local development
+`scripts/local-dev/` runs the client against a live environment: `start-app-api.sh` (loopback-bound, and it refuses a non-loopback bind while the auth bypass is on), `mint-api-key.sh`, `sync-models.sh`, `run-tui.sh`, and a host-side `tui.sh` launcher.
+
+### Version discipline
+`tui/pyproject.toml`, `tui/src/agentcore_tui/__init__.py` and `tui/uv.lock` are wired into `scripts/common/sync-version.sh`, so the new project's manifests cannot drift from `VERSION` — the same gate the other three packages sit behind.
+
+### Test Coverage
+1,400+ lines across 143 tests, none of which need the network: `httpx.MockTransport` for the client and Textual's `run_test` pilot for the interface. Also exercised end to end against a real app-api, over both the Bedrock and Mantle model paths, plus the 401 and connection-failure surfaces.
+
+---
+
+## Conversations stay on one microVM
+
+Turns got about twice as fast, and the reason is embarrassingly simple: nothing was telling AgentCore that two turns belonged to the same conversation.
+
+AgentCore routes an invocation to a microVM by runtime session id. We never forwarded one, so AWS assigned a fresh session per call — and consecutive turns of a single conversation could land on different containers, where inference-api's in-process agent cache is cold by definition.
+
+Measured in dev with a two-arm A/B differing only by this header, at steady state:
+
+| | turn latency |
+|---|---|
+| No pinning, agent-cache miss | ~7.6s |
+| Pinned, agent-cache miss | ~4.8s |
+| Pinned, agent-cache hit | ~3.9s |
+
+Read the split carefully, because an earlier note in this codebase got it wrong and has been corrected: **most of the win is the warm container**, which every session gets. The agent-cache hit adds roughly 19% on top, and only for the subset of sessions that can use it. Both arms produced an identical prompt-cache token split (write:read 0.336) — **this is a latency fix, not a cost one.** An earlier probe suggested a cost win; that was run-order confound, where the second arm inherited the first's Bedrock cache entry because both primed with byte-identical text.
+
+### Backend
+- `apis/shared/harness/runner.py`, `apis/app_api/chat/proxy_routes.py`, `apis/app_api/mcp_apps/routes.py` — forward a runtime session id derived as a sha256 of our session id. The hash is not decoration: the runtime session id has a charset and a 33-character minimum our session ids don't reliably meet, and a hash is always valid, stable per conversation, and keeps our identifiers out of an AWS-side one
+- Kill switch `AGENTCORE_RUNTIME_SESSION_AFFINITY_ENABLED=false` restores per-call runtime sessions exactly
+
+**This was also the missing prerequisite for the agent-cache work below.** That predicate fired correctly but could never hit, because the process was always cold — promoting more tool families was worthless without affinity first.
+
+---
+
+## Artifact turns can use the agent cache
+
+`get_agent` bypassed the agent cache for *any* `extra_tools`, standing in for "this agent captured something the cache key doesn't describe." That was true for two builders and false for everything else, which closes over only session and user — both already key elements. The blanket predicate reached **76% of sessions and 95% of spend**, making every one of those turns pay a full `initialize()` plus an AgentCore Memory restore.
+
+It is now a predicate over what a turn actually captured, starting with `create_artifact` alone — deliberately the single-builder experiment, because artifacts are the clean arm (no `assistant_id`, no memory binding) and the bypass→cache-write correlation is otherwise confounded by workload.
+
+### Backend
+- `apis/shared/tools/injected.py` (new) — the eligibility predicate, with structured `agent_cache` hit/miss logging to instrument the experiment's "initialize() per turn" gate
+- `apis/inference_api/chat/service.py` / `chat/routes.py` — the MCP App dispatch paths call `get_agent` with no injected tools but the *same cache key* as real turns. They couldn't collide while artifact turns never cached; now they share a slot, so an App call arriving first would leave every later real turn hitting an agent with no `create_artifact`. Those two callers now **read** the slot but never seed it
+- Needs no cache-key or `PausedTurnSnapshot` change — artifact closures are already fully described by the key — so the paused-agent orphaning hazard is not in play
+- Kill switch `AGENT_CACHE_INJECTED_TOOLS_ENABLED=false` restores the blanket bypass exactly
+
+**The honest read:** the cost thesis behind this work is disproven. It buys the ~19% marginal latency delta above, not a cache-write reduction. That is recorded in the spec rather than quietly dropped.
+
+---
+
+## Naming the cache miss that reports as a hit
+
+A nonzero `cacheRead` was treated as proof the prefix was cached. So any call that read a leading segment and re-wrote everything behind it classified as `hit` with `wastedUsd = 0`. The 2026-08-05 compaction spiral did exactly that on **56 consecutive calls** — 11k read against 190k written, an 18:1 ratio — and spent 90% of a user's monthly quota invisibly.
+
+`partial_miss` splits "read the prefix, wrote the tail" from "read a sliver, wrote the prefix": write greater than 3× read against a live entry, TTL-gated exactly like `miss_avoidable` so a legitimately cold prefix is not booked as waste. It is priced identically to a full miss, minus the tokens the call actually read.
+
+### Backend
+- `apis/shared/observability/prompt_cache.py` — the classification; `emf.py` — `PartialMiss` and `PartialMissUsd`
+- `apis/shared/sessions/metadata.py` — `partialMissCount` / `partialMissUsd` session rollups, carried into `wastedUsd` on the `C#` row
+- `apis/app_api/admin/costs/` — the cost-anatomy endpoint reports the new status
+
+### Frontend
+- `session-cost-anatomy.page.ts` — partial miss rendered alongside the existing statuses, so the anatomy page stops implying a clean prefix
+
+### Infrastructure
+- `prompt-cache-observability-construct.ts` — a partial-miss widget, and the platform's **first per-session alarm**: $5 of partial-miss waste in 24 hours, off the running rollup total. The fleet sums sitting beside it never saw the incident at all
+
+Rides the existing `PROMPT_CACHE_OBSERVABILITY_ENABLED` kill switch. No new flag, **no change to any request sent to Bedrock**, and no backfill — rows written before this ships still say `hit`.
+
+---
+
+## Quota runway
+
+In the 2026-08-05 incident every quota warning — 80% and 90% — fired on the day the block landed, and nothing ever told the user that **one conversation** had spent $28 of their $30 month. Two signals address that, behind one kill switch (`QUOTA_RUNWAY_ENABLED`, default on).
+
+**Earlier rungs.** 50% and 75% join the tier's soft limit and 90%, tier-configurable via `earlyWarningPercentages` (`[]` opts out). Strictly additive — no tier loses a warning it had.
+
+**A per-conversation notice.** The new `quota_session_notice` SSE event fires when a single conversation reaches the tier's `sessionNoticePercentage` share of the monthly limit (default 25%, 0 disables). It reads the `totalCost` already denormalized on the session row, so there is no new aggregation and no new index.
+
+The acceptance test is a replay, not a claim: `tests/shared/test_quota_runway.py` runs the incident session's own 105 recorded cost rows (a content-free fixture — timestamp and cost only) through the ladder. **The result corrected the spec.** The session notice fires on 2026-08-01 as predicted, but the 50%/75% rungs land on 2026-08-03 UTC — a day later than expected, buying only about 6 hours over today's 80% rung. The runway comes from the per-session signal, because the defect was never that the *user* was overspending.
+
+### Backend
+- `agents/main_agent/quota/thresholds.py` (new) — the ladder; `quota/checker.py` and `quota/event_recorder.py` — a durable `session_notice` quota event on first crossing, for support
+- `apis/app_api/admin/costs/` — `GET /admin/costs/top-sessions`, assembled by fanning out over the period's top-cost users rather than scanning. It reports `usersScanned` and `truncated` so a bounded list never reads as exhaustive
+- `apis/app_api/admin/quota/models.py` — fixes `QuotaTierUpdate` silently dropping `softLimitPercentage` and `actionOnLimit`, which the SPA's edit form has been sending all along
+
+### Frontend
+- `quota-warning-banner.component.ts` / `quota-warning.service.ts` — the notice renders as its own dismissible chip, **scoped to the conversation it names** and never shown above another thread's composer
+- `top-sessions-table.component.ts` — the new admin table; `tier-detail.component` — the two new tier settings
+
+---
+
+## 🐛 Bug fixes
+
+- **A tool marked public was listed for everyone and then refused at use.** `isPublic` was read by exactly one function — `ToolCatalogService._compute_granted_by`, which builds the tool picker — while every enforcement path resolved access from role `grantedTools` alone. A public tool granted by no role therefore appeared in the picker and failed at the gate: agent tool bindings raised a hard `AgentBindingBlockedError` refusing the entire turn ("…isn't available to your account"), schedules and "Run now" dropped it silently, and `ToolAccessService` carried a second, narrower copy of the same rule. Only `"*"` holders were unaffected, which is why it read as a permissions misconfiguration rather than a bug. **In production this stranded `create_word_document`, `create_powerpoint_presentation` and `excalidraw`** — all `isPublic: true`, all granted by zero roles — including on public marketplace agents that bind them. Every gate now routes through one `AppRoleService._tool_grant_set` (role grant ∪ public tools), backed by a `get_public_tool_ids()` TTL snapshot that shares its catalog read with `get_all_tool_ids()`. The public set is unioned **at the predicate**, not merged into `UserEffectivePermissions` — that object is per-user cached and its `tools` list reaches the model's `toolConfig`, where an order flip re-writes the prompt-cache prefix. This is the tools-axis twin of the `_grants_access` consolidation already done for models
+- **One leading space silently downgraded delegated identity to anonymous.** A pasted `token_exchange_audience` reached DynamoDB at 37 characters; the token service compares against its per-client allowlist ordinally and refused every exchange. The tool still *appeared* to work — the endpoint it called allows anonymous access, so the request went unauthenticated and returned plausible results. Eight refusals in the token-service log; nothing wrong in the agent's answer. A before-validator now strips surrounding whitespace and maps blank to `None`; blank → `None` matters as much as the strip, because an empty string reads as "exchange configured" and would send an empty audience. **Note for whoever hits this next:** correcting the stored value alone was not enough in dev — the runtime caches MCP clients keyed on the tool's `updatedAt` and the token-provider closure captures the audience at construction, so a fixed record is ignored until the version changes
+- **Auth-mode validation held on create and not on update.** `update_tool` never considered `token_exchange_audience`, so creating a tool with an audience was checked and editing one to add an audience was not — reachable straight through the admin UI. An edit could leave a tool with an audience plus `forward_auth_token`, or an audience with MCP auth type `aws-iam`. Neither is a credential leak: the exchange branch is evaluated before forward-auth so the raw Cognito token is never sent, and with `aws-iam` the bearer takes precedence so the request reaches an IAM-expecting endpoint unsigned. Both are a broken tool. The bug is the inconsistency — a rule the UI implies was checked and wasn't is worse than no rule
+- **The Runtime construct was one environment variable over a hard limit.** `AWS::BedrockAgentCore::Runtime` accepts at most 50 and the construct sat at exactly 50; the quota runway's kill switch made 51 and broke the dev Platform Stack deploy (`maximum size: [50], found: [51]`). CloudFormation enforces this when it validates the changeset — **not** at `cdk synth` — so tsc, jest and CI were all green on the PR that broke it. The variable is removed and the kill switch is unaffected, since `quota_runway_enabled()` reads `os.environ` and defaults on. Setting it to a non-default value now requires an out-of-band Runtime update until a slot is freed
+- **Three dashboard widgets queried a log group nothing ever wrote to.** The inference construct declared `/aws/bedrock-agentcore/runtimes/<prefix>`; measured in dev, that group holds 0 bytes while the service's own holds 229 MB. Empty results read as "no errors" and "no traffic" rather than as a broken query — so the `cacheStatus` widget has never shown data since it shipped, and the partial-miss widget above copied the pattern before this was caught. AgentCore names the group after the AWS-assigned runtime *id* plus the endpoint qualifier, so it is knowable only from the Runtime resource
+- **Two local-dev scripts tripped the `SKIP_AUTH` CI guard** — six matches, in comments, in error messages, and in the very grep patterns they use to *detect* the bypass in a developer's `.env`. Neither script sets it, so the guard's intent was never violated, but the match is real and CI is right to be blunt. Fixed in the scripts rather than by excluding `scripts/local-dev/` from the scan, which would trade a permanent hole in the guard for a cosmetic problem. Side benefit: the new character-class pattern also matches `SKIP_AUTH = true` with spaces, which the previous literal missed — so `start-app-api.sh` would have allowed a non-loopback bind for a spaced assignment
+
+---
+
+## 🏗️ Infrastructure
+
+- `runtimeLogGroupName` is exposed from the inference construct and threaded to the prompt-cache observability construct, which moves into the compute-wiring phase to receive it. The phantom `LogGroup` and its retention policy — which never applied to anything — are dropped. **Operators:** retention on the real, service-created group is unmanaged. That is a live cost item, noted in the code and tracked as a W5 follow-up
+- New `PartialMiss` / `PartialMissUsd` EMF metrics, a partial-miss dashboard widget, and a per-session partial-miss alarm on the `AgentCoreStack/PromptCache` namespace
+- **No GSI changes.** `infrastructure/gsi-inventory.json` is byte-identical to `main`, so the one-GSI-per-`UpdateTable` limit is not in play for this release
+
+---
+
+## 🔧 CI/CD
+
+- `infrastructure/test/runtime-env-var-limit.test.ts` asserts the Runtime environment-variable count stays at or under 50, and fails with a message naming the ways to free a slot. It logs remaining headroom on every run — **currently 0 free** — and synthesizes the worst case deliberately, with `tokenExchange` enabled because it spreads in three more variables. Without that the test counts 47 while prod and dev deploy 50, and the guard would report headroom no real environment has. Any future conditional block must be enabled there too, or the guard quietly stops guarding
+
+---
+
+## 📚 Docs
+
+This release carries an unusually large specification arc, because the cost work is being designed in the open before it is built:
+
+- `docs/one-pagers/cost-effectiveness-roadmap.md` — the plan of record over the whole arc, with W1–W5 workstreams and G0–G3 gates
+- `docs/specs/compaction-over-threshold-cache-spiral.md`, `docs/specs/agent-cache-extra-tools-bypass.md`, compaction v2's versioned frozen prefix segments, and the document-context-offload spec with its adversarial validation and eval design
+- `docs/one-pagers/fleet-prefix-spend-anatomy.md` and `backend/scripts/scan_fleet_prefix_spend.py` — measuring where model spend actually goes, across all conversations rather than one
+- Two corrections worth flagging, both recorded rather than quietly fixed: the agent-cache bypass's cost thesis is **disproven** by its own gate read, and the 1.13.0 note claiming that reaping a microVM risks context loss was wrong — history restores from AgentCore Memory at agent init, so a reap is a cold start, not a loss
+- `AGENTCORE_GATEWAY_TOKEN_EXCHANGE_PLAN.md` corrected: the Gateway does not perform the exchange
+
+---
+
+## 🚀 Deployment notes
+
+**Deploy order: `platform.yml` → `backend.yml` → `frontend-deploy.yml`.** Unlike 1.13.0, this release **does** change `infrastructure/lib/` and requires a CDK deploy.
+
+- **No data migration and no GSI operations.** The GSI inventory is unchanged from `main`, so nothing in this release is exposed to the one-index-per-`UpdateTable` limit
+- **Everything new is behind a default-on kill switch.** `AGENTCORE_RUNTIME_SESSION_AFFINITY_ENABLED`, `AGENT_CACHE_INJECTED_TOOLS_ENABLED`, `QUOTA_RUNWAY_ENABLED`, and the pre-existing `PROMPT_CACHE_OBSERVABILITY_ENABLED` each disable their feature exactly, with no partial state
+- **`QUOTA_RUNWAY_ENABLED` has no Runtime environment-variable slot.** The Runtime construct is at its 50-variable ceiling with **0 headroom**, so the flag is read from `os.environ` with a default of on. Turning it *off* requires an out-of-band Runtime update until a slot is freed — and any new Runtime variable added from here requires retiring an existing one first, which `runtime-env-var-limit.test.ts` will now tell you in CI rather than at deploy
+- **Expect fewer cold starts and faster turns after the first in each conversation** once session affinity is live. This partially offsets 1.13.0's idle-reaper change, which deliberately shrank the warm-microVM pool: conversations now reuse their own container rather than relying on a large shared pool
+- **Users on tiers with default settings will start seeing quota warnings at 50% and 75%**, and a per-conversation notice at 25% of the monthly limit. Both are tier-configurable — set `earlyWarningPercentages` to `[]` and `sessionNoticePercentage` to `0` to keep the old behaviour for a given tier
+- **Watch the new per-session partial-miss alarm.** It is the first alarm on this platform that fires for a single conversation rather than a fleet aggregate, and it exists because the fleet sums did not see the incident that motivated it
+- **The terminal client deploys nothing.** `tui/` is a standalone `uv` project distributed via `uvx agentcore-tui`; it is not part of any image, and it needs an API key from the existing API-key feature
+
+---
+
 # Release Notes — v1.13.0
 
 **Release Date:** August 2, 2026
