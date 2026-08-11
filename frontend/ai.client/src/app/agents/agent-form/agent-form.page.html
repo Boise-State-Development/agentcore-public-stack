@@ -314,15 +314,24 @@
             @for (p of enumParams(); track p.key) {
               <div>
                 <label [attr.for]="'param-' + p.key" class="block text-xs/5 font-medium text-gray-700 dark:text-gray-300">{{ p.label }}</label>
+                <!--
+                  Bind [selected] on each <option>, never [value] on the <select>.
+                  `select.value` is a one-time DOM property write applied before
+                  @for has mounted the options in the same change-detection tick,
+                  so the browser drops the unmatched value and falls back to the
+                  first option ("Default") — and Angular never re-applies it,
+                  because the bound value itself never changed. A saved
+                  `reasoning_effort: high` then reads as the model's default
+                  forever. Same failure this pattern caused in chat preferences (#161).
+                -->
                 <select
                   [id]="'param-' + p.key"
                   [disabled]="isViewer()"
-                  [value]="paramValue(p.key)"
                   (change)="onEnumParam(p.key, $any($event.target).value)"
                   class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-xs transition focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
-                  <option value="">Default{{ p.spec.default != null ? ' (' + p.spec.default + ')' : '' }}</option>
+                  <option value="" [selected]="paramValue(p.key) === ''">Default{{ p.spec.default != null ? ' (' + p.spec.default + ')' : '' }}</option>
                   @for (opt of p.spec.allowed ?? []; track opt) {
-                    <option [value]="opt">{{ opt }}</option>
+                    <option [value]="opt" [selected]="opt === paramValue(p.key)">{{ opt }}</option>
                   }
                 </select>
               </div>
