@@ -93,16 +93,35 @@ DEFAULT_AGENT_TYPE = "chat"
 
 
 def _mark_session_cancelled(agent) -> None:
-    """Flip the agent's session-manager ``cancelled`` flag (cooperative stop).
+    """Arm cancellation for the running turn (cooperative stop).
 
-    Both StopHook (tool boundaries) and the stream coordinator (mid-generation)
-    read this flag to unwind the turn. Defensive: a nonstandard agent without a
-    session manager is simply a no-op.
+    Two signals, because they stop different things:
+
+    - ``session_manager.cancelled`` is read by StopHook (tool boundaries) and
+      by the stream coordinator (mid-generation). It ends the turn, but only
+      at a point where our own code regains control.
+    - ``agent.cancel()`` is Strands' own signal. As of strands-agents 1.51.0 it
+      propagates into an **in-flight MCP tool call** and makes the sequential
+      tool executor skip the tools still queued behind it. That is the gap the
+      flag alone cannot close: StopHook fires only *before* a tool starts, so a
+      Stop pressed during a slow MCP call previously ran that call to
+      completion — the shape behind the MCP Apps proxy-call timeouts.
+
+    Both are cleared at the head of the next turn by
+    ``reset_cancellation_state``; neither may leak onto the cached agent.
+
+    Defensive throughout: a nonstandard agent missing either surface is a
+    no-op, and cancelling is idempotent.
     """
     session_manager = getattr(agent, "session_manager", None)
     if session_manager is not None:
         session_manager.cancelled = True
-        logger.info("Cooperative stop: cancel observed for the running turn")
+
+    cancel = getattr(agent, "cancel", None)
+    if callable(cancel):
+        cancel()
+
+    logger.info("Cooperative stop: cancel observed for the running turn")
 
 
 async def _lease_heartbeat_loop(lease, agent) -> None:
