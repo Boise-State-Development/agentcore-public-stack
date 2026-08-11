@@ -166,6 +166,38 @@ class TestPayload:
 
         assert json.loads(captured[0].content)["enabled_tools"] == ["calculator", "fetch_url_content"]
 
+    async def test_declares_itself_as_a_terminal(self) -> None:
+        """So the agent's interface guidance matches this client.
+
+        The server defaults to "web" when the field is absent, which is how a
+        terminal user came to be told about a gear icon and offered KaTeX.
+        """
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return sse_response(agent_body())
+
+        async with build(handler) as client:
+            await drain(client)
+
+        assert json.loads(captured[0].content)["client_surface"] == "terminal"
+
+    async def test_the_surface_is_sent_on_every_turn(self) -> None:
+        """Not just the first. The server keys its agent cache on the surface, so
+        omitting it mid-conversation would swap the interface guidance."""
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return sse_response(agent_body())
+
+        async with build(handler) as client:
+            await drain(client)
+            await drain(client, message="and again")
+
+        assert [json.loads(r.content)["client_surface"] for r in captured] == ["terminal", "terminal"]
+
 
 class TestConstruction:
     def test_requires_a_base_url(self) -> None:

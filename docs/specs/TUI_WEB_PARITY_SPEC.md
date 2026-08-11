@@ -98,6 +98,40 @@ my-skills, agents and `@`-mentions, settings, API keys, costs.
 
 **Phase 4 — sharing, export, connectors.**
 
+## The agent knows which client it is talking to
+
+Parity is not only about what the client can do — it is also about what the agent
+is *told*. The shared system prompt used to instruct every client to toggle tools
+from "the gear icon next to the message input" and offered KaTeX and Mermaid, so
+a terminal user was directed to a control that does not exist and handed two
+renderers a terminal draws as literal noise.
+
+`InvocationRequest.client_surface` fixes that. `"web"` (the default, and what an
+older client that omits the field gets) keeps every browser instruction; the TUI
+sends `"terminal"` and receives keybindings, a prohibition on KaTeX/Mermaid, a
+width warning, and the fact that OAuth consent cannot be completed there.
+
+Composition lives in `agents/main_agent/core/system_prompt_builder.py`:
+`SHARED_SYSTEM_PROMPT` + one entry from `SURFACE_GUIDANCE`. Adding a surface is a
+block plus a key. Three things about it are load-bearing:
+
+* **The surface is part of the agent cache key.** It changes the *built* prompt
+  while leaving the raw `system_prompt` argument untouched — and that argument is
+  `None` on the default path, so `prompt_hash` cannot separate surfaces. Since the
+  key begins with `session_id` and the TUI now lists and resumes web
+  conversations, omitting it would serve the second client an agent carrying the
+  first client's guidance.
+* **A paused turn records its surface** in `PausedTurnSnapshot`, because a resume
+  must rebuild under the same cache key or the paused agent is stranded and
+  Strands reports "must resume from interrupt with list of interruptResponse's".
+* **The interface section is appended after `<user_instructions>`.** What a client
+  can physically render is a fact, not a preference, so an assistant author must
+  not be able to talk the agent into emitting KaTeX to a terminal.
+
+Deployment order is safe in either direction: the model sets no `extra='forbid'`,
+so a deployed backend that predates the field ignores it, and a deployed backend
+that has it defaults to web for clients that omit it.
+
 ## Facts worth not rediscovering
 
 * **`model_id` and `provider` travel together**, and both are absent for "system

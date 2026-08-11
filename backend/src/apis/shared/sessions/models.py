@@ -107,6 +107,11 @@ class PausedTurnSnapshot(BaseModel):
     caching_enabled: Optional[bool] = Field(default=None, alias="cachingEnabled")
     max_tokens: Optional[int] = Field(default=None, alias="maxTokens")
     agent_type: Optional[str] = Field(default=None, alias="agentType")
+    # Part of the agent cache key, so a resume MUST reuse the value the
+    # paused turn ran with. Resuming under a different surface would rebuild
+    # under a different key and strand the paused agent, which Strands then
+    # reports as "must resume from interrupt with list of interruptResponse's".
+    client_surface: Optional[str] = Field(default=None, alias="clientSurface")
     enabled_skills: Optional[List[str]] = Field(
         default=None,
         alias="enabledSkills",

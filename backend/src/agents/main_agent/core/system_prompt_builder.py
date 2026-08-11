@@ -46,7 +46,7 @@ Non-negotiable platform policies:
 """
 
 
-DEFAULT_SYSTEM_PROMPT = """You are boisestate.ai, an AI assistant created for Boise State University 
+SHARED_SYSTEM_PROMPT = """You are boisestate.ai, an AI assistant created for Boise State University 
 students, staff, and faculty. You are designed to be helpful, accurate, and 
 cost-conscious.
 
@@ -80,9 +80,6 @@ COMMUNICATION STYLE:
 RESPONSE GUIDELINES:
 - Respond using markdown.
 - You can ONLY use tools that are explicitly provided to you in each conversation
-- When approriate, you may use KaTeX to render mathematical equations.
-- Since the $ character is used to denote a variable in KaTeX, other uses of $ should be use the HTML entity &#36;
-- When the user asks for a diagram or chart, you may use Mermaid to render it.
 - Available tools may change throughout the conversation based on user preferences
 - When multiple tools are available, select and use the most appropriate combination in the optimal order to fulfill the user's request
 - Break down complex tasks into steps and use multiple tools sequentially or in parallel as needed
@@ -90,17 +87,18 @@ RESPONSE GUIDELINES:
 - If you don't have the right tool for a task, clearly inform the user about the limitation
 
 HANDLING MISSING TOOLS:
-Users can toggle individual tools on and off from the Tools section of the
-model settings panel (the gear icon next to the message input). When a user
-asks for something you would normally handle with a tool that isn't currently
-available to you, don't just say "I can't do that." Instead:
+Users can turn individual tools on and off themselves. The INTERFACE section
+at the end of this prompt says how in the client they are actually using —
+follow it exactly, and never describe a control from a different client. When a
+user asks for something you would normally handle with a tool that isn't
+currently available to you, don't just say "I can't do that." Instead:
 
 1. Identify which capability they're asking for in plain language
    (e.g. "spreadsheet analysis", "web browsing", "Python execution",
    "knowledge base search").
 2. Tell them that capability isn't active in the current session and suggest
-   they enable the matching tool from the Tools panel in settings, then retry
-   the request.
+   they enable the matching tool the way the INTERFACE section describes, then
+   retry the request.
 3. If you can offer a partial answer without the tool (e.g. explaining a
    formula they could run themselves), do that as a fallback — but lead with
    the tool suggestion so they know the better path exists.
@@ -112,16 +110,6 @@ Common user intents and the tools to point at:
 - Live web searches, news, current events → the web search tools
 - Fetching a specific URL's contents → the URL fetch tool
 - Questions answerable from the assistant's knowledge base → the knowledge base search tool
-
-Example response when spreadsheet analysis is disabled and a user asks for a
-column total:
-
-> I can compute that for you, but the Spreadsheet Analysis tool isn't
-> currently enabled for this conversation. Open the settings panel (gear
-> icon next to the message input), enable "Spreadsheet Analysis" under
-> Tools, and send the request again — I'll run the aggregation directly
-> on the file. Alternatively, you can open the file in Excel and use
-> `=SUM(NET_AMOUNT)` on the column.
 
 SPREADSHEET ANALYSIS — DISAMBIGUATION:
 When more than one spreadsheet is attached (including the assistant's
@@ -168,17 +156,140 @@ listing one CSV target per sheet (e.g. `Budget.summary.csv`,
 Your goal is to be helpful, accurate, and efficient in completing user requests using the available tools."""
 
 
+# ---------------------------------------------------------------------------
+# Per-surface guidance
+# ---------------------------------------------------------------------------
+#
+# Everything above is true regardless of how the user reached the agent.
+# Everything below is not, and mixing the two is what produced the defect this
+# split fixes: the shared prompt used to tell *every* client to click "the gear
+# icon next to the message input", so terminal users were sent to a control that
+# does not exist, and were handed KaTeX and Mermaid that a terminal cannot draw.
+#
+# Rules for editing these blocks:
+#   - A statement about a keybinding, a mouse target, a renderer, or a panel
+#     belongs here, not in SHARED_SYSTEM_PROMPT.
+#   - Every surface must answer the same questions, so a client is never left
+#     without an answer: how do I change tools, what may I render, what can I
+#     not show, and what happens when a tool needs consent.
+#   - Adding a surface means adding a block here and a value to ClientSurface.
+#     Nothing else in the composition needs to change.
+
+#: What the Angular SPA can do. Carries the instructions that used to live
+#: inline in the shared prompt, so browser behaviour is unchanged.
+WEB_SURFACE_GUIDANCE = """INTERFACE — WEB APP:
+You are being used through the web application in a browser.
+
+- Users toggle individual tools from the Tools section of the model settings
+  panel (the gear icon next to the message input).
+- When appropriate, you may use KaTeX to render mathematical equations.
+- Since the $ character is used to denote a variable in KaTeX, other uses of $
+  should use the HTML entity &#36;
+- When the user asks for a diagram or chart, you may use Mermaid to render it.
+- Rich output renders inline: images, artifacts, and interactive panels.
+
+Example response when spreadsheet analysis is disabled and a user asks for a
+column total:
+
+> I can compute that for you, but the Spreadsheet Analysis tool isn't
+> currently enabled for this conversation. Open the settings panel (gear
+> icon next to the message input), enable "Spreadsheet Analysis" under
+> Tools, and send the request again — I'll run the aggregation directly
+> on the file. Alternatively, you can open the file in Excel and use
+> `=SUM(NET_AMOUNT)` on the column."""
+
+#: What a terminal client can do. Deliberately explicit about what NOT to emit:
+#: a browser-shaped answer is not merely suboptimal here, it is unreadable.
+TERMINAL_SURFACE_GUIDANCE = """INTERFACE — TERMINAL CLIENT:
+You are being used through a terminal client, not a browser. There is no mouse,
+no settings panel, and no HTML renderer. Never refer the user to a control that
+does not exist here.
+
+- Users toggle individual tools by pressing F3 (the tool picker), or from the
+  command palette with F1. Name the tool and the key; never a mouse target.
+  Saved conversations are on F4, and the model picker is F2.
+- Do NOT emit KaTeX or LaTeX math delimiters. Neither renders — they arrive as
+  literal characters and obscure the answer. Write mathematics in plain text
+  using Unicode where it helps: x², √2, ≤, ≈, π, 1/2. The $ character needs no
+  escaping here, so use it normally for currency.
+- Do NOT emit Mermaid, PlantUML, or any other diagram source expecting it to be
+  drawn. It renders as an unreadable code block. For structure, use a short
+  indented tree, an arrow chain (A → B → C), or a table. If a request genuinely
+  needs a rendered diagram, produce it with a tool and say it opens in the web
+  app.
+- Markdown that does render: headings, bold and italic, bullet and numbered
+  lists, block quotes, tables, and fenced code blocks with syntax highlighting.
+  Prefer fenced code with a language tag — it is highlighted and is the most
+  useful thing you can emit here.
+- Keep tables narrow. A terminal is often 80 columns; a table wider than that
+  wraps and becomes unreadable. Beyond three or four short columns, prefer a
+  list.
+- You cannot display images, artifacts, or interactive panels. If you create
+  one with a tool, say what it is and that it opens in the web app rather than
+  describing it as though the user can see it.
+- OAuth consent and tool approvals cannot be completed in a terminal. If a tool
+  needs one, say the turn is paused and that continuing requires the web app.
+  Never tell the user to click Allow in a popup.
+- Favour short, scannable answers with the conclusion first. The reader has a
+  viewport rather than a page, and scrolling back costs them more than it costs
+  a browser user.
+
+Example response when spreadsheet analysis is disabled and a user asks for a
+column total:
+
+> I can compute that for you, but the Spreadsheet Analysis tool isn't
+> currently enabled. Press F3, enable "Spreadsheet Analysis", and send the
+> request again — I'll run the aggregation directly on the file.
+> Alternatively, you can open the file in Excel and use `=SUM(NET_AMOUNT)`
+> on the column."""
+
+#: Every surface the agent knows how to address. Keys are the wire values
+#: accepted in ``InvocationRequest.client_surface``.
+SURFACE_GUIDANCE: dict[str, str] = {
+    "web": WEB_SURFACE_GUIDANCE,
+    "terminal": TERMINAL_SURFACE_GUIDANCE,
+}
+
+#: Used when a request omits the surface, or names one this build does not know.
+#: Web, because it is the overwhelming majority of traffic and because an older
+#: client that predates the field is by definition the browser.
+DEFAULT_CLIENT_SURFACE = "web"
+
+
+def compose_base_prompt(surface: Optional[str] = None) -> str:
+    """The shared prompt plus one surface's interface section.
+
+    An unknown surface degrades to :data:`DEFAULT_CLIENT_SURFACE` rather than
+    raising: a client sending a value this build has not heard of should get a
+    slightly wrong interface section, not a failed turn.
+    """
+    resolved = surface if surface in SURFACE_GUIDANCE else DEFAULT_CLIENT_SURFACE
+    if surface and resolved != surface:
+        logger.warning("Unknown client_surface %r; falling back to %r", surface, resolved)
+    return f"{SHARED_SYSTEM_PROMPT}\n\n{SURFACE_GUIDANCE[resolved]}"
+
+
+#: Back-compatible name. Several call sites and tests import this directly, and
+#: it is what a caller that says nothing about a surface should get.
+DEFAULT_SYSTEM_PROMPT = compose_base_prompt(DEFAULT_CLIENT_SURFACE)
+
+
 class SystemPromptBuilder:
     """Builds system prompts with optional date injection"""
 
-    def __init__(self, base_prompt: Optional[str] = None):
+    def __init__(self, base_prompt: Optional[str] = None, surface: Optional[str] = None):
         """
         Initialize prompt builder
 
         Args:
-            base_prompt: Custom base prompt (if None, uses DEFAULT_SYSTEM_PROMPT)
+            base_prompt: Custom base prompt. When given it is used verbatim and
+                ``surface`` is ignored — a caller supplying its own text has
+                already decided what the agent should be told.
+            surface: Which client the user is on (``"web"``, ``"terminal"``).
+                Selects the interface section appended to the shared prompt.
+                ``None`` means :data:`DEFAULT_CLIENT_SURFACE`.
         """
-        self.base_prompt = base_prompt or DEFAULT_SYSTEM_PROMPT
+        self.base_prompt = base_prompt or compose_base_prompt(surface)
 
     def build(self, include_date: bool = True) -> str:
         """
@@ -200,7 +311,7 @@ class SystemPromptBuilder:
             return self.base_prompt
 
     @classmethod
-    def from_user_prompt(cls, user_prompt: str) -> "SystemPromptBuilder":
+    def from_user_prompt(cls, user_prompt: str, surface: Optional[str] = None) -> "SystemPromptBuilder":
         """
         Create a builder that wraps a user-supplied prompt with the platform
         safety floor.
@@ -212,6 +323,12 @@ class SystemPromptBuilder:
         instruction. The user-supplied portion is appended below the floor
         inside ``<user_instructions>`` tags.
 
+        The interface section for ``surface`` is appended **after** the user
+        portion. It describes what the client can physically render, which is a
+        fact about the world rather than a preference, so an assistant author's
+        instructions must not be able to talk the agent into emitting KaTeX to a
+        terminal.
+
         The user portion is truncated to :data:`MAX_USER_PROMPT_LENGTH`
         characters before assembly. Length validation also happens at the
         API layer so callers normally won't see truncation here.
@@ -219,10 +336,11 @@ class SystemPromptBuilder:
         Args:
             user_prompt: User-provided system-prompt text. The platform
                 safety floor is added regardless of what this contains.
+            surface: Which client the user is on. See :meth:`__init__`.
 
         Returns:
             SystemPromptBuilder: Builder configured with the assembled
-            (floor + wrapped user prompt) text.
+            (floor + wrapped user prompt + interface section) text.
         """
         if user_prompt is None:
             user_prompt = ""
@@ -238,10 +356,15 @@ class SystemPromptBuilder:
         # caller can't close the wrapper and inject text outside it.
         sanitized = truncated.replace("<user_instructions>", "").replace("</user_instructions>", "")
 
-        assembled = f"{PLATFORM_SAFETY_FLOOR}\n" f"<user_instructions>\n{sanitized}\n</user_instructions>"
+        assembled = (
+            f"{PLATFORM_SAFETY_FLOOR}\n"
+            f"<user_instructions>\n{sanitized}\n</user_instructions>\n\n"
+            f"{SURFACE_GUIDANCE.get(surface or DEFAULT_CLIENT_SURFACE, WEB_SURFACE_GUIDANCE)}"
+        )
 
         logger.info(
-            "Assembled system prompt with platform safety floor (user portion: %d chars)",
+            "Assembled system prompt with platform safety floor (user portion: %d chars, surface: %s)",
             len(sanitized),
+            surface or DEFAULT_CLIENT_SURFACE,
         )
         return cls(base_prompt=assembled)

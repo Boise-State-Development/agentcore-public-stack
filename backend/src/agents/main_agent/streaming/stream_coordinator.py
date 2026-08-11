@@ -1378,6 +1378,7 @@ class StreamCoordinator:
                 caching_enabled=snapshot_source.get("caching_enabled"),
                 max_tokens=inference_params.get("max_tokens"),
                 agent_type=snapshot_source.get("agent_type"),
+                client_surface=snapshot_source.get("client_surface"),
                 enabled_skills=snapshot_source.get("enabled_skills"),
                 inference_params=dict(inference_params) if inference_params else None,
                 mantle_api_mode=snapshot_source.get("mantle_api_mode"),

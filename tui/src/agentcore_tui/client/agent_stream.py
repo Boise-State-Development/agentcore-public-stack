@@ -73,6 +73,16 @@ logger = logging.getLogger(__name__)
 
 USER_AGENT = f"agentcore-tui/{__version__}"
 
+#: Sent as ``client_surface`` on every turn. The server keys its interface
+#: guidance off this, and also its agent cache — see the note in
+#: ``_create_cache_key``, where the surface is a key dimension because it changes
+#: the built system prompt without changing the raw ``system_prompt`` field.
+#:
+#: Must match a key in the backend's ``SURFACE_GUIDANCE``. An unrecognised value
+#: degrades to web rather than failing the turn, so a mismatch is quiet — which
+#: is why the value lives here as a named constant rather than inline.
+CLIENT_SURFACE = "terminal"
+
 
 def _server_detail(response: httpx.Response) -> str:
     """A human-readable message from an error response, if there is one."""
@@ -181,6 +191,12 @@ class AgentStreamClient:
         payload: dict[str, Any] = {
             "session_id": session_id,
             "message": message,
+            # Tells the agent which client it is talking to, so its interface
+            # guidance matches what the user can actually see and press. Without
+            # it the server's default is "web", and terminal users get told to
+            # click a gear icon that does not exist and handed KaTeX and Mermaid
+            # that render here as literal noise.
+            "client_surface": CLIENT_SURFACE,
         }
         target = model_id or self._config.model_id
         if target:

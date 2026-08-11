@@ -548,3 +548,33 @@ class TestInjectedToolCacheEligibility:
             )
 
         assert mentioned.agent.messages, "the second live Agent forked the conversation"
+
+def test_create_cache_key_separates_client_surfaces():
+    """The same conversation opened from the web app and from the terminal must
+    not share a cached agent.
+
+    The surface changes the *built* system prompt while leaving the raw
+    `system_prompt` argument untouched — and that argument is `None` on the
+    default path, so `prompt_hash` cannot tell the two apart. The key begins with
+    `session_id`, and the TUI lists and resumes web conversations, so without this
+    dimension the second client is served an agent carrying the first client's
+    interface guidance: terminal users back to being told about a gear icon.
+    """
+    base = dict(
+        session_id="s",
+        user_id="u",
+        enabled_tools=["t"],
+        model_id="m",
+        inference_params={},
+        system_prompt=None,
+        caching_enabled=False,
+        provider="bedrock",
+        freshness_hash="f",
+        agent_type="chat",
+    )
+    web = service._create_cache_key(**base, client_surface="web")
+    terminal = service._create_cache_key(**base, client_surface="terminal")
+
+    assert web != terminal
+    # An omitted surface is the browser, so pre-existing keys are unchanged.
+    assert service._create_cache_key(**base) == web

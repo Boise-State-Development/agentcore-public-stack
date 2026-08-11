@@ -61,6 +61,7 @@ def _create_cache_key(
     freshness_hash: str,
     agent_type: Optional[str],
     skills_hash: str = "",
+    client_surface: Optional[str] = None,
 ) -> Tuple:
     """
     Create a cache key for agent instances.
@@ -76,6 +77,14 @@ def _create_cache_key(
     granted skills, which `enabled_tools` does not capture — so without this an
     edit to a granted skill (or a role grant change) would serve a stale agent.
     Empty for chat turns with no skills, so the default path is unaffected.
+
+    `client_surface` is a key dimension because it changes the *built* system
+    prompt while leaving the raw `system_prompt` argument untouched — which is
+    `None` on the default path, so `prompt_hash` cannot distinguish surfaces.
+    The key starts with `session_id`, and a conversation can now be opened from
+    both the web app and the terminal (the TUI lists and resumes web
+    conversations), so omitting this would serve the second client an agent
+    built with the first client's interface guidance.
     """
     tools_hash = _hash_tools(enabled_tools)
 
@@ -95,6 +104,9 @@ def _create_cache_key(
         provider or "bedrock",
         freshness_hash,
         agent_type or "chat",
+        # Before `skills_hash` so that stays the trailing element, which an
+        # existing test documents.
+        client_surface or "web",
         skills_hash,
     )
 
@@ -224,6 +236,7 @@ async def get_agent(
     accessible_skill_ids: Optional[List[str]] = None,
     extra_tools_key_described: bool = False,
     cache_write: bool = True,
+    client_surface: Optional[str] = None,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -252,6 +265,8 @@ async def get_agent(
             derive it with ``injected_tools_are_key_described``; the default
             (False) keeps the historical bypass, so any caller that has not
             reasoned about its closures gets the safe behavior.
+        client_surface: Which client the user is on ("web", "terminal").
+            Selects the agent's interface guidance, and is part of the cache key.
         cache_write: Whether this caller may *populate* the cache. Read stays
             allowed either way. Set False by callers that build a partial
             toolset for a session whose real turns build more — otherwise they
@@ -298,6 +313,7 @@ async def get_agent(
         freshness_hash=freshness_hash,
         agent_type=agent_type,
         skills_hash=skills_hash,
+        client_surface=client_surface,
     )
 
     # Whether this turn's injected tools (if any) let it use the cache at all.
@@ -364,6 +380,7 @@ async def get_agent(
         inference_params=merged_params,
         mantle_api_mode=mantle_api_mode,
         mantle_region=mantle_region,
+        client_surface=client_surface,
     )
     # Skills v2: ChatAgent (now the target of both "chat" and "skill" types)
     # accepts accessible_skill_ids and conditionally adds the AgentSkills

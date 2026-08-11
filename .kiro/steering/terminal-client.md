@@ -112,6 +112,25 @@ The bus-address rejoin lives in **`/etc/profile.d/`**, not `~/.bashrc`:
 returns early for exactly that. The Dockerfile's pre-existing `~/.bashrc` PATH
 block has the same latent problem.
 
+## The agent is told it is in a terminal
+
+`client_surface: "terminal"` on every `/chat/stream` turn
+(`client/agent_stream.py`, `CLIENT_SURFACE`). The backend composes
+`SHARED_SYSTEM_PROMPT` + a per-surface interface block, so the agent names F2/F3/F4
+instead of a gear icon and is explicitly forbidden from emitting KaTeX and
+Mermaid — a terminal renders both as literal noise, and the model's priors push
+hard toward them unless told no.
+
+**If you move a keybinding, update `TERMINAL_SURFACE_GUIDANCE`** in
+`backend/src/agents/main_agent/core/system_prompt_builder.py`. It hardcodes F2,
+F3 and F4; a stale block means the agent confidently tells users the wrong key,
+which is the exact failure the split was built to end. A test asserts the keys
+are present but cannot know whether they are still correct.
+
+The surface is a dimension of the **agent cache key**, and a paused turn records
+it in its snapshot. Both are deliberate — details in
+#[[file:docs/specs/TUI_WEB_PARITY_SPEC.md]].
+
 ## Test fixtures written from types will not save you
 
 The agent-stream dialect was built from the SPA's `stream-parser-types.ts` and
@@ -192,7 +211,7 @@ tui/src/agentcore_tui/
 └── widgets/          transcript messages, composer, status bar
 ```
 
-553 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+634 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.

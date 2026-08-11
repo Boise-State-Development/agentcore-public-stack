@@ -1093,6 +1093,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 mantle_region=mantle_region,
                 agent_type=effective_agent_type,
                 is_resume=False,
+                client_surface=input_data.client_surface,
                 accessible_skill_ids=effective_skill_ids,
                 # This path builds no injected tools, but shares a cache slot
                 # with the real turns that do. Read the slot; never seed it.
@@ -1144,6 +1145,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 mantle_region=mantle_region,
                 agent_type=effective_agent_type,
                 is_resume=False,
+                client_surface=input_data.client_surface,
                 accessible_skill_ids=effective_skill_ids,
                 # Same partial-toolset hazard as app_tool_call above.
                 cache_write=False,
@@ -1633,7 +1635,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
 
             # Build the base prompt with date
-            base_prompt_builder = SystemPromptBuilder()
+            base_prompt_builder = SystemPromptBuilder(surface=input_data.client_surface)
             base_prompt = base_prompt_builder.build(include_date=True)
 
             # Append assistant instructions to the base prompt
@@ -1653,7 +1655,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             if not system_prompt:
                 from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
 
-                base_prompt_builder = SystemPromptBuilder()
+                base_prompt_builder = SystemPromptBuilder(surface=input_data.client_surface)
                 system_prompt = base_prompt_builder.build(include_date=True)
             logger.info(
                 "Assistant has no instructions - using fallback system prompt"
@@ -1775,7 +1777,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # path can leave system_prompt unset).
             if not system_prompt:
                 from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
-                system_prompt = SystemPromptBuilder().build(include_date=True)
+                system_prompt = SystemPromptBuilder(surface=input_data.client_surface).build(include_date=True)
             system_prompt = append_active_prompt(system_prompt, prompt_name, prompt_text)
             logger.info(f"Appended custom system prompt: {prompt_name!r}")
 
@@ -1870,6 +1872,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 mantle_region=snapshot.mantle_region,
                 agent_type=snapshot.agent_type,
                 is_resume=True,
+                client_surface=snapshot.client_surface or input_data.client_surface,
                 # Resume must rebuild the SAME cache key the original turn used,
                 # or the paused agent is orphaned. New snapshots carry the
                 # original turn's exact effective set in enabled_skills, so
@@ -2060,6 +2063,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_type=effective_agent_type,
                 extra_tools=extra_tools,
                 is_resume=False,
+                client_surface=input_data.client_surface,
                 accessible_skill_ids=effective_skill_ids,
                 extra_tools_key_described=extra_tools_key_described,
             )

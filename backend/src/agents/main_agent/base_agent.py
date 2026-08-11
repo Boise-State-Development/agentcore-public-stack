@@ -65,6 +65,7 @@ class BaseAgent(ABC):
         mantle_region: Optional[str] = None,
         skip_persistence: bool = False,
         extra_tools: Optional[List[Any]] = None,
+        client_surface: Optional[str] = None,
     ):
         """
         Initialize base agent with shared infrastructure.
@@ -123,18 +124,26 @@ class BaseAgent(ABC):
             "inference_params": dict(resolved_params),
             "mantle_api_mode": mantle_api_mode,
             "mantle_region": mantle_region,
+            # Recorded so a paused turn resumes under the same cache key; the
+            # surface is a key dimension.
+            "client_surface": client_surface,
         }
 
         # Load retry configuration from environment variables
         from agents.main_agent.core.model_config import RetryConfig
         self.model_config.retry_config = RetryConfig.from_env()
 
-        # Initialize system prompt builder
+        # Initialize system prompt builder. `client_surface` selects the
+        # interface section — which controls the agent may name, and which
+        # renderers it may emit. It is threaded into BOTH branches: an assistant
+        # or custom prompt still runs in a terminal, and telling that user to
+        # click a gear icon is wrong regardless of who wrote the instructions.
+        self.client_surface = client_surface
         if system_prompt:
-            self.prompt_builder = SystemPromptBuilder.from_user_prompt(system_prompt)
+            self.prompt_builder = SystemPromptBuilder.from_user_prompt(system_prompt, surface=client_surface)
             self.system_prompt = self.prompt_builder.build(include_date=False)
         else:
-            self.prompt_builder = SystemPromptBuilder()
+            self.prompt_builder = SystemPromptBuilder(surface=client_surface)
             self.system_prompt = self.prompt_builder.build(include_date=True)
 
         # Snapshot the *unbuilt* system_prompt — i.e. the same value the

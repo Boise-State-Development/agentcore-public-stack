@@ -97,6 +97,16 @@ class InvocationRequest(BaseModel):
     # the managed model's admin defaults. Unsupported params are dropped
     # silently by the merge step in routes.py.
     inference_params: Optional[Dict[str, Any]] = None
+    # Which client the user is on, so the agent's interface guidance matches
+    # what they can actually see and press. "web" (the default) keeps the
+    # browser instructions every existing client already gets; "terminal"
+    # swaps in keybindings and forbids KaTeX/Mermaid, which a terminal renders
+    # as literal noise. Unknown values degrade to "web" rather than failing the
+    # turn — see `system_prompt_builder.compose_base_prompt`.
+    #
+    # NOTE: this is a *rendering capability* hint, not an authorization input.
+    # Nothing downstream may grant or restrict access based on it.
+    client_surface: Optional[str] = None
     # NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
     # AgentCore Runtime's internal 'assistant_id' field handling.
     # AgentCore Runtime returns 424 when it sees a non-empty 'assistant_id' field,
