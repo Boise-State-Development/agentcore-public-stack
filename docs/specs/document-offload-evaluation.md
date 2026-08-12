@@ -45,6 +45,24 @@ definition of "full fidelity" from this probe, and the offload spec's
 
 ## 2. Answer quality
 
+> **Amended 2026-08-12 — what to build vs. what to adopt.** This section is the
+> base design for the harness shared with #833 §4.3 and #835 §8. A spike
+> (`agentcore-evaluations-spike-findings.md`) verified against dev-ai that the
+> managed `bedrock-agentcore` evaluation service — available on our existing
+> pin, authorized, no infrastructure — supplies a usable third of it. Read the
+> spike's §3 before writing a runner. The split, for this section:
+>
+> - **Adopt:** the tool-trajectory families (`Builtin.TrajectoryInOrderMatch`,
+>   `Builtin.ToolSelectionAccuracy`, `Builtin.ToolParameterAccuracy`) score the
+>   `document_read` health band in §3.1 directly and for free. Consider
+>   `Builtin.Faithfulness` — "is the response supported by the provided
+>   context" is close to this spec's actual question, *did the digest lose
+>   something the document had* — as a candidate primary for the holistic
+>   family, or at minimum as the second judge §2.4 asks for on the 20% sample.
+> - **Build:** the arms, the k=3 replication, the corpus and planted facts, the
+>   programmatic lookup/citation scoring, the statistics — and the blinded
+>   holistic judge, for the reason in §2.4.
+
 ### 2.1 Critique of the spec's ~30-task design, and what replaces it
 
 The shape (holistic / lookup / citation) is right and maps onto the failure
@@ -128,6 +146,16 @@ documents since >100k-token peaks are 4× more common in attachment sessions):
   transcripts to *final answer text only* before judging, and a scrubber must
   verify no digest/tool artifacts survive (grep for the digest tag and tool
   names; reject the sample into manual review if found).
+
+  ⚠️ **This requirement rules the managed evaluation service out for the
+  holistic judge — structurally, not as a gap to work around** (added
+  2026-08-12). AgentCore Evaluations works by handing the evaluator the whole
+  collected span set; content-in-spans *is* the mechanism, and there is no
+  scrubbing seam between collection and judging. The blinded pairwise judge
+  must therefore be ours, over scrubbed final-answer text. Everything else in
+  §2 can go through the service. Do not design around a `ReferenceInputs`
+  field or a custom evaluator to recover blinding — the transcript reaches the
+  judge regardless of what ground truth is attached.
 - **Consistency checks:** (1) each pair judged in both orders — an
   order-flipped verdict is recorded as a tie; (2) a second judge model on a
   20 % sample, report inter-judge agreement; (3) human (Phil or delegate)
