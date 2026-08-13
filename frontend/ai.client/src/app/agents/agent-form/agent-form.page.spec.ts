@@ -241,3 +241,140 @@ describe('AgentFormPage — loading state', () => {
     expect(fixture.nativeElement.querySelector('form')).toBeTruthy();
   });
 });
+
+/**
+ * A saved enum param (reasoning effort) must still be the one selected when the
+ * author reopens the agent. The select's options are rendered by `@for` from the
+ * model's `supportedParams`, so binding the saved value on the <select> loses it:
+ * `select.value` is written before the options mount, the browser drops it, and
+ * Angular never re-applies a binding whose value did not change — a saved `high`
+ * silently reads back as the model's default. Same defect as #161.
+ */
+describe('AgentFormPage — saved enum param on reopen', () => {
+  let fixture: ComponentFixture<AgentFormPage>;
+  let component: AgentFormPage;
+
+  const MODEL_WITH_EFFORT = {
+    kind: 'model',
+    ref: 'openai.gpt-5.4',
+    label: 'GPT-5.4',
+    description: '',
+    meta: {
+      provider: 'mantle',
+      supportedParams: {
+        params: {
+          reasoning_effort: {
+            supported: true,
+            allowed: ['low', 'medium', 'high'],
+            default: 'medium',
+            locked: false,
+          },
+        },
+      },
+    },
+  };
+
+  const mockAgentService = {
+    loadBindable: vi
+      .fn()
+      .mockImplementation((kind: string) =>
+        Promise.resolve(kind === 'model' ? [MODEL_WITH_EFFORT] : []),
+      ),
+    getAgent: vi.fn().mockResolvedValue({
+      agentId: 'agt-1',
+      name: 'Research Assistant',
+      description: 'A short summary of the agent',
+      instructions: 'You are a helpful assistant that answers questions.',
+      visibility: 'PRIVATE',
+      userPermission: 'owner',
+      modelConfig: {
+        modelId: 'openai.gpt-5.4',
+        provider: 'mantle',
+        params: { reasoning_effort: 'high' },
+      },
+      bindings: [],
+    }),
+    updateAgent: vi.fn().mockResolvedValue({ agentId: 'agt-1' }),
+  };
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    vi.clearAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
+
+    TestBed.configureTestingModule({
+      imports: [ReactiveFormsModule],
+      providers: [
+        provideRouter([{ path: 'agents', children: [] }]),
+        { provide: AgentService, useValue: mockAgentService },
+        {
+          provide: ToastService,
+          useValue: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
+        },
+        { provide: SidenavService, useValue: { hide: vi.fn(), show: vi.fn() } },
+        { provide: ThemeService, useValue: { isDark: () => false } },
+        // Edit mode: the route carries the agent id.
+        { provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: () => 'agt-1' } } } },
+      ],
+    });
+
+    TestBed.overrideComponent(AgentFormPage, {
+      remove: { imports: [AgentPreviewComponent, KnowledgeBaseSectionComponent] },
+      add: { imports: [StubPreviewComponent, StubKnowledgeBaseComponent] },
+    });
+
+    fixture = TestBed.createComponent(AgentFormPage);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+    await settle(fixture);
+  });
+
+  function effortSelect(): HTMLSelectElement {
+    return fixture.nativeElement.querySelector('select#param-reasoning_effort');
+  }
+
+  it('hydrates the saved param into component state', () => {
+    expect(component.paramValue('reasoning_effort')).toBe('high');
+  });
+
+  it('renders the saved value as the selected option, not the model default', () => {
+    const select = effortSelect();
+    expect(select).toBeTruthy();
+    expect([...select.options].map((o) => o.value)).toEqual(['', 'low', 'medium', 'high']);
+    expect(select.value).toBe('high');
+  });
+
+  it('still round-trips a change back through the form state', () => {
+    const select = effortSelect();
+    select.value = 'low';
+    select.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+
+    expect(component.paramValue('reasoning_effort')).toBe('low');
+    expect(effortSelect().value).toBe('low');
+  });
+
+  it('still sends the saved value on a save that never touched the control', async () => {
+    // The regression was display-only: `modelParams` kept `high` even while the
+    // select showed the default, so reopening and saving never rewrote the record.
+    await component.onSubmit();
+
+    expect(mockAgentService.updateAgent).toHaveBeenCalledWith(
+      'agt-1',
+      expect.objectContaining({
+        modelConfig: expect.objectContaining({ params: { reasoning_effort: 'high' } }),
+      }),
+    );
+  });
+
+  it('falls back to the Default option when the param is cleared', () => {
+    const select = effortSelect();
+    select.value = '';
+    select.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+
+    expect(component.paramValue('reasoning_effort')).toBe('');
+    expect(effortSelect().value).toBe('');
+  });
+});

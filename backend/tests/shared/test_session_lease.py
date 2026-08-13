@@ -17,6 +17,7 @@ from apis.shared.sessions.session_lease import (
     SessionBusyError,
     SessionLease,
     acquire_session_lease,
+    is_session_lease_held,
     release_session_lease,
     renew_session_lease,
     request_session_cancel,
@@ -163,6 +164,52 @@ class TestRelease:
     @pytest.mark.asyncio
     async def test_release_none_is_noop(self, sessions_metadata_table):
         await release_session_lease(None)  # must not raise
+
+
+class TestIsHeld:
+    """The read-only probe app-api uses to explain a Runtime 424 rewrite."""
+
+    @pytest.mark.asyncio
+    async def test_reports_held_while_a_turn_owns_the_lease(
+        self, sessions_metadata_table
+    ):
+        await acquire_session_lease("s1", "u1")
+        assert await is_session_lease_held("s1", "u1") is True
+
+    @pytest.mark.asyncio
+    async def test_reports_free_when_no_lease_exists(self, sessions_metadata_table):
+        assert await is_session_lease_held("s1", "u1") is False
+
+    @pytest.mark.asyncio
+    async def test_reports_free_after_release(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        await release_session_lease(lease)
+        assert await is_session_lease_held("s1", "u1") is False
+
+    @pytest.mark.asyncio
+    async def test_expired_lease_reads_as_free(self, sessions_metadata_table):
+        # Matches acquire's condition: a lapsed lease is not a conflict, so it
+        # must never be reported as one (that would turn a container crash's
+        # 424 into a misleading "already responding" notice).
+        now = int(time.time())
+        sessions_metadata_table.put_item(
+            Item={
+                "PK": "USER#u1",
+                "SK": "LEASE#s1",
+                "leaseOwner": "dead-owner",
+                "leaseExpiresAt": now - 1,
+                "ttl": now + 3600,
+            }
+        )
+        assert await is_session_lease_held("s1", "u1") is False
+
+    @pytest.mark.asyncio
+    async def test_is_scoped_to_the_named_session_and_user(
+        self, sessions_metadata_table
+    ):
+        await acquire_session_lease("s1", "u1")
+        assert await is_session_lease_held("s2", "u1") is False
+        assert await is_session_lease_held("s1", "u2") is False
 
 
 class TestCancel:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentcore-stack"
-version = "1.13.0"
+version = "1.14.1"
 requires-python = ">=3.10"
 description = "Multi-agent conversational AI system with AWS Bedrock AgentCore"
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
     "uvicorn[standard]==0.46.0",
 
     # AWS and cloud services
-    "boto3==1.43.9",
+    "boto3==1.43.68",
 
     # Utilities
     "python-dotenv==1.2.2",
@@ -56,11 +56,11 @@ dependencies = [
 [project.optional-dependencies]
 # AgentCore-specific dependencies (for inference_api)
 agentcore = [
-    "strands-agents==1.48.0",
-    "strands-agents-tools==0.5.2",
+    "strands-agents==1.51.0",
+    "strands-agents-tools==0.8.6",
 
-    "aws-opentelemetry-distro==0.17.0",
-    "bedrock-agentcore==1.9.1",
+    "aws-opentelemetry-distro==0.19.0",
+    "bedrock-agentcore==1.21.0",
     # Multi-provider LLM support
     "openai==2.32.0",  # For OpenAI models
     "google-genai==1.73.1",  # For Google Gemini models
@@ -71,7 +71,7 @@ agentcore = [
 
 # Voice/BidiAgent dependencies (Nova Sonic speech-to-speech)
 bidi = [
-    "strands-agents[bidi]==1.48.0",
+    "strands-agents[bidi]==1.51.0",
 ]
 
 # Document ingestion pipeline dependencies (for Lambda deployment)
