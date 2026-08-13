@@ -149,6 +149,43 @@ async def _lease_heartbeat_loop(lease, agent) -> None:
             return
 
 
+async def _release_turn_lease(heartbeat_task, lease) -> None:
+    """End the turn's lease heartbeat and release the lease. Cancellation-proof.
+
+    This runs from a stream generator's ``finally``, and the case that matters
+    is the one where cancellation is what *put us here*: on a client
+    disconnect the whole request task is being torn down, so a bare ``await``
+    in that ``finally`` is itself cancelled at the first suspension point and
+    the release never lands. The lease then survives for the rest of its 90s
+    window, and the user's resend is rejected as a duplicate turn — a 409 that
+    the AgentCore Runtime rewrites to 424 and the SPA shows as "Chat Request
+    Failed", seconds after the dropped stream already showed them a network
+    error.
+
+    Same hazard and same remedy as ``_persist_interruption`` in the stream
+    coordinator: do the work on an independent task and shield the wait on it,
+    so the release completes even when our wait for it does not.
+    """
+    async def _do() -> None:
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            # Await the cancelled task so its CancelledError is retrieved
+            # (never re-raised) before the lease is released.
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
+        from apis.shared.sessions.session_lease import release_session_lease
+
+        await release_session_lease(lease)
+
+    try:
+        await asyncio.shield(asyncio.ensure_future(_do()))
+    except asyncio.CancelledError:
+        # The shield was cancelled from outside while _do() ran; the inner
+        # task finishes on its own. Swallowing here cannot suppress whatever
+        # unwound the stream — that exception is still in flight and resumes
+        # propagating once this `finally` returns.
+        logger.debug("lease-release shield cancelled; inner release continues")
+
+
 def is_preview_session(session_id: str) -> bool:
     """Check if a session ID is a preview session (should skip persistence).
 
@@ -2325,13 +2362,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 async for chunk in stream_with_quota_warning():
                     yield chunk
             finally:
-                if heartbeat_task is not None:
-                    heartbeat_task.cancel()
-                    # Await the cancelled task so its CancelledError is retrieved
-                    # (never re-raised) before the lease is released.
-                    await asyncio.gather(heartbeat_task, return_exceptions=True)
-                from apis.shared.sessions.session_lease import release_session_lease
-                await release_session_lease(session_lease)
+                await _release_turn_lease(heartbeat_task, session_lease)
 
         # Stream response from agent as SSE (with optional files)
         # Note: Compression is handled by GZipMiddleware if configured in main.py
