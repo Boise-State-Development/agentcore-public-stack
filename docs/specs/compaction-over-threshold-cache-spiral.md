@@ -515,6 +515,19 @@ write volume to ≤ (prefix − previous cached prefix) + delta.
 
 ### 4.3 Quality gate — PR-2 and PR-4 change model-visible context (veto)
 
+> **Amended 2026-08-12 — build on AgentCore Evaluations, not from scratch.**
+> The harness this section describes is shared with #835 §8 and #836 eval §2,
+> and a spike (`agentcore-evaluations-spike-findings.md`) found the managed
+> `bedrock-agentcore` evaluation service supplies a usable third of it —
+> verified working end to end against dev-ai on our existing pin, with no
+> infrastructure. For **this** section specifically: `Builtin.GoalSuccessRate`
+> and `Builtin.InstructionFollowing` map onto the constraint-retention and
+> revision-continuity families below, and the trajectory matchers score tool
+> use exactly. **What must still be built by hand:** the paired arms, the k=3
+> replication, the planted-constraint corpus, and the statistics. See the
+> spike's §3 for the split, and its §2 for the one requirement the managed
+> path cannot meet — blinding.
+
 PR-2 replaces a 40k-token verbatim edit log with an ≤8k re-summary; PR-4
 freezes memory retrievals for a visit. Both are context *reductions* in
 exactly the workload where continuity matters most (a user iterating on one

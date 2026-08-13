@@ -1,9 +1,18 @@
+import * as cdk from 'aws-cdk-lib';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 
-import { AppConfig, getResourceName } from '../../config';
+import { AppConfig, getRemovalPolicy, getResourceName } from '../../config';
+
+/**
+ * How long ALB access logs are kept. Long enough to investigate a pattern
+ * across a couple of weeks of traffic, short enough that a high-volume log
+ * of every request doesn't accumulate cost indefinitely.
+ */
+const ACCESS_LOG_RETENTION_DAYS = 30;
 
 export interface AlbConstructProps {
   config: AppConfig;
@@ -16,6 +25,9 @@ export interface AlbConstructProps {
  * Provisions:
  *   - ALB security group permitting :80 and :443 from anywhere
  *   - Internet-facing ALB in the VPC's public subnets
+ *   - Access-log bucket (30-day expiry) with delivery enabled, which is
+ *     what makes a mid-stream SSE disconnect attributable to the client,
+ *     the network, or the ALB's own idle timeout
  *   - Primary listener: HTTPS on :443 if `config.certificateArn` is set,
  *     plus a redirect-to-HTTPS HTTP listener on :80; otherwise HTTP on :80
  *     with a fixed 404 response
@@ -33,6 +45,7 @@ export class AlbConstruct extends Construct {
   public readonly alb: elbv2.ApplicationLoadBalancer;
   public readonly albListener: elbv2.ApplicationListener;
   public readonly albSecurityGroup: ec2.SecurityGroup;
+  public readonly accessLogBucket: s3.Bucket;
 
   constructor(scope: Construct, id: string, props: AlbConstructProps) {
     super(scope, id);
@@ -71,6 +84,38 @@ export class AlbConstruct extends Construct {
         subnetType: ec2.SubnetType.PUBLIC,
       },
     });
+
+    // Access logs: the only record of who ENDED a connection.
+    //
+    // The chat path is SSE, and a stream that dies mid-turn reaches the
+    // backend as an indistinguishable cancellation — a client going away, a
+    // dropped socket, and the ALB's own 60s idle timeout all look identical
+    // from inside the container. The access log is the one place that
+    // separates them: `elb_status_code`, the `-`/`connection` termination
+    // fields, and `request_processing_time` name the terminator and how long
+    // the request had run. Without it, that attribution is guesswork.
+    //
+    // SSE-S3 rather than KMS deliberately — the ALB log delivery service
+    // only supports SSE-S3 (or none) and silently fails to deliver against
+    // an SSE-KMS bucket. `logAccessLogs` writes the bucket policy that
+    // grants the regional ELB log-delivery principal.
+    this.accessLogBucket = new s3.Bucket(this, 'AlbAccessLogBucket', {
+      bucketName: getResourceName(config, 'alb-access-logs'),
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      lifecycleRules: [
+        {
+          id: 'expire-access-logs',
+          expiration: cdk.Duration.days(ACCESS_LOG_RETENTION_DAYS),
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
+        },
+      ],
+      removalPolicy: getRemovalPolicy(config),
+      autoDeleteObjects: !config.retainDataOnDelete,
+    });
+
+    this.alb.logAccessLogs(this.accessLogBucket);
 
 
 

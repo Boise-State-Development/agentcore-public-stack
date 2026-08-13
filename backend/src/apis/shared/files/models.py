@@ -112,6 +112,49 @@ def is_tabular_file(filename: str, mime_type: str) -> bool:
     return False
 
 
+# =============================================================================
+# Presentation File Detection
+# =============================================================================
+
+# PowerPoint files are routed to the PowerPoint presentation tools
+# (list_powerpoint_presentations, read_powerpoint_presentation) instead of
+# being sent inline as Bedrock document content blocks. Unlike the tabular
+# carve-out below, this one is not a size optimization — it is mandatory:
+# Bedrock's Converse `DocumentFormat` enum has no `pptx` member (pdf, csv,
+# doc, docx, xls, xlsx, html, txt, md are the only accepted values), so an
+# inline .pptx fails the whole turn with a ValidationException. The tools are
+# the only path that works.
+#
+# read_powerpoint_presentation extracts slide text, tables and speaker notes
+# with python-pptx inside Code Interpreter, which is also far cheaper in
+# tokens than shipping raw OOXML bytes would be even if Bedrock accepted them.
+#
+# Uploads are gated to keep this reachable: `.pptx` is in ALLOWED_MIME_TYPES
+# above, and the frontend allowlist in `file-upload.service.ts` must stay in
+# sync — drift there is what made .pptx un-uploadable while the create-deck
+# tool's own error text told users to "upload a .pptx template first".
+
+PRESENTATION_MIME_TYPES = frozenset({
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+})
+
+PRESENTATION_EXTENSIONS = frozenset({".pptx"})
+
+
+def is_presentation_file(filename: str, mime_type: str) -> bool:
+    """Return True when the file should be handled by the PowerPoint tools
+    rather than sent inline as a Bedrock document block.
+    """
+    if mime_type and mime_type.lower() in PRESENTATION_MIME_TYPES:
+        return True
+    if filename:
+        lower = filename.lower()
+        for ext in PRESENTATION_EXTENSIONS:
+            if lower.endswith(ext):
+                return True
+    return False
+
+
 # Bedrock's /ConverseStream imposes a 4.5MB hard limit on each document
 # content block's *internal* representation. Non-tabular formats (PDF, docx,
 # txt, md) don't inflate much, but we leave margin for per-request overhead

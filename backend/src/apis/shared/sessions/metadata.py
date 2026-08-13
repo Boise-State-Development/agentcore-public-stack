@@ -2843,6 +2843,20 @@ async def clear_truncated_turn(session_id: str, user_id: str) -> None:
         logger.error("Failed to clear truncated_turn: %s", e, exc_info=True)
 
 
+# Interrupt-reason precedence, strongest first. Rank = how much the reason
+# actually tells us, which is why the client-attested ones outrank the
+# server's fallback: `connection_lost` is stamped whenever a stream is torn
+# down and nothing said why, so a refresh, a dead socket and a platform-side
+# idle timeout are indistinguishable under it. A reason may only overwrite a
+# same-or-weaker one (see `set_interrupted_turn`).
+_REASON_RANK = {
+    "unknown": 0,
+    "connection_lost": 1,
+    "navigated_away": 2,
+    "user_stopped": 3,
+}
+
+
 async def set_interrupted_turn(
     session_id: str,
     user_id: str,
@@ -2852,22 +2866,34 @@ async def set_interrupted_turn(
     """Mark that the last turn was interrupted before completion.
 
     Interruptions come from two racing sources that write the same session
-    record: the client stop signal (app-api ``POST /sessions/{id}/interrupt``,
-    ``reason="user_stopped"``) and the stream cancellation backstop
-    (inference-api, ``reason="connection_lost"`` fallback). ``user_stopped``
-    is the stronger signal, so a ``user_stopped`` write is unconditional
-    while a fallback write is guarded by a condition so it can never
-    downgrade an already-recorded ``user_stopped`` — whichever source lands
-    first, the final reason is correct. Idempotent. Best-effort: a write
-    failure logs but never breaks the live flow. No-op when the session
-    record is missing or the table env var is unset.
+    record: the client signal (app-api ``POST /sessions/{id}/interrupt`` —
+    ``user_stopped`` from the Stop button, ``navigated_away`` from the
+    page-lifecycle handler) and the stream cancellation backstop
+    (inference-api, ``connection_lost`` fallback).
+
+    Precedence is by ``_REASON_RANK``: a write only lands if no *stronger*
+    reason is already recorded, enforced as a DynamoDB condition against the
+    pre-update item, so the outcome is correct regardless of which source
+    wins the race. The ranking is by how much the reason actually tells us —
+    a client-attested reason outranks the server's fallback, which is
+    literally "the stream died and nothing told us why".
+
+    Note this used to protect only ``user_stopped``, which meant the
+    ``connection_lost`` backstop could overwrite any other reason it raced.
+    That was harmless while ``user_stopped`` was the only client reason;
+    with ``navigated_away`` it would silently erase the attribution this
+    exists to capture.
+
+    Idempotent. Best-effort: a write failure logs but never breaks the live
+    flow. No-op when the session record is missing or the table env var is
+    unset.
     """
     sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
     if not sessions_metadata_table:
         logger.warning("DYNAMODB_SESSIONS_METADATA_TABLE_NAME not set; skipping interrupted_turn persistence")
         return
 
-    if reason not in ("user_stopped", "connection_lost", "unknown"):
+    if reason not in _REASON_RANK:
         reason = "unknown"
 
     try:
@@ -2904,13 +2930,21 @@ async def set_interrupted_turn(
             },
         }
 
-        # A fallback (non-user_stopped) write must not clobber a stronger
-        # user_stopped reason the beacon may have already landed. The
-        # condition is evaluated against the pre-update item, so this is
-        # race-safe regardless of which source writes first.
-        if reason != "user_stopped":
-            update_kwargs["ConditionExpression"] = "attribute_not_exists(#ltr) OR #ltr <> :user_stopped"
-            update_kwargs["ExpressionAttributeValues"][":user_stopped"] = "user_stopped"
+        # A write must not clobber a reason that says more than this one
+        # does. Guard against every strictly-stronger reason; evaluated
+        # against the pre-update item, so it is race-safe regardless of
+        # which source writes first. The strongest reason has no stronger
+        # peers, so it writes unconditionally.
+        stronger = [r for r, rank in _REASON_RANK.items() if rank > _REASON_RANK[reason]]
+        if stronger:
+            clauses = []
+            for i, r in enumerate(stronger):
+                placeholder = f":stronger{i}"
+                clauses.append(f"#ltr <> {placeholder}")
+                update_kwargs["ExpressionAttributeValues"][placeholder] = r
+            update_kwargs["ConditionExpression"] = (
+                "attribute_not_exists(#ltr) OR (" + " AND ".join(clauses) + ")"
+            )
 
         try:
             table.update_item(**update_kwargs)
