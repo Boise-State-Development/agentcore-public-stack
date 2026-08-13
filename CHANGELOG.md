@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.14.1] - 2026-08-13
+
+Patch release on the streaming interrupt path. A dropped SSE connection no longer bricks the next message in the conversation — the fix users are most likely to notice, since the failure presented as a "Network error" followed by a fatal "Chat Request Failed" on the resend. Stop now reaches an in-flight MCP call instead of waiting it out, and a cancelled turn no longer sticks to the cached agent and refuses every subsequent message. Session persistence moves off the asyncio event loop, and the Strands/AgentCore libraries move to the versions those fixes require. **No CDK deploy** — `backend.yml`, then `frontend-deploy.yml`.
+
+### 🐛 Fixed
+
+- **A dropped SSE stream leaked its single-flight session lease, bricking the next message.** The release sat behind an `await` in the stream generator's `finally`, and Starlette cancels a disconnected `StreamingResponse` with an anyio cancel scope — which is level-triggered, so every checkpoint inside it raises, cleanup included. The case that ran the `finally` was the case that guaranteed it never finished. The lease then survived its full 90s window and rejected the user's resend as a duplicate turn. Shielded, using the same idiom `_persist_interruption` already used (#863)
+- **SSE connections are kept warm with keepalive comment frames.** CloudFront's `OriginReadTimeout` and the ALB's `idle_timeout` are both 60s, with no keepalive anywhere in the chat path, so a turn that legitimately went quiet longer than that — a slow tool, a burst of MCP calls — was cut by the platform. Of 47 dropped turns measured over 5 days, 11 died in a 62–67s band. The frame is `": keepalive\n"` with exactly one newline: a blank line is what *dispatches* an event, and `@microsoft/fetch-event-source` dispatches unconditionally rather than suppressing empty messages, so a second newline would push a phantom nameless event into the SPA's parser. Injected only at a frame boundary, since `aiter_bytes()` yields transport chunks that can end mid-frame (#863)
+- **AgentCore's 424 rewrite of a single-flight 409 is relayed back as 409.** The Runtime data plane maps *any* non-2xx from the container to `424 Failed Dependency`, so the container's deliberate "a response is already streaming" reached the SPA as a fatal error rather than the soft "Already responding" notice it already implements. Translated in the proxy rather than the SPA, and gated on `is_session_lease_held` — a 424 is genuinely ambiguous, so a real container failure is never disguised as a conflict (#863)
+- **Stop did not reach an in-flight MCP call.** `_mark_session_cancelled` only flipped `session_manager.cancelled`, which StopHook reads at tool boundaries and the stream coordinator reads between stream events — neither regains control while an MCP `tools/call` is running. A Stop pressed during a slow MCP call appeared to do nothing until that call returned on its own (#858)
+- **A cancelled turn outlived itself and bricked the whole session.** The `cancelled` flag was never reset on the cached agent, so every later message on that session was refused (#858)
+- **The Agent Designer showed `Default (medium)` for an agent saved with a non-default reasoning effort.** `select.value` is a one-time DOM property write that Angular applies before `@for` mounts the options in the same change-detection tick, so the browser found no matching option and fell back to the first. User-reported on boisestate.ai (#849)
+
+### ⚡ Performance
+
+- **AgentCore Memory writes are offloaded off the asyncio event loop.** `AgentCoreMemoryConfig` was built without `batch_size`, which defaults to 1 — so every message appended during a turn (the user message, each assistant message, each tool result) fired a synchronous boto3 `create_event` plus a `sync_agent` on the event loop, from inside the SSE stream generator. Session persistence was the last blocking boto3 caller on the hot path; `stream_coordinator` and the artifact and spreadsheet tools already followed this rule (#859)
+
+### 📦 Dependencies
+
+- Backend: `strands-agents` 1.48.0 → 1.51.0, `strands-agents-tools` 0.5.2 → 0.8.6, `bedrock-agentcore` 1.9.1 → 1.21.0, `aws-opentelemetry-distro` 0.17.0 → 0.19.0, `boto3` 1.43.9 → 1.43.68 (also pinned in the three Lambda `requirements.txt` files) (#857)
+
+### 📚 Docs
+
+- `docs/specs/bedrock-managed-kb-evaluation.md` — evaluates Bedrock Managed Knowledge Base as a replacement for the S3 Vectors RAG pipeline. Evaluation and design only, no code or infra. Grounded in an AWS Price List API query and a live 3-KB probe in dev-ai; the headline finding is that Managed KB carries **no per-KB billing floor**, billing under service code `AmazonBedrockAgentCore` via three consumption SKUs (#856)
+
 ## [1.14.0] - 2026-08-11
 
 Feature release with two faces: a **terminal client** — the platform's first interface that isn't the browser — and the first shipped instalments of the cost-effectiveness arc. Conversations now **pin to a microVM**, which cuts steady-state turn latency roughly in half for every session; the prompt-cache observability layer learns to name the `partial_miss` that was hiding 90% of a burned quota behind a green `hit`; and quota warnings gain earlier rungs plus a **per-conversation cost notice**, the signal that would have caught the 2026-08-05 incident ten days earlier. On the correctness side, `isPublic` on a tool finally means something at enforcement time rather than only in the admin picker. **Requires a CDK deploy** — `platform.yml` first, then `backend.yml` and `frontend-deploy.yml`.
