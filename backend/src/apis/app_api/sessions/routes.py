@@ -647,22 +647,32 @@ async def signal_turn_interrupted_endpoint(
     body: SessionInterruptRequest,
     current_user: User = Depends(get_current_user_from_session),
 ):
-    """Record that the user deliberately stopped the session's in-flight turn.
+    """Record a client-attested reason for the session's turn being interrupted.
 
-    This is the AUTHORITATIVE carrier of stop intent for the interrupted-turn
-    flow: the transport cannot distinguish a Stop click from a dropped socket
-    (both surface as a cancelled stream), so the SPA signals intent here
-    out-of-band when the user clicks Stop — via ``fetch(..., {keepalive:
+    This is the AUTHORITATIVE carrier of client intent for the
+    interrupted-turn flow: the transport cannot distinguish a Stop click from
+    a refresh from a dropped socket (all three surface as a cancelled
+    stream), so the SPA signals out-of-band — via ``fetch(..., {keepalive:
     true})`` with the ``X-CSRF-Token`` header (NOT ``navigator.sendBeacon``,
     which cannot set headers and would be rejected by CSRFMiddleware).
+
+    Two reasons are accepted, and they mean different things:
+
+      * ``user_stopped``   — the Stop button. Deliberate: the user rejected
+        the response in flight, so the turn is cancelled server-side too.
+      * ``navigated_away`` — the page was hidden or unloaded mid-turn. The
+        user left; they did not reject anything. **Recorded only** — the
+        running turn is deliberately left alone, matching today's behaviour
+        where a refresh lets the turn finish server-side and the reload
+        offers to continue it.
 
     Lives on app-api, not inference-api: the AgentCore Runtime data plane
     only proxies ``/invocations`` + ``/ping``, so a custom inference-api
     route would 404 in cloud.
 
-    ``user_stopped`` takes precedence over the ``connection_lost`` fallback
-    that inference-api's cancellation backstop may race against this write
-    (see ``set_interrupted_turn``). No-op for missing sessions — and the GSI
+    Both take precedence over the ``connection_lost`` fallback that
+    inference-api's cancellation backstop may race against this write (see
+    ``set_interrupted_turn``). No-op for missing sessions — and the GSI
     lookup inside ``set_interrupted_turn`` is user-scoped, so a session
     owned by someone else is also a no-op. Returns 204 either way (the
     user's intent is recorded best-effort; the client never waits on it).
@@ -685,11 +695,19 @@ async def signal_turn_interrupted_endpoint(
         # so the user's resend isn't rejected with 409 and stopping wasted
         # model/tool work. Owner-scoped, so a stale Stop can't kill a later
         # turn. Best-effort: never fail the Stop signal on this.
-        try:
-            from apis.shared.sessions.session_lease import request_session_cancel
-            await request_session_cancel(session_id, user_id)
-        except Exception:
-            logger.warning("Failed to arm session cancel on stop", exc_info=True)
+        #
+        # Deliberate Stop ONLY. `navigated_away` is an attribution signal, not
+        # an instruction: cancelling on it would make every refresh kill the
+        # turn it interrupted, discarding work the reload is about to offer to
+        # continue. Leaving the turn running preserves exactly today's
+        # behaviour for a departure — this endpoint's reason set widened, the
+        # side effects did not.
+        if body.reason == "user_stopped":
+            try:
+                from apis.shared.sessions.session_lease import request_session_cancel
+                await request_session_cancel(session_id, user_id)
+            except Exception:
+                logger.warning("Failed to arm session cancel on stop", exc_info=True)
         return Response(status_code=204)
     except Exception:
         logger.error("Error recording turn interruption", exc_info=True)

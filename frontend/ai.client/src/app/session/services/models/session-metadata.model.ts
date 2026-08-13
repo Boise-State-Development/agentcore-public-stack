@@ -55,7 +55,11 @@ export interface SessionMetadata {
   /** Why the last turn was interrupted. 'user_stopped' (deliberate Stop) →
    *  no Continue; 'connection_lost' (refresh / dropped connection) → offer
    *  Continue. */
-  lastTurnInterruptReason?: 'user_stopped' | 'connection_lost' | 'unknown';
+  lastTurnInterruptReason?:
+    | 'user_stopped'
+    | 'navigated_away'
+    | 'connection_lost'
+    | 'unknown';
   /** ISO 8601 timestamp when the interruption was detected. */
   lastTurnInterruptedAt?: string;
   /** True when an unattended (scheduled) run left a response the user hasn't

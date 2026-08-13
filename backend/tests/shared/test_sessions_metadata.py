@@ -141,6 +141,73 @@ class TestInterruptedTurnMarker:
         assert result.last_turn_interrupt_reason == "user_stopped"
 
     @pytest.mark.asyncio
+    async def test_navigated_away_wins_over_connection_lost(self, sessions_metadata_table):
+        # The whole point of attesting departures: the cancellation backstop
+        # races the pagehide signal and must not erase it. Before the rank
+        # generalisation the condition only protected `user_stopped`, so this
+        # write order silently reverted to the unattributable reason.
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_interrupted_turn,
+        )
+        await store_session_metadata(session_id="i5", user_id="u1", session_metadata=_make_session_metadata(session_id="i5"))
+
+        await set_interrupted_turn("i5", "u1", reason="navigated_away", source="client_signal")
+        await set_interrupted_turn("i5", "u1", reason="connection_lost", source="cancellation")
+
+        result = await get_session_metadata("i5", "u1")
+        assert result.last_turn_interrupt_reason == "navigated_away"
+
+    @pytest.mark.asyncio
+    async def test_navigated_away_upgrades_connection_lost(self, sessions_metadata_table):
+        # Reverse order: the backstop lands first and the departure signal
+        # arrives late (the keepalive fetch outliving the page), upgrading it.
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_interrupted_turn,
+        )
+        await store_session_metadata(session_id="i6", user_id="u1", session_metadata=_make_session_metadata(session_id="i6"))
+
+        await set_interrupted_turn("i6", "u1", reason="connection_lost", source="cancellation")
+        await set_interrupted_turn("i6", "u1", reason="navigated_away", source="client_signal")
+
+        result = await get_session_metadata("i6", "u1")
+        assert result.last_turn_interrupt_reason == "navigated_away"
+
+    @pytest.mark.asyncio
+    async def test_navigated_away_never_downgrades_user_stopped(self, sessions_metadata_table):
+        # Stop, then the user closes the tab. The deliberate rejection is the
+        # stronger statement and must survive.
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_interrupted_turn,
+        )
+        await store_session_metadata(session_id="i7", user_id="u1", session_metadata=_make_session_metadata(session_id="i7"))
+
+        await set_interrupted_turn("i7", "u1", reason="user_stopped", source="client_signal")
+        await set_interrupted_turn("i7", "u1", reason="navigated_away", source="client_signal")
+
+        result = await get_session_metadata("i7", "u1")
+        assert result.last_turn_interrupt_reason == "user_stopped"
+
+    @pytest.mark.asyncio
+    async def test_unrecognised_reason_falls_back_to_unknown(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_interrupted_turn,
+        )
+        await store_session_metadata(session_id="i8", user_id="u1", session_metadata=_make_session_metadata(session_id="i8"))
+
+        await set_interrupted_turn("i8", "u1", reason="something_new", source="cancellation")
+
+        result = await get_session_metadata("i8", "u1")
+        assert result.last_turn_interrupt_reason == "unknown"
+
+    @pytest.mark.asyncio
     async def test_set_noop_when_session_missing(self, sessions_metadata_table):
         from apis.shared.sessions.metadata import set_interrupted_turn, get_session_metadata
         # No store first — must not raise, and nothing to read back.
