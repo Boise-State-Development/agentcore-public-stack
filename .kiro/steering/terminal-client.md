@@ -211,7 +211,7 @@ tui/src/agentcore_tui/
 └── widgets/          transcript messages, composer, status bar
 ```
 
-634 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+637 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.
@@ -340,6 +340,19 @@ bash scripts/common/sync-version.sh --check
   style/defs and regroups runs by `y`.
 - **`metadata` SSE events fire per LLM call.** Only the last one (the one
   carrying `contextWindow`) is a valid whole-turn summary.
+- **app-api slips `: keepalive` comment frames into idle streams** (every 20s,
+  `proxy_routes.py`) because two hops in front of the response cut an idle
+  connection. `httpx_sse` skips SSE comments correctly — verified, not assumed,
+  by `TestKeepalives` — so they are invisible to the dialect. Anything that
+  hand-parses this stream must skip them too, or a slow tool call turns into a
+  stream of unknown events.
+- **409 from `/chat/stream` is not a failure.** It is the per-session
+  single-flight guard saying a turn is already running, relayed deliberately by
+  app-api to undo the AgentCore Runtime's rewrite of it to 424. It maps to
+  `SessionBusyError`, whose hint says wait or press Esc — a 409 used to fall
+  through to `UpstreamError` and tell the user that retrying usually helps,
+  which is the one thing that cannot work. Reachable because the TUI can resume a
+  conversation someone has open in a browser tab.
 
 ## When Phase 2 resumes
 

@@ -30,6 +30,7 @@ from agentcore_tui.errors import (
     ConnectionFailedError,
     ModelAccessDeniedError,
     RateLimitedError,
+    SessionBusyError,
     UpstreamError,
 )
 
@@ -328,6 +329,58 @@ class TestErrors:
         async with build(lambda _r: sse_response(body)) as client:
             events = await drain(client)
         assert any(type(e).__name__ == "ErrorEvent" for e in events)
+
+    async def test_a_409_is_a_busy_session_not_an_upstream_failure(self) -> None:
+        """app-api relays the single-flight 409 deliberately, undoing the
+        AgentCore Runtime's rewrite of it to 424.
+
+        It used to fall through to the catch-all and inherit "retrying usually
+        helps" — actively wrong advice, since retrying immediately conflicts
+        again. Reachable whenever the same conversation is driven from a terminal
+        and a browser tab at once.
+        """
+        detail = "A response is already streaming for this conversation. Wait for it to finish before sending another message."
+        async with build(lambda _r: httpx.Response(409, json={"detail": detail})) as client:
+            with pytest.raises(SessionBusyError) as caught:
+                await drain(client)
+
+        assert caught.value.status_code == 409
+        assert "already streaming" in caught.value.message
+        assert "Esc" in caught.value.hint
+
+
+class TestKeepalives:
+    """app-api slips `: keepalive` comment frames onto idle streams.
+
+    Two hops in front of the response cut an idle connection, so a tool that runs
+    for a minute would otherwise drop the stream. A comment line is the SSE no-op
+    and must be invisible to us — if it ever parsed as an event, every long turn
+    would log an unknown-event warning and could disturb the fold.
+    """
+
+    async def test_keepalive_frames_are_invisible(self) -> None:
+        body = (
+            b": keepalive\n"
+            + sse_body([("message_start", {"role": "assistant"})])
+            + b": keepalive\n"
+            + sse_body(
+                [
+                    ("content_block_delta", {"contentBlockIndex": 0, "type": "text", "text": "hi"}),
+                    ("message_stop", {"stopReason": "end_turn"}),
+                    ("done", {}),
+                ]
+            )
+        )
+        async with build(lambda _r: sse_response(body)) as client:
+            events = await drain(client)
+
+        assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "hi"
+        assert not [e for e in events if type(e).__name__ == "UnknownEvent"]
+
+    async def test_a_stream_that_is_only_keepalives_yields_nothing(self) -> None:
+        """A turn still waiting on a slow tool. It must not look like an event."""
+        async with build(lambda _r: sse_response(b": keepalive\n" * 5)) as client:
+            assert await drain(client) == []
 
 
 class TestInterrupt:

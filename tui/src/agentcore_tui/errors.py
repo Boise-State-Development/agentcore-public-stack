@@ -90,6 +90,29 @@ class RateLimitedError(ApiError):
         self.retry_after = retry_after
 
 
+class SessionBusyError(ApiError):
+    """409 — a turn is already streaming for this conversation.
+
+    The server's per-session single-flight guard. Distinct from
+    :class:`RateLimitedError` (a budget) and from :class:`UpstreamError` (a
+    failure): nothing is wrong, something is simply still running. Retrying
+    immediately just conflicts again, which is why this exists rather than
+    letting a 409 fall through to the catch-all and inherit "retrying usually
+    helps".
+
+    Reachable when the same conversation is driven from two places at once — a
+    terminal and a browser tab, say — which the TUI made possible by listing and
+    resuming web conversations.
+    """
+
+    def __init__(self, message: str = "A response is already streaming for this conversation") -> None:
+        super().__init__(
+            message,
+            status_code=409,
+            hint="Wait for it to finish, or press Esc to stop the turn that is running.",
+        )
+
+
 class UpstreamError(ApiError):
     """502 — the model provider failed behind app-api."""
 

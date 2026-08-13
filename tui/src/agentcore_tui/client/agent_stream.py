@@ -48,6 +48,7 @@ from ..errors import (
     ConnectionFailedError,
     ModelAccessDeniedError,
     RateLimitedError,
+    SessionBusyError,
     UpstreamError,
 )
 from ..logging_setup import redact
@@ -229,6 +230,16 @@ class AgentStreamClient:
                 # a missing CSRF exemption would produce. The hint covers the
                 # case the user can act on.
                 return ModelAccessDeniedError(model_id)
+            case 409:
+                # The per-session single-flight guard: a turn is already running
+                # for this conversation. app-api relays this deliberately, undoing
+                # the AgentCore Runtime's rewrite of it to 424.
+                #
+                # NOT an UpstreamError, which is where this used to land via the
+                # catch-all. That carries the hint "retrying usually helps", and
+                # here retrying immediately just conflicts again — the honest
+                # advice is to wait, or stop the turn that is running.
+                return SessionBusyError(detail or "A response is already streaming for this conversation")
             case 429:
                 return RateLimitedError(detail or "Rate limit or quota exceeded", retry_after=_retry_after(response))
             case 400 | 422:
