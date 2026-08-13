@@ -93,16 +93,35 @@ DEFAULT_AGENT_TYPE = "chat"
 
 
 def _mark_session_cancelled(agent) -> None:
-    """Flip the agent's session-manager ``cancelled`` flag (cooperative stop).
+    """Arm cancellation for the running turn (cooperative stop).
 
-    Both StopHook (tool boundaries) and the stream coordinator (mid-generation)
-    read this flag to unwind the turn. Defensive: a nonstandard agent without a
-    session manager is simply a no-op.
+    Two signals, because they stop different things:
+
+    - ``session_manager.cancelled`` is read by StopHook (tool boundaries) and
+      by the stream coordinator (mid-generation). It ends the turn, but only
+      at a point where our own code regains control.
+    - ``agent.cancel()`` is Strands' own signal. As of strands-agents 1.51.0 it
+      propagates into an **in-flight MCP tool call** and makes the sequential
+      tool executor skip the tools still queued behind it. That is the gap the
+      flag alone cannot close: StopHook fires only *before* a tool starts, so a
+      Stop pressed during a slow MCP call previously ran that call to
+      completion — the shape behind the MCP Apps proxy-call timeouts.
+
+    Both are cleared at the head of the next turn by
+    ``reset_cancellation_state``; neither may leak onto the cached agent.
+
+    Defensive throughout: a nonstandard agent missing either surface is a
+    no-op, and cancelling is idempotent.
     """
     session_manager = getattr(agent, "session_manager", None)
     if session_manager is not None:
         session_manager.cancelled = True
-        logger.info("Cooperative stop: cancel observed for the running turn")
+
+    cancel = getattr(agent, "cancel", None)
+    if callable(cancel):
+        cancel()
+
+    logger.info("Cooperative stop: cancel observed for the running turn")
 
 
 async def _lease_heartbeat_loop(lease, agent) -> None:
@@ -128,6 +147,43 @@ async def _lease_heartbeat_loop(lease, agent) -> None:
         if cancel_requested:
             _mark_session_cancelled(agent)
             return
+
+
+async def _release_turn_lease(heartbeat_task, lease) -> None:
+    """End the turn's lease heartbeat and release the lease. Cancellation-proof.
+
+    This runs from a stream generator's ``finally``, and the case that matters
+    is the one where cancellation is what *put us here*: on a client
+    disconnect the whole request task is being torn down, so a bare ``await``
+    in that ``finally`` is itself cancelled at the first suspension point and
+    the release never lands. The lease then survives for the rest of its 90s
+    window, and the user's resend is rejected as a duplicate turn — a 409 that
+    the AgentCore Runtime rewrites to 424 and the SPA shows as "Chat Request
+    Failed", seconds after the dropped stream already showed them a network
+    error.
+
+    Same hazard and same remedy as ``_persist_interruption`` in the stream
+    coordinator: do the work on an independent task and shield the wait on it,
+    so the release completes even when our wait for it does not.
+    """
+    async def _do() -> None:
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            # Await the cancelled task so its CancelledError is retrieved
+            # (never re-raised) before the lease is released.
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
+        from apis.shared.sessions.session_lease import release_session_lease
+
+        await release_session_lease(lease)
+
+    try:
+        await asyncio.shield(asyncio.ensure_future(_do()))
+    except asyncio.CancelledError:
+        # The shield was cancelled from outside while _do() ran; the inner
+        # task finishes on its own. Swallowing here cannot suppress whatever
+        # unwound the stream — that exception is still in flight and resumes
+        # propagating once this `finally` returns.
+        logger.debug("lease-release shield cancelled; inner release continues")
 
 
 def is_preview_session(session_id: str) -> bool:
@@ -2306,13 +2362,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 async for chunk in stream_with_quota_warning():
                     yield chunk
             finally:
-                if heartbeat_task is not None:
-                    heartbeat_task.cancel()
-                    # Await the cancelled task so its CancelledError is retrieved
-                    # (never re-raised) before the lease is released.
-                    await asyncio.gather(heartbeat_task, return_exceptions=True)
-                from apis.shared.sessions.session_lease import release_session_lease
-                await release_session_lease(session_lease)
+                await _release_turn_lease(heartbeat_task, session_lease)
 
         # Stream response from agent as SSE (with optional files)
         # Note: Compression is handled by GZipMiddleware if configured in main.py

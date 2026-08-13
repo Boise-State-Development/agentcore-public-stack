@@ -69,10 +69,13 @@ def _ensure_gemma4_openai_v1_routing() -> None:
 
     Per its AWS model card, Gemma 4 is served *only* on the Mantle
     ``/openai/v1`` base path — "different from the ``v1`` path used by other
-    models." But the SDK's ``_OPENAI_PATH_MODEL_PREFIXES`` only lists
-    ``openai.gpt-5.``, so ``google.gemma-4-*`` falls through to ``/v1`` and the
-    endpoint 401s ("... is not enabled for this account"). Append the family
-    prefix at build time until it lands upstream (strands-agents/sdk-python).
+    models." A model whose prefix is missing from the SDK's
+    ``_OPENAI_PATH_MODEL_PREFIXES`` falls through to ``/v1`` and the endpoint
+    401s ("... is not enabled for this account").
+
+    strands-agents 1.51.0 ships ``google.gemma-4-`` upstream, so this is now a
+    no-op on the pinned SDK; the guard stays as a floor in case a future pin
+    regresses the list.
 
     ``google.gemma-4-`` specifically — NOT ``google.gemma-``: Gemma 3 is served
     on ``/v1`` and must not be rerouted. Idempotent; safe to call on every build.

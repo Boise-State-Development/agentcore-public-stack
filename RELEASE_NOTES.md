@@ -1,3 +1,76 @@
+# Release Notes — v1.14.1
+
+**Release Date:** August 13, 2026
+**Previous Release:** v1.14.0 (August 11, 2026)
+
+---
+
+> 🚀 **No CDK deploy.** Run `backend.yml`, then `frontend-deploy.yml`. `infrastructure/lib/` is untouched this release and `infrastructure/gsi-inventory.json` is byte-identical to `main` — **no data migration, no GSI changes**.
+
+---
+
+## Highlights
+
+A patch release about interruptions — what happens when a turn does not finish normally.
+
+The headline is a bug prod users reported and could not work around: a mid-response **"Network error"**, then a fatal **"Chat Request Failed"** when they resent. That was one causal chain, not two bugs. A dropped SSE stream never released its single-flight session lease, so the conversation stayed locked for the lease's full 90-second window and rejected the very next message. Two related fixes ship alongside it: SSE keepalive frames, because CloudFront and the ALB were both cutting quiet connections at 60 seconds with no keepalive anywhere in the chat path, and a status relay so the platform's opaque `424` no longer masks the SPA's existing soft "Already responding" path.
+
+**Stop also works properly now.** Pressed during a slow MCP call it used to appear dead until the call returned on its own; separately, a cancelled turn left its flag set on the cached agent and refused every later message in that session.
+
+---
+
+## 🐛 Bug fixes
+
+**A dropped connection bricked the next message.** The lease release sat behind an `await` in the stream generator's `finally`. Starlette cancels a disconnected `StreamingResponse` with an anyio cancel scope, which is level-triggered — while cancelled, *every* checkpoint inside it raises, cleanup included. So the one case that ran the `finally` was the case that guaranteed it never completed. Over 24 hours in production: 433 lease acquires against 413 releases, and those 20 leaked leases accounted exactly for the 20 rejected resends. Fixed by shielding the release, the same idiom `_persist_interruption` already used. Verified live in dev, where the runtime log now shows `Released session lease` landing 420ms after the interruption marker (#863)
+
+**Quiet turns were being cut at 60 seconds.** CloudFront's `OriginReadTimeout` and the ALB's `idle_timeout` are both 60s, and nothing in the chat path sent a keepalive — so any turn that legitimately went silent longer than that, typically a slow tool or a burst of MCP calls, was killed by the platform rather than by anything wrong with the turn. Of 47 dropped turns measured over five days, 11 died in a 62–67 second band. app-api now emits a `": keepalive\n"` comment frame every 20 seconds at frame boundaries (#863)
+
+**The platform's 424 masked a deliberate 409.** The AgentCore Runtime data plane rewrites *any* non-2xx from the container into `424 Failed Dependency`, so inference-api's deliberate "a response is already streaming for this conversation" arrived as a fatal error and the SPA's existing soft notice never fired. The proxy now relays it as 409 — but only when an unexpired turn lease is actually held, since a container crash produces an identical 424 and a real failure must never be disguised as a conflict (#863)
+
+**Stop did not reach a running MCP call.** Cancellation only flipped `session_manager.cancelled`, which StopHook reads at tool boundaries and the stream coordinator reads between stream events. Neither regains control while an MCP `tools/call` is in flight, so a Stop pressed during a slow call did nothing visible until that call finished on its own (#858)
+
+**A cancelled turn bricked the session it was in.** The `cancelled` flag was never reset on the cached agent, so every subsequent message on that conversation was refused (#858)
+
+**The Agent Designer forgot a saved reasoning effort.** An agent saved with `reasoning_effort: high` reopened showing `Default (medium)`. `select.value` is a one-time DOM property write, and Angular applies it before `@for` mounts the options in the same change-detection tick — the browser finds no matching option and falls back to the first. User-reported on boisestate.ai (#849)
+
+---
+
+## ⚡ Performance
+
+**Session persistence no longer blocks the chat event loop.** `AgentCoreMemoryConfig` was constructed without `batch_size`, which defaults to 1, so every message appended during a turn — the user message, each assistant message, each tool result — fired a synchronous boto3 `create_event` plus a `sync_agent` directly on the asyncio event loop from inside the SSE stream generator. This was the last blocking boto3 caller on the hot path; `stream_coordinator` offloads in four places and the artifact and spreadsheet tools document the same rule on every blocking helper (#859)
+
+---
+
+## 📦 Dependencies
+
+| Package | From | To |
+|---|---|---|
+| `strands-agents` | 1.48.0 | 1.51.0 |
+| `strands-agents-tools` | 0.5.2 | 0.8.6 |
+| `bedrock-agentcore` | 1.9.1 | 1.21.0 |
+| `aws-opentelemetry-distro` | 0.17.0 | 0.19.0 |
+| `boto3` | 1.43.9 | 1.43.68 |
+
+`boto3` was not optional — `bedrock-agentcore==1.21.0` floors at `>=1.43.35`, so the resolve fails until it moves. It is pinned in `backend/pyproject.toml` and in the three Lambda `requirements.txt` files that carried the old version. The upgrade is a prerequisite for both fixes above: #858 needs `strands-agents` 1.51.0 to forward the cancel signal into an in-flight MCP call, and #859 needs `bedrock-agentcore` 1.21.0 (#857)
+
+---
+
+## 📚 Docs
+
+`docs/specs/bedrock-managed-kb-evaluation.md` evaluates Bedrock Managed Knowledge Base as a replacement for the custom S3 Vectors RAG pipeline — evaluation and design only, no code and no infrastructure. Grounded in an AWS Price List API query and a live three-KB probe in dev-ai rather than documentation alone. The finding that drives the design: Managed KB has **no per-KB billing floor**, billing under service code `AmazonBedrockAgentCore` through three consumption SKUs (#856)
+
+---
+
+## 🚀 Deployment notes
+
+Backend and frontend only. Run `backend.yml`, then `frontend-deploy.yml`.
+
+- **No `platform.yml` run required.** `infrastructure/lib/` is untouched, and the GSI update-limit check passes with 26 tables compared and no index operations pending.
+- **No new environment variables, no new kill switches.** Every change in this release is unconditional.
+- The frontend deploy is needed only for the Agent Designer fix (#849); the interrupt-path work is entirely server-side.
+
+---
+
 # Release Notes — v1.14.0
 
 **Release Date:** August 11, 2026

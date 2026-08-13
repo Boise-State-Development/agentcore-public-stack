@@ -39,6 +39,36 @@ class _CooperativeStopSignal(Exception):
     """
 
 
+def reset_cancellation_state(agent: Any, session_manager: Any) -> None:
+    """Clear any cancellation armed by a PREVIOUS turn on this agent.
+
+    Both cancellation flags live on objects the agent cache reuses across
+    turns (#741/#751): ``session_manager.cancelled`` is set by
+    ``_mark_session_cancelled`` and never reset, and Strands' ``_cancel_signal``
+    is normally cleared by ``stream_async``'s own ``finally`` — but only if an
+    invocation was actually running when ``cancel()`` landed. The lease
+    heartbeat can observe a cancel just as a turn finishes, which sets the
+    signal with no invocation left to clear it.
+
+    Left sticky, either flag silently breaks every later turn in the session:
+    ``StopHook`` cancels each tool at its boundary, ``append_message`` drops
+    each message, and the in-loop check below raises ``_CooperativeStopSignal``
+    on the first event. Reset at the head of the turn — the same per-turn
+    discipline ``reset_prefix_fingerprints`` follows, and for the same reason.
+
+    ``_cancel_signal`` is private to Strands; there is no public un-cancel, so
+    the access is guarded and a differently-shaped agent is a no-op.
+    """
+    if session_manager is not None and getattr(session_manager, "cancelled", False):
+        logger.info("Clearing a stale cancel flag left by a previous turn")
+        session_manager.cancelled = False
+
+    cancel_signal = getattr(agent, "_cancel_signal", None)
+    if cancel_signal is not None and cancel_signal.is_set():
+        logger.info("Clearing a stale Strands cancel signal left by a previous turn")
+        cancel_signal.clear()
+
+
 class StreamCoordinator:
     """Coordinates streaming lifecycle for agent responses"""
 
@@ -95,6 +125,10 @@ class StreamCoordinator:
         # turn's entries so entry N of this turn maps to the turn's Nth
         # model call (the agent instance is cached across turns).
         reset_prefix_fingerprints(agent)
+
+        # Same per-turn discipline: a cancel armed by a previous turn must not
+        # brick this one. See ``reset_cancellation_state``.
+        reset_cancellation_state(agent, session_manager)
 
         # Track timing for latency metrics
         stream_start_time = time.time()

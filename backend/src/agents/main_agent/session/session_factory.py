@@ -16,6 +16,42 @@ from agents.main_agent.session.preview_session_manager import (
 
 logger = logging.getLogger(__name__)
 
+# Kill switch for async session persistence. Default ON; only the literal
+# string "false" disables it — an empty or unset value stays enabled (workflow
+# env vars can materialize as ""). See ``session_async_persistence_enabled``.
+SESSION_ASYNC_PERSISTENCE_ENABLED_ENV = "AGENTCORE_SESSION_ASYNC_PERSISTENCE_ENABLED"
+
+
+def session_async_persistence_enabled() -> bool:
+    """Whether AgentCore Memory writes are offloaded off the event loop.
+
+    ``batch_size`` is 1, so every message appended during a turn — the user
+    message, each assistant message, each tool result — fires a synchronous
+    boto3 ``create_event`` plus a ``sync_agent`` from inside the SSE stream
+    generator, blocking the asyncio event loop for the whole container.
+
+    ``async_mode`` (bedrock-agentcore 1.21.0) wraps exactly those calls in
+    ``asyncio.to_thread``. It is the same discipline the chat path already
+    applies to every other boto3 caller (artifacts, spreadsheet tools, the
+    interrupted-turn persistence in ``stream_coordinator``); session
+    persistence was the last blocking one on the hot path.
+
+    Two constraints come with it, both satisfied here:
+
+    - The agent MUST be invoked via the async path. Sync ``agent(...)`` raises
+      RuntimeError from Strands' hook registry, which refuses to dispatch
+      coroutine callbacks synchronously. Every invocation in this repo goes
+      through ``stream_async``.
+    - ``AgentInitializedEvent`` cannot be async (Strands disallows it), so
+      ``initialize()`` — session restore plus our compaction — still blocks the
+      calling thread. This flag buys per-turn writes, not cold start.
+
+    Read per call (no module-level caching) so tests and live config changes
+    behave predictably; the env read is negligible next to the boto3 work.
+    """
+    return os.environ.get(SESSION_ASYNC_PERSISTENCE_ENABLED_ENV, "").lower() != "false"
+
+
 # AgentCore Memory integration (optional, only for cloud deployment)
 try:
     from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
@@ -202,12 +238,15 @@ class SessionFactory:
             logger.warning("⚠️ No memory strategies found - long-term memory retrieval disabled")
 
         # Configure AgentCore Memory with dynamically discovered namespaces
+        async_persistence = session_async_persistence_enabled()
+
         agentcore_memory_config = AgentCoreMemoryConfig(
             memory_id=memory_id,
             session_id=session_id,
             actor_id=user_id,
             enable_prompt_caching=caching_enabled,
-            retrieval_config=retrieval_config
+            retrieval_config=retrieval_config,
+            async_mode=async_persistence,
         )
 
         # Build compaction config
@@ -236,6 +275,7 @@ class SessionFactory:
             logger.info("   • Compaction: Enabled (threshold=%s)", f"{compaction_config.token_threshold:,}")
         else:
             logger.info("   • Compaction: Disabled")
+        logger.info("   • Persistence: %s", "Async (off the event loop)" if async_persistence else "Sync (blocking)")
 
         return session_manager
 
