@@ -107,6 +107,11 @@ describe('PlatformStack', () => {
             clientId: 'example-client',
           },
         }),
+        // A concrete region is required: the ALB's access logging resolves
+        // the regional ELB log-delivery principal for the bucket policy, and
+        // CDK refuses to synth it against an env-agnostic stack. Every real
+        // deploy passes env (see bin/infrastructure.ts); this matches.
+        env: { account: MOCK_ACCOUNT, region: MOCK_REGION },
       });
       const optIn = Template.fromStack(optInStack);
 
@@ -155,8 +160,9 @@ describe('PlatformStack', () => {
       // file-uploads, SPA static, mcp-sandbox, rag-documents, fine-tuning-data,
       // artifacts-content, skill-resources (admin-managed Skills reference files),
       // memory-spaces (Memory Spaces feature content bucket),
-      // shared-conversations (share snapshot-body offload)
-      template.resourceCountIs('AWS::S3::Bucket', 9);
+      // shared-conversations (share snapshot-body offload),
+      // alb-access-logs (who terminated a connection — SSE disconnect attribution)
+      template.resourceCountIs('AWS::S3::Bucket', 10);
     });
   });
 
