@@ -22,7 +22,7 @@ import os
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
@@ -70,6 +70,51 @@ _SSE_KEEPALIVE_FRAME = b": keepalive\n"
 # under the historical private name so existing call sites and docstring
 # references stay valid.
 _build_invocations_url = build_invocations_url
+
+
+# Copy the SPA renders under its "Already responding" notice. Sent in place of
+# the Runtime's opaque 424 body, which carries no usable explanation once the
+# container's own 409 detail has been swallowed by the rewrite.
+_SESSION_BUSY_DETAIL = (
+    "A response is already streaming for this conversation. "
+    "Wait for it to finish before sending another message."
+)
+
+
+async def _resolve_upstream_error_status(
+    status_code: int, session_id: Optional[str], user_id: str
+) -> tuple[int, Optional[str]]:
+    """Undo the AgentCore Runtime's 424 rewrite of the single-flight 409.
+
+    The Runtime data plane maps *any* non-2xx from the inference-api container
+    to `424 Failed Dependency`, so the container's deliberate 409 — "a response
+    is already streaming for this conversation" — reaches the SPA as a fatal
+    424 and surfaces as a "Chat Request Failed" toast, instead of the soft
+    "Already responding" notice the SPA already implements for 409.
+
+    A 424 is ambiguous on its own: a genuine container 500 looks identical. So
+    the lease itself is the tiebreaker — re-map only when an unexpired turn
+    lease is actually held for this session, which is the exact fact the
+    container's 409 asserted a moment earlier. Best-effort: anything unproven
+    keeps the 424, so a real upstream failure is never disguised as a conflict.
+
+    Returns the status to relay and, when re-mapped, the detail to relay with
+    it (the Runtime's 424 body no longer explains anything useful).
+    """
+    if status_code != status.HTTP_424_FAILED_DEPENDENCY or not session_id:
+        return status_code, None
+    try:
+        from apis.shared.sessions.session_lease import is_session_lease_held
+
+        if await is_session_lease_held(session_id, user_id):
+            logger.info(
+                "Upstream 424 for a session with a live turn lease — "
+                "relaying as 409 (single-flight conflict)"
+            )
+            return status.HTTP_409_CONFLICT, _SESSION_BUSY_DETAIL
+    except Exception:  # noqa: BLE001 - explanatory lookup only, never fatal
+        logger.debug("Could not check session lease for 424 mapping", exc_info=True)
+    return status_code, None
 
 
 def _build_upstream_client() -> httpx.AsyncClient:
@@ -180,9 +225,16 @@ async def chat_stream(
         finally:
             await response.aclose()
             await client.aclose()
+        relay_status, relay_detail = await _resolve_upstream_error_status(
+            response.status_code, session_id, current_user.user_id
+        )
         raise HTTPException(
-            status_code=response.status_code,
-            detail=error_body.decode("utf-8", errors="replace"),
+            status_code=relay_status,
+            detail=(
+                relay_detail
+                if relay_detail is not None
+                else error_body.decode("utf-8", errors="replace")
+            ),
         )
 
     content_type = response.headers.get("content-type", "")
