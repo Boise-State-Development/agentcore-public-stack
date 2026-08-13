@@ -15,6 +15,7 @@ access token — to inference-api, which accepts Cognito Bearer tokens via
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -40,6 +41,28 @@ def _inference_api_url() -> str:
 # Long enough to cover a full agent turn (model + tool calls), bounded so a
 # wedged upstream eventually surfaces.
 _PROXY_TIMEOUT_SECONDS = 300.0
+
+# SSE keepalive cadence. Two hops in front of this response cut an idle
+# connection at 60s — CloudFront's `OriginReadTimeout` and the ALB's
+# `idle_timeout` — while an agent turn can legitimately go quiet for longer
+# than that whenever a slow tool runs (code interpreter, a burst of MCP calls)
+# with nothing to stream. The browser then reports a network error, the
+# half-finished turn is marked `connection_lost`, and the user's resend races
+# the session lease. A comment line is the SSE no-op: a line beginning with
+# ':' carries no field, so it puts bytes on the wire — resetting both idle
+# timers — without reaching the SPA's event parser.
+#
+# Exactly ONE trailing newline, deliberately. A blank line is what *dispatches*
+# an event, and `@microsoft/fetch-event-source` dispatches on it unconditionally
+# rather than suppressing empty messages the way the SSE spec allows — so
+# `":…\n\n"` would deliver a phantom event with no name to `parseEventSourceMessage`.
+#
+# Emitted here rather than on inference-api for two reasons: both timeouts sit
+# downstream of app-api, and interposing a task on the agent stream would
+# change how client cancellation reaches that turn's interruption handling.
+# 20s leaves room for two lost frames inside a 60s window.
+_SSE_KEEPALIVE_SECONDS = 20.0
+_SSE_KEEPALIVE_FRAME = b": keepalive\n"
 
 # Canonical `/invocations` URL resolution lives in the shared harness
 # (`apis.shared.harness.runner.build_invocations_url`) — the headless
@@ -165,10 +188,44 @@ async def chat_stream(
     content_type = response.headers.get("content-type", "")
     if "text/event-stream" in content_type:
         async def stream_relay():
+            # Upstream reads run on their own task so a silent turn can be
+            # distinguished from a finished one: on timeout the read stays
+            # pending (shielded from `wait_for`'s cancellation) and is awaited
+            # again next pass, while we slip a keepalive onto the wire.
+            chunks = response.aiter_bytes()
+            pending: Optional[asyncio.Future] = None
+            # These are raw transport chunks, not parsed frames, so a chunk can
+            # end mid-frame; injecting there would corrupt it (`data: {"text":`
+            # + `: keepalive` reads as one field). Only inject once the bytes
+            # already forwarded end a frame. A stall *inside* a frame therefore
+            # goes uncovered — acceptable, since a frame is written upstream in
+            # one go, and this is never worse than sending nothing at all.
+            at_frame_boundary = True
             try:
-                async for chunk in response.aiter_bytes():
+                while True:
+                    if pending is None:
+                        pending = asyncio.ensure_future(chunks.__anext__())
+                    try:
+                        chunk = await asyncio.wait_for(
+                            asyncio.shield(pending), timeout=_SSE_KEEPALIVE_SECONDS
+                        )
+                    except asyncio.TimeoutError:
+                        if at_frame_boundary:
+                            yield _SSE_KEEPALIVE_FRAME
+                        # Deliberately keep `pending`. A chunk that lands in
+                        # the same tick as the timeout is already sitting in
+                        # that future; dropping it here to start a fresh read
+                        # would silently swallow an SSE frame.
+                        continue
+                    except StopAsyncIteration:
+                        pending = None
+                        return
+                    pending = None  # consumed — safe to read the next one
                     yield chunk
+                    at_frame_boundary = chunk.endswith(b"\n\n")
             finally:
+                if pending is not None:
+                    pending.cancel()
                 await response.aclose()
                 await client.aclose()
 

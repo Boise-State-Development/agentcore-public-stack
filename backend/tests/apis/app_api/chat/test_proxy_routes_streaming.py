@@ -169,3 +169,163 @@ async def test_ttfb_under_200ms_with_x_accel_buffering(
     )
     assert b"oauth_required" in body
     assert b"event: done" in body
+    # A stream that never goes quiet longer than the keepalive interval must
+    # not be padded — keepalives are for silence, not for every gap.
+    assert b": keepalive" not in body
+
+
+@pytest.mark.asyncio
+async def test_silent_upstream_gets_keepalive_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A turn that goes quiet mid-stream keeps its connection warm.
+
+    CloudFront's `OriginReadTimeout` and the ALB's `idle_timeout` both cut an
+    idle connection at 60s, and an agent turn legitimately goes silent for
+    longer while a slow tool runs — the browser then reports a network error
+    and the half-finished turn is marked `connection_lost`. Comment frames
+    reset both timers; the SSE spec says the client ignores them, so no
+    `event:` reaches the SPA's parser that the upstream didn't send.
+    """
+    gap = 0.4
+
+    async def quiet_then_finish():
+        yield b'event: message_start\ndata: {"role": "assistant"}\n\n'
+        await asyncio.sleep(gap)  # a long tool call with nothing to stream
+        yield b"event: done\ndata: {}\n\n"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=quiet_then_finish(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        proxy_routes,
+        "_build_upstream_client",
+        lambda: httpx.AsyncClient(transport=transport),
+    )
+    monkeypatch.setattr(proxy_routes, "_SSE_KEEPALIVE_SECONDS", 0.1)
+
+    app = _build_app()
+    with _UvicornInThread(app) as server:
+        async with httpx.AsyncClient(base_url=server.url, timeout=10.0) as client:
+            async with client.stream(
+                "POST", "/chat/stream", json={"message": "hi"}
+            ) as response:
+                assert response.status_code == 200
+                body = b"".join([c async for c in response.aiter_bytes()])
+
+    # Several intervals fit inside the gap, so the silence is covered rather
+    # than merely interrupted once.
+    assert body.count(b": keepalive\n") >= 2
+    # Exactly one newline: a blank line is what dispatches an event, and
+    # fetch-event-source dispatches on it unconditionally — a `":…\n\n"` frame
+    # would deliver a phantom nameless event to the SPA's parser.
+    assert b": keepalive\n\n" not in body
+    # The real events still arrive, in order, unmodified.
+    assert body.index(b"event: message_start") < body.index(b"event: done")
+    assert b'data: {"role": "assistant"}' in body
+
+
+@pytest.mark.asyncio
+async def test_keepalive_is_never_injected_mid_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A keepalive spliced into a half-sent frame would corrupt it.
+
+    `aiter_bytes` yields transport chunks, not parsed frames, so a chunk can
+    end mid-frame. Injecting a comment there merges into the open field:
+    `data: {"text":` + `: keepalive` parses as one line.
+    """
+
+    async def stall_mid_frame():
+        yield b'event: message_start\ndata: {"role": "assistant"}\n\n'
+        yield b'event: content_block_delta\ndata: {"text": '  # frame left open
+        await asyncio.sleep(0.4)
+        yield b'"hi"}\n\n'
+        yield b"event: done\ndata: {}\n\n"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=stall_mid_frame(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        proxy_routes,
+        "_build_upstream_client",
+        lambda: httpx.AsyncClient(transport=transport),
+    )
+    monkeypatch.setattr(proxy_routes, "_SSE_KEEPALIVE_SECONDS", 0.1)
+
+    app = _build_app()
+    with _UvicornInThread(app) as server:
+        async with httpx.AsyncClient(base_url=server.url, timeout=10.0) as client:
+            async with client.stream(
+                "POST", "/chat/stream", json={"message": "hi"}
+            ) as response:
+                body = b"".join([c async for c in response.aiter_bytes()])
+
+    assert b": keepalive" not in body
+    # The frame that was open across the stall arrives intact.
+    assert b'event: content_block_delta\ndata: {"text": "hi"}\n\n' in body
+    assert b"event: done" in body
+
+
+@pytest.mark.asyncio
+async def test_frames_survive_repeated_keepalive_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No frame may be dropped by the timeout/re-await cycle.
+
+    The upstream read is a future the relay re-awaits across timeouts. An
+    earlier version abandoned that future whenever it happened to be resolved
+    at timeout time, silently swallowing the frame it held — a missing SSE
+    event with nothing logged anywhere.
+
+    Chunks are paced at exactly the keepalive interval so every read is
+    contended with its own timeout. Be honest about what this buys: the losing
+    interleaving is timing-dependent and this does NOT reproduce it on demand
+    (it passed 10/10 against the buggy relay in isolation; the bug showed as a
+    ~1-in-8 flake only under the scheduling pressure of a larger run). It is a
+    guard on the invariant, not a deterministic reproducer.
+    """
+    interval = 0.05
+    n_chunks = 12
+
+    async def paced():
+        yield b'event: message_start\ndata: {"role": "assistant"}\n\n'
+        for i in range(n_chunks):
+            await asyncio.sleep(interval)
+            yield b'event: content_block_delta\ndata: {"i": %d}\n\n' % i
+        yield b"event: done\ndata: {}\n\n"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=paced(), headers={"content-type": "text/event-stream"}
+        )
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        proxy_routes,
+        "_build_upstream_client",
+        lambda: httpx.AsyncClient(transport=transport),
+    )
+    monkeypatch.setattr(proxy_routes, "_SSE_KEEPALIVE_SECONDS", interval)
+
+    app = _build_app()
+    with _UvicornInThread(app) as server:
+        async with httpx.AsyncClient(base_url=server.url, timeout=10.0) as client:
+            async with client.stream(
+                "POST", "/chat/stream", json={"message": "hi"}
+            ) as response:
+                body = b"".join([c async for c in response.aiter_bytes()])
+
+    missing = [i for i in range(n_chunks) if b'{"i": %d}' % i not in body]
+    assert not missing, f"relay dropped chunk(s) {missing} on the keepalive tick"
+    assert b"event: done" in body
