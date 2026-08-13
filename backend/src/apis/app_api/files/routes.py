@@ -62,10 +62,11 @@ async def request_presigned_url(
     2. Use the returned presignedUrl to PUT the file directly to S3
     3. Call POST /files/{uploadId}/complete to finalize
 
-    **Supported file types:** PDF, DOCX, TXT, HTML, CSV, XLS, XLSX, MD
+    **Supported file types:** PDF, DOCX, TXT, HTML, CSV, XLS, XLSX, PPTX, MD
 
     **Limits:**
-    - Maximum file size: 4MB
+    - Maximum file size: 4MB (25MB for PPTX — decks never go inline to
+      Bedrock, so the inline-document ceiling doesn't bound them)
     - Maximum files per message: 5
     - User storage quota: 1GB
     """
