@@ -1,6 +1,7 @@
 # Bedrock Managed Knowledge Base — evaluation and target topology
 
-**Status:** Evaluation complete, design proposed. No branch, no code.
+**Status:** Evaluation complete, target topology proposed. Benchmark and
+implementation-readiness gates defined below; no product implementation.
 **Question asked:** Can Bedrock Managed Knowledge Base replace our custom RAG
 pipeline? Given usage, pricing and quotas, should a user have *multiple* KBs per
 agent, or one KB filtered by agent id? And is it a fit for impromptu document
@@ -27,7 +28,7 @@ conversation attachments), `docs/specs/RAG_KEEP_WARM_SPEC.md`
 | Embed | `backend/src/apis/shared/embeddings/bedrock_embeddings.py:24` | `amazon.titan-embed-text-v2:0`, 1024-dim, hardcoded in Python; CDK carries a *separate* `config.ragIngestion.embeddingModel` used only for the IAM ARN |
 | Vector store | `infrastructure/lib/constructs/rag/rag-data-construct.ts:97` | **Amazon S3 Vectors**, raw `CfnResource`. **One global index for the whole deployment**; isolation is a metadata filter only |
 | Retrieval | `backend/src/apis/shared/assistants/rag_service.py:18` | Pre-turn prompt augmentation, `top_k=5`, `filter={"assistant_id": ...}`. No agentic retrieval, **no reranking**, no hybrid search |
-| Context cap | `rag_service.py:139`, `max_context_length=2000` | **~500 tokens reach the model** regardless of what was retrieved |
+| Context cap | `rag_service.py:139`, `max_context_length=2000` | **2,000 characters (~500 tokens) reach the model** regardless of what was retrieved |
 | Doc-status post-filter | `rag_service.py:71` | Up to 5 *serial* DynamoDB `get_item` calls on the critical path of every RAG turn |
 | Re-index | `backend/src/apis/app_api/kb_sync/` + `infrastructure/lib/constructs/kb-sync/` | Shipped. Re-stages bytes to the **same S3 key** to re-fire the pipeline |
 | Ingestion Lambda | ARM64, 3008 MB, 900 s, `backend/Dockerfile.rag-ingestion` | **~175 s cold / ~35 s warm**; ~140 s of that is Docling/PyTorch model load. The keep-warm rule in `RAG_KEEP_WARM_SPEC.md` was never implemented |
@@ -117,14 +118,12 @@ win dominates; above that it needs a deliberate decision.
 
 Two things the earlier draft got wrong, both found by calling the real API.
 
-### 4.1 The SDK pin predates the feature
+### 4.1 The SDK prerequisite is now satisfied
 
-`boto3 1.43.9` (pinned; released **2026-05-15**) predates Managed KB GA
-(**2026-06-17**) and has no `MANAGED` enum —
-`knowledgeBaseConfiguration.type` offers only `VECTOR | KENDRA | SQL`.
-`bedrock-agentcore-control` has no KB operations at all.
-
-For evaluation, side-load the newer service model rather than moving the pin:
+At evaluation time the repo pinned `boto3 1.43.9` (released **2026-05-15**),
+which predates Managed KB GA (**2026-06-17**) and has no `MANAGED` enum —
+`knowledgeBaseConfiguration.type` offers only `VECTOR | KENDRA | SQL`. The
+probe therefore side-loaded the newer service model without changing the repo:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/boto/botocore/1.43.68/botocore/data/bedrock-agent/2023-06-05/service-2.json \
@@ -132,8 +131,14 @@ curl -fsSL https://raw.githubusercontent.com/boto/botocore/1.43.68/botocore/data
 AWS_DATA_PATH=$MODELS python ...
 ```
 
-Implementation requires an actual `boto3`/`botocore` bump — an exact-pin change,
-and the first hard prerequisite of any PR-1.
+The current repo now pins **`boto3==1.43.68`**, the same model version used by
+the probe. The dependency bump is no longer an implementation prerequisite.
+Before a benchmark or PR-1, run the create/ingest/retrieve smoke probe using the
+normal checked-in environment with no `AWS_DATA_PATH`; that is the contract test
+that the lock and packaged service model are really sufficient.
+
+`bedrock-agentcore-control` still has no KB operations. Provisioning and direct
+ingestion use `bedrock-agent`; retrieval uses the Bedrock agent runtime client.
 
 ### 4.2 A MANAGED KB rejects the classic data-source types
 
@@ -365,13 +370,20 @@ aws ce get-cost-and-usage --profile dev-ai --region us-east-1 \
 
 ## 9. Migration surface
 
-**Displaced:** `RagIngestionLambdaConstruct`; the `AWS::S3Vectors::*` resources in
-`RagDataConstruct`; `backend/Dockerfile.rag-ingestion` (~1.5 GB of baked
-Docling/PyTorch); `apis/app_api/documents/ingestion/**`;
+**Target-state displaced:** `RagIngestionLambdaConstruct`; the
+`AWS::S3Vectors::*` resources in `RagDataConstruct`;
+`backend/Dockerfile.rag-ingestion` (~1.5 GB of baked Docling/PyTorch);
+`apis/app_api/documents/ingestion/**`;
 `apis/shared/embeddings/bedrock_embeddings.py`;
 `apis/shared/assistants/rag_service.py`; the two
 `search_assistant_knowledgebase_with_formatting` call sites
-(`inference_api/chat/routes.py:1601`, `app_api/assistants/routes.py:524`).
+(`inference_api/chat/routes.py:1620`, `app_api/assistants/routes.py:524`).
+
+None of these resources may be removed when the managed backend first ships.
+They remain required for legacy writes, dual reads, migration, and rollback.
+Removal is a separate final phase after every legacy KB has migrated, the
+retention window has expired, and managed traffic has completed a no-rollback
+observation period.
 
 **Not displaced:** `DOC#` records and provenance fields; the documents bucket;
 the tabular bypass (`list_spreadsheets`/`analyze_spreadsheet`, which reads S3
@@ -387,11 +399,12 @@ direct ingest.
 
 **One-way doors:** embedding type is immutable after `CreateKnowledgeBase`.
 
-**Confounder for any A/B:** hold `max_context_length=2000` constant. Today only
-~500 tokens reach the model; raise it at the same time as switching and the
-managed reranker gets credit for "we finally sent more than 500 tokens". **Test
-that cap on the current pipeline first** — it may be the cheapest quality win
-available and it costs nothing to try.
+**Confounder for any A/B:** hold the 2,000-character
+`max_context_length=2000` cap constant. Today only ~500 tokens reach the model;
+raise it at the same time as switching and the managed reranker gets credit for
+"we finally sent more than 500 tokens". **Test that cap on the current pipeline
+first** — it may be the cheapest quality win available and it costs nothing to
+try.
 
 ---
 
@@ -404,7 +417,7 @@ across without downtime or a perceived quality change.
 ### 10.1 The seam
 
 There are exactly **two** retrieval call sites
-(`inference_api/chat/routes.py:1601`, `app_api/assistants/routes.py:524`), both
+(`inference_api/chat/routes.py:1620`, `app_api/assistants/routes.py:524`), both
 through `search_assistant_knowledgebase_with_formatting`. That is the strangler
 seam. Introduce a backend protocol in `apis/shared/assistants/`:
 
@@ -434,7 +447,7 @@ ships **separately and later**, or the two effects are unattributable.
 |---|---|
 | **Score direction** | ⚠️ Managed returns **relevance** (higher = better; measured `1.0` on an exact hit). S3 Vectors returns cosine **distance** (lower = better). Canonicalize on relevance and convert in the `S3VectorsBackend` adapter. Get this wrong and ranking silently inverts — no error, just bad answers |
 | `top_k` | 5 on both |
-| Context cap | `max_context_length=2000` on both, unchanged |
+| Context cap | `max_context_length=2000` characters on both, unchanged |
 | Doc-status filter | Keep the `status == "complete"` post-filter on both during parity, even though managed makes it redundant (§10.3) — removing it in the same change confounds the comparison |
 | Citations | Built from the same `context_chunks`; excerpt clip stays 500 chars |
 
@@ -476,10 +489,11 @@ assistant ≈ **4 min**; 100 docs ≈ **9.5 min**. Background work, never intera
 
 **Fleet throughput ceiling:** concurrent `Ingest`+`Delete KnowledgeBaseDocuments`
 is **10 per account**. At ~5 s each that is ~2 docs/sec fleet-wide — ~85 min for
-10,000 documents. Batching helps: the user guide says **25 documents per
-`IngestKnowledgeBaseDocuments` call** while a third-party report claims the API
-reference caps the array at 10. **Verify the real batch limit before sizing the
-migrator**; do not assume 25.
+10,000 documents. Batching helps, but AWS's own documentation currently
+disagrees: the user guide says **25 documents per
+`IngestKnowledgeBaseDocuments` call**, while the API reference declares a
+maximum array size of **10**. Treat 10 as the safe limit and probe the real API
+before sizing the migrator; do not assume 25.
 
 Reuse the kb-sync topology: sparse GSI on migration state → EventBridge →
 dispatcher → worker, with a bounded per-tick dispatch so a bug caps out.
@@ -508,7 +522,7 @@ word "vector" never appears; and the upgrade is reversible.
 | State | Surface |
 |---|---|
 | legacy, no action | **nothing** — no badge, no nag. A KB that works needs no UI |
-| upgrade available | Inline card on the KB page: what improves (better search quality, image/table understanding), how long it takes, "your knowledge base keeps working during the upgrade" |
+| upgrade available | Inline card on the KB page: only improvements proven by the §13 benchmark, how long it takes, and "your knowledge base keeps working during the upgrade". Do not promise better image/table understanding before the corpus comparison proves it |
 | `shadow`/`verify` | Non-blocking progress ("Upgrading — 12 of 40 documents"), KB fully usable, safe to navigate away |
 | `promoted` | One-time dismissible success note; no permanent badge |
 | failed | Plain-language reason + Retry; **stays on legacy**, which keeps working. Never a dead end |
@@ -568,3 +582,211 @@ Live in dev-ai until torn down: KBs `kb-probe-empty-1`/`VZKNLS9T1F`,
 `kb-probe-empty-2`/`0EKHSBWBOA` (zero data sources — the empty control),
 `kb-probe-loaded`/`DAK4HL3JU7`; IAM role `kb-billing-probe-role`. Keep until the
 §11 question 2 CE read, then delete all four.
+
+---
+
+## 13. Required pre-build benchmark — current vs managed, 1:1
+
+The three small API probes in §5 answer service-shape questions, not whether a
+replacement improves this product. Before building a product vertical slice,
+run one disposable comparison harness against **the current pipeline and a
+temporary Managed KB with the same documents, questions, model, and context
+cap**. This is a decision gate, not production code.
+
+### 13.1 Minimal scope
+
+One script with two adapters is enough:
+
+| Adapter | Path |
+|---|---|
+| `current` | Create a clearly named temporary assistant in dev through the existing service layer → create normal `DOC#` rows → PUT to the existing documents bucket → let the existing S3-event/Docling/Titan pipeline run → poll `DOC#` → query S3 Vectors → delete the temporary assistant and its documents |
+| `managed` | Create a temporary MANAGED KB using `kb-billing-probe-role` → create one `CUSTOM` connector → direct-ingest the same S3 objects → poll document state and then a canary `Retrieve` → delete the data source and KB |
+
+The current adapter creates **test data only** in the dev table; it changes no
+schema or configuration and cleans up afterward. The managed adapter writes no
+product DynamoDB data. Both use a run id in every resource name, local result
+files, and an explicit cleanup command so an interrupted process is recoverable.
+
+Start with exactly three controlled documents:
+
+1. a small plain-text file;
+2. a native layout-heavy PDF with columns/tables/charts;
+3. an image-only scanned PDF that requires OCR.
+
+Put a unique canary fact in each document and define three questions with known
+answers per file. Keep this small until Managed KB clears the decision gate.
+
+### 13.2 Measurements
+
+For each backend and document, record raw timestamps for:
+
+- upload/direct-ingest start → API accepted;
+- start → pipeline reports complete/indexed;
+- start → the canary is actually returned by retrieval;
+- first retrieval latency and 10 immediate retrievals (p50/p95);
+- expected `document_id` present in top 5, its rank, and whether the retrieved
+  text contains the expected answer;
+- the retrieved chunks themselves for human inspection.
+
+`INDEXED` and retrievable are separate timestamps. Use a fresh KB for each
+first-document comparison, then ingest the remaining documents into a warm KB.
+This separates one-time KB warm-up from parser/OCR cost. Run at least five
+samples per document class before treating a p50/p95 as meaningful.
+
+Add one user-level comparison after raw retrieval: send both result sets through
+the same answer model, system prompt, `top_k=5`, and **2,000-character** context
+cap. Raising the cap, enabling agentic retrieval, or changing the model is a
+separate experiment.
+
+The report is one CSV/Markdown table:
+
+| Backend | File | Complete/indexed | Retrievable | Retrieve p50/p95 | Top-5 hit | Expected answer |
+|---|---|---|---|---|---|---|
+
+### 13.3 Idle follow-up, not a scheduler
+
+Do not build a 48-hour harness first. Leave one probe KB alive after the main
+run, record its id locally, and rerun retrieval plus one tiny follow-up ingest
+the next morning. If that shows a cold penalty, only then expand to controlled
+1 h / 6 h / 24 h / 48 h probes using separate KBs so one check cannot warm the
+next.
+
+### 13.4 Decision gate
+
+Proceed to a product vertical slice only if the comparison shows:
+
+- no answer-quality regression on plain text;
+- a measurable benefit on layout-heavy or OCR documents, or another quality
+  gain large enough to justify the storage premium;
+- acceptable first-document delay when treated as background work;
+- subsequent-ingest improvement over the current warm path;
+- acceptable added retrieval latency at p95.
+
+If Managed KB does not clear this gate, keep S3 Vectors and test the current
+2,000-character cap independently before taking on a migration.
+
+---
+
+## 14. Implementation-readiness gates
+
+The topology decision is approved for evaluation, not implementation. The
+following details must be written into this spec or a linked design before
+PR-1. They are blocking because each one otherwise creates a leak, lockout, or
+irreversible rollout failure.
+
+### 14.1 Durable ingestion control plane
+
+The browser currently creates an `uploading` `DOC#` row, receives a presigned
+S3 PUT, and relies on the bucket's `ObjectCreated` notification. There is no
+upload-complete API call. Managed direct ingestion therefore still needs a
+durable S3-event consumer (a much smaller replacement Lambda is the simplest
+shape) that:
+
+1. resolves the document's logical KB and engine;
+2. conditionally provisions/polls the Managed KB and `CUSTOM` data source;
+3. calls `IngestKnowledgeBaseDocuments` with a stable client token;
+4. polls the document until indexed and actually retrievable;
+5. updates `DOC#` to complete/failed with bounded retries and a durable retry
+   anchor.
+
+Do not move this work into an app-process `asyncio.ensure_future` task. During
+coexistence the same consumer must route legacy documents to the existing
+pipeline and managed documents to direct ingest without double-indexing them.
+
+### 14.2 Stable KB identity and concrete data model
+
+Bindings reference a stable **application `kbId`**, never the replaceable AWS
+`knowledgeBaseId`. Dormancy/rehydration can create a new AWS id without changing
+an Agent binding. Define exact keys, GSIs, conditional transitions, and API
+models for at least:
+
+- `kbId`, owner and ACL/visibility;
+- `retrievalEngine`, lifecycle/provisioning state, AWS KB id and data-source id;
+- embedding/parser configuration (immutable choices included);
+- source-byte/storage accounting and `lastRetrievedAt`;
+- migration generation, progress, lease, error and rollback timestamps;
+- pin/retention/listing exemptions and delete tombstones.
+
+Documents and sync policies are currently children of `AST#{assistant_id}`.
+Before 0..N bindings, decide whether they move under `KB#{kbId}` or how a KB
+shared by multiple agents owns them. A compatible phase-1 option is
+`kbId == assistantId`, an absent KB record meaning virtual legacy S3 Vectors,
+and promotion changing the KB record's engine while the binding ref stays put.
+
+### 14.3 Authorization and publication semantics
+
+A shareable KB needs design-time and invocation-time access checks comparable
+to Memory Spaces. Define owner/editor/viewer behavior, whether an Agent grants
+invoke-through access to its KB, and whether one inaccessible KB blocks the
+whole turn. The runtime must resolve access for the invoking user before
+retrieval.
+
+Marketplace versions freeze a KB ref, not its changing contents. Decide whether
+published agents pin a corpus revision, require re-review after KB changes, or
+may bind only immutable/publisher-managed KBs. Exemption from lifecycle cleanup
+alone does not close this review bypass.
+
+### 14.4 Provisioning and deletion sagas
+
+Create the DDB KB record first in `provisioning`, then call AWS with an
+idempotency token and conditionally attach the returned ids. This prevents two
+simultaneous first uploads from creating two KBs and leaves a retry anchor if
+the process dies.
+
+Use durable tombstones for whole-KB, data-source, and individual-document
+deletes. Do not erase the last DDB record or let TTL remove it until AWS confirms
+deletion. Keep the document-status filter during migration and make lookup
+failure **fail closed**; the current legacy filter's unfiltered fallback is not
+safe for deleting or access-controlled content.
+
+### 14.5 IAM, encryption, audit, and teardown
+
+Define a dedicated Bedrock KB service role with `aws:SourceAccount` and
+`aws:SourceArn` confused-deputy guards, least-privilege S3/KMS access, and a
+caller `iam:PassRole` grant constrained by `iam:PassedToService`. Separately
+scope provisioner/migrator CRUD, direct-ingestion, and inference
+`bedrock:Retrieve` permissions. Synchronous boto3 calls from async request paths
+must run through `asyncio.to_thread` or an async client.
+
+Managed KBs are runtime-created and are not CloudFormation children.
+`scripts/teardown/destroy.sh` must list and delete only resources tagged for the
+project/environment **before** deleting their service role and PlatformStack.
+The daily reconciler is still required for ordinary crash orphans.
+
+### 14.6 Enforceable cost and quota controls
+
+The existing 1 GB user-files precedent is not a safe default: at the managed
+rate, 1 GB for each of 30,000 users is a $150,000/month exposure. Define a lower
+role-tier default, per-KB and per-owner byte caps, account-wide budget and KB
+count alarms, and an atomic reserve/commit/release flow based on S3 `HEAD` size
+rather than the client-reported size. Define whether the owner or invoker pays
+retrieval/reranking quota. Cost-allocation tags are delayed reporting, not a
+real-time enforcement mechanism; owner tags must be opaque, never email/PII.
+
+### 14.7 Additive deployment choreography
+
+Ship in explicit, reversible phases:
+
+1. additive schema, service role, IAM, worker resources and cleanup support;
+2. dual backends dark, with mixed-version compatibility;
+3. §13 benchmark and opted-in dual-read pilot, serving legacy;
+4. opt-in migration and rollback observation;
+5. managed default for new KBs;
+6. stop legacy writes after the fleet is migrated;
+7. reclaim legacy vectors after the retention window;
+8. remove the old Lambda, image/workflow jobs, S3 Vectors resources, env vars,
+   IAM grants and tests in a final target-state cleanup.
+
+Backend code must never deploy before the IAM/resources it requires, and
+Platform cleanup must never deploy before all running code has stopped using
+legacy resources.
+
+### 14.8 Minimum test matrix
+
+Before promotion, cover adapter parity and score direction; managed API stubs;
+create/ingest/delete idempotency; crash after AWS create but before DDB update;
+DDB-only and AWS-only reconciliation; uploads/deletes during migration;
+fail-closed access and document status; published-agent corpus behavior; quota
+reservation races; mixed old/new deployment; teardown of tagged dynamic
+resources; and CDK IAM assertions. Promotion verification uses an exact source
+manifest (`document_id` + content hash/generation), not doc-count parity alone.
