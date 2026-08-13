@@ -257,6 +257,44 @@ async def release_session_lease(lease: Optional[SessionLease]) -> None:
         logger.warning("Session lease release failed for %s: %s", lease.session_id, e)
 
 
+async def is_session_lease_held(session_id: str, user_id: str) -> bool:
+    """Report whether an unexpired turn lease exists for this session.
+
+    Read-only mirror of ``acquire_session_lease``'s condition, for a caller
+    that has to *explain* a rejection it did not raise itself. The AgentCore
+    Runtime data plane rewrites every non-2xx from the container into a
+    ``424 Failed Dependency``, so app-api's chat proxy cannot tell the
+    single-flight ``409`` apart from a container crash by status alone; this
+    is the tiebreaker, asserting the same fact the container's 409 asserted.
+
+    Best-effort in the safe direction: an unconfigured table or any DynamoDB
+    error returns ``False``. A caller must never invent a conflict the guard
+    itself would not have raised.
+    """
+    table = _table()
+    if table is None:
+        return False
+
+    from botocore.exceptions import ClientError
+
+    try:
+        resp = table.get_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"LEASE#{session_id}"}
+        )
+    except ClientError as e:
+        logger.warning("Session lease lookup failed for %s: %s", session_id, e)
+        return False
+
+    item = resp.get("Item") or {}
+    expires_at = item.get("leaseExpiresAt")
+    if expires_at is None:
+        return False
+    try:
+        return int(expires_at) > int(time.time())
+    except (TypeError, ValueError):
+        return False
+
+
 async def request_session_cancel(session_id: str, user_id: str) -> bool:
     """Ask the turn currently holding this session's lease to stop.
 
