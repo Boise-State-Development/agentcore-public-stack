@@ -170,9 +170,25 @@ Gate summary — each is a *measurement with a decision attached*, not a date:
   rate: *of conversations that get long enough to compact at all, 32% already
   exceed PR-2's proposed budget.* That rate does not shrink with growth; the
   population it applies to grows.
-- **G3** — no citations config is sent in prod today, so we don't know what
-  the current document path can even see. Every offload quality comparison
-  inherits its baseline from this probe.
+- **G3 — CLEARED 2026-08-12, by falsifying its own premise**
+  (`document-citations-probe-findings.md`). The gate existed because no
+  citations config is sent in prod and the #836 validation reasoned Bedrock's
+  visual PDF path was *tied to* citations-enabled handling — which would have
+  made prod blind to figures. It is not. Probed with 14 questions over 5
+  documents on two models: **14/14 correct in both arms, both models**,
+  including bar values read off an unlabeled axis, cells in a table that exists
+  only as pixels, and a rotated scan. **Citations turn out to be a text-layer
+  feature**: with citations explicitly enabled, every image-only document
+  returned none at all, while text-layer and mixed-document page-1 prose
+  questions returned them with a usable `documentPage` location.
+  Consequences: the offload baseline is **full visual fidelity, uncited**; the
+  spec's "native blocks, never flattened text" rule is now measured rather than
+  precautionary; and offloading an image-only document costs no citations,
+  because there were never any. ⚠️ One migration cost surfaced — with citations
+  on, the answer text moves *inside* `citationsContent` and top-level `text`
+  blocks go empty, so every consumer must handle both shapes first. "Should we
+  enable citations?" is now a standalone product question about attribution,
+  **not a prerequisite for the offload arc**.
 
 Independent of all gates: #833 PR-5 (quota runway — **built 2026-08-05**) and
 the W5 follow-ups — cheap, and they don't wait on measurement. PR-5 also
@@ -204,7 +220,8 @@ between sessions. **Update a row here in the PR that changes it.**
 | #834 spreadsheets | unbuilt | `assistant_id` into cache key + `PausedTurnSnapshot` |
 | #834 Memory-Space tools | unbuilt | binding descriptor into cache key |
 | #835 compaction v2 | unbuilt | G2 |
-| #836 offload PRs 1–3 | unbuilt | G3 citations probe |
+| #836 offload PRs 1–3 | unbuilt | ~~G3 citations probe~~ — **G3 cleared 2026-08-12**; baseline is full visual fidelity, uncited. Now blocked only on the eval harness owner (PRs 1–3 change model-visible context) |
+| G3 citations probe | ✅ **run 2026-08-12** — `document-citations-probe-findings.md`; script committed at `backend/scripts/probe_document_citations.py` | nothing |
 | eval harness (quality veto) | **unowned** — but **smaller than the specs assumed** as of the 2026-08-12 AgentCore Evaluations spike: the managed service supplies the judges, the trajectory/tool-call scoring and the result plumbing (~a third of the build). Scope decided the same day: internal instrument, no admin feature | an owner |
 | replay harness (#833 §4.2) | partially built — `experiment_agent_cache_arms.py` + `probe_runtime_session_affinity.py` drive real arms against dev; does not yet replay a recorded session's event stream | an owner for the rest |
 | §4.1 cohort scan | ✅ **run 2026-08-05** — cohort is 49 sessions (1.63%) / $172.46 (21.9% of recorded session spend); D2 and D3 both reproduce outside the incident (a 174,952-char summary on another session; anchor≠checkpoint on 199 of 1,238 rows). Written up in #833 §4.1 | nothing |
