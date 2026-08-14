@@ -15,7 +15,7 @@ OAuth Support:
 
 import logging
 import re
-from typing import Any, Callable, Optional, List, Set
+from typing import Any, Callable, Iterator, Optional, List, Set
 from urllib.parse import urlparse
 
 from mcp.client.streamable_http import streamablehttp_client
@@ -124,6 +124,64 @@ def detect_aws_service_from_url(url: str) -> Optional[str]:
             url,
         )
         return None
+
+
+# HTTP statuses that mean "this caller is not authorized" — the only kind of
+# pre-flight failure that completing an OAuth consent flow can actually fix.
+_AUTH_STATUS_CODES = frozenset({401, 403})
+
+# Fallback for transports that stringify the status instead of raising an
+# httpx error carrying a `.response` (an MCP server may surface the refusal as
+# a protocol-level message). Deliberately narrow: matching bare digits would
+# fire on any URL or port that happens to contain them.
+_AUTH_TEXT_RE = re.compile(
+    r"\b(?:401|403)\b|\bunauthorized\b|\bforbidden\b", re.IGNORECASE
+)
+
+
+def _iter_exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    """Yield `exc` and everything reachable through its cause/context chain
+    and any ExceptionGroup members, each exactly once.
+
+    The exception we catch is never the interesting one: Strands wraps the
+    real failure twice (`ToolProviderException` around
+    `MCPClientInitializationError`), and the transport or HTTP error
+    underneath arrives inside an anyio `ExceptionGroup`.
+    """
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        e = stack.pop()
+        if id(e) in seen:
+            continue
+        seen.add(id(e))
+        yield e
+        for nxt in (e.__cause__, e.__context__):
+            if nxt is not None:
+                stack.append(nxt)
+        stack.extend(getattr(e, "exceptions", ()) or ())  # ExceptionGroup
+
+
+def _is_auth_failure(exc: BaseException) -> bool:
+    """True when `exc`'s chain carries an HTTP 401/403.
+
+    Used to decide whether a failed pre-flight is plausibly a *consent* gap.
+    A connection refusal, DNS failure, or timeout is not: the server simply
+    isn't answering, and no amount of authorizing will change that. Treating
+    those as consent gaps prompts the user to connect a server that isn't
+    there, on every single turn, with no way for the prompt to succeed.
+    """
+    for e in _iter_exception_chain(exc):
+        response = getattr(e, "response", None)
+        for code in (
+            getattr(response, "status_code", None),
+            getattr(e, "status_code", None),
+        ):
+            if isinstance(code, int) and code in _AUTH_STATUS_CODES:
+                return True
+        if _AUTH_TEXT_RE.search(str(e)):
+            return True
+    return False
 
 
 def create_external_mcp_client(
@@ -344,7 +402,13 @@ class ExternalMCPIntegration:
         cache: the tool stayed missing for the life of the process even for
         a user whose token was sitting in the AgentCore vault the whole time.
 
-        So on failure we ask the vault directly:
+        Only an *auth* failure qualifies. A pre-flight that failed because the
+        server is unreachable, timed out, or resolved to nothing is not a
+        consent gap — asking the vault there would answer "no token, here's an
+        authorization URL" for a server that isn't listening, and the user
+        would be told to connect it on every turn with no way to succeed.
+
+        So on an auth failure we ask the vault directly:
           * token  -> warm the cache and retry the pre-flight once. This is
             the consented-user path, and it is why the tool comes back by
             itself after the user completes consent in the popup.
@@ -369,6 +433,17 @@ class ExternalMCPIntegration:
             logger.warning(
                 f"Skipping external MCP tool {tool_id}: failed to start client "
                 f"with a cached {provider_id} token ({exc})"
+            )
+            return False
+
+        # Consent can only fix a refusal to authorize. Anything else — the
+        # server is down, the URL is wrong, the host doesn't resolve — keeps
+        # the pre-recovery behaviour of dropping the tool quietly.
+        if not _is_auth_failure(exc):
+            logger.warning(
+                f"Skipping external MCP tool {tool_id}: pre-flight failed without "
+                f"an auth error, so this is not a {provider_id} consent gap "
+                f"({exc})"
             )
             return False
 
