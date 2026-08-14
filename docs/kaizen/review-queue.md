@@ -5,12 +5,52 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
-### [2026-07-24] Bump `bedrock-agentcore` 1.9.1 → 1.18.1 (closes #482 SSE deadlock + #571 Memory reorder; + security patches)
-- **Source**: research/2026-07-24.md ▸ Top 5 #1 — bedrock-agentcore 1.18.1 (Jul 17, security patch over 1.18.0's #571 fix; #482 fix in 1.17.0) — https://github.com/aws/bedrock-agentcore-sdk-python/releases
-- **Surface**: backend (`backend/pyproject.toml` + coupled `boto3`; inference-api chat router + `TurnBasedSessionManager` flush ordering; full local pytest suite)
+> ✅ **Queue hygiene completed 2026-08-14** (at Phil's request, ahead of `kaizen-review-prep`). **Nine** stale entries were resolved: four `bedrock-agentcore` bump entries and two Strands bump entries (all **shipped** in #857 — `bedrock-agentcore` 1.9.1 → **1.21.0** at zero lag, `strands-agents` → **1.51.0**; #482 and #571 closed upstream), two nightly-CI entries (**green 12 consecutive days**), and two MCP Apps spec-prep entries (superseded now the 2026-07-28 spec is final). Genuine residue was carried forward, not dropped: **#564** (still open upstream) and the **un-adopted Strands capabilities** are now their own entries below. See `## Resolved` for the evidence trail.
+
+### [2026-08-14] Probe Anthropic's mid-conversation tool-mutation beta on Bedrock
+- **Source**: research/2026-08-14.md ▸ Top 5 #1 — https://www.anthropic.com/news/claude-opus-5 (2026-07-24): "change which tools Claude can use mid-conversation without invalidating the prompt cache" (beta). Convergent: pydantic-ai `ToolReturn.tools`/`load_capability` (v2.26.0), MCP SEP-2549 cacheable list results, Claude Code 2.1.232 fork-inherits-cache.
+- **Surface**: backend (`agents/main_agent/core/model_config.py` Bedrock request construction; `_build_filtered_tools`; the `toolConfigHash` fingerprint on `C#` rows; `GET /admin/costs/sessions/{id}/calls`)
+- **Effort × Impact**: L (probe) × H
+- **Subtracts**: conditionally, and enormously — could narrow the prompt-cache contract's most expensive clause ("any list reaching `toolConfig` must be deterministically ordered at its source") and unblock three separately-queued items that share the same wall
+- **Unlocks**: per-turn tool filtering (the real fix for MCP tool-list bloat); `@`-mention switches that don't structurally re-write a 30k–150k-token prefix; the Vercel "app-visible-only tools" and pydantic-ai tool-search patterns
+- **Status**: open — **recommended #1.** A probe, not a build: (a) does Bedrock Converse expose the beta at all, or is it Claude-API-only? (b) what's the header/param, and does `strands` pass it through? (c) measured on a real session, does adding a tool mid-conversation leave `cacheReadInputTokens` intact? **A negative result is a valid outcome** — same shape as G1/G3, and it closes an assumption currently sitting under several queued items.
+
+### [2026-08-14] Migrate the MCP Apps host off `initialize`/`serverInfo` to `server/discover`
+- **Source**: research/2026-08-14.md ▸ Top 5 #2 — MCP **2026-07-28 is now the Current protocol version**; SEP-2575 removed the `initialize`/`initialized` handshake + `Mcp-Session-Id` — https://modelcontextprotocol.io/specification/versioning · https://blog.modelcontextprotocol.io/posts/2026-07-28/
+- **Surface**: backend (`agents/main_agent/integrations/mcp_apps.py:673` — the `getattr(result, "serverInfo", None)` capture; `_mcp_apps_server_info` consumers ~L454–461 / L628–635; `streaming/stream_coordinator.py:1680` `ui_resource` header emission; the `ClientCapabilities(experimental=...)` subclassing at `mcp_apps.py:26`)
+- **Effort × Impact**: M × M–H
+- **Subtracts**: yes — retires the `initialize`-response dependency, and collapses the "fresh MCP session per call" concern behind the MCP Apps proxy-call 504 work (there is no protocol-level session left to preserve)
+- **Unlocks**: conformance with a published host matrix (Claude, VS Code Copilot, M365 Copilot, Goose, Postman); readiness for **MRTR (SEP-2322)** — the sanctioned interrupt/resume shape, which would let OAuth consent and tool approvals resume *without* holding an SSE stream open against the 600s timeout; readiness for SEP-2243 header-based Gateway routing
+- **Status**: open — **SUPERSEDES the [2026-07-24] "prep the MCP Apps host for the 2026-07-28 spec" item** (written when the spec was an RC; it is now final). **Two cheap verifications required before any code**: (a) confirm the UI capability identifier against the apps **spec source** — this scan could NOT confirm `io.modelcontextprotocol/ui` vs `experimental.ui`; (b) confirm `ui/notifications/tool-input-partial` still exists in the spec (absent from the SDK overview page — not evidence of removal, but our `ui_tool_input_partial` relay depends on it). Keep the handshake path as a compatibility branch: `server/discover` is **mandatory for servers, optional for clients**.
+
+### [2026-08-14] Attack the W5 memory bill — self-managed LTM strategies + model Runtime Instances
+- **Source**: research/2026-08-14.md ▸ Top 5 #3 — https://aws.amazon.com/bedrock/agentcore/pricing/ (built-in long-term strategies **$0.75/1,000 records/month** vs override/self-managed **$0.25/1,000**) + Runtime **Instances** GA (EC2 + 12% fee, **Savings Plans / ODCR eligible**, 14-day sessions) — https://aws.amazon.com/about-aws/whats-new/2026/08/aws-bedrock-agentcore-runtime-instances-generally-available/. **Verified internally**: `infrastructure/lib/constructs/agentcore/memory-construct.ts:77` configures all three built-in strategies.
+- **Surface**: infrastructure / backend (`memory-construct.ts` `memoryStrategies` array + `eventExpiryDuration: 90`; `inference-agentcore-construct.ts` compute type + memory allocation; `apis/app_api/memory/routes.py` `/facts/` `/preferences/` `/summaries/` readers)
 - **Effort × Impact**: M × H
-- **Subtracts**: yes — retires the queued [2026-05-22] hand-written #482 guard (library-native); the #571 ordering fix complements (not replaces) `_repair_tool_pairing`
-- **Status**: open — **highest priority; now SEVEN weeks queued while the release keeps advancing (1.18.1).** SUPERSEDES the [2026-07-17] "→ 1.18.0" item (retarget 1.18.1). We're on 1.9.1, exposed to #482 + #571 today. Validate ms event-flooring vs our flush ordering; #564 (eventual-consistency read gap) stays unfixed — keep agent-cache continuity primary. **Sequence AFTER Nightly is green (the [2026-07-24] nightly-stack item below) so the dep-bump gate can vouch for it.**
+- **Subtracts**: yes (track 1) — a **3× per-record price cut** on a line item we're paying the premium tier for by default, with no deliberate decision behind it
+- **Unlocks**: Savings-Plans/ODCR-covered agent compute — the first commitment-discount lever AgentCore has ever offered — and 14-day persistent sessions, which changes the idle-reaper calculus (#827)
+- **Status**: open — **the named W5 gap, and the first week the ecosystem handed us a real lever on it.** Split into two tracks and ship track 1's *measurement* first: (1) determine per-strategy record volume and whether each is *read* often enough to justify 3× the self-managed rate; (2) model Instances against real dev/prod session-concurrency — Instances favour many concurrent short sessions sharing an agent, penalize spiky low-utilization. ⚠️ **AWS's own Instances HN post drew 1 point / 0 comments — zero independent validation.** Model it against our numbers; do not adopt on the pitch.
+
+### [2026-08-14] Run the Anthropic `cost_optimization` cookbook as an audit against our own contract
+- **Source**: research/2026-08-14.md ▸ Top 5 #4 — https://github.com/anthropics/claude-cookbooks/blob/main/cost_optimization/cost_optimization.ipynb (2026-08-12), seven measured strategies + a `usage_cost()` helper. Reinforced by opencode v1.18.17 (turn-aligned compaction) and v1.18.14 (retry cap with jitter).
+- **Surface**: backend (`core/model_config.py` cache-point placement + `CacheConfig(strategy="auto")` at L389; `session/turn_based_session_manager.py` truncation anchor + repeated-compaction path; `session/compaction_models.py` `cache_ttl_seconds`; system-prompt assembly)
+- **Effort × Impact**: L × M–H
+- **Subtracts**: yes — every item is "find waste and delete it"; no new abstraction, no new dependency
+- **Status**: open — **highest confidence-per-hour item in the scan.** Four checks: (1) **byte-stable prefix** — grep system-prompt assembly for time/random/env-derived values (the cookbook measured a **44% swing from one `datetime.now()`**; this also tests whether we're *reading* `systemPromptHash`); (2) **layered mixed-TTL breakpoints** — 54% cheaper upstream, but ⚠️ **blocked by Strands #3758** (per-section TTLs emit a checkpoint order Bedrock rejects with `ValidationException` on every request — we set no per-section TTL today, so evaluate + document, don't adopt); (3) **repeated-compaction audit** — does pass 2 preserve tool pairing and avoid re-writing the prefix? (our death-spiral incident says this is where the money went); (4) **retry cap with jitter** — an uncapped retry on a 424/throttle re-writes the whole prefix per attempt.
+
+### [2026-08-14] Resolve the stale review queue before `kaizen-review-prep` consumes it
+- **Source**: research/2026-08-14.md ▸ Top 5 #5 — internal: this file vs. `backend/pyproject.toml` (`bedrock-agentcore==1.21.0`, `strands-agents==1.51.0`) and `gh run list` (Nightly green Aug 3–14)
+- **Surface**: docs/process (`docs/kaizen/review-queue.md` only — no code)
+- **Effort × Impact**: L × M–H
+- **Subtracts**: yes — retired 9 superseded entries (more than the 4 first estimated); 6 chained through two bump subjects and would otherwise have been re-ranked as live work
+- **Status**: ✅ **DONE 2026-08-14** — executed at Phil's request in the same PR, ahead of `kaizen-review-prep`. Resolved as *superseded by events*: (a) **four** `bedrock-agentcore` bump entries ([2026-07-24]/[2026-07-17]/[2026-07-10]/[2026-07-03]) — shipped in #857, zero lag, #482 + #571 closed upstream; **#564 residue carried forward** as its own entry; (b) **two** Strands bump entries ([2026-07-10]/[2026-07-03]) — pin is 1.51.0; un-adopted capabilities split into a new [2026-08-14] entry; (c) **two** nightly-CI entries ([2026-07-24] `DELETE_FAILED` + [2026-06-19] `exit 127`) — 12 consecutive green nights; (d) **two** MCP Apps spec-prep entries ([2026-07-24]/[2026-05-29]) — superseded by the new [2026-08-14] migration entry, which also fixes the [2026-05-29] entry's **unverified** `io.modelcontextprotocol/ui` premise; (e) the [2026-07-17] curl-pin item **down-ranked, not closed**. Note: the research skill normally does not edit `## Resolved` — that is review-prep's job — so this was done under explicit instruction and each resolved entry records that.
+
+### [2026-08-14] Guard against `bedrock-agentcore` #564 — the one failure class the 1.21.0 bump did NOT close
+- **Source**: research/2026-08-14.md ▸ Community + GitHub issues; the carried-forward residue of the four now-resolved `bedrock-agentcore` bump entries — https://github.com/aws/bedrock-agentcore-sdk-python/issues/564 (**still open**; #482 and #571 closed, #564 did not)
+- **Surface**: backend (`agents/main_agent/session/turn_based_session_manager.py` restore path; `AgentCoreMemorySessionManager` `read_agent`/`read_session` marker-event lookup)
+- **Effort × Impact**: M × M–H
+- **Subtracts**: no — a local guard against an upstream gap; delete it if/when #564 is fixed upstream
+- **Status**: open — **the bump's value was real but incomplete; this is what's left.** Metadata-filtered `ListEvents` transiently misses marker events, so the manager treats the turn as a **new session** and skips history restoration *even though the data exists in the unfiltered view*. Cost impact precedes correctness impact: a false "new session" both loses context **and** re-writes the entire cacheable prefix at the cache-write premium. Related upstream risks worth checking in the same pass: **#621** (`filter_restored_tool_context` incompatible with extended thinking — same restore path) and **#629** (TracerProvider never flushed before microVM freeze, so end-of-invocation spans are dropped — which means our own cost telemetry under-reports the final turn of every session).
 
 ### [2026-07-24] Add GPT-5.6 Terra + Luna to the model catalog via the existing Mantle Responses path
 - **Source**: research/2026-07-24.md ▸ Top 5 #2 — GPT-5.6 Sol/Terra/Luna GA on Bedrock via Mantle (confirms last week's flagged-for-verification item) — https://aws.amazon.com/about-aws/whats-new/2026/07/openai-gpt-sol-terra/
@@ -28,21 +68,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**: captures GPT-5.6's 90% cached-input discount instead of leaving it on the table
 - **Status**: open — SUPERSEDES the [2026-07-17] caching-audit item (adds the GPT-5.6 explicit-breakpoint motivation). Instrument `cache_read`/`cache_write` per provider (1.9.0 observability surfaces them); wire explicit breakpoints on the Mantle leg; confirm the Bedrock manual cache-point still engages post-1.48; do NOT switch to `strategy="auto"`. Coupled to the GPT-5.6 item above.
 
-### [2026-07-24] Prep the MCP Apps host for the 2026-07-28 spec (`serverInfo` → `server/discover`; SEP-2575 handshake removal)
-- **Source**: research/2026-07-24.md ▸ Top 5 #4 — MCP 07-28 RC final in 4 days; SEP-2575 removes the `initialize`/`initialized` handshake + `Mcp-Session-Id`, adds `server/discover`; MCP Apps (SEP-1865) graduates to a first-class official extension — https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/
-- **Surface**: backend (inference-api MCP Apps host — the `initialize` `serverInfo` read that resolves App-frame `serverName`/`icon`; capability advertisement `experimental.ui` → `io.modelcontextprotocol/ui`; `ui_resource` SSE header path; existing `manifest.json`-fallback icon resolution)
-- **Effort × Impact**: M × M–H
-- **Subtracts**: yes — retires the pre-standard `initialize`-serverInfo dependency + the `experimental.ui` id
-- **Unlocks**: RC-conformant negotiation with spec-final MCP hosts/servers; readiness for SEP-2567 stateless transport + SEP-2322 multi-round-trip elicitation (the App user-input flow)
-- **Status**: open — **near-term (spec-final in 4 days); ABSORBS the [2026-05-29] "align MCP Apps capability advertisement" item and sharpens it with the SEP-2575 handshake-removal detail.** Migrate `serverName`/`icon` off `serverInfo` to `server/discover` (manifest.json fallback stays); confirm final-spec details next Friday before building (don't build against a moving RC).
-
-### [2026-07-24] Fix the nightly `DELETE_FAILED` stuck ephemeral stack + make teardown resilient
-- **Source**: research/2026-07-24.md ▸ Top 5 #5 — internal friction: Nightly red Jul 23–24 (run 30083857845), `nightly-develop-PlatformStack is in DELETE_FAILED state and can not be updated`; green Jul 14–17 before (a new teardown-idempotency failure class, distinct from the June exit-127 + July curl-pin clusters)
-- **Surface**: infra/CI (`.github/workflows/nightly-deploy-pipeline.yml` ephemeral deploy/teardown lane + PlatformStack `RemovalPolicy`/`autoDeleteObjects` in the nightly context — retained buckets/log-groups/custom resources are the usual `DELETE_FAILED` culprits)
-- **Effort × Impact**: L × M–H
-- **Subtracts**: yes — removes a recurring nightly-wedge class; restores the dep-bump safety gate
-- **Status**: open — **cheapest win with outsized leverage: unblocks the #1 keystone bump's safety net.** (1) immediate — manually force-delete the wedged stack (skip the un-deletable resource) so Nightly goes green; (2) durable — pre-deploy step that force-deletes a leftover `DELETE_FAILED`/`ROLLBACK_COMPLETE` stack of that name before re-creating + nightly-context removal policies.
-
 ### [2026-07-19] Track harness-sdk#3348 (rolling pair of message cachePoints) — local workaround gated on dashboard evidence
 - **Source**: Phil-initiated (PR #697 follow-up) — https://github.com/strands-agents/harness-sdk/issues/3348 (filed by philmerrell, open, no maintainer response yet); prod session aecd387d (18-way parallel tool fan-out → cacheRead=0 / cacheWrite=134k mid-turn, the ~20-block Anthropic lookback miss mode documented in `model_config.py:366`)
 - **Surface**: backend (`agents/main_agent/core/model_config.py` 3-cachePoint budget). If built locally: strands 1.48's `_inject_cache_point` **strips any pre-existing message-level cachePoints**, so a rolling pair requires dropping `CacheConfig(strategy="auto")` and hand-placing both points via a hook — the 4th Bedrock cachePoint slot is free. Position tests in `tests/agents/main_agent/core/test_bedrock_cache_points.py` are the safety net.
@@ -56,13 +81,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: M–H × M–H (payoff directly measurable by the PR #697 cache/cost metrics)
 - **Subtracts**: partial — bounds MCP/tool payload growth at the source instead of relying solely on reactive below-anchor truncation in `TurnBasedSessionManager` (which stays for legacy history)
 - **Status**: open — spike before commitment; four known gotchas: (1) `evict_after_cycles=20` runs on `BeforeModelCallEvent` and touches *prior* messages — potential byte-stability cache-buster, verify semantics or set `None` and expire via S3 lifecycle; (2) `model.count_tokens` per tool result adds latency, and Bedrock CountTokens rejects `us.*` inference-profile ids (de-prefix precedent in context attribution); (3) adoption flips `toolConfigHash` once (expected; the new tool must land in the deterministically-ordered tool list); (4) check SPA tool-result rendering against placeholder content.
-
-### [2026-07-17] Bump `bedrock-agentcore` 1.9.1 → 1.18.0 (closes #571 cross-process Memory reorder + #482 SSE deadlock)
-- **Source**: research/2026-07-17.md ▸ Top 5 #1 — bedrock-agentcore 1.18.0 (Jul 10, PR #572/#573 close #571; #482 fix in 1.17.0/PR #563) — https://github.com/aws/bedrock-agentcore-sdk-python/releases
-- **Surface**: backend (`backend/pyproject.toml` + coupled `boto3`; inference-api chat router + `TurnBasedSessionManager` flush ordering; full local pytest suite)
-- **Effort × Impact**: M × H
-- **Subtracts**: yes — retires the queued [2026-05-22] hand-written #482 guard (library-native); the #571 ordering fix complements (not replaces) the just-shipped `_repair_tool_pairing`
-- **Status**: open — **highest priority; the release we've queued for six weeks now exists and landed in-window.** SUPERSEDES the [2026-07-03] "→ 1.17.0" item AND the [2026-07-10] "double-forced" item below (which said "bump to 1.17.0, track 1.18 for #571" — 1.18.0 now exists with the #571 fix, so retarget 1.18.0 and consolidate the two into this one). We're on 1.9.1, ~9 minors behind, exposed to both #571 and #482 while Scheduled Runs + Memory Spaces + conversation-sharing lean hard on Memory. Validate ms event-flooring vs our flush ordering; #564 (eventual-consistency read gap) stays unfixed — keep agent-cache continuity primary.
 
 ### [2026-07-17] Audit multi-provider prompt caching (issue #642 + Strands #3144)
 - **Source**: research/2026-07-17.md ▸ Top 5 #2 — internal issue #642 (Jul 11); Strands #3144 (`CacheConfig(strategy="auto")` never caches system prompt, fix PR #3145 open) — https://github.com/strands-agents/sdk-python/issues/3144
@@ -91,22 +109,15 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Surface**: infra/CI (`backend/Dockerfile.app-api` + `Dockerfile.inference-api` line 42 `apt-get install curl=...`; check `scheduled-runs`/`kb-sync`)
 - **Effort × Impact**: L × M–H
 - **Subtracts**: yes — removes a recurring deploy-breaker class; the `deb13u*` wildcard only defers the next break to a Debian series/base-image bump
-- **Status**: open — replace the version-pinned curl with unpinned (latest security patch) or the base image's `curl-minimal` (as the Lambda images already do). The pin was never a supply-chain control — it's a HEALTHCHECK runtime probe. Cheapest durable win; the band-aid will bite again.
+- **Status**: open — **DOWN-RANKED 2026-08-14: correctness debt, not active breakage.** The `deb13u*` wildcard has held all window (Backend Deploy + Nightly green Aug 3–14), so the urgency claim in the original entry no longer applies. The fix is unchanged and still right: replace the version-pinned curl with unpinned (latest security patch) or the base image's `curl-minimal` (as the Lambda images already do). The pin was never a supply-chain control — it's a HEALTHCHECK runtime probe. The wildcard only defers the next break to a Debian series / base-image bump.
 
-### [2026-07-10] Bump `bedrock-agentcore` off 1.9.1 — now double-forced (#482 SSE deadlock + NEW #571 Memory-reorder)
-- **Source**: research/2026-07-10.md ▸ Top 5 #1 — https://github.com/aws/bedrock-agentcore-sdk-python/pull/563 (#482, in 1.17.0) + **NEW** https://github.com/aws/bedrock-agentcore-sdk-python/issues/571 (cross-process Memory event-reorder corruption, fix pending a post-1.17.0 release).
-- **Surface**: backend (`backend/pyproject.toml`, inference-api chat router, `AgentCoreMemorySessionManager` usage; full local pytest suite)
-- **Effort × Impact**: M × H
-- **Subtracts**: yes — retires the queued [2026-05-22] #482 hand-written guard (library-native subtraction)
-- **Status**: open — **CONSOLIDATED into the [2026-07-17] "→ 1.18.0" item above** (the #571 fix this entry was tracking landed in 1.18.0 on Jul 10 — the post-1.17.0 release it awaited). Treat as one item; review-prep should resolve this stub. 1.1.0/1.2.0 shipped Scheduled Runs (multi-replica Runtime) + Memory Spaces (heavier Memory use), amplifying exactly the failure classes #482/#571 corrupt.
-
-### [2026-07-10] Bump Strands 1.40 → 1.47; adopt `continue_on_error` MCP resilience (#3101) + hook ordering
-- **Source**: research/2026-07-10.md ▸ Top 5 #2 — Strands 1.46–1.47 (https://github.com/strands-agents/sdk-python/releases). **Supersedes the [2026-07-03] 1.45 item** (now 7 minors behind).
-- **Surface**: backend (`agents/main_agent/` hooks + `to_bedrock_config` + compaction, `FilteredMCPClient`/gateway targets, `CountTokensBedrockModel`)
-- **Effort × Impact**: M–H × H
-- **Subtracts**: candidate — hand-rolled MCP-abort handling (`continue_on_error`), custom cache-point plumbing (`cache_tools_ttl`), runaway guard (`Limits`)
-- **Unlocks**: a flaky external/Gateway MCP server no longer aborts the turn (newly relevant — Scheduled Runs use external tools unattended); `Limits` per-invocation cost caps; deterministic hook ordering (the enabler for the tool-approval fix)
-- **Status**: open — **the bump itself SHIPPED** (commit `42e69bc7` "upgrade Strands to 1.47.0"; the pin is now 1.47.0). Remaining follow-on work is separately queued: `Limits` adoption on the headless lane is the [2026-07-17] item above; `continue_on_error` on the MCP client + optional hook ordering (#2559) + the `cache_tools_ttl`/`context_manager="auto"` audits are still open here (decisions.md 2026-05-18 bars a bare compaction swap). Review-prep should split "bump = done" from the un-adopted capabilities.
+### [2026-08-14] Adopt the Strands capabilities the 1.51 bump made available but did not wire
+- **Source**: research/2026-08-14.md ▸ queue-hygiene cleanup — the split-out residue of the [2026-07-10] "Strands 1.40 → 1.47" entry, whose *bump* half shipped (now pinned **1.51.0** via #857). Capability refs: `continue_on_error` MCP resilience (#3101), optional hook ordering (#2559), `cache_tools_ttl`, `context_manager="auto"` — https://github.com/strands-agents/sdk-python/releases
+- **Surface**: backend (`agents/main_agent/` hooks + `to_bedrock_config` + compaction; `FilteredMCPClient`/gateway targets; `CountTokensBedrockModel`)
+- **Effort × Impact**: M × M–H
+- **Subtracts**: candidate — hand-rolled MCP-abort handling (`continue_on_error`) and custom cache-point plumbing (`cache_tools_ttl`) are both library-native replacements
+- **Unlocks**: a flaky external/Gateway MCP server no longer aborts the turn (load-bearing — Scheduled Runs use external tools unattended); deterministic hook ordering, the enabler for the tool-approval fix
+- **Status**: open — **the bump is DONE; this is only the un-adopted capability list.** `Limits` on the headless lane is tracked separately at [2026-07-17]. ⚠️ `context_manager="auto"` is **barred as a bare swap** by decisions.md 2026-05-18 — our compaction additionally does tool-content truncation, LTM summary retrieval, and DynamoDB checkpoint persistence, and drives the `compaction` SSE event; only a migration design covering all four is in scope. Also re-check `cache_tools_ttl` against Strands **#3758** (per-section TTLs can emit a checkpoint order Bedrock rejects on every request) before wiring it.
 
 ### [2026-07-10] Audit whether prompt caching actually engages in `to_bedrock_config` (Strands #3144)
 - **Source**: research/2026-07-10.md ▸ Top 5 #3 — **NEW** Strands open issue #3144 (`CacheConfig(strategy="auto")` never caches the system prompt); Strands 1.46 now surfaces `cache_read`/`cache_write` tokens in the metadata chunk (#2302). https://github.com/strands-agents/sdk-python/issues
@@ -148,21 +159,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**: Mantle-first capability gradient (Responses API, server-side tool use, async/long-running, Projects/Workspaces) once Claude parity lands; a uniform OpenAI-compatible lane for non-Claude models inside Bedrock without a second vendor SDK.
 - **Status**: open — **strategic/future-proofing, not urgent; recommend Defer (watchlist) + a small non-Claude-lane spike.** Corrected findings: (1) `bedrock-runtime` is "fully supported," no EOL signal — Mantle recommendation is greenfield-onboarding language, but the capability gradient toward Mantle is real. (2) **The "persisted Converse wire shape = multi-model lock-in" concern does NOT hold** — verified `strands/types/content.py:78` `ContentBlock` (`toolUse`/`toolResult`/`reasoningContent`) IS Strands' provider-neutral canonical shape; every Strands provider round-trips it to/from Anthropic Messages / OpenAI Chat Completions. AgentCore Memory abstracts *persistence*; Strands abstracts *multi-model shape*. Switching a provider's endpoint changes Strands `format_request` internals, **not** our persistence schema or `_convert_content_block`. No schema-decoupling PR needed. (3) The real bedrock-runtime ties are narrow: the 3 direct-Converse bypasses, `CountTokens` (no Mantle equal — powers context-attribution + compaction), and cross-region profiles (`us.*`/`global.*`, Mantle-absent). (4) **Do NOT migrate the Claude chat path to Mantle yet**: Opus 4.8 on Mantle is Messages-API-only (Chat Completions/Responses = No), so Mantle's headline built-ins don't apply to our primary model; Mantle also lacks cross-region inference, native `CountTokens`, structured outputs, and **Guardrails** (runtime-only — see [2026-06-19] Guardrails item, which this reinforces). Pricing identical; Mantle default TPM not a win (`20M in/4M out` vs runtime `30M`). **Reopen trigger:** a Strands Anthropic-Messages-on-Mantle provider ships **AND** cross-region + native token counting reach Claude-on-Mantle. Interim, low-risk value = finishing the non-Claude OpenAI-compatible lane already scaffolded in `_create_mantle_model()`.
 
-### [2026-07-03] Bump `bedrock-agentcore` 1.9.1 → 1.17.0 (closes SSE-deadlock #482)
-- **Source**: research/2026-07-03.md ▸ Top 5 #1 — https://github.com/aws/bedrock-agentcore-sdk-python/pull/563 (issue #482); internal inference-api SSE-over-Runtime exposure.
-- **Surface**: backend (`backend/pyproject.toml`, inference-api chat router; full local pytest suite — the only correctness gate, pytest isn't in CI)
-- **Effort × Impact**: M × H
-- **Subtracts**: yes — retires the queued [2026-05-22] "defensive guard against #482" work item; the fix (`put_nowait` + disconnect stop-event + source `aclose()`) is now upstream (library-native subtraction)
-- **Status**: open — **highest priority; we're on 1.9.1 and exposed today** to a silent, process-wide container hang that keeps `/ping` green when an SSE consumer stops draining. This supersedes/absorbs the queued [2026-05-22] guard item.
-
-### [2026-07-03] Bump Strands 1.40 → 1.45 + adopt hook ordering; audit cache_tools_ttl / context_manager / Limits
-- **Source**: research/2026-07-03.md ▸ Top 5 #2 — Strands releases 1.41–1.45 (https://github.com/strands-agents/sdk-python/releases, now `harness-sdk` monorepo).
-- **Surface**: backend (`backend/src/agents/main_agent/` hooks + BedrockModel config + compaction, `to_bedrock_config`, `CountTokensBedrockModel`)
-- **Effort × Impact**: M–H × H
-- **Subtracts**: candidate — custom cache-point plumbing (`cache_tools_ttl`, 1.41) and possible compaction simplification (`context_manager="auto"`, 1.43 — gated on the SSE-contract check per decisions.md 2026-05-18, not a bare drop-in)
-- **Unlocks**: `Limits` per-invocation token/cost caps (first-class budget guard we lack)
-- **Status**: open — **supersedes the queued [2026-06-19] "1.40 → 1.44" item.** Adopt optional hook ordering (#2559) to deterministically sequence the OAuth-consent + tool-approval BeforeToolCall hooks through the tool-fold. Only breaking change 1.41→1.45 is Mistral (N/A). Run the full local pytest suite; watch compaction + count_tokens/context-attribution.
-
 ### [2026-07-03] Model-settings refresh: reinstate Fable 5 + add Sonnet 5 with temperature-suppression guard
 - **Source**: research/2026-07-03.md ▸ Top 5 #3 — Fable 5 reinstated (https://aws.amazon.com/blogs/aws/anthropic-claude-fable-5-on-aws-mythos-class-capabilities-with-built-in-safeguards-now-available/); Sonnet 5 GA + promo pricing (https://aws.amazon.com/bedrock/pricing/); ref-repo `NO_TEMPERATURE_MODELS` (commit 35bc3a9).
 - **Surface**: cross-cutting (inference-api model config + model-settings admin, `to_bedrock_config`, `CountTokensBedrockModel` de-prefix, frontend model picker)
@@ -195,13 +191,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**: deployers attach content-safety filtering + staff-alerting monitoring to all model invocations without modifying inference-api source (FERPA duty-of-care for higher-ed: proactive self-harm/crisis-language monitoring Claude's reactive layer doesn't surface)
 - **Status**: open — strongest fit (filed issue + library-native path). **Decide in-agent vs. gateway-level in one pass** — the [2026-07-03] "gateway-level Guardrails (AgentCore Policy)" item folds into this #480 decision (one gateway policy blankets every MCP target, model-independent). Verify guardrail *resource* region availability + SSE streaming-mode compatibility. Reviewed reviews/2026-07-03.md ▸ Proposal #4.
 
-### [2026-06-19] Fix Nightly Build & Test (`exit 127` at install — ~14 consecutive failures)
-- **Source**: research/2026-06-19.md ▸ Internal Audit + Top 5 #2 — `gh run view 27820449858 --log-failed` shows `exit code 127` on every install/setup step (June 19); failing daily since June 5. Carries the [2026-06-12] nightly item forward with a sharper diagnosis (was "root cause unknown").
-- **Surface**: CI — `.github/workflows/` nightly workflow install/setup steps (`setup-uv` / `setup-node` / cache action)
-- **Effort × Impact**: L × H
-- **Subtracts**: no — hygiene; the dep-bump gate
-- **Status**: open — **#518 (in 1.0.2) repointed the test/install paths but nightly STILL failed Jun 29–30** (research/2026-07-03.md): a different stage (the ephemeral deploy/teardown per the `fix/nightly` work) is implicated. **Live note**: Jul 1–3 nightly is green on `main` — likely just-fixed; confirm the `develop` nightly (last develop run 2026-06-03) is covered before trusting it as the dep-bump gate. Consolidates the [2026-06-12] nightly item. Reviewed reviews/2026-07-03.md ▸ Proposal #9.
-
 ### [2026-06-19] Ship the interactive context-breakdown badge (Cursor + LibreChat convergence)
 - **Source**: research/2026-06-19.md ▸ Top 5 #5 — LibreChat v0.8.7-rc1 real-time context gauge + Cursor Context Usage Report (2026-06-05) + internal PR #433. **Reinforces** the [2026-06-05] "make the context-breakdown badge interactive" item with a second independent product datapoint.
 - **Surface**: frontend (context-breakdown badge component in `frontend/ai.client/src/app/session/`)
@@ -232,14 +221,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: partial — Opus 4.8's system-in-`messages` caching allowance simplifies the #269 caching wiring (system no longer must sit strictly outside `messages` to preserve cache)
 - **Unlocks**: fewer-step tool turns (lower per-turn cost), best-in-class computer-use, ~4× fewer code-flaw pass-throughs, the `effort` compute-depth knob
 - **Status**: open — verify Bedrock region availability (us-east-1 ✓) and the 4.8 context window on the model card before flipping the pin; confirm the beta.27 Opus-4.7 thinking/`temperature` handling still applies
-
-### [2026-05-29] Align MCP Apps capability advertisement to spec-canonical `io.modelcontextprotocol/ui`
-- **Source**: research/2026-05-29.md ▸ Top 5 #3 — SEP-1865 folded into the 2026-07-28 draft spec, PR #2791 (May 27)
-- **Surface**: backend (inference-api `initialize` capability advertisement — currently `experimental.ui`; the `ui_resource` SSE path)
-- **Effort × Impact**: L-M × M
-- **Subtracts**: yes — retires our pre-standard `experimental.ui` identifier in favor of the conformant name
-- **Unlocks**: RC-conformant negotiation with future MCP hosts/servers once the spec stabilizes (~2026-07-28)
-- **Status**: open — on our timeline before the RC stabilizes; diff the merged draft for any change to the declare-templates-ahead-of-time / tool-list prefetch shape
 
 ### [2026-05-29] Compaction summary prompt: preserve standing/sensitive user instructions
 - **Source**: research/2026-05-29.md ▸ Top 5 #4 — Claude Code v2.1.152 compaction-prompt change (~May 26)
@@ -316,13 +297,41 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 
 ## Resolved
 
+### [2026-07-24] + [2026-07-17] + [2026-07-10] + [2026-07-03] Bump `bedrock-agentcore` off 1.9.1 (→1.17.0 / →1.18.0 / →1.18.1) → RESOLVED — SHIPPED
+- **Source**: research/2026-07-24.md · research/2026-07-17.md · research/2026-07-10.md · research/2026-07-03.md ▸ each Top 5 #1
+- **Decision**: Ship — **done**, no further action.
+- **Reasoning**: PR #857 bumped `bedrock-agentcore` **1.9.1 → 1.21.0** (with `strands-agents` 1.48→1.51, `strands-agents-tools` 0.5.2→0.8.6, `aws-opentelemetry-distro` 0.17→0.19, `boto3` 1.43.9→1.43.68 across 4 files), released in 1.14.1 on 2026-08-13. Verified 2026-08-14: latest upstream is 1.21.0 — **zero version lag**. #482 (SSE deadlock, PR #563) and #571 (cross-process Memory event reorder, PR #572) are both **closed upstream**. All four entries chained through the same subject and repeated the now-false claim *"we're on 1.9.1, exposed today"*.
+- **Residue carried forward**: **#564 is still open** — see the [2026-08-14] guard item under `## Open`.
+- **Reviewed in**: resolved directly at Phil's request 2026-08-14 (ahead of reviews/2026-08-14.md); evidence in research/2026-08-14.md ▸ Version-pin lag + Retirement candidates.
+
+### [2026-07-10] + [2026-07-03] Bump Strands (1.40 → 1.45 / → 1.47) → RESOLVED — SHIPPED, capabilities split out
+- **Source**: research/2026-07-10.md ▸ Top 5 #2 · research/2026-07-03.md ▸ Top 5 #2
+- **Decision**: Ship — **bump done**; un-adopted capabilities re-queued as their own entry.
+- **Reasoning**: the pin is now **1.51.0** (#857), well past both entries' targets; latest upstream is 1.52.0, so lag is 1 minor / 5 days. The [2026-07-10] entry's own status line already read "the bump itself SHIPPED". The genuinely unfinished half — `continue_on_error`, optional hook ordering (#2559), `cache_tools_ttl`, `context_manager="auto"` — is now the **[2026-08-14] "Adopt the Strands capabilities the 1.51 bump made available but did not wire"** entry under `## Open`. `Limits` remains separately queued at [2026-07-17].
+- **Reviewed in**: resolved directly at Phil's request 2026-08-14; evidence in research/2026-08-14.md ▸ Version-pin lag.
+
+### [2026-07-24] Fix the nightly `DELETE_FAILED` stuck ephemeral stack + [2026-06-19] Nightly `exit 127` → RESOLVED — GREEN
+- **Source**: research/2026-07-24.md ▸ Top 5 #5 · research/2026-06-19.md ▸ Top 5 #2
+- **Decision**: Ship — **resolved by events**, no action needed.
+- **Reasoning**: Nightly Build & Test has been **green 12 consecutive runs, Aug 3 → Aug 14**, and there have been **zero CI failures of any workflow in the last 12 days**. Both entries' premises — a wedged `DELETE_FAILED` ephemeral stack, and a ~14-failure `exit 127` install cluster — no longer reproduce. The dep-bump safety gate these entries existed to restore is functioning, and it vouched for #857.
+- **Note**: neither entry records *which* fix closed it, so this is "resolved by observation" rather than "resolved by an identified commit". If Nightly regresses, re-open with a fresh diagnosis rather than reviving these.
+- **Reviewed in**: resolved directly at Phil's request 2026-08-14; evidence in research/2026-08-14.md ▸ Internal Audit ▸ Activity.
+
+### [2026-07-24] Prep the MCP Apps host for the 2026-07-28 spec + [2026-05-29] Align MCP Apps capability advertisement → RESOLVED — superseded (spec is now final)
+- **Source**: research/2026-07-24.md ▸ Top 5 #4 · research/2026-05-29.md ▸ Top 5 #3
+- **Decision**: Defer into the successor entry — superseded, **not** declined; the work is still wanted.
+- **Reasoning**: both were written against a *moving RC* ("spec-final in 4 days", "before the RC stabilizes"). MCP **2026-07-28 is now the Current protocol version**, so the successor can be written against settled facts: the `initialize` handshake is gone, `server/discover` is the replacement (mandatory for servers, **optional for clients**), and MRTR/SEP-2322 + SEP-2243 are concrete follow-ons. ⚠️ Critically, the [2026-05-29] entry asserted `io.modelcontextprotocol/ui` is "spec-canonical" — the 2026-08-14 scan **could not confirm that identifier** against the spec source and saw a changelog reference to preserving `experimental` settings. Leaving it open would have propagated an unverified premise into an implementation.
+- **Superseded by**: **[2026-08-14] "Migrate the MCP Apps host off `initialize`/`serverInfo` to `server/discover`"** under `## Open`, which carries the capability-identifier verification as an explicit precondition.
+- **Reviewed in**: resolved directly at Phil's request 2026-08-14; evidence in research/2026-08-14.md ▸ MCP ecosystem ▸ Spec status.
+
 ### [2026-06-19] Bump Strands 1.40 → 1.44 + [2026-06-12] 1.43 + [2026-06-05] 1.42 + [2026-06-05] #2635 guard → RESOLVED — superseded by the [2026-07-03] 1.45 keystone
 - **Decision**: Superseded — all four consolidated into the open [2026-07-03] "Strands 1.40 → 1.45 + hook ordering" item. The #2635 count-tokens guard folds into the bump.
 - **Reviewed-in**: reviews/2026-07-03.md ▸ Proposal #2.
 
 ### [2026-06-19] Bump `bedrock-agentcore` 1.9.1 → 1.15.0 + [2026-06-12] 1.14.1 + [2026-05-22] 1.11.0 (×2) + [2026-05-22] #482 hand-written guard → RESOLVED — superseded by the [2026-07-03] 1.17.0 bump
-- **Decision**: Superseded — all consolidated into the open [2026-07-03] "bedrock-agentcore 1.9.1 → 1.17.0" item. Per research/2026-07-03.md the #482 fix is now **upstream in 1.17.0** (PR #563), so the queued hand-written guard converts to "bump the pin" — a library-native subtraction.
+- **Decision**: Superseded — all consolidated into the [2026-07-03] "bedrock-agentcore 1.9.1 → 1.17.0" item. Per research/2026-07-03.md the #482 fix is now **upstream in 1.17.0** (PR #563), so the queued hand-written guard converts to "bump the pin" — a library-native subtraction.
 - **Reviewed-in**: reviews/2026-07-03.md ▸ Proposal #1.
+- **Trail update 2026-08-14**: the [2026-07-03] item this pointed at is itself now resolved — the whole chain **shipped** in #857 (1.9.1 → 1.21.0). See the [2026-07-24]+[2026-07-17]+[2026-07-10]+[2026-07-03] consolidated resolution at the top of this section.
 
 ### [2026-06-12] Add Claude Fable 5 to model settings (+ the [2026-06-19] WITHDRAW) → RESOLVED — un-withdrawn, folded into the [2026-07-03] model-settings refresh
 - **Decision**: Superseded — **NOT declined.** Fable 5 was revoked on Bedrock mid-June (forcing the withdrawal) and **reinstated Jul 1**. The reinstatement + Sonnet 5 GA are consolidated into the open [2026-07-03] "Model-settings refresh: reinstate Fable 5 + add Sonnet 5" item (US inference profile only; Global unstable).
