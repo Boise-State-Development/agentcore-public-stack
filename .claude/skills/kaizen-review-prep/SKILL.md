@@ -1,6 +1,6 @@
 ---
 name: kaizen-review-prep
-description: Friday late-morning synthesis. Runs ~2 hours after `kaizen-research` the same morning. Consumes this week's research doc, open items in `docs/kaizen/review-queue.md`, last weekend's POC findings (from comments on the previous week's research PR), and recent merges/reverts/CI signal — produces a ranked, decision-oriented agenda. Every item has a Ship / Decline / Defer recommendation. Opens a PR into `develop`. Triggers: "kaizen review prep", "weekly review prep", "friday review", "rank kaizen ideas".
+description: Friday late-morning synthesis, scoped to Strands Agents / AWS Bedrock / Bedrock AgentCore. Runs ~2 hours after `kaizen-research` the same morning. Consumes this week's research doc, open items in `docs/kaizen/review-queue.md`, last weekend's POC findings (from comments on the previous week's research PR), and recent merges/reverts/CI signal — produces a ranked, decision-oriented agenda. Ranks on two questions only: what NEW capability do the three libraries enable, and what CUSTOM CODE do they let us delete. Every item has a Ship / Decline / Defer recommendation. Opens a PR into `develop`. Triggers: "kaizen review prep", "weekly review prep", "friday review", "rank kaizen ideas".
 ---
 
 # Kaizen Review Prep
@@ -11,7 +11,8 @@ Friday late morning, after `kaizen-research` ran earlier the same morning. This 
 
 - **Review is a decision forum, not a status update.** Everything that lands in the output should be either: (a) actionable this week, (b) explicitly deferred with a reason and revisit date, or (c) declined. Nothing is "noted." Noted-and-forgotten is how systems accumulate friction.
 - **Subtraction first.** Every proposal ranks against "do nothing" and "retire something instead." If a proposal adds anything, it must explain what existing thing it either replaces or simplifies.
-- **Dual lens — impact + capability-unlock.** Rank proposals through *two* lenses, not one: (a) **impact on existing code** (does this change, simplify, or obsolete something we already have?) and (b) **capability unlock** (what *new* product capability or UX enhancement does this enable that we couldn't easily build before?). Subtraction-first applies to lens (a). But proposals that genuinely unlock new product surface — code-interpreter sandboxes, persistent agent state, multi-agent UI attribution, new SSE event types that enable inline UI, etc. — must be evaluated on their strategic merit, *not* auto-deferred because they don't intersect existing code. A proposal with no `Subtracts` value but a substantive `Unlocks` value can rank above a low-impact dep-bump. Don't penalize net-new capability for not being a cleanup.
+- **Two questions, and only two.** This loop is scoped to **Strands Agents, AWS Bedrock, and Bedrock AgentCore**. Rank every proposal on: (a) **addition through subtraction** — what custom code in this repo does an upstream release let us delete? and (b) **capability unlock** — what can we now build on these three libraries that we couldn't easily build before? Subtraction outranks unlock at equal effort, because it is lower-risk and leaves the codebase smaller. A proposal with no `Subtracts` value but a substantive `Unlocks` value can still rank high — don't penalize net-new library capability for not being a cleanup. Classify honestly: don't dress an addition up as a subtraction because the format has the field.
+- **Out-of-scope items get routed, not ranked.** A proposal that answers neither question — frontend/UX work, a pattern from a competing harness, a non-library bug fix — does not belong in the Proposals list *regardless of merit*. Put it under `## Out of Scope — routed elsewhere` with a one-line disposition (open an issue, fold into existing work, drop). This is how the narrowing stays honest: good ideas leave the queue through a named door rather than getting silently re-ranked back in. Queue entries that predate the narrowing get routed the same way, once.
 - **Multiple cycles.** Kaizen is small changes, weekly, compounding. If this week's review touches 3 things, next week's will touch 3 different things. Phil doesn't need a grand plan — he needs a reliable weekly cadence.
 - **One-week feedback lag is intentional.** Phil reviews Friday → POCs over the weekend → those POC findings surface in the *next* Friday's review-prep as Carried Over items. Don't try to fold same-day POC findings in — they don't exist yet.
 - **No edits outside `docs/kaizen/`.** This skill writes one Markdown file under `docs/kaizen/reviews/` and updates `docs/kaizen/review-queue.md` (moves Open → Resolved post-review). It never touches source code, `CLAUDE.md`, or skill files. Those changes happen in separate PRs after the review.
@@ -22,7 +23,7 @@ Friday late morning (~8am MT), ~2 hours after `kaizen-research` runs. Phil revie
 
 ## Inputs
 
-1. **Most recent `docs/kaizen/research/YYYY-MM-DD.md`** — Friday's scan. Its Top 5 ideas are the primary candidate list.
+1. **Most recent `docs/kaizen/research/YYYY-MM-DD.md`** — Friday's scan, scoped to Strands / AgentCore / Bedrock. Its Top 5 ideas are the primary candidate list. If the scan reports finding **no deletable-custom-code candidate**, say so in the Take — that is a finding about the week, not a gap to paper over.
 2. **`docs/kaizen/review-queue.md`** — `## Open` entries. Includes both this week's ideas (just appended by `kaizen-research`) and any prior-week items that weren't resolved.
 3. **Last 1–2 `docs/kaizen/reviews/*.md`** — what was proposed before, what was decided, anything deferred to "revisit by [date]".
 4. **PR comments on the *previous* week's kaizen-research PR.** `gh pr view <n> --comments` — Phil's reactions and weekend POC findings are first-class signal. The PR opened *this* morning by `kaizen-research` is too fresh; comments accumulate over the week as Phil POCs ideas. Pick the research PR from one week ago (or the most recent merged/closed kaizen-research PR), not today's.
@@ -72,6 +73,7 @@ check before decisions.]
 
 ### 1. [Proposal title]
 - **Source**: research/YYYY-MM-DD.md ▸ Top 5 #N | review-queue.md (open since YYYY-MM-DD) | PR comment | direct observation
+- **Scope**: Strands | AgentCore | Bedrock | Strands+AgentCore | … — [which of the two questions it answers: subtraction, capability unlock, or both]
 - **Surface area**: backend / frontend / infrastructure / cross-cutting / docs / skills
 - **Change**: [concrete description — what files change, what the new behavior is]
 - **Subtracts**: [required field — what this retires, simplifies, or replaces. Or explicitly "addition only — justified because…"]
@@ -85,6 +87,14 @@ check before decisions.]
 
 ### 2. [Next proposal]
 …
+
+## Out of Scope — routed elsewhere
+
+<!-- Items that surfaced but answer neither question (not Strands/AgentCore/Bedrock capability,
+     not deletable custom code). Real work still gets a home — it just isn't kaizen's.
+     One line each. Nothing is silently dropped. -->
+
+- **[Item]** — [why it's out of scope] → *routed*: [open issue #N / fold into <work> / drop with reason]
 
 ## Carried Over From Prior Reviews
 <!-- Items deferred in earlier review docs that have hit their revisit date.
@@ -179,11 +189,13 @@ After Phil reviews and the decisions are logged in the review doc, this skill (o
    - All `## Open` entries in `review-queue.md` (the primary source)
    - Any new friction patterns surfaced from PR comments / merged PRs / CI that weren't already in the queue
    - Carried Over items
-   Rank:
-   - Low-effort × High-impact first.
-   - **Retirement candidates** get a +1 boost (subtraction bias).
-   - **Capability-unlock items** (proposals with a substantive `Unlocks` field — new product capability, UX surface, or platform primitive adoption) rank on their strategic merit. Do not auto-defer just because `Subtracts: no`. A High-impact unlock can rank above a Low-impact subtraction.
-   - Items with **POC findings** rank above untested items at the same effort/impact.
+   Rank, in order:
+   1. **Deletable custom code** — an upstream Strands/AgentCore/Bedrock release that lets us remove something we maintain. Highest, because it is the lowest-risk win. The proposal must name the file.
+   2. **Unadopted capability already in our pin** — a primitive in the version we *currently run* that duplicates our own code. Nearly free, and routinely missed by release-note-only scanning.
+   3. **New capability unlock** — a genuinely new library primitive enabling product surface we couldn't easily build before. Rank on strategic merit, not on whether it touches existing code.
+   4. **Probe items** — an unresolved "is this reachable on Bedrock / does Strands expose it?" question sitting under other queued work. Cheap, and a negative result is a real deliverable.
+   5. **Version-pin lag with a named consequence** — only when a specific release note maps to a specific file or failure mode.
+   Modifiers: items with **POC findings** outrank untested items at the same effort/impact; **retirement candidates** get a +1 boost; low-effort breaks ties.
 
 8. **Cap the proposal count at 10.** If more than 10 candidates, defer the lowest-ranked to next week with a note. The review is supposed to take 10-15 minutes, not be exhaustive.
 
@@ -234,6 +246,7 @@ EOF
 
 ## Rules
 
+- **Scope before rank.** A proposal that answers neither question goes in `## Out of Scope — routed elsewhere` with a disposition, never in the ranked list. Merit is not the test; scope is.
 - **Every proposal is a decision.** No "consider X" or "we might want to." Each has Ship means / Decline means / Recommendation.
 - **Every proposal has a Subtracts field.** Required. If empty, ask: does it really need to be its own thing? Could an existing skill / construct be updated instead? If still pure addition, justify it explicitly.
 - **Retirement candidates are required.** If the section is empty and the system has been running >2 weeks, *that's* the finding — flag it in the Take.

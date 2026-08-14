@@ -1,18 +1,28 @@
 ---
 name: kaizen-research
-description: Weekly Friday early-morning external + internal scan for emerging functionality, agentic trends, tools, and feature/UX improvements in the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem (including MCP Apps + extensions), frontier model announcements, agent-harness patterns (including opencode (anomalyco/opencode) as an open-source coding-agent harness reference scanned through tooling, cost-effectiveness, and context-engineering lenses — releases-first, light touch), agentic UI/UX patterns (MCP Apps, Vercel AI SDK, assistant-ui, NN/g AI research, Linear/Cursor/Anthropic product blogs), and LibreChat as a parallel open-source agentic-platform reference (releases-first, light touch). Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: security advisories / Dependabot / CodeQL — those have dedicated tooling and don't need a weekly kaizen lens. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
+description: Weekly Friday early-morning scan of the three libraries this stack is built on — Strands Agents, AWS Bedrock, and Bedrock AgentCore — plus their dependency releases, asking exactly two questions: what NEW capability do they now enable, and what CUSTOM CODE do they now let us delete. Tracks AWS Bedrock + AgentCore announcements/release notes/pricing, Strands Agents releases and issues, the bedrock-agentcore SDK + starter-toolkit, the aws-samples/sample-strands-agent-with-agentcore reference repo, Bedrock model-catalog changes (including vendor capability announcements filtered to "is this reachable on Bedrock?"), and the MCP/FastMCP surface *only where it touches AgentCore Gateway or our MCP host*. Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: general agentic UI/UX trends, competing agent harnesses (Claude Code, opencode, LangChain, pydantic-ai), parallel chat platforms (LibreChat), frontend component libraries (Vercel AI SDK, assistant-ui), UX research, HN/Reddit community signal, and security advisories / Dependabot / CodeQL. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
 ---
 
 # Kaizen Research
 
-Friday early morning. The "what's the rest of the world learning that we should consider, and what's our own week telling us?" scan. Pairs with `kaizen-review-prep` which runs ~2 hours later the same morning and ranks this skill's output into a decision agenda — both docs ready before Phil sits down to review Friday morning.
+Friday early morning. The "what did Strands, AgentCore, and Bedrock ship this week that we should use or delete code for — and what is our own week telling us?" scan. Pairs with `kaizen-review-prep` which runs ~2 hours later the same morning and ranks this skill's output into a decision agenda — both docs ready before Phil sits down to review Friday morning.
 
 ## Philosophy
 
-- **Subtraction first.** Every research run should propose at least as many things to *remove or simplify* as to add. A smaller stack you trust beats a bigger one you route around. **Subtraction explicitly includes replacing custom code with library-native equivalents** — when an upstream release (Strands, AgentCore SDK, FastMCP, MCP, etc.) ships a capability we'd already built or filed an issue for, the win is closing our version and adopting upstream. Example: the 2026-05-10 bootstrap run found that Strands v1.37/v1.38 silently closed our open issues #266 and #267 — the codebase surface area shrinks even though we "added" a dep bump.
-- **Dual lens — impact + capability-unlock.** Evaluate every upstream feature through *two* lenses, not one: (a) **impact on existing code** (does it change, simplify, or obsolete something we already have?) and (b) **capability unlock** (what *new* product capability, UX pattern, or enhancement does this make possible that we couldn't easily do before?). Subtraction-first still applies to the first lens. But capability-unlock items — features that enable net-new product surface — must be evaluated on their strategic merit, *not* hedged into "replaces future glue we haven't written." Example: the 2026-05-10 AgentCore Runtime BYO filesystem was first framed only as "could replace future filesystem-staging glue" — under-weighting the real story (code-interpreter sandboxes, cross-session uploads, shared skill hot-swap, persistent vector indexes). A dep-bump's win is usually subtraction; a *new* platform primitive's win is usually capability unlock. Don't mis-classify.
+### The two questions
+
+This stack is built on **Strands Agents**, **AWS Bedrock**, and **Bedrock AgentCore**. That is the scope. Every item this skill surfaces must answer at least one of exactly two questions:
+
+1. **Capability unlock** — *what can we now build that we couldn't easily build before, because Strands / AgentCore / Bedrock shipped it?* New platform primitives, new SDK hooks, new model capabilities, new Gateway/Memory/Identity/Policy features, new pricing or quota shapes that change an architectural choice.
+2. **Addition through subtraction** — *what custom code in this repo can we now delete, because an upstream release does it for us?* When Strands, the AgentCore SDK, or Bedrock ships something we hand-rolled or filed an issue for, the win is closing our version and adopting upstream. Example: Strands v1.37/v1.38 silently closed our open issues #266 and #267 — the codebase shrinks even though we "added" a dep bump.
+
+**An item that answers neither question is out of scope.** Not "low priority" — out. Don't surface it, don't queue it, don't spend web budget on it. Being interesting is not the bar; being *actionable against these three libraries* is.
+
+- **Subtraction is the sharper of the two.** Prefer the item that deletes 200 lines of ours over the item that adds a capability we haven't been asked for. When both are available, the subtraction ships first because it carries less risk and leaves the codebase smaller. Every run should surface at least one deletable-custom-code candidate; if it can't, say so plainly rather than padding.
+- **Classify honestly.** A dep-bump's win is usually subtraction; a *new* platform primitive's win is usually capability unlock. Don't hedge an unlock into "replaces future glue we haven't written" — that under-weights the real story (the 2026-05-10 BYO-filesystem item made exactly this mistake). And don't dress an addition up as a subtraction because the format has a `Subtracts` field.
+- **The libraries are the lens, not the whole world.** Model-vendor announcements, MCP spec changes, and FastMCP releases are in scope **only through a Bedrock/AgentCore aperture**: *is this reachable on Bedrock, does Strands expose it, does it touch our AgentCore Gateway or MCP host?* If the answer is no, it's out — however good the idea is.
 - **Subagent fan-out.** External sources are independent — fan them out to parallel subagents and synthesize. Keeps the main context clean and runs faster.
-- **Web budget soft cap.** Target ≤50 web requests. If a source is exhausted, unreachable, or rate-limited, list it as "not scanned this week" — don't skip silently. Going modestly over the cap (say, to 60) is fine if the extra requests are surfacing real signal; document the overage in the Web Budget block. Don't pad — if 30 requests covered every source meaningfully, stop at 30.
+- **Web budget soft cap.** Target ≤30 web requests (narrowed from 50 when the scope narrowed — fewer sources, scanned deeper). If a source is exhausted, unreachable, or rate-limited, list it as "not scanned this week" — don't skip silently. Modest overage is fine when it's surfacing real signal; document it in the Web Budget block. Don't pad.
 - **Cite everything.** Every external claim gets a URL + access date in the Sources Scanned appendix. Web findings rot fast and you'll re-read them next week.
 - **No edits outside `docs/kaizen/`.** This skill writes a dated research doc and updates `review-queue.md`. It never touches `backend/`, `frontend/`, `infrastructure/`, `CLAUDE.md`, or skill files.
 
@@ -24,93 +34,67 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 
 ### External (web — last 7 days unless noted)
 
-1. **AWS Bedrock + AgentCore "What's New"**
-   - https://aws.amazon.com/about-aws/whats-new/recent/feed/ (canonical AWS What's New RSS — filter entries for Bedrock/AgentCore)
+> **Scope guard.** Sources 1–5 are the point of this skill. Sources 6–7 are in scope *only* through a Bedrock/AgentCore aperture. Anything not on this list is out of scope — see "Explicitly out of scope" below. Don't reintroduce a source because a single item looked interesting; propose a scope change instead.
+
+#### Core — Strands, AgentCore, Bedrock
+
+1. **AWS Bedrock + AgentCore announcements**
+   - https://aws.amazon.com/about-aws/whats-new/recent/feed/ (canonical AWS What's New RSS — filter for Bedrock/AgentCore)
+   - https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/release-notes.html (AgentCore release notes — often ahead of What's New)
    - https://aws.amazon.com/blogs/machine-learning/ (filter: bedrock, agentcore)
-   - Filter to: Bedrock, AgentCore, Bedrock Agents, Knowledge Bases, Guardrails, model availability/region/quota changes.
+   - Filter to: AgentCore Runtime / Gateway / Memory / Identity / Policy / Code Interpreter / Browser / Evaluations; Bedrock models, Knowledge Bases, Guardrails, Mantle; availability, region, quota, and default-behavior changes.
+   - **Highest-value shape**: a new AgentCore primitive that replaces something we hand-rolled (managed Harness vs our headless lane, managed Memory vs our session manager, Gateway rate limits vs our app-layer quota).
 
-2. **Strands Agents SDK**
+2. **Strands Agents SDK** — the harness we run on. Read every release in window, not just the headline.
    - https://github.com/strands-agents/sdk-python/releases
-   - https://github.com/strands-agents/sdk-python/blob/main/CHANGELOG.md
    - https://github.com/strands-agents/sdk-python/issues?q=is%3Aissue+sort%3Aupdated-desc
-   - For each new release, identify: breaking changes, new hooks/features, fixes that map to current usage in `backend/src/agents/main_agent/`.
+   - https://pypi.org/project/strands-agents/ + `strands-agents-tools` (version + release date; the registry JSON is authoritative for dates)
+   - For each release identify: breaking changes; new hooks, plugins, model/session primitives; and — most importantly — **any feature that duplicates code in `backend/src/agents/main_agent/`**. Explicitly check the version we *already run*, not just newer ones: a primitive shipped two minors ago that we never adopted is a subtraction sitting on the table.
+   - ⚠️ Release notes are **monorepo-wide** (tags `python/vX`, `typescript/vX`, `mcp/vX`) and `CHANGELOG.md` on `main` is gone. Diff the wheels before acting on a specific feature claim.
 
-3. **Reference repo — `aws-samples/sample-strands-agent-with-agentcore`**
-   - https://github.com/aws-samples/sample-strands-agent-with-agentcore/commits/main
-   - Diff the last 7 days (or "since last research run" — whichever is longer). Identify new patterns, removed approaches, or fixes that map to constructs in this repo: agent setup, tool registration, AgentCore Identity flows, Memory configuration, Gateway/MCP wiring.
-   - This repo has historically informed our architecture; week-over-week deltas are first-class signal.
-
-4. **MCP ecosystem**
-   - https://modelcontextprotocol.io (blog, spec changes)
-   - https://github.com/modelcontextprotocol/servers (new servers, retired servers)
-   - MCP registry / awesome-mcp lists for new servers relevant to the stack (Bedrock, AWS, GitHub, Slack, observability).
-
-4a. **FastMCP** — used by our externally hosted MCP servers (Lambda-backed, behind AgentCore Gateway). FastMCP is **not** pinned in this repo's `pyproject.toml`; it lives in the MCP server repos this stack consumes via Gateway. Track upstream releases because changes affect server behavior we depend on.
-   - https://github.com/jlowin/fastmcp/releases
-   - https://github.com/jlowin/fastmcp/blob/main/CHANGELOG.md
-   - https://github.com/jlowin/fastmcp/issues?q=is%3Aissue+sort%3Aupdated-desc
-   - https://pypi.org/project/fastmcp/ (for latest version + release date)
-   - Identify: breaking changes, new server-side primitives (resources/prompts/tool decorators, lifespan, auth helpers), transport changes (especially relevant if MCP SEP-2567 sessionless transport lands), and Lambda/runtime adapter changes.
-
-4b. **Agentic UI/UX patterns** — emerging UI and UX conventions for AI/agentic apps. We're Angular + Tailwind, so React-specific libraries are **pattern-only** references (extract the idea, implement in signals). Focus on functionality + interaction + visual conventions, not generic "good chat UX".
-   - **MCP Apps + extensions** (priority): https://modelcontextprotocol.io/extensions/apps/overview, https://github.com/modelcontextprotocol/ext-apps, https://blog.modelcontextprotocol.io. The "MCP server returns an interactive UI inline with the chat" standard. Track host adoption (Claude Desktop, ChatGPT, VS Code Copilot, Goose, Postman) and new MCP extension SEPs.
-   - **AI SDK / Generative UI** (Vercel): https://ai-sdk.dev/docs/ai-sdk-ui, https://ai-sdk.dev/cookbook. Canonical reference for tool-call rendering, multi-step UI, generative UI, streaming state patterns. React, but the patterns port.
-   - **assistant-ui**: https://www.assistant-ui.com/docs, https://github.com/Yonom/assistant-ui/releases. React component library purpose-built for AI chat UI. Tracks attachment UX, threading, tool-call rendering primitives.
-   - **Vendor product-blog UX writeups**: https://linear.app/blog (Linear Agent), https://www.cursor.com/blog (canvas, agent harness), https://www.anthropic.com/news filtered for `artifact`/`ui`/`design`. Where in-app agentic patterns get documented by the teams shipping them.
-   - **OpenAI Canvas + ChatGPT UI**: https://openai.com/blog filtered for `canvas`, `chatgpt`, agent UI updates.
-   - **Nielsen Norman Group AI articles**: https://www.nngroup.com/topic/artificial-intelligence/. UX-research perspective; evidence-based; slow cadence — surfaces in ~1 of 4 weekly runs but high signal when it does.
-   - Identify: new agentic UI standards (especially MCP Apps + adjacent SEPs), tool-result rendering patterns, attachment/preview UX, multi-agent attribution patterns, consent/elicitation UX, evidence-based usability findings.
-
-5. **Frontier model announcements**
-   - https://www.anthropic.com/news
-   - https://openai.com/blog (filter: API, agents, tools)
-   - https://blog.google/technology/google-deepmind/ (Gemini)
-   - https://ai.meta.com/blog/ (Llama)
-   - Focus on capability deltas affecting agent harness design: longer context, native tool use changes, prompt caching APIs, computer use, structured output, latency/cost shifts.
-
-6. **Agent harness patterns**
-   - https://www.anthropic.com/engineering (Claude Code, agent design posts)
-   - https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md
-   - LangChain / LlamaIndex / Pydantic-AI release notes — for ideas, not adoption.
-
-6a. **opencode** (`anomalyco/opencode`) — open-source, terminal-native AI coding agent (a Claude Code analog; TypeScript/MIT; very active). Track as a parallel coding-agent-harness reference: how a fast-moving competing harness solves the same problems we face in `backend/src/agents/main_agent/`. Light-touch scan (releases-first); deeper dives only when a release headline maps onto our agent loop, tool layer, or context handling.
-   - https://github.com/anomalyco/opencode/releases (primary — read the latest release notes)
-   - https://github.com/anomalyco/opencode/commits (supplementary — skim recent commits only if a release headline warrants a closer look; confirm the default branch before relying on a path)
-   - Web budget: 1–2 requests per week.
-   - Identify across the three lenses we track this repo for:
-     - **Tooling** — how tools are defined, surfaced, gated/permissioned, and composed; the built-in tool set; tool-call/permission UX; sub-agent / task delegation. *Maps to*: our ToolRegistry, `agents/main_agent/tools/__init__.py`, RBAC/`enabled_tools`, and the multi-protocol tool architecture (direct / AWS SDK / MCP+SigV4 / A2A).
-     - **Cost-effectiveness** — model routing and selection, cheap-vs-capable fallback, prompt caching, token-spend controls, anything that lowers per-turn cost. *Maps to*: model selection in `inference_api`, and our caching/compaction story.
-     - **Context engineering** — context-window management, compaction/summarization, file/context selection, prompt assembly, retrieval into the window. *Maps to*: our `compaction` SSE event, session/AgentCore-Memory restore, and agent prompt assembly.
-   - TypeScript/CLI app, so any UI items are pattern-only references (extract the idea, implement in Angular signals). If a release headlines something material *outside* these three lenses (e.g., a new MCP capability or UX pattern), flag it for the relevant section rather than expanding the opencode scan inline.
-
-7. **AWS Bedrock pricing + quota**
-   - https://aws.amazon.com/bedrock/pricing/
-   - Note any model price/quota changes that could shift architecture choices in this repo (e.g., model selection in `inference_api`).
-
-8. **AgentCore SDK / starter-toolkit issues**
-   - https://github.com/aws/bedrock-agentcore-sdk-python/issues
+3. **AgentCore SDK + starter-toolkit** — the library and its early-signal bug tracker.
+   - https://github.com/aws/bedrock-agentcore-sdk-python/releases
+   - https://github.com/aws/bedrock-agentcore-sdk-python/issues?q=is%3Aissue+sort%3Aupdated-desc
    - https://github.com/aws/bedrock-agentcore-starter-toolkit/issues
-   - Early-signal bugs/limits other users hit before we do.
+   - Identify: fixes that close a hazard we guard against by hand (the win is deleting our guard); open issues that describe a failure mode we're exposed to; limits with no upstream fix, which stay our problem.
 
-9. **Community signal (filtered)**
-   - HN search: `site:news.ycombinator.com bedrock OR agentcore OR strands OR "claude code"` (last 7 days)
-   - r/LocalLLaMA, r/MachineLearning — agent-harness critiques and patterns surface here before vendor blogs.
+4. **Reference repo — `aws-samples/sample-strands-agent-with-agentcore`** — the only third-party codebase in scope, because it is Strands + AgentCore doing what we do.
+   - https://github.com/aws-samples/sample-strands-agent-with-agentcore/commits/main
+   - Diff since the last research run. Identify patterns worth porting, approaches they *removed*, and places where they use a library primitive we hand-rolled.
 
-10. **Anthropic cookbook**
-    - https://github.com/anthropics/anthropic-cookbook
-    - Worked examples often outpace docs — especially for caching, tool use, and agent loops.
+5. **Bedrock model catalog, pricing, and quota**
+   - https://aws.amazon.com/bedrock/pricing/ + https://aws.amazon.com/bedrock/agentcore/pricing/
+   - ⚠️ Both pages are JS-heavy and have returned wrong/stale rows. Prefer the **AWS Price List API** (`aws pricing get-products --service-code AmazonBedrock`) — it is diffable across runs and doesn't require scraping.
+   - Model availability and capability changes on Bedrock, including the Mantle endpoint. Price/quota moves that would change an architectural choice (model tiering, cache strategy, memory strategy, compute type).
 
-12. **LibreChat** — open-source ChatGPT-like agentic platform; useful as a parallel-implementation reference cutting across UI/UX, MCP integration, agent/RAG architecture, and provider-routing decisions. Light-touch scan (releases-first); deeper dives only when a release headline maps onto something we're building.
-    - https://github.com/danny-avila/LibreChat/releases (primary — read the latest release notes)
-    - https://github.com/danny-avila/LibreChat/blob/main/CHANGELOG.md (supplementary if releases are sparse)
-    - Web budget: 1–2 requests per week. If a release headlines something material (new MCP capability, attachment UX, agent harness pattern, OAuth/identity flow, multi-model routing), flag it for the Agentic UI/UX or MCP ecosystem sections rather than expanding the LibreChat scan inline.
-    - Identify across four lenses: (a) **UI/UX patterns** — chat UX, attachments, tool-call rendering, agent UI; (b) **comparable-platform choices** — agent harness, RAG, multi-provider routing, feature parity vs this stack; (c) **MCP integration** — how they wire MCP servers, tool routing, OAuth/consent; (d) **release-only signal** — feature ships worth knowing about even if we don't act.
-    - React/Node app, so UI items are pattern-only references (extract idea, implement in Angular signals).
+#### Adjacent — in scope only through a Bedrock/AgentCore aperture
 
-11. **Seasonal sources** (only when in window)
-    - AWS re:Invent (typically late Nov / early Dec) — Bedrock/AgentCore announcements.
-    - NeurIPS / ICLR / EMNLP agent tracks (when proceedings drop).
-    - If today's date is not in a known window, skip with "no seasonal sources this week".
+6. **Model-vendor capability announcements — filtered to one question: "is this reachable on Bedrock, and does Strands expose it?"**
+   - https://www.anthropic.com/news (primary — Claude is our main model path)
+   - Other vendors **only** when the model ships on Bedrock or Mantle.
+   - Include a capability item **only** if it plausibly reaches us through Converse / Mantle / Strands. A Claude-API-only feature is out of scope unless the item is explicitly *"probe whether Bedrock exposes this"* — which is itself in scope and often the highest-value idea of a run.
+   - Bedrock-relevant technique docs (e.g. Anthropic's prompt-caching / cost-optimization cookbooks) count here **when they document behavior of a model we invoke through Bedrock** — the test is whether the finding is verifiable against our own Converse traffic.
+   - Explicitly **not** in scope: model benchmarks, product launches, non-Bedrock API changes, agent-framework news from vendors.
+
+7. **MCP + FastMCP — only where they touch AgentCore Gateway or our MCP Apps host**
+   - https://blog.modelcontextprotocol.io + https://modelcontextprotocol.io/specification/versioning (spec revisions, SEP outcomes)
+   - https://modelcontextprotocol.io/extensions/apps/overview (MCP Apps — we ship a host)
+   - https://github.com/jlowin/fastmcp/releases (our externally hosted servers behind Gateway run FastMCP; not pinned in this repo)
+   - The test: does this change how AgentCore Gateway routes/meters/authorizes, how our MCP host negotiates, or how a Gateway-fronted server behaves? If yes, in scope. General MCP-ecosystem news, new community servers, and registry churn are **out**.
+
+8. **Seasonal** (only when in window)
+   - AWS re:Invent (late Nov / early Dec) — the year's largest Bedrock/AgentCore drop.
+   - If today's date is not in a known window, skip with "no seasonal sources this week".
+
+#### Explicitly out of scope
+
+Removed 2026-08-14 when the loop was narrowed to Strands / AgentCore / Bedrock. Do **not** re-add without an explicit scope change from Phil:
+
+- **Agentic UI/UX pattern sources** — Vercel AI SDK, assistant-ui, Linear/Cursor product blogs, OpenAI Canvas, NN/g UX research. Frontend patterns are real work but they are not library-capability work; they belong in GitHub issues, not the kaizen queue.
+- **Competing agent harnesses** — Claude Code CHANGELOG, opencode, LangChain, LlamaIndex, pydantic-ai. Interesting, never actionable against our three libraries.
+- **Parallel chat platforms** — LibreChat.
+- **Community signal** — HN, Reddit. Historically low yield (an AWS Instances GA post drew 1 point); the AgentCore/Strands issue trackers are the real early-signal source and are already covered by sources 2–3.
+- **Security advisories / Dependabot / CodeQL** — dedicated tooling already owns these.
 
 ### Internal (this repo)
 
@@ -126,11 +110,11 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 
 18. **Skill inventory.** `find .claude/skills -name SKILL.md -exec stat -f "%Sm %N" {} \;`. Skills not modified in 60+ days and not visibly referenced in recent PRs are retirement candidates.
 
-19. **Version-pin lag.** For each tracked dep, fetch latest release version and compute lag:
-    - Backend: `strands-agents`, `boto3`, `botocore`, `fastapi`, `pydantic`, `bedrock-agentcore`, `mcp`
-    - Frontend: `@angular/core`, `@analogjs/platform`, `vitest`
-    - Infrastructure: `aws-cdk-lib`, `constructs`
+19. **Version-pin lag.** Compute lag in releases and days for each tracked dep. **Tiered — a bump is only Top 5 material when a release note maps to a specific file or failure mode:**
+    - **Core (always check, always report)**: `strands-agents`, `strands-agents-tools`, `bedrock-agentcore`, `boto3`/`botocore` (coupled to the AgentCore SDK; the floor is pinned in 4 files), `mcp`.
+    - **Supporting (report the row, don't editorialize unless something breaks)**: `fastapi`, `pydantic`, `aws-cdk-lib`, `constructs`, `@angular/core`, `vitest`, `typescript`.
     - Source files: `backend/pyproject.toml`, `frontend/ai.client/package.json`, `infrastructure/package.json`.
+    - ⚠️ Verify dates against raw registry JSON (`upload_time_iso_8601`, npm packument `time`) — a summarizer has fabricated a release date before.
 
 20. **Decisions log** — `docs/kaizen/decisions.md` (if it exists). Items previously declined; don't re-propose without materially new context.
 
@@ -143,7 +127,7 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 ```markdown
 # Kaizen Research — [Day, Month D, YYYY]
 > Scan window: [Month D – Month D, YYYY] (7 days)
-> Web budget: N/50 used (target).
+> Web budget: N/30 used (target).
 
 ## TL;DR
 
@@ -164,37 +148,27 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 > Bug-fixes and incremental dep-bumps usually only need `*relevance*`. New platform features, new SDK primitives, new spec capabilities, and new UX patterns usually deserve both.
 
 #### AWS Bedrock / AgentCore
-- **[Item]** — [1-2 sentence summary] — [URL] — *relevance*: [specific construct/file] — *unlocks* (if applicable): [net-new capability or enhancement this enables]
+- **[Item]** — [1-2 sentence summary] — [URL] — *relevance*: [specific construct/file] — *unlocks* (if applicable): [net-new capability this enables] — *subtracts* (if applicable): [custom code this lets us delete]
 
 #### Strands Agents
-- **[Item]** — …
+- **[Release / issue]** — [URL] — *relevance*: [which of our files does this touch?] — *subtracts*: [what in `agents/main_agent/` becomes deletable, or "nothing"]
+- Include a **"already in our pin but unadopted"** sub-list: primitives in the version we *currently run* that duplicate our custom code. These are free subtractions and are routinely missed by release-note-only scanning.
+
+#### AgentCore SDK + starter-toolkit
+- **[Release / issue]** — [URL] — *relevance*: [fix that retires one of our guards / open failure mode we're exposed to]
 
 #### Reference repo (aws-samples/sample-strands-agent-with-agentcore)
-- **[Commit / change]** — [diff summary] — [URL] — *applicability*: [does our equivalent code do this differently? worth porting?]
+- **[Commit / change]** — [diff summary] — [URL] — *applicability*: [does our equivalent do this differently? do they use a library primitive we hand-rolled?]
 
-#### MCP ecosystem
-- …
+#### Bedrock model catalog / pricing / quota
+- **[Change]** — [URL] — *relevance*: [architectural choice this would shift — model tiering, cache strategy, memory strategy, compute type]
 
-#### FastMCP
-- **[Release / change]** — [URL] — *implications for our MCP servers*: [breaking change? new primitive worth adopting?]
+#### Model-vendor capability — Bedrock reachability only
+- **[Capability]** — [URL] — *Bedrock reachable?*: [yes / no / **unknown — probe it**] — *does Strands expose it?*: […] — *relevance*: […]
+- An **unknown** here is a legitimate and often high-value Top 5 idea: "probe whether Bedrock exposes X". A confirmed **no** closes the question and is also worth recording.
 
-#### Agentic UI/UX patterns
-- **[Pattern / release]** — [URL] — *what it is*: [1-2 sentences] — *fit for our stack*: [direct port / pattern-only (Angular equivalent: …) / not applicable] — *where it'd land*: [SSE event / component / route]
-
-#### Frontier model announcements
-- …
-
-#### Agent harness patterns
-- …
-
-#### Pricing / quota
-- …
-
-#### Community + GitHub issues
-- …
-
-#### Cookbook / courses
-- …
+#### MCP / FastMCP — Gateway + MCP-host surface only
+- **[Spec change / release]** — [URL] — *does it touch AgentCore Gateway routing/metering/auth, our MCP Apps host, or a Gateway-fronted server?*: […] — if no, it should not be in this doc.
 
 #### Seasonal
 - [content, or "Out of window — none scanned this week"]
@@ -263,7 +237,7 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 
 ## Web Budget
 
-Used: N / 50 requests (target).
+Used: N / 30 requests (target).
 Skipped (unreachable / rate-limited): [list]
 Skipped (other): [list with reason]
 Notes: [if the cap was exceeded, name the source category that justified it]
@@ -318,21 +292,24 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    - `find .claude/skills -name SKILL.md -exec stat -f "%Sm %N" {} \;`
    - Read pinned versions from the three manifest files.
 
-4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–12 above (15 categories total including 4a FastMCP, 4b Agentic UI/UX, 6a opencode, and 12 LibreChat). LibreChat and opencode each get a *light* subagent — releases-first, 1–2 web requests; do not fan either out further unless a headline maps onto something we're shipping. Each subagent receives:
+4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` where a source needs several targeted lookups). **One subagent per source category 1–7** (seven, down from fifteen). Sources 1–5 get the depth; 6–7 get a light touch and a hard aperture instruction. Each subagent receives:
    - The exact URLs to scan
-   - Scope: last 7 days
+   - Scope: last 7 days (or "since the last research run", whichever is longer)
    - Web budget for that subagent (3–5 requests soft target)
-   - Required output: 3-5 bullet items max — title, 1-2 sentence summary, URL, "relevance to this repo" line.
-   - **Required**: cite URLs; never fabricate. If empty, return "no notable items this week".
+   - **The two questions, verbatim**, plus the instruction: *return nothing for items that answer neither.* An empty report is a valid and useful result — do not pad.
+   - Required output: 3–5 bullet items max — title, 1–2 sentence summary, URL, and an explicit *unlocks* and/or *subtracts* line naming the file or construct involved.
+   - **Required**: cite URLs; never fabricate. Registry JSON (PyPI/npm `time` maps) is authoritative for release dates — a summarizer has fabricated one before.
 
-   Total budget across subagents targets ≤50. Track centrally; modest overage (~60) is acceptable when surfacing real signal — beyond that, stop and document the skip.
+   Total budget across subagents targets ≤30. Modest overage is acceptable when surfacing real signal; beyond that, stop and document the skip.
 
 5. **Version-pin diff.** For each tracked dep, fetch latest release version (WebFetch on the release page or registry equivalent — counts toward budget). Compute lag in releases and days. If a budget hit prevents a check, list the dep under "Skipped".
 
-6. **Synthesize.** Write the research doc per the shape above. Pull subagent reports verbatim into source sections; write the gestalt narrative (TL;DR, "What's moving", Take) yourself. **Top 5 weighting**:
-   - **Library-native subtraction** opportunities (where upstream closed a custom-code need) get a subtraction boost.
-   - **Capability-unlock** items — new platform primitives, SDK hooks, spec capabilities, or UX patterns that enable net-new product surface we couldn't easily build before — rank on their strategic merit, *not* deprioritized just because they don't intersect existing code. Apply the dual lens from Philosophy: if a feature genuinely unlocks new capability (code-interpreter, persistent agent state, multi-agent UI attribution, etc.), rank it like a fit item, not like a "monitor" item. Resist the temptation to hedge unlock items into "replaces future glue we haven't written" — that under-weights the real story.
-   - **Concrete fit** UI/UX patterns that match an existing surface (tool-call rendering, attachments, A2A attribution, consent flows) get a fit boost over generic "interesting trend" items.
+6. **Synthesize.** Write the research doc per the shape above. Pull subagent reports verbatim into source sections; write the gestalt narrative (TL;DR, "What's moving", Take) yourself. **Top 5 weighting, in order:**
+   1. **Deletable custom code** — an upstream release that lets us remove something we maintain. Highest rank, because it is the lowest-risk win and leaves the codebase smaller. Name the file.
+   2. **Unadopted capability already in our pin** — a Strands/AgentCore primitive we could use *today* with no bump. Nearly free; routinely missed.
+   3. **New capability unlock** — a genuinely new Strands/AgentCore/Bedrock primitive enabling product surface we couldn't easily build before. Rank on strategic merit, not on whether it intersects existing code.
+   4. **Probe items** — an unresolved "is this reachable on Bedrock?" question sitting under queued work. Cheap, and a negative result is a real deliverable.
+   5. **Version-pin lag with a named consequence** — a bump is only Top 5 material when a specific release note maps to a specific file or failure mode. "We're N minors behind" alone is a table row, not an idea.
 
 7. **Update review queue.** For each Top 5 idea, prepend a new entry under `## Open` in `docs/kaizen/review-queue.md`. Never touch `## Resolved`.
 
@@ -359,7 +336,7 @@ gh pr create --base develop --head "$BRANCH" \
   --title "chore(kaizen): weekly research scan ${DATE}" \
   --body "$(cat <<'EOF'
 ## Summary
-- External scan: AWS Bedrock/AgentCore, Strands Agents, FastMCP, reference repo, MCP, agentic UI/UX patterns, frontier models, agent-harness patterns, pricing.
+- External scan (narrowed to Strands / AgentCore / Bedrock): AWS Bedrock + AgentCore announcements, Strands releases + issues, AgentCore SDK + starter-toolkit, the reference repo, Bedrock model catalog/pricing/quota, plus model-vendor capability and MCP/FastMCP **only where Bedrock-reachable or Gateway-touching**.
 - Internal audit: recent commits, open PRs, GitHub issues, CI failures, version-pin lag, retirement candidates.
 - Top 5 ideas in the dated research doc and queued in `docs/kaizen/review-queue.md`.
 
@@ -380,12 +357,15 @@ The branch is one-shot — squash-merging the PR lands the doc on `develop` and 
 
 ## Rules
 
-- **No fabrication.** If a source is rate-limited or empty, list it as "not scanned" — don't invent content. The Sources Scanned table is auditable.
-- **Web budget is a soft target, not a hard cap.** ≤50 requests is the goal. Overage is acceptable when justified by signal (document in the Web Budget block). Don't pad — if a source is empty after one fetch, move on.
-- **Subtraction first.** Top 5 should include at least 2 retire/simplify candidates if the system has been running >2 weeks.
-- **Concrete, not aspirational.** "Consider Strands hooks" is too vague. "Add a Strands `BeforeToolCall` hook in `backend/src/agents/main_agent/hooks/` to attribute tokens by tool" is actionable.
+- **Scope is the first filter, not the last.** Before writing an item down, answer: *does this let us build something new on Strands/AgentCore/Bedrock, or delete custom code?* If neither, it doesn't go in the doc — not even as a "worth noting". A shorter, sharper doc is the goal of the narrowing.
+- **Every Top 5 idea names a file.** "Adopt Strands hooks" is too vague. "Delete `_build_filtered_tools`'s scoped-id filtering in favour of Strands 1.51 MCP name-prefix filtering" is actionable.
+- **Check the pin we already run, not just newer ones.** The cheapest subtractions are primitives that shipped in a version we installed months ago and never adopted.
+- **No fabrication.** If a source is rate-limited or empty, list it as "not scanned" — don't invent content. The Sources Scanned table is auditable. Registry JSON is authoritative for versions and dates.
+- **Web budget is a soft target, not a hard cap.** ≤30 requests is the goal. Overage is acceptable when justified by signal (document it). Don't pad — if a source is empty after one fetch, move on.
+- **Subtraction first.** Every run should surface at least one deletable-custom-code candidate. If it genuinely can't, say so — that's a finding about the week, not a reason to pad the list.
+- **Honest about dry weeks.** A quiet week produces a short doc. With the narrowed scope, dry weeks will be more common and that is the intended trade: fewer, better items.
+- **Out-of-scope work still exists — it just isn't kaizen's.** A good frontend/UX idea or a competing-harness pattern that surfaces incidentally goes in a GitHub issue, not the review queue. Note it in one line and move on.
 - **No edits to source code.** This skill only writes under `docs/kaizen/`.
-- **Honest about dry weeks.** A quiet week produces a short doc, not a padded one.
 - **Don't re-propose declined ideas** without materially new context. Check `docs/kaizen/decisions.md` and recent reviews.
 - **Cite everything.** Every external claim has a URL + access date in the Sources Scanned appendix.
 - **Don't auto-merge the PR.** Phil reviews and merges Friday morning. Review-prep runs against the unmerged PR's docs — it reads the file from the working tree, not from `develop`.
@@ -396,6 +376,7 @@ After the PR is opened, tell Phil:
 1. PR URL.
 2. Top 1-2 ideas (title + Effort×Impact).
 3. One-sentence Take.
-4. Web budget used (N/50 target) and any skipped sources.
+4. Web budget used (N/30 target) and any skipped sources.
+5. Whether the run found at least one **deletable-custom-code** candidate — and say so plainly if it didn't.
 
 Brief. The full doc is on the PR.
