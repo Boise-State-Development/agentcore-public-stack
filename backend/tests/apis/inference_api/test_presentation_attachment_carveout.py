@@ -23,6 +23,7 @@ text ("Upload a .pptx template first") becomes a lie again.
 import pytest
 
 from apis.inference_api.chat.routes import (
+    _attachment_marker_names,
     _build_attachment_guidance,
     _partition_attachments,
 )
@@ -103,6 +104,52 @@ class TestPartitionAttachments:
         assert tabular == [sheet]
         assert presentations == [deck]
         assert oversized == []
+
+
+class TestAttachmentMarkerNames:
+    """Diverting a file must not erase it from the message it was attached to.
+
+    The `[Attached files: …]` marker is the only link the SPA can replay on
+    reload — see `_attachment_marker_names`. Deriving it from the inline set
+    is what made a diverted deck's card vanish from restored history.
+    """
+
+    def test_includes_a_diverted_deck(self):
+        pdf = _Attachment("report.pdf", "application/pdf")
+        deck = _Attachment("deck.pptx", PPTX_MIME)
+        assert _attachment_marker_names([pdf, deck], []) == [
+            "report.pdf",
+            "deck.pptx",
+        ]
+
+    def test_includes_a_diverted_spreadsheet(self):
+        sheet = _Attachment("data.xlsx", XLSX_MIME)
+        assert _attachment_marker_names([sheet], []) == ["data.xlsx"]
+
+    def test_a_lone_deck_still_yields_a_name(self):
+        # Nothing inline at all — the case that previously left no trace.
+        deck = _Attachment("deck.pptx", PPTX_MIME)
+        assert _attachment_marker_names([deck], []) == ["deck.pptx"]
+
+    def test_excludes_oversized_files(self):
+        # Dropped from the turn entirely; the guidance explains their absence,
+        # so a card promising otherwise would be misleading.
+        pdf = _Attachment("report.pdf", "application/pdf")
+        huge = _Attachment("huge.pdf", "application/pdf")
+        assert _attachment_marker_names([pdf, huge], [huge]) == ["report.pdf"]
+
+    def test_preserves_attachment_order(self):
+        # Order is deterministic because this text reaches the cacheable
+        # prefix on later turns.
+        files = [
+            _Attachment("b.pptx", PPTX_MIME),
+            _Attachment("a.pdf", "application/pdf"),
+            _Attachment("c.xlsx", XLSX_MIME),
+        ]
+        assert _attachment_marker_names(files, []) == ["b.pptx", "a.pdf", "c.xlsx"]
+
+    def test_no_attachments_yields_no_names(self):
+        assert _attachment_marker_names([], []) == []
 
 
 class TestAttachmentGuidance:
