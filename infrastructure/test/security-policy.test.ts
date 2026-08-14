@@ -215,6 +215,96 @@ describe('Security policy hardening', () => {
   });
 
   // ──────────────────────────────────────────────────────────
+  // 2c. Grants proven missing by prod CloudWatch AccessDenied
+  // ──────────────────────────────────────────────────────────
+
+  // Both grants below were found the same way as SharedConversationsAccess
+  // above: the capability was wired end-to-end except for the IAM statement,
+  // so the failure only ever surfaced as an AccessDeniedException in the
+  // prod logs. Iterate AWS::IAM::Policy AND AWS::IAM::ManagedPolicy because
+  // CDK auto-splits oversized inline policies into managed overflow policies
+  // attached to the same role.
+  function statementsWithSid(sid: string): PolicyStatement[] {
+    const candidates: PolicyStatement[] = [];
+    for (const [, r] of Object.entries(template.findResources('AWS::IAM::Policy'))) {
+      const stmts = ((r.Properties as { PolicyDocument?: { Statement?: PolicyStatement[] } })?.PolicyDocument?.Statement) ?? [];
+      for (const s of stmts) candidates.push(s);
+    }
+    for (const [, r] of Object.entries(template.findResources('AWS::IAM::ManagedPolicy'))) {
+      const stmts = ((r.Properties as { PolicyDocument?: { Statement?: PolicyStatement[] } })?.PolicyDocument?.Statement) ?? [];
+      for (const s of stmts) candidates.push(s);
+    }
+    return candidates.filter((s) => s.Sid === sid);
+  }
+
+  describe('App-api S3 Vectors grant', () => {
+    // Regression guard: the grant listed read actions only, so every
+    // document-delete cleanup exhausted its 3 retries on
+    // AccessDeniedException and logged "Cleanup incomplete ... TTL will
+    // auto-expire" — orphaning the document's vectors in the index, where
+    // they stayed searchable until TTL.
+    it('app-api role can DeleteVectors as well as query the RAG index', () => {
+      const matches = statementsWithSid('S3VectorsQueryAccess');
+
+      if (matches.length === 0) {
+        throw new Error(
+          "Could not locate the app-api S3 Vectors grant. " +
+            "Looked for Sid 'S3VectorsQueryAccess'. If the Sid was renamed, update this test.",
+        );
+      }
+
+      // Both app-api and the AgentCore runtime declare this Sid; only
+      // app-api runs cleanup, so assert at least one statement carries the
+      // delete action rather than requiring it of every match.
+      const withDelete = matches.filter((s) => asArray(s.Action).includes('s3vectors:DeleteVectors'));
+      expect(withDelete.length).toBeGreaterThan(0);
+
+      for (const s of matches) {
+        const actions = asArray(s.Action);
+        // The query path is what the runtime needs; keep it intact.
+        expect(actions).toContain('s3vectors:QueryVectors');
+        // s3vectors' batch delete is DeleteVectors (plural). DeleteVector
+        // (singular, what rag-ingestion holds) is a DIFFERENT action and
+        // does not authorize the cleanup service's call.
+        expect(actions).not.toContain('s3vectors:DeleteVector');
+        const resources = asArray(s.Resource);
+        expect(resources).not.toContain('*');
+      }
+    });
+  });
+
+  describe('AgentCore runtime user-settings grant', () => {
+    // Regression guard: inference-agentcore-construct.ts injects
+    // DYNAMODB_USER_SETTINGS_TABLE_NAME, which makes UserSettingsRepository
+    // report itself enabled — but the table was absent from the runtime
+    // role's grants. get_settings swallowed the AccessDeniedException into
+    // DEFAULT_SETTINGS, silently ignoring the user's chosen default model.
+    it('runtime role can GetItem on the user-settings table', () => {
+      const matches = statementsWithSid('UserSettingsTableReadAccess');
+
+      if (matches.length === 0) {
+        throw new Error(
+          "Could not locate the runtime user-settings grant. " +
+            "Looked for Sid 'UserSettingsTableReadAccess'. Without it the user's saved " +
+            "defaultModelId is silently ignored on the inference path. " +
+            "If the Sid was renamed, update this test.",
+        );
+      }
+
+      for (const s of matches) {
+        const actions = asArray(s.Action);
+        expect(actions).toContain('dynamodb:GetItem');
+        // The runtime never writes settings — app-api owns that path.
+        expect(actions).not.toContain('dynamodb:PutItem');
+        expect(actions).not.toContain('dynamodb:UpdateItem');
+        expect(actions).not.toContain('dynamodb:DeleteItem');
+        const resources = asArray(s.Resource);
+        expect(resources).not.toContain('*');
+      }
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────
   // 3. S3 hardening (encryption + public-access-block)
   // ──────────────────────────────────────────────────────────
 
