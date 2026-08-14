@@ -764,6 +764,32 @@ def _partition_attachments(
     return inline, tabular, presentations, oversized
 
 
+def _attachment_marker_names(all_files: list, oversized_inline: list) -> list:
+    """Filenames for the ``[Attached files: …]`` marker on the user message.
+
+    The SPA replays that marker on session load to rebuild attachment cards
+    (``restoreFileAttachments``): the ``fileAttachment`` content block it
+    renders from is built client-side at send time and is never persisted, so
+    the marker is the only surviving link between a file and the message it
+    was attached to.
+
+    Deliberately NOT ``files_to_send``. Diverted spreadsheets and decks are
+    still in the session and still reachable through their tools, so their
+    cards have to survive a reload too — deriving this from the inline set
+    alone is exactly what made an uploaded .pptx vanish from history while
+    the file itself remained perfectly present.
+
+    Oversized files are excluded: those were dropped from the turn entirely
+    and the guidance text already explains their absence.
+
+    Order follows ``all_files`` (how the user attached them) rather than a
+    concatenation of the partition buckets, so the text is deterministic —
+    it lands in the cacheable prefix on every later turn.
+    """
+    oversized_names = {f.filename for f in oversized_inline}
+    return [f.filename for f in all_files if f.filename not in oversized_names]
+
+
 def _build_attachment_guidance(
     diverted_tabular: list,
     diverted_presentations: list,
@@ -1354,6 +1380,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             f"Skipped {len(oversized_inline)} oversized file(s) (> inline limit): "
             f"{[(f.filename, _estimate_decoded_size(f)) for f in oversized_inline]}"
         )
+
+    attachment_marker_names = _attachment_marker_names(all_files, oversized_inline)
 
     # Pre-create session metadata so OAuth interrupts and other state can
     # attach to the session row from turn one. Best-effort; on failure the
@@ -2323,6 +2351,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             message_will_be_modified = (
                 final_message != input_data.message  # RAG augmentation / attachment guidance / inventory
                 or bool(files_to_send)               # File attachments
+                # The `[Attached files: …]` marker is appended for diverted
+                # attachments too, so the persisted text differs from what the
+                # user typed even when nothing went inline (a lone .pptx).
+                or bool(attachment_marker_names)
             )
             # Strands' resume protocol wants each entry wrapped as
             # {"interruptResponse": {...}}. The InvocationRequest schema
@@ -2338,6 +2370,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 final_message,
                 session_id=input_data.session_id,
                 files=files_to_send if files_to_send else None,
+                attachment_names=attachment_marker_names or None,
                 citations=citations_for_storage if citations_for_storage else None,
                 original_message=input_data.message if message_will_be_modified else None,
                 interrupt_responses=interrupt_responses_payload,

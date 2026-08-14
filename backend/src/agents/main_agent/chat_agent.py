@@ -84,6 +84,7 @@ class ChatAgent(BaseAgent):
         message: str,
         session_id: Optional[str] = None,
         files: Optional[List] = None,
+        attachment_names: Optional[List[str]] = None,
         citations: Optional[List] = None,
         original_message: Optional[str] = None,
         interrupt_responses: Optional[List[Dict[str, Any]]] = None,
@@ -98,7 +99,12 @@ class ChatAgent(BaseAgent):
                 `interrupt_responses` — the paused turn already has the
                 original prompt in `_interrupt_state`.
             session_id: Session identifier (defaults to instance session_id)
-            files: Optional list of FileContent objects (with base64 bytes)
+            files: Optional list of FileContent objects (with base64 bytes).
+                Inline attachments only — diverted ones (spreadsheets, decks)
+                must not be here or they become invalid document blocks.
+            attachment_names: Every filename the user attached this turn,
+                including diverted ones, for the `[Attached files: …]` marker
+                the SPA replays to rebuild attachment cards on reload.
             citations: Optional list of citation dicts from RAG retrieval
             original_message: Original user message before RAG augmentation
             interrupt_responses: When set, resume a paused agent turn by
@@ -129,7 +135,9 @@ class ChatAgent(BaseAgent):
             # user turn, no multimodal/files.
             prompt = []
         else:
-            prompt = self.multimodal_builder.build_prompt(message, files)
+            prompt = self.multimodal_builder.build_prompt(
+                message, files, attachment_names=attachment_names
+            )
 
         async for event in self.stream_coordinator.stream_response(
             agent=self.agent,
