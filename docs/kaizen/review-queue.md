@@ -38,13 +38,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: yes — every item is "find waste and delete it"; no new abstraction, no new dependency
 - **Status**: open — **highest confidence-per-hour item in the scan.** Four checks: (1) **byte-stable prefix** — grep system-prompt assembly for time/random/env-derived values (the cookbook measured a **44% swing from one `datetime.now()`**; this also tests whether we're *reading* `systemPromptHash`); (2) **layered mixed-TTL breakpoints** — 54% cheaper upstream, but ⚠️ **blocked by Strands #3758** (per-section TTLs emit a checkpoint order Bedrock rejects with `ValidationException` on every request — we set no per-section TTL today, so evaluate + document, don't adopt); (3) **repeated-compaction audit** — does pass 2 preserve tool pairing and avoid re-writing the prefix? (our death-spiral incident says this is where the money went); (4) **retry cap with jitter** — an uncapped retry on a 424/throttle re-writes the whole prefix per attempt.
 
-### [2026-08-14] Resolve the stale review queue before `kaizen-review-prep` consumes it
-- **Source**: research/2026-08-14.md ▸ Top 5 #5 — internal: this file vs. `backend/pyproject.toml` (`bedrock-agentcore==1.21.0`, `strands-agents==1.51.0`) and `gh run list` (Nightly green Aug 3–14)
-- **Surface**: docs/process (`docs/kaizen/review-queue.md` only — no code)
-- **Effort × Impact**: L × M–H
-- **Subtracts**: yes — retired 9 superseded entries (more than the 4 first estimated); 6 chained through two bump subjects and would otherwise have been re-ranked as live work
-- **Status**: ✅ **DONE 2026-08-14** — executed at Phil's request in the same PR, ahead of `kaizen-review-prep`. Resolved as *superseded by events*: (a) **four** `bedrock-agentcore` bump entries ([2026-07-24]/[2026-07-17]/[2026-07-10]/[2026-07-03]) — shipped in #857, zero lag, #482 + #571 closed upstream; **#564 residue carried forward** as its own entry; (b) **two** Strands bump entries ([2026-07-10]/[2026-07-03]) — pin is 1.51.0; un-adopted capabilities split into a new [2026-08-14] entry; (c) **two** nightly-CI entries ([2026-07-24] `DELETE_FAILED` + [2026-06-19] `exit 127`) — 12 consecutive green nights; (d) **two** MCP Apps spec-prep entries ([2026-07-24]/[2026-05-29]) — superseded by the new [2026-08-14] migration entry, which also fixes the [2026-05-29] entry's **unverified** `io.modelcontextprotocol/ui` premise; (e) the [2026-07-17] curl-pin item **down-ranked, not closed**. Note: the research skill normally does not edit `## Resolved` — that is review-prep's job — so this was done under explicit instruction and each resolved entry records that.
-
 ### [2026-08-14] Guard against `bedrock-agentcore` #564 — the one failure class the 1.21.0 bump did NOT close
 - **Source**: research/2026-08-14.md ▸ Community + GitHub issues; the carried-forward residue of the four now-resolved `bedrock-agentcore` bump entries — https://github.com/aws/bedrock-agentcore-sdk-python/issues/564 (**still open**; #482 and #571 closed, #564 did not)
 - **Surface**: backend (`agents/main_agent/session/turn_based_session_manager.py` restore path; `AgentCoreMemorySessionManager` `read_agent`/`read_session` marker-event lookup)
@@ -82,13 +75,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: partial — bounds MCP/tool payload growth at the source instead of relying solely on reactive below-anchor truncation in `TurnBasedSessionManager` (which stays for legacy history)
 - **Status**: open — spike before commitment; four known gotchas: (1) `evict_after_cycles=20` runs on `BeforeModelCallEvent` and touches *prior* messages — potential byte-stability cache-buster, verify semantics or set `None` and expire via S3 lifecycle; (2) `model.count_tokens` per tool result adds latency, and Bedrock CountTokens rejects `us.*` inference-profile ids (de-prefix precedent in context attribution); (3) adoption flips `toolConfigHash` once (expected; the new tool must land in the deterministically-ordered tool list); (4) check SPA tool-result rendering against placeholder content.
 
-### [2026-07-17] Audit multi-provider prompt caching (issue #642 + Strands #3144)
-- **Source**: research/2026-07-17.md ▸ Top 5 #2 — internal issue #642 (Jul 11); Strands #3144 (`CacheConfig(strategy="auto")` never caches system prompt, fix PR #3145 open) — https://github.com/strands-agents/sdk-python/issues/3144
-- **Surface**: backend (`to_bedrock_config` cache-point injection; Mantle Responses builder `build_mantle_model`/`_create_mantle_model`; OpenAI-compatible path; `CountTokensBedrockModel` cache-token read)
-- **Effort × Impact**: L–M × M–H
-- **Subtracts**: yes — consolidates per-provider cache logic; kills a silent full-input-token cost regression if a Mantle/OpenAI path caches nothing
-- **Status**: open — a filed internal tech-debt issue with a library-confirmed failure mode. Instrument `cache_read`/`cache_write` ratios per provider (Strands 1.46 surfaces them); confirm the Bedrock manual cache-point still engages post-1.47 and do NOT switch to `strategy="auto"` expecting system-prompt caching. Strongest internal-signal fit after the bump.
-
 ### [2026-07-17] Adopt Strands `Limits` on the unattended Scheduled Runs / headless lane
 - **Source**: research/2026-07-17.md ▸ Top 5 #3 — convergent harness rail (Claude Code 2.1.212 spawn cap + opencode 1.18.2 `subagent_depth`); Strands `Limits` now available (we're on 1.47).
 - **Surface**: backend (headless/scheduled path `apis/shared/harness/run_agent_headless` per [2026-07-06] managed-Harness spike + agent-loop per-invocation config)
@@ -118,14 +104,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: candidate — hand-rolled MCP-abort handling (`continue_on_error`) and custom cache-point plumbing (`cache_tools_ttl`) are both library-native replacements
 - **Unlocks**: a flaky external/Gateway MCP server no longer aborts the turn (load-bearing — Scheduled Runs use external tools unattended); deterministic hook ordering, the enabler for the tool-approval fix
 - **Status**: open — **the bump is DONE; this is only the un-adopted capability list.** `Limits` on the headless lane is tracked separately at [2026-07-17]. ⚠️ `context_manager="auto"` is **barred as a bare swap** by decisions.md 2026-05-18 — our compaction additionally does tool-content truncation, LTM summary retrieval, and DynamoDB checkpoint persistence, and drives the `compaction` SSE event; only a migration design covering all four is in scope. Also re-check `cache_tools_ttl` against Strands **#3758** (per-section TTLs can emit a checkpoint order Bedrock rejects on every request) before wiring it.
-
-### [2026-07-10] Audit whether prompt caching actually engages in `to_bedrock_config` (Strands #3144)
-- **Source**: research/2026-07-10.md ▸ Top 5 #3 — **NEW** Strands open issue #3144 (`CacheConfig(strategy="auto")` never caches the system prompt); Strands 1.46 now surfaces `cache_read`/`cache_write` tokens in the metadata chunk (#2302). https://github.com/strands-agents/sdk-python/issues
-- **Surface**: backend (`agents/main_agent/` cache-point config in `to_bedrock_config`; the metadata/usage path feeding `CountTokensBedrockModel` + the context-attribution badge)
-- **Effort × Impact**: L–M × M–H
-- **Subtracts**: no — a cost-correctness audit (may confirm we're fine, or expose a silent full-input-token regression)
-- **Unlocks**: potentially large per-turn cost cut if caching is silently off; a verifiable caching invariant
-- **Status**: open — **subsumed by / merge with the [2026-07-17] "multi-provider prompt caching" item above** (same Bedrock cache-point surface + Strands #3144, extended to the Mantle/OpenAI provider shapes). Assert cache points are written *and* read via `cache_read`/`cache_write` counts; measurement is nearly free now that 1.46 surfaces the tokens.
 
 ### [2026-07-10] Tool-approval policy layer + signed approvals (Vercel AI SDK) — evolve the queued approval item
 - **Source**: research/2026-07-10.md ▸ Top 5 #4 — Vercel AI SDK tool-approvals (https://ai-sdk.dev/docs/agents/tool-approvals). Builds on the [2026-07-03] tool-approval item.
@@ -296,6 +274,16 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
 ## Resolved
+
+### [2026-08-14] Resolve the stale review queue before `kaizen-review-prep` consumes it → RESOLVED — done, in two passes
+- **Decision**: Resolved. Executed in **two** passes on the same day: (1) commit `a49d2656` on the research PR, at Phil's request, resolved **nine** entries — four `bedrock-agentcore` bumps, two Strands bumps, two nightly-CI entries, two MCP Apps spec-prep entries — and carried the real residue forward (#564; the un-adopted Strands capabilities); (2) this review pass resolved the **three** it left: this entry itself, plus the two duplicate caching-audit entries below.
+- **Reasoning**: research/2026-08-14 wrote this as an explicit instruction to review-prep because `kaizen-research` does not normally edit `## Resolved`. Phil pulled the work forward into the research PR instead, which is strictly better — the ranking run then consumed a clean queue rather than one with four false premises. The entry's own status line said ✅ DONE while sitting in `## Open`, which is exactly the stub shape that gets re-ranked as live work next cycle.
+- **Reviewed-in**: reviews/2026-08-14.md ▸ Week in Review + Retirement Candidates.
+
+### [2026-07-17] Audit multi-provider prompt caching + [2026-07-10] audit whether caching engages in `to_bedrock_config` → RESOLVED — consolidated
+- **Decision**: Superseded — both consolidated into the open **[2026-07-24] "Multi-provider prompt-caching audit"** entry, which carries the same surface (`to_bedrock_config` cache-point injection plus the Mantle/OpenAI legs) and adds the GPT-5.6 explicit-breakpoint motivation on top.
+- **Reasoning**: Three dated entries described **one** audit against **one** surface, differing only in accumulated motivation — the same duplication pattern as the bump entries, just less loud. Issue [#642](https://github.com/Boise-State-Development/agentcore-public-stack/issues/642) stays **open** as the work-tracking issue. Two standing constraints survive the merge and must not be lost with the stubs: do **not** switch to `CacheConfig(strategy="auto")` expecting system-prompt caching (Strands #3144), and per reviews/2026-08-14.md ▸ Risks, per-section cache TTLs are now a hard `ValidationException` landmine (Strands #3758).
+- **Reviewed-in**: reviews/2026-08-14.md ▸ Proposal #2 + Retirement Candidates.
 
 ### [2026-07-24] + [2026-07-17] + [2026-07-10] + [2026-07-03] Bump `bedrock-agentcore` off 1.9.1 (→1.17.0 / →1.18.0 / →1.18.1) → RESOLVED — SHIPPED
 - **Source**: research/2026-07-24.md · research/2026-07-17.md · research/2026-07-10.md · research/2026-07-03.md ▸ each Top 5 #1
