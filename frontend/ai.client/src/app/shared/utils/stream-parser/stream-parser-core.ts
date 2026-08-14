@@ -392,8 +392,11 @@ export function validateOAuthRequiredEvent(data: unknown): data is OAuthRequired
     event.providerId.length > 0 &&
     typeof event.authorizationUrl === 'string' &&
     event.authorizationUrl.length > 0 &&
-    typeof event.interruptId === 'string' &&
-    event.interruptId.length > 0
+    // Optional: the pre-flight flavor omits it because no turn is paused.
+    // Still reject an explicitly empty string — that means the backend
+    // meant to send a resumable id and produced a broken one.
+    (event.interruptId === undefined ||
+      (typeof event.interruptId === 'string' && event.interruptId.length > 0))
   );
 }
 

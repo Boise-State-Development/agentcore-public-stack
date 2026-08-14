@@ -306,6 +306,116 @@ class ExternalMCPIntegration:
         # than a global tool-name list (so two MCP servers can share a tool
         # name and only one is gated).
         self._approval_names_for_client_id: dict[int, set[str]] = {}
+        # user_id -> {provider_id: authorization_url} for OAuth-gated tools
+        # whose pre-flight failed because the user has not consented yet.
+        # Drained by the stream coordinator (`take_pending_consents`) so the
+        # turn can surface an `oauth_required` event instead of dropping the
+        # tool silently. Keyed by user because this integration is a
+        # process-wide singleton shared across concurrent sessions.
+        self._pending_consents: dict[str, dict[str, str]] = {}
+
+    def take_pending_consents(self, user_id: str) -> dict[str, str]:
+        """Pop and return {provider_id: authorization_url} for `user_id`.
+
+        Draining on read keeps the singleton from re-emitting a stale prompt
+        on a later turn: if the user still hasn't consented, the next
+        `load_external_tools` fails pre-flight again and re-records it. On an
+        agent-cache hit no loading happens, nothing is recorded, and nothing
+        is emitted — correct, because the prompt already went out once.
+        """
+        return self._pending_consents.pop(user_id, {})
+
+    async def _recover_oauth_preflight(
+        self,
+        *,
+        tool_id: str,
+        client: MCPClient,
+        user_id: Optional[str],
+        provider_id: Optional[str],
+        exc: Exception,
+    ) -> bool:
+        """Second chance for an OAuth-gated tool whose pre-flight failed.
+
+        A server that requires auth even for `tools/list` (GitHub's MCP
+        endpoint does) 401s whenever the in-process token cache is cold —
+        which it always is on a fresh microVM. Before this recovery step the
+        tool was dropped, and because `OAuthConsentHook` only runs
+        `BeforeToolCall` for *registered* tools, nothing ever warmed the
+        cache: the tool stayed missing for the life of the process even for
+        a user whose token was sitting in the AgentCore vault the whole time.
+
+        So on failure we ask the vault directly:
+          * token  -> warm the cache and retry the pre-flight once. This is
+            the consented-user path, and it is why the tool comes back by
+            itself after the user completes consent in the popup.
+          * consent URL -> AgentCore is telling us this user genuinely has
+            not authorized. Record it so the turn can emit `oauth_required`
+            rather than dropping the tool with no explanation.
+
+        Returns True when the client is usable and should be registered.
+        """
+        if not provider_id or not user_id:
+            logger.warning(
+                f"Skipping external MCP tool {tool_id}: "
+                f"failed to start client ({exc})"
+            )
+            return False
+
+        # Only meaningful when the cache was cold. A warm token that still
+        # failed is an expiry/refresh case, which `OAuthConsentHook`'s
+        # AfterToolCall 401 handler already owns — re-asking the vault with
+        # force_authentication=False would just hand back the same token.
+        if oauth_token_cache.get(user_id, provider_id):
+            logger.warning(
+                f"Skipping external MCP tool {tool_id}: failed to start client "
+                f"with a cached {provider_id} token ({exc})"
+            )
+            return False
+
+        from apis.shared.oauth.token_resolution import resolve_token_or_consent_url
+
+        resolved = await resolve_token_or_consent_url(provider_id, user_id)
+        if resolved is None:
+            # Couldn't ask AgentCore at all — not evidence of a consent gap,
+            # so stay silent rather than prompting for a connector that may
+            # well be authorized.
+            logger.warning(
+                f"Skipping external MCP tool {tool_id}: failed to start client "
+                f"and could not resolve a {provider_id} token ({exc})"
+            )
+            return False
+
+        if resolved["token"]:
+            oauth_token_cache.set(user_id, provider_id, resolved["token"])
+            try:
+                await client.load_tools()
+            except Exception as retry_exc:
+                logger.warning(
+                    f"Skipping external MCP tool {tool_id}: pre-flight still failed "
+                    f"after warming the {provider_id} token from the vault "
+                    f"({retry_exc})"
+                )
+                return False
+            logger.info(
+                f"Recovered external MCP tool {tool_id}: warmed {provider_id} "
+                "token from the AgentCore vault after a cold-cache pre-flight failure"
+            )
+            return True
+
+        authorization_url = resolved["url"]
+        if not authorization_url:
+            logger.warning(
+                f"Skipping external MCP tool {tool_id}: no {provider_id} token and "
+                f"no authorization URL from AgentCore ({exc})"
+            )
+            return False
+
+        self._pending_consents.setdefault(user_id, {})[provider_id] = authorization_url
+        logger.info(
+            f"External MCP tool {tool_id} needs {provider_id} consent; "
+            "surfacing oauth_required instead of dropping it silently"
+        )
+        return False
 
     def _get_cache_key(self, tool_id: str, user_id: Optional[str], requires_oauth: bool) -> str:
         if requires_oauth and user_id:
@@ -497,11 +607,15 @@ class ExternalMCPIntegration:
                     try:
                         await client.load_tools()
                     except Exception as exc:
-                        logger.warning(
-                            f"Skipping external MCP tool {tool_id}: "
-                            f"failed to start client ({exc})"
+                        recovered = await self._recover_oauth_preflight(
+                            tool_id=tool_id,
+                            client=client,
+                            user_id=user_id,
+                            provider_id=provider_id,
+                            exc=exc,
                         )
-                        continue
+                        if not recovered:
+                            continue
 
                     self.clients[cache_key] = client
                     self._client_versions[cache_key] = tool_version

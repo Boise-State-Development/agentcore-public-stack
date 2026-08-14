@@ -118,7 +118,13 @@ export interface OAuthRequiredEvent {
   type: 'oauth_required';
   providerId: string;
   authorizationUrl: string;
-  interruptId: string;
+  /** Present when a paused agent turn is waiting on this consent, so the
+   *  chat layer can resume that exact turn once the popup completes.
+   *  Absent for the pre-flight flavor, where an OAuth-gated MCP server
+   *  refused `tools/list` and the tool never registered — the turn already
+   *  finished, so there is nothing to resume and the consent service must
+   *  skip its resume handler. */
+  interruptId?: string;
 }
 
 /**

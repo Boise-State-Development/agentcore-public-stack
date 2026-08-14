@@ -440,6 +440,8 @@ class StreamCoordinator:
                         user_id=user_id,
                     ):
                         yield sse
+                    for sse in self._extract_preflight_consent_events(user_id):
+                        yield sse
 
                 # Check if this is the "done" event - send final metadata before it
                 if event.get("type") == "done":
@@ -1425,6 +1427,53 @@ class StreamCoordinator:
                 "Failed to persist paused_turn snapshot for session %s: %s",
                 session_id, e, exc_info=True,
             )
+
+    def _extract_preflight_consent_events(
+        self,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield an `oauth_required` event per OAuth-gated MCP tool that was
+        dropped at agent-build time because the user hasn't consented.
+
+        These are NOT Strands interrupts — the turn ran to completion, just
+        without the tool, because an unauthorized `tools/list` meant we never
+        learned what the server exposes and so could never advertise it to
+        the model. The events therefore carry no `interruptId` and the
+        frontend must not try to resume anything; it shows the Connect
+        affordance, and the tool registers by itself on the next turn once
+        `_recover_oauth_preflight` can warm a real token from the vault.
+
+        Deliberately not persisted as a `pending_interrupt` breadcrumb: those
+        are keyed by interrupt id for the resume path, and a refresh doesn't
+        need one here — while consent is still outstanding, the next turn
+        fails pre-flight again and re-emits this event.
+        """
+        if not user_id:
+            return []
+
+        from agents.main_agent.integrations.external_mcp_client import (
+            get_external_mcp_integration,
+        )
+        from apis.shared.oauth.models import OAuthRequiredEvent
+
+        try:
+            pending = get_external_mcp_integration().take_pending_consents(user_id)
+        except Exception:
+            logger.exception("Failed to read pre-flight OAuth consents")
+            return []
+
+        events: List[str] = []
+        for provider_id, authorization_url in sorted(pending.items()):
+            logger.info(
+                "Emitting pre-flight oauth_required for provider=%s", provider_id
+            )
+            events.append(
+                OAuthRequiredEvent(
+                    provider_id=provider_id,
+                    authorization_url=authorization_url,
+                ).to_sse_format()
+            )
+        return events
 
     async def _extract_oauth_required_events(
         self,
