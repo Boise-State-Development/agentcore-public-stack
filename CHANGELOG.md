@@ -4,6 +4,46 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.15.0] - 2026-08-17
+
+Minor release on attachments and external tools. PowerPoint decks can now be uploaded and handed to the PowerPoint toolset, and attachment cards survive a reload — a gap that also affected spreadsheets. OAuth-gated MCP servers no longer lose their tools permanently when the pre-flight runs on a cold token cache, and an abandoned consent prompt no longer bricks every later message in the conversation. Two IAM grants missing in production are fixed, and ALB access logs are enabled so a mid-stream disconnect can be attributed to whoever actually ended the connection. **Requires a CDK deploy** — run `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`.
+
+### 🚀 Added
+
+- `.pptx` uploads accepted in the SPA and routed to the PowerPoint toolset, with a presentation carve-out that keeps decks out of the inline document set Bedrock cannot encode (#868)
+- Slide-deck preview card for `.pptx` attachments — presentation icon and a stacked-slides mock in place of the generic grey file chip (#873)
+- `navigated_away` interruption reason, attested by a SPA `pagehide` handler so refreshes, tab closes, and navigations leave the unattributable `connection_lost` bucket (#864)
+- ALB access logs to a 30-day SSE-S3 bucket, recording `elb_status_code`, termination reason, and `request_processing_time` for connection-termination attribution (#867)
+
+### 🐛 Fixed
+
+- OAuth-gated MCP tools were dropped permanently when the registration pre-flight 401'd against a cold `oauth_token_cache`; the runtime now consults the AgentCore vault, warms the cache and retries, or records a consent gap instead of dropping the tool silently. 20 turns hit this in prod in 24h (#872)
+- An unreachable MCP server was misread as an OAuth consent gap, showing a Connect prompt that completing consent could never satisfy; only 401/403 now counts, with the status read through the wrapped `ToolProviderException` → `MCPClientInitializationError` → `ExceptionGroup` chain (#876)
+- An abandoned OAuth-consent or tool-approval pause left `InterruptState.activated` set on the cached agent, so every later turn in the session failed with a non-recoverable `stream_error`; a fresh turn now abandons the stale pause and drops history back to the last completed assistant turn (#874)
+- `.pptx` and spreadsheet attachment cards vanished on reload — carved-out files never reached the `[Attached files: …]` marker the SPA rebuilds them from, and a lone deck left no trace at all (#873)
+- app-api was missing `s3vectors:DeleteVectors`, so document cleanup exhausted its retries on every vector delete and orphaned chunks in the index until TTL — two bulk cleanups failed outright in one hour (#870)
+- The AgentCore runtime role lacked read access to the user-settings table, so `get_settings` swallowed the `AccessDenied` into `DEFAULT_SETTINGS` and silently ignored each user's saved `defaultModelId` (#870)
+- `validateFile` accepted a file by extension when the browser reported no MIME, but `uploadFile` then sent `application/octet-stream`, 400-ing an upload the UI had just accepted; `resolveMimeType()` now resolves from the extension (#868)
+
+### ⚠️ Changed
+
+- SSE contract: `oauth_required.interruptId` is now optional. The pre-flight flavor has no paused turn to resume — clients must show the Connect affordance without attempting a resume (#872)
+- `build_prompt` takes a new `attachment_names` argument, defaulting to the names in `files` so existing callers are unchanged (#873)
+
+### 🏗️ Infrastructure
+
+- New ALB access-log S3 bucket (SSE-S3, 30-day expiry). SSE-KMS is not an option — the ELB log-delivery service fails silently against a KMS-encrypted bucket (#867)
+- New app-api env var `FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION` (25MB), a deck-specific ceiling above the general 4MB inline-document cap (#868)
+- Synthing the ALB construct now requires a concrete region, since CDK resolves the regional ELB log-delivery principal for the bucket policy (#867)
+- `S3VectorsQueryAccess` gains `s3vectors:DeleteVectors`; new `UserSettingsTableReadAccess` on the AgentCore runtime role (#870)
+
+### 📚 Docs
+
+- AgentCore Evaluations spike findings and eval-harness scope (#862)
+- Expanded Bedrock Managed KB evaluation with recommendations (#867)
+- G3 document-citations probe findings — the premise was wrong; visual PDF understanding is unconditional and citations are text-layer-only (#869)
+- Weekly kaizen research scan and review prep for 2026-08-14, plus nine stale review-queue entries resolved (#871, #875)
+
 ## [1.14.1] - 2026-08-13
 
 Patch release on the streaming interrupt path. A dropped SSE connection no longer bricks the next message in the conversation — the fix users are most likely to notice, since the failure presented as a "Network error" followed by a fatal "Chat Request Failed" on the resend. Stop now reaches an in-flight MCP call instead of waiting it out, and a cancelled turn no longer sticks to the cached agent and refuses every subsequent message. Session persistence moves off the asyncio event loop, and the Strands/AgentCore libraries move to the versions those fixes require. **No CDK deploy** — `backend.yml`, then `frontend-deploy.yml`.
