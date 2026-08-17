@@ -419,6 +419,49 @@ offload of native blocks, rehydrated on demand, never on the introducing turn.
 the agent's knowledge base" action. Non-blocking, ~5–9 s into a warm KB, and the
 user has asked for persistence.
 
+**This decision does not prevent an attachment and a knowledge base from being
+used together — they already compose in a single turn.** Worth stating explicitly,
+because "attachments stay out of Managed KB" reads as though the combination is
+excluded, and it is not. The two paths are independent and both reach the model:
+
+- the attachment arrives as an inline `document` block, **whole and unchunked**
+  (`agents/main_agent/multimodal/prompt_builder.py`);
+- knowledge-base material arrives as retrieved chunks prepended by
+  `augment_prompt_with_context`;
+- `inference_api/chat/routes.py:2234` merges them (`final_message =
+  augmented_message`, then attachment guidance), and the comment at :2215 names
+  both mechanisms operating on the same prompt.
+
+So "here is my essay, compare it against the exemplars in your knowledge base"
+works today with no change. **Ingesting the attachment into the KB would be
+strictly worse for that shape of task,** for the reason in objection 3 above —
+chunking destroys the whole-document structure being compared — and for a second
+reason that is not merely a quality concern: a chat attachment ingested into an
+agent's shared KB becomes **retrievable by every other user of that agent.** For a
+class-assignment agent, one student's essay leaking into another's retrieval is an
+incident, not a papercut. Keeping attachments session-scoped prevents it by
+default.
+
+⚠️ **What *does* limit this shape of task is the 2,000-character context cap, and
+§13.6's result explicitly does not cover it.** The attachment arrives in full while
+the corpus arrives as ~2,000 characters of fragments — measured at 1,987 of 2,000
+characters and **2 of 5 chunks** on every managed question. §13.6's finding that the
+cap costs nothing holds only for single-fact lookups; compare-and-contrast is
+precisely the multi-chunk synthesis case it flags as untested. **Use this scenario
+as the question set for that experiment** — it is scorable in a way "summarise" is
+not: does the answer cite specific exemplars, or generalise vaguely? Sizing from
+§13.6: 8,000 characters is where all five chunks fit, at ~966 extra input tokens
+per turn.
+
+A related gap: retrieval returns five *fragments*, never "exemplar #3 in full", so
+"compare my structure against a strong essay's structure" may have nothing
+structural to compare against. Two candidate mechanisms, both unproven here:
+`bedrock:GetDocumentContent` (§11.1, §14.0) to fetch a whole KB document after
+using retrieval only to *identify* it — API shape, size limits and cost
+unverified; or agentic retrieval, which per §13.6 "does its own retrieval and is
+**not** subject to this cap at all", making this class of request a natural trigger
+for the §6.5 escalation rather than a configuration flag.
+
 ---
 
 ### 6.4 Quota headroom — verified against measured scale
@@ -649,10 +692,18 @@ upstream, in two places:
    filter **fails open**: `rag_service._filter_vectors_by_document_status` catches
    DynamoDB errors and sets `valid_doc_ids = doc_ids`, returning results
    *unfiltered*. A DynamoDB blip therefore serves content from documents users
-   deleted. Fail closed — drop chunks whose status cannot be confirmed. Separately,
+   deleted. Fail closed — drop chunks whose status cannot be confirmed. Scope note:
+   the *inner* per-document handler already fails closed (a single failed `get_item`
+   leaves that `doc_id` out of `valid_doc_ids`, dropping its chunks); only the
+   *outer* table-level handler fails open, so the window is table unavailability
+   rather than ordinary throttling. Low probability, but the consequence is a
+   privacy incident rather than a bad answer, and the fix is one line. Separately,
    `documents/services/cleanup_service.py` is evidently not finishing these
    deletes; the same tombstone-saga pattern proposed above for KBs applies at the
    document level.
+
+   *This is the canonical description of the fail-open defect. §11.1 and §14.4
+   reference it rather than restate it — keep it that way.*
 2. **95 `failed` records are invisible to their owners.** Users believe those
    uploads worked. §10.3 ingests only `complete` docs, so migration will silently
    drop all 95 — correct for the index, wrong for the user. Surface them and offer
@@ -1001,10 +1052,9 @@ the harness findings log; the harness itself is disposable and not committed.
   ordering changed on two of three queries. The flat case matters for the context
   cap: when scores are undiscriminating, truncating to the top two chunks is close
   to arbitrary. **The reranker is what makes a small context cap defensible.**
-- **ACL-aware retrieval exists and fails closed**, which is *better* than today: the
-  current document-status filter in `rag_service.py` falls back to **unfiltered**
-  results on any DynamoDB failure, so it fails **open** — already flagged in §14.4
-  and now confirmed as a live difference. AWS is explicit that ACL awareness "is not
+- **ACL-aware retrieval exists and fails closed**, which is *better* than today's
+  document-status filter — ours fails open on a table-level DynamoDB error (§7.4).
+  AWS is explicit that ACL awareness "is not
   authorization" and does not authenticate users, so app-side authorization is still
   required. Identity is **email only**, with no alias resolution; mismatches fail
   silently.
@@ -1361,9 +1411,10 @@ the process dies.
 
 Use durable tombstones for whole-KB, data-source, and individual-document
 deletes. Do not erase the last DDB record or let TTL remove it until AWS confirms
-deletion. Keep the document-status filter during migration and make lookup
-failure **fail closed**; the current legacy filter's unfiltered fallback is not
-safe for deleting or access-controlled content.
+deletion. Keep the document-status filter during migration and make lookup failure
+**fail closed** — §7.4 carries the measured defect and the exact code path. It is
+not safe for deleting or access-controlled content, and because it is live today it
+should be fixed ahead of migration rather than as part of it.
 
 ### 14.5 IAM, encryption, audit, and teardown
 
