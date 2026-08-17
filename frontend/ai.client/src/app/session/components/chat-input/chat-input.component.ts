@@ -30,7 +30,7 @@ import {
   FileUploadService,
   PendingUpload,
   ALLOWED_EXTENSIONS,
-  MAX_FILE_SIZE_BYTES,
+  maxFileSizeFor,
   MAX_FILES_PER_MESSAGE,
   formatBytes
 } from '../../../services/file-upload';
@@ -647,11 +647,12 @@ export class ChatInputComponent {
 
     // Validate and upload each file
     for (const file of newFiles) {
-      // Check file size
-      if (file.size > MAX_FILE_SIZE_BYTES) {
+      // Check file size (pptx has its own, larger cap — see maxFileSizeFor)
+      const sizeLimit = maxFileSizeFor(file);
+      if (file.size > sizeLimit) {
         this.toastService.error(
           'File Too Large',
-          `${file.name} exceeds maximum size of ${formatBytes(MAX_FILE_SIZE_BYTES)}.`
+          `${file.name} exceeds maximum size of ${formatBytes(sizeLimit)}.`
         );
         continue;
       }

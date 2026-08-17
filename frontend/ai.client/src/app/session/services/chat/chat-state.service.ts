@@ -234,6 +234,20 @@ export class ChatStateService {
         return controller;
     }
 
+    /**
+     * Session ids with a stream in flight right now.
+     *
+     * Read at page-hide time to attribute a departure to the turns it
+     * actually interrupted. A live controller is the truthful test: it is
+     * created per request and nulled on abort, so it tracks the transport
+     * rather than the `loading` flag, which other code also drives.
+     */
+    streamingSessionIds(): string[] {
+        return [...this.states().entries()]
+            .filter(([, state]) => state.abortController !== null)
+            .map(([sessionId]) => sessionId);
+    }
+
     /** Abort a session's in-flight request (Stop button), if any. */
     abortRequest(sessionId: string): void {
         const state = this.states().get(sessionId);

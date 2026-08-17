@@ -6,12 +6,15 @@ import { signal } from '@angular/core';
 import { 
   FileUploadService, 
   formatBytes, 
-  isAllowedMimeType, 
+  isAllowedMimeType,
   getFileExtension,
+  resolveMimeType,
   FileTooLargeError,
   InvalidFileTypeError,
   QuotaExceededError,
   MAX_FILE_SIZE_BYTES,
+  PPTX_MAX_FILE_SIZE_BYTES,
+  maxFileSizeFor,
   ALLOWED_EXTENSIONS
 } from './file-upload.service';
 import { ConfigService } from '../config.service';
@@ -138,8 +141,25 @@ describe('FileUploadService', () => {
       });
 
       it('should throw FileTooLargeError for oversized file', () => {
-        const file = new File(['x'.repeat(MAX_FILE_SIZE_BYTES + 1)], 'large.pdf', { 
-          type: 'application/pdf' 
+        const file = new File(['x'.repeat(MAX_FILE_SIZE_BYTES + 1)], 'large.pdf', {
+          type: 'application/pdf'
+        });
+        expect(() => service.validateFile(file)).toThrow(FileTooLargeError);
+      });
+
+      // A deck never goes inline to Bedrock, so the 4MB inline-document
+      // ceiling doesn't bound it. Corporate templates with imagery clear
+      // 4MB routinely — capping them there is what broke `template_name`.
+      it('should allow a .pptx above the general cap', () => {
+        const file = new File(['x'.repeat(MAX_FILE_SIZE_BYTES + 1)], 'deck.pptx', {
+          type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        });
+        expect(() => service.validateFile(file)).not.toThrow();
+      });
+
+      it('should still reject a .pptx above the presentation cap', () => {
+        const file = new File(['x'.repeat(PPTX_MAX_FILE_SIZE_BYTES + 1)], 'huge.pptx', {
+          type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
         });
         expect(() => service.validateFile(file)).toThrow(FileTooLargeError);
       });
@@ -151,6 +171,22 @@ describe('FileUploadService', () => {
 
       it('should allow unknown MIME with valid extension', () => {
         const file = new File(['content'], 'test.pdf', { type: '' });
+        expect(() => service.validateFile(file)).not.toThrow();
+      });
+
+      // .pptx uploads feed the PowerPoint tools (read a deck, or pass one as
+      // a template to create_powerpoint_presentation). The backend has always
+      // allowed the MIME type; this list was the only thing blocking it, and
+      // the create-deck tool's error text tells users to upload a template.
+      it('should allow .pptx by MIME type', () => {
+        const file = new File(['content'], 'deck.pptx', {
+          type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        });
+        expect(() => service.validateFile(file)).not.toThrow();
+      });
+
+      it('should allow .pptx by extension when MIME is empty', () => {
+        const file = new File(['content'], 'deck.pptx', { type: '' });
         expect(() => service.validateFile(file)).not.toThrow();
       });
     });
@@ -429,11 +465,70 @@ describe('FileUploadService', () => {
         });
       });
 
+      describe('maxFileSizeFor', () => {
+        it('should return the general cap for ordinary files', () => {
+          const file = new File(['c'], 'doc.pdf', { type: 'application/pdf' });
+          expect(maxFileSizeFor(file)).toBe(MAX_FILE_SIZE_BYTES);
+        });
+
+        it('should return the presentation cap by MIME type', () => {
+          const file = new File(['c'], 'deck.pptx', {
+            type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+          });
+          expect(maxFileSizeFor(file)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
+        });
+
+        it('should return the presentation cap by extension when MIME is empty', () => {
+          const file = new File(['c'], 'deck.pptx', { type: '' });
+          expect(maxFileSizeFor(file)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
+        });
+
+        it('should not exceed the backend presentation cap', () => {
+          // The backend is the enforcing side; if the UI cap were larger it
+          // would accept decks that presign then rejects with a 400.
+          expect(PPTX_MAX_FILE_SIZE_BYTES).toBe(25 * 1024 * 1024);
+        });
+      });
+
+      describe('resolveMimeType', () => {
+        it('should keep an allowed MIME the browser reported', () => {
+          const file = new File(['c'], 'doc.pdf', { type: 'application/pdf' });
+          expect(resolveMimeType(file)).toBe('application/pdf');
+        });
+
+        it('should resolve .pptx from the extension when MIME is empty', () => {
+          // Presign would otherwise receive application/octet-stream, which
+          // the backend allowlist rejects — and a deck stored under the wrong
+          // MIME is invisible to read_powerpoint_presentation, which matches
+          // the stored type exactly.
+          const file = new File(['c'], 'deck.pptx', { type: '' });
+          expect(resolveMimeType(file)).toBe(
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+          );
+        });
+
+        it('should override a generic octet-stream MIME using the extension', () => {
+          const file = new File(['c'], 'data.xlsx', { type: 'application/octet-stream' });
+          expect(resolveMimeType(file)).toBe(
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          );
+        });
+
+        it('should pass through an unknown type it cannot resolve', () => {
+          // validateFile is the gate for rejection; this helper must not
+          // invent a MIME for something the allowlist never accepted.
+          const file = new File(['c'], 'thing.exe', { type: 'application/exe' });
+          expect(resolveMimeType(file)).toBe('application/exe');
+        });
+      });
+
       describe('getAcceptedFileTypes equivalent', () => {
         it('should return allowed extensions', () => {
           expect(ALLOWED_EXTENSIONS).toContain('.pdf');
           expect(ALLOWED_EXTENSIONS).toContain('.png');
           expect(ALLOWED_EXTENSIONS).toContain('.docx');
+          // Drives the file picker's `accept` filter in chat-input.
+          expect(ALLOWED_EXTENSIONS).toContain('.pptx');
           expect(ALLOWED_EXTENSIONS.length).toBeGreaterThan(0);
         });
       });

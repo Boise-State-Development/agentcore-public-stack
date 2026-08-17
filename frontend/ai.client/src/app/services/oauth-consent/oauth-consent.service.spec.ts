@@ -95,4 +95,58 @@ describe('OAuthConsentService', () => {
       expect(service.pending().length).toBe(1);
     });
   });
+
+  describe('pre-flight consents (no interruptId)', () => {
+    // Emitted when an OAuth-gated MCP server refused `tools/list`, so the
+    // tool never registered and no turn is paused. The backend re-emits
+    // these every turn that rebuilds the agent, so dismissal has to stick
+    // locally — there is no server-side breadcrumb to DELETE.
+    const URL_A = 'https://accounts.example/consent?a=1';
+
+    it('surfaces a request with no interruptId', () => {
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-1', 'sess-1');
+
+      const pending = service.pending();
+      expect(pending.length).toBe(1);
+      expect(pending[0].providerId).toBe('github-oauth');
+      expect(pending[0].interruptId).toBeUndefined();
+    });
+
+    it('dedupes by providerId while the prompt is live', () => {
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-1', 'sess-1');
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-2', 'sess-1');
+
+      expect(service.pending().length).toBe(1);
+    });
+
+    it('does not resurrect after the user dismisses it', () => {
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-1', 'sess-1');
+      service.dismiss('github-oauth');
+      expect(service.pending().length).toBe(0);
+
+      // Next turn re-emits because consent still has not landed.
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-2', 'sess-1');
+      expect(service.pending().length).toBe(0);
+    });
+
+    it('still surfaces an interrupt-driven prompt after a pre-flight dismissal', () => {
+      // A paused turn is blocking on consent — the user must be able to act
+      // even though they dismissed the passive pre-flight nudge earlier.
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-1', 'sess-1');
+      service.dismiss('github-oauth');
+
+      service.requestConsent('github-oauth', URL_A, 'i-99', 'msg-2', 'sess-1');
+      expect(service.pending().length).toBe(1);
+      expect(service.pending()[0].interruptId).toBe('i-99');
+    });
+
+    it('clear() lifts the dismissal', () => {
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-1', 'sess-1');
+      service.dismiss('github-oauth');
+      service.clear();
+
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-2', 'sess-2');
+      expect(service.pending().length).toBe(1);
+    });
+  });
 });

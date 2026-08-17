@@ -127,6 +127,12 @@ export class MessageListComponent {
     ) {
       return null;
     }
+    // Two UI outcomes, not one per reason: only a deliberate Stop withholds
+    // the Continue affordance. Every other reason — `navigated_away`,
+    // `connection_lost`, `unknown` — means the user never rejected the
+    // answer, so Continue is offered. New reasons bucket here by default,
+    // which is the safe direction: offering Continue on a turn the user
+    // abandoned is recoverable; withholding it on one they still want is not.
     return this.chatStateService.lastTurnInterruptReason() === 'user_stopped'
       ? 'user_stopped'
       : 'connection_lost';

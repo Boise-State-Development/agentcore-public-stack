@@ -15,7 +15,7 @@ OAuth Support:
 
 import logging
 import re
-from typing import Any, Callable, Optional, List, Set
+from typing import Any, Callable, Iterator, Optional, List, Set
 from urllib.parse import urlparse
 
 from mcp.client.streamable_http import streamablehttp_client
@@ -124,6 +124,64 @@ def detect_aws_service_from_url(url: str) -> Optional[str]:
             url,
         )
         return None
+
+
+# HTTP statuses that mean "this caller is not authorized" — the only kind of
+# pre-flight failure that completing an OAuth consent flow can actually fix.
+_AUTH_STATUS_CODES = frozenset({401, 403})
+
+# Fallback for transports that stringify the status instead of raising an
+# httpx error carrying a `.response` (an MCP server may surface the refusal as
+# a protocol-level message). Deliberately narrow: matching bare digits would
+# fire on any URL or port that happens to contain them.
+_AUTH_TEXT_RE = re.compile(
+    r"\b(?:401|403)\b|\bunauthorized\b|\bforbidden\b", re.IGNORECASE
+)
+
+
+def _iter_exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    """Yield `exc` and everything reachable through its cause/context chain
+    and any ExceptionGroup members, each exactly once.
+
+    The exception we catch is never the interesting one: Strands wraps the
+    real failure twice (`ToolProviderException` around
+    `MCPClientInitializationError`), and the transport or HTTP error
+    underneath arrives inside an anyio `ExceptionGroup`.
+    """
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        e = stack.pop()
+        if id(e) in seen:
+            continue
+        seen.add(id(e))
+        yield e
+        for nxt in (e.__cause__, e.__context__):
+            if nxt is not None:
+                stack.append(nxt)
+        stack.extend(getattr(e, "exceptions", ()) or ())  # ExceptionGroup
+
+
+def _is_auth_failure(exc: BaseException) -> bool:
+    """True when `exc`'s chain carries an HTTP 401/403.
+
+    Used to decide whether a failed pre-flight is plausibly a *consent* gap.
+    A connection refusal, DNS failure, or timeout is not: the server simply
+    isn't answering, and no amount of authorizing will change that. Treating
+    those as consent gaps prompts the user to connect a server that isn't
+    there, on every single turn, with no way for the prompt to succeed.
+    """
+    for e in _iter_exception_chain(exc):
+        response = getattr(e, "response", None)
+        for code in (
+            getattr(response, "status_code", None),
+            getattr(e, "status_code", None),
+        ):
+            if isinstance(code, int) and code in _AUTH_STATUS_CODES:
+                return True
+        if _AUTH_TEXT_RE.search(str(e)):
+            return True
+    return False
 
 
 def create_external_mcp_client(
@@ -306,6 +364,133 @@ class ExternalMCPIntegration:
         # than a global tool-name list (so two MCP servers can share a tool
         # name and only one is gated).
         self._approval_names_for_client_id: dict[int, set[str]] = {}
+        # user_id -> {provider_id: authorization_url} for OAuth-gated tools
+        # whose pre-flight failed because the user has not consented yet.
+        # Drained by the stream coordinator (`take_pending_consents`) so the
+        # turn can surface an `oauth_required` event instead of dropping the
+        # tool silently. Keyed by user because this integration is a
+        # process-wide singleton shared across concurrent sessions.
+        self._pending_consents: dict[str, dict[str, str]] = {}
+
+    def take_pending_consents(self, user_id: str) -> dict[str, str]:
+        """Pop and return {provider_id: authorization_url} for `user_id`.
+
+        Draining on read keeps the singleton from re-emitting a stale prompt
+        on a later turn: if the user still hasn't consented, the next
+        `load_external_tools` fails pre-flight again and re-records it. On an
+        agent-cache hit no loading happens, nothing is recorded, and nothing
+        is emitted — correct, because the prompt already went out once.
+        """
+        return self._pending_consents.pop(user_id, {})
+
+    async def _recover_oauth_preflight(
+        self,
+        *,
+        tool_id: str,
+        client: MCPClient,
+        user_id: Optional[str],
+        provider_id: Optional[str],
+        exc: Exception,
+    ) -> bool:
+        """Second chance for an OAuth-gated tool whose pre-flight failed.
+
+        A server that requires auth even for `tools/list` (GitHub's MCP
+        endpoint does) 401s whenever the in-process token cache is cold —
+        which it always is on a fresh microVM. Before this recovery step the
+        tool was dropped, and because `OAuthConsentHook` only runs
+        `BeforeToolCall` for *registered* tools, nothing ever warmed the
+        cache: the tool stayed missing for the life of the process even for
+        a user whose token was sitting in the AgentCore vault the whole time.
+
+        Only an *auth* failure qualifies. A pre-flight that failed because the
+        server is unreachable, timed out, or resolved to nothing is not a
+        consent gap — asking the vault there would answer "no token, here's an
+        authorization URL" for a server that isn't listening, and the user
+        would be told to connect it on every turn with no way to succeed.
+
+        So on an auth failure we ask the vault directly:
+          * token  -> warm the cache and retry the pre-flight once. This is
+            the consented-user path, and it is why the tool comes back by
+            itself after the user completes consent in the popup.
+          * consent URL -> AgentCore is telling us this user genuinely has
+            not authorized. Record it so the turn can emit `oauth_required`
+            rather than dropping the tool with no explanation.
+
+        Returns True when the client is usable and should be registered.
+        """
+        if not provider_id or not user_id:
+            logger.warning(
+                f"Skipping external MCP tool {tool_id}: "
+                f"failed to start client ({exc})"
+            )
+            return False
+
+        # Only meaningful when the cache was cold. A warm token that still
+        # failed is an expiry/refresh case, which `OAuthConsentHook`'s
+        # AfterToolCall 401 handler already owns — re-asking the vault with
+        # force_authentication=False would just hand back the same token.
+        if oauth_token_cache.get(user_id, provider_id):
+            logger.warning(
+                f"Skipping external MCP tool {tool_id}: failed to start client "
+                f"with a cached {provider_id} token ({exc})"
+            )
+            return False
+
+        # Consent can only fix a refusal to authorize. Anything else — the
+        # server is down, the URL is wrong, the host doesn't resolve — keeps
+        # the pre-recovery behaviour of dropping the tool quietly.
+        if not _is_auth_failure(exc):
+            logger.warning(
+                f"Skipping external MCP tool {tool_id}: pre-flight failed without "
+                f"an auth error, so this is not a {provider_id} consent gap "
+                f"({exc})"
+            )
+            return False
+
+        from apis.shared.oauth.token_resolution import resolve_token_or_consent_url
+
+        resolved = await resolve_token_or_consent_url(provider_id, user_id)
+        if resolved is None:
+            # Couldn't ask AgentCore at all — not evidence of a consent gap,
+            # so stay silent rather than prompting for a connector that may
+            # well be authorized.
+            logger.warning(
+                f"Skipping external MCP tool {tool_id}: failed to start client "
+                f"and could not resolve a {provider_id} token ({exc})"
+            )
+            return False
+
+        if resolved["token"]:
+            oauth_token_cache.set(user_id, provider_id, resolved["token"])
+            try:
+                await client.load_tools()
+            except Exception as retry_exc:
+                logger.warning(
+                    f"Skipping external MCP tool {tool_id}: pre-flight still failed "
+                    f"after warming the {provider_id} token from the vault "
+                    f"({retry_exc})"
+                )
+                return False
+            logger.info(
+                f"Recovered external MCP tool {tool_id}: warmed {provider_id} "
+                "token from the AgentCore vault after a cold-cache pre-flight failure"
+            )
+            return True
+
+        authorization_url = resolved["url"]
+        if not authorization_url:
+            logger.warning(
+                f"Skipping external MCP tool {tool_id}: no {provider_id} token and "
+                f"no authorization URL from AgentCore ({exc})"
+            )
+            return False
+
+        self._pending_consents.setdefault(user_id, {})[provider_id] = authorization_url
+        logger.info(
+            f"External MCP tool {tool_id} needs {provider_id} consent; "
+            "surfacing oauth_required instead of dropping it silently"
+        )
+        return False
 
     def _get_cache_key(self, tool_id: str, user_id: Optional[str], requires_oauth: bool) -> str:
         if requires_oauth and user_id:
@@ -497,11 +682,15 @@ class ExternalMCPIntegration:
                     try:
                         await client.load_tools()
                     except Exception as exc:
-                        logger.warning(
-                            f"Skipping external MCP tool {tool_id}: "
-                            f"failed to start client ({exc})"
+                        recovered = await self._recover_oauth_preflight(
+                            tool_id=tool_id,
+                            client=client,
+                            user_id=user_id,
+                            provider_id=provider_id,
+                            exc=exc,
                         )
-                        continue
+                        if not recovered:
+                            continue
 
                     self.clients[cache_key] = client
                     self._client_versions[cache_key] = tool_version

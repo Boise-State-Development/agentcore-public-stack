@@ -40,7 +40,7 @@ class _SignatureFaithfulCoordinator:
 
 
 class _PassthroughMultimodalBuilder:
-    def build_prompt(self, message, files):
+    def build_prompt(self, message, files, attachment_names=None):
         return message
 
 

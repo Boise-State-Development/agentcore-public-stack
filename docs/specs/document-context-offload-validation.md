@@ -242,6 +242,18 @@ Related code findings that sharpen PR-6:
    processing is tied to the citations-enabled document path. The evaluation
    must establish the *current* fidelity baseline before scoring the digest
    against it (see the evaluation spec §2).
+
+   > **Superseded 2026-08-12 — the second half of this item is wrong.** The
+   > first half stands: no citations config is sent, and the
+   > `_BEDROCK_CONTENT_BLOCK_KEYS` reasoning does conflate response-side with
+   > request-side. But "full visual PDF processing is tied to the
+   > citations-enabled document path" is **false**, and the G3 probe
+   > (`document-citations-probe-findings.md`) measured it: 14/14 correct in the
+   > *bare* arm on two models, including unlabeled bar values, image-only table
+   > cells, and a rotated scan. Visual understanding is unconditional.
+   > Citations are a **text-layer** feature — enabled explicitly, they produced
+   > no citations at all on image-only documents. The current fidelity baseline
+   > is therefore **full visual fidelity, uncited**, and it is established.
 2. **The bypass spec's §6 isolating experiment is not clean — it is nearly
    powerless.** 921 of 974 `create_artifact` sessions *also* have spreadsheet
    tools enabled, so "enable caching for `create_artifact` only" changes the

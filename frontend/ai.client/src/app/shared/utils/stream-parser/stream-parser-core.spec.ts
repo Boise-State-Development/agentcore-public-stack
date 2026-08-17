@@ -16,6 +16,7 @@ import {
   validateUiResourceEvent,
   validateToolInputPartialEvent,
   validateSessionTitleEvent,
+  validateOAuthRequiredEvent,
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
@@ -894,6 +895,39 @@ describe('stream-parser-core', () => {
       expect(result).toEqual([{
         image: { format: 'png', data: 'base64data' }
       }]);
+    });
+  });
+
+  describe('validateOAuthRequiredEvent', () => {
+    const base = {
+      type: 'oauth_required',
+      providerId: 'github-oauth',
+      authorizationUrl: 'https://consent.example/authorize',
+    };
+
+    it('accepts the interrupt-driven flavor carrying a resumable id', () => {
+      expect(validateOAuthRequiredEvent({ ...base, interruptId: 'i-1' })).toBe(true);
+    });
+
+    it('accepts the pre-flight flavor with interruptId omitted', () => {
+      // No turn is paused — an OAuth-gated MCP server refused `tools/list`
+      // so the tool never registered. There is nothing to resume.
+      expect(validateOAuthRequiredEvent(base)).toBe(true);
+    });
+
+    it('rejects an explicitly empty interruptId', () => {
+      // Distinct from "absent": the backend meant to send a resumable id
+      // and produced a broken one, which would 400 on resume.
+      expect(validateOAuthRequiredEvent({ ...base, interruptId: '' })).toBe(false);
+    });
+
+    it('rejects a non-string interruptId', () => {
+      expect(validateOAuthRequiredEvent({ ...base, interruptId: 7 })).toBe(false);
+    });
+
+    it('still requires providerId and authorizationUrl', () => {
+      expect(validateOAuthRequiredEvent({ ...base, providerId: '' })).toBe(false);
+      expect(validateOAuthRequiredEvent({ ...base, authorizationUrl: '' })).toBe(false);
     });
   });
 });
