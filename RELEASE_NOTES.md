@@ -1,3 +1,176 @@
+# Release Notes — v1.15.0
+
+**Release Date:** August 17, 2026
+**Previous Release:** v1.14.1 (August 13, 2026)
+
+---
+
+> 🏗️ **CDK deploy required.** Run `platform.yml` first, then `backend.yml`, then `frontend-deploy.yml`. `infrastructure/lib/` changed in four places this release (one new S3 bucket, two IAM grants, one env var). `infrastructure/gsi-inventory.json` is byte-identical to `main` — **no data migration, no GSI changes**.
+
+---
+
+## Highlights
+
+A minor release about attachments and external tools.
+
+**PowerPoint decks are uploadable.** The backend has accepted `.pptx` since the PowerPoint toolset landed, but the SPA's allowlist never did — so `create_powerpoint_presentation`'s own error text told users to "upload a .pptx template first," advice the UI made impossible. Decks now upload, get a stacked-slides preview card instead of a grey blob, and route to the PowerPoint tools. Fixing the reload path for them fixed it for spreadsheets too: any attachment that skips the inline document set was vanishing from the conversation on refresh.
+
+**OAuth-gated MCP servers stop losing their tools.** A server that requires auth even for `tools/list` — GitHub's does — 401'd the registration pre-flight on every fresh microVM, and the tool was dropped with no explanation and no recovery for the life of the process. That was the single largest source of ERROR lines in the production runtime log. Alongside it, an abandoned consent prompt no longer bricks every later message in the conversation.
+
+**Two IAM grants missing in production are fixed** — both had the capability wired end-to-end except the policy statement, so neither surfaced as a user-visible error while document cleanup silently orphaned vector chunks and every user's saved default model was silently ignored.
+
+---
+
+## PowerPoint decks as attachments
+
+Users can upload a `.pptx` and hand it to the PowerPoint tools — as a template to build from, or a deck to read. It renders as a slide-deck card in the conversation and survives a reload.
+
+The upload could not simply be allowlisted. Bedrock's Converse `DocumentFormat` enum has no `pptx` member (`pdf`, `csv`, `doc`, `docx`, `xls`, `xlsx`, `html`, `txt`, `md`), so a deck sent as an inline document block fails the turn with a `ValidationException` at any size. The release adds a presentation carve-out mirroring the existing tabular one, diverting decks out of the inline set and pointing the model at the tools instead.
+
+### Backend
+
+- `apis/shared/files/models.py` — new `is_presentation_file()` predicate
+- `_partition_attachments()` returns a 4-tuple, diverting decks **before** the size gate (they never go inline, so an "oversized" note would misdescribe why they were skipped)
+- `_build_attachment_guidance()` names the deck and points at `read_powerpoint_presentation`, or names the toggle when the tool is disabled
+- `PromptBuilder.build_prompt()` takes an authoritative `attachment_names` list, defaulting to the names in `files` so existing callers are unchanged. Its `if not files: return message` early path now still emits the marker
+- `chat_agent.stream_async` forwards it; the route derives it via `_attachment_marker_names`, the only place that sees every attachment. Oversized files stay excluded — those were dropped from the turn and the guidance already explains their absence
+- The tools needed no changes: `_find_powerpoint_presentation` already resolves any `READY` `.pptx` in the session
+- Decks get their own **25MB** upload ceiling (`FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION`) rather than the general 4MB cap, since that cap exists to bound inline document blocks and a deck never becomes one
+
+### Frontend
+
+- `file-upload.service.ts` — `.pptx` added to the allowlist; new `resolveMimeType()` resolves from the extension. `validateFile` accepted a file by extension when the browser reported no MIME, but `uploadFile` then sent `application/octet-stream`, which the backend allowlist rejects — 400-ing an upload the UI had just accepted. It bit decks twice, since `_find_powerpoint_presentation` matches the stored MIME exactly, so a deck saved as octet-stream would upload and then be invisible to the tool
+- `file-attachment-badge.component.ts` — `FILE_TYPE_STYLES` gains a PPTX entry (presentation icon, orange tint). Presentations render a 16:9 mock front slide with two offset slides stacked behind it, and suppress the folded-corner and bottom-fade details — both are "sheet of paper" cues that fight the stacked-slides metaphor. The mock slide is decorative; a real first-slide thumbnail needs LibreOffice
+
+### Why attachment cards vanished on reload
+
+The card renders from a `fileAttachment` content block the SPA builds client-side at send time and never persists. On reload it rebuilds those blocks by parsing the `[Attached files: …]` marker out of the message text and matching names against the session's file list (`restoreFileAttachments` in `message-map.service.ts`) — so that marker is the only surviving link between a file and the message it was attached to. `PromptBuilder` derived the marker from the files it was turning into content blocks, i.e. the inline set, so any carved-out file never reached it. Spreadsheets had the same gap from the tabular carve-out; csv/xlsx cards now survive reload too.
+
+### Test Coverage
+
+420+ lines across `test_presentation_attachment_carveout.py`, `test_presentation_upload_size_cap.py`, and `test_attachment_marker.py`, plus a frontend spec that pins `FILE_TYPE_STYLES` against the upload allowlist — a type missing from the map degrades silently to a grey blob rather than failing, which is exactly how this shipped, so adding a type to one list now forces the other.
+
+---
+
+## OAuth-gated MCP tools survive a cold token cache
+
+An MCP server that requires auth even for `tools/list` 401s the registration pre-flight whenever the in-process `oauth_token_cache` is cold — which it always is on a fresh microVM. `load_external_tools` caught that, logged a warning, and dropped the tool.
+
+Nothing recovered from there. `OAuthConsentHook` is a `BeforeToolCall` hook, so it only runs for tools that made it into the registry; the dropped tool never reached it, the cache was never warmed, and the drop repeated every turn for the life of the process. A user whose token was sitting in the AgentCore vault the whole time lost the tool permanently and was told nothing — the model simply did not have it. **20 turns hit this in production in 24 hours, the single largest source of ERROR lines in the runtime log.**
+
+### Backend
+
+On pre-flight failure for an OAuth-gated tool with a cold cache, the runtime now asks the vault directly:
+
+- **token** → warm the cache and retry the pre-flight once. This is the consented-user path, and it is also how the tool returns by itself after the user completes consent in the popup
+- **consent URL** → AgentCore is saying the user genuinely has not authorized. Record it so the turn emits `oauth_required` rather than dropping the tool with no explanation
+- **hard error** → stay silent. "Couldn't ask" is not "must consent"; prompting there would nag a connected user whenever the server blips
+
+The vault is only consulted when the pre-flight already failed, so the happy path costs no extra round-trip. Scopes and `customParameters` moved into a shared `oauth/token_resolution.py` helper — AgentCore folds both into the token-vault key, so two callers asking with different values look up different vault entries and would prompt a user who is already connected.
+
+A follow-up narrowed the trigger. Recovery originally ran on *any* pre-flight failure, so an unreachable server looked identical to one refusing an unauthorized caller: the vault correctly answered "this user has no token, here is an authorization URL," and the user got a Connect prompt on every turn that completing consent could never satisfy. Only a 401/403 now counts. The status is not on the exception that surfaces — `MCPClient.load_tools()` raises `ToolProviderException` wrapping `MCPClientInitializationError` wrapping an anyio `ExceptionGroup`, with the real `httpx.HTTPStatusError` three levels down and no status in the outermost message — so `_is_auth_failure` walks `__cause__`/`__context__`/`ExceptionGroup` members, the same shape `mcp_apps._is_transient_connect_error` already had to handle.
+
+### SSE contract
+
+`oauth_required.interruptId` **is now optional.** The pre-flight flavor has no paused turn to resume, and a synthetic id would be worse than none — the resume guard in `inference_api/chat/routes.py` 400s on unknown ids, so the user would hit an error immediately after consenting. Clients must show the Connect affordance and not attempt a resume when the field is absent. Pre-flight events are re-emitted each turn that rebuilds the agent and are deliberately not persisted as `pending_interrupt` breadcrumbs, which are keyed by interrupt id for the resume path.
+
+### Frontend
+
+- `oauth-consent.service.ts` and `stream-parser-core.ts` — handle the id-less flavor, dedupe by `providerId`, and suppress a dismissed pre-flight prompt for the tab session
+
+### Test Coverage
+
+680+ lines across `test_external_mcp_client.py`, `test_oauth_token_resolution.py`, and `test_preflight_consent_events.py`. The tests build the real wrapped exception chain; an existing test that used `RuntimeError("connection refused")` to reach the vault-unreachable branch now uses a 401, since under the new gate it would never have reached the vault and would have passed vacuously.
+
+---
+
+## Attributing interrupted turns
+
+`connection_lost` is a fallback label, not a diagnosis. The container stamps it whenever a stream task is torn down with no client signal, so a refresh, a dead socket, and a platform-side idle timeout were all recorded identically and the resulting population could not be reasoned about. Over 14 days in production: 64 `connection_lost` against 40 `user_stopped`, and of 47 dropped turns sampled in detail only the 11 in the 62–67s band could be attributed to anything at all. The rest were unexplainable in principle, not merely unexplained.
+
+This release closes both ends of that gap — the browser's and the load balancer's.
+
+### Frontend
+
+A page departure is the one interruption cause only the browser witnesses, and the SPA had no `beforeunload`/`pagehide`/`unload` handler anywhere — `cancelChatRequest` was reached solely from the Stop button. A `pagehide` handler now signals `navigated_away` for each session with a stream in flight. `pagehide` rather than `unload` because it still fires for mobile Safari and bfcache navigations; `keepalive: true` on the fetch is what lets the request outlive the page, the same property the Stop path already relies on.
+
+Two things it deliberately does **not** do:
+
+- **It does not abort the stream.** Aborting on page-hide would kill turns for a bfcache navigation the user may return from, and the server turn is meant to keep running so a reload can offer to continue it
+- **It does not arm the distributed turn cancel.** That stays exclusive to a deliberate Stop — cancelling on a departure would make every refresh discard work the reload is about to offer to continue. This endpoint's reason set widened; its side effects did not
+
+### Infrastructure
+
+The ALB access log is the only record of who *ended* a connection. A mid-stream SSE disconnect is indistinguishable from inside the container — client gone, socket dropped, and the ALB's own 60s idle timeout all arrive as the same cancellation — so with logging off, attribution beyond the timing signature was guesswork. `elb_status_code`, the termination-reason field, and `request_processing_time` name the terminator and how long the request had run.
+
+- New access-log bucket is **SSE-S3, not KMS**: the ELB log-delivery service cannot write to an SSE-KMS bucket and fails silently, leaving an empty bucket and no logs. 30-day expiry bounds the cost of a per-request log
+- Synthing the ALB construct now requires a concrete region — CDK resolves the regional ELB log-delivery principal for the bucket policy and refuses on an env-agnostic stack. Every real deploy already passes env via `bin/infrastructure.ts`; one `PlatformStack` test did not, and now does
+
+---
+
+## 🐛 Bug fixes
+
+**An abandoned consent prompt bricked every later message.** If a turn paused on an OAuth-consent or tool-approval interrupt and the user never completed it — just typed a new message instead — Strands rejected the new turn with `TypeError: prompt_type=<class 'str'> | must resume from interrupt with list of interruptResponse's`. `InterruptState.resume` refuses a plain string prompt while `activated` is set, and that flag lives on the agent, which the cache reuses across turns. Nothing cleared it, so every later turn in the session hit the same wall and produced a non-recoverable `stream_error`.
+
+The "a fresh turn supersedes a paused turn" policy already existed in `clear_paused_turn` / `clear_interrupted_turn`, but it only cleared the DynamoDB side — the live object on the cached agent was missed. Deactivating alone is not enough: Strands appends the assistant `toolUse` before running tools and returns on interrupt without the matching `toolResult`, so history ends on an unanswered tool call. `_repair_tool_pairing` cannot fix it, because it deliberately leaves a *trailing* `toolUse` alone for prompt-arrival handling and does not count it as a violation. So the abandoned turn is dropped back to the last completed assistant turn, in place — the message list is aliased across the cached agents serving one session, and rebinding mid-life silently breaks that alias (#874)
+
+**Document cleanup orphaned vector chunks in production.** app-api's `S3VectorsQueryAccess` listed read actions only, so `documents/services/cleanup_service.py` exhausted its three retries on every vector delete and logged "Cleanup incomplete … TTL will auto-expire". Two bulk cleanups failed outright in a single hour (0/18 and 0/1 documents), leaving those chunks searchable in the index until TTL. Note the batch action is `DeleteVectors` (plural); rag-ingestion's `DeleteVector` (singular) is a different action (#870)
+
+**Saved default model was silently ignored.** `inference-agentcore-construct.ts` injects `DYNAMODB_USER_SETTINGS_TABLE_NAME`, so `UserSettingsRepository` reported itself enabled — but the table was absent from the runtime role's grants, and `get_settings` swallowed the `AccessDenied` into `DEFAULT_SETTINGS`, serving the system default instead of the user's `defaultModelId`. Scoped read-only on a bare ARN following the `SystemPromptsTableReadAccess` precedent; the runtime never writes settings and the table has no GSIs (#870)
+
+Both IAM gaps were found by `AccessDeniedException` in the prod-ai CloudWatch logs, and both now carry regression tests alongside the existing `SharedConversationsAccess` guard, which covers the identical failure mode.
+
+---
+
+## 🏗️ Infrastructure
+
+| Change | Detail |
+|---|---|
+| ALB access-log bucket | New S3 bucket, SSE-S3 encryption, 30-day expiry. KMS is not an option — ELB log delivery fails silently against it |
+| `S3VectorsQueryAccess` | Gains `s3vectors:DeleteVectors` on the app-api task role |
+| `UserSettingsTableReadAccess` | New read-only grant on the AgentCore runtime role |
+| `FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION` | New app-api env var, 25MB. Must never be smaller than `PPTX_MAX_FILE_SIZE_BYTES` in the SPA's `file-upload.service.ts` |
+| Synth requirement | The ALB construct now needs a concrete region for the regional ELB log-delivery principal |
+
+No GSI changes: `infrastructure/gsi-inventory.json` is byte-identical to `main`, and `scripts/release/check-gsi-update-limit.mjs` passes across all 26 tables. No data migration.
+
+---
+
+## 📚 Documentation
+
+- **G3 document-citations probe** — the premise was wrong. Visual PDF understanding is unconditional, and citations are text-layer-only rather than the gate we assumed. Note the answer text moves inside `citationsContent` (#869)
+- **AgentCore Evaluations spike** and eval-harness scoping (#862)
+- **Bedrock Managed KB evaluation** expanded with recommendations (#867)
+- Weekly kaizen research scan and review prep for 2026-08-14, with nine stale review-queue entries resolved (#871, #875)
+
+---
+
+## 🧪 Test coverage
+
+**2,600+ lines of new tests.** Largest additions: `test_external_mcp_client.py` (399), `test_stale_interrupt_reset.py` (273), `test_presentation_attachment_carveout.py` (194), `test_oauth_token_resolution.py` (165), `test_preflight_consent_events.py` (120), `test_presentation_upload_size_cap.py` (117), `test_attachment_marker.py` (109). Infrastructure adds 90 lines of security-policy assertions covering both new IAM grants and 48 lines for the access-log bucket.
+
+---
+
+## 🚀 Deployment notes
+
+**This release requires a CDK deploy**, unlike 1.14.1.
+
+1. **`platform.yml`** — picks up the ALB access-log bucket, both IAM grants, and the new app-api env var
+2. **`backend.yml`** — app-api, inference-api, rag-ingestion, artifact-render
+3. **`frontend-deploy.yml`** — S3 + CloudFront
+
+No data migration and no GSI changes, so the deploy is not order-sensitive beyond the sequence above. Compute image URIs still come from SSM at CFN deploy time, so the infra deploy will not revert a live service.
+
+**After deploying, verify:**
+
+- The ALB access-log bucket is receiving objects. An empty bucket after real traffic means the log-delivery grant did not take — check the bucket is SSE-S3 and not KMS
+- A document delete no longer logs "Cleanup incomplete … TTL will auto-expire" in the app-api logs
+- A user with a non-default `defaultModelId` gets that model on a fresh session
+
+**For API clients:** `oauth_required.interruptId` is now optional. Any client that resumes a turn from that event must check for the field's presence and fall back to showing a Connect affordance without a resume — posting a missing or synthetic id back will 400.
+
+---
+
 # Release Notes — v1.14.1
 
 **Release Date:** August 13, 2026
