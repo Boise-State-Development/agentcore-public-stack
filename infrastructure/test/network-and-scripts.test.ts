@@ -92,6 +92,54 @@ describe('AlbConstruct — detailed', () => {
     });
   });
 
+  // Access logs are the only record of who ENDED a connection. A mid-stream
+  // SSE disconnect is indistinguishable inside the container — client gone,
+  // socket dropped, and the ALB's own idle timeout all arrive as the same
+  // cancellation — so losing this attribute re-blinds that investigation.
+  it('access logging is enabled on the ALB', () => {
+    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
+      LoadBalancerAttributes: Match.arrayWith([
+        Match.objectLike({ Key: 'access_logs.s3.enabled', Value: 'true' }),
+      ]),
+    });
+  });
+
+  it('access-log bucket uses SSE-S3, not KMS', () => {
+    // The ELB log-delivery service cannot write to an SSE-KMS bucket; it
+    // fails silently, leaving an empty bucket and no logs.
+    t.hasResourceProperties('AWS::S3::Bucket', {
+      BucketName: Match.stringLikeRegexp('alb-access-logs'),
+      BucketEncryption: {
+        ServerSideEncryptionConfiguration: [
+          { ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } },
+        ],
+      },
+    });
+  });
+
+  it('access logs expire so a per-request log cannot grow unbounded', () => {
+    t.hasResourceProperties('AWS::S3::Bucket', {
+      BucketName: Match.stringLikeRegexp('alb-access-logs'),
+      LifecycleConfiguration: {
+        Rules: Match.arrayWith([
+          Match.objectLike({ ExpirationInDays: 30, Status: 'Enabled' }),
+        ]),
+      },
+    });
+  });
+
+  it('access-log bucket blocks public access', () => {
+    t.hasResourceProperties('AWS::S3::Bucket', {
+      BucketName: Match.stringLikeRegexp('alb-access-logs'),
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+    });
+  });
+
   it('HTTP listener returns 404 by default (no cert)', () => {
     t.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
       Port: 80,

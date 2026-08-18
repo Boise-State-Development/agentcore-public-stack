@@ -862,6 +862,56 @@ class TestSignalTurnInterrupted:
         assert resp.status_code == 422
         recorder.assert_not_awaited()
 
+    def test_returns_204_and_records_navigated_away(self, app, make_user, authenticated_client):
+        """A departure (refresh / tab close / navigation) is client-attested
+        too — it is the one interruption cause only the browser witnesses."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        recorder = AsyncMock()
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            recorder,
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "navigated_away"},
+            )
+
+        assert resp.status_code == 204
+        recorder.assert_awaited_once_with(
+            "sess-001",
+            user.user_id,
+            reason="navigated_away",
+            source="client_signal",
+        )
+
+    def test_navigated_away_does_not_cancel_the_turn(self, app, make_user, authenticated_client):
+        """Attribution, not instruction.
+
+        Cancelling on a departure would make every refresh kill the turn it
+        interrupted — discarding work the reload is about to offer to
+        continue. Only a deliberate Stop arms the distributed cancel.
+        """
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        cancel = AsyncMock(return_value=True)
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            AsyncMock(),
+        ), patch(
+            "apis.shared.sessions.session_lease.request_session_cancel",
+            cancel,
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "navigated_away"},
+            )
+
+        assert resp.status_code == 204
+        cancel.assert_not_awaited()
+
     def test_returns_401_for_unauthenticated(self, app, unauthenticated_client):
         client = unauthenticated_client(app)
         resp = client.post(

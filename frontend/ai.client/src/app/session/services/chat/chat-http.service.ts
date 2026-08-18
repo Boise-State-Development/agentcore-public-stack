@@ -1,4 +1,4 @@
-import { inject, Injectable } from '@angular/core';
+import { DestroyRef, inject, Injectable } from '@angular/core';
 import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-source';
 import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
@@ -73,6 +73,14 @@ async function parseConflictMessage(response: Response): Promise<string> {
   }
 }
 
+/**
+ * Client-attested interruption reasons — the causes only the browser can
+ * witness. The server's `connection_lost` fallback is deliberately not here:
+ * it means "the stream died and nothing told us why", and the point of
+ * attesting these is to shrink that unattributable population.
+ */
+type InterruptReason = 'user_stopped' | 'navigated_away';
+
 interface GenerateTitleRequest {
   session_id: string;
   input: string;
@@ -95,6 +103,11 @@ export class ChatHttpService {
   private sessionService = inject(SessionService);
   private bffSession = inject(BffSessionService);
   private errorService = inject(ErrorService);
+  private destroyRef = inject(DestroyRef);
+
+  constructor() {
+    this.registerPageLifecycleAttribution();
+  }
 
   async sendChatRequest(requestObject: any): Promise<void> {
     const sessionId = requestObject.session_id as string;
@@ -332,7 +345,7 @@ export class ChatHttpService {
     // unlike `navigator.sendBeacon`, can carry the `X-CSRF-Token` header the
     // app-api CSRFMiddleware requires on unsafe cookie-authenticated methods.
     // Best-effort / fire-and-forget — the user's Stop must never block on it.
-    this.signalUserStopped(sessionId);
+    this.signalInterrupt(sessionId, 'user_stopped');
     // Reflect the interruption locally right away so the reload chip also
     // shows within the same session, without waiting for a refresh. The
     // backend marker (raced with the cancellation backstop) is the
@@ -384,8 +397,8 @@ export class ChatHttpService {
     }
   }
 
-  /** Fire-and-forget POST to app-api recording deliberate stop intent. */
-  private signalUserStopped(sessionId: string): void {
+  /** Fire-and-forget POST to app-api recording a client-attested interrupt reason. */
+  private signalInterrupt(sessionId: string, reason: InterruptReason): void {
     try {
       const appApiUrl = this.config.appApiUrl();
       if (!appApiUrl) return;
@@ -398,14 +411,52 @@ export class ChatHttpService {
           'Content-Type': 'application/json',
           ...this.bffSession.csrfHeaders(),
         },
-        body: JSON.stringify({ reason: 'user_stopped' }),
+        body: JSON.stringify({ reason }),
       }).catch(() => {
         // Best-effort: a failed signal degrades to the server-side
         // connection_lost backstop (or nothing if the turn completed).
       });
     } catch {
-      // Never let intent signalling interfere with the Stop action.
+      // Never let intent signalling interfere with the caller's action.
     }
+  }
+
+  /**
+   * Attribute a page departure to whatever turns it interrupts.
+   *
+   * Without this, a refresh / tab close / navigation lands server-side as
+   * `connection_lost` — the backstop's "the stream died and nothing told us
+   * why" — indistinguishable from a dropped socket or a platform-side idle
+   * timeout. Departures are the one cause only the browser can witness, so
+   * labelling them here is what makes the remaining `connection_lost`
+   * population diagnosable.
+   *
+   * `pagehide` rather than `beforeunload` or `unload`: it is the event that
+   * still fires reliably on mobile Safari and for bfcache navigations, where
+   * `unload` does not. `keepalive: true` on the fetch is what lets the
+   * request outlive the page — the same property the Stop path already
+   * relies on.
+   *
+   * Deliberately does NOT abort the stream. Aborting on page-hide would kill
+   * turns for a bfcache navigation the user may return from, and the server
+   * turn is meant to keep running so a reload can offer to continue it. This
+   * records; it does not intervene.
+   */
+  private registerPageLifecycleAttribution(): void {
+    // SSR / non-browser render pass has no window to listen on.
+    if (typeof window === 'undefined') return;
+    const onPageHide = () => {
+      for (const sessionId of this.chatStateService.streamingSessionIds()) {
+        this.signalInterrupt(sessionId, 'navigated_away');
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    // The root service outlives everything in the app, so this matters for
+    // tests rather than production: without it each TestBed instance leaves
+    // a live listener bound to the shared window, and the suite runs with
+    // `isolate: false`, so a later `pagehide` would fan out across every
+    // stale instance and its torn-down mocks.
+    this.destroyRef.onDestroy(() => window.removeEventListener('pagehide', onPageHide));
   }
 
   /**

@@ -69,6 +69,135 @@ def reset_cancellation_state(agent: Any, session_manager: Any) -> None:
         cancel_signal.clear()
 
 
+def _is_interrupt_resume_prompt(prompt: Any) -> bool:
+    """True when `prompt` is Strands' resume payload for a paused turn.
+
+    Mirrors ``strands.interrupt.InterruptState.resume``'s own acceptance test
+    — a list whose every content block carries nothing but ``interruptResponse``
+    — so we can never disagree with it about what counts as a resume.
+
+    One deliberate difference: an EMPTY list is not a resume here. Strands
+    tolerates it (``all()`` over nothing is True), but in this codebase ``[]``
+    is the max_tokens "Continue" prompt (``chat_agent.py``), and ``if
+    interrupt_responses:`` means a real resume always carries at least one
+    entry. Treating ``[]`` as a resume would leave a stale pause armed on a
+    continuation.
+    """
+    if not isinstance(prompt, list) or not prompt:
+        return False
+    return all(
+        isinstance(content, dict)
+        and content
+        and all(key == "interruptResponse" for key in content)
+        for content in prompt
+    )
+
+
+def _message_has_tool_use(message: Any) -> bool:
+    if not isinstance(message, dict):
+        return False
+    return any(
+        isinstance(block, dict) and "toolUse" in block
+        for block in (message.get("content") or [])
+    )
+
+
+def _drop_abandoned_turn_tail(messages: List[Dict[str, Any]]) -> int:
+    """Pop trailing messages until history ends on a completed assistant turn.
+
+    Mutates in place and returns the number dropped. In-place is mandatory:
+    the message list is **aliased** across the cached agents serving one
+    session (#741/#750, see ``_adopt_session_conversation``), and rebinding
+    mid-life silently breaks that alias.
+    """
+    dropped = 0
+    while messages:
+        last = messages[-1]
+        if (
+            isinstance(last, dict)
+            and last.get("role") == "assistant"
+            and not _message_has_tool_use(last)
+        ):
+            break
+        messages.pop()
+        dropped += 1
+    return dropped
+
+
+def reset_stale_interrupt_state(agent: Any, prompt: Any) -> None:
+    """Abandon a pause left by a PREVIOUS turn when this turn isn't a resume.
+
+    When ``OAuthConsentHook`` (or the tool-approval hook) calls
+    ``event.interrupt(...)``, Strands sets ``_interrupt_state.activated`` and
+    stops. If the user never completes consent and instead just types a new
+    message, that flag is still set on the cached agent — and
+    ``InterruptState.resume`` rejects a plain string prompt with
+    ``TypeError: prompt_type=<class 'str'> | must resume from interrupt with
+    list of interruptResponse's``. It reached the user as a non-recoverable
+    ``stream_error``: the session was stuck, because every subsequent fresh
+    turn hit the same flag.
+
+    The "a fresh turn supersedes a paused turn" policy already exists — see
+    ``clear_paused_turn`` / ``clear_interrupted_turn`` in
+    ``inference_api/chat/routes.py``. Those only clear the DynamoDB side; the
+    live object on the cached agent was missed. Same sticky-state-on-a-cached-
+    agent family as the cancel flags above.
+
+    Deactivating is not enough on its own. Strands appends the assistant
+    ``toolUse`` message to ``agent.messages`` *before* running tools
+    (``event_loop.py``), and on interrupt it returns without ever appending
+    the matching ``toolResult`` — so history ends on an unanswered tool call.
+    ``_repair_tool_pairing`` can't help here: it deliberately leaves a
+    *trailing* toolUse alone ("left for prompt-arrival handling") and doesn't
+    even count it as a violation, so at this point in the turn it no-ops. Left
+    as-is, Strands appends the new user message behind the dangling toolUse
+    and Bedrock rejects the request.
+
+    So we drop the abandoned turn back to the last completed assistant turn.
+    That clears the unanswered toolUse *and* leaves the history ending on an
+    assistant message, so the incoming user prompt keeps roles alternating.
+    Synthesizing an error ``toolResult`` instead would satisfy the pairing
+    rule but leave two consecutive user turns (the synthetic result, then the
+    real prompt), which Bedrock rejects just the same.
+
+    Dropping messages rewrites the prompt-cache prefix, so this costs a cache
+    write — on a turn the user has already abandoned, which is the right place
+    to spend it. Nothing is lost from the *conversation*: the abandoned turn
+    produced no assistant answer, and the transcript the user sees is
+    persisted separately.
+    """
+    interrupt_state = getattr(agent, "_interrupt_state", None)
+    if interrupt_state is None or not getattr(interrupt_state, "activated", False):
+        return
+
+    if _is_interrupt_resume_prompt(prompt):
+        return
+
+    logger.info(
+        "Abandoning a paused turn: this turn is not an interrupt resume "
+        "(%d pending interrupt(s))",
+        len(getattr(interrupt_state, "interrupts", None) or {}),
+    )
+
+    try:
+        interrupt_state.deactivate()
+    except Exception:
+        logger.exception("Failed to deactivate stale interrupt state")
+        return
+
+    messages = getattr(agent, "messages", None)
+    if not isinstance(messages, list) or not messages:
+        return
+
+    dropped = _drop_abandoned_turn_tail(messages)
+    if dropped:
+        logger.info(
+            "Dropped %d message(s) from the abandoned turn so the incoming "
+            "prompt lands on a valid history",
+            dropped,
+        )
+
+
 class StreamCoordinator:
     """Coordinates streaming lifecycle for agent responses"""
 
@@ -129,6 +258,12 @@ class StreamCoordinator:
         # Same per-turn discipline: a cancel armed by a previous turn must not
         # brick this one. See ``reset_cancellation_state``.
         reset_cancellation_state(agent, session_manager)
+
+        # Likewise a pause armed by a previous turn: if the user abandoned an
+        # OAuth/tool-approval consent and just typed again, the still-armed
+        # interrupt state makes Strands reject this turn's prompt outright.
+        # See ``reset_stale_interrupt_state``.
+        reset_stale_interrupt_state(agent, prompt)
 
         # Track timing for latency metrics
         stream_start_time = time.time()
@@ -439,6 +574,8 @@ class StreamCoordinator:
                         session_id=session_id,
                         user_id=user_id,
                     ):
+                        yield sse
+                    for sse in self._extract_preflight_consent_events(user_id):
                         yield sse
 
                 # Check if this is the "done" event - send final metadata before it
@@ -1426,6 +1563,53 @@ class StreamCoordinator:
                 "Failed to persist paused_turn snapshot for session %s: %s",
                 session_id, e, exc_info=True,
             )
+
+    def _extract_preflight_consent_events(
+        self,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield an `oauth_required` event per OAuth-gated MCP tool that was
+        dropped at agent-build time because the user hasn't consented.
+
+        These are NOT Strands interrupts — the turn ran to completion, just
+        without the tool, because an unauthorized `tools/list` meant we never
+        learned what the server exposes and so could never advertise it to
+        the model. The events therefore carry no `interruptId` and the
+        frontend must not try to resume anything; it shows the Connect
+        affordance, and the tool registers by itself on the next turn once
+        `_recover_oauth_preflight` can warm a real token from the vault.
+
+        Deliberately not persisted as a `pending_interrupt` breadcrumb: those
+        are keyed by interrupt id for the resume path, and a refresh doesn't
+        need one here — while consent is still outstanding, the next turn
+        fails pre-flight again and re-emits this event.
+        """
+        if not user_id:
+            return []
+
+        from agents.main_agent.integrations.external_mcp_client import (
+            get_external_mcp_integration,
+        )
+        from apis.shared.oauth.models import OAuthRequiredEvent
+
+        try:
+            pending = get_external_mcp_integration().take_pending_consents(user_id)
+        except Exception:
+            logger.exception("Failed to read pre-flight OAuth consents")
+            return []
+
+        events: List[str] = []
+        for provider_id, authorization_url in sorted(pending.items()):
+            logger.info(
+                "Emitting pre-flight oauth_required for provider=%s", provider_id
+            )
+            events.append(
+                OAuthRequiredEvent(
+                    provider_id=provider_id,
+                    authorization_url=authorization_url,
+                ).to_sse_format()
+            )
+        return events
 
     async def _extract_oauth_required_events(
         self,

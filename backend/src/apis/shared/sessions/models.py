@@ -246,10 +246,17 @@ class SessionMetadata(BaseModel):
         alias="lastTurnInterrupted",
         description="True when the last turn was interrupted before completion (user Stop, refresh, or dropped connection). Lets a reload show the 'response interrupted' state. Cleared at the start of any new (non-interrupt-resume) turn",
     )
-    last_turn_interrupt_reason: Optional[Literal["user_stopped", "connection_lost", "unknown"]] = Field(
+    last_turn_interrupt_reason: Optional[
+        Literal["user_stopped", "navigated_away", "connection_lost", "unknown"]
+    ] = Field(
         default=None,
         alias="lastTurnInterruptReason",
-        description="Why the last turn was interrupted. 'user_stopped' (deliberate Stop, from the client beacon) wins over the 'connection_lost' cancellation fallback",
+        description=(
+            "Why the last turn was interrupted, strongest client-attested reason first: "
+            "'user_stopped' (deliberate Stop) > 'navigated_away' (page hidden/unloaded) > "
+            "'connection_lost' (the server-side cancellation fallback) > 'unknown'. "
+            "A weaker reason can never overwrite a stronger one — see set_interrupted_turn"
+        ),
     )
     last_turn_interrupted_at: Optional[str] = Field(
         default=None,
@@ -326,14 +333,29 @@ class UpdateSessionMetadataRequest(BaseModel):
 class SessionInterruptRequest(BaseModel):
     """Request body for the client stop signal (POST /sessions/{id}/interrupt).
 
-    Only `user_stopped` is accepted from the client — it is the one reason
-    that requires user attestation. `connection_lost` is never client-sent;
-    it is inferred server-side by the stream-cancellation backstop and would
-    otherwise let a client downgrade a deliberate stop.
+    Only client-*attested* reasons are accepted here — the ones the browser
+    is the sole witness to:
+
+      * `user_stopped`    — the Stop button. Deliberate rejection of the
+                            in-flight response.
+      * `navigated_away`  — the page was hidden or unloaded (refresh, tab
+                            close, navigation) while a turn was streaming.
+                            NOT a rejection: the user left, they didn't say
+                            "stop". Sent from a `pagehide` handler.
+
+    `connection_lost` is never client-sent. It is the server-side
+    cancellation backstop's fallback — literally "the stream died and nothing
+    told us why" — and accepting it from a client would let a caller
+    downgrade an attested reason.
+
+    The distinction exists because `connection_lost` is otherwise
+    unattributable: a refresh, a dropped socket, and a platform-side idle
+    timeout all reach the container as an identical cancellation. Labelling
+    departures at the source is what makes the remainder diagnosable.
     """
 
-    reason: Literal["user_stopped"] = Field(
-        description="Interruption reason. Only the deliberate Stop is client-attested",
+    reason: Literal["user_stopped", "navigated_away"] = Field(
+        description="Interruption reason. Only client-attested reasons are accepted",
     )
 
 
@@ -385,7 +407,7 @@ class SessionMetadataResponse(BaseModel):
     last_turn_interrupt_reason: Optional[str] = Field(
         default=None,
         alias="lastTurnInterruptReason",
-        description="Why the last turn was interrupted: 'user_stopped' (deliberate Stop) or 'connection_lost' (refresh / dropped connection). Drives whether a 'Continue' affordance is offered on reload",
+        description="Why the last turn was interrupted: 'user_stopped' (deliberate Stop), 'navigated_away' (page hidden/unloaded mid-turn), or 'connection_lost' (the unattributable server-side fallback). Only 'user_stopped' suppresses the 'Continue' affordance on reload",
     )
     last_turn_interrupted_at: Optional[str] = Field(
         default=None,

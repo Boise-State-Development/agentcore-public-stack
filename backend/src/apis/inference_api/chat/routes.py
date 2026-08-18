@@ -714,26 +714,42 @@ def _estimate_decoded_size(file: "FileContent") -> int:
 
 def _partition_attachments(
     all_files: list,
-) -> tuple[list, list, list]:
-    """Split attachments into (inline_for_bedrock, tabular, oversized_non_tabular).
+) -> tuple[list, list, list, list]:
+    """Split attachments into
+    (inline_for_bedrock, tabular, presentations, oversized_non_tabular).
 
     - Tabular files (csv/xlsx) are never sent inline — they route through
       the spreadsheet analysis tools. Keeps Bedrock's 4.5MB document limit
       from exploding on XLSX files that expand during internal parsing.
+    - Presentations (pptx) are never sent inline either, but for a harder
+      reason: Bedrock's document-block format enum has no `pptx`, so an
+      inline deck is a guaranteed ValidationException. They route through
+      the PowerPoint tools (see `is_presentation_file`).
     - Non-tabular files larger than INLINE_DOCUMENT_MAX_BYTES are dropped
       from the inline set with a user-facing note, to prevent mid-stream
       ValidationException on the raw AWS error path.
     - Everything else rides along as a regular document/image content block.
+
+    Both diverted classes are checked before the size gate: they never go
+    inline at any size, so an oversized note would misdescribe them.
     """
-    from apis.shared.files.models import INLINE_DOCUMENT_MAX_BYTES, is_tabular_file
+    from apis.shared.files.models import (
+        INLINE_DOCUMENT_MAX_BYTES,
+        is_presentation_file,
+        is_tabular_file,
+    )
 
     inline: list = []
     tabular: list = []
+    presentations: list = []
     oversized: list = []
 
     for file in all_files:
         if is_tabular_file(file.filename, file.content_type):
             tabular.append(file)
+            continue
+        if is_presentation_file(file.filename, file.content_type):
+            presentations.append(file)
             continue
         # Only size-gate non-image documents. Images have their own Bedrock
         # limits (much larger) and the prompt builder reroutes them as
@@ -745,11 +761,38 @@ def _partition_attachments(
             continue
         inline.append(file)
 
-    return inline, tabular, oversized
+    return inline, tabular, presentations, oversized
+
+
+def _attachment_marker_names(all_files: list, oversized_inline: list) -> list:
+    """Filenames for the ``[Attached files: …]`` marker on the user message.
+
+    The SPA replays that marker on session load to rebuild attachment cards
+    (``restoreFileAttachments``): the ``fileAttachment`` content block it
+    renders from is built client-side at send time and is never persisted, so
+    the marker is the only surviving link between a file and the message it
+    was attached to.
+
+    Deliberately NOT ``files_to_send``. Diverted spreadsheets and decks are
+    still in the session and still reachable through their tools, so their
+    cards have to survive a reload too — deriving this from the inline set
+    alone is exactly what made an uploaded .pptx vanish from history while
+    the file itself remained perfectly present.
+
+    Oversized files are excluded: those were dropped from the turn entirely
+    and the guidance text already explains their absence.
+
+    Order follows ``all_files`` (how the user attached them) rather than a
+    concatenation of the partition buckets, so the text is deterministic —
+    it lands in the cacheable prefix on every later turn.
+    """
+    oversized_names = {f.filename for f in oversized_inline}
+    return [f.filename for f in all_files if f.filename not in oversized_names]
 
 
 def _build_attachment_guidance(
     diverted_tabular: list,
+    diverted_presentations: list,
     oversized_inline: list,
     enabled_tools: list | None,
 ) -> str:
@@ -777,6 +820,27 @@ def _build_attachment_guidance(
                 f"this size. To analyze them, enable **Spreadsheet Analysis** "
                 f"in the Tools section of the settings panel (gear icon next "
                 f"to the message input), then re-send your message._"
+            )
+
+    if diverted_presentations:
+        names = ", ".join(f"`{f.filename}`" for f in diverted_presentations)
+        tool_is_enabled = bool(enabled_tools) and bool(
+            POWERPOINT_PRESENTATION_TOOL_IDS.intersection(enabled_tools)
+        )
+        if tool_is_enabled:
+            parts.append(
+                f"_Attached presentation(s) {names} are available through the "
+                f"PowerPoint Presentations tool rather than inline — use "
+                f"`read_powerpoint_presentation` to read a deck's slide text "
+                f"and speaker notes, or pass it as `template_name` to "
+                f"`create_powerpoint_presentation` to build on its layouts._"
+            )
+        else:
+            parts.append(
+                f"_Attached presentation(s) {names} can't be read inline. To "
+                f"work with them, enable **PowerPoint Presentations** in the "
+                f"Tools section of the settings panel (gear icon next to the "
+                f"message input), then re-send your message._"
             )
 
     if oversized_inline:
@@ -1240,6 +1304,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     #     (1.4MB zipped → >4.5MB internal, triggering ValidationException).
     #     They remain available to the agent via list_spreadsheets /
     #     analyze_spreadsheet, which run pandas on the real file. See #206.
+    #   - presentation_files: pptx, also never sent inline — Bedrock's
+    #     document-block format enum has no `pptx` member at all, so an
+    #     inline deck is an unconditional ValidationException. They remain
+    #     available via list/read_powerpoint_presentation, which extract
+    #     slide text with python-pptx in Code Interpreter.
     #   - oversized_files: non-tabular docs that exceed our inline size
     #     budget; we skip them inline and surface a note instead of
     #     letting Bedrock reject the turn.
@@ -1291,17 +1360,30 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             )
         all_files = deduped_files
 
-    files_to_send, diverted_tabular, oversized_inline = _partition_attachments(all_files)
+    (
+        files_to_send,
+        diverted_tabular,
+        diverted_presentations,
+        oversized_inline,
+    ) = _partition_attachments(all_files)
     if diverted_tabular:
         logger.info(
             f"Diverted {len(diverted_tabular)} tabular file(s) from inline document blocks; "
             f"available via spreadsheet tools: {[f.filename for f in diverted_tabular]}"
+        )
+    if diverted_presentations:
+        logger.info(
+            f"Diverted {len(diverted_presentations)} presentation(s) from inline document "
+            f"blocks (Bedrock has no pptx document format); available via PowerPoint tools: "
+            f"{[f.filename for f in diverted_presentations]}"
         )
     if oversized_inline:
         logger.warning(
             f"Skipped {len(oversized_inline)} oversized file(s) (> inline limit): "
             f"{[(f.filename, _estimate_decoded_size(f)) for f in oversized_inline]}"
         )
+
+    attachment_marker_names = _attachment_marker_names(all_files, oversized_inline)
 
     # Pre-create session metadata so OAuth interrupts and other state can
     # attach to the session row from turn one. Best-effort; on failure the
@@ -2221,7 +2303,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # The original text becomes the single source of truth for UI display,
             # while the full augmented prompt stays in AgentCore Memory for the LLM.
             attachment_guidance = _build_attachment_guidance(
-                diverted_tabular, oversized_inline, effective_enabled_tools
+                diverted_tabular,
+                diverted_presentations,
+                oversized_inline,
+                effective_enabled_tools,
             )
             # When multiple spreadsheets are visible, ship the full inventory
             # up front so the agent can disambiguate intentionally instead of
@@ -2270,6 +2355,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             message_will_be_modified = (
                 final_message != input_data.message  # RAG augmentation / attachment guidance / inventory
                 or bool(files_to_send)               # File attachments
+                # The `[Attached files: …]` marker is appended for diverted
+                # attachments too, so the persisted text differs from what the
+                # user typed even when nothing went inline (a lone .pptx).
+                or bool(attachment_marker_names)
             )
             # Strands' resume protocol wants each entry wrapped as
             # {"interruptResponse": {...}}. The InvocationRequest schema
@@ -2285,6 +2374,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 final_message,
                 session_id=input_data.session_id,
                 files=files_to_send if files_to_send else None,
+                attachment_names=attachment_marker_names or None,
                 citations=citations_for_storage if citations_for_storage else None,
                 original_message=input_data.message if message_will_be_modified else None,
                 interrupt_responses=interrupt_responses_payload,

@@ -8,7 +8,14 @@ import { ConfigService } from '../config.service';
 export type FileStatus = 'pending' | 'ready' | 'failed';
 
 /**
- * Allowed MIME types for file uploads (Bedrock-compliant)
+ * Allowed MIME types for file uploads.
+ *
+ * Must stay in sync with `ALLOWED_MIME_TYPES` in
+ * `backend/src/apis/shared/files/models.py` — the backend is the enforcing
+ * side, this list drives the picker's `accept` filter and the drop/paste
+ * check. Not every entry is sent to Bedrock as a document block: csv/xls/xlsx
+ * route to the spreadsheet tools and pptx routes to the PowerPoint tools
+ * (Bedrock's document-format enum has no `pptx`). See `_partition_attachments`.
  */
 export const ALLOWED_MIME_TYPES: Record<string, string> = {
   // Documents
@@ -19,6 +26,7 @@ export const ALLOWED_MIME_TYPES: Record<string, string> = {
   'text/csv': 'csv',
   'application/vnd.ms-excel': 'xls',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
   'text/markdown': 'md',
   // Images (Bedrock-supported)
   'image/png': 'png',
@@ -32,7 +40,7 @@ export const ALLOWED_MIME_TYPES: Record<string, string> = {
  */
 export const ALLOWED_EXTENSIONS = [
   // Documents
-  '.pdf', '.docx', '.txt', '.html', '.csv', '.xls', '.xlsx', '.md',
+  '.pdf', '.docx', '.txt', '.html', '.csv', '.xls', '.xlsx', '.pptx', '.md',
   // Images
   '.png', '.jpg', '.jpeg', '.gif', '.webp'
 ];
@@ -41,6 +49,34 @@ export const ALLOWED_EXTENSIONS = [
  * Maximum file size in bytes (4MB)
  */
 export const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Maximum .pptx size in bytes (25MB).
+ *
+ * Decks get a larger cap because the general limit exists to keep documents
+ * under what Bedrock accepts as an inline content block, and a .pptx is
+ * never sent inline — it routes to the PowerPoint tools instead. Corporate
+ * templates with imagery routinely clear 4MB, which is what made the
+ * `template_name` workflow unusable.
+ *
+ * Must match `FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION` on the backend
+ * (`files/service.py`), which is the enforcing side — if this is the larger
+ * of the two, the UI accepts a deck that presign then rejects.
+ */
+export const PPTX_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Resolve the size cap that applies to a given file. Use this rather than
+ * `MAX_FILE_SIZE_BYTES` directly at any gate, or a legitimate deck gets
+ * rejected by whichever check was missed.
+ */
+export function maxFileSizeFor(file: File): number {
+  const isPptx =
+    file.name.toLowerCase().endsWith('.pptx') ||
+    file.type ===
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  return isPptx ? PPTX_MAX_FILE_SIZE_BYTES : MAX_FILE_SIZE_BYTES;
+}
 
 /**
  * Maximum files per message
@@ -232,6 +268,48 @@ export function getFileExtension(filename: string): string {
 }
 
 /**
+ * Extension → MIME map, mirroring `ALLOWED_EXTENSIONS` in
+ * `backend/src/apis/shared/files/models.py`.
+ */
+const EXTENSION_TO_MIME_TYPE: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.txt': 'text/plain',
+  '.html': 'text/html',
+  '.csv': 'text/csv',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.md': 'text/markdown',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+/**
+ * Resolve the MIME type to send with a presign request.
+ *
+ * Browsers do not always populate `File.type` — an OS with no handler
+ * registered for the extension reports `''`, and some file managers report
+ * `application/octet-stream`. `validateFile` accepts those by extension, so
+ * sending the browser's value verbatim would hand the backend a MIME its
+ * own allowlist rejects, 400-ing an upload the UI just accepted.
+ *
+ * Resolving from the extension also keeps files reachable by the tools that
+ * route them, which match on the stored MIME *exactly*: a deck stored as
+ * octet-stream is invisible to `read_powerpoint_presentation`, and a
+ * spreadsheet stored that way never reaches the analysis tools.
+ */
+export function resolveMimeType(file: File): string {
+  if (isAllowedMimeType(file.type)) {
+    return file.type;
+  }
+  return EXTENSION_TO_MIME_TYPE[getFileExtension(file.name)] ?? file.type;
+}
+
+/**
  * Service for managing file uploads via pre-signed URLs.
  *
  * Upload flow:
@@ -313,9 +391,10 @@ export class FileUploadService {
    * @throws FileUploadError if validation fails
    */
   validateFile(file: File): void {
-    // Check size
-    if (file.size > MAX_FILE_SIZE_BYTES) {
-      throw new FileTooLargeError(file.size, MAX_FILE_SIZE_BYTES);
+    // Check size (pptx has its own, larger cap)
+    const sizeLimit = maxFileSizeFor(file);
+    if (file.size > sizeLimit) {
+      throw new FileTooLargeError(file.size, sizeLimit);
     }
 
     // Check MIME type
@@ -346,7 +425,7 @@ export class FileUploadService {
     const presignRequest: PresignRequest = {
       sessionId,
       filename: file.name,
-      mimeType: file.type || 'application/octet-stream',
+      mimeType: resolveMimeType(file),
       sizeBytes: file.size,
     };
 
