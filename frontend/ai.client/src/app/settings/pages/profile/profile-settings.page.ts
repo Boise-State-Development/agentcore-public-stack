@@ -36,6 +36,7 @@ import { UserService } from '../../../auth/user.service';
               class="size-20 rounded-full object-cover ring-2 ring-gray-200 dark:ring-white/10"
             />
           } @else {
+            <!-- intentional: decorative fallback-avatar gradient, no status/identity meaning -->
             <div class="flex size-20 items-center justify-center rounded-full bg-linear-to-br from-blue-500 to-indigo-600 text-2xl font-bold text-white ring-2 ring-gray-200 dark:ring-white/10">
               {{ getInitials() }}
             </div>
@@ -47,7 +48,13 @@ import { UserService } from '../../../auth/user.service';
             <p class="text-sm/6 text-gray-500 dark:text-gray-400">
               {{ userService.currentUser()?.email ?? '' }}
             </p>
-            <span class="mt-1 inline-flex items-center rounded-xs bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+            <!--
+              vendor-microsoft (not primary/state) — this badge names the
+              actual identity provider (Entra ID = Microsoft), the same
+              vendor identity signal src/styles/tokens/identity.css exists
+              for. Must not follow Brand_Config.
+            -->
+            <span class="mt-1 inline-flex items-center rounded-xs bg-vendor-microsoft-100 px-2 py-0.5 text-xs font-medium text-vendor-microsoft-700 dark:bg-vendor-microsoft-900/30 dark:text-vendor-microsoft-400">
               Managed by Entra ID
             </span>
           </div>

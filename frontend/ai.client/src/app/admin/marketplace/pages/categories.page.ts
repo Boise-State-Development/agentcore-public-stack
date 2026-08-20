@@ -10,6 +10,7 @@ import { heroPlus, heroTrash, heroTag } from '@ng-icons/heroicons/outline';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import { AgentCategory } from '../models/marketplace.model';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 /**
  * Categories — the browse order of the store (D10).
@@ -30,7 +31,7 @@ import { AgentCategory } from '../models/marketplace.model';
 @Component({
   selector: 'app-marketplace-categories',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, TooltipDirective],
+  imports: [NgIcon, TooltipDirective, SpinnerComponent],
   providers: [provideIcons({ heroPlus, heroTrash, heroTag })],
   template: `
     <div class="min-h-dvh">
@@ -46,7 +47,7 @@ import { AgentCategory } from '../models/marketplace.model';
         @if (error()) {
           <div
             role="alert"
-            class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mb-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
@@ -66,14 +67,14 @@ import { AgentCategory } from '../models/marketplace.model';
               [value]="newLabel()"
               (input)="onNewLabelInput($event)"
               placeholder="e.g. Student Support"
-              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
             />
           </div>
           <button
             type="button"
             [disabled]="!newLabel().trim() || busy()"
             (click)="addCategory()"
-            class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
             Add
@@ -82,10 +83,7 @@ import { AgentCategory } from '../models/marketplace.model';
 
         @if (loading()) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading categories</span>
+            <app-spinner size="lg" label="Loading categories" />
           </div>
         } @else if (categories().length === 0) {
           <div
@@ -115,7 +113,7 @@ import { AgentCategory } from '../models/marketplace.model';
                     [id]="'label-' + category.id"
                     [value]="category.label"
                     (change)="renameCategory(category, $event)"
-                    class="block w-full rounded-2xl border border-transparent bg-transparent px-2 py-1 text-sm/6 font-medium text-gray-900 hover:border-gray-300 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white dark:hover:border-gray-600 dark:focus:bg-gray-900"
+                    class="block w-full rounded-2xl border border-transparent bg-transparent px-2 py-1 text-sm/6 font-medium text-gray-900 hover:border-gray-300 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 dark:text-white dark:hover:border-gray-600 dark:focus:bg-gray-900"
                   />
                   @if (category.id !== category.label) {
                     <p class="px-2 text-xs text-gray-400 dark:text-gray-500">
@@ -129,7 +127,7 @@ import { AgentCategory } from '../models/marketplace.model';
                     type="button"
                     [disabled]="busy()"
                     (click)="toggleEnabled(category)"
-                    class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                     [appTooltip]="
                       category.enabled
                         ? 'Hide from the pickers and the browse header. Agents already in it keep working.'
@@ -143,7 +141,7 @@ import { AgentCategory } from '../models/marketplace.model';
                     type="button"
                     [disabled]="busy()"
                     (click)="removeCategory(category)"
-                    class="rounded-2xl p-2 text-gray-500 hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-rose-900/20 dark:hover:text-rose-400"
+                    class="rounded-2xl p-2 text-gray-500 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                     [appTooltip]="'Delete category'"
                     appTooltipPosition="top"
                   >

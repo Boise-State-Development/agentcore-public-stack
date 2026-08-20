@@ -3,7 +3,7 @@
     <!-- Back link -->
     <a
       routerLink="/admin/manage-models"
-      class="mb-4 inline-flex items-center gap-1 text-sm/6 font-medium text-blue-600 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+      class="mb-4 inline-flex items-center gap-1 text-sm/6 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
     >
       <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
       Back to models
@@ -33,9 +33,9 @@
           [attr.aria-controls]="'catalog-panel-' + tab.id"
           [tabindex]="activeTab() === tab.id ? 0 : -1"
           (click)="selectTab(tab.id)"
-          class="rounded-2xl px-4 py-1.5 text-sm/6 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+          class="rounded-2xl px-4 py-1.5 text-sm/6 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
           [class]="activeTab() === tab.id
-            ? 'bg-blue-600 text-white dark:bg-blue-500'
+            ? 'bg-primary-accessible text-white'
             : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white'"
         >
           {{ tab.label }}
@@ -68,7 +68,7 @@
               </p>
               <a
                 routerLink="/admin/manage-models/new"
-                class="mt-4 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+                class="mt-4 inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:brightness-110"
               >
                 <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
                 Add a custom model
@@ -111,7 +111,7 @@
                       </div>
                     </div>
                     @if (isAlreadyAdded(model.template.modelId)) {
-                      <span class="inline-flex shrink-0 items-center gap-1 rounded-2xl bg-green-100 px-2 py-0.5 text-xs/5 font-medium text-green-700 dark:bg-green-900/40 dark:text-green-300">
+                      <span class="inline-flex shrink-0 items-center gap-1 rounded-2xl bg-state-success-100 px-2 py-0.5 text-xs/5 font-medium text-state-success-700 dark:bg-state-success-900/40 dark:text-state-success-300">
                         <ng-icon name="heroCheckCircleSolid" class="size-4" aria-hidden="true" />
                         Added
                       </span>
@@ -127,7 +127,7 @@
                   <ul class="mt-3 flex flex-wrap gap-1.5">
                     @for (cap of model.capabilities; track cap) {
                       <li
-                        class="inline-flex items-center rounded-2xl bg-purple-100 px-2 py-0.5 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
+                        class="inline-flex items-center rounded-2xl bg-category-accent-skills-100 px-2 py-0.5 text-xs/5 text-category-accent-skills-700 dark:bg-category-accent-skills-900/50 dark:text-category-accent-skills-300"
                       >
                         {{ cap }}
                       </li>
@@ -189,7 +189,7 @@
                   @if (errorFor(model.key); as msg) {
                     <p
                       role="alert"
-                      class="mt-3 text-xs/5 text-red-600 dark:text-red-400"
+                      class="mt-3 text-xs/5 text-state-danger-600 dark:text-state-danger-400"
                     >
                       {{ msg }}
                     </p>
@@ -200,7 +200,7 @@
                     @if (isAlreadyAdded(model.template.modelId)) {
                       <a
                         routerLink="/admin/manage-models"
-                        class="inline-flex items-center gap-1 text-sm/6 font-medium text-blue-600 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+                        class="inline-flex items-center gap-1 text-sm/6 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
                       >
                         View in list
                       </a>
@@ -209,7 +209,7 @@
                         type="button"
                         (click)="previewCuratedModel(model)"
                         [disabled]="addingKey() !== null"
-                        class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                        class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                       >
                         Preview &amp; customize
                       </button>
@@ -217,7 +217,7 @@
                         type="button"
                         (click)="addCuratedModel(model)"
                         [disabled]="addingKey() !== null"
-                        class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
+                        class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:brightness-110"
                       >
                         <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
                         {{ isAdding(model.key) ? 'Adding…' : 'Add to models' }}
@@ -236,7 +236,7 @@
     <div class="mt-8 flex flex-col gap-2 text-sm/6 sm:flex-row sm:items-center sm:justify-between">
       <a
         routerLink="/admin/manage-models/new"
-        class="inline-flex items-center gap-1 font-medium text-blue-600 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+        class="inline-flex items-center gap-1 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
       >
         Need something else? Add a custom model
       </a>

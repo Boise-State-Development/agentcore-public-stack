@@ -26,6 +26,7 @@ import {
   ConfirmationDialogComponent,
   ConfirmationDialogData,
 } from '../../../components/confirmation-dialog';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 type ConnectState =
   | 'probing'
@@ -38,7 +39,7 @@ type ConnectState =
 @Component({
   selector: 'app-connectors-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroLink,
@@ -62,21 +63,21 @@ type ConnectState =
 
       @if (resource.isLoading()) {
         <div class="flex items-center gap-3 text-sm/6 text-gray-500 dark:text-gray-400">
-          <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-t-blue-400 dark:border-gray-600"></div>
+          <app-spinner size="sm" label="Loading connectors" />
           Loading connectors...
         </div>
       } @else if (resource.error()) {
-        <div class="flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
-          <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-red-600 dark:text-red-400" />
+        <div class="flex items-start gap-3 rounded-sm border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20">
+          <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" />
           <div>
-            <h3 class="text-sm/6 font-medium text-red-800 dark:text-red-200">Couldn't load connectors</h3>
-            <p class="mt-1 text-sm/6 text-red-700 dark:text-red-300">
+            <h3 class="text-sm/6 font-medium text-state-danger-800 dark:text-state-danger-200">Couldn't load connectors</h3>
+            <p class="mt-1 text-sm/6 text-state-danger-700 dark:text-state-danger-300">
               {{ resource.error()?.message || 'Try again in a moment.' }}
             </p>
             <button
               type="button"
               (click)="resource.reload()"
-              class="mt-2 text-sm/6 font-medium text-red-700 underline hover:text-red-800 dark:text-red-200"
+              class="mt-2 text-sm/6 font-medium text-state-danger-700 underline hover:text-state-danger-800 dark:text-state-danger-200"
             >
               Retry
             </button>
@@ -96,9 +97,9 @@ type ConnectState =
         <ul class="flex flex-col gap-3">
           @for (connector of connectors(); track connector.providerId) {
             <li
-              class="flex items-start justify-between gap-4 rounded-sm border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
+              class="flex items-center justify-between gap-4 rounded-sm border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
             >
-              <div class="flex items-start gap-3">
+              <div class="flex items-center gap-3">
                 @if (connector.iconData) {
                   <div class="flex size-10 shrink-0 items-center justify-center rounded-md bg-gray-50 dark:bg-gray-900">
                     <img
@@ -133,12 +134,12 @@ type ConnectState =
               } @else {
                 <div class="flex shrink-0 items-center gap-2">
                   @if (state === 'connected') {
-                    <span class="inline-flex items-center gap-1.5 rounded-sm bg-emerald-50 px-2.5 py-1.5 text-xs/5 font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+                    <span class="inline-flex items-center gap-1.5 rounded-sm bg-state-success-50 px-2.5 py-1.5 text-xs/5 font-medium text-state-success-700 dark:bg-state-success-900/30 dark:text-state-success-300">
                       <ng-icon name="heroCheckCircle" class="size-4" />
                       Connected
                     </span>
                   } @else if (state === 'error') {
-                    <span class="inline-flex items-center gap-1.5 rounded-sm bg-red-50 px-2.5 py-1.5 text-xs/5 font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">
+                    <span class="inline-flex items-center gap-1.5 rounded-sm bg-state-danger-50 px-2.5 py-1.5 text-xs/5 font-medium text-state-danger-700 dark:bg-state-danger-900/30 dark:text-state-danger-300">
                       <ng-icon name="heroExclamationTriangle" class="size-4" />
                       Failed
                     </span>
@@ -153,14 +154,27 @@ type ConnectState =
                       Disconnect
                     </button>
                   } @else {
+                    <!--
+                      Brand accent. Uses the generated \`primary-accessible\`
+                      alias rather than a fixed step, so the white label text
+                      clears WCAG AA whatever Brand_Color is configured. No
+                      \`dark:\` override: the contrast that matters for a solid
+                      fill is fill-vs-white-text, which is identical in both
+                      themes, so lightening in dark mode would only erode it.
+                      Hover is a brightness filter rather than a darker step
+                      because for a light brand color the accessible variant
+                      can already be darker than step 700, which would make
+                      \`hover:bg-primary-700\` brighten on hover and lose the
+                      guarantee.
+                    -->
                     <button
                       type="button"
                       (click)="connect(connector.providerId)"
                       [disabled]="state === 'initiating' || state === 'awaiting'"
-                      class="inline-flex items-center gap-1.5 rounded-sm bg-blue-600 px-3 py-1.5 text-sm/6 font-semibold text-white shadow-xs hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                      class="inline-flex items-center gap-1.5 rounded-sm bg-primary-accessible px-3 py-1.5 text-sm/6 font-semibold text-white shadow-xs transition-[filter] hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-accessible/50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       @if (state === 'initiating') {
-                        <div class="size-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
+                        <app-spinner size="sm" variant="on-solid" label="Starting" />
                         Starting...
                       } @else if (state === 'awaiting') {
                         <ng-icon name="heroArrowPath" class="size-4" />
@@ -355,19 +369,28 @@ export class ConnectorsSettingsPage {
     }
   }
 
+  /**
+   * Icon container styling per connector provider.
+   *
+   * Uses the `vendor-*` identity tokens (src/styles/tokens/identity.css)
+   * rather than raw palette utilities: these hues track each third party's
+   * own brand, so they must NOT follow Brand_Config. GitHub stays on
+   * neutrals because its brand is near-black, and neutrals are outside the
+   * rebrandable surface.
+   */
   protected iconClasses(providerType: UserConnector['providerType']): string {
     const base = 'flex size-10 items-center justify-center rounded-sm';
     switch (providerType) {
       case 'google':
-        return `${base} bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400`;
+        return `${base} bg-vendor-google-100 text-vendor-google-600 dark:bg-vendor-google-900/30 dark:text-vendor-google-400`;
       case 'microsoft':
-        return `${base} bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400`;
+        return `${base} bg-vendor-microsoft-100 text-vendor-microsoft-600 dark:bg-vendor-microsoft-900/30 dark:text-vendor-microsoft-400`;
       case 'github':
         return `${base} bg-gray-800 text-white dark:bg-gray-600`;
       case 'canvas':
-        return `${base} bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400`;
+        return `${base} bg-vendor-canvas-100 text-vendor-canvas-600 dark:bg-vendor-canvas-900/30 dark:text-vendor-canvas-400`;
       default:
-        return `${base} bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400`;
+        return `${base} bg-vendor-generic-100 text-vendor-generic-600 dark:bg-vendor-generic-900/30 dark:text-vendor-generic-400`;
     }
   }
 }

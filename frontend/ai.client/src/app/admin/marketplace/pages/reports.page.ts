@@ -20,6 +20,7 @@ import {
   ResolveReportDialogResult,
 } from '../components/resolve-report-dialog.component';
 import { parseIso } from '../../../utils/date';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 /**
  * The Reports queue — user-submitted problem reports (D10, D15).
@@ -43,7 +44,7 @@ import { parseIso } from '../../../utils/date';
 @Component({
   selector: 'app-marketplace-reports',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, AgentTileComponent, TooltipDirective],
+  imports: [NgIcon, RouterLink, AgentTileComponent, TooltipDirective, SpinnerComponent],
   providers: [
     provideIcons({
       heroChatBubbleLeftRight,
@@ -69,7 +70,7 @@ import { parseIso } from '../../../utils/date';
         @if (error()) {
           <div
             role="alert"
-            class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mb-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
@@ -77,10 +78,7 @@ import { parseIso } from '../../../utils/date';
 
         @if (loading()) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading reports</span>
+            <app-spinner size="lg" label="Loading reports" />
           </div>
         } @else if (reports().length === 0) {
           <div
@@ -105,7 +103,7 @@ import { parseIso } from '../../../utils/date';
                 class="rounded-2xl border bg-white p-4 dark:bg-gray-800"
                 [class]="
                   row.reason === 'inappropriate'
-                    ? 'border-rose-300 dark:border-rose-800'
+                    ? 'border-state-danger-300 dark:border-state-danger-800'
                     : 'border-gray-200 dark:border-gray-700'
                 "
               >
@@ -200,7 +198,7 @@ import { parseIso } from '../../../utils/date';
                         [routerLink]="['/agents', row.agentId]"
                         [appTooltip]="'Open this agent as a user sees it'"
                         appTooltipPosition="top"
-                        class="inline-flex items-center rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                        class="inline-flex items-center rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                       >
                         View agent
                       </a>
@@ -211,7 +209,7 @@ import { parseIso } from '../../../utils/date';
                       (click)="triage(row, 'dismiss')"
                       [appTooltip]="'No action needed — takes it off the queue'"
                       appTooltipPosition="top"
-                      class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                      class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                     >
                       <ng-icon name="heroNoSymbol" class="size-4" aria-hidden="true" />
                       Dismiss
@@ -222,7 +220,7 @@ import { parseIso } from '../../../utils/date';
                       (click)="triage(row, 'resolve')"
                       [appTooltip]="'Handled — records your decision, does not change the agent'"
                       appTooltipPosition="top"
-                      class="inline-flex items-center gap-1.5 rounded-2xl bg-blue-600 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                      class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3 py-1.5 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <ng-icon name="heroCheck" class="size-4" aria-hidden="true" />
                       Resolve
@@ -304,7 +302,7 @@ export class ReportsPage implements OnInit {
   /** Only `inappropriate` gets colour — everything else is a queue item, not an alarm. */
   reasonClass(reason: ReportReason): string {
     return reason === 'inappropriate'
-      ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300'
+      ? 'bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/30 dark:text-state-danger-300'
       : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300';
   }
 

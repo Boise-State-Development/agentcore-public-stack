@@ -65,7 +65,7 @@ import { ManagedModel } from '../../admin/manage-models/models/managed-model.mod
                 Loading models...
               </div>
             } @else if (modelService.modelsError()) {
-              <div class="px-3 py-2 text-sm text-red-600 dark:text-red-400">
+              <div class="px-3 py-2 text-sm text-state-danger-600 dark:text-state-danger-400">
                 {{ modelService.modelsError() }}
               </div>
             } @else if (modelService.availableModels().length === 0) {

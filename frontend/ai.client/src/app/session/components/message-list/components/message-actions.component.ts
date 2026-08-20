@@ -24,7 +24,7 @@ import { TooltipDirective } from '../../../../components/tooltip';
     <div class="flex items-center gap-1">
       <button
         type="button"
-        class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+        class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
         [appTooltip]="copied() ? 'Copied' : 'Copy'"
         appTooltipPosition="top"
         [attr.aria-label]="copied() ? 'Copied to clipboard' : 'Copy message'"
@@ -44,7 +44,7 @@ import { TooltipDirective } from '../../../../components/tooltip';
         </span>
         <button
           type="button"
-          class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-300 dark:hover:bg-blue-950/40"
+          class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-primary-accessible transition-colors hover:bg-primary-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-primary-950/40"
           appTooltip="Resume response"
           appTooltipPosition="top"
           aria-label="Continue the truncated response"
@@ -59,7 +59,7 @@ import { TooltipDirective } from '../../../../components/tooltip';
         </span>
         <button
           type="button"
-          class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-300 dark:hover:bg-blue-950/40"
+          class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-primary-accessible transition-colors hover:bg-primary-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-primary-950/40"
           appTooltip="Resume response"
           appTooltipPosition="top"
           aria-label="Continue the interrupted response"

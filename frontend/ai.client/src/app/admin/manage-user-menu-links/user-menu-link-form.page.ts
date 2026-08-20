@@ -14,12 +14,13 @@ import {
   UserMenuLinkFormData,
   UserMenuLinkKind,
 } from './models/user-menu-link.model';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 const URL_PATTERN = /^https?:\/\/.+/i;
 
 @Component({
   selector: 'app-user-menu-link-form-page',
-  imports: [RouterLink, ReactiveFormsModule, MarkdownComponent, NgIcon],
+  imports: [RouterLink, ReactiveFormsModule, MarkdownComponent, NgIcon, SpinnerComponent],
   providers: [provideIcons({ heroArrowLeft })],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -37,7 +38,7 @@ const URL_PATTERN = /^https?:\/\/.+/i;
         </h1>
 
         @if (loadError()) {
-          <div class="mb-4 rounded-sm border border-red-300 bg-red-50 p-4 text-sm/6 text-red-700 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300">
+          <div class="mb-4 rounded-sm border border-state-danger-300 bg-state-danger-50 p-4 text-sm/6 text-state-danger-700 dark:border-state-danger-700 dark:bg-state-danger-900/20 dark:text-state-danger-300">
             {{ loadError() }}
           </div>
         }
@@ -47,18 +48,18 @@ const URL_PATTERN = /^https?:\/\/.+/i;
             <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div class="md:col-span-2">
                 <label for="label" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                  Label <span class="text-red-600">*</span>
+                  Label <span class="text-state-danger-600">*</span>
                 </label>
                 <input
                   id="label"
                   type="text"
                   formControlName="label"
                   maxlength="64"
-                  class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-500 dark:bg-gray-700 dark:text-white"
+                  class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700 dark:text-white"
                   placeholder="e.g. Privacy policy"
                 />
                 @if (showError('label')) {
-                  <p class="mt-1 text-xs text-red-600 dark:text-red-400">Label is required.</p>
+                  <p class="mt-1 text-xs text-state-danger-600 dark:text-state-danger-400">Label is required.</p>
                 }
               </div>
 
@@ -69,7 +70,7 @@ const URL_PATTERN = /^https?:\/\/.+/i;
                 <select
                   id="kind"
                   formControlName="kind"
-                  class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-500 dark:bg-gray-700 dark:text-white"
+                  class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700 dark:text-white"
                 >
                   <option value="external">External URL (new tab)</option>
                   <option value="modal">In-app modal (rich text)</option>
@@ -86,7 +87,7 @@ const URL_PATTERN = /^https?:\/\/.+/i;
                   min="0"
                   max="10000"
                   formControlName="order"
-                  class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-500 dark:bg-gray-700 dark:text-white"
+                  class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700 dark:text-white"
                 />
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Lower numbers appear first.</p>
               </div>
@@ -96,7 +97,7 @@ const URL_PATTERN = /^https?:\/\/.+/i;
                   id="enabled"
                   type="checkbox"
                   formControlName="enabled"
-                  class="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  class="size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
                 <label for="enabled" class="text-sm/6 text-gray-700 dark:text-gray-300">
                   Visible to users
@@ -108,7 +109,7 @@ const URL_PATTERN = /^https?:\/\/.+/i;
           @if (kindValue() === 'external') {
             <div class="rounded-sm border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
               <label for="url" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                URL <span class="text-red-600">*</span>
+                URL <span class="text-state-danger-600">*</span>
               </label>
               <input
                 id="url"
@@ -116,17 +117,17 @@ const URL_PATTERN = /^https?:\/\/.+/i;
                 formControlName="url"
                 maxlength="2048"
                 placeholder="https://example.com/privacy"
-                class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-500 dark:bg-gray-700 dark:text-white"
+                class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700 dark:text-white"
               />
               @if (showError('url')) {
-                <p class="mt-1 text-xs text-red-600 dark:text-red-400">A valid http(s) URL is required.</p>
+                <p class="mt-1 text-xs text-state-danger-600 dark:text-state-danger-400">A valid http(s) URL is required.</p>
               }
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Opens in a new tab with <code>rel="noopener noreferrer"</code>.</p>
             </div>
           } @else {
             <div class="rounded-sm border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
               <label for="body_markdown" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                Body (Markdown) <span class="text-red-600">*</span>
+                Body (Markdown) <span class="text-state-danger-600">*</span>
               </label>
               <p class="mt-1 mb-3 text-xs text-gray-500 dark:text-gray-400">
                 Supports CommonMark: headings, lists, links, code, emphasis. Links open in a new tab.
@@ -137,7 +138,7 @@ const URL_PATTERN = /^https?:\/\/.+/i;
                   formControlName="body_markdown"
                   rows="14"
                   maxlength="50000"
-                  class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-500 dark:bg-gray-700 dark:text-white"
+                  class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700 dark:text-white"
                   placeholder="# Welcome&#10;&#10;Some **rich** text..."
                 ></textarea>
                 <div class="rounded-sm border border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-900">
@@ -148,13 +149,13 @@ const URL_PATTERN = /^https?:\/\/.+/i;
                 </div>
               </div>
               @if (showError('body_markdown')) {
-                <p class="mt-1 text-xs text-red-600 dark:text-red-400">Body is required for modal links.</p>
+                <p class="mt-1 text-xs text-state-danger-600 dark:text-state-danger-400">Body is required for modal links.</p>
               }
             </div>
           }
 
           @if (submitError()) {
-            <div class="rounded-sm border border-red-300 bg-red-50 p-4 text-sm/6 text-red-700 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300">
+            <div class="rounded-sm border border-state-danger-300 bg-state-danger-50 p-4 text-sm/6 text-state-danger-700 dark:border-state-danger-700 dark:bg-state-danger-900/20 dark:text-state-danger-300">
               {{ submitError() }}
             </div>
           }
@@ -169,10 +170,10 @@ const URL_PATTERN = /^https?:\/\/.+/i;
             <button
               type="submit"
               [disabled]="form.invalid || isSubmitting()"
-              class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+              class="inline-flex items-center gap-2 rounded-sm bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               @if (isSubmitting()) {
-                <span class="size-4 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden="true"></span>
+                <app-spinner size="sm" variant="on-solid" label="Saving" />
               }
               {{ isEdit() ? 'Save changes' : 'Create link' }}
             </button>

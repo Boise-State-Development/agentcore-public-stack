@@ -10,13 +10,14 @@ import { NgComponentOutlet } from '@angular/common';
 import { JsonSyntaxHighlightPipe } from './json-syntax-highlight.pipe';
 import { ContentBlock, ToolUseData } from '../../../../services/models/message.model';
 import { ToolRendererRegistryService } from './tool-renderer-registry.service';
+import { SpinnerComponent } from '../../../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-tool-use',
   templateUrl: './tool-use.component.html',
   styleUrl: './tool-use.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [JsonSyntaxHighlightPipe, NgComponentOutlet],
+  imports: [JsonSyntaxHighlightPipe, NgComponentOutlet, SpinnerComponent],
 })
 export class ToolUseComponent {
   /** The content block containing tool use data */
@@ -117,9 +118,9 @@ export class ToolUseComponent {
   /** Status icon color classes */
   statusIconColor = computed(() => {
     const status = this.toolStatus();
-    if (status === 'complete') return 'text-green-600 dark:text-green-400';
-    if (status === 'error') return 'text-red-600 dark:text-red-400';
-    return 'text-blue-600 dark:text-blue-400';
+    if (status === 'complete') return 'text-state-success-600 dark:text-state-success-400';
+    if (status === 'error') return 'text-state-danger-600 dark:text-state-danger-400';
+    return 'text-state-info-600 dark:text-state-info-400';
   });
 
   /** Toggle the details expanded state */

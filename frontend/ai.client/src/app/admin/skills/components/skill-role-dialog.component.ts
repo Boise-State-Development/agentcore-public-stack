@@ -13,6 +13,7 @@ import { AdminSkill, SkillRoleAssignment } from '../models/admin-skill.model';
 import { AppRolesService } from '../../roles/services/app-roles.service';
 import { AppRole } from '../../roles/models/app-role.model';
 import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 /**
  * Data passed to the skill role dialog.
@@ -30,7 +31,7 @@ export type SkillRoleDialogResult = string[] | undefined;
 @Component({
   selector: 'app-skill-role-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon],
+  imports: [DialogDismissDirective, NgIcon, SpinnerComponent],
   providers: [provideIcons({ heroXMark, heroUserGroup })],
   host: {
     class: 'block',
@@ -48,7 +49,7 @@ export type SkillRoleDialogResult = string[] | undefined;
       appDialogDismiss
       (dismissed)="onCancel()">
       <div
-        class="dialog-panel relative w-full overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
+        class="dialog-panel relative w-full overflow-hidden rounded-lg border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
         role="dialog"
         aria-modal="true"
         aria-labelledby="skill-role-title"
@@ -68,7 +69,7 @@ export type SkillRoleDialogResult = string[] | undefined;
             type="button"
             (click)="onCancel()"
             aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
           </button>
@@ -78,23 +79,23 @@ export type SkillRoleDialogResult = string[] | undefined;
         <div class="max-h-72 overflow-y-auto px-6 py-4">
           @if (loading()) {
             <div class="flex items-center justify-center py-8">
-              <div class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
+              <app-spinner size="lg" label="Loading" />
             </div>
           } @else {
             <div class="space-y-2">
               @for (role of allRoles(); track role.roleId) {
                 <label
-                  class="flex cursor-pointer items-center gap-3 rounded-2xl border border-gray-200 p-3 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700/50"
-                  [class.border-blue-500]="selectedRoleIds().has(role.roleId)"
-                  [class.bg-blue-50]="selectedRoleIds().has(role.roleId)"
-                  [class.dark:border-blue-400]="selectedRoleIds().has(role.roleId)"
-                  [class.dark:bg-blue-900/20]="selectedRoleIds().has(role.roleId)"
+                  class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700/50"
+                  [class.border-primary-500]="selectedRoleIds().has(role.roleId)"
+                  [class.bg-primary-50]="selectedRoleIds().has(role.roleId)"
+                  [class.dark:border-primary-400]="selectedRoleIds().has(role.roleId)"
+                  [class.dark:bg-primary-900/20]="selectedRoleIds().has(role.roleId)"
                 >
                   <input
                     type="checkbox"
                     [checked]="selectedRoleIds().has(role.roleId)"
                     (change)="toggleRole(role.roleId)"
-                    class="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-500 dark:bg-gray-700"
+                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700"
                   />
                   <div class="min-w-0 flex-1">
                     <div class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ role.displayName }}</div>
@@ -115,7 +116,7 @@ export type SkillRoleDialogResult = string[] | undefined;
               </p>
             }
 
-            <p class="mt-4 text-xs/5 text-amber-600 dark:text-amber-400">
+            <p class="mt-4 text-xs/5 text-state-warning-600 dark:text-state-warning-400">
               Changes take effect within 5-10 minutes.
             </p>
           }
@@ -126,7 +127,7 @@ export type SkillRoleDialogResult = string[] | undefined;
           <button
             type="button"
             (click)="onCancel()"
-            class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
+            class="rounded-lg px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
           >
             Cancel
           </button>
@@ -134,7 +135,7 @@ export type SkillRoleDialogResult = string[] | undefined;
             type="button"
             (click)="save()"
             [disabled]="saving() || loading()"
-            class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex items-center gap-2 rounded-lg bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:brightness-110"
           >
             {{ saving() ? 'Saving…' : 'Save Changes' }}
           </button>

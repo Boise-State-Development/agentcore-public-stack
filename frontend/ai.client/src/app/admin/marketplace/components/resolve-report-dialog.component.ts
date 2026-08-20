@@ -74,15 +74,15 @@ export type ResolveReportDialogResult = { note?: string } | undefined;
             type="button"
             (click)="onCancel()"
             aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
           </button>
         </div>
 
         <div class="px-6 py-4">
-          <div class="rounded-2xl bg-amber-50 px-4 py-3 dark:bg-amber-900/20">
-            <h3 class="text-sm/6 font-semibold text-amber-800 dark:text-amber-300">
+          <div class="rounded-2xl bg-state-warning-50 px-4 py-3 dark:bg-state-warning-900/20">
+            <h3 class="text-sm/6 font-semibold text-state-warning-800 dark:text-state-warning-300">
               This does not change the agent
             </h3>
             <p class="mt-1 text-sm/6 text-gray-700 dark:text-gray-300">
@@ -111,7 +111,7 @@ export type ResolveReportDialogResult = { note?: string } | undefined;
             [placeholder]="
               isDismiss() ? 'Why this needs no action' : 'What you changed, or who you contacted'
             "
-            class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+            class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
           ></textarea>
         </div>
 
@@ -121,14 +121,14 @@ export type ResolveReportDialogResult = { note?: string } | undefined;
           <button
             type="button"
             (click)="onCancel()"
-            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
           >
             Cancel
           </button>
           <button
             type="button"
             (click)="onSubmit()"
-            class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
           >
             {{ isDismiss() ? 'Dismiss report' : 'Resolve report' }}
           </button>

@@ -1,5 +1,6 @@
 import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { Router, RouterOutlet } from '@angular/router';
+import { Title } from '@angular/platform-browser';
 import { Sidenav } from './components/sidenav/sidenav';
 import { ErrorToastComponent } from './components/error-toast/error-toast.component';
 import { ToastComponent } from './components/toast';
@@ -10,6 +11,7 @@ import { TooltipDirective } from './components/tooltip/tooltip.directive';
 import { SessionService } from './auth/session.service';
 import { SessionService as SessionListService } from './session/services/session/session.service';
 import { ArtifactStateService } from './session/services/artifacts/artifact-state.service';
+import { BrandingService } from '../branding/branding.service';
 
 @Component({
   selector: 'app-root',
@@ -32,6 +34,8 @@ export class App {
   private session = inject(SessionService);
   private sessionList = inject(SessionListService);
   private artifactState = inject(ArtifactStateService);
+  private titleService = inject(Title);
+  private branding = inject(BrandingService);
 
   /** True while an artifact pane is docked — content reserves right-side
    *  space for it (desktop only) so the fixed panel doesn't occlude chat. */
@@ -47,6 +51,9 @@ export class App {
   );
 
   constructor() {
+    // Set page title from branding config
+    this.titleService.setTitle(this.branding.pageTitle);
+
     // Re-probe the BFF session whenever the tab regains focus. A session
     // that expired while the tab was backgrounded surfaces immediately
     // (redirect to /auth/login) instead of waiting for the next user

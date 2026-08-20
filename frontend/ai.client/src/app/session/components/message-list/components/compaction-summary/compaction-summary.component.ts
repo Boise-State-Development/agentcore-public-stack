@@ -49,7 +49,7 @@ import { heroArchiveBoxArrowDown } from '@ng-icons/heroicons/outline';
       [class.compaction-enter]="animate()"
     >
       <span
-        class="group relative inline-flex items-center gap-1 rounded-sm px-1 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
+        class="group relative inline-flex items-center gap-1 rounded-sm px-1 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
         tabindex="0"
       >
         <ng-icon

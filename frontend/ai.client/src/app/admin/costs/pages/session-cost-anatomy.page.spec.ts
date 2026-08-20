@@ -155,14 +155,14 @@ describe('SessionCostAnatomyPage', () => {
     const fixture = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY)));
     const page = fixture.componentInstance;
 
-    expect(page.getStatusClass('hit')).toContain('bg-green-100');
-    expect(page.getStatusClass('first_write')).toContain('bg-blue-100');
-    expect(page.getStatusClass('miss_ttl_expired')).toContain('bg-yellow-100');
-    expect(page.getStatusClass('miss_avoidable')).toContain('bg-red-100');
+    expect(page.getStatusClass('hit')).toContain('bg-state-success-100');
+    expect(page.getStatusClass('first_write')).toContain('bg-state-info-100');
+    expect(page.getStatusClass('miss_ttl_expired')).toContain('bg-state-warning-100');
+    expect(page.getStatusClass('miss_avoidable')).toContain('bg-state-danger-100');
     expect(page.getStatusClass('uncached')).toContain('bg-gray-100');
     // Its own colour, between hit and miss: it read from cache and still
-    // wasted money, so neither green nor red would be honest.
-    expect(page.getStatusClass('partial_miss')).toContain('bg-orange-100');
+    // wasted money, so neither success nor danger would be honest.
+    expect(page.getStatusClass('partial_miss')).toContain('bg-category-accent-partial-miss-100');
   });
 
   it('labels a partial miss as a miss, not a hit', () => {

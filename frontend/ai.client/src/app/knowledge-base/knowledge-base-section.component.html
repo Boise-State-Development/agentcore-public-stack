@@ -1,11 +1,12 @@
 <!-- Knowledge (card surface — matches the Skills / Memory spaces sections) -->
 <section class="space-y-4 rounded-2xl border border-gray-200/80 bg-white p-5 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80 sm:p-6">
   <div class="flex items-center gap-2">
-    <ng-icon name="heroBookOpen" class="size-5 text-amber-500" aria-hidden="true" />
+    <!-- intentional: decorative section icon (book/knowledge), not a status; no sibling accent in this header to stay distinct from -->
+    <ng-icon name="heroBookOpen" class="size-5 text-state-warning-500" aria-hidden="true" />
     <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Knowledge base</h2>
     @if (webCrawlActive()) {
-      <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2 py-0.5 text-xs/4 font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-        <span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>
+      <span class="inline-flex items-center gap-1.5 rounded-full bg-state-info-50 px-2 py-0.5 text-xs/4 font-medium text-state-info-700 dark:bg-state-info-500/10 dark:text-state-info-300">
+        <span class="size-1.5 animate-pulse rounded-full bg-state-info-500"></span>
         Crawling…
       </span>
     }
@@ -41,7 +42,7 @@
       <!-- Device upload sits first — the most-common action. -->
       <label
         for="file-upload"
-        class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+        class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
       >
         <ng-icon name="heroPlus" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
         Add files
@@ -50,7 +51,7 @@
       <button
         type="button"
         (click)="openWebSourceDialog()"
-        class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+        class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
       >
         <ng-icon name="heroGlobeAlt" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
         Add web content
@@ -82,10 +83,10 @@
             type="button"
             (click)="openOrConnect(source)"
             [disabled]="busy"
-            class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+            class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
           >
             @if (busy && connectPhase() === 'initiating') {
-              <div class="size-4 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
+              <app-spinner size="sm" label="Starting" />
               Starting…
             } @else if (busy && connectPhase() === 'awaiting') {
               <ng-icon name="heroArrowPath" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
@@ -98,7 +99,7 @@
               }
               @if (source.connected) {
                 {{ source.displayName }}
-                <span class="size-1.5 shrink-0 rounded-full bg-emerald-500" title="Connected"></span>
+                <span class="size-1.5 shrink-0 rounded-full bg-state-success-500" title="Connected"></span>
               } @else {
                 Connect to {{ source.displayName }}
               }
@@ -140,23 +141,23 @@
             <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ upload.progress }}%</span>
           }
           @if (upload.status === 'complete') {
-            <span class="text-xs/5 text-green-600 dark:text-green-400">Complete</span>
+            <span class="text-xs/5 text-state-success-600 dark:text-state-success-400">Complete</span>
           }
           @if (upload.status === 'error') {
-            <span class="text-xs/5 text-red-600 dark:text-red-400">Error</span>
+            <span class="text-xs/5 text-state-danger-600 dark:text-state-danger-400">Error</span>
           }
         </div>
       </div>
       @if (upload.status === 'uploading') {
         <div class="h-2 w-full rounded-full bg-gray-200 dark:bg-gray-700">
           <div
-            class="h-2 rounded-full bg-blue-600 transition-all duration-300 dark:bg-blue-500"
+            class="h-2 rounded-full bg-primary-500 transition-all duration-300"
             [style.width.%]="upload.progress"
           ></div>
         </div>
       }
       @if (upload.status === 'error' && upload.error) {
-        <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">{{ upload.error }}</p>
+        <p class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ upload.error }}</p>
       }
     </div>
   }
@@ -198,13 +199,13 @@
                 <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ crawl.fetchedCount }} page{{ crawl.fetchedCount === 1 ? '' : 's' }}</span>
                 @if (crawl.status === 'running') {
                   <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
-                  <span class="inline-flex items-center gap-1.5 text-xs/5 font-medium text-blue-600 dark:text-blue-400">
-                    <span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>
+                  <span class="inline-flex items-center gap-1.5 text-xs/5 font-medium text-state-info-600 dark:text-state-info-400">
+                    <span class="size-1.5 animate-pulse rounded-full bg-state-info-500"></span>
                     Crawling…
                   </span>
                 } @else if (crawl.status === 'failed') {
                   <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
-                  <span class="text-xs/5 font-medium text-red-600 dark:text-red-400">Crawl failed</span>
+                  <span class="text-xs/5 font-medium text-state-danger-600 dark:text-state-danger-400">Crawl failed</span>
                 }
                 @if (isCrawlSyncable(crawl)) {
                   <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
@@ -234,7 +235,7 @@
               (click)="removeWebSource(crawl)"
               title="Remove web source"
               [attr.aria-label]="'Remove ' + crawl.rootUrl"
-              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
             >
               <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
             </button>
@@ -253,15 +254,15 @@
           <li class="flex items-start gap-3 px-3 py-2.5 sm:px-4">
             <div class="flex min-w-0 flex-1 items-start gap-3">
               @if (doc.status === 'complete') {
-                <svg class="mt-0.5 size-5 shrink-0 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <svg class="mt-0.5 size-5 shrink-0 text-state-success-600 dark:text-state-success-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                 </svg>
               } @else if (doc.status === 'failed') {
-                <svg class="mt-0.5 size-5 shrink-0 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <svg class="mt-0.5 size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                 </svg>
               } @else if (pollingDocuments().has(doc.documentId)) {
-                <div class="mt-0.5 size-5 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
+                <app-spinner size="md" label="Processing" />
               } @else {
                 <svg class="mt-0.5 size-5 shrink-0 text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
@@ -274,12 +275,12 @@
                   <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
                   <span
                     class="text-xs/5 font-medium capitalize"
-                    [class.text-blue-600]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
-                    [class.dark:text-blue-400]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
-                    [class.text-green-600]="doc.status === 'complete'"
-                    [class.dark:text-green-400]="doc.status === 'complete'"
-                    [class.text-red-600]="doc.status === 'failed'"
-                    [class.dark:text-red-400]="doc.status === 'failed'"
+                    [class.text-state-info-600]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
+                    [class.dark:text-state-info-400]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
+                    [class.text-state-success-600]="doc.status === 'complete'"
+                    [class.dark:text-state-success-400]="doc.status === 'complete'"
+                    [class.text-state-danger-600]="doc.status === 'failed'"
+                    [class.dark:text-state-danger-400]="doc.status === 'failed'"
                     [class.text-gray-500]="doc.status !== 'complete' && doc.status !== 'failed' && doc.status !== 'uploading' && doc.status !== 'chunking' && doc.status !== 'embedding'"
                     [class.dark:text-gray-400]="doc.status !== 'complete' && doc.status !== 'failed' && doc.status !== 'uploading' && doc.status !== 'chunking' && doc.status !== 'embedding'"
                   >
@@ -295,7 +296,7 @@
                   }
                 </div>
                 @if (doc.status === 'failed' && doc.errorMessage) {
-                  <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">{{ doc.errorMessage }}</p>
+                  <p class="mt-1 text-xs/5 text-state-danger-600 dark:text-state-danger-400">{{ doc.errorMessage }}</p>
                 }
                 <!-- "Keep in sync" — only for documents imported from
                      an external connector (device uploads have no
@@ -323,7 +324,7 @@
                 (click)="downloadDocument(doc.documentId)"
                 title="Download document"
                 [attr.aria-label]="'Download ' + doc.filename"
-                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
+                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-primary-50 hover:text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-primary-500/10 dark:hover:text-primary-accessible-dark"
               >
                 <ng-icon name="heroArrowDownTray" class="size-4" aria-hidden="true" />
               </button>
@@ -333,7 +334,7 @@
               (click)="deleteDocument(doc.documentId)"
               title="Delete document"
               [attr.aria-label]="'Delete ' + doc.filename"
-              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
             >
               <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
             </button>

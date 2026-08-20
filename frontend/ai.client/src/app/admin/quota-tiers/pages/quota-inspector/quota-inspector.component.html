@@ -21,19 +21,16 @@
             [(ngModel)]="userIdInput"
             (keyup.enter)="searchUser()"
             placeholder="Enter user ID or email..."
-            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
           />
         </div>
         <button
           (click)="searchUser()"
           [disabled]="isLoading() || !userIdInput()"
-          class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+          class="inline-flex items-center gap-2 rounded-sm bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:opacity-50"
         >
           @if (isLoading()) {
-            <svg class="size-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
+            <app-spinner size="sm" variant="on-solid" label="Searching" />
             Searching...
           } @else {
             <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -55,8 +52,8 @@
 
     <!-- Error Display -->
     @if (error()) {
-      <div class="mb-6 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
-        <p class="text-sm/6 text-red-800 dark:text-red-300">{{ error() }}</p>
+      <div class="mb-6 rounded-sm border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20">
+        <p class="text-sm/6 text-state-danger-800 dark:text-state-danger-300">{{ error() }}</p>
       </div>
     }
 
@@ -80,7 +77,7 @@
                 <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Roles</h4>
                 <div class="mt-2 flex flex-wrap gap-2">
                   @for (role of info.roles; track role) {
-                    <span class="inline-flex items-center rounded-sm bg-purple-100 px-2 py-1 text-xs/5 font-medium text-purple-800 dark:bg-purple-900/50 dark:text-purple-300">
+                    <span class="inline-flex items-center rounded-sm bg-accent-1-100 px-2 py-1 text-xs/5 font-medium text-accent-1-700 dark:bg-accent-1-900/50 dark:text-accent-1-300">
                       {{ role }}
                     </span>
                   }
@@ -97,8 +94,8 @@
           @if (info.tier) {
             <div class="space-y-4">
               <!-- Matched By -->
-              <div class="rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
-                <p class="text-sm/6 font-medium text-blue-900 dark:text-blue-200">
+              <div class="rounded-sm border border-state-info-200 bg-state-info-50 p-4 dark:border-state-info-800 dark:bg-state-info-900/20">
+                <p class="text-sm/6 font-medium text-state-info-900 dark:text-state-info-200">
                   Resolved via: <span class="font-bold">{{ getMatchedByDisplay(info.matchedBy) }}</span>
                 </p>
               </div>
@@ -127,11 +124,11 @@
                   <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Action on Limit</h4>
                   <p class="mt-1">
                     @if (info.tier.actionOnLimit === 'block') {
-                      <span class="inline-flex items-center rounded-sm bg-red-100 px-2 py-1 text-xs/5 font-medium text-red-800 dark:bg-red-900/50 dark:text-red-300">
+                      <span class="inline-flex items-center rounded-sm bg-state-danger-100 px-2 py-1 text-xs/5 font-medium text-state-danger-800 dark:bg-state-danger-900/50 dark:text-state-danger-300">
                         Block Requests
                       </span>
                     } @else {
-                      <span class="inline-flex items-center rounded-sm bg-yellow-100 px-2 py-1 text-xs/5 font-medium text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300">
+                      <span class="inline-flex items-center rounded-sm bg-state-warning-100 px-2 py-1 text-xs/5 font-medium text-state-warning-800 dark:bg-state-warning-900/50 dark:text-state-warning-300">
                         Warn Only
                       </span>
                     }
@@ -141,12 +138,12 @@
 
               <!-- Override Info (if applicable) -->
               @if (info.override) {
-                <div class="mt-4 rounded-sm border border-purple-200 bg-purple-50 p-4 dark:border-purple-800 dark:bg-purple-900/20">
-                  <h4 class="font-medium text-purple-900 dark:text-purple-200">Active Override</h4>
-                  <p class="mt-2 text-sm/6 text-purple-800 dark:text-purple-300">
+                <div class="mt-4 rounded-sm border border-category-accent-override-200 bg-category-accent-override-50 p-4 dark:border-category-accent-override-800 dark:bg-category-accent-override-900/20">
+                  <h4 class="font-medium text-category-accent-override-900 dark:text-category-accent-override-200">Active Override</h4>
+                  <p class="mt-2 text-sm/6 text-category-accent-override-800 dark:text-category-accent-override-300">
                     Type: <span class="font-semibold">{{ info.override.overrideType }}</span>
                   </p>
-                  <p class="text-xs/5 text-purple-700 dark:text-purple-400">
+                  <p class="text-xs/5 text-category-accent-override-700 dark:text-category-accent-override-400">
                     Valid until: {{ info.override.validUntil | date:'short' }}
                   </p>
                 </div>
@@ -217,9 +214,9 @@
 
         <!-- Recent Blocks -->
         @if (info.recentBlocks > 0) {
-          <div class="rounded-sm border border-red-200 bg-red-50 p-6 dark:border-red-800 dark:bg-red-900/20">
-            <h2 class="mb-2 text-lg/7 font-semibold text-red-900 dark:text-red-200">Recent Blocks</h2>
-            <p class="text-sm/6 text-red-800 dark:text-red-300">
+          <div class="rounded-sm border border-state-danger-200 bg-state-danger-50 p-6 dark:border-state-danger-800 dark:bg-state-danger-900/20">
+            <h2 class="mb-2 text-lg/7 font-semibold text-state-danger-900 dark:text-state-danger-200">Recent Blocks</h2>
+            <p class="text-sm/6 text-state-danger-800 dark:text-state-danger-300">
               This user has been blocked <span class="font-bold">{{ info.recentBlocks }} time(s)</span>
               @if (info.lastBlockTime) {
                 <span class="block mt-1 text-xs/5">Last block: {{ info.lastBlockTime | date:'short' }}</span>

@@ -17,7 +17,7 @@ import { TooltipDirective } from '../../../../components/tooltip';
   template: `
     <button
       type="button"
-      class="inline-flex items-center justify-center rounded-md bg-gray-100/80 p-1.5 text-gray-500 backdrop-blur-sm transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-gray-800/80 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+      class="inline-flex items-center justify-center rounded-md bg-gray-100/80 p-1.5 text-gray-500 backdrop-blur-sm transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-gray-800/80 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
       [appTooltip]="copied() ? 'Copied' : 'Copy code'"
       appTooltipPosition="top"
       [attr.aria-label]="copied() ? 'Copied to clipboard' : 'Copy code'"

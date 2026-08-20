@@ -51,7 +51,7 @@ import { ContentBlock, ReasoningContentData } from '../../../../services/models/
 
           <!-- Redacted indicator -->
           @if (hasRedactedContent()) {
-            <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 dark:bg-amber-500/20 px-1.5 py-0.5 text-[0.625rem] font-medium text-amber-700 dark:text-amber-300">
+            <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-state-warning-500/15 dark:bg-state-warning-500/20 px-1.5 py-0.5 text-[0.625rem] font-medium text-state-warning-700 dark:text-state-warning-300">
               <ng-icon name="heroLockClosed" class="size-3" aria-hidden="true" />
               Redacted
             </span>
@@ -74,10 +74,10 @@ import { ContentBlock, ReasoningContentData } from '../../../../services/models/
               }
 
               @if (hasRedactedContent() && !hasReasoningText()) {
-                <div class="flex items-center gap-1.5 rounded-xs border border-amber-300/50 dark:border-amber-700/30 bg-amber-100/50 dark:bg-amber-900/20 p-2 text-xs text-amber-800 dark:text-amber-200">
+                <div class="flex items-center gap-1.5 rounded-xs border border-state-warning-300/50 dark:border-state-warning-700/30 bg-state-warning-100/50 dark:bg-state-warning-900/20 p-2 text-xs text-state-warning-800 dark:text-state-warning-200">
                   <ng-icon
                     name="heroExclamationTriangle"
-                    class="size-4 text-amber-500"
+                    class="size-4 text-state-warning-500"
                     aria-hidden="true"
                   />
                   <span>Some reasoning content was redacted for safety purposes.</span>

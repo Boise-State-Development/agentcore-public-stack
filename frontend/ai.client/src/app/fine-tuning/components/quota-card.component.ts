@@ -59,8 +59,8 @@ export class QuotaCardComponent {
 
   readonly barColor = computed(() => {
     const pct = this.usedPercent();
-    if (pct >= 90) return 'bg-red-500';
-    if (pct >= 70) return 'bg-amber-500';
-    return 'bg-blue-500';
+    if (pct >= 90) return 'bg-state-danger-500';
+    if (pct >= 70) return 'bg-state-warning-500';
+    return 'bg-state-info-500';
   });
 }

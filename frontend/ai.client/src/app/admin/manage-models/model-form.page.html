@@ -21,11 +21,7 @@
     @if (isLoading()) {
       <div class="flex h-64 items-center justify-center rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
         <div class="flex flex-col items-center gap-4">
-          <div
-            class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            role="status"
-            aria-label="Loading model"
-          ></div>
+          <app-spinner size="xl" label="Loading model" />
           <p class="text-sm/6 text-gray-500 dark:text-gray-400">
             Loading model…
           </p>
@@ -41,7 +37,7 @@
           <!-- Model ID -->
           <div>
             <label for="modelId" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-              Model ID <span class="text-red-600">*</span>
+              Model ID <span class="text-state-danger-600">*</span>
             </label>
             <input
               type="text"
@@ -49,8 +45,8 @@
               formControlName="modelId"
               [attr.list]="isMantle() ? 'mantle-model-ids' : null"
               placeholder="e.g., anthropic.claude-3-5-sonnet-20241022-v2:0"
-              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-              [class.border-red-500]="modelForm.controls.modelId.invalid && modelForm.controls.modelId.touched"
+              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+              [class.border-state-danger-500]="modelForm.controls.modelId.invalid && modelForm.controls.modelId.touched"
             />
             @if (isMantle() && mantleModelIdOptions().length > 0) {
               <datalist id="mantle-model-ids">
@@ -64,25 +60,25 @@
               </p>
             }
             @if (modelForm.controls.modelId.invalid && modelForm.controls.modelId.touched) {
-              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Model ID is required</p>
+              <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Model ID is required</p>
             }
           </div>
 
           <!-- Model Name -->
           <div>
             <label for="modelName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-              Model Name <span class="text-red-600">*</span>
+              Model Name <span class="text-state-danger-600">*</span>
             </label>
             <input
               type="text"
               id="modelName"
               formControlName="modelName"
               placeholder="e.g., Claude 3.5 Sonnet v2"
-              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-              [class.border-red-500]="modelForm.controls.modelName.invalid && modelForm.controls.modelName.touched"
+              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+              [class.border-state-danger-500]="modelForm.controls.modelName.invalid && modelForm.controls.modelName.touched"
             />
             @if (modelForm.controls.modelName.invalid && modelForm.controls.modelName.touched) {
-              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Model name is required</p>
+              <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Model name is required</p>
             }
           </div>
 
@@ -90,37 +86,37 @@
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label for="provider" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                Provider <span class="text-red-600">*</span>
+                Provider <span class="text-state-danger-600">*</span>
               </label>
               <select
                 id="provider"
                 formControlName="provider"
-                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                [class.border-red-500]="modelForm.controls.provider.invalid && modelForm.controls.provider.touched"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                [class.border-state-danger-500]="modelForm.controls.provider.invalid && modelForm.controls.provider.touched"
               >
                 @for (provider of availableProviders; track provider) {
                   <option [value]="provider">{{ provider }}</option>
                 }
               </select>
               @if (modelForm.controls.provider.invalid && modelForm.controls.provider.touched) {
-                <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Provider is required</p>
+                <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Provider is required</p>
               }
             </div>
 
             <div>
               <label for="providerName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                Provider Name <span class="text-red-600">*</span>
+                Provider Name <span class="text-state-danger-600">*</span>
               </label>
               <input
                 type="text"
                 id="providerName"
                 formControlName="providerName"
                 placeholder="e.g., Anthropic"
-                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                [class.border-red-500]="modelForm.controls.providerName.invalid && modelForm.controls.providerName.touched"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                [class.border-state-danger-500]="modelForm.controls.providerName.invalid && modelForm.controls.providerName.touched"
               />
               @if (modelForm.controls.providerName.invalid && modelForm.controls.providerName.touched) {
-                <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Provider name is required</p>
+                <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Provider name is required</p>
               }
             </div>
           </div>
@@ -129,12 +125,12 @@
           @if (isMantle()) {
             <div>
               <label for="mantleApiMode" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                Mantle API surface <span class="text-red-600">*</span>
+                Mantle API surface <span class="text-state-danger-600">*</span>
               </label>
               <select
                 id="mantleApiMode"
                 formControlName="mantleApiMode"
-                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
               >
                 @for (mode of mantleApiModes; track mode) {
                   <option [value]="mode">{{ mantleApiModeLabels[mode] }}</option>
@@ -156,7 +152,7 @@
                 id="mantleRegion"
                 formControlName="mantleRegion"
                 placeholder="Defaults to the app's region"
-                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
               />
               <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                 Optional. Pins inference to the region hosting the model (e.g. <code>us-east-1</code>),
@@ -174,7 +170,7 @@
               type="date"
               id="knowledgeCutoffDate"
               formControlName="knowledgeCutoffDate"
-              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
             />
             <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
               The date when the model's training data was last updated.
@@ -189,56 +185,56 @@
           <!-- Input Modalities -->
           <div>
             <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-              Input Modalities <span class="text-red-600">*</span>
+              Input Modalities <span class="text-state-danger-600">*</span>
             </label>
             <div class="mt-2 flex flex-wrap gap-2">
               @for (modality of availableModalities; track modality) {
                 <button
                   type="button"
                   (click)="toggleArrayValue('inputModalities', modality)"
-                  [class.bg-blue-600]="isSelected('inputModalities', modality)"
+                  [class.bg-primary-accessible]="isSelected('inputModalities', modality)"
                   [class.text-white]="isSelected('inputModalities', modality)"
                   [class.bg-gray-100]="!isSelected('inputModalities', modality)"
                   [class.text-gray-700]="!isSelected('inputModalities', modality)"
-                  [class.dark:bg-blue-500]="isSelected('inputModalities', modality)"
+                  [class.dark:bg-primary-accessible-dark]="isSelected('inputModalities', modality)"
                   [class.dark:bg-gray-800]="!isSelected('inputModalities', modality)"
                   [class.dark:text-gray-300]="!isSelected('inputModalities', modality)"
-                  class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                  class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                 >
                   {{ modality }}
                 </button>
               }
             </div>
             @if (modelForm.controls.inputModalities.invalid && modelForm.controls.inputModalities.touched) {
-              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Select at least one input modality</p>
+              <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Select at least one input modality</p>
             }
           </div>
 
           <!-- Output Modalities -->
           <div>
             <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-              Output Modalities <span class="text-red-600">*</span>
+              Output Modalities <span class="text-state-danger-600">*</span>
             </label>
             <div class="mt-2 flex flex-wrap gap-2">
               @for (modality of availableModalities; track modality) {
                 <button
                   type="button"
                   (click)="toggleArrayValue('outputModalities', modality)"
-                  [class.bg-blue-600]="isSelected('outputModalities', modality)"
+                  [class.bg-primary-accessible]="isSelected('outputModalities', modality)"
                   [class.text-white]="isSelected('outputModalities', modality)"
                   [class.bg-gray-100]="!isSelected('outputModalities', modality)"
                   [class.text-gray-700]="!isSelected('outputModalities', modality)"
-                  [class.dark:bg-blue-500]="isSelected('outputModalities', modality)"
+                  [class.dark:bg-primary-accessible-dark]="isSelected('outputModalities', modality)"
                   [class.dark:bg-gray-800]="!isSelected('outputModalities', modality)"
                   [class.dark:text-gray-300]="!isSelected('outputModalities', modality)"
-                  class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                  class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                 >
                   {{ modality }}
                 </button>
               }
             </div>
             @if (modelForm.controls.outputModalities.invalid && modelForm.controls.outputModalities.touched) {
-              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Select at least one output modality</p>
+              <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Select at least one output modality</p>
             }
           </div>
 
@@ -247,7 +243,7 @@
             <!-- Max Input Tokens -->
             <div>
               <label for="maxInputTokens" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                Max Input Tokens <span class="text-red-600">*</span>
+                Max Input Tokens <span class="text-state-danger-600">*</span>
               </label>
               <input
                 type="number"
@@ -256,11 +252,11 @@
                 min="1"
                 step="1"
                 placeholder="e.g., 200000"
-                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                [class.border-red-500]="modelForm.controls.maxInputTokens.invalid && modelForm.controls.maxInputTokens.touched"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                [class.border-state-danger-500]="modelForm.controls.maxInputTokens.invalid && modelForm.controls.maxInputTokens.touched"
               />
               @if (modelForm.controls.maxInputTokens.invalid && modelForm.controls.maxInputTokens.touched) {
-                <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Enter a valid token limit (1 or greater)</p>
+                <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter a valid token limit (1 or greater)</p>
               }
             </div>
 
@@ -276,14 +272,14 @@
                 min="1"
                 step="1"
                 placeholder="Leave blank if the provider doesn't publish one"
-                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                [class.border-red-500]="modelForm.controls.maxOutputTokens.invalid && modelForm.controls.maxOutputTokens.touched"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                [class.border-state-danger-500]="modelForm.controls.maxOutputTokens.invalid && modelForm.controls.maxOutputTokens.touched"
               />
               <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                 Ceiling for the model's max_tokens setting. Leave blank for reasoning models that share output with the context window.
               </p>
               @if (modelForm.controls.maxOutputTokens.invalid && modelForm.controls.maxOutputTokens.touched) {
-                <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Enter a valid token limit (1 or greater)</p>
+                <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter a valid token limit (1 or greater)</p>
               }
             </div>
           </div>
@@ -305,7 +301,7 @@
             @if (rolesResource.isLoading()) {
               <div class="mt-2 text-sm/6 text-gray-500 dark:text-gray-400">Loading roles…</div>
             } @else if (rolesResource.error()) {
-              <div class="mt-2 text-sm/6 text-red-600 dark:text-red-400">
+              <div class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                 Failed to load roles. Please refresh the page.
               </div>
             } @else {
@@ -315,14 +311,14 @@
                     type="button"
                     (click)="toggleArrayValue('allowedAppRoles', role.roleId)"
                     [attr.aria-pressed]="isSelected('allowedAppRoles', role.roleId)"
-                    [class.bg-purple-600]="isSelected('allowedAppRoles', role.roleId)"
+                    [class.bg-primary-600]="isSelected('allowedAppRoles', role.roleId)"
                     [class.text-white]="isSelected('allowedAppRoles', role.roleId)"
                     [class.bg-gray-100]="!isSelected('allowedAppRoles', role.roleId)"
                     [class.text-gray-700]="!isSelected('allowedAppRoles', role.roleId)"
-                    [class.dark:bg-purple-500]="isSelected('allowedAppRoles', role.roleId)"
+                    [class.dark:bg-primary-500]="isSelected('allowedAppRoles', role.roleId)"
                     [class.dark:bg-gray-800]="!isSelected('allowedAppRoles', role.roleId)"
                     [class.dark:text-gray-300]="!isSelected('allowedAppRoles', role.roleId)"
-                    class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-500"
+                    class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                     [title]="role.description"
                   >
                     {{ role.displayName }}
@@ -330,7 +326,7 @@
                 }
               </div>
               @if (availableAppRoles().length === 0) {
-                <p class="mt-2 text-sm/6 text-amber-600 dark:text-amber-400">
+                <p class="mt-2 text-sm/6 text-state-warning-600 dark:text-state-warning-400">
                   No roles configured. Please create roles in Admin &gt; Roles first.
                 </p>
               }
@@ -359,7 +355,7 @@
               <input
                 type="checkbox"
                 formControlName="enabled"
-                class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
               />
               <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                 Model enabled (users can select this model)
@@ -373,7 +369,7 @@
               <input
                 type="checkbox"
                 formControlName="isDefault"
-                class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
               />
               <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                 Default model (auto-selected for new sessions)
@@ -394,7 +390,7 @@
             <!-- Input Price -->
             <div>
               <label for="inputPricePerMillionTokens" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                Input Price (per 1M tokens) <span class="text-red-600">*</span>
+                Input Price (per 1M tokens) <span class="text-state-danger-600">*</span>
               </label>
               <div class="relative mt-1">
                 <span class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500 dark:text-gray-400">
@@ -407,19 +403,19 @@
                   step="0.01"
                   min="0"
                   placeholder="0.00"
-                  class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                  [class.border-red-500]="modelForm.controls.inputPricePerMillionTokens.invalid && modelForm.controls.inputPricePerMillionTokens.touched"
+                  class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-state-danger-500]="modelForm.controls.inputPricePerMillionTokens.invalid && modelForm.controls.inputPricePerMillionTokens.touched"
                 />
               </div>
               @if (modelForm.controls.inputPricePerMillionTokens.invalid && modelForm.controls.inputPricePerMillionTokens.touched) {
-                <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Enter a valid price (0 or greater)</p>
+                <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter a valid price (0 or greater)</p>
               }
             </div>
 
             <!-- Output Price -->
             <div>
               <label for="outputPricePerMillionTokens" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                Output Price (per 1M tokens) <span class="text-red-600">*</span>
+                Output Price (per 1M tokens) <span class="text-state-danger-600">*</span>
               </label>
               <div class="relative mt-1">
                 <span class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500 dark:text-gray-400">
@@ -432,12 +428,12 @@
                   step="0.01"
                   min="0"
                   placeholder="0.00"
-                  class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                  [class.border-red-500]="modelForm.controls.outputPricePerMillionTokens.invalid && modelForm.controls.outputPricePerMillionTokens.touched"
+                  class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-state-danger-500]="modelForm.controls.outputPricePerMillionTokens.invalid && modelForm.controls.outputPricePerMillionTokens.touched"
                 />
               </div>
               @if (modelForm.controls.outputPricePerMillionTokens.invalid && modelForm.controls.outputPricePerMillionTokens.touched) {
-                <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Enter a valid price (0 or greater)</p>
+                <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter a valid price (0 or greater)</p>
               }
             </div>
           </div>
@@ -455,7 +451,7 @@
                   <input
                     type="checkbox"
                     formControlName="supportsCaching"
-                    class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
                   />
                   <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                     Model supports prompt caching
@@ -487,12 +483,12 @@
                         step="0.01"
                         min="0"
                         placeholder="0.00 (optional)"
-                        class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                        [class.border-red-500]="modelForm.controls.cacheWritePricePerMillionTokens.invalid && modelForm.controls.cacheWritePricePerMillionTokens.touched"
+                        class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        [class.border-state-danger-500]="modelForm.controls.cacheWritePricePerMillionTokens.invalid && modelForm.controls.cacheWritePricePerMillionTokens.touched"
                       />
                     </div>
                     @if (modelForm.controls.cacheWritePricePerMillionTokens.invalid && modelForm.controls.cacheWritePricePerMillionTokens.touched) {
-                      <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Enter a valid price (0 or greater)</p>
+                      <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter a valid price (0 or greater)</p>
                     }
                   </div>
 
@@ -512,12 +508,12 @@
                         step="0.01"
                         min="0"
                         placeholder="0.00 (optional)"
-                        class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                        [class.border-red-500]="modelForm.controls.cacheReadPricePerMillionTokens.invalid && modelForm.controls.cacheReadPricePerMillionTokens.touched"
+                        class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        [class.border-state-danger-500]="modelForm.controls.cacheReadPricePerMillionTokens.invalid && modelForm.controls.cacheReadPricePerMillionTokens.touched"
                       />
                     </div>
                     @if (modelForm.controls.cacheReadPricePerMillionTokens.invalid && modelForm.controls.cacheReadPricePerMillionTokens.touched) {
-                      <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Enter a valid price (0 or greater)</p>
+                      <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter a valid price (0 or greater)</p>
                     }
                   </div>
                 </div>
@@ -533,7 +529,7 @@
             (click)="toggleInferenceParams()"
             [attr.aria-expanded]="inferenceParamsExpanded()"
             aria-controls="inference-params-body"
-            class="flex w-full items-center justify-between gap-4 rounded-2xl text-left hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+            class="flex w-full items-center justify-between gap-4 rounded-2xl text-left hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
           >
             <div class="flex items-center gap-3">
               <ng-icon
@@ -578,7 +574,7 @@
                         <input
                           type="checkbox"
                           formControlName="supported"
-                          class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                          class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
                         />
                         Supported
                       </label>
@@ -593,7 +589,7 @@
                               type="number"
                               formControlName="min"
                               [step]="meta.kind === 'number' ? 'any' : 1"
-                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                             />
                           </div>
                           <div>
@@ -602,7 +598,7 @@
                               type="number"
                               formControlName="max"
                               [step]="meta.kind === 'number' ? 'any' : 1"
-                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                             />
                           </div>
                           <div>
@@ -617,7 +613,7 @@
                               type="number"
                               formControlName="defaultValue"
                               [step]="meta.kind === 'number' ? 'any' : 1"
-                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                             />
                           </div>
                         } @else if (meta.kind === 'toggle') {
@@ -626,7 +622,7 @@
                               <input
                                 type="checkbox"
                                 formControlName="defaultValue"
-                                class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                                class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
                               />
                               Default to enabled
                             </label>
@@ -643,7 +639,7 @@
                                     type="checkbox"
                                     [checked]="isParamAllowed(i, lvl)"
                                     (change)="toggleParamAllowed(i, lvl)"
-                                    class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
                                   />
                                   {{ lvl }}
                                 </label>
@@ -654,7 +650,7 @@
                             <label class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">Default</label>
                             <select
                               formControlName="defaultValue"
-                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                             >
                               <option [ngValue]="null">— none (API default) —</option>
                               @for (lvl of paramRowGroup(i).controls.allowed.value ?? []; track lvl) {
@@ -668,14 +664,14 @@
                             <input
                               type="checkbox"
                               formControlName="locked"
-                              class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                              class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
                             />
                             Locked (no user override)
                           </label>
                         </div>
                       </div>
                       @if (paramRowErrors(i, 'known').length > 0) {
-                        <ul role="alert" class="mt-3 list-disc space-y-0.5 pl-5 text-xs/5 text-red-600 dark:text-red-400">
+                        <ul role="alert" class="mt-3 list-disc space-y-0.5 pl-5 text-xs/5 text-state-danger-600 dark:text-state-danger-400">
                           @for (err of paramRowErrors(i, 'known'); track err) {
                             <li>{{ err }}</li>
                           }
@@ -695,7 +691,7 @@
 
                 <div class="space-y-3" formArrayName="customInferenceParams">
                   @for (row of modelForm.controls.customInferenceParams.controls; track $index; let i = $index) {
-                    <div class="rounded-2xl border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-900/40 dark:bg-amber-900/10" [formGroupName]="i">
+                    <div class="rounded-2xl border border-state-warning-200 bg-state-warning-50/50 p-4 dark:border-state-warning-900/40 dark:bg-state-warning-900/10" [formGroupName]="i">
                       <div class="flex items-start gap-4">
                         <div class="flex-1">
                           <label class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">Parameter key</label>
@@ -703,18 +699,18 @@
                             type="text"
                             formControlName="key"
                             placeholder="snake_case_key"
-                            class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
-                            [class.border-red-500]="customParamGroup(i).controls.key.invalid && customParamGroup(i).controls.key.touched"
+                            class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                            [class.border-state-danger-500]="customParamGroup(i).controls.key.invalid && customParamGroup(i).controls.key.touched"
                           />
                           @if (customParamGroup(i).controls.key.invalid && customParamGroup(i).controls.key.touched) {
-                            <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">Use snake_case: lowercase letters, digits, underscores; must start with a letter.</p>
+                            <p class="mt-1 text-xs/5 text-state-danger-600 dark:text-state-danger-400">Use snake_case: lowercase letters, digits, underscores; must start with a letter.</p>
                           }
                         </div>
                         <label class="flex items-center gap-2 pt-5 text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                           <input
                             type="checkbox"
                             formControlName="supported"
-                            class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                            class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
                           />
                           Supported
                         </label>
@@ -736,7 +732,7 @@
                               type="number"
                               formControlName="min"
                               step="any"
-                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                             />
                           </div>
                           <div>
@@ -745,7 +741,7 @@
                               type="number"
                               formControlName="max"
                               step="any"
-                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                             />
                           </div>
                           <div>
@@ -754,7 +750,7 @@
                               type="number"
                               formControlName="defaultValue"
                               step="any"
-                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                             />
                           </div>
                           <div>
@@ -762,14 +758,14 @@
                               <input
                                 type="checkbox"
                                 formControlName="locked"
-                                class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                                class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
                               />
                               Locked (no user override)
                             </label>
                           </div>
                         </div>
                         @if (paramRowErrors(i, 'custom').length > 0) {
-                          <ul role="alert" class="mt-3 list-disc space-y-0.5 pl-5 text-xs/5 text-red-600 dark:text-red-400">
+                          <ul role="alert" class="mt-3 list-disc space-y-0.5 pl-5 text-xs/5 text-state-danger-600 dark:text-state-danger-400">
                             @for (err of paramRowErrors(i, 'custom'); track err) {
                               <li>{{ err }}</li>
                             }
@@ -790,19 +786,19 @@
                       [value]="newCustomParamKey()"
                       (input)="onCustomKeyInput($any($event.target).value)"
                       (keydown.enter)="$event.preventDefault(); addCustomParam()"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                     />
                   </div>
                   <button
                     type="button"
                     (click)="addCustomParam()"
-                    class="inline-flex items-center justify-center rounded-2xl px-3 py-1.5 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                    class="inline-flex items-center justify-center rounded-2xl px-3 py-1.5 text-sm/6 font-medium text-primary-accessible hover:bg-primary-50 hover:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-primary-900/20"
                   >
                     Add custom parameter
                   </button>
                 </div>
                 @if (newCustomParamError()) {
-                  <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">{{ newCustomParamError() }}</p>
+                  <p class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ newCustomParamError() }}</p>
                 }
               </div>
             </div>
@@ -812,11 +808,11 @@
         <!-- Form Actions -->
         <div class="flex flex-col gap-4 border-t border-gray-200 pt-8 dark:border-gray-700">
           @if (modelForm.invalid) {
-            <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
-              <p class="text-sm/6 font-medium text-amber-800 dark:text-amber-200">
+            <div class="rounded-2xl border border-state-warning-200 bg-state-warning-50 p-4 dark:border-state-warning-800 dark:bg-state-warning-900/20">
+              <p class="text-sm/6 font-medium text-state-warning-800 dark:text-state-warning-200">
                 Please fix the following before saving:
               </p>
-              <ul class="mt-1 list-inside list-disc text-sm/6 text-amber-700 dark:text-amber-300">
+              <ul class="mt-1 list-inside list-disc text-sm/6 text-state-warning-700 dark:text-state-warning-300">
                 @if (modelForm.controls.modelId.invalid) {
                   <li>Model ID is required</li>
                 }
@@ -857,7 +853,7 @@
             <button
               type="submit"
               [disabled]="isSubmitting() || modelForm.invalid"
-              class="inline-flex items-center justify-center rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+              class="inline-flex items-center justify-center rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:brightness-110"
             >
               @if (isSubmitting()) {
                 Saving…

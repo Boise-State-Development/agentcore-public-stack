@@ -15,10 +15,11 @@ import { FineTuningStateService } from '../../services/fine-tuning-state.service
 import { FineTuningHttpService } from '../../services/fine-tuning-http.service';
 import { FineTuningUploadService } from '../../services/fine-tuning-upload.service';
 import { FileUploadState, CreateInferenceJobRequest } from '../../models/fine-tuning.models';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-create-inference-job',
-  imports: [RouterLink, ReactiveFormsModule, DatePipe, NgIcon],
+  imports: [RouterLink, ReactiveFormsModule, DatePipe, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowLeft,

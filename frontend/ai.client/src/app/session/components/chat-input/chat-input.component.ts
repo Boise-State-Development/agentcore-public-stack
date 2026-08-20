@@ -26,6 +26,7 @@ import { QuotaWarningBannerComponent } from '../../../components/quota-warning-b
 import { TooltipDirective } from '../../../components/tooltip';
 import { FileCardComponent } from '../../../components/file-card';
 import { StorageQuotaBannerComponent } from '../../../components/storage-quota-banner';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import {
   FileUploadService,
   PendingUpload,
@@ -68,7 +69,7 @@ interface MentionToken {
 
 @Component({
   selector: 'app-chat-input',
-  imports: [FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent],
+  imports: [FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SpinnerComponent],
   providers: [
     provideIcons({
       heroPlus,
@@ -166,11 +167,11 @@ export class ChatInputComponent {
     const base = 'flex size-10 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]';
     switch (status) {
       case 'listening':
-        return `${base} bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 animate-pulse`;
+        return `${base} bg-state-danger-100 text-state-danger-600 dark:bg-state-danger-900/30 dark:text-state-danger-400 animate-pulse`;
       case 'speaking':
-        return `${base} bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400`;
+        return `${base} bg-state-success-100 text-state-success-600 dark:bg-state-success-900/30 dark:text-state-success-400`;
       case 'connecting':
-        return `${base} bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400`;
+        return `${base} bg-state-warning-100 text-state-warning-600 dark:bg-state-warning-900/30 dark:text-state-warning-400`;
       default:
         return `${base} text-gray-500 dark:text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300`;
     }

@@ -95,7 +95,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
             type="button"
             (click)="onCancel()"
             aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
           </button>
@@ -112,7 +112,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
             <!-- D7.2 — not a warning. Nothing below it would help. -->
             <div
               role="alert"
-              class="flex gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-200"
+              class="flex gap-3 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-200"
             >
               <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0" aria-hidden="true" />
               <p>{{ reason }}</p>
@@ -123,7 +123,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
                  acts on it in place rather than being sent to another screen. -->
             @if (requiresPublic()) {
               <div
-                class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-900/20"
+                class="rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 dark:border-state-warning-900 dark:bg-state-warning-900/20"
               >
                 <div class="flex gap-3">
                   <input
@@ -132,16 +132,16 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
                     [checked]="makePublic()"
                     (change)="onMakePublicChange($event)"
                     [attr.aria-describedby]="'listing-make-public-help'"
-                    class="mt-1 size-4 shrink-0 rounded border-gray-300 text-blue-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                    class="mt-1 size-4 shrink-0 rounded border-gray-300 text-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-700"
                   />
                   <div>
                     <label
                       for="listing-make-public"
-                      class="block text-sm/6 font-medium text-amber-900 dark:text-amber-200"
+                      class="block text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-200"
                     >
                       Make this agent public
                     </label>
-                    <p id="listing-make-public-help" class="text-sm/6 text-amber-900 dark:text-amber-200">
+                    <p id="listing-make-public-help" class="text-sm/6 text-state-warning-900 dark:text-state-warning-200">
                       {{ makePublicHelp() }}
                     </p>
                   </div>
@@ -170,7 +170,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
               <select
                 id="listing-category"
                 (change)="onCategoryChange($event)"
-                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
               >
                 <option value="" disabled [selected]="!category()">Choose a category…</option>
                 @for (option of categories(); track option.id) {
@@ -180,7 +180,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
                 }
               </select>
               @if (!categories().length) {
-                <p class="mt-2 text-xs/5 text-amber-700 dark:text-amber-400">
+                <p class="mt-2 text-xs/5 text-state-warning-700 dark:text-state-warning-400">
                   No categories are open for new listings yet. An admin adds these under
                   Admin → Marketplace → Categories.
                 </p>
@@ -206,7 +206,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
                 [value]="tagline()"
                 (input)="onTaglineInput($event)"
                 [attr.maxlength]="taglineMax"
-                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
               />
               <p class="mt-1 text-right text-xs/5 text-gray-400 dark:text-gray-500">
                 {{ tagline().length }}/{{ taglineMax }}
@@ -223,27 +223,27 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
                 [value]="note()"
                 (input)="onNoteInput($event)"
                 [placeholder]="notePlaceholder()"
-                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
               ></textarea>
             </div>
 
             <!-- D7.1 — enumerate, don't count. -->
             @if (exposedSkills().length; as count) {
-              <div class="mt-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-900/20">
+              <div class="mt-5 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 dark:border-state-warning-900 dark:bg-state-warning-900/20">
                 <div class="flex gap-3">
                   <ng-icon
                     name="heroEye"
-                    class="mt-0.5 size-5 shrink-0 text-amber-700 dark:text-amber-400"
+                    class="mt-0.5 size-5 shrink-0 text-state-warning-700 dark:text-state-warning-400"
                     aria-hidden="true"
                   />
                   <div class="min-w-0">
-                    <p class="text-sm/6 font-medium text-amber-900 dark:text-amber-200">
+                    <p class="text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-200">
                       {{ count === 1 ? '1 skill you wrote becomes' : count + ' skills you wrote become' }}
                       readable by anyone who runs this agent
                     </p>
                     <ul class="mt-1.5 space-y-0.5">
                       @for (skill of exposedSkills(); track skill.ref) {
-                        <li class="text-sm/6 text-amber-900 dark:text-amber-200">· {{ skill.label }}</li>
+                        <li class="text-sm/6 text-state-warning-900 dark:text-state-warning-200">· {{ skill.label }}</li>
                       }
                     </ul>
                   </div>
@@ -263,7 +263,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
             </p>
 
             @if (error(); as message) {
-              <p role="alert" class="mt-4 text-sm/6 text-rose-700 dark:text-rose-400">{{ message }}</p>
+              <p role="alert" class="mt-4 text-sm/6 text-state-danger-700 dark:text-state-danger-400">{{ message }}</p>
             }
           }
         </div>
@@ -272,7 +272,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
           <button
             type="button"
             (click)="onCancel()"
-            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
           >
             {{ blockReason() ? 'Close' : 'Cancel' }}
           </button>
@@ -281,7 +281,7 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
               type="button"
               [disabled]="!canSubmit()"
               (click)="onSubmit()"
-              class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+              class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 "
             >
               {{ submitting() ? 'Submitting…' : 'Submit for review' }}
             </button>

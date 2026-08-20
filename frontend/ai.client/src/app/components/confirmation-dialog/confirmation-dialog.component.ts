@@ -85,7 +85,7 @@ export interface ConfirmationDialogData {
           <button
             type="button"
             (click)="onCancel()"
-            class="rounded-md bg-white text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-600 dark:bg-gray-800 dark:hover:text-gray-300 dark:focus:outline-white"
+            class="rounded-md bg-white text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-primary-600 dark:bg-gray-800 dark:hover:text-gray-300 dark:focus:outline-white"
             aria-label="Close dialog"
           >
             <span class="sr-only">Close</span>
@@ -96,8 +96,8 @@ export interface ConfirmationDialogData {
         <!-- Icon + Content -->
         <div class="sm:flex sm:items-start">
           @if (data.destructive) {
-            <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:size-10 dark:bg-red-500/10">
-              <ng-icon name="heroExclamationTriangle" class="size-6 text-red-600 dark:text-red-400" aria-hidden="true" />
+            <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-full bg-state-danger-100 sm:mx-0 sm:size-10 dark:bg-state-danger-500/10">
+              <ng-icon name="heroExclamationTriangle" class="size-6 text-state-danger-600 dark:text-state-danger-400" aria-hidden="true" />
             </div>
           }
           <div class="mt-3 text-center sm:mt-0 sm:text-left" [class.sm:ml-4]="data.destructive">
@@ -186,7 +186,7 @@ export class ConfirmationDialogComponent {
     const baseClasses = 'inline-flex w-full justify-center rounded-md px-3 py-2 text-sm/6 font-semibold text-white shadow-xs sm:ml-3 sm:w-auto';
 
     if (this.data.destructive) {
-      return `${baseClasses} bg-red-600 hover:bg-red-500 dark:bg-red-500 dark:shadow-none dark:hover:bg-red-400`;
+      return `${baseClasses} bg-state-danger-600 hover:bg-state-danger-500 dark:bg-state-danger-500 dark:shadow-none dark:hover:bg-state-danger-400`;
     }
 
     return `${baseClasses} bg-primary-600 hover:bg-primary-500 dark:bg-primary-500 dark:shadow-none dark:hover:bg-primary-400`;
@@ -208,3 +208,4 @@ export class ConfirmationDialogComponent {
     this.dialogRef.close(false);
   }
 }
+

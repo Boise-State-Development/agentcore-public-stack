@@ -20,6 +20,7 @@ import {
   ListingState,
 } from '../models/marketplace.model';
 import { AgentTileComponent } from '../components/agent-tile.component';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import {
   TakedownDialogComponent,
   TakedownDialogData,
@@ -54,7 +55,7 @@ import {
 @Component({
   selector: 'app-marketplace-listings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, AgentTileComponent, TooltipDirective],
+  imports: [NgIcon, AgentTileComponent, TooltipDirective, SpinnerComponent],
   providers: [
     provideIcons({ heroRectangleStack, heroCheckBadge }),
   ],
@@ -76,7 +77,7 @@ import {
               id="state"
               [value]="stateFilter()"
               (change)="onStateFilterChange($event)"
-              class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
             >
               <option value="">All states</option>
               @for (state of states; track state) {
@@ -92,7 +93,7 @@ import {
         @if (error()) {
           <div
             role="alert"
-            class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mb-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
@@ -100,10 +101,7 @@ import {
 
         @if (loading()) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading listings</span>
+            <app-spinner size="lg" label="Loading listings" />
           </div>
         } @else if (listings().length === 0) {
           <div
@@ -166,7 +164,7 @@ import {
                           @if (row.publisher.verified) {
                             <ng-icon
                               name="heroCheckBadge"
-                              class="size-4 text-blue-600 dark:text-blue-400"
+                              class="size-4 text-state-info-600 dark:text-state-info-400"
                               [appTooltip]="'Verified publisher'"
                               appTooltipPosition="top"
                             />
@@ -218,7 +216,7 @@ import {
                             type="button"
                             [disabled]="busyId() === row.agentId"
                             (click)="requestChanges(row)"
-                            class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                            class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                           >
                             Request changes
                           </button>
@@ -235,7 +233,7 @@ import {
                               type="button"
                               [disabled]="busyId() === row.agentId"
                               (click)="rollback(row)"
-                              class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                              class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                             >
                               Change version
                             </button>
@@ -244,7 +242,7 @@ import {
                             type="button"
                             [disabled]="busyId() === row.agentId"
                             (click)="takedown(row)"
-                            class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-rose-700 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-rose-400 dark:hover:bg-gray-700"
+                            class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-state-danger-700 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-state-danger-400 dark:hover:bg-gray-700"
                           >
                             Take down
                           </button>

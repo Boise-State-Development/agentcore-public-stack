@@ -60,7 +60,7 @@ interface GrantRow {
           <button
             type="button"
             (click)="onCancel()"
-            class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
             aria-label="Close dialog"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
@@ -68,8 +68,8 @@ interface GrantRow {
         </div>
 
         <div class="sm:flex sm:items-start">
-          <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-2xl bg-blue-100 sm:mx-0 sm:size-10 dark:bg-blue-500/10">
-            <ng-icon name="heroShare" class="size-6 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+          <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary-100 sm:mx-0 sm:size-10 dark:bg-primary-500/10">
+            <ng-icon name="heroShare" class="size-6 text-primary-accessible dark:text-primary-accessible-dark" aria-hidden="true" />
           </div>
           <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
             <h3 id="share-space-title" class="text-base/7 font-semibold text-gray-900 dark:text-white">
@@ -98,7 +98,7 @@ interface GrantRow {
                 (ngModelChange)="emailInput.set($event)"
                 (keydown.enter)="addEmail()"
                 placeholder="person@example.edu"
-                class="flex-1 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                class="flex-1 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
               />
               <div class="relative inline-flex">
                 <label for="new-permission" class="sr-only">Permission for new people</label>
@@ -106,7 +106,7 @@ interface GrantRow {
                   id="new-permission"
                   [ngModel]="newPermission()"
                   (ngModelChange)="newPermission.set($event)"
-                  class="h-full appearance-none rounded-2xl border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                  class="h-full appearance-none rounded-2xl border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                 >
                   <option value="viewer">Can view</option>
                   <option value="editor">Can edit</option>
@@ -121,7 +121,7 @@ interface GrantRow {
                 type="button"
                 (click)="addEmail()"
                 [disabled]="!emailInput().trim()"
-                class="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                class="inline-flex items-center justify-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <ng-icon name="heroUserPlus" class="size-4" aria-hidden="true" />
                 Add
@@ -157,7 +157,7 @@ interface GrantRow {
                         [id]="'perm-' + grant.email"
                         [ngModel]="grant.permission"
                         (ngModelChange)="setPermission(grant.email, $event)"
-                        class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                        class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                       >
                         <option value="viewer">Can view</option>
                         <option value="editor">Can edit</option>
@@ -171,7 +171,7 @@ interface GrantRow {
                     <button
                       type="button"
                       (click)="removeEmail(grant.email)"
-                      class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                      class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                       [attr.aria-label]="'Remove ' + grant.email"
                     >
                       <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
@@ -182,7 +182,7 @@ interface GrantRow {
             }
 
             @if (error()) {
-              <div class="rounded-2xl bg-red-50 px-3 py-2 text-sm/6 text-red-800 dark:bg-red-900/20 dark:text-red-400" role="alert">
+              <div class="rounded-2xl bg-state-danger-50 px-3 py-2 text-sm/6 text-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-400" role="alert">
                 {{ error() }}
               </div>
             }
@@ -201,7 +201,7 @@ interface GrantRow {
             type="button"
             (click)="onSave()"
             [disabled]="saving()"
-            class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {{ saving() ? 'Saving…' : 'Save changes' }}
           </button>

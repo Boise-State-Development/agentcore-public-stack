@@ -1,4 +1,4 @@
-import { Component, effect, inject, computed } from '@angular/core';
+import { Component, effect, inject, computed, signal } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { SessionList } from './components/session-list/session-list';
 import { SessionService } from '../../session/services/session/session.service';
@@ -10,6 +10,7 @@ import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
 import { AgentService } from '../../agents/services/agent.service';
 import { LEGACY_MIGRATION_HOST } from '../../shared/utils/legacy-migration-host';
+import { BrandingService } from '../../../branding/branding.service';
 
 @Component({
   selector: 'app-sidenav',
@@ -25,6 +26,10 @@ export class Sidenav {
   private agentService = inject(AgentService);
   protected sidenavService = inject(SidenavService);
   protected userService = inject(UserService);
+  protected branding = inject(BrandingService);
+
+  /** Whether the branding logo image failed to load (Requirement 2.8). */
+  protected logoLoadFailed = signal(false);
 
   // Access to current session signals - available for use in template or component logic
   readonly currentSession = this.sessionService.currentSession;
@@ -99,6 +104,17 @@ export class Sidenav {
 
   toggleCollapse() {
     this.sidenavService.toggleCollapsed();
+  }
+
+  /**
+   * Handles a branding logo `<img>` failing to load (missing/broken asset at
+   * its documented path). Sets `logoLoadFailed`, which the template uses to
+   * hide the broken `<img>` elements and reveal a same-dimension placeholder
+   * with a visible "logo failed to load" indication, without collapsing the
+   * layout (Requirement 2.8).
+   */
+  onLogoError(_event: Event): void {
+    this.logoLoadFailed.set(true);
   }
 
   async handleLogout(): Promise<void> {

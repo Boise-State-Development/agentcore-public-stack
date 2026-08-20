@@ -69,7 +69,7 @@ interface NavItem {
               <label for="settings-nav" class="sr-only">Settings section</label>
               <select
                 id="settings-nav"
-                class="block w-full rounded-sm border-gray-300 bg-white py-2 pl-3 pr-10 text-base text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                class="block w-full rounded-sm border-gray-300 bg-white py-2 pl-3 pr-10 text-base text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                 (change)="onMobileNavChange($event)"
               >
                 @for (item of navItems; track item.route) {

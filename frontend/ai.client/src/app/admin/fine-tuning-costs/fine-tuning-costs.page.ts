@@ -20,12 +20,13 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { FineTuningAdminStateService } from '../fine-tuning-access/services/fine-tuning-admin-state.service';
 import { UserCostBreakdown } from '../fine-tuning-access/models/fine-tuning-access.models';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 type SortField = 'email' | 'total_cost_usd' | 'total_gpu_hours' | 'training_job_count' | 'inference_job_count';
 
 @Component({
   selector: 'app-fine-tuning-costs-page',
-  imports: [FormsModule, NgIcon],
+  imports: [FormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowLeft,

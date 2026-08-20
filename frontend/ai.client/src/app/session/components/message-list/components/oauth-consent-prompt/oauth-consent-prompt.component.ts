@@ -15,6 +15,7 @@ import {
 } from '../../../../../services/oauth-consent/oauth-consent.service';
 import { UserConnector } from '../../../../../settings/connectors/models/user-connector.model';
 import { UserConnectorsService } from '../../../../../settings/connectors/services/user-connectors.service';
+import { SpinnerComponent } from '../../../../../components/spinner/spinner.component';
 
 /**
  * Inline OAuth consent prompt rendered alongside the assistant message whose
@@ -25,7 +26,7 @@ import { UserConnectorsService } from '../../../../../settings/connectors/servic
 @Component({
   selector: 'app-oauth-consent-prompt',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroAcademicCap,
@@ -109,27 +110,7 @@ import { UserConnectorsService } from '../../../../../settings/connectors/servic
             [attr.aria-label]="'Connect to ' + displayName()"
           >
             @if (isInFlight()) {
-              <svg
-                class="size-3 animate-spin"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <circle
-                  class="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  stroke-width="4"
-                ></circle>
-                <path
-                  class="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                ></path>
-              </svg>
+              <app-spinner size="sm" variant="on-solid" label="Waiting" />
               <span>Waiting…</span>
             } @else {
               <span>Connect</span>

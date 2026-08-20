@@ -2,6 +2,11 @@
 
 @import "tailwindcss";
 @import '@ctrl/ngx-emoji-mart/picker';
+@import './styles/generated/brand-theme.css';
+/* Non-rebrandable color tokens. See each file's header for the split:
+   state.css = status meaning, identity.css = category identity. */
+@import './styles/tokens/state.css';
+@import './styles/tokens/identity.css';
 @custom-variant dark (&:where(.dark, .dark *));
 
 @font-face {
@@ -276,43 +281,4 @@ html.dark body {
 @theme {
     --font-sans: 'InterVariable', sans-serif;
     --font-sans--font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-
-    /* Primary color scale - #0033a0 */
-    --color-primary-50: oklch(from #0033a0 calc(l + 0.4) c h);
-    --color-primary-100: oklch(from #0033a0 calc(l + 0.35) c h);
-    --color-primary-200: oklch(from #0033a0 calc(l + 0.3) c h);
-    --color-primary-300: oklch(from #0033a0 calc(l + 0.2) c h);
-    --color-primary-400: oklch(from #0033a0 calc(l + 0.1) c h);
-    --color-primary-500: #0033a0;
-    --color-primary-600: oklch(from #0033a0 calc(l - 0.1) c h);
-    --color-primary-700: oklch(from #0033a0 calc(l - 0.15) c h);
-    --color-primary-800: oklch(from #0033a0 calc(l - 0.2) c h);
-    --color-primary-900: oklch(from #0033a0 calc(l - 0.25) c h);
-    --color-primary-950: oklch(from #0033a0 calc(l - 0.3) c h);
-
-    /* Secondary color scale - #d64309 */
-    --color-secondary-50: oklch(from #d64309 calc(l + 0.4) c h);
-    --color-secondary-100: oklch(from #d64309 calc(l + 0.35) c h);
-    --color-secondary-200: oklch(from #d64309 calc(l + 0.3) c h);
-    --color-secondary-300: oklch(from #d64309 calc(l + 0.2) c h);
-    --color-secondary-400: oklch(from #d64309 calc(l + 0.1) c h);
-    --color-secondary-500: #d64309;
-    --color-secondary-600: oklch(from #d64309 calc(l - 0.1) c h);
-    --color-secondary-700: oklch(from #d64309 calc(l - 0.15) c h);
-    --color-secondary-800: oklch(from #d64309 calc(l - 0.2) c h);
-    --color-secondary-900: oklch(from #d64309 calc(l - 0.25) c h);
-    --color-secondary-950: oklch(from #d64309 calc(l - 0.3) c h);
-
-    /* Tertiary color scale - #0072ce */
-    --color-tertiary-50: oklch(from #0072ce calc(l + 0.4) c h);
-    --color-tertiary-100: oklch(from #0072ce calc(l + 0.35) c h);
-    --color-tertiary-200: oklch(from #0072ce calc(l + 0.3) c h);
-    --color-tertiary-300: oklch(from #0072ce calc(l + 0.2) c h);
-    --color-tertiary-400: oklch(from #0072ce calc(l + 0.1) c h);
-    --color-tertiary-500: #0072ce;
-    --color-tertiary-600: oklch(from #0072ce calc(l - 0.1) c h);
-    --color-tertiary-700: oklch(from #0072ce calc(l - 0.15) c h);
-    --color-tertiary-800: oklch(from #0072ce calc(l - 0.2) c h);
-    --color-tertiary-900: oklch(from #0072ce calc(l - 0.25) c h);
-    --color-tertiary-950: oklch(from #0072ce calc(l - 0.3) c h);
 }

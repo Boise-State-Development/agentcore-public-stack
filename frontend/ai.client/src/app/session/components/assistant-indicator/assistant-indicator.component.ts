@@ -162,7 +162,7 @@ import {
       }
 
       &:focus-visible {
-        outline: 2px solid var(--color-blue-500);
+        outline: 2px solid var(--color-primary-accessible);
         outline-offset: 2px;
       }
     }
@@ -238,7 +238,7 @@ import {
       }
 
       &:focus-visible {
-        outline: 2px solid var(--color-blue-500);
+        outline: 2px solid var(--color-primary-accessible);
         outline-offset: 2px;
       }
     }
@@ -374,7 +374,7 @@ import {
       }
 
       &:focus-visible {
-        outline: 2px solid var(--color-blue-500);
+        outline: 2px solid var(--color-primary-accessible);
         outline-offset: -2px;
       }
     }

@@ -28,6 +28,7 @@ import {
   formatBytes
 } from '../services/file-upload';
 import { ToastService } from '../services/toast/toast.service';
+import { SpinnerComponent } from '../components/spinner/spinner.component';
 import {
   ConfirmationDialogComponent,
   ConfirmationDialogData
@@ -40,14 +41,14 @@ const MAX_SELECTION = 20;
 
 /** File type icons and colors */
 const FILE_TYPE_CONFIG: Record<string, { icon: string; color: string; label: string }> = {
-  'application/pdf': { icon: 'heroDocument', color: 'text-red-600 dark:text-red-400', label: 'PDF' },
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { icon: 'heroDocumentText', color: 'text-blue-600 dark:text-blue-400', label: 'DOCX' },
+  'application/pdf': { icon: 'heroDocument', color: 'text-filetype-pdf-600 dark:text-filetype-pdf-400', label: 'PDF' },
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { icon: 'heroDocumentText', color: 'text-filetype-doc-600 dark:text-filetype-doc-400', label: 'DOCX' },
   'text/plain': { icon: 'heroDocumentText', color: 'text-gray-600 dark:text-gray-400', label: 'TXT' },
-  'text/html': { icon: 'heroDocumentText', color: 'text-orange-600 dark:text-orange-400', label: 'HTML' },
-  'text/csv': { icon: 'heroTableCells', color: 'text-green-600 dark:text-green-400', label: 'CSV' },
-  'application/vnd.ms-excel': { icon: 'heroTableCells', color: 'text-green-600 dark:text-green-400', label: 'XLS' },
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { icon: 'heroTableCells', color: 'text-green-600 dark:text-green-400', label: 'XLSX' },
-  'text/markdown': { icon: 'heroDocumentText', color: 'text-purple-600 dark:text-purple-400', label: 'MD' },
+  'text/html': { icon: 'heroDocumentText', color: 'text-filetype-code-600 dark:text-filetype-code-400', label: 'HTML' },
+  'text/csv': { icon: 'heroTableCells', color: 'text-filetype-sheet-600 dark:text-filetype-sheet-400', label: 'CSV' },
+  'application/vnd.ms-excel': { icon: 'heroTableCells', color: 'text-filetype-sheet-600 dark:text-filetype-sheet-400', label: 'XLS' },
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { icon: 'heroTableCells', color: 'text-filetype-sheet-600 dark:text-filetype-sheet-400', label: 'XLSX' },
+  'text/markdown': { icon: 'heroDocumentText', color: 'text-filetype-markdown-600 dark:text-filetype-markdown-400', label: 'MD' },
 };
 
 type SortBy = 'date' | 'size' | 'type';
@@ -56,7 +57,7 @@ type SortOrder = 'asc' | 'desc';
 @Component({
   selector: 'app-file-browser-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, TooltipDirective],
+  imports: [NgIcon, RouterLink, TooltipDirective, SpinnerComponent],
   providers: [
     provideIcons({
       heroTrash,
@@ -106,7 +107,7 @@ type SortOrder = 'asc' | 'desc';
               ></div>
             </div>
             @if (quotaUsagePercent() >= 80) {
-              <p class="mt-2 text-xs/5 text-amber-600 dark:text-amber-400">
+              <p class="mt-2 text-xs/5 text-state-warning-600 dark:text-state-warning-400">
                 @if (quotaUsagePercent() >= 90) {
                   Storage almost full. Consider deleting unused files.
                 } @else {
@@ -127,7 +128,7 @@ type SortOrder = 'asc' | 'desc';
               type="button"
               (click)="selectAll()"
               [disabled]="files().length === 0"
-              class="text-sm/6 font-medium text-blue-600 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:text-blue-300"
+              class="text-sm/6 font-medium text-primary-accessible hover:underline disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-accessible-dark"
             >
               Select all
             </button>
@@ -135,7 +136,7 @@ type SortOrder = 'asc' | 'desc';
               <button
                 type="button"
                 (click)="clearSelection()"
-                class="text-sm/6 font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                class="text-sm/6 font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark"
               >
                 Clear selection
               </button>
@@ -190,12 +191,12 @@ type SortOrder = 'asc' | 'desc';
               type="button"
               (click)="confirmBulkDelete()"
               [disabled]="selectedCount() === 0 || isDeleting()"
-              class="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm/6 font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-500 dark:hover:bg-red-600"
+              class="flex items-center gap-2 rounded-lg bg-state-danger-600 px-4 py-2 text-sm/6 font-medium text-white transition-colors hover:bg-state-danger-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-state-danger-500 dark:hover:bg-state-danger-600"
               [appTooltip]="'Delete selected files'"
               appTooltipPosition="top"
             >
               @if (isDeleting()) {
-                <div class="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
+                <app-spinner size="sm" variant="on-solid" label="Deleting" />
                 Deleting...
               } @else {
                 <ng-icon name="heroTrash" class="size-4" />
@@ -207,10 +208,10 @@ type SortOrder = 'asc' | 'desc';
 
         <!-- Selection Limit Warning -->
         @if (isAtSelectionLimit()) {
-          <div class="mb-6 rounded-lg border border-yellow-200 bg-yellow-50 p-4 dark:border-yellow-800 dark:bg-yellow-900/20">
+          <div class="mb-6 rounded-lg border border-state-warning-200 bg-state-warning-50 p-4 dark:border-state-warning-800 dark:bg-state-warning-900/20">
             <div class="flex items-center gap-3">
-              <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-yellow-600 dark:text-yellow-400" />
-              <p class="text-sm/6 text-yellow-700 dark:text-yellow-300">
+              <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400" />
+              <p class="text-sm/6 text-state-warning-700 dark:text-state-warning-300">
                 Selection limit reached. You can delete up to {{ maxSelection }} files at a time.
               </p>
             </div>
@@ -221,7 +222,7 @@ type SortOrder = 'asc' | 'desc';
         @if (isLoading() && files().length === 0) {
           <div class="flex items-center justify-center py-12">
             <div class="text-center">
-              <div class="mb-4 inline-block size-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent"></div>
+              <app-spinner size="lg" label="Loading files" />
               <p class="text-base/7 text-gray-600 dark:text-gray-400">Loading files...</p>
             </div>
           </div>
@@ -265,7 +266,7 @@ type SortOrder = 'asc' | 'desc';
                         <span>{{ formatDate(file.createdAt) }}</span>
                         <a
                           [routerLink]="['/s', file.sessionId]"
-                          class="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                          class="text-primary-accessible hover:underline dark:text-primary-accessible-dark"
                           (click)="$event.stopPropagation()"
                         >
                           View conversation
@@ -281,7 +282,7 @@ type SortOrder = 'asc' | 'desc';
                         [checked]="isSelected"
                         [disabled]="isDisabled"
                         (change)="toggleFile(file.uploadId)"
-                        class="col-start-1 row-start-1 appearance-none rounded-xs border border-gray-300 bg-white checked:border-indigo-600 checked:bg-indigo-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-100 disabled:checked:bg-gray-100 dark:border-white/10 dark:bg-white/5 dark:checked:border-indigo-500 dark:checked:bg-indigo-500 dark:focus-visible:outline-indigo-500 dark:disabled:border-white/5 dark:disabled:bg-white/10 dark:disabled:checked:bg-white/10 forced-colors:appearance-auto"
+                        class="col-start-1 row-start-1 appearance-none rounded-xs border border-gray-300 bg-white checked:border-primary-600 checked:bg-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-100 disabled:checked:bg-gray-100 dark:border-white/10 dark:bg-white/5 dark:checked:border-primary-500 dark:checked:bg-primary-500 dark:focus-visible:outline-primary-500 dark:disabled:border-white/5 dark:disabled:bg-white/10 dark:disabled:checked:bg-white/10 forced-colors:appearance-auto"
                       />
                       <svg viewBox="0 0 14 14" fill="none" class="pointer-events-none col-start-1 row-start-1 size-3.5 self-center justify-self-center stroke-white group-has-disabled:stroke-gray-950/25 dark:group-has-disabled:stroke-white/25">
                         <path d="M3 8L6 11L11 3.5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="opacity-0 group-has-checked:opacity-100" />
@@ -303,7 +304,7 @@ type SortOrder = 'asc' | 'desc';
                 class="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
               >
                 @if (isLoadingMore()) {
-                  <div class="size-4 animate-spin rounded-full border-2 border-gray-400 border-t-gray-700"></div>
+                  <app-spinner size="sm" label="Loading" />
                   Loading...
                 } @else {
                   Load More
@@ -378,9 +379,9 @@ export class FileBrowserPage implements OnInit {
   /** Quota bar color based on usage */
   readonly quotaBarColor = computed(() => {
     const percent = this.quotaUsagePercent();
-    if (percent >= 90) return 'bg-red-600';
-    if (percent >= 80) return 'bg-amber-500';
-    return 'bg-blue-600';
+    if (percent >= 90) return 'bg-state-danger-600';
+    if (percent >= 80) return 'bg-state-warning-500';
+    return 'bg-state-info-600';
   });
 
   /** Sort by label for dropdown button */

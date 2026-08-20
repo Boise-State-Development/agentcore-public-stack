@@ -38,6 +38,7 @@ import {
 import { VoiceChatService } from './services/voice';
 import { SystemPromptsService } from '../services/system-prompts/system-prompts.service';
 import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.service';
+import { GreetingProvider } from '../../branding/greeting.provider';
 
 @Component({
   selector: 'app-session-page',
@@ -73,6 +74,7 @@ export class ConversationPage implements OnDestroy {
   private dialog = inject(Dialog);
   private voiceChatService = inject(VoiceChatService);
   private systemPromptsService = inject(SystemPromptsService);
+  private greetingProvider = inject(GreetingProvider);
   private scrollPositions = inject(ScrollPositionService);
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
@@ -151,35 +153,10 @@ export class ConversationPage implements OnDestroy {
     return user?.firstName || null;
   });
 
-  // Greeting message templates (use {name} as placeholder for first name)
-  private greetingTemplates = [
-    'How can I help you today, {name}?',
-    'What would you like to know, {name}?',
-    'Ready to assist you, {name}!',
-    'What can I do for you, {name}?',
-    "Let's get started, {name}!",
-  ];
-
-  // Fallback greetings when user name is not available
-  private fallbackGreetings = [
-    'How can I help you today?',
-    'What would you like to know?',
-    'Ready to assist you!',
-    'What can I do for you?',
-    "Let's get started!",
-  ];
-
-  // Store the selected template index for consistency
-  private selectedGreetingIndex = Math.floor(Math.random() * this.greetingTemplates.length);
-
-  // Computed greeting message that reacts to user changes
-  greetingMessage = computed(() => {
-    const name = this.firstName();
-    if (name) {
-      return this.greetingTemplates[this.selectedGreetingIndex].replace('{name}', name);
-    }
-    return this.fallbackGreetings[this.selectedGreetingIndex];
-  });
+  // Computed greeting message that reacts to user changes. Delegates
+  // selection and `{name}` substitution to GreetingProvider, which reads
+  // the greeting templates/fallbacks from BrandingService.
+  greetingMessage = computed(() => this.greetingProvider.resolveGreeting(this.firstName()));
 
   private routeSubscription?: Subscription;
   private queryParamSubscription?: Subscription;

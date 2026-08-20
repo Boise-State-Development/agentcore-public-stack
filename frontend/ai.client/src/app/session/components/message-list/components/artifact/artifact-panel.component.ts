@@ -96,7 +96,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
         >
           <span
             aria-hidden="true"
-            class="h-12 w-1 rounded-full bg-gray-300 transition-colors group-hover:bg-blue-500 group-focus-visible:bg-blue-500 dark:bg-gray-600 dark:group-hover:bg-blue-400"
+            class="h-12 w-1 rounded-full bg-gray-300 transition-colors group-hover:bg-primary-500 group-focus-visible:bg-primary-500 dark:bg-gray-600 dark:group-hover:bg-primary-400"
           ></span>
         </div>
         <header
@@ -112,7 +112,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
               <div #versionControl class="relative">
                 <button
                   type="button"
-                  class="-ml-1 flex items-center gap-0.5 rounded px-1 py-0.5 text-xs text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:text-gray-100"
+                  class="-ml-1 flex items-center gap-0.5 rounded px-1 py-0.5 text-xs text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-400 dark:hover:text-gray-100"
                   aria-haspopup="menu"
                   [attr.aria-expanded]="menuOpen()"
                   aria-controls="artifact-version-menu"
@@ -145,7 +145,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
                         type="button"
                         role="menuitemradio"
                         [attr.aria-checked]="v.version === ref.version"
-                        class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+                        class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
                         [class]="
                           v.version === ref.version
                             ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-gray-100'
@@ -171,7 +171,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
                         </span>
                         @if (v.version === latestVersion()) {
                           <span
-                            class="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-500/15 dark:text-blue-300"
+                            class="shrink-0 rounded bg-primary-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-accessible dark:bg-primary-500/15 dark:text-primary-accessible-dark"
                             >Latest</span
                           >
                         }
@@ -193,7 +193,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
           >
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
               [class]="
                 view() === 'preview'
                   ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
@@ -208,7 +208,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
             </button>
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
               [class]="
                 view() === 'code'
                   ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
@@ -229,7 +229,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
           @if (view() === 'code') {
             <button
               type="button"
-              class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+              class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
               [attr.aria-label]="copied() ? 'Copied' : 'Copy code'"
               [disabled]="!source()"
               (click)="copy()"
@@ -237,14 +237,14 @@ import { ArtifactSourceComponent } from './artifact-source.component';
               <ng-icon
                 [name]="copied() ? 'heroCheck' : 'heroClipboard'"
                 class="text-lg"
-                [class.text-green-600]="copied()"
+                [class.text-state-success-600]="copied()"
                 aria-hidden="true"
               />
             </button>
           }
           <button
             type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
             [attr.aria-label]="
               downloading() ? 'Downloading artifact…' : 'Download artifact'
             "
@@ -261,7 +261,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
           </button>
           <button
             type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
             aria-label="Close artifact"
             (click)="close()"
           >
@@ -278,7 +278,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
               >
                 <ng-icon
                   name="heroExclamationTriangle"
-                  class="text-3xl text-amber-500"
+                  class="text-3xl text-state-warning-500"
                   aria-hidden="true"
                 />
                 <p class="text-sm text-gray-700 dark:text-gray-300">
@@ -286,7 +286,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
                 </p>
                 <button
                   type="button"
-                  class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
+                  class="rounded-md bg-primary-accessible px-3 py-1.5 text-sm font-medium text-white transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
                   (click)="retrySource()"
                 >
                   Try again
@@ -311,7 +311,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
               >
                 <ng-icon
                   name="heroExclamationTriangle"
-                  class="text-3xl text-amber-500"
+                  class="text-3xl text-state-warning-500"
                   aria-hidden="true"
                 />
                 <p class="text-sm text-gray-700 dark:text-gray-300">
@@ -319,7 +319,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
                 </p>
                 <button
                   type="button"
-                  class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
+                  class="rounded-md bg-primary-accessible px-3 py-1.5 text-sm font-medium text-white transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
                   (click)="retry()"
                 >
                   Try again

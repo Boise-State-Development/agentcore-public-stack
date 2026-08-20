@@ -1,0 +1,93 @@
+/**
+ * State color tokens — NOT rebrandable.
+ *
+ * These encode status meaning: danger/error, warning, success, info.
+ * They are deliberately NOT derived from Brand_Config, because their
+ * meaning is fixed regardless of who deploys the app. A red error banner
+ * must stay red even for an organization whose brand color is red, and it
+ * must not turn green just because the brand primary is green.
+ *
+ * Contrast with:
+ *   - styles/generated/brand-theme.css — machine-written from
+ *     src/branding/brand.config.ts, rebrandable, for accent/interactive UI.
+ *   - styles/tokens/identity.css — category identity (vendor, file type,
+ *     chart series), also not rebrandable.
+ *
+ * VALUES: literal OKLCH copied verbatim from Tailwind's default palette
+ * (node_modules/tailwindcss/theme.css) so migrating a call site from
+ * e.g. `bg-red-100` to `bg-state-danger-100` is a zero-pixel change.
+ * They are literals rather than `var(--color-red-100)` references because
+ * Tailwind v4 only emits theme variables that something actually uses, so
+ * a reference could resolve to nothing once the raw palette utilities are
+ * gone. They are OKLCH rather than hex because Tailwind v4's palette is
+ * OKLCH; converting to hex would clamp to sRGB and shift the color on
+ * wide-gamut displays.
+ *
+ * Full 11-step ramps are defined for each role because state colors are
+ * used at nearly every step across the app; a partial ramp would need
+ * extending on almost every migration.
+ *
+ * Source hues: danger=red, warning=amber, success=green, info=blue.
+ */
+
+@theme {
+  /* --- danger / error / destructive (Tailwind red) --- */
+  --color-state-danger-50: oklch(97.1% 0.013 17.38);
+  --color-state-danger-100: oklch(93.6% 0.032 17.717);
+  --color-state-danger-200: oklch(88.5% 0.062 18.334);
+  --color-state-danger-300: oklch(80.8% 0.114 19.571);
+  --color-state-danger-400: oklch(70.4% 0.191 22.216);
+  --color-state-danger-500: oklch(63.7% 0.237 25.331);
+  --color-state-danger-600: oklch(57.7% 0.245 27.325);
+  --color-state-danger-700: oklch(50.5% 0.213 27.518);
+  --color-state-danger-800: oklch(44.4% 0.177 26.899);
+  --color-state-danger-900: oklch(39.6% 0.141 25.723);
+  --color-state-danger-950: oklch(25.8% 0.092 26.042);
+
+  /* --- warning / caution (Tailwind amber) --- */
+  --color-state-warning-50: oklch(98.7% 0.022 95.277);
+  --color-state-warning-100: oklch(96.2% 0.059 95.617);
+  --color-state-warning-200: oklch(92.4% 0.12 95.746);
+  --color-state-warning-300: oklch(87.9% 0.169 91.605);
+  --color-state-warning-400: oklch(82.8% 0.189 84.429);
+  --color-state-warning-500: oklch(76.9% 0.188 70.08);
+  --color-state-warning-600: oklch(66.6% 0.179 58.318);
+  --color-state-warning-700: oklch(55.5% 0.163 48.998);
+  --color-state-warning-800: oklch(47.3% 0.137 46.201);
+  --color-state-warning-900: oklch(41.4% 0.112 45.904);
+  --color-state-warning-950: oklch(27.9% 0.077 45.635);
+
+  /* --- success / healthy / enabled (Tailwind green) --- */
+  --color-state-success-50: oklch(98.2% 0.018 155.826);
+  --color-state-success-100: oklch(96.2% 0.044 156.743);
+  --color-state-success-200: oklch(92.5% 0.084 155.995);
+  --color-state-success-300: oklch(87.1% 0.15 154.449);
+  --color-state-success-400: oklch(79.2% 0.209 151.711);
+  --color-state-success-500: oklch(72.3% 0.219 149.579);
+  --color-state-success-600: oklch(62.7% 0.194 149.214);
+  --color-state-success-700: oklch(52.7% 0.154 150.069);
+  --color-state-success-800: oklch(44.8% 0.119 151.328);
+  --color-state-success-900: oklch(39.3% 0.095 152.535);
+  --color-state-success-950: oklch(26.6% 0.065 152.934);
+
+  /*
+   * --- info / neutral notice (Tailwind blue) ---
+   *
+   * NOTE: blue is currently overloaded in this codebase. It is both the
+   * historical brand accent (the default primary #0033a0 is blue) and the
+   * "info" state. When migrating a `blue-*` call site, decide which it is:
+   * an accent/interactive element becomes `primary-*`, an informational
+   * notice becomes `state-info-*`. Do not bulk-replace.
+   */
+  --color-state-info-50: oklch(97% 0.014 254.604);
+  --color-state-info-100: oklch(93.2% 0.032 255.585);
+  --color-state-info-200: oklch(88.2% 0.059 254.128);
+  --color-state-info-300: oklch(80.9% 0.105 251.813);
+  --color-state-info-400: oklch(70.7% 0.165 254.624);
+  --color-state-info-500: oklch(62.3% 0.214 259.815);
+  --color-state-info-600: oklch(54.6% 0.245 262.881);
+  --color-state-info-700: oklch(48.8% 0.243 264.376);
+  --color-state-info-800: oklch(42.4% 0.199 265.638);
+  --color-state-info-900: oklch(37.9% 0.146 265.522);
+  --color-state-info-950: oklch(28.2% 0.091 267.935);
+}

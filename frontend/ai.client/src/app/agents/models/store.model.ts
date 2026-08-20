@@ -61,13 +61,13 @@ export const LISTING_STATE_LABELS: Record<ListingState, string> = {
  */
 export const LISTING_STATE_CLASSES: Record<ListingState, string> = {
   private: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
-  in_review: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
-  published: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
-  changes_requested: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
-  taken_down: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
-  // Amber like in_review, not rose: this is work waiting on an admin, not a problem with
-  // the listing — and it is still published while it waits.
-  withdrawal_requested: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+  in_review: 'bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/40 dark:text-state-warning-300',
+  published: 'bg-state-success-100 text-state-success-800 dark:bg-state-success-900/40 dark:text-state-success-300',
+  changes_requested: 'bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/40 dark:text-state-danger-300',
+  taken_down: 'bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/40 dark:text-state-danger-300',
+  // Warning like in_review, not danger: this is work waiting on an admin, not a problem
+  // with the listing — and it is still published while it waits.
+  withdrawal_requested: 'bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/40 dark:text-state-warning-300',
 };
 
 /**
