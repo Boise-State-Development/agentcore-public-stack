@@ -194,6 +194,50 @@ build_cdk_context_params() {
         context_params="${context_params} --context mcpSandbox.certificateArn=\"${CDK_MCP_SANDBOX_CERTIFICATE_ARN}\""
     fi
 
+    # Managed knowledge bases (.kiro/specs/managed-kb-migration).
+    #
+    # All three flags default to FALSE in config.ts, so an omitted flag is
+    # the safe, shipped state. Each is forwarded ONLY when non-empty:
+    # CDK context cannot express an empty string, and an unset GitHub
+    # Actions variable arrives here as exactly that. Omitting the flag is
+    # also the correct semantic — it means "use the default (off)".
+    #
+    # These are read by config.ts as the FLAT dotted context key
+    # (`managedKb.newDefault`), because `--context a.b=c` sets
+    # context["a.b"] rather than building a nested object. Both synth.sh
+    # and deploy.sh obtain their flags from this one function, so the two
+    # can never drift apart.
+    if [ -n "${CDK_MANAGED_KB_NEW_DEFAULT:-}" ]; then
+        context_params="${context_params} --context managedKb.newDefault=\"${CDK_MANAGED_KB_NEW_DEFAULT}\""
+    fi
+    if [ -n "${CDK_MANAGED_KB_MIGRATION_ENABLED:-}" ]; then
+        context_params="${context_params} --context managedKb.migrationEnabled=\"${CDK_MANAGED_KB_MIGRATION_ENABLED}\""
+    fi
+    if [ -n "${CDK_MANAGED_KB_RECONCILER_ARMED:-}" ]; then
+        context_params="${context_params} --context managedKb.reconcilerArmed=\"${CDK_MANAGED_KB_RECONCILER_ARMED}\""
+    fi
+    # Byte_Caps in BYTES (Requirement 12.2) and the rollback window in DAYS
+    # (Requirement 15.11). config.ts reads the same flat dotted keys, so these
+    # are honoured rather than silently dropped.
+    if [ -n "${CDK_MANAGED_KB_PER_OWNER_BYTES:-}" ]; then
+        context_params="${context_params} --context managedKb.perOwnerDefaultBytes=\"${CDK_MANAGED_KB_PER_OWNER_BYTES}\""
+    fi
+    if [ -n "${CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES:-}" ]; then
+        context_params="${context_params} --context managedKb.perOwnerElevatedBytes=\"${CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES}\""
+    fi
+    if [ -n "${CDK_MANAGED_KB_PER_KB_CEILING_BYTES:-}" ]; then
+        context_params="${context_params} --context managedKb.perKnowledgeBaseCeilingBytes=\"${CDK_MANAGED_KB_PER_KB_CEILING_BYTES}\""
+    fi
+    if [ -n "${CDK_MANAGED_KB_RETENTION_WINDOW_DAYS:-}" ]; then
+        context_params="${context_params} --context managedKb.retentionWindowDays=\"${CDK_MANAGED_KB_RETENTION_WINDOW_DAYS}\""
+    fi
+    if [ -n "${CDK_MANAGED_KB_STORAGE_ALARM_GB:-}" ]; then
+        context_params="${context_params} --context managedKb.storageAlarmGb=\"${CDK_MANAGED_KB_STORAGE_ALARM_GB}\""
+    fi
+    if [ -n "${CDK_MANAGED_KB_DAILY_COST_ALARM_USD:-}" ]; then
+        context_params="${context_params} --context managedKb.dailyCostAlarmUsd=\"${CDK_MANAGED_KB_DAILY_COST_ALARM_USD}\""
+    fi
+
     echo "${context_params}"
 }
 
@@ -270,6 +314,33 @@ export CDK_RAG_LAMBDA_TIMEOUT="${CDK_RAG_LAMBDA_TIMEOUT:-$(get_json_value "ragIn
 export CDK_ARTIFACTS_CERTIFICATE_ARN="${CDK_ARTIFACTS_CERTIFICATE_ARN:-$(get_json_value "artifacts.certificateArn" "${CONTEXT_FILE}")}"
 export CDK_ARTIFACTS_RETENTION_DAYS="${CDK_ARTIFACTS_RETENTION_DAYS:-$(get_json_value "artifacts.retentionDays" "${CONTEXT_FILE}")}"
 
+# Managed knowledge bases (.kiro/specs/managed-kb-migration).
+#
+# Three independent OPT-IN flags, all defaulting to false in config.ts:
+#   newDefault      — new knowledge bases are created managed
+#   migrationEnabled — the background migration worker runs at all
+#   reconcilerArmed  — the daily reconciler DELETES rather than only reporting
+#
+# Empty is safe and is the shipped state. Unlike the default-ON flags
+# above, there is no "kill switch" reading here to get wrong: nothing
+# turns on unless a value explicitly says so.
+export CDK_MANAGED_KB_NEW_DEFAULT="${CDK_MANAGED_KB_NEW_DEFAULT:-$(get_json_value "managedKb.newDefault" "${CONTEXT_FILE}")}"
+export CDK_MANAGED_KB_MIGRATION_ENABLED="${CDK_MANAGED_KB_MIGRATION_ENABLED:-$(get_json_value "managedKb.migrationEnabled" "${CONTEXT_FILE}")}"
+export CDK_MANAGED_KB_RECONCILER_ARMED="${CDK_MANAGED_KB_RECONCILER_ARMED:-$(get_json_value "managedKb.reconcilerArmed" "${CONTEXT_FILE}")}"
+# Per-owner / per-knowledge-base Byte_Caps, in BYTES (Requirement 12.2), and
+# the legacy-vector rollback window in DAYS (Requirement 15.11). Defaults live
+# in config.ts as named constants (100 MB / 1 GB / 500 MB / 30 days); these
+# exist so an environment can tune them without a code change. Empty means
+# "use the default" — the flag is only forwarded when non-empty.
+export CDK_MANAGED_KB_PER_OWNER_BYTES="${CDK_MANAGED_KB_PER_OWNER_BYTES:-$(get_json_value "managedKb.perOwnerDefaultBytes" "${CONTEXT_FILE}")}"
+export CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES="${CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES:-$(get_json_value "managedKb.perOwnerElevatedBytes" "${CONTEXT_FILE}")}"
+export CDK_MANAGED_KB_PER_KB_CEILING_BYTES="${CDK_MANAGED_KB_PER_KB_CEILING_BYTES:-$(get_json_value "managedKb.perKnowledgeBaseCeilingBytes" "${CONTEXT_FILE}")}"
+export CDK_MANAGED_KB_RETENTION_WINDOW_DAYS="${CDK_MANAGED_KB_RETENTION_WINDOW_DAYS:-$(get_json_value "managedKb.retentionWindowDays" "${CONTEXT_FILE}")}"
+# Fleet-level alarm thresholds (Requirement 12.13). Per-owner byte caps
+# bound one user; these bound the account.
+export CDK_MANAGED_KB_STORAGE_ALARM_GB="${CDK_MANAGED_KB_STORAGE_ALARM_GB:-$(get_json_value "managedKb.storageAlarmGb" "${CONTEXT_FILE}")}"
+export CDK_MANAGED_KB_DAILY_COST_ALARM_USD="${CDK_MANAGED_KB_DAILY_COST_ALARM_USD:-$(get_json_value "managedKb.dailyCostAlarmUsd" "${CONTEXT_FILE}")}"
+
 # Cognito configuration (optional — defaults to projectPrefix for domain prefix)
 export CDK_COGNITO_DOMAIN_PREFIX="${CDK_COGNITO_DOMAIN_PREFIX:-$(get_json_value "cognito.domainPrefix" "${CONTEXT_FILE}")}"
 
@@ -322,6 +393,20 @@ validate_config() {
         log_error "  Expected 'iam' or 'jwt'"
         errors=$((errors + 1))
     fi
+
+    # Validate the Managed_KB flags. config.ts's parseBooleanEnv throws on
+    # an unrecognised value, but failing here names the variable and the
+    # allowed set instead of surfacing a stack trace from inside cdk synth.
+    # Empty is valid and means off — that is the shipped state.
+    for _mkb_var in CDK_MANAGED_KB_NEW_DEFAULT CDK_MANAGED_KB_MIGRATION_ENABLED CDK_MANAGED_KB_RECONCILER_ARMED; do
+        eval "_mkb_val=\${${_mkb_var}:-}"
+        if [ -n "${_mkb_val}" ] && ! [[ "${_mkb_val}" =~ ^(true|false|1|0)$ ]]; then
+            log_error "Invalid ${_mkb_var} value: '${_mkb_val}'"
+            log_error "  Expected 'true', 'false', '1', '0', or empty (empty means off)"
+            errors=$((errors + 1))
+        fi
+    done
+    unset _mkb_var _mkb_val
     
     if [ $errors -gt 0 ]; then
         log_error "Configuration validation failed with ${errors} error(s)"

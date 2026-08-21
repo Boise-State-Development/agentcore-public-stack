@@ -49,6 +49,7 @@ export interface AppConfig {
   inferenceApi: InferenceApiConfig;
   ragIngestion: RagIngestionConfig;
   kbSync: KbSyncConfig;
+  managedKb: ManagedKbConfig;
   scheduledRuns: ScheduledRunsConfig;
   memorySpaces: MemorySpacesConfig;
   skills: SkillsConfig;
@@ -152,6 +153,83 @@ export interface RagIngestionConfig {
 export interface KbSyncConfig {
   enabled: boolean;
 }
+
+/**
+ * Managed knowledge bases — Amazon Bedrock Managed KB as a second
+ * retrieval backend (.kiro/specs/managed-kb-migration, Requirement 19).
+ *
+ * Three INDEPENDENT booleans, all defaulting to **false**, all treating
+ * an empty string as false. This inverts the repo's usual "default ON
+ * with a kill switch" idiom on purpose: managed storage bills at
+ * $5.00/GB-month against ~$0.15/GB-month today, so every one of these
+ * has to be a deliberate, reviewable opt-in rather than something a
+ * fork inherits by cloning.
+ *
+ * The empty-string rule is not pedantry (Requirement 19.8). An unset
+ * GitHub Actions variable renders as an EMPTY STRING, not as absent, so
+ * a naive truthiness check on the forwarded value is fine but a naive
+ * `!== 'false'` check — the shape used by the default-ON flags above —
+ * would resolve an unset variable to **true** and silently arm the
+ * feature on every fork. `parseBooleanEnv` returns `undefined` for both
+ * unset and empty, so the `??` chain falls through to context and then
+ * to `false`.
+ *
+ * - `newDefault` (MANAGED_KB_NEW_DEFAULT) — newly created knowledge
+ *   bases are provisioned managed instead of legacy.
+ * - `migrationEnabled` (MANAGED_KB_MIGRATION_ENABLED) — whether the
+ *   background Migration_Worker runs at all. Off ⇒ the dispatcher's
+ *   EventBridge rule is created DISABLED and the dispatcher itself
+ *   no-ops (Requirement 19.6), so migration work is inert two ways
+ *   over.
+ * - `reconcilerArmed` (MANAGED_KB_RECONCILER_ARMED) — whether the daily
+ *   Reconciler DELETES orphans or merely logs what it would have
+ *   deleted. This is the inverted-convention flag: the Reconciler is
+ *   *deployed and running* from day one but *disarmed*, so its
+ *   judgement can be reviewed against weeks of real data before it is
+ *   allowed to delete anything (Requirements 14.7, 19.7). Note the
+ *   consequence for the schedule: the Reconciler's rule is ENABLED even
+ *   with every flag off, because report-only is the point. Report-only
+ *   is read-only, so it changes nothing.
+ *
+ * Byte caps (Requirement 12.2) are expressed in BYTES rather than MB so
+ * nothing downstream has to guess at a unit, and they resolve by role
+ * tier. The standard tier sits deliberately **below** the platform's
+ * existing 1 GB user-files precedent: at 30,000 users the 1 GB
+ * precedent would permit 30 TB, i.e. ~$150,000/month. These figures
+ * still require product sign-off before enforcement is switched on.
+ *
+ * `storageAlarmGb` / `dailyCostAlarmUsd` are the fleet-level guards
+ * (Requirement 12.13). Per-owner caps bound one user; only these bound
+ * the account, and the gap between ~$169/month expected and ~$15,000
+ * permitted is why they are not optional.
+ */
+export interface ManagedKbConfig {
+  /** New knowledge bases are created managed. Default false. */
+  newDefault: boolean;
+  /** The background Migration_Worker runs at all. Default false. */
+  migrationEnabled: boolean;
+  /** The Reconciler deletes rather than only reporting. Default false. */
+  reconcilerArmed: boolean;
+  /** Per-owner Byte_Cap, standard role tier. Default 100 MB. */
+  perOwnerDefaultBytes: number;
+  /** Per-owner Byte_Cap, elevated (admin-granted) role tier. Default 1 GB. */
+  perOwnerElevatedBytes: number;
+  /** Per-knowledge-base ceiling, bounding a single runaway corpus. Default 500 MB. */
+  perKnowledgeBaseCeilingBytes: number;
+  /** Rollback window during `retain`, in days. At least 30 (Requirement 15.11). */
+  retentionWindowDays: number;
+  /** Fleet-wide managed-storage alarm threshold, in GB. */
+  storageAlarmGb: number;
+  /** Daily Knowledge-Base usagetype cost alarm threshold, in USD. */
+  dailyCostAlarmUsd: number;
+}
+
+/** Per-owner Byte_Cap defaults by role tier (Requirement 12.2). */
+export const MANAGED_KB_DEFAULT_PER_OWNER_BYTES = 100 * 1024 * 1024; // 100 MB
+export const MANAGED_KB_ELEVATED_PER_OWNER_BYTES = 1024 * 1024 * 1024; // 1 GB
+export const MANAGED_KB_PER_KB_CEILING_BYTES = 500 * 1024 * 1024; // 500 MB
+/** Minimum legacy-data rollback window (Requirement 15.11). */
+export const MANAGED_KB_RETENTION_WINDOW_DAYS = 30;
 
 /**
  * Scheduled runs — headless agent runs as a user (the Harness primitive,
@@ -468,6 +546,101 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_KB_SYNC_ENABLED
         ? process.env.CDK_KB_SYNC_ENABLED !== 'false'
         : scope.node.tryGetContext('kbSync')?.enabled ?? true,
+    },
+    // Managed knowledge bases (.kiro/specs/managed-kb-migration).
+    //
+    // OPT-IN, inverting the default-ON idiom used by the flags above and
+    // below, because managed storage costs ~35x legacy per GB-month. All
+    // three booleans default to FALSE and an EMPTY STRING resolves to
+    // false (Requirement 19.8): `parseBooleanEnv` returns undefined for
+    // both unset and empty — which is exactly what an unset GitHub
+    // Actions variable forwards — so the `??` chain falls through to
+    // cdk.json context and then to the `false` literal. Deliberately NOT
+    // the `X ? X !== 'false' : default` shape used by kbSync /
+    // scheduledRuns / skills: that shape reads an unset (empty-string)
+    // variable as the default, which is correct when the default is ON
+    // and catastrophic when it is OFF.
+    //
+    // Precedence, highest first:
+    //   1. CDK_MANAGED_KB_* environment variable
+    //   2. `--context managedKb.<flag>=...` from build_cdk_context_params
+    //   3. a nested `managedKb: { ... }` object in cdk.context.json
+    //   4. false
+    //
+    // Step 2 reads the FLAT dotted key on purpose. `--context a.b=c` sets
+    // context["a.b"], it does NOT build a nested object — verified
+    // empirically: with `--context probe.flag=true`,
+    // tryGetContext('probe.flag') is the string "true" while
+    // tryGetContext('probe') is undefined. So a section that reads only
+    // `tryGetContext('managedKb')?.flag` silently ignores its own
+    // --context flag, which is the state the sibling dotted flags in
+    // load-env.sh are in. Reading both keys is what makes the documented
+    // GitHub-variable → workflow → load-env → synth/deploy → config
+    // chain actually deliver a value. Do not "simplify" this away.
+    managedKb: {
+      newDefault:
+        parseBooleanEnv(process.env.CDK_MANAGED_KB_NEW_DEFAULT)
+        ?? parseBooleanEnv(scope.node.tryGetContext('managedKb.newDefault'))
+        ?? scope.node.tryGetContext('managedKb')?.newDefault
+        ?? false,
+      migrationEnabled:
+        parseBooleanEnv(process.env.CDK_MANAGED_KB_MIGRATION_ENABLED)
+        ?? parseBooleanEnv(scope.node.tryGetContext('managedKb.migrationEnabled'))
+        ?? scope.node.tryGetContext('managedKb')?.migrationEnabled
+        ?? false,
+      reconcilerArmed:
+        parseBooleanEnv(process.env.CDK_MANAGED_KB_RECONCILER_ARMED)
+        ?? parseBooleanEnv(scope.node.tryGetContext('managedKb.reconcilerArmed'))
+        ?? scope.node.tryGetContext('managedKb')?.reconcilerArmed
+        ?? false,
+      // Byte caps in BYTES so no consumer has to guess a unit. The
+      // standard tier is deliberately below the 1 GB user-files
+      // precedent (Requirement 12.2).
+      //
+      // Same three-step precedence as the flags above, and for the same
+      // reason: step 2 reads the FLAT dotted key that
+      // `--context managedKb.perOwnerDefaultBytes=...` actually sets.
+      // Without it, load-env.sh's --context flag for these tunables
+      // would be accepted by the CLI and then silently ignored.
+      perOwnerDefaultBytes:
+        parseIntEnv(process.env.CDK_MANAGED_KB_PER_OWNER_BYTES)
+        ?? parseIntEnv(scope.node.tryGetContext('managedKb.perOwnerDefaultBytes'))
+        ?? scope.node.tryGetContext('managedKb')?.perOwnerDefaultBytes
+        ?? MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
+      perOwnerElevatedBytes:
+        parseIntEnv(process.env.CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES)
+        ?? parseIntEnv(scope.node.tryGetContext('managedKb.perOwnerElevatedBytes'))
+        ?? scope.node.tryGetContext('managedKb')?.perOwnerElevatedBytes
+        ?? MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
+      perKnowledgeBaseCeilingBytes:
+        parseIntEnv(process.env.CDK_MANAGED_KB_PER_KB_CEILING_BYTES)
+        ?? parseIntEnv(scope.node.tryGetContext('managedKb.perKnowledgeBaseCeilingBytes'))
+        ?? scope.node.tryGetContext('managedKb')?.perKnowledgeBaseCeilingBytes
+        ?? MANAGED_KB_PER_KB_CEILING_BYTES,
+      retentionWindowDays:
+        parseIntEnv(process.env.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS)
+        ?? parseIntEnv(scope.node.tryGetContext('managedKb.retentionWindowDays'))
+        ?? scope.node.tryGetContext('managedKb')?.retentionWindowDays
+        ?? MANAGED_KB_RETENTION_WINDOW_DAYS,
+      // Fleet-level alarm thresholds (Requirement 12.13). Same three-step
+      // precedence as everything above, INCLUDING the flat dotted read —
+      // load-env.sh emits `--context managedKb.storageAlarmGb=...` and
+      // `--context managedKb.dailyCostAlarmUsd=...`, which set the flat
+      // keys `context['managedKb.storageAlarmGb']` /
+      // `context['managedKb.dailyCostAlarmUsd']`. Omitting the dotted read
+      // makes the CLI accept those flags and then silently ignore them, so
+      // an operator who raises a threshold via context keeps the old one
+      // and only finds out when an alarm fires at the wrong number.
+      storageAlarmGb:
+        parseIntEnv(process.env.CDK_MANAGED_KB_STORAGE_ALARM_GB)
+        ?? parseIntEnv(scope.node.tryGetContext('managedKb.storageAlarmGb'))
+        ?? scope.node.tryGetContext('managedKb')?.storageAlarmGb
+        ?? 500,
+      dailyCostAlarmUsd:
+        parseIntEnv(process.env.CDK_MANAGED_KB_DAILY_COST_ALARM_USD)
+        ?? parseIntEnv(scope.node.tryGetContext('managedKb.dailyCostAlarmUsd'))
+        ?? scope.node.tryGetContext('managedKb')?.dailyCostAlarmUsd
+        ?? 100,
     },
     scheduledRuns: {
       // Default ON with a kill switch: enabled unless explicitly disabled.

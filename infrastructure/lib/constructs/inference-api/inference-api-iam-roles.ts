@@ -11,6 +11,7 @@ import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
 import { PlatformComputeRefs } from '../platform-compute-refs';
+import { grantManagedKbRetrieval } from '../managed-kb/managed-kb-role-construct';
 
 /**
  * Create the AgentCore Runtime execution role with all required
@@ -298,6 +299,11 @@ export function createRuntimeExecutionRole(
       `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${vectorBucketName}/index/${vectorIndexName}`,
     ],
   }));
+
+  // ── Managed knowledge bases (Bedrock Retrieve) ──
+  // Query-only: the agent loop may retrieve from a Managed_KB but never
+  // create or delete one (Requirement 20.6).
+  grantManagedKbRetrieval(config, role);
 
   // ── AgentCore WorkloadIdentity + OAuth token minting ──
   // The agent loop's tool gating in shared/oauth/agentcore_identity.py
