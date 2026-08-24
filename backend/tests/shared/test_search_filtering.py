@@ -192,6 +192,35 @@ def test_filter_graceful_degradation_on_dynamo_error(mock_boto3_resource):
 
 
 # -----------------------------------------------------------------------
+# Requirement 3.4: missing table name → graceful degradation (unfiltered)
+#
+# The second of the two fail-open paths, previously untested. Recorded here so
+# that the current contract is asserted rather than merely present: the
+# managed-kb-migration spec's Requirement 5 deliberately INVERTS both of these
+# (see its task 6.1/6.4), and an unasserted behaviour cannot be knowingly
+# inverted. When that change lands, this test and the one above flip to
+# expecting an empty result.
+# -----------------------------------------------------------------------
+
+
+@patch("boto3.resource")
+@patch.dict("os.environ", {}, clear=True)
+def test_filter_graceful_degradation_when_table_name_unset(mock_boto3_resource):
+    """DYNAMODB_ASSISTANTS_TABLE_NAME unset — return unfiltered results."""
+    from apis.shared.assistants.rag_service import _filter_vectors_by_document_status
+
+    vectors = [_make_vector("doc-a", 0), _make_vector("doc-b", 0)]
+
+    result = _filter_vectors_by_document_status(vectors, ASSISTANT_ID)
+
+    assert len(result) == 2
+    doc_ids = [v["metadata"]["document_id"] for v in result]
+    assert doc_ids == ["doc-a", "doc-b"]
+    # No table to reach, so DynamoDB is never contacted.
+    mock_boto3_resource.assert_not_called()
+
+
+# -----------------------------------------------------------------------
 # Edge case: Empty vector list
 # -----------------------------------------------------------------------
 

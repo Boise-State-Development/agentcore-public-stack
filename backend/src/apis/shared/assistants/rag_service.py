@@ -1,7 +1,34 @@
 """RAG service for assistant knowledge base search and prompt augmentation
 
-This service handles searching the vector store for assistant-specific
-knowledge and augmenting user prompts with retrieved context.
+This module is the **facade** over the knowledge base seam. It resolves which
+backend serves an assistant's knowledge base, delegates the search, and then
+applies the properties that must hold identically on every backend. It contains
+no retrieval logic of its own: what an S3 Vectors response looks like now lives
+in ``apis.shared.kb_backend.s3vectors_backend``.
+
+What lives here, and why here
+-----------------------------
+Three rules sit above the seam rather than inside either adapter, because a rule
+implemented twice is a rule that will eventually differ (Requirement 3):
+
+* **The document-status filter.** Dropped chunks whose parent document is not
+  ``complete``. Kept on both backends during parity even though managed
+  ingestion makes it largely redundant — removing it in the same change that
+  swaps the engine would make any difference in results unattributable.
+* **``top_k`` narrowing.** Applied *after* the status filter, which is the order
+  the legacy path has always used: filter-then-slice, so an incomplete document
+  cannot silently shrink a five-chunk answer.
+* **The 2,000-character context cap.** ``augment_prompt_with_context``'s
+  default. Held constant deliberately: the evaluation measured no correctness
+  change between 2,000 and 20,000 characters, so raising it here would add a
+  variable to a change whose whole purpose is to hold every variable but one.
+
+Score direction
+---------------
+The seam speaks **relevance** (higher is better). This facade still emits a
+``distance`` key (lower is better), derived by exact negation, because
+``app_api/assistants/routes.py`` puts that value in an HTTP response body that a
+client already reads. The rename stops at the seam; no caller has to change.
 """
 
 import logging
@@ -10,14 +37,25 @@ from typing import Any, Dict, List, Set
 
 import boto3
 
-from apis.shared.embeddings.bedrock_embeddings import search_assistant_knowledgebase
+from apis.shared.kb_backend.protocol import DEFAULT_TOP_K, Chunk, distance_from_relevance
+from apis.shared.kb_backend.resolver import resolve_backend
 
 logger = logging.getLogger(__name__)
 
+#: Parity contract (Requirement 3.2): the cap is 2,000 characters on every
+#: backend, unchanged from the value the legacy path has always used. Named so
+#: that a change to it is a visible change to a constant rather than an edit to a
+#: default argument.
+MAX_CONTEXT_CHARS = 2000
 
-async def search_assistant_knowledgebase_with_formatting(assistant_id: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+
+async def search_assistant_knowledgebase_with_formatting(assistant_id: str, query: str, top_k: int = DEFAULT_TOP_K) -> List[Dict[str, Any]]:
     """
     Search assistant knowledge base and return formatted results
+
+    Resolves the knowledge base's backend, delegates the search across the seam,
+    then applies the parity rules that must hold on every backend: the document
+    status filter, and ``top_k`` narrowing after it.
 
     Args:
         assistant_id: Assistant identifier to filter vectors
@@ -32,30 +70,28 @@ async def search_assistant_knowledgebase_with_formatting(assistant_id: str, quer
         - key: Vector key/ID
     """
     try:
-        # Call the bedrock_embeddings search function
-        response = await search_assistant_knowledgebase(assistant_id, query)
+        backend = resolve_backend(assistant_id)
 
-        # Extract vectors from response
-        vectors = response.get("vectors", [])
+        chunks = await backend.search(assistant_id, query, top_k)
 
-        if not vectors:
+        if not chunks:
             logger.info(f"No vectors found for assistant {assistant_id} with query: {query[:50]}...")
             return []
 
         # Filter out chunks from documents that are not in "complete" status
-        vectors = _filter_vectors_by_document_status(vectors, assistant_id)
+        chunks = _filter_chunks_by_document_status(chunks, assistant_id)
 
         # Format results - return document_id for on-demand download URL generation
         formatted_results = []
-        for vector in vectors[:top_k]:
-            metadata = vector.get("metadata", {})
-
+        for chunk in chunks[:top_k]:
             formatted_results.append(
                 {
-                    "text": metadata.get("text", ""),
-                    "distance": vector.get("distance"),
-                    "metadata": metadata,
-                    "key": vector.get("key", ""),
+                    "text": chunk.text,
+                    # Derived from relevance by exact negation, so the value a
+                    # caller reads is the one it has always read.
+                    "distance": distance_from_relevance(chunk.relevance),
+                    "metadata": chunk.metadata,
+                    "key": chunk.key,
                 }
             )
 
@@ -66,6 +102,31 @@ async def search_assistant_knowledgebase_with_formatting(assistant_id: str, quer
         logger.error(f"Error searching knowledge base for assistant {assistant_id}: {e}", exc_info=True)
         # Return empty list on error (graceful degradation)
         return []
+
+
+def _filter_chunks_by_document_status(chunks: List[Chunk], assistant_id: str) -> List[Chunk]:
+    """
+    Apply the document status filter to protocol chunks, on any backend.
+
+    Delegates to :func:`_filter_vectors_by_document_status` rather than
+    reimplementing the lookup, so both backends share one set of DynamoDB
+    semantics — including its fallback behaviour, which task group 6 changes in
+    exactly one place.
+
+    Each chunk is presented to the filter as a minimal view carrying only what
+    the filter reads (``metadata.document_id``) plus its index, and survivors are
+    mapped back by that index. Order and duplicates are preserved.
+
+    Args:
+        chunks: Chunks returned by a backend, in backend ranking order
+        assistant_id: Assistant identifier for DynamoDB key construction
+
+    Returns:
+        The subset of chunks whose parent document is 'complete'
+    """
+    views = [{"metadata": chunk.metadata, "_chunk_index": index} for index, chunk in enumerate(chunks)]
+    surviving = _filter_vectors_by_document_status(views, assistant_id)
+    return [chunks[view["_chunk_index"]] for view in surviving]
 
 
 def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_id: str) -> List[Dict[str, Any]]:
@@ -136,12 +197,15 @@ def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_
     return filtered
 
 
-def augment_prompt_with_context(user_message: str, context_chunks: List[Dict[str, Any]], max_context_length: int = 2000) -> str:
+def augment_prompt_with_context(user_message: str, context_chunks: List[Dict[str, Any]], max_context_length: int = MAX_CONTEXT_CHARS) -> str:
     """
     Augment user message with retrieved context chunks
 
     The context is prepended to the user message with clear delimiters.
     This allows the LLM to use the retrieved knowledge when generating responses.
+
+    Applies on both backends: the cap lives here, above the seam, so neither
+    adapter can widen it independently.
 
     Args:
         user_message: Original user message
