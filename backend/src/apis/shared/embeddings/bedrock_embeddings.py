@@ -57,7 +57,13 @@ async def generate_embeddings(chunks: List[str]) -> List[List[float]]:
 
     IMPORTANT: This function does NOT validate token counts. Callers that
     process large documents should validate/split chunks before calling this.
-    For search queries (short strings), no validation is needed.
+
+    Search queries are length-capped by the caller, not here: the facade applies
+    `apis.shared.kb_backend.query_guard.clamp_query` before dispatch. This used to
+    say no validation was needed for queries, which was true only because Titan v2
+    tolerates roughly 32,000 characters. Managed Knowledge Base caps `Retrieve`
+    input at 10,000 and that quota is not adjustable, so the assumption no longer
+    holds for every backend.
 
     Args:
         chunks: List of text chunks to embed
@@ -145,7 +151,8 @@ async def search_assistant_knowledgebase(assistant_id: str, query: str):
     """Search the S3 vector store for chunks relevant to the query."""
     client = boto3.client("s3vectors", region_name=AWS_REGION)
 
-    # Generate vector for the query (short string, no token validation needed)
+    # Generate vector for the query. Length is already capped upstream by the
+    # facade's query clamp (10,000 chars, the Managed KB Retrieve limit).
     query_embedding = await generate_embeddings([query])
 
     # Query the Global Index with a STRICT Filter

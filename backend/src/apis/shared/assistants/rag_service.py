@@ -37,7 +37,9 @@ from typing import Any, Dict, List, Set
 
 import boto3
 
+from apis.shared.kb_backend.metrics import METRIC_STATUS_FILTER_FAIL_CLOSED, emit_count
 from apis.shared.kb_backend.protocol import DEFAULT_TOP_K, Chunk, distance_from_relevance
+from apis.shared.kb_backend.query_guard import clamp_query
 from apis.shared.kb_backend.resolver import resolve_backend
 
 logger = logging.getLogger(__name__)
@@ -71,6 +73,13 @@ async def search_assistant_knowledgebase_with_formatting(assistant_id: str, quer
     """
     try:
         backend = resolve_backend(assistant_id)
+
+        # Clamp before dispatch, so both backends receive an identically-shaped
+        # query (Requirement 4.2). Managed KB rejects anything over 10,000
+        # characters outright and the quota is not adjustable, so clamping only
+        # the managed path would make the two backends answer different
+        # questions and invalidate the dual-read comparison.
+        query, _ = clamp_query(query)
 
         chunks = await backend.search(assistant_id, query, top_k)
 
@@ -136,7 +145,14 @@ def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_
     Extracts unique document_ids from vector metadata, looks up each document's status
     in DynamoDB, and removes chunks from documents that are not 'complete' or don't exist.
 
-    On any DynamoDB failure, falls back to returning unfiltered results (graceful degradation).
+    Fails CLOSED (Requirement 5): if status cannot be confirmed — no table
+    configured, or the lookup errors — every chunk is dropped and an empty list is
+    returned. This deliberately supersedes `reliable-document-deletion`
+    Requirement 3.4, which specified the opposite. The reasoning changed because
+    the fail-open path was measured: 936 retrievals in a trailing 30-day window had
+    chunks dropped by this filter, so the documents it guards against are real, and
+    serving a user content they believe they deleted is worse than serving nothing.
+    A per-document lookup failure still skips only that document.
 
     Args:
         vectors: List of vector results from S3 Vectors search
@@ -180,12 +196,31 @@ def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_
                     logger.warning(f"Failed to look up document {doc_id}: {e}")
                     # Skip individual lookup failures
         else:
-            # No table configured — fall back to unfiltered
-            logger.warning("DYNAMODB_ASSISTANTS_TABLE_NAME not configured, returning unfiltered results")
-            valid_doc_ids = doc_ids
+            # FAIL CLOSED (Requirement 5.2). Previously this returned everything
+            # unfiltered. Without a table there is no way to confirm that a
+            # document is still `complete`, and the chunks in question may belong
+            # to documents a user has deleted. Serving unverifiable content is a
+            # worse outcome than serving none: the user sees material they believe
+            # they removed, and nothing in the response signals that the check was
+            # skipped.
+            logger.error(
+                "DYNAMODB_ASSISTANTS_TABLE_NAME not configured; dropping all "
+                "chunks because document status cannot be confirmed"
+            )
+            emit_count(METRIC_STATUS_FILTER_FAIL_CLOSED)
+            return []
     except Exception as e:
-        logger.warning(f"DynamoDB lookup failed, returning unfiltered results: {e}")
-        valid_doc_ids = doc_ids  # Graceful degradation
+        # FAIL CLOSED (Requirement 5.1). Same reasoning as above. Logged at ERROR,
+        # not WARNING: an empty result from this path is a degradation, and it must
+        # be distinguishable from the ordinary "corpus had no match" case, which is
+        # logged at INFO below.
+        logger.error(
+            f"Document status lookup failed; dropping all chunks because status "
+            f"cannot be confirmed: {e}",
+            exc_info=True,
+        )
+        emit_count(METRIC_STATUS_FILTER_FAIL_CLOSED)
+        return []
 
     # Filter vectors to only include chunks from valid documents
     filtered = [v for v in vectors if v.get("metadata", {}).get("document_id") in valid_doc_ids]

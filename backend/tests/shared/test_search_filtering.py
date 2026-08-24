@@ -164,14 +164,25 @@ def test_filter_excludes_missing_records(mock_boto3_resource):
 
 
 # -----------------------------------------------------------------------
-# Requirement 3.4: DynamoDB error → graceful degradation (unfiltered)
+# Requirement 5.1 (managed-kb-migration): DynamoDB error → fail closed
+# Supersedes reliable-document-deletion Requirement 3.4, which said unfiltered.
 # -----------------------------------------------------------------------
 
 
+@patch("apis.shared.assistants.rag_service.emit_count")
 @patch("boto3.resource")
 @patch.dict("os.environ", ENV_PATCH)
-def test_filter_graceful_degradation_on_dynamo_error(mock_boto3_resource):
-    """DynamoDB raises exception — return unfiltered results."""
+def test_filter_fails_closed_on_dynamo_error(mock_boto3_resource, mock_emit):
+    """DynamoDB raises — drop every chunk.
+
+    INVERTED from the previous "return unfiltered" expectation by
+    managed-kb-migration Requirement 5.1, which supersedes
+    reliable-document-deletion Requirement 3.4. The old behaviour was deliberate;
+    what changed is evidence. 936 retrievals in a trailing 30-day window had chunks
+    removed by this filter, so a lookup failure would have served users content
+    they believe they deleted — worse than serving nothing, because the response
+    gives no hint the check was skipped.
+    """
     mock_dynamo = MagicMock()
     mock_dynamo.Table.side_effect = Exception("DynamoDB unavailable")
     mock_boto3_resource.return_value = mock_dynamo
@@ -185,37 +196,34 @@ def test_filter_graceful_degradation_on_dynamo_error(mock_boto3_resource):
 
     result = _filter_vectors_by_document_status(vectors, ASSISTANT_ID)
 
-    # Graceful degradation: all vectors returned unfiltered
-    assert len(result) == 2
-    doc_ids = [v["metadata"]["document_id"] for v in result]
-    assert doc_ids == ["doc-a", "doc-b"]
+    assert result == [], "unconfirmable document status must not leak chunks"
+    # The degradation is reported, so an empty result here is distinguishable from
+    # the ordinary "corpus had no match" case.
+    mock_emit.assert_called_once()
 
 
 # -----------------------------------------------------------------------
-# Requirement 3.4: missing table name → graceful degradation (unfiltered)
+# Requirement 5.2 (managed-kb-migration): missing table name → fail closed
 #
-# The second of the two fail-open paths, previously untested. Recorded here so
-# that the current contract is asserted rather than merely present: the
-# managed-kb-migration spec's Requirement 5 deliberately INVERTS both of these
-# (see its task 6.1/6.4), and an unasserted behaviour cannot be knowingly
-# inverted. When that change lands, this test and the one above flip to
-# expecting an empty result.
+# The second of the two former fail-open paths. It was previously untested; a
+# test pinning the old behaviour was added first precisely so that inverting it
+# here would be a deliberate, visible edit rather than a silent one.
 # -----------------------------------------------------------------------
 
 
+@patch("apis.shared.assistants.rag_service.emit_count")
 @patch("boto3.resource")
 @patch.dict("os.environ", {}, clear=True)
-def test_filter_graceful_degradation_when_table_name_unset(mock_boto3_resource):
-    """DYNAMODB_ASSISTANTS_TABLE_NAME unset — return unfiltered results."""
+def test_filter_fails_closed_when_table_name_unset(mock_boto3_resource, mock_emit):
+    """DYNAMODB_ASSISTANTS_TABLE_NAME unset — drop every chunk."""
     from apis.shared.assistants.rag_service import _filter_vectors_by_document_status
 
     vectors = [_make_vector("doc-a", 0), _make_vector("doc-b", 0)]
 
     result = _filter_vectors_by_document_status(vectors, ASSISTANT_ID)
 
-    assert len(result) == 2
-    doc_ids = [v["metadata"]["document_id"] for v in result]
-    assert doc_ids == ["doc-a", "doc-b"]
+    assert result == [], "no table means status is unconfirmable, so nothing may leak"
+    mock_emit.assert_called_once()
     # No table to reach, so DynamoDB is never contacted.
     mock_boto3_resource.assert_not_called()
 
