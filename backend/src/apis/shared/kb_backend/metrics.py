@@ -49,11 +49,14 @@ METRIC_STATUS_FILTER_FAIL_CLOSED = "KbStatusFilterFailClosed"
 def metric_namespace() -> str:
     """The custom namespace this feature publishes into.
 
-    Falls back to the same default the rest of the backend uses for
-    ``PROJECT_PREFIX`` so local runs do not crash; a mismatch in a deployed
-    environment shows up as an access-denied warning from :func:`emit_count`
-    rather than as silence.
+    Prefers ``MANAGED_KB_METRIC_NAMESPACE``, which the CDK construct sets from the
+    *same* helper that builds the IAM condition — so where that variable is present
+    the grant and the publish cannot disagree. Falls back to deriving from
+    ``PROJECT_PREFIX`` for services that do not receive it and for local runs.
     """
+    explicit = os.environ.get("MANAGED_KB_METRIC_NAMESPACE")
+    if explicit:
+        return explicit
     prefix = os.environ.get("PROJECT_PREFIX", "agentcore")
     return f"{prefix}/ManagedKb"
 

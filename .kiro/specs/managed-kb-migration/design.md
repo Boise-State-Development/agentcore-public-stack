@@ -720,6 +720,45 @@ requires account-wide guards:
 Alarms use `TreatMissingData.NOT_BREACHING`, matching the posture of the existing
 kb-sync, scheduled-runs, and prompt-cache observability constructs.
 
+### Who consumes retrieval quota
+
+Requirement 12.10 asks whether the knowledge base **owner** or the **invoking
+user** consumes retrieval quota. Half the answer is a fact about AWS rather than a
+choice, and it inverts the current model:
+
+| | Today (S3 Vectors) | Managed KB |
+|---|---|---|
+| `Retrieve` throughput | 20 rps **account-wide** | 600/min + 25 rps burst, **per knowledge base** |
+
+So the quota is consumed **per knowledge base**, which means the *owner's* knowledge
+base absorbs the throughput of everyone who invokes their agent. The invoking user
+does not carry a retrieval allowance of their own.
+
+**Decision: the owner is the payer, and this is an improvement, not a compromise.**
+Today a single hot assistant can exhaust a 20 rps account-wide ceiling and degrade
+retrieval for every other user on the platform. Per-KB quotas make that blast radius
+one agent instead of the fleet — noisy-neighbour containment we do not currently
+have.
+
+Consequences worth stating, because they follow from the decision rather than from
+the implementation:
+
+* A **published** agent is the case to watch. Its knowledge base is one partition
+  serving an unbounded audience, so it is the only realistic way to approach
+  600/min. Measured headroom is comfortable — ~26 requests/min average on a hot
+  shared knowledge base against an allowance of 600, about 4% — but the ceiling is
+  now per-agent and therefore reachable by a single popular agent in a way the
+  account-wide limit never made obvious.
+* Retrieval is billed at **$0.001/query** and that cost attaches to the account, not
+  to a tenant. Attributing it per invoking user is a cost-reporting question, not a
+  quota question, and is out of scope here.
+* Byte caps are per **owner**, consistent with this: the owner controls the corpus,
+  so the owner carries both its storage cost and its throughput ceiling.
+
+No code enforces a per-user retrieval allowance, deliberately. Adding one would
+invent a limit AWS does not impose and that the existing per-agent permission model
+already bounds.
+
 ---
 
 ## IAM and encryption

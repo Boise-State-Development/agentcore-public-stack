@@ -8,6 +8,7 @@
  */
 
 import { AppConfig, buildCorsOrigins } from '../../config';
+import { managedKbMetricNamespace } from '../managed-kb/managed-kb-role-construct';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 
 /** All SSM-resolved values the App API construct needs. */
@@ -227,6 +228,18 @@ export function buildAppApiEnvironment(
   return {
     AWS_REGION: config.awsRegion,
     PROJECT_PREFIX: config.projectPrefix,
+    // Managed knowledge base byte caps (.kiro/specs/managed-kb-migration,
+    // Requirement 12.11). The cap must be enforced on EVERY byte-adding path, and
+    // interactive upload runs here — the migration worker has its own copy of
+    // these in kb-migration-construct.ts. Without them this service would fall
+    // back to the module defaults in byte_cap.py and silently ignore an operator's
+    // configured limits.
+    MANAGED_KB_PER_OWNER_DEFAULT_BYTES: String(config.managedKb.perOwnerDefaultBytes),
+    MANAGED_KB_PER_OWNER_ELEVATED_BYTES: String(config.managedKb.perOwnerElevatedBytes),
+    MANAGED_KB_PER_KB_CEILING_BYTES: String(config.managedKb.perKnowledgeBaseCeilingBytes),
+    // Kept in step with the IAM condition by deriving both from one helper; a
+    // mismatch would make every metric publish silently denied.
+    MANAGED_KB_METRIC_NAMESPACE: managedKbMetricNamespace(config),
     FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',
     CORS_ORIGINS: buildCorsOrigins(config, config.appApi.additionalCorsOrigins).join(','),
     AGENTCORE_LOCAL_OAUTH_CALLBACK_URL: config.domainName
