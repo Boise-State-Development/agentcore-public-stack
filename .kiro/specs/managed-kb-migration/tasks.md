@@ -354,7 +354,9 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Write the KB_Record in `provisioning` **before** calling AWS; attach returned
       ids with a conditional update
     - `CreateKnowledgeBase` with `type="MANAGED"`, `roleArn`, and
-      `managedKnowledgeBaseConfiguration={}`; omit `storageConfiguration` entirely
+      `managedKnowledgeBaseConfiguration` carrying the embedding pin (it has no
+      required members, but the pin has nowhere else to live — NOT literally `{}`);
+      omit `storageConfiguration` entirely
     - Build the `clientToken` programmatically to satisfy the **33-character
       minimum** and persist it so a retry reuses it — a natural
       `{id}-{variant}-kb` token is 31 characters and fails client-side validation
@@ -368,7 +370,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       real type in
       `managedKnowledgeBaseConnectorConfiguration.connectorParameters`
     - `embeddingModelType: CUSTOM` pinned to `amazon.titan-embed-text-v2:0`,
-      float32, 1024 dimensions
+      `FLOAT32` (upper-case: that is the service-model enum value), 1024 dimensions
     - `mediaExtractionConfiguration.imageExtractionConfiguration.imageExtractionStatus
       = ENABLED` — opt-in, and silently indexes no chart or image content if left
       default

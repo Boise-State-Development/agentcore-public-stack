@@ -472,7 +472,7 @@ sequenceDiagram
         IC->>IC: poll existing record until active
     else this worker owns provisioning
         DDB-->>IC: ok (clientToken persisted)
-        IC->>BA: CreateKnowledgeBase(type=MANAGED,<br/>managedKnowledgeBaseConfiguration={},<br/>clientToken)
+        IC->>BA: CreateKnowledgeBase(type=MANAGED,<br/>managedKnowledgeBaseConfiguration=embedding pin,<br/>clientToken)
         Note over IC,BA: 47-124 s to ACTIVE.<br/>"Unable to verify embedding model"<br/>is IAM eventual consistency -> RETRY
         BA-->>IC: knowledgeBaseId
         IC->>BA: CreateDataSource(MANAGED_KNOWLEDGE_BASE_CONNECTOR<br/>connectorParameters={type:CUSTOM}<br/>dataDeletionPolicy=RETAIN<br/>imageExtractionStatus=ENABLED)

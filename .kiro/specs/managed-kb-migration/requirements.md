@@ -301,7 +301,16 @@ capability we are paying for.
 #### Acceptance Criteria
 
 1. THE system SHALL call `CreateKnowledgeBase` with `type: "MANAGED"`, a
-   `roleArn`, and `managedKnowledgeBaseConfiguration: {}`.
+   `roleArn`, and `managedKnowledgeBaseConfiguration`.
+
+> Shape note, verified against the packaged botocore service model:
+> `managedKnowledgeBaseConfiguration` has **no required members**, but its only
+> members are `embeddingModelType`, `embeddingModelArn`,
+> `embeddingModelConfiguration` and `serverSideEncryptionConfiguration`. So the
+> embedding pin required by criterion 5 below has nowhere else to live, and sending
+> a literal `{}` would make that criterion unsatisfiable. "No required members" is
+> not the same as "must be empty" — earlier drafts of this spec said `{}`, which is
+> why this note exists.
 2. THE system SHALL omit `storageConfiguration` entirely.
 3. THE system SHALL create its data source with
    `dataSourceConfiguration.type = "MANAGED_KNOWLEDGE_BASE_CONNECTOR"` and the
@@ -309,7 +318,7 @@ capability we are paying for.
    `managedKnowledgeBaseConnectorConfiguration.connectorParameters`.
 4. THE system SHALL use connector type `CUSTOM`.
 5. THE system SHALL set `embeddingModelType: CUSTOM` pinned to
-   `amazon.titan-embed-text-v2:0` at float32 and 1024 dimensions.
+   `amazon.titan-embed-text-v2:0` at `FLOAT32` (the service-model enum value; lowercase is rejected) and 1024 dimensions.
 6. THE system SHALL enable
    `mediaExtractionConfiguration.imageExtractionConfiguration.imageExtractionStatus
    = ENABLED` on the data source.
