@@ -18,8 +18,8 @@ All three flags — managed-default, migration, and reconciler arming — ship *
 
 ## Tasks
 
-- [ ] 1. Platform: additive schema and IAM (no behaviour change)
-  - [ ] 1.1 Add the sparse work-discovery GSI to the assistants table
+- [x] 1. Platform: additive schema and IAM (no behaviour change)
+  - [x] 1.1 Add the sparse work-discovery GSI to the assistants table
     - In `infrastructure/lib/constructs/rag/rag-data-construct.ts`, add GSI
       `KbWorkIndex` with partition key `GSI7_PK` and sort key `GSI7_SK`, both
       STRING, `projectionType: ALL`
@@ -48,7 +48,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       re-checks it against `origin/main` on PRs into `main`.
     - _Requirements: 15.14, 15.13_
 
-  - [ ] 1.2 Create the Bedrock knowledge base service role
+  - [x] 1.2 Create the Bedrock knowledge base service role
     - New construct `infrastructure/lib/constructs/managed-kb/managed-kb-role-construct.ts`
     - Trust policy: `bedrock.amazonaws.com` with `aws:SourceAccount` equal to the
       account and `ArnLike` on `AWS:SourceArn` scoped to `knowledge-base/*`
@@ -64,7 +64,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Publish the role ARN to SSM at `/${prefix}/managed-kb/service-role-arn`
     - _Requirements: 20.1, 20.2, 20.4, 20.5, 20.10, 8.5, 8.9_
 
-  - [ ] 1.3 Grant caller permissions for provisioning, ingestion, and retrieval
+  - [x] 1.3 Grant caller permissions for provisioning, ingestion, and retrieval
     - Separate policy statements with distinct SIDs for: provisioner/migrator CRUD
       (`bedrock:CreateKnowledgeBase`, `CreateDataSource`, `DeleteKnowledgeBase`,
       `DeleteDataSource`, `ListKnowledgeBases`, `GetKnowledgeBase`), direct
@@ -76,7 +76,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       attach CRUD only to the migration Lambdas' roles
     - _Requirements: 20.3, 20.6_
 
-  - [ ] 1.4 Write CDK assertions for the IAM conditions
+  - [x] 1.4 Write CDK assertions for the IAM conditions
     - New `infrastructure/test/managed-kb.test.ts`, following
       `infrastructure/test/kb-sync.test.ts`
     - Assert the `aws:SourceAccount` and `ArnLike` `AWS:SourceArn` conditions, the
@@ -95,8 +95,8 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       succeeding
     - _Requirements: 20.9, 24.10, 24.13_
 
-- [ ] 2. Platform: worker resources and config
-  - [ ] 2.1 Add the migration construct with dispatcher, worker, and reconciler
+- [x] 2. Platform: worker resources and config
+  - [x] 2.1 Add the migration construct with dispatcher, worker, and reconciler
     - New `infrastructure/lib/constructs/managed-kb/kb-migration-construct.ts`,
       following `infrastructure/lib/constructs/kb-sync/kb-sync-construct.ts`
     - Three DockerImage Lambdas sharing ONE image
@@ -109,14 +109,14 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Wire the construct in `infrastructure/lib/platform-stack.ts`
     - _Requirements: 14.1, 15.13, 15.14_
 
-  - [ ] 2.2 Add the ingestion consumer Lambda
+  - [x] 2.2 Add the ingestion consumer Lambda
     - Same construct; triggered by the documents bucket `ObjectCreated`
       notification, wired in `platform-stack.ts` alongside the existing
       notification to avoid a circular dependency
     - Timeout ≥300 s (a 50 KiB PDF was measured at 264 s) and a dead-letter queue
     - _Requirements: 10.1, 10.9_
 
-  - [ ] 2.3 Add configuration properties and flags
+  - [x] 2.3 Add configuration properties and flags
     - In `infrastructure/lib/config.ts`, add a `managedKb` section carrying
       `newDefault`, `migrationEnabled`, `reconcilerArmed`, per-owner byte cap
       defaults by role tier, and the retention window in days
@@ -127,7 +127,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       false
     - _Requirements: 19.1, 19.2, 19.3, 19.4, 19.5, 19.8, 12.2, 14.7, 15.11_
 
-  - [ ] 2.4 Add tagging for reconciliation and teardown
+  - [x] 2.4 Add tagging for reconciliation and teardown
     - Tag every runtime-created knowledge base with `prefix`, `env`, `appKbId`, and
       an opaque `ownerUserId`
     - The owner tag must be an opaque identifier, never an email address or other
@@ -136,7 +136,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       `ListKnowledgeBases` and the teardown script both read these tags
     - _Requirements: 20.11, 20.12_
 
-  - [ ] 2.5 Add account-level alarms
+  - [x] 2.5 Add account-level alarms
     - New alarms in the managed-kb construct on total managed storage, managed
       knowledge base count against 80% of the 10,000 quota, daily
       Knowledge-Base `usagetype` cost, and sustained non-zero `KbOrphansFound`
@@ -146,8 +146,8 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       ~$169/month expected and ~$15,000/month permitted is why they are required
     - _Requirements: 12.13_
 
-- [ ] 3. KB_Record data layer
-  - [ ] 3.1 Define the KB_Record model
+- [x] 3. KB_Record data layer
+  - [x] 3.1 Define the KB_Record model
     - New `backend/src/apis/shared/kb_backend/records.py`
     - Keys `PK=AST#{assistant_id}`, `SK=KB#{app_kb_id}`, with
       `app_kb_id == assistant_id` in this phase
@@ -157,7 +157,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       with generation and lease, and lifecycle exemption flags
     - _Requirements: 6.1, 6.2, 6.5_
 
-  - [ ] 3.2 Implement conditional state transitions
+  - [x] 3.2 Implement conditional state transitions
     - `create_provisioning`, `attach_aws_ids`, `promote_engine`,
       `rollback_engine`, `set_migration_state`, `acquire_lease`
     - Every transition uses a DynamoDB condition expression; `promote_engine` is
@@ -166,7 +166,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       **removed** on reaching a terminal state
     - _Requirements: 15.8, 15.10, 15.13, 17.1, 17.5_
 
-  - [ ] 3.3 Write property test for engine resolution by absence
+  - [x] 3.3 Write property test for engine resolution by absence
     - **Property 1: absence means legacy**
     - Using `hypothesis`, for any KB_Record shape with no `retrievalEngine`
       attribute, verify resolution returns the legacy backend, and verify no code
@@ -175,28 +175,28 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - **Validates: Requirements 1.6, 1.7, 6.6**
     - File: `backend/tests/property/test_pbt_kb_engine_resolution.py`
 
-  - [ ] 3.4 Write unit tests for conditional transitions
+  - [x] 3.4 Write unit tests for conditional transitions
     - Concurrent `create_provisioning` yields exactly one winner
     - Concurrent `promote_engine` yields exactly one winner
     - Terminal transitions remove the GSI attributes
     - File: `backend/tests/shared/test_kb_records.py`
     - _Requirements: 7.4, 15.10, 15.13_
 
-- [ ] 4. Backend abstraction seam
-  - [ ] 4.1 Define the protocol and canonical chunk shape
+- [x] 4. Backend abstraction seam
+  - [x] 4.1 Define the protocol and canonical chunk shape
     - New `backend/src/apis/shared/kb_backend/protocol.py`
     - `KnowledgeBaseBackend` Protocol with `search`, `ingest`, `delete_document`
     - Frozen `Chunk` dataclass whose score field is named `relevance` and is
       documented as higher-is-more-relevant
     - _Requirements: 1.1, 2.1_
 
-  - [ ] 4.2 Implement the backend resolver
+  - [x] 4.2 Implement the backend resolver
     - New `backend/src/apis/shared/kb_backend/resolver.py`
     - Reads `retrievalEngine` from the KB_Record; absence resolves to
       `S3VectorsBackend`
     - _Requirements: 1.4, 1.6_
 
-  - [ ] 4.3 Extract the legacy backend verbatim
+  - [x] 4.3 Extract the legacy backend verbatim
     - New `backend/src/apis/shared/kb_backend/s3vectors_backend.py`
     - Move the existing S3 Vectors search path from
       `apis/shared/assistants/rag_service.py` and
@@ -204,7 +204,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Convert S3 Vectors cosine **distance** to **relevance** inside this adapter
     - _Requirements: 1.2, 1.3, 2.2_
 
-  - [ ] 4.4 Convert the entry point into a facade
+  - [x] 4.4 Convert the entry point into a facade
     - In `apis/shared/assistants/rag_service.py`, reduce
       `search_assistant_knowledgebase_with_formatting(assistant_id, query, top_k=5)`
       to resolve-then-delegate, preserving its public signature
@@ -214,7 +214,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       (`inference_api/chat/routes.py`, `app_api/assistants/routes.py`) changes
     - _Requirements: 1.5, 3.4_
 
-  - [ ] 4.5 Write property test for score direction equivalence
+  - [x] 4.5 Write property test for score direction equivalence
     - **Property 2: ranking is backend-independent**
     - Using `hypothesis`, for any list of chunks with distinct scores, verify both
       backends return the known-best chunk first after adapter conversion
@@ -223,7 +223,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - **Validates: Requirements 2.1, 2.2, 2.3, 2.4, 24.1**
     - File: `backend/tests/property/test_pbt_kb_score_direction.py`
 
-  - [ ] 4.6 Apply the document-status filter above the seam, on both backends
+  - [x] 4.6 Apply the document-status filter above the seam, on both backends
     - Move the `status == "complete"` post-filter into the facade so there is one
       implementation covering both backends
     - It works on the managed path only because `customDocumentIdentifier` is the
@@ -235,12 +235,12 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Apply the 2,000-character context cap in the same place, for the same reason
     - _Requirements: 3.2, 3.3_
 
-  - [ ] 4.7 Write test for parity properties on the managed path
+  - [x] 4.7 Write test for parity properties on the managed path
     - Assert `top_k=5`, the 2,000-character cap, the status filter, and the
       500-character citation clip all hold on the managed backend, not just legacy
     - _Requirements: 3.1, 3.2, 3.3, 3.4_
 
-  - [ ] 4.8 Write architecture test for the Lambda import constraint
+  - [x] 4.8 Write architecture test for the Lambda import constraint
     - Assert `apis.shared.kb_backend` does not transitively import
       `apis.shared.assistants`, whose `__init__` drags in the embeddings stack
     - Add alongside the existing boundary tests in `backend/tests/architecture/`
@@ -248,8 +248,8 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       the convention in `kb_sync/records.py`
     - _Requirements: 24.15_
 
-- [ ] 5. Query clamp
-  - [ ] 5.1 Implement the query guard
+- [x] 5. Query clamp
+  - [x] 5.1 Implement the query guard
     - New `backend/src/apis/shared/kb_backend/query_guard.py` with
       `MAX_QUERY_CHARS = 10_000`
     - Applied in the facade before backend dispatch so both backends are protected
@@ -257,14 +257,14 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Emit a `KbQueryClamped` metric on truncation
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 22.3_
 
-  - [ ] 5.2 Remove the stale no-validation assertion
+  - [x] 5.2 Remove the stale no-validation assertion
     - In `apis/shared/embeddings/bedrock_embeddings.py`, delete the inline comment
       stating the query is a "short string, no token validation needed"
     - It is true only because Titan v2 tolerates ~32,000 characters; Managed KB
       caps `Retrieve` input at 10,000 and the limit is not adjustable
     - _Requirements: 4.5_
 
-  - [ ] 5.3 Write property test for the clamp
+  - [x] 5.3 Write property test for the clamp
     - **Property 3: clamp is total and non-throwing**
     - Using `hypothesis`, for any input string of any length, verify the output is
       at most 10,000 characters, the function never raises, and a truncation signal
@@ -272,8 +272,8 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - **Validates: Requirements 4.1, 4.3, 4.4**
     - File: `backend/tests/property/test_pbt_kb_query_clamp.py`
 
-- [ ] 6. Fail-closed document status filter
-  - [ ] 6.1 Make the status filter fail closed
+- [x] 6. Fail-closed document status filter
+  - [x] 6.1 Make the status filter fail closed
     - In `apis/shared/assistants/rag_service.py`, change
       `_filter_vectors_by_document_status` so both fallback paths drop chunks
       instead of returning them unfiltered:
@@ -285,27 +285,27 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       empty-result log line
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 22.4_
 
-  - [ ] 6.2 Record the supersession in the prior spec
+  - [x] 6.2 Record the supersession in the prior spec
     - In `.kiro/specs/reliable-document-deletion/requirements.md`, annotate
       Requirement 3.4 as superseded by Requirement 5 of this spec
     - That requirement specified the fail-open deliberately, so retiring it is a
       supersession and must be recorded rather than silently contradicted
     - _Requirements: 5.5_
 
-  - [ ] 6.3 Write property test for fail-closed behaviour
+  - [x] 6.3 Write property test for fail-closed behaviour
     - **Property 4: unconfirmable status never leaks**
     - Using `hypothesis`, for any set of vectors and any injected table-level
       failure or missing table-name condition, verify zero chunks are returned
     - **Validates: Requirements 5.1, 5.2, 24.6**
     - File: `backend/tests/property/test_pbt_kb_status_fail_closed.py`
 
-  - [ ] 6.4 Update existing tests that assert the fail-open contract
+  - [x] 6.4 Update existing tests that assert the fail-open contract
     - Search `backend/tests/` for tests asserting unfiltered fallback and invert
       their expectations, citing this spec's Requirement 5
     - _Requirements: 5.5_
 
-- [ ] 7. Byte cap accounting
-  - [ ] 7.1 Implement reserve / commit / release
+- [x] 7. Byte cap accounting
+  - [x] 7.1 Implement reserve / commit / release
     - New `backend/src/apis/shared/kb_backend/byte_cap.py`
     - `reserve` is a conditional update failing when
       `storedBytes + reservedBytes + n > cap`; `commit` moves reserved to stored;
@@ -318,12 +318,12 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       directly-ingested document and remains unconfirmed
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.6, 12.7, 12.8_
 
-  - [ ] 7.2 Document the retrieval-quota payer decision
+  - [x] 7.2 Document the retrieval-quota payer decision
     - Record in the design whether the knowledge base owner or the invoking user
       consumes retrieval quota, and implement accordingly
     - _Requirements: 12.10_
 
-  - [ ] 7.3 Write property test for reservation races
+  - [x] 7.3 Write property test for reservation races
     - **Property 5: the cap is never exceeded under concurrency**
     - Using `hypothesis`, for any interleaving of N concurrent reserve/commit
       operations against a cap, verify the committed total never exceeds the cap
@@ -331,7 +331,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - **Validates: Requirements 12.4, 12.5, 12.6, 24.7**
     - File: `backend/tests/property/test_pbt_kb_byte_cap.py`
 
-  - [ ] 7.4 Enforce the cap on the migration re-ingest path
+  - [x] 7.4 Enforce the cap on the migration re-ingest path
     - The Migration_Worker reserves for the **whole snapshot** before entering
       `shadow`, and fails the migration up front rather than part-migrating a corpus
       that cannot fit
@@ -343,13 +343,13 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Emit `KbByteCapRejected` on rejection
     - _Requirements: 12.11, 12.12, 12.14_
 
-  - [ ] 7.5 Write test for migration byte-cap rejection
+  - [x] 7.5 Write test for migration byte-cap rejection
     - A corpus exceeding the owner's remaining allowance fails before `shadow`, and
       leaves no partially-ingested managed knowledge base behind
     - _Requirements: 12.11, 12.12_
 
-- [ ] 8. Managed backend: provisioning and retrieval
-  - [ ] 8.1 Implement the provisioning saga
+- [x] 8. Managed backend: provisioning and retrieval
+  - [x] 8.1 Implement the provisioning saga
     - New `backend/src/apis/shared/kb_backend/provisioning.py`
     - Write the KB_Record in `provisioning` **before** calling AWS; attach returned
       ids with a conditional update
@@ -365,7 +365,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       ACTIVE and invokable
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 8.1, 8.2_
 
-  - [ ] 8.2 Create the CUSTOM connector data source
+  - [x] 8.2 Create the CUSTOM connector data source
     - `dataSourceConfiguration.type = "MANAGED_KNOWLEDGE_BASE_CONNECTOR"` with the
       real type in
       `managedKnowledgeBaseConnectorConfiguration.connectorParameters`
@@ -378,7 +378,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       `DELETE_UNSUCCESSFUL` state already present in the dev account
     - _Requirements: 8.3, 8.4, 8.5, 8.6, 8.7, 8.8_
 
-  - [ ] 8.3 Implement managed retrieval
+  - [x] 8.3 Implement managed retrieval
     - New `backend/src/apis/shared/kb_backend/managed_backend.py`
     - Use `managedSearchConfiguration` with `numberOfResults=5` and
       `rerankingModelType="MANAGED"`; never send `vectorSearchConfiguration`, which
@@ -388,7 +388,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Run synchronous boto3 calls off the event loop
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 3.1, 20.7_
 
-  - [ ] 8.4 Implement direct ingestion and document delete
+  - [x] 8.4 Implement direct ingestion and document delete
     - `IngestKnowledgeBaseDocuments` batched at **10 documents maximum**,
       server-enforced; the user guide's claim of 25 does not apply to managed
       knowledge bases
@@ -400,21 +400,21 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       limit
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6_
 
-  - [ ] 8.5 Write unit tests with stubbed AWS APIs
+  - [x] 8.5 Write unit tests with stubbed AWS APIs
     - Stub `bedrock-agent` and the agent runtime client; never call live
     - Cover create/ingest/delete idempotency, the 10-document batch boundary,
       retryable embedding-verification failure, and `clientToken` length ≥33
     - File: `backend/tests/shared/test_managed_kb_backend.py`
     - _Requirements: 24.2, 24.11_
 
-  - [ ] 8.6 Write test for crash between AWS create and record update
+  - [x] 8.6 Write test for crash between AWS create and record update
     - Simulate a crash after `CreateKnowledgeBase` returns but before the
       conditional update; verify the record remains a discoverable retry anchor and
       that a retry does not create a second knowledge base
     - _Requirements: 7.8, 24.3_
 
-- [ ] 9. Ingestion control plane
-  - [ ] 9.1 Implement the ingestion consumer
+- [x] 9. Ingestion control plane
+  - [x] 9.1 Implement the ingestion consumer
     - New `backend/src/apis/app_api/kb_migration/ingestion_consumer.py`
     - Follow `kb_sync/records.py`'s raw-table-access convention: importing
       `apis.shared.assistants` drags in the whole embeddings stack, and keeping the
@@ -430,7 +430,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - No in-process `asyncio.ensure_future` orchestration
     - _Requirements: 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8_
 
-  - [ ] 9.2 Write unit tests for routing exclusivity
+  - [x] 9.2 Write unit tests for routing exclusivity
     - Legacy document routes to the old pipeline only; managed document routes to
       direct ingestion only; neither is double-indexed
     - File: `backend/tests/lambdas/test_kb_ingestion_consumer.py`
