@@ -1,6 +1,6 @@
 # Managed KB Migration — Handoff
 
-**Last updated:** 2026-08-25 · **Branch:** `feature/kb-migration` · **Nothing deployed**
+**Last updated:** 2026-08-25 (groups 11–12) · **Branch:** `feature/kb-migration` · **Nothing deployed**
 
 Working state for this feature so a fresh session can pick it up without re-deriving
 anything. Read this, then `tasks.md`.
@@ -12,22 +12,25 @@ anything. Read this, then `tasks.md`.
 | | |
 |---|---|
 | Spec | Complete, audited 3× to clean. 25 requirements, 201 criteria, 0 dangling refs |
-| Implementation | Groups **1–10 of 15** done. 26 subtasks left across groups 11–15 |
-| Tests | **611** infra (jest) · **6,301** backend (pytest) · 5 pre-existing unrelated failures |
+| Implementation | Groups **1–12 of 15** done. 18 subtasks left across groups 13–15 |
+| Tests | **614** infra (jest) · **6,386** backend (pytest) · 5 pre-existing unrelated failures |
 | Deployed | **Nothing.** No `cdk deploy`, no AWS mutation, at any point |
 | Feature flags | All three ship **off** |
 
-### Commits (8 on the branch, 7 not yet pushed as of writing)
+### Commits (10 on the branch)
 
 ```
-8079f7e2  tombstone deletion sagas and the report-only reconciler   (group 10)
-e6936b0b  ingestion consumer with exclusive engine routing          (group 9)
-620fa49c  managed KB provisioning, retrieval and direct ingestion   (group 8)
-d433d6f1  per-owner byte cap with atomic reserve/commit/release     (group 7)
-f2e86afe  clamp retrieval queries and fail closed on status         (groups 5, 6)
-24689de1  backend abstraction seam behind the retrieval entry point (group 4)
-ffa7a408  KB_Record data layer with conditional state transitions   (group 3)
-5f2c98b1  spec, schema and worker platform                          (groups 1, 2)
+a361fdd4  opt-in dual-read pilot that legacy always wins                (group 12)
+a43d80bf  app-side authorization, IAM-enforced sharing, publication      (group 11)
+58f0c6b6  handoff document and accurate task-list state
+8079f7e2  tombstone deletion sagas and the report-only reconciler        (group 10)
+e6936b0b  ingestion consumer with exclusive engine routing              (group 9)
+620fa49c  managed KB provisioning, retrieval and direct ingestion        (group 8)
+d433d6f1  per-owner byte cap with atomic reserve/commit/release          (group 7)
+f2e86afe  clamp retrieval queries and fail closed on status              (groups 5, 6)
+24689de1  backend abstraction seam behind the retrieval entry point      (group 4)
+ffa7a408  KB_Record data layer with conditional state transitions        (group 3)
+5f2c98b1  spec, schema and worker platform                              (groups 1, 2)
 ```
 
 ### Is the feature reachable yet?
@@ -37,12 +40,19 @@ enrolls a knowledge base, and the resolver has only `s3vectors` registered. A re
 saying `retrievalEngine: "managed"` raises `BackendUnavailable` — which is the correct
 fail-safe, since substituting the legacy index for a promoted KB would serve a stale
 corpus. Registering the managed backend and adding an enrollment surface are groups
-11–14.
+13–14.
 
-**Two behaviour changes ARE live on the existing path** and are the only things worth
-testing by hand right now:
+The dual-read pilot inherits that: `start_managed_read` returns `None` whenever no
+managed backend is registered, so setting `dualReadPilot: true` on a record today is
+harmless.
+
+**Three behaviour changes ARE live on the existing path** and are the only things
+worth testing by hand right now:
 1. The document-status filter now **fails closed** (group 6).
 2. Retrieval queries are **clamped to 10,000 chars** (group 5).
+3. Retrieval requires a resolved access grant (group 11). Both production callers
+   pass one; the parameter is required and keyword-only, so a third caller added
+   without one fails at the call site rather than silently serving nothing.
 
 ---
 
@@ -178,6 +188,16 @@ saying why that number is a property of AWS rather than a knob.
 10. **Latent config bug, twice.** `--context managedKb.x=…` sets a **flat dotted**
     key; a nested-only `tryGetContext('managedKb')?.x` read silently ignores it. Hit
     the byte caps and then the alarm thresholds.
+11. **`{}` treated as an unreadable record (group 11).** `is_reclaim_exempt` used
+    `if not kb_record`, which conflated "absent, so fail closed" with "read, no
+    holds set". Every unheld knowledge base would have been exempt and the whole
+    predicate vacuous. `None` and `{}` are now distinct. Found by writing the test
+    first and believing it over the implementation.
+12. **Requirement 25.6 had no IAM behind it (group 11).** There was no
+    resource-policy grant anywhere in the construct, so the sharing code would have
+    deployed as inert. Same category as defect 1: correct-looking, clean-deploying,
+    authorizes nothing. Now `grantManagedKbResourcePolicyAdmin`, on its own role,
+    with a test asserting no retrieval identity ever receives it.
 
 ---
 
@@ -185,10 +205,8 @@ saying why that number is a property of AWS rather than a knob.
 
 | Group | Subtasks | Notes |
 |---|---|---|
-| **11** Authorization, isolation, publication | 6 | Requirement 25. App is the authorization authority; metadata filters are **not** the tenant boundary; ACL-aware retrieval explicitly **not** adopted (email-only identity, silent mismatch). Resource policies re-applied after any `awsKbId` change. |
-| **12** Dual-read pilot | 2 | Legacy always serves; managed call is fire-and-forget and concurrent, so not additive latency. Opt-in, default off. |
 | **13** Migration dispatcher and worker | 8 | Where `reserve_snapshot` finally gets its caller, and where the `shadow → verify → promote → retain` saga runs. |
-| **14** Surfaces, observability, teardown | 7 | UI, admin surface, metrics, teardown script. Also where the managed backend gets **registered** in the resolver. |
+| **14** Surfaces, observability, teardown | 7 | UI, admin surface, metrics, teardown script. Also where the managed backend gets **registered** in the resolver, and where the dual-read pilot flag gets a surface that can set it. |
 | **15** Pre-promotion verification | 3 | The gate before any real traffic moves. |
 
 ### Known deferrals (correct, not oversights)
@@ -216,14 +234,21 @@ backend/src/apis/shared/kb_backend/
   __init__.py          EMPTY, deliberately
   records.py           KB_Record + conditional transitions
   protocol.py          KnowledgeBaseBackend + frozen Chunk (score = relevance)
-  resolver.py          engine → backend registry; absence ⇒ legacy
+  resolver.py          engine → backend registry; absence ⇒ legacy; load_record
   s3vectors_backend.py legacy adapter; converts distance → relevance HERE
   managed_backend.py   ManagedKbBackend: retrieval + direct ingestion
   provisioning.py      create saga + CUSTOM connector data source
   byte_cap.py          reserve / commit / release
   tombstones.py        delete sagas
+  resource_policy.py   IAM-enforced sharing; staleness is state, not an event
+  dual_read.py         pilot: start early, detach, compare, serve legacy
   query_guard.py       10,000-char clamp
-  metrics.py           namespace + best-effort emit
+  metrics.py           namespace + best-effort emit_count / emit_value
+
+backend/src/apis/shared/assistants/
+  rag_service.py       the FACADE — access gate, dual read, status filter, caps
+  kb_access.py         KbAccess grant; reuses resolve_assistant_permission
+  kb_publication.py    engine swap ≠ corpus change; reclaim exemption
 
 backend/src/apis/app_api/kb_migration/
   ingestion_consumer.py   routes by engine; legacy ⇒ do nothing
@@ -233,6 +258,24 @@ infrastructure/lib/constructs/managed-kb/
   managed-kb-role-construct.ts    Bedrock service role + grant methods
   kb-migration-construct.ts       4 Lambdas sharing ONE image + alarms
 ```
+
+### Where authorization lives, and why not in `kb_backend`
+
+`kb_access` and `kb_publication` sit in `apis.shared.assistants` because they reuse
+`resolve_assistant_permission` and `listing.is_on_shelf`, and `kb_backend` may not
+import that package. Authorization is above the seam by nature anyway: the answer is
+the same whichever engine serves the query, so implementing it once above both
+adapters is the only way it cannot differ between them.
+
+The facade's `access` parameter is **required and keyword-only**. Forgetting it is a
+`TypeError` at the call site; a genuine denial passes `None` and fails closed. A
+`KbAccess` cannot be built with a permission outside the read set, so holding one is
+evidence the permission model was consulted — holding a string is not.
+
+Reclaim exemption keys on `listing.is_on_shelf`, **never** `is_listed`: an admin
+requesting changes on a live listing leaves it serving but moves its state out of
+`LISTED_STATES`, so by state name alone a reclaim pass would delete the corpus behind
+an agent users can still see in the store.
 
 ### Score direction — the highest-silent-risk detail
 
@@ -269,6 +312,13 @@ physics** rather than by filter. Third use of this convention on this table
 Nothing writes `"s3vectors"` onto a record that lacked it — that is what makes the
 migration zero-backfill across 1,692 existing records and makes rollback a single
 attribute `REMOVE` rather than a data rewrite.
+
+Same convention for two more attributes:
+
+- `dualReadPilot` — read as `is True`, never truthiness. Absence is off.
+- `policyAwsKbId` — the `awsKbId` the resource policy was last applied to.
+  `policy_is_stale` compares it against the live one, so re-application after a
+  replacement identifier is a comparison nothing can bypass by omission.
 
 Source bytes already live at
 `assistants/{assistant_id}/documents/{document_id}/{filename}`. Migration is a
