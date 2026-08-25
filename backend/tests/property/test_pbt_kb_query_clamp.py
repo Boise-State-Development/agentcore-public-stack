@@ -25,6 +25,7 @@ from unittest.mock import patch
 import pytest
 from hypothesis import given, settings, strategies as st
 
+from apis.shared.assistants.kb_access import granted
 from apis.shared.kb_backend.query_guard import MAX_QUERY_CHARS, clamp_query
 
 # ---------------------------------------------------------------------------
@@ -218,7 +219,9 @@ async def test_the_facade_actually_clamps_before_dispatch():
         rag_service, "emit_count"
     ), patch("apis.shared.kb_backend.query_guard.emit_count"):
         await rag_service.search_assistant_knowledgebase_with_formatting(
-            "ast-1", "x" * (MAX_QUERY_CHARS + 500)
+            "ast-1",
+            "x" * (MAX_QUERY_CHARS + 500),
+            access=granted("ast-1", "user-clamp", "owner"),
         )
 
     assert seen["query"] is not None

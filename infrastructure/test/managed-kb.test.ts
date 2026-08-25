@@ -65,12 +65,14 @@ function synthConstruct(): Template {
   const provisioner = new iam.Role(stack, 'FakeProvisioner', { assumedBy: lambdaPrincipal });
   const ingestor = new iam.Role(stack, 'FakeIngestor', { assumedBy: lambdaPrincipal });
   const retriever = new iam.Role(stack, 'FakeRetriever', { assumedBy: lambdaPrincipal });
+  const sharer = new iam.Role(stack, 'FakeSharer', { assumedBy: lambdaPrincipal });
 
   // Exercise the public methods (the surface task 2.1 calls) for
   // provisioning/ingestion and the free function for retrieval (the
   // surface the compute IAM modules call).
   managedKb.grantProvisioning(provisioner);
   managedKb.grantDirectIngestion(ingestor);
+  managedKb.grantResourcePolicyAdmin(sharer);
   grantManagedKbRetrieval(config, retriever);
 
   return Template.fromStack(stack);
@@ -343,6 +345,7 @@ describe('ManagedKbRoleConstruct — caller grants', () => {
       'ManagedKbProvisionMetrics',
       'ManagedKbIngestMetrics',
       'ManagedKbRetrieveMetrics',
+      'ManagedKbResourcePolicyMetrics',
     ]) {
       const s = statementBySid(t, sid);
       expect(s.Action).toBe('cloudwatch:PutMetricData');
@@ -367,6 +370,55 @@ describe('ManagedKbRoleConstruct — caller grants', () => {
     expect(retrieverJson).not.toContain('DeleteKnowledgeBase');
     expect(retrieverJson).not.toContain('IngestKnowledgeBaseDocuments');
     expect(retrieverJson).not.toContain('iam:PassRole');
+  });
+
+  it('scopes resource-policy administration to knowledge-base ARNs in this account', () => {
+    // Requirement 25.6. Sharing is the one grant that can change who else
+    // may read a corpus, so it is its own statement on its own role rather
+    // than folded into provisioning CRUD.
+    const s = statementBySid(t, 'ManagedKbResourcePolicyAdmin');
+    expect(s.Action).toEqual([
+      'bedrock:PutResourcePolicy',
+      'bedrock:GetResourcePolicy',
+      'bedrock:DeleteResourcePolicy',
+    ]);
+    expect(s.Resource).toBe(KB_ARN_WILDCARD);
+    // No `*` resource: PutResourcePolicy is resource-scopable, unlike
+    // CreateKnowledgeBase, so there is no excuse for account-wide reach.
+    expect(s.Resource).not.toBe('*');
+  });
+
+  it('keeps the sharing caller away from documents, CRUD and the service role', () => {
+    // The writer of a resource policy is a control-plane identity. It
+    // never reads document bytes — which is why `bedrock:GetDocumentContent`
+    // appears in the policy documents it writes but not in its own grant —
+    // and it must not be able to create or delete a knowledge base.
+    const holders = policiesWithSid(t, 'ManagedKbResourcePolicyAdmin');
+    expect(holders).toHaveLength(1);
+    const json = holders[0].json;
+    for (const forbidden of [
+      'CreateKnowledgeBase',
+      'DeleteKnowledgeBase',
+      'IngestKnowledgeBaseDocuments',
+      'GetDocumentContent',
+      'bedrock:Retrieve',
+      'iam:PassRole',
+      's3:GetObject',
+    ]) {
+      expect(json).not.toContain(forbidden);
+    }
+  });
+
+  it('does not attach resource-policy administration to any retrieval identity', () => {
+    // A turn that retrieves must never be able to rewrite the policy that
+    // decides who may retrieve. Asserted across the whole template rather
+    // than on one role, so a future wiring mistake is caught here.
+    const sharing = policiesWithSid(t, 'ManagedKbResourcePolicyAdmin');
+    const retrieving = policiesWithSid(t, 'ManagedKbRetrieve');
+    const sharingRoles = new Set(sharing.flatMap((h) => h.roleIds));
+    for (const roleId of retrieving.flatMap((h) => h.roleIds)) {
+      expect(sharingRoles.has(roleId)).toBe(false);
+    }
   });
 });
 

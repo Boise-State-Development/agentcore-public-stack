@@ -1460,6 +1460,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     if input_data.rag_assistant_id and not is_resume and not is_continuation:
         # Local imports to avoid circular dependency
+        from apis.shared.assistants.kb_access import granted
         from apis.shared.assistants.rag_service import (
             augment_prompt_with_context,
             search_assistant_knowledgebase_with_formatting,
@@ -1543,7 +1544,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
         # 2. Load assistant with access check
         logger.info("Loading assistant with access check...")
-        assistant, _ = await get_assistant_with_access_check(
+        # The permission is kept, not discarded: it is what the knowledge base
+        # retrieval below runs under (Requirement 25.1), so the grant that governs
+        # the corpus read is provably the same one that admitted this turn.
+        assistant, assistant_permission = await get_assistant_with_access_check(
             assistant_id=input_data.rag_assistant_id, user_id=user_id, user_email=current_user.email
         )
 
@@ -1655,7 +1659,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         try:
             logger.info("Searching knowledge base for assistant...")
             context_chunks = await search_assistant_knowledgebase_with_formatting(
-                assistant_id=input_data.rag_assistant_id, query=input_data.message, top_k=5
+                assistant_id=input_data.rag_assistant_id,
+                query=input_data.message,
+                top_k=5,
+                access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
             )
             logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
             if context_chunks:

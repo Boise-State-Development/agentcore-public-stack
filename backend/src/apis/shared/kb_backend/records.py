@@ -336,6 +336,53 @@ def attach_aws_ids(
     )
 
 
+def set_resource_policy_state(
+    assistant_id: str,
+    app_kb_id: str,
+    aws_kb_id: Optional[str],
+    revision_id: Optional[str],
+) -> None:
+    """Record which ``awsKbId`` the resource policy is currently attached to.
+
+    Requirement 25.7. This attribute is the whole staleness check: a policy
+    attaches to an ARN, so once the record's ``awsKbId`` and this value disagree,
+    the policy is on a resource nobody reads and sharing has silently stopped.
+    Storing the target rather than a boolean is what turns that from an event
+    somebody has to remember to fire into a comparison
+    (``resource_policy.policy_is_stale``).
+
+    Unconditional, deliberately. Every other writer here guards on the state it
+    expects, because those transitions must not race. This one records what AWS has
+    just confirmed, and a stale overwrite of the *same* fact is harmless while a
+    refused write would leave the record claiming a policy target that is no longer
+    true — the failure mode the attribute exists to prevent.
+
+    Passing ``None`` clears both attributes, for a knowledge base that stopped
+    being shared.
+    """
+    key = {"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)}
+    if aws_kb_id is None:
+        _table().update_item(
+            Key=key,
+            UpdateExpression="REMOVE policyAwsKbId, policyRevisionId",
+        )
+        return
+
+    values: Dict[str, Any] = {":kb": aws_kb_id}
+    expression = "SET policyAwsKbId = :kb"
+    if revision_id:
+        expression += ", policyRevisionId = :rev"
+        values[":rev"] = revision_id
+    else:
+        expression += " REMOVE policyRevisionId"
+
+    _table().update_item(
+        Key=key,
+        UpdateExpression=expression,
+        ExpressionAttributeValues=values,
+    )
+
+
 def promote_engine(
     assistant_id: str,
     app_kb_id: str,

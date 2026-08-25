@@ -470,8 +470,8 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - File: `backend/tests/lambdas/test_kb_reconciler.py`
     - _Requirements: 24.4_
 
-- [ ] 11. Authorization, isolation, and publication
-  - [ ] 11.1 Resolve access before retrieval
+- [x] 11. Authorization, isolation, and publication
+  - [x] 11.1 Resolve access before retrieval
     - In the facade, resolve the invoking user's access to the knowledge base
       **before** attempting retrieval, reusing the existing assistant permission
       model rather than introducing a parallel one
@@ -480,7 +480,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       0..N case, which is F4's problem
     - _Requirements: 25.1, 25.2, 25.3_
 
-  - [ ] 11.2 Keep filters out of the tenant boundary
+  - [x] 11.2 Keep filters out of the tenant boundary
     - Do not use a metadata filter as the isolation mechanism; the per-knowledge-base
       boundary is the tenant boundary in this phase
     - Do not adopt ACL-aware retrieval: its identity is email-only with no alias
@@ -488,14 +488,14 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       explicit app-side check on an OIDC claim-mapped platform
     - _Requirements: 25.4, 25.5, 11.5_
 
-  - [ ] 11.3 Apply resource policies for shared knowledge bases
+  - [x] 11.3 Apply resource policies for shared knowledge bases
     - Where a knowledge base is shared beyond its owner, attach a resource policy
       granting IAM-enforced `bedrock:Retrieve`
     - Re-apply the policy whenever a new `awsKbId` is produced; policies attach to
       the AWS ARN, so a replacement silently drops sharing
     - _Requirements: 25.6, 25.7_
 
-  - [ ] 11.4 Preserve published-agent semantics
+  - [x] 11.4 Preserve published-agent semantics
     - An engine migration must not change what a published agent retrieves; parity
       is the contract, so a swap is not a corpus change and needs no re-review
     - Exempt listed agents' knowledge bases from lifecycle reclaim; `taken_down`
@@ -504,14 +504,14 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       marketplace spec
     - _Requirements: 25.8, 25.9, 25.10, 25.11_
 
-  - [ ] 11.5 Write authorization tests
+  - [x] 11.5 Write authorization tests
     - Viewer can read through the agent but never sees the upgrade control; a user
       with no access never reaches retrieval; access checks fail closed
     - Published-agent corpus behaviour and reclaim exemption
     - Resource policy is re-applied after a new `awsKbId`
     - _Requirements: 24.6, 24.12, 24.14_
 
-  - [ ] 11.6 Write test asserting the 1:1 binding freeze
+  - [x] 11.6 Write test asserting the 1:1 binding freeze
     - Assert an explicit `knowledge_base` binding is still rejected by
       `binding_validation.py` and that `bindable_catalog.py` still returns an empty
       list for it, so the freeze is enforced by test rather than by intention

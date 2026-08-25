@@ -24,6 +24,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from apis.shared.assistants.kb_access import granted
 from apis.shared.assistants.rag_service import (
     MAX_CONTEXT_CHARS,
     augment_prompt_with_context,
@@ -39,6 +40,13 @@ from apis.shared.kb_backend.resolver import register_backend, unregister_backend
 
 ASSISTANT_ID = "ast-parity-001"
 TABLE_NAME = "test-table"
+
+#: Every parity test runs as a user who is allowed to read, because parity is a
+#: claim about *authorized* retrieval on both backends. The access gate itself is
+#: covered by ``test_kb_authorization.py``; going through ``granted`` rather than
+#: constructing a ``KbAccess`` directly keeps these tests honest about the one
+#: door into the type.
+OWNER_ACCESS = granted(ASSISTANT_ID, "user-parity", "owner")
 
 #: The clip applied when the inference API turns chunks into citation events
 #: (``inference_api/chat/routes.py``: ``chunk.get("text", "")[:500]``).
@@ -161,7 +169,7 @@ def test_managed_path_requests_top_k_five(managed_kb):
     boto_patch, _ = _patch_record_and_statuses({"doc-a": "complete"})
 
     with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
-        asyncio.run(search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q"))
+        asyncio.run(search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS))
 
     assert backend.calls, "the managed backend was never reached"
     assert backend.calls[0]["top_k"] == DEFAULT_TOP_K
@@ -181,7 +189,7 @@ def test_managed_path_narrows_results_to_top_k(managed_kb):
 
     with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     assert len(results) == DEFAULT_TOP_K
@@ -201,7 +209,7 @@ def test_managed_path_narrowing_happens_after_the_status_filter(managed_kb):
 
     with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     assert len(results) == DEFAULT_TOP_K
@@ -228,7 +236,7 @@ def test_managed_path_applies_document_status_filter(managed_kb):
 
     with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     assert [r["metadata"]["document_id"] for r in results] == ["doc-ok"]
@@ -241,7 +249,7 @@ def test_managed_path_drops_chunks_for_missing_document_records(managed_kb):
 
     with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     assert [r["metadata"]["document_id"] for r in results] == ["doc-ok"]
@@ -265,7 +273,7 @@ def test_managed_path_emits_the_legacy_result_shape(managed_kb):
 
     with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     assert len(results) == 1
@@ -290,7 +298,7 @@ def test_managed_path_preserves_backend_ranking_order(managed_kb):
 
     with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     assert [r["metadata"]["document_id"] for r in results] == [
@@ -313,7 +321,7 @@ def test_citation_excerpt_clip_holds_on_managed_results(managed_kb):
 
     with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     excerpt = results[0].get("text", "")[:CITATION_EXCERPT_CHARS]
@@ -417,7 +425,7 @@ def test_legacy_path_emits_identical_values_to_the_pre_seam_formatter():
         ),
     ):
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     expected = [
@@ -451,7 +459,7 @@ def test_legacy_path_applies_the_same_filter_and_top_k():
         ),
     ):
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     assert len(results) == DEFAULT_TOP_K
@@ -476,7 +484,7 @@ def test_legacy_path_preserves_a_missing_distance_as_none():
         ),
     ):
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     assert results[0]["distance"] is None
@@ -495,7 +503,7 @@ def test_empty_backend_result_returns_empty_list():
         ),
     ):
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     assert results == []
@@ -516,7 +524,7 @@ def test_backend_failure_degrades_to_empty_list():
         ),
     ):
         results = asyncio.run(
-            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
         )
 
     assert results == []
@@ -548,7 +556,7 @@ def test_absent_kb_record_resolves_to_the_legacy_backend():
             ),
         ):
             results = asyncio.run(
-                search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+                search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
             )
     finally:
         unregister_backend(ENGINE_MANAGED)
@@ -594,7 +602,7 @@ def test_existing_record_without_an_engine_attribute_resolves_to_legacy():
             ),
         ):
             results = asyncio.run(
-                search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q")
+                search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
             )
     finally:
         unregister_backend(ENGINE_MANAGED)

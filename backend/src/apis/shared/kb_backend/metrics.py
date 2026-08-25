@@ -45,6 +45,12 @@ METRIC_QUERY_CLAMPED = "KbQueryClamped"
 #: one means retrieval degraded, not that the corpus had no match.
 METRIC_STATUS_FILTER_FAIL_CLOSED = "KbStatusFilterFailClosed"
 
+#: Emitted when retrieval was refused because the invoking user's access could not
+#: be established (Requirement 25.1). Counts both honest denials and
+#: check-failed-so-denied, dimensioned by ``reason`` to keep them apart: the first
+#: is the system working, the second is a degradation worth alarming on.
+METRIC_ACCESS_DENIED = "KbAccessDenied"
+
 
 def metric_namespace() -> str:
     """The custom namespace this feature publishes into.

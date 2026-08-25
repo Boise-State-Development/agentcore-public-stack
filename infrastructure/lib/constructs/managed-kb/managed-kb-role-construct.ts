@@ -166,6 +166,41 @@ export function grantManagedKbDirectIngestion(config: AppConfig, role: iam.IRole
   role.addToPrincipalPolicy(putMetricDataStatement(config, 'ManagedKbIngestMetrics'));
 }
 
+/**
+ * Sharing grant: administer a knowledge base's *resource* policy
+ * (Requirement 25.6). Separate from every other grant because it is the
+ * only one that can change who else may read a corpus — a caller that
+ * ingests documents has no business rewriting that.
+ *
+ * `bedrock:GetDocumentContent` appears in the policy documents this
+ * caller writes but is deliberately absent from this grant: writing a
+ * policy that permits an action is not the same as holding it, and the
+ * writer is a control-plane path that never reads document bytes.
+ *
+ * No `PutResourcePolicy` condition is available to pin the policy's
+ * contents, so the scope here is the resource: this caller may only
+ * touch policies on knowledge bases in this account and region. What
+ * stops it writing an over-broad policy is
+ * `resource_policy.retrieve_policy_document`, which has no branch that
+ * emits a wildcard principal, and the test that asserts so.
+ *
+ * Intentionally unattached until task 2.1's migration Lambda roles
+ * exist, like the provisioning and ingestion grants above.
+ */
+export function grantManagedKbResourcePolicyAdmin(config: AppConfig, role: iam.IRole): void {
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbResourcePolicyAdmin',
+    effect: iam.Effect.ALLOW,
+    actions: [
+      'bedrock:PutResourcePolicy',
+      'bedrock:GetResourcePolicy',
+      'bedrock:DeleteResourcePolicy',
+    ],
+    resources: [knowledgeBaseArnWildcard(config)],
+  }));
+  role.addToPrincipalPolicy(putMetricDataStatement(config, 'ManagedKbResourcePolicyMetrics'));
+}
+
 export interface ManagedKbRoleConstructProps {
   config: AppConfig;
   /**
@@ -302,5 +337,14 @@ export class ManagedKbRoleConstruct extends Construct {
   /** Attach the inference-side `bedrock:Retrieve` grant to a caller role. */
   public grantRetrieval(role: iam.IRole): void {
     grantManagedKbRetrieval(this.config, role);
+  }
+
+  /**
+   * Attach the resource-policy administration grant to a caller role —
+   * the identity that shares a knowledge base beyond its owner. No
+   * caller today, by design.
+   */
+  public grantResourcePolicyAdmin(role: iam.IRole): void {
+    grantManagedKbResourcePolicyAdmin(this.config, role);
   }
 }

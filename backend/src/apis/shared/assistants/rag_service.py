@@ -8,9 +8,13 @@ in ``apis.shared.kb_backend.s3vectors_backend``.
 
 What lives here, and why here
 -----------------------------
-Three rules sit above the seam rather than inside either adapter, because a rule
+Four rules sit above the seam rather than inside either adapter, because a rule
 implemented twice is a rule that will eventually differ (Requirement 3):
 
+* **The access check.** No backend is contacted until the invoking user's grant
+  has been resolved (Requirement 25.1). It is above the seam because the answer
+  does not depend on the engine, and because Bedrock's own isolation features are
+  not trusted to be the authority — see ``kb_access``.
 * **The document-status filter.** Dropped chunks whose parent document is not
   ``complete``. Kept on both backends during parity even though managed
   ingestion makes it largely redundant — removing it in the same change that
@@ -33,11 +37,16 @@ client already reads. The rename stops at the seam; no caller has to change.
 
 import logging
 import os
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 import boto3
 
-from apis.shared.kb_backend.metrics import METRIC_STATUS_FILTER_FAIL_CLOSED, emit_count
+from apis.shared.assistants.kb_access import KbAccess
+from apis.shared.kb_backend.metrics import (
+    METRIC_ACCESS_DENIED,
+    METRIC_STATUS_FILTER_FAIL_CLOSED,
+    emit_count,
+)
 from apis.shared.kb_backend.protocol import DEFAULT_TOP_K, Chunk, distance_from_relevance
 from apis.shared.kb_backend.query_guard import clamp_query
 from apis.shared.kb_backend.resolver import resolve_backend
@@ -51,7 +60,13 @@ logger = logging.getLogger(__name__)
 MAX_CONTEXT_CHARS = 2000
 
 
-async def search_assistant_knowledgebase_with_formatting(assistant_id: str, query: str, top_k: int = DEFAULT_TOP_K) -> List[Dict[str, Any]]:
+async def search_assistant_knowledgebase_with_formatting(
+    assistant_id: str,
+    query: str,
+    top_k: int = DEFAULT_TOP_K,
+    *,
+    access: Optional[KbAccess],
+) -> List[Dict[str, Any]]:
     """
     Search assistant knowledge base and return formatted results
 
@@ -63,6 +78,12 @@ async def search_assistant_knowledgebase_with_formatting(assistant_id: str, quer
         assistant_id: Assistant identifier to filter vectors
         query: User query text
         top_k: Number of top results to return (default: 5)
+        access: The invoking user's resolved grant, or ``None`` if they have none.
+            Required and keyword-only (Requirement 25.1): a caller that forgets it
+            fails loudly at the call site, while a caller that genuinely has no
+            grant passes ``None`` and gets nothing. Build one with
+            ``kb_access.granted`` if the permission is already in hand, or
+            ``kb_access.resolve_kb_access`` if it is not.
 
     Returns:
         List of dictionaries containing:
@@ -70,7 +91,33 @@ async def search_assistant_knowledgebase_with_formatting(assistant_id: str, quer
         - distance: Similarity distance (lower = more similar)
         - metadata: Original metadata from vector store
         - key: Vector key/ID
+
+        Empty when the caller has no grant — no backend is contacted at all.
     """
+    # Authorization first, before the backend resolution, the query clamp, and
+    # any AWS call (Requirement 25.1). Ordering is the requirement: a check that
+    # runs after retrieval has already read the corpus is an audit log, not an
+    # access control.
+    if access is None or not access.may_read:
+        logger.error(
+            f"refusing knowledge base retrieval for assistant {assistant_id}: "
+            f"no resolved access grant"
+        )
+        emit_count(METRIC_ACCESS_DENIED, dimensions={"reason": "no_grant"})
+        return []
+
+    if access.assistant_id != assistant_id:
+        # A grant for a different assistant is not a grant for this one. This is
+        # the shape a copy-paste bug takes when a route resolves permission for
+        # one id and retrieves with another, and while the 1:1 binding holds it is
+        # the only way the two could disagree.
+        logger.error(
+            f"refusing knowledge base retrieval: grant is for assistant "
+            f"{access.assistant_id}, not {assistant_id}"
+        )
+        emit_count(METRIC_ACCESS_DENIED, dimensions={"reason": "grant_mismatch"})
+        return []
+
     try:
         backend = resolve_backend(assistant_id)
 
