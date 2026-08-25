@@ -517,8 +517,8 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       list for it, so the freeze is enforced by test rather than by intention
     - _Requirements: 6.7, 6.8_
 
-- [ ] 12. Dual-read pilot
-  - [ ] 12.1 Implement opt-in dual read
+- [x] 12. Dual-read pilot
+  - [x] 12.1 Implement opt-in dual read
     - In the facade, when a knowledge base is flagged for the pilot, run both
       backends for the same query and **serve legacy**
     - Record per read: overlap in returned `document_id` values, a rank
@@ -527,7 +527,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       own latency
     - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.5_
 
-  - [ ] 12.2 Write dual-read tests
+  - [x] 12.2 Write dual-read tests
     - Legacy results are always the ones served; comparison metrics are emitted;
       a managed-side failure does not fail the turn
     - File: `backend/tests/shared/test_kb_dual_read.py`

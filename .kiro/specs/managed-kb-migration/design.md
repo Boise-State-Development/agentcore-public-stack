@@ -830,6 +830,8 @@ EMF metrics alongside the existing PromptCache metrics. All of the following are
 | `KbQueryClamped` | Req 4 truncation rate |
 | `KbStatusFilterFailClosed` | Req 5 — distinguishes a confirmed-empty result from an unconfirmable one |
 | `KbMigration{Started,Promoted,Failed,RolledBack}` | Rollout health |
+| `KbDualRead{Overlap,RankCorrelation,Latency}` | The pilot's whole output: how much the two engines agree, and what the managed one costs. Values rather than counts, and `KbDualReadLatency` is dimensioned per backend so the 662–695 ms vs 257 ms gap is measured on our own traffic rather than assumed from the benchmark |
+| `KbDualReadFailed` | Managed-side failures during the pilot. Never user-facing — the turn was served from legacy before the comparison ran — but sustained non-zero says the engine is not ready |
 | `KbByteCapRejected` | Whether the proposed 100 MB default is actually workable, before it hardens into policy |
 
 `KbReclaimedGBPerDay` is deliberately **not** emitted: nothing reclaims in this

@@ -149,6 +149,7 @@ class TestKbBackendFreshImportIsLean:
             "apis.shared.kb_backend.protocol",
             "apis.shared.kb_backend.resolver",
             "apis.shared.kb_backend.s3vectors_backend",
+            "apis.shared.kb_backend.dual_read",
         ],
     )
     def test_seam_modules_import_lean(self, module):

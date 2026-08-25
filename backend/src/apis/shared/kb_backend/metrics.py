@@ -51,6 +51,18 @@ METRIC_STATUS_FILTER_FAIL_CLOSED = "KbStatusFilterFailClosed"
 #: is the system working, the second is a degradation worth alarming on.
 METRIC_ACCESS_DENIED = "KbAccessDenied"
 
+#: Dual-read pilot observations (Requirement 18.3). Values, not counts: the
+#: question each answers is "how much do the two backends agree, and at what
+#: cost", and a count cannot answer either.
+METRIC_DUAL_READ_OVERLAP = "KbDualReadOverlap"
+METRIC_DUAL_READ_RANK_CORRELATION = "KbDualReadRankCorrelation"
+METRIC_DUAL_READ_LATENCY = "KbDualReadLatency"
+
+#: Emitted when the observational managed read failed. Never a user-facing
+#: failure — the turn was served from legacy before the comparison ran — but a
+#: sustained non-zero value is the pilot telling us the engine is not ready.
+METRIC_DUAL_READ_FAILED = "KbDualReadFailed"
+
 
 def metric_namespace() -> str:
     """The custom namespace this feature publishes into.
@@ -78,10 +90,35 @@ def emit_count(
     metric that cannot be published is strictly less important than the answer the
     user is waiting for.
     """
+    _publish(metric_name, value, "Count", dimensions)
+
+
+def emit_value(
+    metric_name: str,
+    value: float,
+    unit: str = "None",
+    dimensions: Optional[Mapping[str, str]] = None,
+) -> None:
+    """Publish a measurement rather than an occurrence. Never raises.
+
+    Separate from :func:`emit_count` so the unit is a decision at the call site.
+    A latency published as ``Count`` is not merely mislabelled — CloudWatch will
+    graph and alarm on it as a rate, and the mistake is invisible until somebody
+    tries to read the dashboard.
+    """
+    _publish(metric_name, value, unit, dimensions)
+
+
+def _publish(
+    metric_name: str,
+    value: float,
+    unit: str,
+    dimensions: Optional[Mapping[str, str]],
+) -> None:
     try:
         import boto3
 
-        datum = {"MetricName": metric_name, "Value": value, "Unit": "Count"}
+        datum: dict = {"MetricName": metric_name, "Value": value, "Unit": unit}
         if dimensions:
             datum["Dimensions"] = [
                 {"Name": k, "Value": v} for k, v in sorted(dimensions.items())

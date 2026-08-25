@@ -69,6 +69,47 @@ def registered_engines() -> frozenset:
     return frozenset(_BACKENDS)
 
 
+def load_record(
+    assistant_id: str,
+    app_kb_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The KB_Record, or an empty mapping if there is none to be had.
+
+    For callers that need more from the record than which backend serves it — the
+    dual-read pilot flag, the byte cap, the migration state — and would otherwise
+    read it a second time.
+
+    Returns ``{}`` rather than ``None`` for both "no such record" and "the read
+    failed", because those two cases have the same answer everywhere in this
+    feature: an absent opinion is the legacy opinion. Collapsing them here means
+    no caller has to remember to handle ``None`` and every caller can pass the
+    result straight to :func:`resolve_backend` as ``record=``, which is what makes
+    one read enough.
+    """
+    from apis.shared.kb_backend.records import get_kb_record
+
+    try:
+        return dict(get_kb_record(assistant_id, app_kb_id or assistant_id) or {})
+    except Exception as exc:
+        logger.warning(
+            f"KB_Record lookup failed for assistant {assistant_id}; treating it as "
+            f"absent, which resolves to {ENGINE_LEGACY}: {exc}"
+        )
+        return {}
+
+
+def backend_for_engine(engine: str) -> Optional[KnowledgeBaseBackend]:
+    """The implementation for ``engine``, or ``None`` if this build has none.
+
+    Unlike :func:`resolve_backend` this does not raise, because its callers are
+    asking a different question. The dual-read pilot wants "is there a managed
+    backend I could compare against?", and the answer "no" is an ordinary state —
+    the managed backend is unregistered in every build until task 14 wires it —
+    not the fail-safe emergency that an unservable *promoted* record is.
+    """
+    return _BACKENDS.get(engine)
+
+
 def resolve_engine_for(
     assistant_id: str,
     app_kb_id: Optional[str] = None,
@@ -120,6 +161,8 @@ __all__ = [
     "BackendUnavailable",
     "ENGINE_LEGACY",
     "ENGINE_MANAGED",
+    "backend_for_engine",
+    "load_record",
     "register_backend",
     "registered_engines",
     "resolve_backend",

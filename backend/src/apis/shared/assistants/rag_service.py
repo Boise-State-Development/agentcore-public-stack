@@ -27,9 +27,16 @@ implemented twice is a rule that will eventually differ (Requirement 3):
   change between 2,000 and 20,000 characters, so raising it here would add a
   variable to a change whose whole purpose is to hold every variable but one.
 
+The dual-read pilot
+-------------------
+Also above the seam, and for the same reason: comparing two backends is not a
+thing either backend can do. The facade starts the observational managed read
+before awaiting legacy and detaches the comparison afterwards, so a piloted turn
+waits exactly as long as an unpiloted one (Requirement 18.5). Legacy is always
+what is served. See ``kb_backend.dual_read``.
+
 Score direction
----------------
-The seam speaks **relevance** (higher is better). This facade still emits a
+---------------The seam speaks **relevance** (higher is better). This facade still emits a
 ``distance`` key (lower is better), derived by exact negation, because
 ``app_api/assistants/routes.py`` puts that value in an HTTP response body that a
 client already reads. The rename stops at the seam; no caller has to change.
@@ -37,11 +44,13 @@ client already reads. The rename stops at the seam; no caller has to change.
 
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional, Set
 
 import boto3
 
 from apis.shared.assistants.kb_access import KbAccess
+from apis.shared.kb_backend.dual_read import schedule_observation, start_managed_read
 from apis.shared.kb_backend.metrics import (
     METRIC_ACCESS_DENIED,
     METRIC_STATUS_FILTER_FAIL_CLOSED,
@@ -49,7 +58,7 @@ from apis.shared.kb_backend.metrics import (
 )
 from apis.shared.kb_backend.protocol import DEFAULT_TOP_K, Chunk, distance_from_relevance
 from apis.shared.kb_backend.query_guard import clamp_query
-from apis.shared.kb_backend.resolver import resolve_backend
+from apis.shared.kb_backend.resolver import load_record, resolve_backend
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +127,14 @@ async def search_assistant_knowledgebase_with_formatting(
         emit_count(METRIC_ACCESS_DENIED, dimensions={"reason": "grant_mismatch"})
         return []
 
+    managed_task = None
     try:
-        backend = resolve_backend(assistant_id)
+        # One record read serves both questions: which backend to use, and whether
+        # this knowledge base is in the dual-read pilot. Reading it here rather
+        # than letting the resolver read it internally is what keeps the pilot
+        # from costing an extra DynamoDB round trip on every turn.
+        record = load_record(assistant_id)
+        backend = resolve_backend(assistant_id, record=record)
 
         # Clamp before dispatch, so both backends receive an identically-shaped
         # query (Requirement 4.2). Managed KB rejects anything over 10,000
@@ -128,7 +143,22 @@ async def search_assistant_knowledgebase_with_formatting(
         # questions and invalidate the dual-read comparison.
         query, _ = clamp_query(query)
 
+        # Start the observational read *before* awaiting legacy (Requirement
+        # 18.5). Nothing is awaited here, so a piloted turn does the same waiting
+        # as an unpiloted one; managed Retrieve measured 662–695 ms p50 against
+        # legacy's 257 ms, so awaiting both would nearly triple this leg.
+        # ``None`` whenever there is no comparison to make.
+        managed_task = start_managed_read(record, assistant_id, query, top_k)
+
+        started = time.perf_counter()
         chunks = await backend.search(assistant_id, query, top_k)
+        legacy_ms = (time.perf_counter() - started) * 1000.0
+
+        # Detach the comparison. Legacy is what gets served either way — including
+        # when it is empty, which is a finding rather than a reason to reach for
+        # the other engine's answer (Requirement 18.2).
+        schedule_observation(assistant_id, query, top_k, list(chunks), legacy_ms, managed_task)
+        managed_task = None
 
         if not chunks:
             logger.info(f"No vectors found for assistant {assistant_id} with query: {query[:50]}...")
@@ -156,6 +186,12 @@ async def search_assistant_knowledgebase_with_formatting(
 
     except Exception as e:
         logger.error(f"Error searching knowledge base for assistant {assistant_id}: {e}", exc_info=True)
+        if managed_task is not None:
+            # The legacy search raised before the comparison was detached, so
+            # nothing will ever await this task. Left alone it would run to
+            # completion, pay for a Retrieve, and be reported as a task whose
+            # exception was never retrieved.
+            managed_task.cancel()
         # Return empty list on error (graceful degradation)
         return []
 
