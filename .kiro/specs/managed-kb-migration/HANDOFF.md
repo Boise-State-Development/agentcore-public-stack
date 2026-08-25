@@ -196,6 +196,11 @@ saying why that number is a property of AWS rather than a knob.
     holds set". Every unheld knowledge base would have been exempt and the whole
     predicate vacuous. `None` and `{}` are now distinct. Found by writing the test
     first and believing it over the implementation.
+12. **Requirement 25.6 had no IAM behind it (group 11).** There was no
+    resource-policy grant anywhere in the construct, so the sharing code would have
+    deployed as inert. Same category as defect 1: correct-looking, clean-deploying,
+    authorizes nothing. Now `grantManagedKbResourcePolicyAdmin`, on its own role,
+    with a test asserting no retrieval identity ever receives it.
 13. **A resumed migration re-ingested everything (group 13).** The
     completed-document set lived inside `migrationProgress`, which a later write
     replaces wholesale, so a crash near the end of a 25-document corpus re-parsed
@@ -218,12 +223,6 @@ saying why that number is a property of AWS rather than a knob.
     *other* check satisfied it; and an `except LeaseLost: raise` that was dead code
     because the lease was taken outside the `try`. Each was fixed rather than
     annotated.
-
-12. **Requirement 25.6 had no IAM behind it (group 11).** There was no
-    resource-policy grant anywhere in the construct, so the sharing code would have
-    deployed as inert. Same category as defect 1: correct-looking, clean-deploying,
-    authorizes nothing. Now `grantManagedKbResourcePolicyAdmin`, on its own role,
-    with a test asserting no retrieval identity ever receives it.
 
 ---
 
