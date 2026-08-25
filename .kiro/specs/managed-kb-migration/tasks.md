@@ -436,8 +436,8 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - File: `backend/tests/lambdas/test_kb_ingestion_consumer.py`
     - _Requirements: 10.3, 10.4, 10.5_
 
-- [ ] 10. Deletion sagas and reconciler
-  - [ ] 10.1 Implement tombstones
+- [x] 10. Deletion sagas and reconciler
+  - [x] 10.1 Implement tombstones
     - New `backend/src/apis/shared/kb_backend/tombstones.py`
     - Write `KBTOMB#{app_kb_id}` (and the `#DOC#{document_id}` variant) **before**
       calling AWS; clear only after AWS confirms absence
@@ -450,7 +450,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Surface `DELETE_UNSUCCESSFUL` as an actionable operator state
     - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8_
 
-  - [ ] 10.2 Implement the daily reconciler
+  - [x] 10.2 Implement the daily reconciler
     - New `backend/src/apis/app_api/kb_migration/reconciler.py`
     - Join paginated, tag-filtered `ListKnowledgeBases` against KB_Records
     - AWS-only ⇒ orphan, deleted only if the **AWS-reported `createdAt`** is >24 h
@@ -464,7 +464,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Apply a bounded per-run action limit
     - _Requirements: 14.1, 14.2, 14.3, 14.4, 14.5, 14.6, 14.7, 14.8, 19.7_
 
-  - [ ] 10.3 Write reconciliation tests
+  - [x] 10.3 Write reconciliation tests
     - Record-only and AWS-only outcomes; age-gate honours AWS `createdAt` rather
       than discovery time; report-only performs no deletes
     - File: `backend/tests/lambdas/test_kb_reconciler.py`
