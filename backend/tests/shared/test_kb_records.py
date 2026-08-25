@@ -276,6 +276,44 @@ class TestPromoteEngine:
         with pytest.raises(r.TransitionLost):
             r.promote_engine(ASSISTANT_ID, APP_KB_ID, 0, NOW)
 
+    def test_an_already_promoted_record_cannot_be_promoted_again(self, table):
+        """The guard that ``test_concurrent_promote_yields_exactly_one_winner``
+        cannot see, because that test moves the record on between the two attempts.
+
+        Here **nothing** changes between them: same state, same generation, same
+        converged progress. Every guard except ``attribute_not_exists`` still
+        holds, so without it the second write lands — overwriting the real cutover
+        moment with a later ``promotedAt`` and letting two genuinely concurrent
+        workers both succeed, which is exactly what Requirement 15.10 forbids.
+        Found by the convergence property test crashing between the promotion and
+        the state transition.
+        """
+        self._ready(table)
+        r.promote_engine(ASSISTANT_ID, APP_KB_ID, 0, NOW)
+
+        with pytest.raises(r.TransitionLost):
+            r.promote_engine(ASSISTANT_ID, APP_KB_ID, 0, LATER)
+
+        assert _raw(table)["promotedAt"] == NOW, (
+            "a second promotion overwrote the original cutover timestamp"
+        )
+
+    def test_a_rolled_back_record_can_be_promoted_again(self, table):
+        """So the not-already-promoted guard does not make rollback one-way.
+
+        Rollback ``REMOVE``s the attribute, which is precisely what restores
+        eligibility — another consequence of rollback restoring the original
+        *shape* rather than writing a legacy value.
+        """
+        self._ready(table)
+        r.promote_engine(ASSISTANT_ID, APP_KB_ID, 0, NOW)
+        r.rollback_engine(ASSISTANT_ID, APP_KB_ID, LATER)
+
+        r.promote_engine(ASSISTANT_ID, APP_KB_ID, 0, LATER)
+
+        assert _raw(table)["retrievalEngine"] == r.ENGINE_MANAGED
+        assert _raw(table)["promotedAt"] == LATER
+
 
 # ── rollback_engine ──────────────────────────────────────────────────────────
 class TestRollbackEngine:

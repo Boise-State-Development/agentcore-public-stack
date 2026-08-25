@@ -391,8 +391,18 @@ def promote_engine(
 ) -> None:
     """Flip the record to the managed backend. The single cutover write.
 
-    Three guards, all necessary:
+    Four guards, all necessary:
 
+    * ``attribute_not_exists(retrievalEngine)`` — this knowledge base has not
+      already been promoted. Without it, the other three guards all remain true
+      *after* a successful promotion, so a worker that crashed between the
+      promotion and the state transition promotes a second time on resume: same
+      value, but a fresh ``promotedAt`` that overwrites the real cutover moment and
+      a second ``KbMigrationPromoted``. Worse, two concurrent workers would both
+      succeed, which is precisely what Requirement 15.10 forbids. Found by the
+      convergence property test, which counted two promotions across a crash at
+      the state transition. Rollback ``REMOVE``s the attribute, so this does not
+      block a deliberate re-promotion.
     * ``migrationState = promote`` — only a record that reached the cutover step
       may cut over.
     * ``migrationGeneration = :gen`` — a worker whose lease expired and whose
@@ -416,7 +426,8 @@ def promote_engine(
         Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
         UpdateExpression="SET retrievalEngine = :managed, promotedAt = :now",
         ConditionExpression=(
-            "migrationState = :promote "
+            "attribute_not_exists(retrievalEngine) "
+            "AND migrationState = :promote "
             "AND migrationGeneration = :gen "
             "AND #progress.#migrated = #progress.#total"
         ),

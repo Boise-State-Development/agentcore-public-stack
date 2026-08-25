@@ -533,8 +533,8 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - File: `backend/tests/shared/test_kb_dual_read.py`
     - _Requirements: 18.2, 18.5_
 
-- [ ] 13. Migration dispatcher and worker
-  - [ ] 13.1 Implement the dispatcher
+- [x] 13. Migration dispatcher and worker
+  - [x] 13.1 Implement the dispatcher
     - New `backend/src/apis/app_api/kb_migration/dispatcher.py`, following
       `kb_sync/dispatcher.py`
     - Query the sparse `KbWorkIndex`, apply a bounded per-tick dispatch limit
@@ -542,7 +542,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       migration flag is off
     - _Requirements: 19.6, 15.14_
 
-  - [ ] 13.2 Implement the migration worker state machine
+  - [x] 13.2 Implement the migration worker state machine
     - New `backend/src/apis/app_api/kb_migration/worker.py`
     - `shadow`: provision, then re-ingest every `complete` document from its
       existing S3 key at `assistants/{assistant_id}/documents/{document_id}/{filename}`
@@ -556,7 +556,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Take a lease so one knowledge base is never migrated by two workers
     - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7, 15.8, 15.9, 15.11, 15.13, 12.9_
 
-  - [ ] 13.3 Implement catch-up convergence
+  - [x] 13.3 Implement catch-up convergence
     - Snapshot the doc-id set, migrate, then run catch-up passes until a pass finds
       nothing new — the same converge-on-quiet shape as the crawler's
       consecutive-miss rule
@@ -567,14 +567,14 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       promotion
     - _Requirements: 16.1, 16.2, 16.3, 16.4, 16.5, 16.6_
 
-  - [ ] 13.4 Implement rollback
+  - [x] 13.4 Implement rollback
     - Write `retrievalEngine` back to its prior value and stamp `rolledBackAt`;
       move no data
     - Available for the entire `retain` window; a pre-promotion failure leaves the
       knowledge base on legacy and fully usable
     - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5_
 
-  - [ ] 13.5 Write property test for migration idempotency
+  - [x] 13.5 Write property test for migration idempotency
     - **Property 6: interrupted migration converges without duplication**
     - Using `hypothesis`, for any interruption point in the state machine, verify a
       resumed run reaches the same terminal state, creates exactly one knowledge
@@ -582,18 +582,18 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - **Validates: Requirements 15.9, 15.10, 15.13, 7.4**
     - File: `backend/tests/property/test_pbt_kb_migration_convergence.py`
 
-  - [ ] 13.6 Write tests for interference during migration
+  - [x] 13.6 Write tests for interference during migration
     - Upload during migration is picked up by catch-up; delete during migration
       never resurrects; concurrent promotion attempts yield one winner
     - File: `backend/tests/lambdas/test_kb_migration_worker.py`
     - _Requirements: 16.2, 16.4, 16.5, 24.5_
 
-  - [ ] 13.7 Write test for resource-policy re-application after rehydration
+  - [x] 13.7 Write test for resource-policy re-application after rehydration
     - A rehydration producing a new `awsKbId` re-applies the resource policy;
       policies attach to the AWS ARN, so a new id otherwise silently drops sharing
     - _Requirements: 24.12_
 
-  - [ ] 13.8 Write test for mixed old/new deployment
+  - [x] 13.8 Write test for mixed old/new deployment
     - Old and new code serving simultaneously; a record with no `retrievalEngine`
       resolves to legacy under both
     - _Requirements: 1.6, 24.8_
