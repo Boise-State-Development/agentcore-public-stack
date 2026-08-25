@@ -313,6 +313,8 @@ const SLIDE_BULLET_WIDTHS = [78, 92, 60];
             class="size-full object-cover object-top"
             loading="lazy"
             decoding="async"
+            (load)="onThumbnailLoaded()"
+            (error)="onThumbnailError()"
           />
         } @else if (snippetState() === 'ready' && hasSnippet()) {
           @if (isMarkdown()) {
@@ -382,6 +384,9 @@ export class FileAttachmentBadgeComponent {
       unsupported types or render failure — caller falls back to skeleton. */
   protected readonly thumbnailUrl = signal<string | null>(null);
 
+  /** True while a re-minted thumbnail URL is unproven; see `onThumbnailError`. */
+  private readonly thumbnailReminted = signal(false);
+
   protected readonly formattedSize = computed(() => formatBytes(this.attachment().sizeBytes));
 
   protected readonly style = computed<FileTypeStyle>(
@@ -428,6 +433,27 @@ export class FileAttachmentBadgeComponent {
   private async loadThumbnail(uploadId: string): Promise<void> {
     const result = await this.fileUploadService.getThumbnail(uploadId);
     this.thumbnailUrl.set(result.status === 'ready' ? result.response.url : null);
+  }
+
+  /**
+   * The thumbnail failed to load. Its presigned URL only lives ~10 minutes and
+   * the `<img>` is lazy, so a card scrolled back into view later in a long
+   * conversation asks S3 with a dead signature. Re-mint once, then fall back
+   * to the skeleton rather than leaving a broken image in the card.
+   */
+  protected onThumbnailError(): void {
+    if (this.thumbnailReminted()) {
+      this.thumbnailUrl.set(null);
+      return;
+    }
+    this.thumbnailReminted.set(true);
+    this.thumbnailUrl.set(null);
+    void this.loadThumbnail(this.attachment().uploadId);
+  }
+
+  /** A URL that rendered is proven good, so it earns a fresh retry budget. */
+  protected onThumbnailLoaded(): void {
+    this.thumbnailReminted.set(false);
   }
 
   protected async openFile(): Promise<void> {

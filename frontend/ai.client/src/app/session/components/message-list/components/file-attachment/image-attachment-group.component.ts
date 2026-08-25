@@ -15,7 +15,18 @@ import { ImageLightboxComponent, LightboxImage } from './image-lightbox.componen
 interface PreviewState {
   url: string | null;
   status: 'idle' | 'loading' | 'ready' | 'error';
+  /** Epoch ms the presigned URL stops working; null when unknown. */
+  expiresAt: number | null;
+  /**
+   * True while a re-minted URL is unproven. Set when a failed load triggers a
+   * re-mint, cleared once an `<img>` actually loads — so a genuinely dead
+   * object fails after one retry instead of looping.
+   */
+  reminted: boolean;
 }
+
+/** Treat a URL as expired this far ahead of its stated expiry. */
+const EXPIRY_SKEW_MS = 30_000;
 
 /**
  * iMessage-style group renderer for one or more image attachments.
@@ -57,6 +68,8 @@ interface PreviewState {
               class="size-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
               loading="lazy"
               decoding="async"
+              (load)="onImageLoaded(item.attachment.uploadId)"
+              (error)="onImageError(item.attachment.uploadId)"
             />
           } @else if (item.state.status === 'error') {
             <div
@@ -90,6 +103,7 @@ interface PreviewState {
       <app-image-lightbox
         [images]="lightboxImages()"
         [startIndex]="lightboxOpenAt() ?? 0"
+        (imageError)="onLightboxImageError($event)"
         (close)="closeLightbox()"
       />
     }
@@ -114,7 +128,9 @@ export class ImageAttachmentGroupComponent {
     const map = this.previews();
     return visible.map((attachment) => ({
       attachment,
-      state: map.get(attachment.uploadId) ?? { url: null, status: 'idle' as const },
+      state:
+        map.get(attachment.uploadId) ??
+        ({ url: null, status: 'idle', expiresAt: null, reminted: false } as PreviewState),
     }));
   });
 
@@ -173,7 +189,66 @@ export class ImageAttachmentGroupComponent {
     if (!attachment) return;
     const state = map.get(attachment.uploadId);
     if (state?.status !== 'ready') return;
+    // The tile's own URL may have been minted well before this click. The
+    // lightbox has no error tile of its own, so refresh a stale one up front
+    // rather than showing a full-screen broken image.
+    if (this.isStale(state)) {
+      void this.mintPreview(attachment.uploadId, false);
+    }
     this.lightboxOpenAt.set(visibleIndex);
+  }
+
+  /**
+   * A tile failed to load. Presigned GET URLs expire after ~10 minutes, and
+   * these tiles are `loading="lazy"` — so a message scrolled back into view
+   * later in a long conversation fetches an already-dead signature. Re-mint
+   * once; only call the preview unavailable if the fresh URL fails too.
+   */
+  protected onImageError(uploadId: string): void {
+    const state = this.previews().get(uploadId);
+    if (state?.reminted) {
+      this.updatePreview(uploadId, {
+        url: null,
+        status: 'error',
+        expiresAt: null,
+        reminted: true,
+      });
+      return;
+    }
+    this.updatePreview(uploadId, {
+      url: state?.url ?? null,
+      status: 'loading',
+      expiresAt: state?.expiresAt ?? null,
+      reminted: true,
+    });
+    void this.mintPreview(uploadId, true);
+  }
+
+  /** A URL that rendered is proven good, so it earns a fresh retry budget. */
+  protected onImageLoaded(uploadId: string): void {
+    const state = this.previews().get(uploadId);
+    if (!state?.reminted) return;
+    this.updatePreview(uploadId, { ...state, reminted: false });
+  }
+
+  /** Same one-shot re-mint for a failure surfaced by the lightbox. */
+  protected onLightboxImageError(index: number): void {
+    const attachment = this.attachments()[index];
+    if (!attachment) return;
+    const state = this.previews().get(attachment.uploadId);
+    if (state?.reminted) return;
+    this.updatePreview(attachment.uploadId, {
+      url: state?.url ?? null,
+      status: state?.status ?? 'ready',
+      expiresAt: state?.expiresAt ?? null,
+      reminted: true,
+    });
+    void this.mintPreview(attachment.uploadId, true);
+  }
+
+  private isStale(state: PreviewState): boolean {
+    if (state.expiresAt === null) return false;
+    return Date.now() >= state.expiresAt - EXPIRY_SKEW_MS;
   }
 
   protected closeLightbox(): void {
@@ -186,7 +261,7 @@ export class ImageAttachmentGroupComponent {
     const next = new Map(current);
     for (const a of all) {
       if (!next.has(a.uploadId)) {
-        next.set(a.uploadId, { url: null, status: 'loading' });
+        next.set(a.uploadId, { url: null, status: 'loading', expiresAt: null, reminted: false });
       }
     }
     this.previews.set(next);
@@ -194,14 +269,35 @@ export class ImageAttachmentGroupComponent {
     await Promise.all(
       all.map(async (a) => {
         if (current.get(a.uploadId)?.status === 'ready') return;
-        try {
-          const response = await this.fileUploadService.getPreviewUrl(a.uploadId);
-          this.updatePreview(a.uploadId, { url: response.url, status: 'ready' });
-        } catch {
-          this.updatePreview(a.uploadId, { url: null, status: 'error' });
-        }
+        await this.mintPreview(a.uploadId, false);
       }),
     );
+  }
+
+  /**
+   * Fetch a presigned GET URL and record when it dies.
+   *
+   * `reminted` carries through so the retry budget survives the round trip:
+   * a first mint resets it, a re-mint keeps it spent until an `<img>` loads.
+   */
+  private async mintPreview(uploadId: string, reminted: boolean): Promise<void> {
+    try {
+      const response = await this.fileUploadService.getPreviewUrl(uploadId);
+      const expiresAt = Date.parse(response.expiresAt);
+      this.updatePreview(uploadId, {
+        url: response.url,
+        status: 'ready',
+        expiresAt: Number.isNaN(expiresAt) ? null : expiresAt,
+        reminted,
+      });
+    } catch {
+      this.updatePreview(uploadId, {
+        url: null,
+        status: 'error',
+        expiresAt: null,
+        reminted,
+      });
+    }
   }
 
   private updatePreview(uploadId: string, state: PreviewState): void {
