@@ -1,6 +1,6 @@
 # Managed KB Migration — Handoff
 
-**Last updated:** 2026-08-25 (groups 11–12) · **Branch:** `feature/kb-migration` · **Nothing deployed**
+**Last updated:** 2026-08-25 (groups 11–13) · **Branch:** `feature/kb-migration` · **Nothing deployed**
 
 Working state for this feature so a fresh session can pick it up without re-deriving
 anything. Read this, then `tasks.md`.
@@ -12,14 +12,16 @@ anything. Read this, then `tasks.md`.
 | | |
 |---|---|
 | Spec | Complete, audited 3× to clean. 25 requirements, 201 criteria, 0 dangling refs |
-| Implementation | Groups **1–12 of 15** done. 18 subtasks left across groups 13–15 |
-| Tests | **614** infra (jest) · **6,386** backend (pytest) · 5 pre-existing unrelated failures |
+| Implementation | Groups **1–13 of 15** done. 10 subtasks left across groups 14–15 |
+| Tests | **614** infra (jest) · **6,457** backend (pytest) · 5 pre-existing unrelated failures |
 | Deployed | **Nothing.** No `cdk deploy`, no AWS mutation, at any point |
 | Feature flags | All three ship **off** |
 
-### Commits (10 on the branch)
+### Commits (12 on the branch)
 
 ```
+ee091971  migration dispatcher and the shadow/verify/promote/retain worker (group 13)
+53476544  handoff reflects groups 11-12 and two new defects
 a361fdd4  opt-in dual-read pilot that legacy always wins                (group 12)
 a43d80bf  app-side authorization, IAM-enforced sharing, publication      (group 11)
 58f0c6b6  handoff document and accurate task-list state
@@ -39,8 +41,9 @@ ffa7a408  KB_Record data layer with conditional state transitions        (group 
 enrolls a knowledge base, and the resolver has only `s3vectors` registered. A record
 saying `retrievalEngine: "managed"` raises `BackendUnavailable` — which is the correct
 fail-safe, since substituting the legacy index for a promoted KB would serve a stale
-corpus. Registering the managed backend and adding an enrollment surface are groups
-13–14.
+corpus. Registering the managed backend and adding an enrollment surface are group 14.
+The dispatcher and worker exist but the migration flag ships off, so a tick
+invokes nothing and no record is ever enrolled.
 
 The dual-read pilot inherits that: `start_managed_read` returns `None` whenever no
 managed backend is registered, so setting `dualReadPilot: true` on a record today is
@@ -193,6 +196,29 @@ saying why that number is a property of AWS rather than a knob.
     holds set". Every unheld knowledge base would have been exempt and the whole
     predicate vacuous. `None` and `{}` are now distinct. Found by writing the test
     first and believing it over the implementation.
+13. **A resumed migration re-ingested everything (group 13).** The
+    completed-document set lived inside `migrationProgress`, which a later write
+    replaces wholesale, so a crash near the end of a 25-document corpus re-parsed
+    all 25 — 37–264 s each. Now a separate `migratedDocIds` string set updated with
+    `ADD` per batch. Found by the convergence property test counting a document
+    ingested twice.
+14. **`promote_engine` permitted a second promotion (group 13).** Every guard it
+    had stayed true *after* a successful promotion, so two genuinely concurrent
+    workers would both succeed — exactly what Req 15.10 forbids. Now guarded on
+    `attribute_not_exists(retrievalEngine)`; rollback `REMOVE`s it, so a deliberate
+    re-promotion still works.
+15. **Fixing 14 then broke resumption (group 13).** A resume after a successful
+    promotion had its write refused and marked the migration `failed` — a promoted
+    knowledge base with no retention window. `run_promote` now treats "already
+    promoted" as success, re-reading before deciding so a genuine guard failure
+    still raises.
+16. **Four mutation-test lies, in one sitting (group 13).** A limit assertion the
+    final `[:limit]` trim masked; a derivation whose test was vacuous because the
+    priority list happened to be complete; a `match=` pattern loose enough that the
+    *other* check satisfied it; and an `except LeaseLost: raise` that was dead code
+    because the lease was taken outside the `try`. Each was fixed rather than
+    annotated.
+
 12. **Requirement 25.6 had no IAM behind it (group 11).** There was no
     resource-policy grant anywhere in the construct, so the sharing code would have
     deployed as inert. Same category as defect 1: correct-looking, clean-deploying,
@@ -205,7 +231,6 @@ saying why that number is a property of AWS rather than a knob.
 
 | Group | Subtasks | Notes |
 |---|---|---|
-| **13** Migration dispatcher and worker | 8 | Where `reserve_snapshot` finally gets its caller, and where the `shadow → verify → promote → retain` saga runs. |
 | **14** Surfaces, observability, teardown | 7 | UI, admin surface, metrics, teardown script. Also where the managed backend gets **registered** in the resolver, and where the dual-read pilot flag gets a surface that can set it. |
 | **15** Pre-promotion verification | 3 | The gate before any real traffic moves. |
 
@@ -220,7 +245,8 @@ saying why that number is a property of AWS rather than a knob.
   stub and the **workflow** ships the real image.
 - **Reconciler EventBridge wiring** (Reqs 14.1, 14.7) — `infrastructure/`, platform
   group. Backend code never deploys before the IAM and resources it requires.
-- **Group 7's snapshot reservation has no caller** until group 13.
+- **Group 7's snapshot reservation now has its caller** (`run_shadow`), reserving
+  the whole corpus before anything is provisioned.
 
 ---
 
@@ -253,6 +279,8 @@ backend/src/apis/shared/assistants/
 backend/src/apis/app_api/kb_migration/
   ingestion_consumer.py   routes by engine; legacy ⇒ do nothing
   reconciler.py           daily join, report-only
+  dispatcher.py           sparse-index sweep, bounded, no-ops when the flag is off
+  worker.py               ONE step per invocation, leased, resumable
 
 infrastructure/lib/constructs/managed-kb/
   managed-kb-role-construct.ts    Bedrock service role + grant methods
