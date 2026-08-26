@@ -876,9 +876,9 @@ export class ShareAgentDialogComponent {
     const listing = await firstValueFrom(dialogRef.closed);
     if (listing) {
       this.listing.set(listing);
-      // Publishing widened visibility in the same write (the dialog's `makePublic`
-      // consent). Record it here or the save below derives over a stale PRIVATE and
-      // narrows the agent out from under its own live listing.
+      // Submitting widened visibility in the same write (the dialog's `makePublic`).
+      // Record it here or the save below derives over a stale PRIVATE and narrows the
+      // agent out from under its own live listing.
       this.visibility.set('PUBLIC');
     }
   }
