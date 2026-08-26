@@ -113,10 +113,14 @@ export interface SubmitListingRequest {
   publisherId?: string;
   note?: string;
   /**
-   * The author's explicit consent to make this agent PUBLIC as part of publishing it.
-   * The marketplace is public-only and every agent starts PRIVATE, so this is the normal
-   * path, not an edge case. Omitting it is refused by the backend — the widening is
-   * consent, never a side effect of submitting.
+   * Widen this agent to PUBLIC as part of submitting it. The marketplace is public-only
+   * and every agent starts PRIVATE, so this is the normal path, not an edge case.
+   *
+   * ⚠️ Still **required** by the backend whenever widening is needed — an omitted flag is
+   * refused, so no caller widens an agent by accident. What changed is who decides: the
+   * submit dialog sets it unconditionally, because it shows the author a notice saying
+   * submitting publishes the agent and pressing Submit under that notice is the consent.
+   * A caller that shows no such notice must not send it blindly.
    */
   makePublic?: boolean;
   /**
