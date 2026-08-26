@@ -151,12 +151,23 @@ import {
             </p>
           }
 
-          <div class="mt-6 grid gap-6 lg:grid-cols-2">
+          <!-- items-start so the right column can be sticky: a stretched grid cell has
+               no room to stick within. -->
+          <div class="mt-6 grid items-start gap-6 lg:grid-cols-2">
             <!-- Left: what it is -->
-            <div class="flex flex-col gap-6">
+            <!-- A whole-string class binding rather than a per-class one: a class-binding
+                 *name* cannot contain a colon, so Tailwind's breakpoint prefixes have to be
+                 toggled as a string. -->
+            <div [class]="readColumnClasses()">
               <section>
                 <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Summary</h2>
-                <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-300">{{ s.description }}</p>
+                @if (s.description.trim()) {
+                  <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-300">{{ s.description }}</p>
+                } @else {
+                  <p class="mt-1 text-sm/6 italic text-gray-500 dark:text-gray-400">
+                    None — this agent has no summary.
+                  </p>
+                }
               </section>
 
               <section>
@@ -174,10 +185,23 @@ import {
                   The system prompt this agent runs with.
                 </p>
                 <!-- Monospace, pre-wrapped, scrollable: an author's prose has intentional
-                     line breaks, and reflowing it would misrepresent what they wrote. -->
-                <pre
-                  class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-2xl bg-gray-50 p-3 text-xs/5 text-gray-800 dark:bg-gray-900 dark:text-gray-200"
-                >{{ s.instructions }}</pre>
+                     line breaks, and reflowing it would misrepresent what they wrote.
+
+                     ⚠️ An empty system prompt gets a sentence, not an empty box. A blank
+                     panel under a heading reads as a page that failed to load, and a
+                     reviewer who thinks the read is broken cannot tell it apart from an
+                     agent that genuinely ships no instructions — which is itself a reason
+                     to decline, and so must be legible rather than ambiguous. -->
+                @if (s.instructions.trim()) {
+                  <pre
+                    class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-2xl bg-gray-50 p-3 text-xs/5 text-gray-800 dark:bg-gray-900 dark:text-gray-200"
+                  >{{ s.instructions }}</pre>
+                } @else {
+                  <p class="mt-2 text-sm/6 italic text-gray-500 dark:text-gray-400">
+                    None — this agent ships no system prompt and will behave like a plain
+                    chat.
+                  </p>
+                }
               </section>
 
               <section>
@@ -233,12 +257,20 @@ import {
               }
             </div>
 
-            <!-- Right: what it does -->
+            <!-- Right: what it does.
+                 Sized against the viewport rather than against the left column, which is
+                 what made it unusable: a chat surface whose height is "whatever the prose
+                 beside it happens to need" leaves ~120px between the banner and the
+                 composer, and a reviewer cannot judge an agent through a two-line window.
+                 Sticky so it stays put while they scroll the instructions — reading and
+                 asking are the same loop, not two passes. -->
             <app-review-test-drive
-              class="h-full"
+              [class]="testDriveClasses()"
               [agentId]="s.agentId"
               [name]="s.name"
               [reviewVersion]="s.reviewVersion"
+              [expanded]="expanded()"
+              (expandedChange)="expanded.set($event)"
             />
           </div>
 
@@ -305,6 +337,35 @@ export class SubmissionReviewPage implements OnInit {
   readonly busy = signal(false);
 
   private readonly agentId = signal('');
+
+  /**
+   * Whether the test drive has taken the full width of the page.
+   *
+   * Held here rather than inside the panel because it changes the *page's* grid: expanding
+   * spans the panel across both columns and pushes the read above it. Toggled by class
+   * binding only — never by moving the element in the DOM, which would destroy the
+   * component and take the reviewer's conversation with it.
+   */
+  readonly expanded = signal(false);
+
+  /**
+   * Sticky and viewport-tall in the column; full-width and tall when expanded.
+   *
+   * `100dvh` rather than `100vh` so a mobile browser's collapsing toolbar does not leave
+   * the composer under the chrome.
+   */
+  testDriveClasses(): string {
+    return this.expanded()
+      ? 'h-[calc(100dvh-14rem)] min-h-[28rem] lg:col-span-2'
+      : 'h-[32rem] lg:sticky lg:top-6 lg:h-[calc(100dvh-10rem)] lg:min-h-[28rem]';
+  }
+
+  /** The read column takes the full width once the test drive is spanning both. */
+  readColumnClasses(): string {
+    return this.expanded()
+      ? 'flex flex-col gap-6 lg:col-span-2'
+      : 'flex flex-col gap-6';
+  }
 
   /**
    * Only a pending *submission* gets the three decisions.
