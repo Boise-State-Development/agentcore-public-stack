@@ -16,6 +16,7 @@ import {
   AdminStoreFrontResponse,
   AgentCategory,
   AdminListingsResponse,
+  AdminSubmissionReview,
   ListingPatchRequest,
   ListingState,
   PublisherProfile,
@@ -79,6 +80,21 @@ export class AdminMarketplaceService {
     );
   }
 
+  /**
+   * The reviewer's full read of one submission — instructions, capabilities, model.
+   *
+   * Its own endpoint rather than `GET /agents/{id}`: that route gates `instructions` to
+   * owner/editor and 403s a non-owner outright on a PRIVATE agent, and it would serve the
+   * author's *draft* rather than the snapshot approval promotes.
+   */
+  async loadSubmission(agentId: string): Promise<AdminSubmissionReview> {
+    return firstValueFrom(
+      this.http.get<AdminSubmissionReview>(
+        `${this.baseUrl()}/${encodeURIComponent(agentId)}/submission`,
+      ),
+    );
+  }
+
   /** The Listings table: every agent that has ever been submitted. */
   async loadListings(state?: ListingState): Promise<AdminListingRow[]> {
     const url = state ? `${this.baseUrl()}/listings?state=${state}` : `${this.baseUrl()}/listings`;
@@ -100,7 +116,7 @@ export class AdminMarketplaceService {
     }
   }
 
-  /** Approve a submission, or return it to the author with a reason. */
+  /** Approve a submission, return it with a reason, or decline it for the store. */
   async review(agentId: string, request: ReviewListingRequest): Promise<void> {
     await firstValueFrom(this.http.post(`${this.baseUrl()}/${agentId}/review`, request));
   }

@@ -1553,6 +1553,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         from apis.shared.assistants.version_resolution import (
             AgentVersionUnavailableError,
             resolve_invocation_agent,
+            resolve_review_agent,
         )
         from apis.shared.sessions.messages import get_messages
         from apis.shared.sessions.metadata import (
@@ -1624,13 +1625,54 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             )
 
         # 2. Load assistant with access check
-        logger.info("Loading assistant with access check...")
-        assistant, _ = await get_assistant_with_access_check(
-            assistant_id=input_data.rag_assistant_id, user_id=user_id, user_email=current_user.email
-        )
+        #
+        # ⚠️ The reviewer preview is the ONE path that does not go through the visibility
+        # gate, and it earns that by proving the scope first. A PRIVATE Agent can be sitting
+        # in the review queue — approval refuses one, but submission does not — and
+        # ``get_assistant_with_access_check`` refuses a non-owner outright on PRIVATE, so a
+        # reviewer could not test-drive exactly the submissions most worth testing.
+        #
+        # The scope is re-resolved here against the caller's own roles rather than trusted
+        # from the request, and a caller without it is refused rather than quietly demoted
+        # to an ordinary turn: a silent downgrade would run the published snapshot (or the
+        # author's draft) and report it to the reviewer as the version under review.
+        is_review_preview = bool(input_data.review_preview)
+        if is_review_preview:
+            import os
+
+            from apis.shared.auth import has_admin_scope
+            from apis.shared.assistants.service import (
+                _get_assistant_cloud_without_ownership_check,
+            )
+
+            if not await has_admin_scope(current_user, "admin.marketplace"):
+                logger.warning("review_preview requested without the marketplace scope")
+                raise HTTPException(
+                    status_code=403,
+                    detail="Reviewing an agent requires marketplace admin access.",
+                )
+            table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+            if not table_name:
+                # Explicit, because the alternative is a confusing failure several frames
+                # down inside boto3 rather than a message naming the missing variable.
+                raise RuntimeError(
+                    "DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required"
+                )
+            assistant = await _get_assistant_cloud_without_ownership_check(
+                input_data.rag_assistant_id, table_name
+            )
+        else:
+            logger.info("Loading assistant with access check...")
+            assistant, _ = await get_assistant_with_access_check(
+                assistant_id=input_data.rag_assistant_id,
+                user_id=user_id,
+                user_email=current_user.email,
+            )
 
         if not assistant:
-            logger.warning("get_assistant_with_access_check returned None")
+            logger.warning(
+                "Assistant lookup returned None (review_preview=%s)", is_review_preview
+            )
             # Check if assistant exists at all to provide better error message
             from apis.shared.assistants.service import assistant_exists
 
@@ -1667,7 +1709,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # ⚠️ Ordered *before* the access check's side effects below on purpose: it is not an
         # access decision and must not be read as one. The caller was already admitted.
         try:
-            assistant, resolved_version = await resolve_invocation_agent(assistant, user_id)
+            if is_review_preview:
+                # The submitted snapshot, not the published one and not the author's draft —
+                # the artifact the reviewer's decision is actually about. Shares its rule
+                # with the admin submission read, so the page and the test drive can never
+                # disagree about what is under review.
+                assistant, resolved_version = await resolve_review_agent(assistant)
+            else:
+                assistant, resolved_version = await resolve_invocation_agent(assistant, user_id)
         except AgentVersionUnavailableError as unavailable:
             # A published Agent whose snapshot is missing fails the turn rather than
             # falling back to the draft — the fallback would serve unreviewed instructions
@@ -1688,22 +1737,31 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             f"published version {resolved_version}" if resolved_version else "live record / draft",
         )
 
-        # Mark as viewed if this is a shared assistant (not owned)
-        if assistant.owner_id != user_id:
-            await mark_share_as_interacted(assistant_id=input_data.rag_assistant_id, user_email=current_user.email)
+        # ⚠️ Both bookkeeping writes below are skipped for a reviewer preview, because a
+        # review is not use. ``mark_share_as_interacted`` would stamp a share record the
+        # reviewer does not have, and ``bump_last_used_at`` feeds the KB-sync inactivity
+        # pause — a reviewer poking a submission once would read as the Agent being live
+        # and wake sync policies that were correctly dormant. Persistence of the turn
+        # itself is already handled by the ``preview-`` session id the reviewer's client
+        # sends (``PREVIEW_SESSION_PREFIX``), which is what keeps the test drive out of the
+        # author's conversation history.
+        if not is_review_preview:
+            # Mark as viewed if this is a shared assistant (not owned)
+            if assistant.owner_id != user_id:
+                await mark_share_as_interacted(assistant_id=input_data.rag_assistant_id, user_email=current_user.email)
 
-        # KB sync inactivity signal: any user's chat use counts. Throttled
-        # to one write/day inside bump_last_used_at (conditional update);
-        # the winning bump also wakes any inactivity-paused sync policies.
-        # Best-effort — a bookkeeping failure must never break a chat turn.
-        try:
-            from apis.shared.assistants.service import bump_last_used_at
-            from apis.shared.sync_policies.service import resume_inactive_policies
+            # KB sync inactivity signal: any user's chat use counts. Throttled
+            # to one write/day inside bump_last_used_at (conditional update);
+            # the winning bump also wakes any inactivity-paused sync policies.
+            # Best-effort — a bookkeeping failure must never break a chat turn.
+            try:
+                from apis.shared.assistants.service import bump_last_used_at
+                from apis.shared.sync_policies.service import resume_inactive_policies
 
-            if await bump_last_used_at(input_data.rag_assistant_id):
-                await resume_inactive_policies(input_data.rag_assistant_id)
-        except Exception as bump_err:
-            logger.warning(f"lastUsedAt bump failed for assistant {input_data.rag_assistant_id}: {bump_err}")
+                if await bump_last_used_at(input_data.rag_assistant_id):
+                    await resume_inactive_policies(input_data.rag_assistant_id)
+            except Exception as bump_err:
+                logger.warning(f"lastUsedAt bump failed for assistant {input_data.rag_assistant_id}: {bump_err}")
 
         # 2b. Agent Designer Phase 3 — resolve the Agent's governed capabilities
         # for the INVOKING user (D5), before the expensive KB search. v1 blocks

@@ -1,36 +1,40 @@
 import { Component, ChangeDetectionStrategy, inject, signal } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark } from '@ng-icons/heroicons/outline';
+import { heroXMark, heroNoSymbol } from '@ng-icons/heroicons/outline';
 import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
 
-export interface RequestChangesDialogData {
-  /**
-   * Just the two fields the copy names.
-   *
-   * Narrowed from the full `AdminListingRow` when the submission review page arrived: that
-   * page holds an `AdminSubmissionReview`, not a queue row, and both surfaces send the same
-   * decision. Widening the type to a union would have been the other option and is worse —
-   * the dialog would then know about two shapes to render one sentence.
-   */
-  listing: { name: string; ownerName: string };
+export interface DeclineSubmissionDialogData {
+  /** Just enough to word the copy — the queue row and the review page both supply it. */
+  name: string;
+  ownerName: string;
 }
 
 /** The reason, or undefined if cancelled. */
-export type RequestChangesDialogResult = string | undefined;
+export type DeclineSubmissionDialogResult = string | undefined;
 
 /**
- * Returns a submission to its author with a reason.
+ * Declines a submission for the store, with a reason.
  *
- * The reason is required, not optional: it renders on the author's own card, which is the
- * whole point — the author never has to ask what happened. (The design mockup decided
- * without one; the spec requires it, so this dialog exists.)
+ * **The third decision, and the one the queue was missing.** Approve and request-changes
+ * were the only exits, so an admin who judged a submission not a fit had to publish it or
+ * say "fix this" — which promises a review they do not intend to give, leaves the author
+ * revising toward an approval that is not coming, and puts the same submission back in the
+ * queue every round.
+ *
+ * ⚠️ Deliberately **not** worded as a permanent block, because it is not one: the author
+ * may revise and submit again (`rejected → in_review`). Making it terminal would need an
+ * appeal path and an admin escape hatch, and none of that is worth building before someone
+ * needs it. What this buys now is an honest "no" the author can read and answer.
+ *
+ * The reason is required for the same reason it is on request-changes: it renders on the
+ * author's own card, and a decline with no reason is the one outcome they cannot act on.
  */
 @Component({
-  selector: 'app-request-changes-dialog',
+  selector: 'app-decline-submission-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DialogDismissDirective, NgIcon],
-  providers: [provideIcons({ heroXMark })],
+  providers: [provideIcons({ heroXMark, heroNoSymbol })],
   host: {
     class: 'block',
     '(keydown.escape)': 'onCancel()',
@@ -48,18 +52,18 @@ export type RequestChangesDialogResult = string | undefined;
         class="dialog-panel relative w-full overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="request-changes-title"
-        aria-describedby="request-changes-description"
+        aria-labelledby="decline-submission-title"
+        aria-describedby="decline-submission-description"
       >
         <div class="flex items-start justify-between gap-3 px-6 pt-5">
           <div class="min-w-0">
-            <h2 id="request-changes-title" class="text-lg/7 font-semibold text-gray-900 dark:text-white">
-              Request changes
+            <h2 id="decline-submission-title" class="text-lg/7 font-semibold text-gray-900 dark:text-white">
+              Decline this submission
             </h2>
-            <p id="request-changes-description" class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-              Returns <span class="font-medium">{{ data.listing.name }}</span> to
-              {{ data.listing.ownerName }}. Your note appears on their card, so they can
-              act on it without asking.
+            <p id="decline-submission-description" class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+              <span class="font-medium">{{ data.name }}</span> will not go into the store, and
+              {{ data.ownerName }} sees your reason on their card. Nothing is deleted —
+              they can revise and submit again.
             </p>
           </div>
           <button
@@ -73,11 +77,17 @@ export type RequestChangesDialogResult = string | undefined;
         </div>
 
         <div class="px-6 py-4">
-          <label for="change-reason" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
-            What needs to change?
+          <label for="decline-reason" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+            Why is this not a fit?
           </label>
+          <!-- The copy steers away from "fix X" on purpose. An admin who writes a to-do
+               list here has picked the wrong control, and the author will read it as one. -->
+          <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+            If the answer is "it needs work", use Request changes instead — that says you
+            want it once it is fixed.
+          </p>
           <textarea
-            id="change-reason"
+            id="decline-reason"
             rows="4"
             [value]="reason()"
             (input)="onReasonInput($event)"
@@ -98,18 +108,19 @@ export type RequestChangesDialogResult = string | undefined;
             type="button"
             [disabled]="!reason().trim()"
             (click)="onSubmit()"
-            class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex items-center gap-1.5 rounded-2xl bg-rose-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-rose-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Send to author
+            <ng-icon name="heroNoSymbol" class="size-4" aria-hidden="true" />
+            Decline
           </button>
         </div>
       </div>
     </div>
   `,
 })
-export class RequestChangesDialogComponent {
-  private dialogRef = inject<DialogRef<RequestChangesDialogResult>>(DialogRef);
-  readonly data = inject<RequestChangesDialogData>(DIALOG_DATA);
+export class DeclineSubmissionDialogComponent {
+  private dialogRef = inject<DialogRef<DeclineSubmissionDialogResult>>(DialogRef);
+  readonly data = inject<DeclineSubmissionDialogData>(DIALOG_DATA);
 
   readonly reason = signal('');
 

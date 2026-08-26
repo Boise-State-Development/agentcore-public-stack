@@ -29,6 +29,15 @@ export type ListingState =
   | 'changes_requested'
   | 'taken_down'
   /**
+   * An admin declined the submission for the store, with a reason (D2).
+   *
+   * ⚠️ Not a harsher `changes_requested`, and not a permanent block. The difference is what
+   * the author is told — "this isn't a fit, here's why" rather than "fix X and I'll approve"
+   * — and what the admin is committing to. The author may still revise and submit again;
+   * approval remains the only edge that publishes.
+   */
+  | 'rejected'
+  /**
    * The author has asked to pull a live listing and an admin has not yet decided (§5.1).
    *
    * ⚠️ Still **live in the store**. Dropping it off the shelf the moment the author asked
@@ -53,6 +62,7 @@ export const LISTING_STATE_LABELS: Record<ListingState, string> = {
   changes_requested: 'Changes requested',
   taken_down: 'Taken down',
   withdrawal_requested: 'Withdrawal requested',
+  rejected: 'Declined',
 };
 
 /**
@@ -68,6 +78,9 @@ export const LISTING_STATE_CLASSES: Record<ListingState, string> = {
   // Amber like in_review, not rose: this is work waiting on an admin, not a problem with
   // the listing — and it is still published while it waits.
   withdrawal_requested: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+  // Rose like changes_requested: from the author's side both are "an admin said no for
+  // now, and left a reason". The reason text is what distinguishes them, not the colour.
+  rejected: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
 };
 
 /**
