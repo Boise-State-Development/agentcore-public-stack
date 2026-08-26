@@ -79,8 +79,22 @@ KB_TEARDOWN_MAX="${KB_TEARDOWN_MAX:-500}"
 
 AWS_REGION_ARG="${CDK_AWS_REGION}"
 ACCOUNT_ID="${CDK_AWS_ACCOUNT}"
-PREFIX="${CDK_PROJECT_PREFIX}"
-ENVIRONMENT="${CDK_ENVIRONMENT:-${ENVIRONMENT:-dev}}"
+
+# ⚠️ The tag scope MUST come from the same variables the provisioning code reads,
+# with the same fallback order — see `backend/src/apis/shared/kb_backend/tags.py`.
+#
+# This script previously read `CDK_PROJECT_PREFIX` and `CDK_ENVIRONMENT` and
+# matched on tag keys `prefix`/`env`, while the code that *writes* the tags used
+# different keys and different variables. The result was a teardown that matched
+# nothing and reported success, leaving every knowledge base billing.
+#
+# `tests/supply_chain/test_kb_tag_contract.py` parses this file and fails if these
+# names drift from the Python constants.
+TAG_KEY_PREFIX="ManagedKbPrefix"
+TAG_KEY_ENVIRONMENT="ManagedKbEnvironment"
+
+PREFIX="${MANAGED_KB_TAG_VALUE_PREFIX:-${PROJECT_PREFIX:-${CDK_PROJECT_PREFIX:-agentcore}}}"
+ENVIRONMENT="${MANAGED_KB_TAG_VALUE_ENVIRONMENT:-${ENVIRONMENT:-${CDK_ENVIRONMENT:-dev}}}"
 
 kb_arn() {
     echo "arn:aws:bedrock:${AWS_REGION_ARG}:${ACCOUNT_ID}:knowledge-base/$1"
@@ -143,10 +157,16 @@ is_ours() {
         return 1
     fi
 
-    echo "${tags}" | PREFIX="${PREFIX}" ENVIRONMENT="${ENVIRONMENT}" python3 -c '
+    echo "${tags}" | \
+        TAG_KEY_PREFIX="${TAG_KEY_PREFIX}" \
+        TAG_KEY_ENVIRONMENT="${TAG_KEY_ENVIRONMENT}" \
+        PREFIX="${PREFIX}" ENVIRONMENT="${ENVIRONMENT}" python3 -c '
 import json, os, sys
 tags = (json.load(sys.stdin) or {}).get("tags") or {}
-ok = tags.get("prefix") == os.environ["PREFIX"] and tags.get("env") == os.environ["ENVIRONMENT"]
+ok = (
+    tags.get(os.environ["TAG_KEY_PREFIX"]) == os.environ["PREFIX"]
+    and tags.get(os.environ["TAG_KEY_ENVIRONMENT"]) == os.environ["ENVIRONMENT"]
+)
 sys.exit(0 if ok else 1)
 '
 }

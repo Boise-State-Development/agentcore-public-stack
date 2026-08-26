@@ -589,8 +589,7 @@ describe('loadConfig — managedKb flag resolution (Requirements 19.5, 19.8)', (
 // 2.4 — tagging
 // ============================================================
 
-describe('Managed_KB tagging contract (task 2.4)', () => {
-  let t: Template;
+describe('Managed_KB tagging contract (task 2.4)', () => {  let t: Template;
   beforeAll(() => {
     t = synth();
   });
@@ -629,6 +628,24 @@ describe('Managed_KB tagging contract (task 2.4)', () => {
     const e = env(lambdaFor(t, HANDLERS.worker));
     expect(e.MANAGED_KB_TAG_VALUE_PREFIX).toBe('test-project');
     expect(e.MANAGED_KB_TAG_VALUE_ENVIRONMENT).toBe('test');
+  });
+
+  it('ships the tag VALUES to every function, not only the one that writes them', () => {
+    // The worker writes the tags; the RECONCILER filters on them, and teardown
+    // reads the same variables. A value shipped only to the writer is the shape
+    // of the defect that motivated `kb_backend/tags.py`: the provisioning code
+    // read variables it was never given, fell back to a hardcoded default, and
+    // the reader agreed with it only because it used the same default. The
+    // symptom was a teardown that matched nothing and reported success.
+    for (const p of migrationLambdas(t)) {
+      const e = env(p);
+      expect(e.MANAGED_KB_TAG_VALUE_PREFIX).toBe('test-project');
+      expect(e.MANAGED_KB_TAG_VALUE_ENVIRONMENT).toBe('test');
+      // Non-empty is the property that matters: an empty prefix or environment
+      // widens the Reconciler's and teardown's scope to the whole account.
+      expect(e.MANAGED_KB_TAG_VALUE_PREFIX).not.toBe('');
+      expect(e.MANAGED_KB_TAG_VALUE_ENVIRONMENT).not.toBe('');
+    }
   });
 
   it('resolves a non-empty environment tag value even with no Environment tag configured', () => {

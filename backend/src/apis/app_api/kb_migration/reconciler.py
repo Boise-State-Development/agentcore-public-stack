@@ -772,9 +772,12 @@ def _delete_orphan(facts, client) -> None:
     never removes one.
     """
     from apis.shared.kb_backend import tombstones as tb
+    from apis.shared.kb_backend.tags import TAG_KEY_APP_KB_ID
 
     tags = facts.tags or {}
-    tagged = tags.get("appKbId")
+    # The AWS tag, whose key is owned by `kb_backend.tags` — not the KB_Record
+    # attribute, which is separately named `appKbId` and stays that way.
+    tagged = tags.get(TAG_KEY_APP_KB_ID)
     anchor = tagged or facts.kb_id
     tb.delete_knowledge_base(
         anchor,
@@ -784,7 +787,7 @@ def _delete_orphan(facts, client) -> None:
         remove_record=False,
         extra_attributes={
             tb.SYNTHETIC_PARTITION: True,
-            "anchorSource": "tag:appKbId" if tagged else "aws:knowledgeBaseId",
+            "anchorSource": f"tag:{TAG_KEY_APP_KB_ID}" if tagged else "aws:knowledgeBaseId",
             "orphanKbName": facts.name or None,
         },
     )

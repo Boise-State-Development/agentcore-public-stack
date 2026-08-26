@@ -35,6 +35,8 @@ from pathlib import Path
 
 import pytest
 
+from apis.shared.kb_backend import tags as kb_tags
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TEARDOWN_DIR = REPO_ROOT / "scripts" / "teardown"
 KB_SCRIPT = TEARDOWN_DIR / "managed-kb.sh"
@@ -121,7 +123,13 @@ def _kb(kb_id: str, status: str = "ACTIVE"):
 
 
 def _ours():
-    return {"prefix": PREFIX, "env": ENVIRONMENT, "appKbId": "ast-1", "ownerUserId": "u-1"}
+    """Built through the canonical helper rather than spelled out.
+
+    A fixture that hardcodes tag keys keeps passing after the keys change under
+    it — which is exactly how the writer, the reconciler, the construct and this
+    script came to disagree three ways.
+    """
+    return kb_tags.build_tags("ast-1", "u-1", PREFIX, ENVIRONMENT)
 
 
 @pytest.fixture
@@ -159,8 +167,8 @@ def run_teardown(tmp_path):
             # would have exported.
             "CDK_AWS_REGION": REGION,
             "CDK_AWS_ACCOUNT": ACCOUNT,
-            "CDK_PROJECT_PREFIX": PREFIX,
-            "CDK_ENVIRONMENT": ENVIRONMENT,
+            kb_tags.ENV_TAG_VALUE_PREFIX: PREFIX,
+            kb_tags.ENV_TAG_VALUE_ENVIRONMENT: ENVIRONMENT,
             # Fast but never zero. An interval of 0 made the script's elapsed
             # counter stop advancing, so its timeout was never reached and the
             # loop span at full CPU issuing an `aws` call per iteration — this
@@ -229,8 +237,8 @@ class TestOnlyTaggedResourcesAreDeleted:
         ]
         tags = {
             "KB-OURS": _ours(),
-            "KB-OTHERENV": {"prefix": PREFIX, "env": "prod"},
-            "KB-OTHERPROJ": {"prefix": "someone-else", "env": ENVIRONMENT},
+            "KB-OTHERENV": kb_tags.build_tags("ast-2", "u-2", PREFIX, "prod"),
+            "KB-OTHERPROJ": kb_tags.build_tags("ast-3", "u-3", "someone-else", ENVIRONMENT),
             "KB-UNTAGGED": {},
         }
 
@@ -244,7 +252,7 @@ class TestOnlyTaggedResourcesAreDeleted:
         project prefix but another environment's tag belongs to that
         environment, and its name looks exactly like ours."""
         views = [[_kb("KB-PROD")], [_kb("KB-PROD")]]
-        tags = {"KB-PROD": {"prefix": PREFIX, "env": "prod"}}
+        tags = {"KB-PROD": kb_tags.build_tags("ast-p", "u-p", PREFIX, "prod")}
 
         result, calls = run_teardown(views, tags)
 

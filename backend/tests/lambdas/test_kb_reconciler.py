@@ -35,6 +35,7 @@ from moto import mock_aws
 
 from apis.app_api.kb_migration import reconciler as rec
 from apis.shared.kb_backend import tombstones as tomb
+from apis.shared.kb_backend import tags as kb_tags
 from tests.shared.test_kb_tombstones import FakeBedrockAgent
 
 REGION = "us-east-1"
@@ -51,8 +52,8 @@ def table(monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
     monkeypatch.setenv("DYNAMODB_ASSISTANTS_TABLE_NAME", TABLE)
-    monkeypatch.setenv("PROJECT_PREFIX", PREFIX)
-    monkeypatch.setenv("ENVIRONMENT", ENV)
+    monkeypatch.setenv(kb_tags.ENV_TAG_VALUE_PREFIX, PREFIX)
+    monkeypatch.setenv(kb_tags.ENV_TAG_VALUE_ENVIRONMENT, ENV)
     # Never inherited from the developer's shell: the whole point of the flag is
     # that the reconciler is disarmed unless something says otherwise.
     monkeypatch.delenv(rec.FLAG_RECONCILER_ARMED, raising=False)
@@ -107,12 +108,10 @@ def _aws_kb(kb_id, created_at, status="ACTIVE", app_kb_id=None):
 
 def _ours(kb_id, app_kb_id):
     return {
-        _arn(kb_id): {
-            "prefix": PREFIX,
-            "env": ENV,
-            "appKbId": app_kb_id,
-            "ownerUserId": "u-1",
-        }
+        # Built through the canonical helper, not spelled out: a fixture that
+        # hardcodes tag keys is a fixture that keeps passing after the keys change
+        # under it, which is how the three-way drift stayed invisible.
+        _arn(kb_id): kb_tags.build_tags(app_kb_id, "u-1", PREFIX, ENV)
     }
 
 
@@ -288,7 +287,7 @@ class TestReportOnlyDeletesNothing:
         )
         # And it says which identifier the partition was derived from, which is the
         # first thing an operator needs in order to go find the resource.
-        assert seen.get("anchorSource") == "tag:appKbId"
+        assert seen.get("anchorSource") == f"tag:{kb_tags.TAG_KEY_APP_KB_ID}"
         assert seen.get("awsKbId") == "KBORPH1"
 
     def test_a_tombstone_for_a_real_record_is_not_marked_synthetic(self, table):
@@ -662,7 +661,7 @@ class TestJoinIsPaginatedAndTagFiltered:
             ],
             tags={
                 **_ours("KBMINE", "ast-mine"),
-                _arn("KBTHEIRS"): {"prefix": "other-project", "env": "prod"},
+                _arn("KBTHEIRS"): kb_tags.build_tags("ast-theirs", "u-2", "other-project", "prod"),
             },
         )
 

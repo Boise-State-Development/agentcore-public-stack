@@ -428,20 +428,28 @@ def remove_kb_record(assistant_id: str, app_kb_id: str, confirmed_absent: bool) 
 
 
 # ── AWS listing, tag-filtered and paginated (Requirement 14.1) ───────────────
+#
+# The tag contract itself lives in ``kb_backend.tags``. These two functions are
+# thin re-exports kept for their existing callers.
+#
+# ⚠️ They used to be hand-written *mirrors* of ``provisioning.build_tags``,
+# documented as such — and they had drifted: different key names
+# (``prefix``/``env`` against the construct's ``ManagedKbPrefix``/
+# ``ManagedKbEnvironment``) and values read from environment variables the
+# provisioning Lambda is never given. A mirror is a second implementation, and the
+# only thing keeping two implementations equal is that nobody has edited one yet.
 def project_tag_filter(
     project_prefix: Optional[str] = None,
     environment: Optional[str] = None,
 ) -> Dict[str, str]:
     """The tags that identify this platform's knowledge bases.
 
-    Mirrors ``provisioning.build_tags``, which writes them. Only ``prefix`` and
-    ``env`` are matched: ``appKbId`` and ``ownerUserId`` vary per resource and are
-    identity, not scope.
+    Only the two scope keys are matched: the app id and owner id vary per resource
+    and are identity, not scope.
     """
-    return {
-        "prefix": project_prefix or os.environ.get("PROJECT_PREFIX", "agentcore"),
-        "env": environment or os.environ.get("ENVIRONMENT", "dev"),
-    }
+    from apis.shared.kb_backend.tags import project_tag_filter as _canonical
+
+    return _canonical(project_prefix, environment)
 
 
 def matches_project_tags(tags: Optional[Mapping[str, str]], expected: Mapping[str, str]) -> bool:
@@ -454,7 +462,7 @@ def matches_project_tags(tags: Optional[Mapping[str, str]], expected: Mapping[st
     """
     if not tags:
         return False
-    return all(tags.get(key) == value for key, value in expected.items())
+    return all(str(tags.get(key, "")) == value for key, value in expected.items())
 
 
 def iter_knowledge_base_summaries(client, page_size: Optional[int] = None) -> Iterator[Dict[str, Any]]:

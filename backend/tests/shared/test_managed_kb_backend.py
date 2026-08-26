@@ -35,6 +35,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
+from apis.shared.kb_backend import tags as kb_tags
 from apis.shared.kb_backend import managed_backend as mb
 from apis.shared.kb_backend import provisioning as p
 from apis.shared.kb_backend import records as r
@@ -209,8 +210,8 @@ def table(monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
     monkeypatch.setenv("DYNAMODB_ASSISTANTS_TABLE_NAME", TABLE)
-    monkeypatch.setenv("PROJECT_PREFIX", "test-prefix")
-    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setenv(kb_tags.ENV_TAG_VALUE_PREFIX, "test-prefix")
+    monkeypatch.setenv(kb_tags.ENV_TAG_VALUE_ENVIRONMENT, "test")
 
     with mock_aws():
         ddb = boto3.client("dynamodb", region_name=REGION)
@@ -449,13 +450,30 @@ class TestDataSourcePayload:
 
 
 class TestTags:
+    def test_the_resource_name_uses_the_same_prefix_as_the_tags(self, monkeypatch):
+        """A name that says one deployment while the tag says another is the kind
+        of thing an operator reads once and trusts.
+
+        Every filter in this feature matches on tags, so the name is only a
+        convention — but it is resolved through the same helper precisely so the
+        two cannot disagree. Asserted because the docstring claims it.
+        """
+        monkeypatch.setenv(kb_tags.ENV_TAG_VALUE_PREFIX, "from-tag-var")
+        monkeypatch.delenv("PROJECT_PREFIX", raising=False)
+
+        name = p._resource_name("ast-1")
+        tags = p.build_tags("ast-1", "u-1")
+
+        assert name.startswith(f"{tags[kb_tags.TAG_KEY_PREFIX]}-kb-")
+        assert name == "from-tag-var-kb-ast-1"
+
     def test_tags_carry_prefix_env_kb_and_owner(self):
         tags = p.build_tags(APP_KB_ID, OWNER, project_prefix="pfx", environment="dev")
         assert tags == {
-            "prefix": "pfx",
-            "env": "dev",
-            "appKbId": APP_KB_ID,
-            "ownerUserId": OWNER,
+            kb_tags.TAG_KEY_PREFIX: "pfx",
+            kb_tags.TAG_KEY_ENVIRONMENT: "dev",
+            kb_tags.TAG_KEY_APP_KB_ID: APP_KB_ID,
+            kb_tags.TAG_KEY_OWNER_USER_ID: OWNER,
         }
 
     def test_an_email_owner_tag_is_refused(self):
@@ -520,8 +538,8 @@ class TestProvisioningSaga:
         client = FakeBedrockAgent()
         await _provision(client)
         tags = client.create_kb_calls[0]["tags"]
-        assert tags["appKbId"] == APP_KB_ID
-        assert tags["ownerUserId"] == OWNER
+        assert tags[kb_tags.TAG_KEY_APP_KB_ID] == APP_KB_ID
+        assert tags[kb_tags.TAG_KEY_OWNER_USER_ID] == OWNER
 
     @pytest.mark.asyncio
     async def test_a_second_call_creates_nothing(self, table):

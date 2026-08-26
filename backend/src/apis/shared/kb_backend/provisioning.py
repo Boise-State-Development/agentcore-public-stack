@@ -267,27 +267,20 @@ def build_tags(
 ) -> Dict[str, str]:
     """Tags the Reconciler and the teardown script both read (Requirement 20.11).
 
-    Not housekeeping: a tag-filtered ``ListKnowledgeBases`` is how the Reconciler
-    tells this platform's knowledge bases from everything else in the account, and
-    how teardown scopes itself. An untagged knowledge base is invisible to both,
-    which means it is never reclaimed and never deleted.
+    Delegates to :mod:`apis.shared.kb_backend.tags`, which owns the key names and
+    the value resolution. Kept as a thin wrapper because the provisioning saga is
+    the only caller and this is where a reader looks for it.
 
-    The owner tag must be opaque (Requirement 20.12). An email address here would
-    put PII in a field that is world-readable to anyone with
-    ``bedrock:ListKnowledgeBases``, so an address-shaped value is rejected rather
-    than trimmed — silently dropping it would hide the caller's mistake.
+    ⚠️ This function used to build the tags itself, with keys ``prefix``/``env``
+    and values from ``PROJECT_PREFIX``/``ENVIRONMENT`` — neither of which the
+    provisioning Lambda receives. Every knowledge base would have been tagged with
+    the hardcoded defaults, the teardown script (which read a different pair of
+    variables) would have matched nothing, and two environments in one account
+    would have claimed each other's corpora. See the ``tags`` module docstring.
     """
-    if "@" in owner_user_id:
-        raise ValueError(
-            "ownerUserId tag must be an opaque identifier, never an email address "
-            "or other personally identifying value (Requirement 20.12)"
-        )
-    return {
-        "prefix": project_prefix or os.environ.get("PROJECT_PREFIX", "agentcore"),
-        "env": environment or os.environ.get("ENVIRONMENT", "dev"),
-        "appKbId": app_kb_id,
-        "ownerUserId": owner_user_id,
-    }
+    from apis.shared.kb_backend.tags import build_tags as _canonical
+
+    return _canonical(app_kb_id, owner_user_id, project_prefix, environment)
 
 
 def knowledge_base_payload(
@@ -459,8 +452,17 @@ def _complete(item: Mapping[str, Any]) -> bool:
 
 
 def _resource_name(app_kb_id: str, project_prefix: Optional[str] = None) -> str:
-    prefix = project_prefix or os.environ.get("PROJECT_PREFIX", "agentcore")
-    return f"{prefix}-kb-{app_kb_id}"
+    """The knowledge base's AWS name.
+
+    Resolved through the same helper as the tags, so a knowledge base's name and
+    its ``ManagedKbPrefix`` tag can never disagree. The name is only a convention —
+    every filter in this feature matches on tags — but a name that says ``prod``
+    while the tag says ``dev`` is the kind of thing an operator reads once and
+    trusts.
+    """
+    from apis.shared.kb_backend.tags import tag_prefix
+
+    return f"{tag_prefix(project_prefix)}-kb-{app_kb_id}"
 
 
 async def provision_managed_kb(

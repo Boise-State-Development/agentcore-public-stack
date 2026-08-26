@@ -33,6 +33,7 @@ import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
 
+from apis.shared.kb_backend import tags as kb_tags
 from apis.shared.kb_backend import tombstones as tomb
 
 REGION = "us-east-1"
@@ -43,7 +44,7 @@ AWS_KB_ID = "KBAAAA1111"
 AWS_DS_ID = "DSAAAA1111"
 DOCUMENT_ID = "doc-tomb01"
 ARN = f"arn:aws:bedrock:{REGION}:123456789012:knowledge-base/{AWS_KB_ID}"
-PROJECT_TAGS = {"prefix": "testprefix", "env": "testenv", "appKbId": APP_KB_ID}
+PROJECT_TAGS = kb_tags.build_tags(APP_KB_ID, "u-1", "testprefix", "testenv")
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -54,8 +55,8 @@ def table(monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
     monkeypatch.setenv("DYNAMODB_ASSISTANTS_TABLE_NAME", TABLE)
-    monkeypatch.setenv("PROJECT_PREFIX", "testprefix")
-    monkeypatch.setenv("ENVIRONMENT", "testenv")
+    monkeypatch.setenv(kb_tags.ENV_TAG_VALUE_PREFIX, "testprefix")
+    monkeypatch.setenv(kb_tags.ENV_TAG_VALUE_ENVIRONMENT, "testenv")
 
     with mock_aws():
         boto3.client("dynamodb", region_name=REGION).create_table(
@@ -598,7 +599,7 @@ class TestServiceRoleGuard:
         """The guard is scoped by tag, like everything else here."""
         client = FakeBedrockAgent(
             knowledge_bases=[_kb(role_arn="arn:aws:iam::1:role/kb")],
-            tags={ARN: {"prefix": "someone-else", "env": "prod"}},
+            tags={ARN: kb_tags.build_tags("ast-x", "u-9", "someone-else", "prod")},
         )
 
         tomb.assert_service_role_deletable(client, "arn:aws:iam::1:role/kb")
@@ -621,7 +622,7 @@ class TestListingIsPaginatedAndTagFiltered:
             knowledge_bases=[mine, theirs, untagged],
             tags={
                 mine["knowledgeBaseArn"]: PROJECT_TAGS,
-                theirs["knowledgeBaseArn"]: {"prefix": "other", "env": "testenv"},
+                theirs["knowledgeBaseArn"]: kb_tags.build_tags("ast-y", "u-9", "other", "testenv"),
             },
         )
 
@@ -641,10 +642,10 @@ class TestListingIsPaginatedAndTagFiltered:
         assert found[0].created_at == created
 
     def test_untagged_never_matches(self):
-        assert tomb.matches_project_tags(None, {"prefix": "p"}) is False
-        assert tomb.matches_project_tags({}, {"prefix": "p"}) is False
-        assert tomb.matches_project_tags({"prefix": "p"}, {"prefix": "p"}) is True
-        assert tomb.matches_project_tags({"prefix": "q"}, {"prefix": "p"}) is False
+        assert tomb.matches_project_tags(None, {kb_tags.TAG_KEY_PREFIX: "p"}) is False
+        assert tomb.matches_project_tags({}, {kb_tags.TAG_KEY_PREFIX: "p"}) is False
+        assert tomb.matches_project_tags({kb_tags.TAG_KEY_PREFIX: "p"}, {kb_tags.TAG_KEY_PREFIX: "p"}) is True
+        assert tomb.matches_project_tags({kb_tags.TAG_KEY_PREFIX: "q"}, {kb_tags.TAG_KEY_PREFIX: "p"}) is False
 
     def test_a_knowledge_base_that_vanishes_between_list_and_describe_is_skipped(self, table):
         client = FakeBedrockAgent(knowledge_bases=[_kb()], tags={ARN: PROJECT_TAGS})
