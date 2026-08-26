@@ -150,6 +150,15 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./marketplace/pages/review-queue.page').then(m => m.ReviewQueuePage),
   },
   {
+    // One submission in full — instructions, capabilities, model, and a test drive.
+    // Declared after the literal `marketplace/review` path so it is not captured by it.
+    path: 'marketplace/review/:agentId',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.marketplace' } satisfies AdminScopeRouteData,
+    loadComponent: () =>
+      import('./marketplace/pages/submission-review.page').then(m => m.SubmissionReviewPage),
+  },
+  {
     path: 'marketplace/reports',
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.marketplace' } satisfies AdminScopeRouteData,

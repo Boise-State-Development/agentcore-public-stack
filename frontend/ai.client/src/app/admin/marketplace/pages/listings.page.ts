@@ -271,10 +271,14 @@ export class MarketplaceListingsPage implements OnInit {
   readonly busyId = signal<string | null>(null);
   readonly stateFilter = signal<'' | ListingState>('');
 
+  // The filter chips. `withdrawal_requested` is deliberately absent — those live in the
+  // review queue, not here. `rejected` is present: a declined submission is a listing with
+  // a history, and the Listings table is the only place to find one again.
   readonly states: ListingState[] = [
     'in_review',
     'published',
     'changes_requested',
+    'rejected',
     'taken_down',
     'private',
   ];
