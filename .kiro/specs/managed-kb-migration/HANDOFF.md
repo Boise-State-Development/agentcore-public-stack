@@ -1,6 +1,6 @@
 # Managed KB Migration — Handoff
 
-**Last updated:** 2026-08-26 (groups 11–13, group 14 backend half) · **Branch:** `feature/kb-migration` · **Nothing deployed**
+**Last updated:** 2026-08-26 (groups 11–13, group 14 backend half, tag contract) · **Branch:** `feature/kb-migration` · **Nothing deployed**
 
 Working state for this feature so a fresh session can pick it up without re-deriving
 anything. Read this, then `tasks.md`.
@@ -13,13 +13,15 @@ anything. Read this, then `tasks.md`.
 |---|---|
 | Spec | Complete, audited 3× to clean. 25 requirements, 201 criteria, 0 dangling refs |
 | Implementation | Groups **1–13** done, plus group 14's backend/infra half. 6 subtasks left: 14.3–14.5 (frontend) and group 15 |
-| Tests | **616** infra (jest) · **6,511** backend (pytest) · 5 pre-existing unrelated failures |
+| Tests | **617** infra (jest) · **6,530** backend (pytest) · 5 pre-existing unrelated failures |
 | Deployed | **Nothing.** No `cdk deploy`, no AWS mutation, at any point |
 | Feature flags | All three ship **off** |
 
-### Commits (14 on the branch)
+### Commits (16 on the branch)
 
 ```
+45239838  one source of truth for the managed KB tag contract
+4acaa8f2  handoff reflects group 14 backend half and three more defects
 e59f771c  register the managed backend, fleet metrics, tagged teardown  (group 14 backend)
 d5e56f31  handoff reflects group 13 and four more defects
 ee091971  migration dispatcher and the shadow/verify/promote/retain worker (group 13)
@@ -245,6 +247,24 @@ saying why that number is a property of AWS rather than a knob.
 
 ---
 
+20. **The tag contract had drifted three ways (post-group-14).** The Python wrote
+    keys `prefix`/`env` from variables the provisioning Lambda never receives; the
+    reconciler's filter was a documented *mirror* of that writer; the construct
+    declared different key names and exported the correct values as env vars
+    **nothing read**; and the teardown script read a third pair. Writer and
+    reconciler agreed only because both fell back to the same hardcoded defaults,
+    so the sole symptom was a teardown that matched nothing and reported success.
+    Now `kb_backend/tags.py` owns the keys and one fallback chain, and
+    `tests/supply_chain/test_kb_tag_contract.py` parses the TypeScript and the
+    shell script to assert agreement across all three languages.
+
+    ⚠️ **Tag keys are namespaced** (`ManagedKbPrefix`, not `prefix`) because many
+    accounts carry an org-wide cost-allocation tag literally called `env`. Note the
+    KB_Record *attribute* `appKbId` is a different thing from the AWS *tag*
+    `ManagedKbAppKbId`; only the latter belongs to this contract.
+
+---
+
 ## 6. Remaining work
 
 | Group | Subtasks | Notes |
@@ -287,6 +307,7 @@ backend/src/apis/shared/kb_backend/
   resource_policy.py   IAM-enforced sharing; staleness is state, not an event
   dual_read.py         pilot: start early, detach, compare, serve legacy
   idleness.py          activity = max(retrieval, bound agents' use)
+  tags.py              THE tag contract — keys + value resolution, one place
   query_guard.py       10,000-char clamp
   metrics.py           namespace + best-effort emit_count / emit_value
 
