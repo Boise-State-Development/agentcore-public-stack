@@ -599,7 +599,23 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - _Requirements: 1.6, 24.8_
 
 - [ ] 14. Surfaces, observability, and teardown
-  - [ ] 14.1 Emit EMF metrics
+  - [x] 14.0 Register the managed backend in the resolver
+    - **Spec gap, found during implementation.** `register_backend` was defined in
+      task 4.2 and called by nothing; task 8.3's note that it would register the
+      managed backend was never carried out, and no other task picked it up. Every
+      group could therefore have been completed with the feature unreachable: a
+      promoted record raises `BackendUnavailable`, which is a correct fail-safe and
+      a useless signal — visible only to the single migrated user.
+    - Registered at **import** rather than by a startup call, so there is no
+      sequence to remember and no service that can come up half-configured. Free
+      because both adapters' module bodies are stdlib-only and their clients are
+      lazy, which `test_kb_backend_boundary.py` now asserts for `managed_backend`
+      too.
+    - Does **not** make the feature live: nothing resolves to managed until a
+      record says so, and only a promotion writes that.
+    - _Requirements: 1.4, 2.5_
+
+  - [x] 14.1 Emit EMF metrics
     - Alongside the existing PromptCache metrics: `KbCount`, `KbStorageGB`,
       `KbIdleGB`, `KbOrphansFound`, `KbQueryClamped`,
       `KbStatusFilterFailClosed`, and
@@ -615,7 +631,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       `${prefix}/ManagedKb` (Req 20.10), never into an `AWS/...` namespace
     - _Requirements: 22.1, 22.2, 22.5, 22.6, 22.8, 20.13_
 
-  - [ ] 14.2 Document cost attribution
+  - [x] 14.2 Document cost attribution
     - Record that Managed KB bills under `AmazonBedrockAgentCore` and that queries
       must filter on `usagetype` — keying on `AmazonBedrock` misses it entirely, and
       keying on service code alone blends it into the AgentCore Runtime memory line
@@ -645,7 +661,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       bulk migrate, and per-knowledge-base retry
     - _Requirements: 23.9_
 
-  - [ ] 14.6 Extend teardown for runtime-created resources
+  - [x] 14.6 Extend teardown for runtime-created resources
     - In `scripts/teardown/destroy.sh`, list and delete only knowledge bases tagged
       for the project and environment, **before** deleting their service role and
       the platform stack
@@ -653,7 +669,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       "resource gone"
     - _Requirements: 20.8, 13.4, 13.5_
 
-  - [ ] 14.7 Write teardown test
+  - [x] 14.7 Write teardown test
     - Only tagged resources are deleted, and the service role is deleted only after
       all its knowledge bases are confirmed absent
     - _Requirements: 24.9_

@@ -51,6 +51,7 @@ import boto3
 
 from apis.shared.assistants.kb_access import KbAccess
 from apis.shared.kb_backend.dual_read import schedule_observation, start_managed_read
+from apis.shared.kb_backend.idleness import schedule_activity_touch
 from apis.shared.kb_backend.metrics import (
     METRIC_ACCESS_DENIED,
     METRIC_STATUS_FILTER_FAIL_CLOSED,
@@ -159,6 +160,18 @@ async def search_assistant_knowledgebase_with_formatting(
         # the other engine's answer (Requirement 18.2).
         schedule_observation(assistant_id, query, top_k, list(chunks), legacy_ms, managed_task)
         managed_task = None
+
+        # Record that this knowledge base was needed (Requirement 22.5), for the
+        # idleness signal the follow-up spec's eviction threshold has to be chosen
+        # from — data that cannot be backfilled later.
+        #
+        # Only for knowledge bases that have a record. A legacy knowledge base has
+        # none, and creating one here would break the migration's zero-backfill
+        # property across 1,692 existing rows for the sake of a metric. Detached and
+        # throttled, so retrieval waits for neither the write nor its rejection
+        # (Requirement 22.6).
+        if record:
+            schedule_activity_touch(assistant_id, assistant_id)
 
         if not chunks:
             logger.info(f"No vectors found for assistant {assistant_id} with query: {query[:50]}...")

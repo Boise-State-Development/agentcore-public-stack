@@ -201,6 +201,32 @@ export function grantManagedKbResourcePolicyAdmin(config: AppConfig, role: iam.I
   role.addToPrincipalPolicy(putMetricDataStatement(config, 'ManagedKbResourcePolicyMetrics'));
 }
 
+/**
+ * Read grant for Bedrock's OWN per-knowledge-base metrics
+ * (Requirement 20.13).
+ *
+ * The other direction from `putMetricDataStatement`, and the two are
+ * easy to conflate — doing so once produced a `PutMetricData` grant
+ * scoped to `AWS/Bedrock/KnowledgeBases`, which would have deployed
+ * cleanly and published nothing forever. `Invocations` per knowledge
+ * base is a cheaper idleness signal than anything we can compute
+ * ourselves, and it lives in Bedrock's reserved namespace, so it is
+ * *read* here and never written.
+ *
+ * No namespace condition, because there is nothing to condition on:
+ * `GetMetricData` and `GetMetricStatistics` have no resource-level
+ * permissions and no namespace condition key. The scope available is
+ * the action itself, which is read-only.
+ */
+export function grantManagedKbMetricsRead(config: AppConfig, role: iam.IRole): void {
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbBedrockMetricsRead',
+    effect: iam.Effect.ALLOW,
+    actions: ['cloudwatch:GetMetricData', 'cloudwatch:GetMetricStatistics'],
+    resources: ['*'],
+  }));
+}
+
 export interface ManagedKbRoleConstructProps {
   config: AppConfig;
   /**
@@ -346,5 +372,14 @@ export class ManagedKbRoleConstruct extends Construct {
    */
   public grantResourcePolicyAdmin(role: iam.IRole): void {
     grantManagedKbResourcePolicyAdmin(this.config, role);
+  }
+
+  /**
+   * Attach the read grant for Bedrock's own per-knowledge-base metrics
+   * — the reconciler's idleness signal. Read-only, and the opposite
+   * direction from the `PutMetricData` grants above.
+   */
+  public grantMetricsRead(role: iam.IRole): void {
+    grantManagedKbMetricsRead(this.config, role);
   }
 }

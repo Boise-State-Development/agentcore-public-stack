@@ -63,6 +63,73 @@ METRIC_DUAL_READ_LATENCY = "KbDualReadLatency"
 #: sustained non-zero value is the pilot telling us the engine is not ready.
 METRIC_DUAL_READ_FAILED = "KbDualReadFailed"
 
+#: Fleet gauges (Requirement 22.1), emitted once per reconciler pass rather than
+#: per event, because each is a statement about the whole account.
+METRIC_KB_COUNT = "KbCount"
+METRIC_KB_STORAGE_GB = "KbStorageGB"
+METRIC_KB_IDLE_GB = "KbIdleGB"
+
+#: Days without a sign of life before a knowledge base's bytes count toward
+#: :data:`METRIC_KB_IDLE_GB`. A reporting threshold only: nothing reclaims in this
+#: phase, and the number the follow-up spec eventually evicts on should be chosen
+#: from the distribution this metric records, not inherited from this guess.
+IDLE_THRESHOLD_DAYS = 30
+
+#: Bytes per gigabyte, decimal — matching how AWS bills storage ($5.00/GB-month),
+#: so a dashboard number and an invoice line can be compared without a conversion
+#: nobody remembers to apply.
+BYTES_PER_GB = 1_000_000_000
+
+
+def emit_fleet_gauges(
+    kb_count: int,
+    stored_bytes: int,
+    idle_bytes: int,
+    *,
+    unmeasured: int = 0,
+    idle_threshold_days: Optional[int] = None,
+) -> None:
+    """Publish the account-wide knowledge base gauges. Never raises.
+
+    Requirement 22.1. Emitted through EMF rather than ``PutMetricData`` because the
+    caller is a Lambda whose stdout already reaches CloudWatch Logs, so this needs
+    no client, no batching and no IAM — and because these are gauges published once
+    per pass, which is exactly the shape EMF is good at. The namespace is the same
+    :func:`metric_namespace` the ``PutMetricData`` grant is conditioned on, so both
+    mechanisms land in one place and a dashboard does not have to know which code
+    path produced a number.
+
+    ``unmeasured`` rides along as a log property, not a metric: it is the count of
+    knowledge bases with no recorded activity at all, which is context for reading
+    ``KbIdleGB`` rather than something to alarm on. Emitting it as a metric would
+    invite an alarm on a number that is legitimately large the day this ships and
+    legitimately near zero a month later.
+    """
+    try:
+        from apis.shared.observability.emf import emit_emf_metrics
+
+        emit_emf_metrics(
+            metric_namespace(),
+            {
+                METRIC_KB_COUNT: int(kb_count),
+                METRIC_KB_STORAGE_GB: round(stored_bytes / BYTES_PER_GB, 6),
+                METRIC_KB_IDLE_GB: round(idle_bytes / BYTES_PER_GB, 6),
+            },
+            properties={
+                "unmeasuredKnowledgeBases": int(unmeasured),
+                "idleThresholdDays": int(
+                    IDLE_THRESHOLD_DAYS if idle_threshold_days is None else idle_threshold_days
+                ),
+            },
+            units={
+                METRIC_KB_COUNT: "Count",
+                METRIC_KB_STORAGE_GB: "Gigabytes",
+                METRIC_KB_IDLE_GB: "Gigabytes",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - observability must not break a sweep
+        logger.warning(f"Failed to emit knowledge base fleet gauges: {exc}")
+
 
 def metric_namespace() -> str:
     """The custom namespace this feature publishes into.

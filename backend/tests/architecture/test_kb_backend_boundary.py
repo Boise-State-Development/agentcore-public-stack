@@ -149,6 +149,7 @@ class TestKbBackendFreshImportIsLean:
             "apis.shared.kb_backend.protocol",
             "apis.shared.kb_backend.resolver",
             "apis.shared.kb_backend.s3vectors_backend",
+            "apis.shared.kb_backend.managed_backend",
             "apis.shared.kb_backend.dual_read",
         ],
     )
@@ -158,6 +159,12 @@ class TestKbBackendFreshImportIsLean:
         The resolver is the one that matters most: the facade imports it on every
         retrieval, and it in turn imports every registered backend. If it were
         not lean, no submodule of this package could be.
+
+        ``managed_backend`` is on this list because the resolver **registers** it at
+        import (see the resolver's docstring). That registration is only free while
+        the adapter's module body stays stdlib-only and its clients stay lazy; the
+        day someone hoists a ``boto3.client(...)`` to module scope, every Lambda
+        image carrying any part of this package pays for it.
         """
         loaded = self._import_and_report(module)
         assert loaded == [], (

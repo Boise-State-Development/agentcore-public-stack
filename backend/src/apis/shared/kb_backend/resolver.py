@@ -24,6 +24,27 @@ item — resolves to legacy, which is what every knowledge base in existence
 already uses. The failure is logged at warning level. Choosing legacy on an
 unreadable record is not a guess; it is the same answer the absent attribute
 gives, and the whole migration is built so that answer is always safe.
+
+Why both backends are registered at import
+------------------------------------------
+Registration is not a startup step. Both adapters are installed in
+:data:`_BACKENDS` when this module is imported, so there is no sequence anybody
+has to remember and no service that can come up half-configured. That matters
+because forgetting would not be loud in a useful way: a promoted knowledge base
+would raise :class:`BackendUnavailable` on every turn — correct as a fail-safe,
+useless as a signal, and only ever seen by the one user whose knowledge base was
+migrated.
+
+It costs nothing. Both adapter modules import stdlib and the protocol only, with
+``boto3`` and their clients created lazily inside methods, which
+``tests/architecture/test_kb_backend_boundary.py`` asserts in a fresh
+interpreter. Registering an object whose constructor does no work is not the same
+as connecting to anything.
+
+Registering the managed backend does **not** make the feature live. Nothing can
+resolve to it until a record says ``retrievalEngine == "managed"``, and nothing
+writes that value except a promotion, which needs the migration flag on and an
+explicit opt-in. Registration only settles what happens *once* a record says so.
 """
 
 from __future__ import annotations
@@ -31,6 +52,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Mapping, Optional
 
+from apis.shared.kb_backend.managed_backend import ManagedKbBackend
 from apis.shared.kb_backend.protocol import KnowledgeBaseBackend
 from apis.shared.kb_backend.records import ENGINE_LEGACY, ENGINE_MANAGED, resolve_engine
 from apis.shared.kb_backend.s3vectors_backend import S3VectorsBackend
@@ -45,13 +67,18 @@ class BackendUnavailable(RuntimeError):
     ``managed`` after a successful promotion, and serving legacy for a promoted
     knowledge base would read an index that migration has stopped maintaining —
     fewer results, silently, with no error to notice.
+
+    Reachable only if a backend is explicitly unregistered (which tests do) or if
+    a future engine name is written by a newer deployment than the one reading it.
     """
 
 
-# Engine → backend. Legacy is registered at import; task 8.3 registers the
-# managed backend the same way, so this module never learns what a managed
-# knowledge base is.
-_BACKENDS: Dict[str, KnowledgeBaseBackend] = {ENGINE_LEGACY: S3VectorsBackend()}
+# Engine → backend, populated at import. See the module docstring for why this is
+# not a startup step. Both constructors are inert: clients are created lazily.
+_BACKENDS: Dict[str, KnowledgeBaseBackend] = {
+    ENGINE_LEGACY: S3VectorsBackend(),
+    ENGINE_MANAGED: ManagedKbBackend(),
+}
 
 
 def register_backend(engine: str, backend: KnowledgeBaseBackend) -> None:
@@ -103,9 +130,9 @@ def backend_for_engine(engine: str) -> Optional[KnowledgeBaseBackend]:
 
     Unlike :func:`resolve_backend` this does not raise, because its callers are
     asking a different question. The dual-read pilot wants "is there a managed
-    backend I could compare against?", and the answer "no" is an ordinary state —
-    the managed backend is unregistered in every build until task 14 wires it —
-    not the fail-safe emergency that an unservable *promoted* record is.
+    backend I could compare against?", and ``None`` is an ordinary answer for it —
+    a test that unregistered one, or a deployment older than the engine name it was
+    handed — not the fail-safe emergency that an unservable *promoted* record is.
     """
     return _BACKENDS.get(engine)
 

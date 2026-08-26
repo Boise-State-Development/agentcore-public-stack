@@ -91,24 +91,32 @@ def _all_documents_complete() -> MagicMock:
     return resource
 
 
+def _real_managed_backend():
+    """The adapter the resolver installs at import.
+
+    Used to put the registry back after a test deliberately empties it, so one
+    test cannot leave the process in a state the shipped code never has.
+    """
+    from apis.shared.kb_backend.managed_backend import ManagedKbBackend
+
+    return ManagedKbBackend()
+
+
 @pytest.fixture
 def managed_registered():
-    """Register a managed backend for the duration of one test.
+    """Replace the registered managed backend with a stub for one test.
 
-    Task 14 registers it for real. Registering it here is what lets the pilot be
-    tested before the surface that enables it exists — and unregistering
-    afterwards is what keeps every other test seeing the shipped state, where a
-    dual read is impossible because there is no second backend.
+    The real adapter is installed at import (see the resolver's docstring), so this
+    fixture *substitutes* rather than introduces — and restores the real one
+    afterwards, because leaving a stub behind would make every later test in the
+    process quietly pass against a fake.
     """
-    created: List[StubBackend] = []
-
     def _register(backend: StubBackend) -> StubBackend:
         register_backend(ENGINE_MANAGED, backend)
-        created.append(backend)
         return backend
 
     yield _register
-    unregister_backend(ENGINE_MANAGED)
+    register_backend(ENGINE_MANAGED, _real_managed_backend())
 
 
 async def _search(legacy: StubBackend, record: Dict[str, Any], top_k: int = 5):
@@ -174,13 +182,51 @@ class TestThePilotIsOptIn:
 
     @pytest.mark.asyncio
     async def test_no_managed_call_when_no_managed_backend_is_registered(self):
-        """The shipped state. A record can carry the flag with no effect, which is
-        what makes enabling it in the database harmless before task 14."""
+        """A build that cannot serve managed cannot pilot it either.
+
+        The managed backend is registered at import, so this condition has to be
+        *created* rather than assumed — before that it was assumed, and once
+        registration landed the test kept passing for the wrong reason: a real
+        backend was starting, failing against no AWS, and the assertion on
+        ``emit_value`` could not tell that apart from never starting.
+        """
+        from apis.shared.kb_backend.resolver import backend_for_engine
+
         legacy = StubBackend([_chunk("doc-a")])
-        results, emit_value, _ = await _search(legacy, {DUAL_READ_ATTR: True})
+        unregister_backend(ENGINE_MANAGED)
+        try:
+            assert backend_for_engine(ENGINE_MANAGED) is None
+            results, emit_value, emit_count = await _search(legacy, {DUAL_READ_ATTR: True})
+        finally:
+            register_backend(ENGINE_MANAGED, _real_managed_backend())
 
         assert len(results) == 1
         assert emit_value.called is False
+        assert emit_count.called is False, (
+            "a failure was counted, which means a managed read was attempted"
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_managed_backend_is_registered_by_default(self):
+        """The registration this feature would otherwise have shipped without.
+
+        ``register_backend`` existed and nothing called it, so every promoted
+        knowledge base would have raised ``BackendUnavailable`` — a correct
+        fail-safe and a useless signal, visible only to the one migrated user.
+        """
+        from apis.shared.kb_backend.resolver import (
+            backend_for_engine,
+            registered_engines,
+            resolve_backend,
+        )
+
+        assert ENGINE_MANAGED in registered_engines()
+        assert backend_for_engine(ENGINE_MANAGED) is not None
+
+        served = resolve_backend(
+            ASSISTANT_ID, record={"retrievalEngine": ENGINE_MANAGED}
+        )
+        assert type(served).__name__ == "ManagedKbBackend"
 
     @pytest.mark.asyncio
     async def test_no_dual_read_for_an_already_promoted_knowledge_base(self, managed_registered):

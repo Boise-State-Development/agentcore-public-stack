@@ -71,7 +71,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
-from apis.shared.kb_backend.metrics import emit_count
+from apis.shared.kb_backend.metrics import emit_count, emit_fleet_gauges
 from apis.shared.kb_backend.records import kb_pk, kb_sk
 
 logger = logging.getLogger()
@@ -163,6 +163,18 @@ class ReconcileReport:
     refreshed_bytes: List[str] = field(default_factory=list)
     limit_reached: bool = False
 
+    #: Fleet gauges (Requirement 22.1), accumulated over the record side of the
+    #: join. Computed from each KB_Record as it was read, so a ``storedBytes``
+    #: refresh performed later in the same pass lands in the *next* pass's gauge —
+    #: acceptable for a daily number, and cheaper than a second full scan.
+    stored_bytes: int = 0
+    idle_bytes: int = 0
+    #: Knowledge bases with no recorded activity at all: never retrieved and their
+    #: agent never used. Reported so ``KbIdleGB`` can be read honestly — these are
+    #: unmeasured, not idle, and counting them as idle would make every freshly
+    #: provisioned corpus look abandoned.
+    unmeasured_idleness: int = 0
+
     @property
     def deletions_performed(self) -> int:
         return sum(1 for planned in self.planned_deletions if planned.performed)
@@ -192,6 +204,9 @@ class ReconcileReport:
             "markedMissing": self.marked_missing,
             "refreshedBytes": self.refreshed_bytes,
             "limitReached": self.limit_reached,
+            "storedBytes": self.stored_bytes,
+            "idleBytes": self.idle_bytes,
+            "unmeasuredIdleness": self.unmeasured_idleness,
         }
 
 
@@ -495,6 +510,7 @@ def reconcile(
     unprovisioned = 0
     for item in iter_kb_records():
         report.records += 1
+        _accumulate_gauges(item, report, now)
         aws_kb_id = item.get("awsKbId")
         if aws_kb_id:
             records_by_aws_id[str(aws_kb_id)] = item
@@ -618,6 +634,13 @@ def reconcile(
             planned.error = str(exc)
             logger.error(f"failed to delete orphan {facts.kb_id}: {exc}", exc_info=True)
 
+    emit_fleet_gauges(
+        kb_count=report.records,
+        stored_bytes=report.stored_bytes,
+        idle_bytes=report.idle_bytes,
+        unmeasured=report.unmeasured_idleness,
+    )
+
     logger.info(
         f"reconcile complete: mode={'armed' if armed else 'report-only'} "
         f"aws={report.aws_knowledge_bases} records={report.records} "
@@ -625,9 +648,71 @@ def reconcile(
         f"planned={len(report.planned_deletions)} "
         f"performed={report.deletions_performed} "
         f"markedMissing={len(report.marked_missing)} "
-        f"unprovisioned={unprovisioned}"
+        f"unprovisioned={unprovisioned} "
+        f"storedGB={report.stored_bytes / 1_000_000_000:.3f} "
+        f"idleGB={report.idle_bytes / 1_000_000_000:.3f} "
+        f"unmeasured={report.unmeasured_idleness}"
     )
     return report
+
+
+def _accumulate_gauges(
+    record: Dict[str, Any],
+    report: ReconcileReport,
+    now: Optional[datetime] = None,
+) -> None:
+    """Fold one KB_Record into the fleet gauges (Requirements 22.1, 22.5).
+
+    The reconciler is where this belongs because it is already the one pass that
+    walks every knowledge base; a second sweep to count them would double a scan
+    that exists.
+
+    Idleness comes from :func:`idleness.idle_days`, which takes the **maximum** of
+    the knowledge base's own ``lastRetrievedAt`` and its bound agents'
+    ``lastUsedAt``. Never retrieval alone: an agent can be invoked all day and
+    retrieve nothing, because retrieval only fires when the query matches, so a
+    corpus judged by retrieval alone looks abandoned exactly when its agent is
+    busiest with questions the documents do not answer.
+
+    A record with no activity signal at all counts toward ``unmeasured_idleness``
+    and **not** toward idle bytes. It is unmeasured, not idle — that is what a
+    knowledge base provisioned an hour ago looks like.
+    """
+    from apis.shared.kb_backend.idleness import idle_days
+
+    stored = int(record.get("storedBytes") or 0)
+    report.stored_bytes += stored
+
+    assistant_id = _assistant_id_of(record)
+    if not assistant_id:
+        return
+
+    try:
+        days = idle_days(assistant_id, record, now=_iso_or_none(now))
+    except Exception as exc:  # noqa: BLE001 - a gauge must not end the pass
+        logger.warning(f"could not compute idleness for {assistant_id}: {exc}")
+        return
+
+    if days is None:
+        report.unmeasured_idleness += 1
+    elif days >= idle_threshold_days():
+        report.idle_bytes += stored
+
+
+def _iso_or_none(moment: Optional[datetime]) -> Optional[str]:
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ") if moment else None
+
+
+def idle_threshold_days() -> int:
+    """Days without a sign of life before bytes count as idle.
+
+    A **reporting** threshold. Nothing reclaims in this phase, and the number the
+    follow-up spec eventually evicts on should come from the distribution this
+    metric records rather than being inherited from this default.
+    """
+    from apis.shared.kb_backend.metrics import IDLE_THRESHOLD_DAYS
+
+    return _env_int("KB_IDLE_THRESHOLD_DAYS", IDLE_THRESHOLD_DAYS)
 
 
 def _assistant_id_of(record: Dict[str, Any]) -> str:

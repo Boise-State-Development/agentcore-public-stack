@@ -73,6 +73,7 @@ function synthConstruct(): Template {
   managedKb.grantProvisioning(provisioner);
   managedKb.grantDirectIngestion(ingestor);
   managedKb.grantResourcePolicyAdmin(sharer);
+  managedKb.grantMetricsRead(provisioner);
   grantManagedKbRetrieval(config, retriever);
 
   return Template.fromStack(stack);
@@ -418,6 +419,32 @@ describe('ManagedKbRoleConstruct — caller grants', () => {
     const sharingRoles = new Set(sharing.flatMap((h) => h.roleIds));
     for (const roleId of retrieving.flatMap((h) => h.roleIds)) {
       expect(sharingRoles.has(roleId)).toBe(false);
+    }
+  });
+
+  it('grants Bedrock-metrics reads as reads, in the opposite direction from the writes', () => {
+    // Requirement 20.13. `Invocations` per knowledge base lives in Bedrock's
+    // reserved `AWS/Bedrock/KnowledgeBases` namespace, so it is READ here.
+    // Conflating this with the publish direction once produced a
+    // PutMetricData grant scoped to that namespace, which would have
+    // deployed cleanly and published nothing forever.
+    const s = statementBySid(t, 'ManagedKbBedrockMetricsRead');
+    expect(s.Action).toEqual(['cloudwatch:GetMetricData', 'cloudwatch:GetMetricStatistics']);
+    expect(s.Resource).toBe('*');
+    // Read-only: no publish action may ride along in this statement.
+    const actions = Array.isArray(s.Action) ? s.Action : [s.Action];
+    expect(actions).not.toContain('cloudwatch:PutMetricData');
+  });
+
+  it('never conditions a PutMetricData grant on a reserved AWS namespace', () => {
+    // The defect this asserts against is invisible at deploy time: the grant
+    // applies cleanly and every publish is then silently denied.
+    for (const statement of allStatements(t)) {
+      const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+      if (!actions.includes('cloudwatch:PutMetricData')) continue;
+      const namespace = statement.Condition?.StringEquals?.['cloudwatch:namespace'];
+      expect(namespace).toBeDefined();
+      expect(String(namespace).startsWith('AWS')).toBe(false);
     }
   });
 });

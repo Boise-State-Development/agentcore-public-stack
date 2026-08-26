@@ -79,6 +79,16 @@ def no_metrics(monkeypatch):
     monkeypatch.setattr(tomb, "emit_count", lambda *a, **k: None)
 
 
+def _iso(moment):
+    """The exact timestamp shape this feature writes everywhere.
+
+    Spelled out rather than ``isoformat()`` because every comparison in the
+    idleness path is lexicographic on this format; an offset-style string would
+    sort differently and the test would be measuring the wrong thing.
+    """
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _arn(kb_id):
     return f"arn:aws:bedrock:{REGION}:123456789012:knowledge-base/{kb_id}"
 
@@ -767,6 +777,12 @@ class TestMixedRun:
             "markedMissing": [],
             "refreshedBytes": [],
             "limitReached": False,
+            # Fleet gauges. Zero here, and asserted as an exact dict on purpose: the
+            # report is a stored artifact an operator reads, so a field appearing or
+            # vanishing should be a deliberate change to this list.
+            "storedBytes": 0,
+            "idleBytes": 0,
+            "unmeasuredIdleness": 0,
         }
 
     def test_a_failing_delete_does_not_end_the_run(self, table, monkeypatch):
@@ -879,3 +895,118 @@ class TestLambdaHandler:
             "ignoring armed" in r.message and rec.FLAG_RECONCILER_ARMED in r.message
             for r in caplog.records
         ), f"no warning named the ignored override: {[r.message for r in caplog.records]}"
+
+
+# ── Requirements 22.1, 22.5: the fleet gauges ────────────────────────────────
+class TestFleetGaugeAccumulation:
+    """The reconciler is where the gauges are computed, because it is already the
+    one pass that walks every knowledge base."""
+
+    def test_stored_bytes_sum_across_records(self, table):
+        _seed_record(table, "ast-a", aws_kb_id="KBA", storedBytes=3_000_000_000)
+        _seed_record(table, "ast-b", aws_kb_id="KBB", storedBytes=1_000_000_000)
+        client = FakeBedrockAgent(knowledge_bases=[], tags={})
+
+        report = _run(client, table)
+
+        assert report.records == 2
+        assert report.stored_bytes == 4_000_000_000
+
+    def test_an_agent_used_today_is_not_idle_however_stale_its_retrievals(self, table):
+        """Requirement 22.5, end to end through the reconciler.
+
+        The knowledge base was last retrieved from 200 days ago but its agent was
+        used today — an agent answering questions its documents do not cover. Judged
+        by retrieval alone its bytes would count as idle and the follow-up spec's
+        eviction pass would delete a live corpus.
+        """
+        _seed_record(
+            table,
+            "ast-busy",
+            aws_kb_id="KBA",
+            storedBytes=5_000_000_000,
+            lastRetrievedAt=_iso(NOW - timedelta(days=200)),
+        )
+        table.put_item(
+            Item={
+                "PK": "AST#ast-busy",
+                "SK": "METADATA",
+                "lastUsedAt": _iso(NOW - timedelta(hours=2)),
+            }
+        )
+        client = FakeBedrockAgent(knowledge_bases=[], tags={})
+
+        report = _run(client, table)
+
+        assert report.stored_bytes == 5_000_000_000
+        assert report.idle_bytes == 0, (
+            "a busy agent's corpus was counted as idle; idleness was derived from "
+            "retrieval alone"
+        )
+
+    def test_a_genuinely_dormant_knowledge_base_counts_as_idle(self, table):
+        """So the test above cannot pass by never counting anything."""
+        _seed_record(
+            table,
+            "ast-cold",
+            aws_kb_id="KBA",
+            storedBytes=2_000_000_000,
+            lastRetrievedAt=_iso(NOW - timedelta(days=200)),
+        )
+        table.put_item(
+            Item={
+                "PK": "AST#ast-cold",
+                "SK": "METADATA",
+                "lastUsedAt": _iso(NOW - timedelta(days=180)),
+            }
+        )
+        client = FakeBedrockAgent(knowledge_bases=[], tags={})
+
+        report = _run(client, table)
+
+        assert report.idle_bytes == 2_000_000_000
+
+    def test_a_knowledge_base_with_no_activity_signal_is_unmeasured_not_idle(self, table):
+        """What a corpus provisioned an hour ago looks like. Counting it as idle
+        would report every new knowledge base as abandoned."""
+        _seed_record(table, "ast-new", aws_kb_id="KBA", storedBytes=9_000_000_000)
+        client = FakeBedrockAgent(knowledge_bases=[], tags={})
+
+        report = _run(client, table)
+
+        assert report.unmeasured_idleness == 1
+        assert report.idle_bytes == 0
+
+    def test_the_gauges_are_emitted_once_per_pass(self, table, monkeypatch):
+        emitted = []
+        monkeypatch.setattr(rec, "emit_fleet_gauges", lambda **kw: emitted.append(kw))
+        _seed_record(table, "ast-a", aws_kb_id="KBA", storedBytes=1_000_000_000)
+        client = FakeBedrockAgent(knowledge_bases=[], tags={})
+
+        _run(client, table)
+
+        assert len(emitted) == 1
+        assert emitted[0]["kb_count"] == 1
+        assert emitted[0]["stored_bytes"] == 1_000_000_000
+
+    def test_an_idleness_failure_does_not_end_the_pass(self, table, monkeypatch):
+        """A gauge is never worth a reconciliation."""
+        _seed_record(table, "ast-a", aws_kb_id="KBA", storedBytes=1_000_000_000)
+        monkeypatch.setattr(
+            "apis.shared.kb_backend.idleness.idle_days",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        client = FakeBedrockAgent(knowledge_bases=[], tags={})
+
+        report = _run(client, table)
+
+        assert report.records == 1
+        assert report.stored_bytes == 1_000_000_000
+
+    def test_the_idle_threshold_is_resolved_at_call_time(self, monkeypatch):
+        from apis.shared.kb_backend.metrics import IDLE_THRESHOLD_DAYS
+
+        monkeypatch.delenv("KB_IDLE_THRESHOLD_DAYS", raising=False)
+        assert rec.idle_threshold_days() == IDLE_THRESHOLD_DAYS
+        monkeypatch.setenv("KB_IDLE_THRESHOLD_DAYS", "7")
+        assert rec.idle_threshold_days() == 7
