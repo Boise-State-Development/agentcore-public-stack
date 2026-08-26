@@ -4,9 +4,15 @@ import {
   effect,
   inject,
   input,
+  output,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroBeaker, heroExclamationTriangle } from '@ng-icons/heroicons/outline';
+import {
+  heroArrowsPointingIn,
+  heroArrowsPointingOut,
+  heroBeaker,
+  heroExclamationTriangle,
+} from '@ng-icons/heroicons/outline';
 import { ChatContainerComponent, ChatContainerConfig } from '../../../session/components/chat-container/chat-container.component';
 import { ChatInputComponent } from '../../../session/components/chat-input/chat-input.component';
 import { PreviewChatService } from '../../../assistants/assistant-form/services/preview-chat.service';
@@ -42,9 +48,17 @@ import { PreviewChatService } from '../../../assistants/assistant-form/services/
   selector: 'app-review-test-drive',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, ChatContainerComponent, ChatInputComponent],
-  providers: [PreviewChatService, provideIcons({ heroBeaker, heroExclamationTriangle })],
+  providers: [
+    PreviewChatService,
+    provideIcons({
+      heroArrowsPointingIn,
+      heroArrowsPointingOut,
+      heroBeaker,
+      heroExclamationTriangle,
+    }),
+  ],
   template: `
-    <div class="flex h-full min-h-96 flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+    <div class="flex h-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
       <div class="shrink-0 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0">
@@ -60,15 +74,35 @@ import { PreviewChatService } from '../../../assistants/assistant-form/services/
               }
             </p>
           </div>
-          @if (chat.hasMessages()) {
+          <div class="flex shrink-0 items-center gap-1">
+            @if (chat.hasMessages()) {
+              <button
+                type="button"
+                (click)="clear()"
+                class="rounded-md px-2 py-1 text-xs/5 font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              >
+                Clear
+              </button>
+            }
+            <!-- Widens the panel across the page rather than opening an overlay. The
+                 conversation has to survive the toggle, so the element never moves in the
+                 DOM — only its classes change — and a plain layout change needs none of
+                 the focus trapping an overlay would. -->
             <button
               type="button"
-              (click)="clear()"
-              class="shrink-0 rounded-md px-2 py-1 text-xs/5 font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              (click)="expandedChange.emit(!expanded())"
+              [attr.aria-expanded]="expanded()"
+              [attr.aria-label]="expanded() ? 'Collapse the test drive' : 'Expand the test drive to full width'"
+              [title]="expanded() ? 'Collapse' : 'Expand to full width'"
+              class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
             >
-              Clear
+              <ng-icon
+                [name]="expanded() ? 'heroArrowsPointingIn' : 'heroArrowsPointingOut'"
+                class="size-4"
+                aria-hidden="true"
+              />
             </button>
-          }
+          </div>
         </div>
 
         <!-- Never collapsed away. A reviewer who reads a clean test drive as "this works
@@ -149,6 +183,15 @@ export class ReviewTestDriveComponent {
   readonly name = input<string>('this agent');
   /** Which snapshot the server will run; absent when none backs the submission. */
   readonly reviewVersion = input<number | undefined>(undefined);
+  /**
+   * Whether the panel currently spans the page.
+   *
+   * Owned by the page, not by this component: expanding changes the page's grid, and the
+   * panel is not in a position to know that. This only renders the control and reports the
+   * intent.
+   */
+  readonly expanded = input(false);
+  readonly expandedChange = output<boolean>();
 
   /**
    * `includeSystemPrompt` / `includeEnabledTools` are off for the same reason the agent

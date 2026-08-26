@@ -189,6 +189,46 @@ describe('SubmissionReviewPage', () => {
     expect(text(fixture)).toMatch(/only the author can open this/i);
   });
 
+  it('gives the test drive viewport height, not the height of the prose beside it', async () => {
+    // The bug this guards: the panel was sized by its grid cell, so a short left column
+    // left ~120px between the banner and the composer — too small to judge an agent
+    // through. Assert it is sized against the viewport and sticks while the reviewer
+    // scrolls, rather than asserting a pixel count no test can see.
+    const fixture = await render();
+    const panel = (fixture.nativeElement as HTMLElement).querySelector('app-review-test-drive');
+
+    expect(panel?.className).toMatch(/100dvh/);
+    expect(panel?.className).toContain('lg:sticky');
+  });
+
+  it('spans the page when expanded, without remounting the conversation', async () => {
+    const fixture = await render();
+    const before = (fixture.nativeElement as HTMLElement).querySelector('app-review-test-drive');
+
+    fixture.componentInstance.expanded.set(true);
+    fixture.detectChanges();
+
+    const after = (fixture.nativeElement as HTMLElement).querySelector('app-review-test-drive');
+    expect(after?.className).toContain('lg:col-span-2');
+    // Same element: expanding is a class change, never a move in the DOM. Moving it would
+    // destroy the component and take the reviewer's conversation with it.
+    expect(after).toBe(before);
+  });
+
+  it('says an empty system prompt is empty rather than rendering a blank box', async () => {
+    // A blank panel under a heading reads as a page that failed to load — and an agent
+    // that genuinely ships no instructions is itself a reason to decline, so the two must
+    // not look alike.
+    mockService.loadSubmission.mockResolvedValue(
+      submission({ instructions: '   ', description: '' }),
+    );
+    const fixture = await render();
+    const rendered = text(fixture);
+
+    expect(rendered).toMatch(/ships no system prompt/i);
+    expect(rendered).toMatch(/no summary/i);
+  });
+
   it('surfaces the backend message when the read fails', async () => {
     mockService.loadSubmission.mockRejectedValue({
       error: { detail: 'This agent has no marketplace listing to review.' },
