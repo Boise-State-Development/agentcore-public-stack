@@ -1,6 +1,6 @@
 # Managed KB Migration — Handoff
 
-**Last updated:** 2026-08-25 (groups 11–13) · **Branch:** `feature/kb-migration` · **Nothing deployed**
+**Last updated:** 2026-08-26 (groups 11–13, group 14 backend half) · **Branch:** `feature/kb-migration` · **Nothing deployed**
 
 Working state for this feature so a fresh session can pick it up without re-deriving
 anything. Read this, then `tasks.md`.
@@ -12,14 +12,16 @@ anything. Read this, then `tasks.md`.
 | | |
 |---|---|
 | Spec | Complete, audited 3× to clean. 25 requirements, 201 criteria, 0 dangling refs |
-| Implementation | Groups **1–13 of 15** done. 10 subtasks left across groups 14–15 |
-| Tests | **614** infra (jest) · **6,457** backend (pytest) · 5 pre-existing unrelated failures |
+| Implementation | Groups **1–13** done, plus group 14's backend/infra half. 6 subtasks left: 14.3–14.5 (frontend) and group 15 |
+| Tests | **616** infra (jest) · **6,511** backend (pytest) · 5 pre-existing unrelated failures |
 | Deployed | **Nothing.** No `cdk deploy`, no AWS mutation, at any point |
 | Feature flags | All three ship **off** |
 
-### Commits (12 on the branch)
+### Commits (14 on the branch)
 
 ```
+e59f771c  register the managed backend, fleet metrics, tagged teardown  (group 14 backend)
+d5e56f31  handoff reflects group 13 and four more defects
 ee091971  migration dispatcher and the shadow/verify/promote/retain worker (group 13)
 53476544  handoff reflects groups 11-12 and two new defects
 a361fdd4  opt-in dual-read pilot that legacy always wins                (group 12)
@@ -37,17 +39,16 @@ ffa7a408  KB_Record data layer with conditional state transitions        (group 
 
 ### Is the feature reachable yet?
 
-**No, and deliberately so.** Verified: nothing calls the provisioning saga, no route
-enrolls a knowledge base, and the resolver has only `s3vectors` registered. A record
-saying `retrievalEngine: "managed"` raises `BackendUnavailable` — which is the correct
-fail-safe, since substituting the legacy index for a promoted KB would serve a stale
-corpus. Registering the managed backend and adding an enrollment surface are group 14.
-The dispatcher and worker exist but the migration flag ships off, so a tick
-invokes nothing and no record is ever enrolled.
+**Servable, but nothing routes to it.** The managed backend is now registered in
+the resolver at import (group 14.0), so a record saying `retrievalEngine:
+"managed"` is served correctly instead of raising `BackendUnavailable`. What is
+still missing is anything that *writes* that value: the migration flag ships off,
+so a dispatcher tick invokes nothing, and there is no enrollment surface — that is
+groups 14.3–14.5.
 
-The dual-read pilot inherits that: `start_managed_read` returns `None` whenever no
-managed backend is registered, so setting `dualReadPilot: true` on a record today is
-harmless.
+The dual-read pilot is in the same position: `dualReadPilot: true` on a record now
+genuinely starts an observational managed read, because a managed backend exists to
+compare against. It stays off unless the attribute is set by hand.
 
 **Three behaviour changes ARE live on the existing path** and are the only things
 worth testing by hand right now:
@@ -226,11 +227,29 @@ saying why that number is a property of AWS rather than a knob.
 
 ---
 
+17. **Nothing registered the managed backend (group 14).** `register_backend`
+    was defined in task 4.2 and called by nothing. All 15 groups could have been
+    finished with the feature unreachable — a promoted record raises
+    `BackendUnavailable`, a correct fail-safe and a useless signal. Registration is
+    now at import, so there is no startup sequence to forget.
+18. **A three-defect shell script (group 14).** `scripts/teardown/managed-kb.sh`,
+    all three found by *running* it: an infinite spin at a zero poll interval that
+    burned sixteen hours of a test run; `list | cut | grep -q` reporting false
+    absence when SIGPIPE became the pipeline's status under `pipefail`; and a
+    swallowed `list-knowledge-bases` failure reporting a clean teardown having
+    deleted nothing. `set -e` is suspended inside a function called in a condition,
+    which is why the last one was silent.
+19. **Requirement 20.13 existed only as a comment (group 14).** The metrics *read*
+    grant was described in a comment explaining the write grant and never
+    implemented, so the reconciler could not have read Bedrock's own `Invocations`.
+
+---
+
 ## 6. Remaining work
 
 | Group | Subtasks | Notes |
 |---|---|---|
-| **14** Surfaces, observability, teardown | 7 | UI, admin surface, metrics, teardown script. Also where the managed backend gets **registered** in the resolver, and where the dual-read pilot flag gets a surface that can set it. |
+| **14** Surfaces (frontend only) | 3 | 14.3 upgrade UX, 14.4 failed/stuck document surfacing (200 of 1,692 production `DOC#` records are affected, incl. 95 `failed` whose owners believe the uploads worked), 14.5 admin surface. Metrics, cost attribution, teardown and backend registration are **done**. |
 | **15** Pre-promotion verification | 3 | The gate before any real traffic moves. |
 
 ### Known deferrals (correct, not oversights)
@@ -267,6 +286,7 @@ backend/src/apis/shared/kb_backend/
   tombstones.py        delete sagas
   resource_policy.py   IAM-enforced sharing; staleness is state, not an event
   dual_read.py         pilot: start early, detach, compare, serve legacy
+  idleness.py          activity = max(retrieval, bound agents' use)
   query_guard.py       10,000-char clamp
   metrics.py           namespace + best-effort emit_count / emit_value
 
@@ -280,6 +300,12 @@ backend/src/apis/app_api/kb_migration/
   reconciler.py           daily join, report-only
   dispatcher.py           sparse-index sweep, bounded, no-ops when the flag is off
   worker.py               ONE step per invocation, leased, resumable
+
+scripts/teardown/
+  managed-kb.sh                   delete tag-matched KBs BEFORE any stack
+
+docs/specs/
+  managed-kb-cost-attribution.md  filter on usagetype, never service code alone
 
 infrastructure/lib/constructs/managed-kb/
   managed-kb-role-construct.ts    Bedrock service role + grant methods
