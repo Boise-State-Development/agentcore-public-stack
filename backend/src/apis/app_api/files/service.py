@@ -32,6 +32,7 @@ from apis.shared.files.models import (
     FileListResponse,
     QuotaResponse,
     is_allowed_mime_type,
+    is_presentation_file,
     ALLOWED_MIME_TYPES,
 )
 from .thumbnails import (
@@ -125,6 +126,7 @@ class FileUploadService:
         s3_client=None,
         bucket_name: Optional[str] = None,
         max_file_size: Optional[int] = None,
+        presentation_max_file_size: Optional[int] = None,
         max_files_per_message: Optional[int] = None,
         user_quota_bytes: Optional[int] = None,
         thumbnail_renderer: Optional[ThumbnailRenderer] = None,
@@ -156,6 +158,22 @@ class FileUploadService:
         self.max_file_size = max_file_size or int(
             os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES", 4 * 1024 * 1024)  # 4MB
         )
+        # Presentations get a larger cap than the general limit. The general
+        # 4MB is sized for what Bedrock will accept as an inline document
+        # block; a .pptx never goes inline (Bedrock has no pptx document
+        # format — see `is_presentation_file`), so that ceiling does not
+        # apply to it. What does apply is the Code Interpreter hop in the
+        # PowerPoint tools: `_ci_write_bytes` base64-encodes the whole deck
+        # into a single writeFiles `text` field, inflating it ~4/3. That
+        # field is a MaxLenString (100MB), so 25MB of deck → ~33MB of base64
+        # stays well inside it. Real-world corporate templates with imagery
+        # routinely exceed 4MB, which is what made the template workflow
+        # unusable at the general cap.
+        self.presentation_max_file_size = presentation_max_file_size or int(
+            os.environ.get(
+                "FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION", 25 * 1024 * 1024  # 25MB
+            )
+        )
         self.max_files_per_message = max_files_per_message or int(
             os.environ.get("FILE_UPLOAD_MAX_FILES_PER_MESSAGE", 5)
         )
@@ -166,6 +184,18 @@ class FileUploadService:
         # Pre-signed URL expiration
         self.presign_expiration = 15 * 60  # 15 minutes
         self.preview_url_expiration = 10 * 60  # 10 minutes for GET previews
+
+    def max_size_for(self, filename: str, mime_type: str) -> int:
+        """Return the upload size cap that applies to this file.
+
+        Presentations get their own (larger) cap; everything else gets the
+        general limit. Callers must use this rather than reading
+        `max_file_size` directly, or a .pptx under the presentation cap gets
+        rejected by whichever gate was missed.
+        """
+        if is_presentation_file(filename, mime_type):
+            return self.presentation_max_file_size
+        return self.max_file_size
 
     # =========================================================================
     # Pre-signed URL Flow
@@ -200,9 +230,10 @@ class FileUploadService:
         if not is_allowed_mime_type(request.mime_type):
             raise InvalidFileTypeError(request.mime_type)
 
-        # Validate file size
-        if request.size_bytes > self.max_file_size:
-            raise FileTooLargeError(request.size_bytes, self.max_file_size)
+        # Validate file size against the cap for this file's class
+        size_limit = self.max_size_for(request.filename, request.mime_type)
+        if request.size_bytes > size_limit:
+            raise FileTooLargeError(request.size_bytes, size_limit)
 
         # Check quota
         quota = await self.repository.get_user_quota(user_id)

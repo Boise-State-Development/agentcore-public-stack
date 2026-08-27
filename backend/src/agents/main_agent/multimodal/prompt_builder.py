@@ -23,33 +23,52 @@ class PromptBuilder:
     def build_prompt(
         self,
         message: str,
-        files: Optional[List[Any]] = None
+        files: Optional[List[Any]] = None,
+        attachment_names: Optional[List[str]] = None,
     ) -> Union[str, List[Dict[str, Any]]]:
         """
         Build prompt for Strands Agent with multimodal support
 
         Args:
             message: User message text
-            files: Optional list of FileContent objects with base64 bytes
+            files: Optional list of FileContent objects with base64 bytes.
+                These become content blocks, so this must be the *inline*
+                set only — handing it a .pptx would produce a document block
+                in a format Bedrock's enum doesn't accept.
+            attachment_names: Optional authoritative filename list for the
+                ``[Attached files: …]`` marker. Defaults to the names in
+                ``files``. Pass this when some attachments are deliberately
+                kept out of ``files`` (spreadsheets route to the analysis
+                tools, decks to the PowerPoint tools) — the marker is what
+                the SPA replays to rebuild attachment cards on reload, so a
+                name missing here means that file's card silently disappears
+                from history even though the file itself is still in the
+                session.
 
         Returns:
             str or list[ContentBlock]: Simple string or multimodal content blocks
         """
-        # If no files, return simple text
+        marker_names = (
+            list(attachment_names)
+            if attachment_names is not None
+            else [f.filename for f in (files or []) if hasattr(f, 'filename')]
+        )
+
+        # The marker must stay at the very END of the text: the SPA's
+        # ATTACHED_FILES_PATTERN is `$`-anchored.
+        text = message
+        if marker_names:
+            text = f"{message}\n\n[Attached files: {', '.join(marker_names)}]"
+
+        # Nothing to inline — return plain text. This still carries the
+        # marker, which is the case where every attachment was diverted
+        # (e.g. a lone .pptx): previously this returned early with a bare
+        # message and the attachment vanished from restored history.
         if not files or len(files) == 0:
-            return message
+            return text
 
         # Build ContentBlock list for multimodal input
-        content_blocks = []
-
-        # Add text first (with file reference marker for session history reconstruction)
-        file_names = [f.filename for f in files if hasattr(f, 'filename')]
-        if file_names:
-            # Add file reference marker after user message for session history
-            text_with_marker = f"{message}\n\n[Attached files: {', '.join(file_names)}]"
-            content_blocks.append({"text": text_with_marker})
-        else:
-            content_blocks.append({"text": message})
+        content_blocks: List[Dict[str, Any]] = [{"text": text}]
 
         # Track sanitized document names used in this turn to prevent
         # Bedrock ValidationException: "Messages can't contain duplicate document names"

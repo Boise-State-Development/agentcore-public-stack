@@ -52,6 +52,7 @@ LISTING_STATES: Tuple[str, ...] = (
     "changes_requested",
     "taken_down",
     "withdrawal_requested",
+    "rejected",
 )
 
 # The transition table. ``None`` is the pre-state of a record that has never been
@@ -69,6 +70,9 @@ LISTING_STATES: Tuple[str, ...] = (
 #                                          which returns the record to what was already serving
 #   in_review         → changes_requested  admin requests changes, with a reason — or the author
 #                                          cancels an update submitted while one was outstanding
+#   in_review         → rejected           admin declines it for the store, with a reason
+#   rejected          → in_review          author revises and submits again
+#   rejected          → private            author shelves a declined agent (so it can be deleted)
 #   published         → taken_down         admin delists, with a reason
 #   published         → changes_requested  admin requests changes on a live listing
 #   taken_down        → changes_requested  admin annotates an already-delisted listing
@@ -138,6 +142,32 @@ LISTING_STATES: Tuple[str, ...] = (
 # snapshot keeps serving; approval of the new one is still the only thing that changes what
 # users get. What it does open is the reverse edge — see ``author_cancel_target``.
 #
+# ⚠️ ``rejected`` is the answer to a submission that should not be in the store *at all*,
+# and it exists because the only two decisions before it were "approve" and "request
+# changes". An admin who thought a submission did not belong had to either publish it or
+# say "fix this" — which promises a review they do not intend to give, leaves the author
+# revising toward an approval that is not coming, and leaves the admin re-reading the same
+# submission every time it comes back.
+#
+# **The difference from ``changes_requested`` is intent, not mechanics, and that is
+# deliberate.** Both carry a required reason and both let the author come back
+# (``rejected → in_review``). What differs is what the author is told: "I want this, fix
+# X" versus "this is not a fit, here is why". Making the second one *terminal* was the
+# alternative and it is a much bigger hammer — it needs an appeal path, an admin escape
+# hatch, and a policy about who may grant one. None of that is worth building before
+# someone needs it, and an honest "no" that the author can answer is worth having now.
+#
+# It is not a door into the store and cannot become one: the only way back is
+# ``in_review``, so approval is still the single edge that publishes. ``rejected → private``
+# is the author shelving it, which is what makes it deletable — the same exit
+# ``taken_down`` has, for the same reason.
+#
+# ⚠️ It must also be in ``is_on_shelf``'s never-listed set. A rejected listing has no
+# ``published_version`` to clear (it was never published), so a stale pointer is not the
+# risk; the risk is the *other* direction — without it, a rejected agent that somehow
+# carried a pointer would read as on-the-shelf and route a withdrawal into an admin queue
+# for something no user can see.
+#
 # ⚠️ ``changes_requested`` covers two different listings — one that was never published, and
 # one that *was* and is still serving while the author revises it (``review_listing``
 # deliberately does not unpublish). Only the first may walk ``→ private`` alone; the second
@@ -154,11 +184,12 @@ LISTING_STATES: Tuple[str, ...] = (
 ALLOWED_TRANSITIONS: Dict[Optional[str], Set[str]] = {
     None: {"in_review"},
     "private": {"in_review"},
-    "in_review": {"published", "changes_requested", "private"},
+    "in_review": {"published", "changes_requested", "private", "rejected"},
     "changes_requested": {"in_review", "private", "withdrawal_requested"},
     "published": {"in_review", "taken_down", "changes_requested", "withdrawal_requested"},
     "taken_down": {"in_review", "changes_requested", "private"},
     "withdrawal_requested": {"private", "published", "changes_requested", "taken_down"},
+    "rejected": {"in_review", "private"},
 }
 
 # States a submission can be made *from* while the listing is already on the shelf — and
@@ -360,7 +391,7 @@ def is_on_shelf(state: Optional[str], published_version: Optional[int]) -> bool:
     ``state`` is still consulted so a cleared-but-stale pointer cannot resurrect something:
     ``private`` and ``taken_down`` are never on the shelf whatever the pointer says.
     """
-    if state in ("private", "taken_down", None):
+    if state in ("private", "taken_down", "rejected", None):
         return False
     return published_version is not None
 

@@ -625,7 +625,14 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
-  // ── S3 Vectors (RAG query) ──
+  // ── S3 Vectors (RAG query + document cleanup) ──
+  // DeleteVectors is required by documents/services/cleanup_service.py, which
+  // removes a document's (or an assistant's) chunks from the index when the
+  // document is deleted. Without it every cleanup exhausted its 3 retries and
+  // logged "Cleanup incomplete ... TTL will auto-expire", leaving orphaned
+  // vectors that stayed searchable until TTL. Note the s3vectors delete action
+  // is DeleteVectors (plural, batch); rag-ingestion's DeleteVector (singular)
+  // is a different action and does not cover this call.
   const vectorBucketName = props.refs.ragVectorBucketName;
   const vectorIndexName = props.refs.ragVectorIndexName;
   taskRole.addToPrincipalPolicy(
@@ -634,7 +641,8 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       effect: iam.Effect.ALLOW,
       actions: ['s3vectors:GetVector', 's3vectors:GetVectors',
                 's3vectors:ListVectors', 's3vectors:QueryVectors',
-                's3vectors:GetIndex', 's3vectors:ListIndexes'],
+                's3vectors:GetIndex', 's3vectors:ListIndexes',
+                's3vectors:DeleteVectors'],
       resources: [
         `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${vectorBucketName}`,
         `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${vectorBucketName}/index/${vectorIndexName}`,

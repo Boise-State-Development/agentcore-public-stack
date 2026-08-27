@@ -21,6 +21,7 @@ ListingState = Literal[
     "changes_requested",
     "taken_down",
     "withdrawal_requested",
+    "rejected",
 ]
 PublisherKind = Literal["institution", "department", "individual"]
 
@@ -801,13 +802,25 @@ class ListingPreflightResponse(BaseModel):
 
 
 class ReviewListingRequest(BaseModel):
-    """Admin approves a submission or returns it with a reason (D2)."""
+    """Admin approves a submission, returns it with a reason, or declines it (D2).
+
+    ⚠️ ``reject`` is a third decision, not a harsher ``request_changes``. Both return the
+    submission with a required reason; they differ in what the author is told and in what
+    the admin is committing to. See ``assistants.listing``'s note on the ``rejected`` state.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    decision: Literal["approve", "request_changes"] = Field(..., description="Reviewer's decision")
+    decision: Literal["approve", "request_changes", "reject"] = Field(
+        ..., description="Reviewer's decision"
+    )
     note: Optional[str] = Field(
-        None, max_length=2000, description="Reason; required for request_changes, renders on the author's card"
+        None,
+        max_length=2000,
+        description=(
+            "Reason; required for request_changes and reject, renders on the author's card. "
+            "A decline with no reason is the one outcome an author cannot act on at all."
+        ),
     )
     category: Optional[str] = Field(None, description="Optionally recategorize at approval (D12/D13)")
     publisher_id: Optional[str] = Field(
@@ -1070,6 +1083,105 @@ class AdminListingRow(BaseModel):
         ),
     )
     admin_edits: List[AdminEdit] = Field(default_factory=list, alias="adminEdits", description="Admin edit log (D13)")
+
+
+class AdminSubmissionReview(BaseModel):
+    """Everything a reviewer needs to decide, read from the **frozen snapshot** (D2).
+
+    The gap this closes: before it, a reviewer had a name, an author, a category and a
+    collapsible diff. ``instructions`` is gated to owner/editor on the user-facing detail
+    read, and ``get_assistant_with_access_check`` refuses a non-owner outright on a PRIVATE
+    Agent — so the person deciding whether to publish something could not read its system
+    prompt, could not see what it binds, and on a **first** submission saw no content at
+    all, because a diff against nothing is empty by construction.
+
+    ⚠️ **The snapshot, never the live record, and that is the whole design.** Widening the
+    user-facing ``GET /agents/{id}`` for admins would have been fewer lines and wrong: it
+    serves the author's *draft*, which the author can edit between the reviewer reading it
+    and the reviewer approving it. ``AgentVersion`` exists precisely to close that window
+    (it is cut at submission, not at approval), and ``review_listing`` promotes
+    ``submitted_version`` — so reading anything else would show an admin one configuration
+    and publish another. Reading the snapshot also sidesteps the PRIVATE 403 without
+    loosening anyone's access gate: this is an admin projection of a frozen artifact, not a
+    hole in ``get_assistant_with_access_check``.
+
+    Disclosure note: ``instructions`` reaches a marketplace admin here, deliberately. You
+    cannot review what you cannot read, and the review diff already discloses them on every
+    *update*; what this changes is that a first submission is no longer the one case where
+    the reviewer is asked to approve prose nobody showed them.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    name: str = Field(..., description="Display name as of the reviewed snapshot")
+    description: str = Field(..., description="Summary as of the reviewed snapshot")
+    tagline: Optional[str] = Field(None, description="Shelf subtitle as of the reviewed snapshot")
+    instructions: str = Field(..., description="System prompt as of the reviewed snapshot — the thing being reviewed")
+    starters: List[str] = Field(default_factory=list, description="Conversation starters as of the reviewed snapshot")
+    emoji: Optional[str] = Field(None, description="Emoji, for the generated icon fallback (D5)")
+    icon_url: Optional[str] = Field(
+        None, alias="iconUrl", description="Where to render the icon from; absent → generated gradient"
+    )
+    owner_name: str = Field(..., alias="ownerName", description="Author display name — who to talk to about behavior")
+    publisher: Optional[PublisherProfile] = Field(None, description="Resolved attribution (D12), display only")
+    category: str = Field(..., description="Category id")
+    category_label: Optional[str] = Field(
+        None,
+        alias="categoryLabel",
+        description="Human label for ``category``; ids are not display content (see ``resolve_listing_display``)",
+    )
+    state: ListingState = Field(..., description="Publication state")
+    capabilities: List[AgentCapability] = Field(
+        default_factory=list,
+        description=(
+            "What the snapshot binds, by name. Resolved against the snapshot's own "
+            "``bindings`` rather than the live record's, so a tool the author added after "
+            "submitting is not attributed to the version under review."
+        ),
+    )
+    model_label: Optional[str] = Field(
+        None, alias="modelLabel", description="Display name of the pinned model; absent = resolve as today"
+    )
+    review_version: Optional[int] = Field(
+        None,
+        alias="reviewVersion",
+        description=(
+            "The snapshot this read is of. ``submittedVersion`` while a submission is "
+            "pending, ``publishedVersion`` otherwise — never 'the latest', which an admin "
+            "presentation edit (§6.2) could have moved underneath the reviewer."
+        ),
+    )
+    published_version: Optional[int] = Field(
+        None, alias="publishedVersion", description="Which snapshot the store is currently serving"
+    )
+    snapshot_unavailable: bool = Field(
+        False,
+        alias="snapshotUnavailable",
+        description=(
+            "No snapshot backs this read, so the fields above come from the Agent's **live "
+            "record** — which its author can still change. True for submissions that predate "
+            "version snapshots.\n\n"
+            "Reported rather than refused. ``diff_pending_version`` 400s in this case because "
+            "a diff of one thing is meaningless, but a reviewer looking at a row in their own "
+            "queue needs *something* to read; answering 'no' would leave them exactly where "
+            "the empty diff left them. The flag is what lets the page say the content is not "
+            "frozen instead of implying it is."
+        ),
+    )
+    submitted_at: Optional[str] = Field(None, alias="submittedAt", description="ISO 8601 submission timestamp")
+    withdrawal_requested_at: Optional[str] = Field(
+        None, alias="withdrawalRequestedAt", description="ISO 8601 timestamp of a pending withdrawal request"
+    )
+    reviewed_at: Optional[str] = Field(None, alias="reviewedAt", description="ISO 8601 timestamp of the last review")
+    review_note: Optional[str] = Field(None, alias="reviewNote", description="Most recent reviewer note")
+    reachability: ListingReachability = Field(
+        ...,
+        description=(
+            "Who can open this Agent if it is shelved. Carried here as well as on the queue "
+            "row because this page is where the decision is actually made."
+        ),
+    )
 
 
 class AdminListingsResponse(BaseModel):

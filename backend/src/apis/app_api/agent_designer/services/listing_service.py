@@ -54,11 +54,13 @@ from apis.shared.assistants.version_repository import (
     list_versions,
     set_version_index,
 )
+from apis.shared.assistants.version_resolution import resolve_review_agent
 from apis.shared.assistants.versions import snapshot_of
 from apis.shared.assistants.models import (
     AdminEdit,
     AdminListingPatchRequest,
     AdminListingRow,
+    AdminSubmissionReview,
     AgentListing,
     AgentVersionDiffResponse,
     AgentVersionSummary,
@@ -81,6 +83,7 @@ from apis.shared.assistants.service import (
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import skills_enabled
 from apis.shared.memory.service import MemorySpaceService
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.timestamps import utc_now_iso
 
@@ -764,20 +767,36 @@ async def review_listing(
     category: Optional[str] = None,
     publisher_id: Optional[str] = None,
 ) -> AgentListing:
-    """Approve a submission, or return it with a reason (D2).
+    """Approve a submission, return it with a reason, or decline it (D2).
 
     Approval is where an attribution becomes authoritative, so the reviewer may adjust
     category and publisher in the same act (D12) without a second round trip.
+
+    ``reject`` is the third decision and it is not a synonym for ``request_changes``: it
+    answers a submission that should not be in the store at all, rather than one that needs
+    work. Both carry a required reason for the same reason — a decision the author cannot
+    read is one they cannot act on — and the state machine's note on ``rejected`` records
+    why both let the author come back.
     """
     assistant = await _load_any(agent_id)
     if not assistant.listing:
         raise ListingError("This agent has no marketplace listing to review.", status_code=404)
 
-    target = "published" if decision == "approve" else "changes_requested"
-    if decision == "request_changes" and not (note or "").strip():
+    # Mapped rather than branched, so adding a fourth decision cannot silently fall through
+    # to ``changes_requested`` the way an ``if/else`` on ``approve`` did.
+    targets = {
+        "approve": "published",
+        "request_changes": "changes_requested",
+        "reject": "rejected",
+    }
+    target = targets.get(decision)
+    if target is None:
+        raise ListingError(f"Unknown review decision '{decision}'.", status_code=400)
+    if target != "published" and not (note or "").strip():
+        verb = "Declining a submission" if decision == "reject" else "Requesting changes"
         raise ListingError(
-            "Requesting changes needs a reason — it renders on the author's card so they "
-            "never have to ask what happened.",
+            f"{verb} needs a reason — it renders on the author's card so they never have "
+            "to ask what happened.",
             status_code=400,
         )
 
@@ -1167,6 +1186,101 @@ async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
         instructions_diff=instructions_diff(published, pending),
     )
 
+
+
+async def read_submission_for_review(agent_id: str, admin: User) -> AdminSubmissionReview:
+    """The reviewer's full read of a listing — instructions, bindings, model and all (D2).
+
+    **Which version this reads is the entire correctness question**, and it is answered the
+    same way ``review_listing`` answers "which version does approval promote?": the snapshot
+    named by the listing, never "the latest" and never the live draft.
+
+    * ``in_review`` → ``submitted_version``. That is the artifact approval promotes, so it
+      is the artifact the reviewer must read. The live record is the author's draft and they
+      can edit it while the row sits in the queue; reading it would show one configuration
+      and publish another.
+    * anything else → ``published_version``. ``submitted_version`` is a high-water mark that
+      deliberately survives a decision, so on a ``withdrawal_requested`` row — where nothing
+      is pending and the question is whether to pull what is *live* — it would name a stale
+      snapshot the store never served.
+
+    Falls back to the live record, flagged, when neither pointer resolves. See
+    ``AdminSubmissionReview.snapshot_unavailable`` for why that is reported rather than
+    refused.
+
+    ``admin`` is threaded through only to resolve **memory-space labels**, which have no
+    unfiltered name lookup (see ``agent_detail._memory_labels``). It is not an access
+    decision — the route's ``admin.marketplace`` scope already made that one — and nothing
+    here filters by what this particular admin can reach.
+    """
+    # Imported here rather than at module scope: ``agent_detail`` pulls in the whole
+    # bindable catalog (five per-primitive services), and every other caller of this module
+    # — the author paths, the submit dialog's preflight — needs none of it.
+    from apis.app_api.agent_designer.services.agent_detail import (
+        resolve_capabilities,
+        resolve_listing_display,
+    )
+
+    assistant = await _load_any(agent_id)
+    listing = assistant.listing
+    if not listing:
+        raise ListingError("This agent has no marketplace listing to review.", status_code=404)
+
+    # ⚠️ The which-version rule lives in ``version_resolution``, not here, and that is
+    # load-bearing: the reviewer's *test drive* (``inference_api.chat.routes``) has to
+    # resolve the same snapshot this page shows, and inference-api cannot import from
+    # app_api. A second copy of the rule is a page and a preview that disagree about what
+    # is under review — which is exactly the failure snapshots exist to prevent, one level
+    # up.
+    reviewed, review_version = await resolve_review_agent(assistant)
+
+    publisher = await get_publisher(listing.publisher_id)
+    try:
+        capabilities, model_label = await resolve_capabilities(reviewed, admin)
+    except Exception:
+        # Presentation, exactly as on the user-facing detail read: a catalog hiccup must not
+        # turn a reviewable submission into a 500 and strand the queue.
+        logger.warning(
+            f"Failed to resolve capabilities for review of {scrub_log(agent_id)}", exc_info=True
+        )
+        capabilities, model_label = [], None
+    try:
+        _, category_label = await resolve_listing_display(reviewed)
+    except Exception:
+        logger.warning(f"Failed to resolve category label for {scrub_log(agent_id)}", exc_info=True)
+        category_label = None
+
+    return AdminSubmissionReview(
+        agent_id=agent_id,
+        name=reviewed.name,
+        description=reviewed.description,
+        tagline=reviewed.tagline,
+        instructions=reviewed.instructions,
+        starters=list(reviewed.starters or []),
+        emoji=reviewed.emoji,
+        icon_url=icon_url(agent_id, reviewed.icon_key),
+        owner_name=assistant.owner_name,
+        publisher=publisher,
+        category=listing.category,
+        category_label=category_label,
+        state=listing.state,
+        capabilities=capabilities,
+        model_label=model_label,
+        review_version=review_version,
+        published_version=listing.published_version,
+        snapshot_unavailable=review_version is None,
+        submitted_at=listing.submitted_at,
+        withdrawal_requested_at=(
+            listing.withdrawal_requested_at if listing.state == "withdrawal_requested" else None
+        ),
+        reviewed_at=listing.reviewed_at,
+        review_note=listing.review_note,
+        # ⚠️ Derived from the **live** record, never the snapshot. ``visibility`` is
+        # deliberately absent from ``AgentVersion`` (fusing it with listing state is the
+        # trap that class docstring names), and the question here is "can people reach this
+        # right now?" — a fact about now, which a frozen artifact cannot answer.
+        reachability=_reachability(assistant),
+    )
 
 
 async def list_admin_listings(state: Optional[str] = None) -> Tuple[List[AdminListingRow], int]:

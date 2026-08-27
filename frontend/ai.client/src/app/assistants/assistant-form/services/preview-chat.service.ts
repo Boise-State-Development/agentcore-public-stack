@@ -171,7 +171,23 @@ export class PreviewChatService {
     assistantId: string,
     liveInstructions?: string,
     fileUploadIds?: string[],
-    opts?: { includeSystemPrompt?: boolean; includeEnabledTools?: boolean },
+    opts?: {
+      includeSystemPrompt?: boolean;
+      includeEnabledTools?: boolean;
+      /**
+       * This preview is a marketplace **reviewer** test-driving a submission.
+       *
+       * Sends `review_preview`, which the invocation path honours only after re-checking
+       * `admin.marketplace` against the caller's own roles. It changes two things
+       * server-side: the Agent resolves to the snapshot *under review* rather than to the
+       * published-or-draft rule, and the PRIVATE visibility check is bypassed — a PRIVATE
+       * agent can be sitting in the review queue, and an ordinary read 403s on one.
+       *
+       * ⚠️ Never set from an author-facing surface. A caller without the scope is refused
+       * outright rather than downgraded, so a stray `true` is a 403, not a wrong answer.
+       */
+      reviewPreview?: boolean;
+    },
   ): Promise<void> {
     if (!userMessage.trim() || this.loadingSignal()) {
       return;
@@ -244,6 +260,11 @@ export class PreviewChatService {
       }
       if (fileUploadIds && fileUploadIds.length > 0) {
         requestBody['file_upload_ids'] = fileUploadIds;
+      }
+      // Omitted rather than sent as `false`, so an ordinary preview's request carries no
+      // claim about a scope it never had.
+      if (opts?.reviewPreview) {
+        requestBody['review_preview'] = true;
       }
 
       // `fetchEventSource` bypasses the HttpClient pipeline, so the

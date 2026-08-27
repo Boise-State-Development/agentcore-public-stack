@@ -26,6 +26,7 @@ from apis.app_api.agent_designer.services.listing_service import (
     review_listing,
     decide_withdrawal,
     diff_pending_version,
+    read_submission_for_review,
     takedown_listing,
 )
 from apis.shared.assistants.categories import (
@@ -50,6 +51,7 @@ from apis.shared.assistants.models import (
     AdminReportRow,
     AdminReportsResponse,
     AdminStoreFrontResponse,
+    AdminSubmissionReview,
     AgentCategoriesResponse,
     AgentCategory,
     AgentCategoryCreateRequest,
@@ -143,6 +145,37 @@ async def list_listings(
     except Exception as e:
         logger.error(f"Error listing agent listings: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list listings: {str(e)}")
+
+
+@router.get("/{agent_id}/submission", response_model=AdminSubmissionReview)
+async def get_agent_submission_review(
+    agent_id: str,
+    admin: User = Depends(require_marketplace_admin),
+):
+    """The full reviewer read of a listing — instructions, capabilities, model (D2).
+
+    The queue could name a submission but not show one. ``instructions`` is gated to
+    owner/editor on ``GET /agents/{id}``, and that read refuses a non-owner outright when
+    the Agent is PRIVATE — so the person deciding whether to publish could not read the
+    system prompt or see what the Agent binds, and on a first submission the review diff
+    (their only other window onto it) is empty by construction.
+
+    Serves the **frozen snapshot**, not the live record. See ``AdminSubmissionReview`` for
+    why that distinction is the design rather than an implementation detail: the live record
+    is the author's draft, and approval promotes ``submittedVersion``.
+
+    Deliberately a separate endpoint rather than a widened ``GET /agents/{id}``. That route
+    is the store's detail read *and* the Agent Designer's form loader; teaching it an admin
+    bypass would put an access exception on the busiest read in the feature, to serve the
+    wrong version anyway.
+    """
+    try:
+        return await read_submission_for_review(agent_id, admin)
+    except ListingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error reading submission for review: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to read submission: {str(e)}")
 
 
 @router.get("/{agent_id}/diff", response_model=AgentVersionDiffResponse)

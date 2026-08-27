@@ -6,9 +6,16 @@ import {
   OnInit,
 } from '@angular/core';
 import { Dialog } from '@angular/cdk/dialog';
+import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroInbox, heroCheck, heroArrowUturnLeft, heroEyeSlash } from '@ng-icons/heroicons/outline';
+import {
+  heroInbox,
+  heroCheck,
+  heroArrowUturnLeft,
+  heroEyeSlash,
+  heroNoSymbol,
+} from '@ng-icons/heroicons/outline';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import { AdminListingRow } from '../models/marketplace.model';
 import { AgentTileComponent } from '../components/agent-tile.component';
@@ -24,6 +31,11 @@ import {
   WithdrawalDecisionDialogData,
   WithdrawalDecisionDialogResult,
 } from '../components/withdrawal-decision-dialog.component';
+import {
+  DeclineSubmissionDialogComponent,
+  DeclineSubmissionDialogData,
+  DeclineSubmissionDialogResult,
+} from '../components/decline-submission-dialog.component';
 import { parseIso } from '../../../utils/date';
 
 /**
@@ -33,14 +45,21 @@ import { parseIso } from '../../../utils/date';
  * and the subtitle carries the three things a reviewer needs before making it (who wrote
  * it, what shelf it wants, how long it has waited).
  *
- * The mockup's "Preview" action is deliberately absent: it opens the agent detail page,
- * which is Phase 3. Rendering a dead button would be worse than not having one.
+ * The mockup's "Preview" action is now the agent name itself, and it opens the submission
+ * review page rather than the store detail page. That distinction is the point: the detail
+ * page gates `instructions` to owner/editor, 403s on a PRIVATE agent, and describes the
+ * *published* version — none of which is what a reviewer needs to read.
+ *
+ * The queue stays a list of decisions. Everything a fast approval needs is on the row (who,
+ * what shelf, how long, what changed); everything a careful one needs is one click away.
  */
 @Component({
   selector: 'app-review-queue',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, AgentTileComponent, ReviewDiffComponent],
-  providers: [provideIcons({ heroInbox, heroCheck, heroArrowUturnLeft, heroEyeSlash })],
+  imports: [NgIcon, RouterLink, AgentTileComponent, ReviewDiffComponent],
+  providers: [
+    provideIcons({ heroInbox, heroCheck, heroArrowUturnLeft, heroEyeSlash, heroNoSymbol }),
+  ],
   template: `
     <div class="min-h-dvh">
       <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
@@ -48,7 +67,9 @@ import { parseIso } from '../../../utils/date';
           <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Review queue</h1>
           <p class="mt-1 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
             Every submission lands here. Approving publishes it to the store immediately;
-            requesting changes returns it to the author with your note attached to their card.
+            requesting changes returns it to the author with your note attached to their card;
+            declining tells them it is not a fit. Open one to read its instructions, see what
+            it binds, and test drive it before deciding.
           </p>
           <p class="mt-1 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
             Authors asking to pull a live listing land here too. Those stay published until
@@ -101,7 +122,14 @@ import { parseIso } from '../../../utils/date';
 
                 <div class="min-w-0 flex-1">
                   <h2 class="flex items-center gap-2 text-sm/6 font-semibold text-gray-900 dark:text-white">
-                    <span class="truncate">{{ row.name }}</span>
+                    <!-- The way in to the full read. On the name rather than a separate
+                         button: it is where a reviewer already looks to identify the row,
+                         and the decision buttons stay the row's only competing targets. -->
+                    <a
+                      [routerLink]="['/admin/marketplace/review', row.agentId]"
+                      class="truncate rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                      >{{ row.name }}</a
+                    >
                     <!-- The two things in this queue want opposite answers, and without a
                          label they render identically. A withdrawal request said "take this
                          down"; answering it with the submission verbs re-publishes over the
@@ -167,6 +195,15 @@ import { parseIso } from '../../../utils/date';
                       Take it down
                     </button>
                   } @else {
+                    <button
+                      type="button"
+                      [disabled]="busyId() === row.agentId"
+                      (click)="decline(row)"
+                      class="inline-flex items-center gap-1.5 rounded-2xl border border-rose-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-rose-700 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-gray-800 dark:text-rose-300 dark:hover:bg-rose-900/20"
+                    >
+                      <ng-icon name="heroNoSymbol" class="size-4" aria-hidden="true" />
+                      Decline
+                    </button>
                     <button
                       type="button"
                       [disabled]="busyId() === row.agentId"
@@ -295,9 +332,30 @@ export class ReviewQueuePage implements OnInit {
     }
   }
 
+  /**
+   * Decline a submission for the store.
+   *
+   * The third decision, and the one the queue was missing: an admin who judged a
+   * submission not a fit had to approve it or say "fix this", which promises a review they
+   * do not intend to give and puts the same submission back in the queue every round.
+   *
+   * Routed through the same `review` endpoint as the other two — unlike a withdrawal
+   * decision, which has its own — because all three answer "may this go into the store?".
+   */
+  async decline(row: AdminListingRow): Promise<void> {
+    const ref = this.dialog.open<DeclineSubmissionDialogResult, DeclineSubmissionDialogData>(
+      DeclineSubmissionDialogComponent,
+      { data: { name: row.name, ownerName: row.ownerName } },
+    );
+    const note = await firstValueFrom(ref.closed);
+    if (note) {
+      await this.decide(row, { decision: 'reject', note });
+    }
+  }
+
   private async decide(
     row: AdminListingRow,
-    request: { decision: 'approve' | 'request_changes'; note?: string },
+    request: { decision: 'approve' | 'request_changes' | 'reject'; note?: string },
   ): Promise<void> {
     this.busyId.set(row.agentId);
     this.error.set(null);

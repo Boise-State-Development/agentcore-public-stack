@@ -457,6 +457,24 @@ emits only `format`/`name`/`source.bytes`), so enabling citations is new work
 in PR-1, and the evaluation's §1 baseline probe must establish current PDF
 visual fidelity before any digest comparison is scored.
 
+> **G3 probe run 2026-08-12 — `document-citations-probe-findings.md`.** The
+> baseline is established: **full visual fidelity, uncited.** Today's bare
+> document block reads unlabeled chart bars, image-only table cells and
+> rotated scans — 14/14 on two models — so the §3 "quality tension" is real
+> and this spec's *offload as native blocks, never flattened text* rule is now
+> measured rather than precautionary.
+>
+> Two revisions follow. **Citations are a text-layer feature**, not a visual
+> one: enabled explicitly, image-only documents returned none at all. So
+> "citations stay enabled on it" (§4 lifecycle, and the reassembly note) is
+> not a quality requirement for image-heavy documents — there is nothing to
+> preserve — and **enabling citations is no longer part of PR-1**. It is a
+> standalone product question about attribution, with a real migration cost:
+> with citations on, the answer text moves *inside* `citationsContent` and
+> top-level `text` blocks go empty, so every consumer must handle both shapes.
+> Where citations *do* apply — text-layer documents — `location.documentPage`
+> supplies the page identity the evaluation's reassembly test needs.
+
 ---
 
 ## 7. Non-goals

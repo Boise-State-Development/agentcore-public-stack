@@ -199,6 +199,25 @@ export function createRuntimeExecutionRole(
     resources: tableResources,
   }));
 
+  // ── User settings table (read-only) ──
+  // inference_api/chat/routes.py resolves the user's saved defaultModelId via
+  // UserSettingsRepository.get_settings — a GetItem on PK=USER#<id>, SK=SETTINGS.
+  // The runtime never writes settings (app-api owns that), and the table has no
+  // GSIs, so this stays a bare-ARN GetItem rather than joining the read/write
+  // bulk grant above.
+  //
+  // inference-agentcore-construct.ts injects DYNAMODB_USER_SETTINGS_TABLE_NAME,
+  // which makes the repository report itself enabled — so without this grant the
+  // GetItem AccessDenied'd and get_settings swallowed it into DEFAULT_SETTINGS.
+  // The user's chosen default model was silently ignored with no user-visible
+  // error; only a stray ERROR line in the runtime log revealed it.
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'UserSettingsTableReadAccess',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:GetItem'],
+    resources: [refs.userSettingsTable.tableArn],
+  }));
+
   // ── System prompts table (read-only) ──
   // The inference path resolves the active prompt via system_prompt_resolver
   // and only ever needs GetItem. The table has no GSIs and the inference

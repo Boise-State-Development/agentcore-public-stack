@@ -41,6 +41,29 @@ model can actually answer. Every subsequent quality comparison inherits its
 definition of "full fidelity" from this probe, and the offload spec's
 "dual-encoded" premise is unverified until it runs.
 
+> **✅ RUN 2026-08-12 — `document-citations-probe-findings.md`
+> (`backend/scripts/probe_document_citations.py`). The premise above is
+> disproven; the baseline is settled.** Scaled to 14 questions over 5
+> documents (the three named here, plus a text-layer canary and a mixed
+> text+figure document) on two models: **14/14 correct in both arms on both
+> models**. Visual understanding is **unconditional** — it is not tied to the
+> citations config, and arm A sees charts, image-only table cells and scans at
+> full fidelity today.
+>
+> **"Full fidelity" for every comparison below therefore means: reads figures,
+> carries no citations.** Two knock-ons for this document. §2.3's citation
+> family resolves the way it anticipated — citations are a **text-layer**
+> feature (image-only documents returned none even with the config on), so
+> that family gates B against C, never against A, and on image-heavy documents
+> it has nothing to measure at all. And §2.2's insistence on rendering PDFs
+> with real layout is now load-bearing: a text-extractable-only corpus would
+> compare against a strictly weaker baseline than production actually has.
+>
+> ⚠️ Implementation note for whoever writes the scorer: with citations enabled
+> the answer text moves *inside* `citationsContent.content[]` and top-level
+> `text` blocks go empty. The probe scored a correct answer as a miss until its
+> extractor handled both shapes.
+
 ---
 
 ## 2. Answer quality

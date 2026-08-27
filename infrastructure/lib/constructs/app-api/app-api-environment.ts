@@ -271,6 +271,11 @@ export function buildAppApiEnvironment(
     DYNAMODB_USER_FILES_TABLE_NAME: params.userFilesTableName,
     S3_USER_FILES_BUCKET_NAME: params.userFilesBucketName,
     FILE_UPLOAD_MAX_SIZE_BYTES: String(4194304),
+    // Decks route to the PowerPoint tools instead of Bedrock document blocks,
+    // so the inline-document ceiling that sets the 4MB general cap does not
+    // bound them. Keep in sync with PPTX_MAX_FILE_SIZE_BYTES in the SPA's
+    // file-upload.service.ts — the backend must never be the smaller of the two.
+    FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION: String(26214400), // 25MB
     FILE_UPLOAD_MAX_FILES_PER_MESSAGE: String(5),
     FILE_UPLOAD_USER_QUOTA_BYTES: String(1073741824),
     S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME: params.ragDocumentsBucketName,
