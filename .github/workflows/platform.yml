@@ -57,6 +57,11 @@ jobs:
       CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
       CDK_DOMAIN_NAME: ${{ vars.CDK_DOMAIN_NAME }}
       CDK_CORS_ORIGINS: ${{ vars.CDK_CORS_ORIGINS }}
+      # The Environment tag value. Not cosmetic: it is the filter the managed-KB
+      # reconciler and scripts/teardown/managed-kb.sh match knowledge bases on, so
+      # an unset value here made a dev deploy tag its knowledge bases 'prod' while
+      # teardown looked for 'dev' — matching nothing and reporting success.
+      CDK_TAG_ENVIRONMENT: ${{ vars.CDK_TAG_ENVIRONMENT }}
       CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}

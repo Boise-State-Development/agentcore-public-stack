@@ -758,6 +758,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
       : undefined,
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
+      // `--context tags.Environment=dev` sets the FLAT dotted key
+      // `context['tags.Environment']`; it does NOT merge into the nested `tags`
+      // object above, so a nested-only read silently ignores an operator's own
+      // flag. That trap has already bitten this repo twice (the managed-KB byte
+      // caps and then the alarm thresholds), and here it had a sharper edge: the
+      // Environment tag is a *filter* for the reconciler and for teardown, so
+      // ignoring it does not degrade cosmetically — it makes teardown match
+      // nothing and report success.
+      ...(scope.node.tryGetContext('tags.Environment')
+        ? { Environment: String(scope.node.tryGetContext('tags.Environment')) }
+        : {}),
     },
   };
 

@@ -121,6 +121,21 @@ build_cdk_context_params() {
     if [ -n "${CDK_CORS_ORIGINS:-}" ]; then
         context_params="${context_params} --context corsOrigins=\"${CDK_CORS_ORIGINS}\""
     fi
+
+    # The Environment tag value. Forwarded as the FLAT dotted key because that is
+    # what `--context a.b=c` sets; config.ts merges it into `config.tags`
+    # explicitly for the same reason.
+    #
+    # This is not a cosmetic label. `managedKbEnvironmentTagValue` uses it, and
+    # that value is the filter the reconciler and `scripts/teardown/managed-kb.sh`
+    # match knowledge bases on. Left unset, the construct falls back to
+    # `production ? 'prod' : 'nonprod'` while the teardown script falls back to
+    # `dev` — so a dev deploy tagged its knowledge bases `prod` and teardown,
+    # looking for `dev`, deleted nothing and reported success. Same shape as the
+    # tag-contract drift in the spec's defect list, one layer up.
+    if [ -n "${CDK_TAG_ENVIRONMENT:-}" ]; then
+        context_params="${context_params} --context tags.Environment=\"${CDK_TAG_ENVIRONMENT}\""
+    fi
     
     # App API optional parameters
     if [ -n "${CDK_APP_API_CPU:-}" ]; then
@@ -302,6 +317,13 @@ export CDK_TOKEN_EXCHANGE_CLIENT_ID="${CDK_TOKEN_EXCHANGE_CLIENT_ID:-$(get_json_
 
 # Shared CORS origins — env var > context file (no hardcoded defaults)
 export CDK_CORS_ORIGINS="${CDK_CORS_ORIGINS:-$(get_json_value "corsOrigins" "${CONTEXT_FILE}")}"
+
+# Environment tag value (`Environment` in config.tags). Stamped on every
+# CDK-created resource by applyStandardTags, and — the part that matters —
+# used as the match filter for managed knowledge base reconciliation and
+# teardown. Empty is honoured rather than defaulted here so config.ts's own
+# fallback stays the single documented default.
+export CDK_TAG_ENVIRONMENT="${CDK_TAG_ENVIRONMENT:-$(get_json_value "tags.Environment" "${CONTEXT_FILE}")}"
 
 # File upload configuration — env var > context file (no hardcoded defaults)
 export CDK_FILE_UPLOAD_MAX_SIZE_MB="${CDK_FILE_UPLOAD_MAX_SIZE_MB:-$(get_json_value "fileUpload.maxFileSizeBytes" "${CONTEXT_FILE}")}"

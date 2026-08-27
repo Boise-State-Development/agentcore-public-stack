@@ -195,6 +195,80 @@ class TestTheCdkConstructAgrees:
         assert "config." in line, f"prefix tag value is not derived from config: {line.strip()}"
 
 
+class TestTheEnvironmentTagValueIsPlumbedNotGuessed:
+    """The gap the key-name tests above could not see.
+
+    Every existing test here checks that the three languages agree on the tag
+    *keys*, and that the Python writer and Python filter share one fallback
+    chain. Nothing checked that the value the **CDK computes** and the value the
+    **teardown script defaults to** agree — and they did not.
+
+    `managedKbEnvironmentTagValue` falls back to `production ? 'prod' : 'nonprod'`;
+    `config.production` defaults to `true` because `platform.yml` never passed a
+    production flag and `cdk.context.json` says `true`. So a *development* deploy
+    tagged its knowledge bases `ManagedKbEnvironment=prod`, while
+    `scripts/teardown/managed-kb.sh` falls back to `dev`. Teardown would have
+    matched nothing and reported a clean run, leaving billed Bedrock knowledge
+    bases behind — the exact symptom of the original tag-contract drift, one
+    layer up and invisible to the tests written for it.
+
+    The fix is to stop relying on either fallback: the value is passed explicitly
+    per environment. These tests guard that plumbing end to end, because an
+    omission anywhere in the chain silently reinstates the guess.
+    """
+
+    WORKFLOW = REPO_ROOT / ".github/workflows/platform.yml"
+    LOAD_ENV = REPO_ROOT / "scripts/common/load-env.sh"
+    CONFIG_TS = REPO_ROOT / "infrastructure/lib/config.ts"
+
+    def test_the_workflow_passes_an_environment_tag_value(self):
+        body = self.WORKFLOW.read_text(encoding="utf-8")
+        assert "CDK_TAG_ENVIRONMENT:" in body, (
+            "platform.yml does not pass CDK_TAG_ENVIRONMENT, so config.tags.Environment "
+            "is unset and the construct falls back to the production guess"
+        )
+        assert "vars.CDK_TAG_ENVIRONMENT" in body, (
+            "CDK_TAG_ENVIRONMENT is declared but not sourced from an environment "
+            "variable, so it cannot differ between development and production"
+        )
+
+    def test_load_env_forwards_it_as_the_flat_dotted_context_key(self):
+        """`--context a.b=c` sets `context['a.b']`, never nested `a.b`."""
+        body = self.LOAD_ENV.read_text(encoding="utf-8")
+        assert "CDK_TAG_ENVIRONMENT" in body, "load-env.sh does not export the variable"
+        assert '--context tags.Environment=' in body, (
+            "load-env.sh does not forward the value to CDK, so the workflow variable "
+            "is exported and then dropped"
+        )
+
+    def test_config_reads_the_flat_key_and_not_only_the_nested_object(self):
+        """A nested-only read is how the two earlier flat-key defects worked."""
+        body = self.CONFIG_TS.read_text(encoding="utf-8")
+        assert "tryGetContext('tags.Environment')" in body, (
+            "config.ts reads only the nested `tags` object, so --context "
+            "tags.Environment=... is silently ignored"
+        )
+
+    def test_the_shell_fallback_is_not_the_constructs_fallback(self):
+        """Documents the divergence rather than pretending it is gone.
+
+        Both fallbacks still exist and still disagree; they are simply no longer
+        reached in a deployed environment. Asserting the disagreement keeps the
+        reason the plumbing is mandatory visible — if someone later deletes the
+        plumbing, the tests above fail and this one explains why it matters.
+        """
+        construct = CONSTRUCT.read_text(encoding="utf-8")
+        script = (REPO_ROOT / "scripts/teardown/managed-kb.sh").read_text(encoding="utf-8")
+
+        assert "'prod' : 'nonprod'" in construct, (
+            "the construct's documented fallback changed; re-check that it now "
+            "agrees with the teardown script's, or that neither is reachable"
+        )
+        assert "CDK_ENVIRONMENT:-dev" in script, (
+            "the teardown script's documented fallback changed; re-check the pair"
+        )
+
+
 class TestTheTeardownScriptAgrees:
     def test_the_script_matches_the_canonical_key_names(self):
         """It previously matched ``prefix``/``env`` — keys nothing ever wrote."""
