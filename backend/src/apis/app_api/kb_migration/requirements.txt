@@ -1,0 +1,32 @@
+# kb-migration Lambda image dependencies (backend/Dockerfile.kb-migration).
+# Exact pins per repo policy; versions match backend/uv.lock.
+#
+# ⚠️ THE boto3 PIN IS LOAD-BEARING, NOT HYGIENE.
+#
+# The Lambda Python base image bundles its own, older boto3. That bundled
+# version's packaged service model has no `MANAGED` member in
+# `CreateKnowledgeBase`'s `knowledgeBaseConfiguration.type` enum and no
+# `managedKnowledgeBaseConfiguration` shape at all, so every provisioning call
+# would fail with a ParamValidationError naming a parameter that looks correct
+# in our source. Installing this pin *over* the bundled copy is what makes the
+# managed knowledge base API reachable from a Lambda.
+#
+# Verified against the pinned version rather than assumed (spec task 15.1's
+# static half): `type` enum is ['VECTOR','KENDRA','SQL','MANAGED'],
+# `managedKnowledgeBaseConfiguration` carries the embedding pin and encryption
+# members, `embeddingDataType` enum is ['FLOAT32','BINARY'], and all four
+# document operations — Ingest/Get/List/DeleteKnowledgeBaseDocuments — exist.
+# No `AWS_DATA_PATH` side-load is required, and none must be relied on.
+boto3==1.43.68
+botocore==1.43.68
+
+# Nothing else. The four handlers' whole import closure is 16 first-party
+# modules plus these two, which is the point of `kb_backend` being its own
+# package with an empty `__init__` and stdlib-only module scope — pulling
+# `apis.shared.assistants` instead would drag the embeddings stack, and with it
+# the image-size budget, into a Lambda that never needs either.
+# Enforced by backend/tests/architecture/test_kb_backend_boundary.py.
+#
+# In particular this image has NO FastAPI and NO pydantic: KB_Record is a
+# dataclass precisely so a size-constrained image need not carry validation
+# machinery it would then have to justify.
