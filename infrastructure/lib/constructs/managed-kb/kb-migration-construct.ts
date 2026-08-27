@@ -227,7 +227,10 @@ export class KbMigrationConstruct extends Construct {
       MANAGED_KB_PER_OWNER_DEFAULT_BYTES: String(managedKb.perOwnerDefaultBytes),
       MANAGED_KB_PER_OWNER_ELEVATED_BYTES: String(managedKb.perOwnerElevatedBytes),
       MANAGED_KB_PER_KB_CEILING_BYTES: String(managedKb.perKnowledgeBaseCeilingBytes),
-      MANAGED_KB_RETENTION_WINDOW_DAYS: String(managedKb.retentionWindowDays),
+      // Read by worker._retain_days(). The MANAGED_KB_ spelling was published and
+      // read by nothing, so Requirement 15.11's configured window was silently
+      // replaced by the code's 30-day floor.
+      KB_MIGRATION_RETAIN_DAYS: String(managedKb.retentionWindowDays),
       // Tag contract (Requirement 20.11). Keys AND the two values that
       // are static at deploy time; `appKbId` and the opaque owner id are
       // per-knowledge-base and can only be supplied at CreateKnowledgeBase
@@ -285,7 +288,12 @@ export class KbMigrationConstruct extends Construct {
       logGroup: dispatcherLogGroup,
       environment: {
         ...sharedEnvironment,
-        MANAGED_KB_WORKER_FUNCTION_NAME: this.workerLambda.functionName,
+        // The dispatcher reads KB_MIGRATION_WORKER_FUNCTION_NAME — matching the
+        // house convention its siblings use (KB_SYNC_WORKER_FUNCTION_NAME,
+        // SCHEDULED_RUNS_WORKER_FUNCTION_NAME). Named MANAGED_KB_* here, the
+        // dispatcher raised `KB_MIGRATION_WORKER_FUNCTION_NAME is not set` on every
+        // tick and no knowledge base could ever be migrated.
+        KB_MIGRATION_WORKER_FUNCTION_NAME: this.workerLambda.functionName,
       },
       description:
         'Managed_KB migration dispatcher - sweeps the sparse KbWorkIndex on a schedule and invokes the worker',

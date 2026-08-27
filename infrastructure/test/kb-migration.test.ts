@@ -469,13 +469,39 @@ describe('KbMigrationConstruct — flags reach every function', () => {
     expect(env(p2).MANAGED_KB_RECONCILER_ARMED).toBe('true');
   });
 
+  it('gives the dispatcher the worker function name the Python actually reads', () => {
+    // Shipped as MANAGED_KB_WORKER_FUNCTION_NAME while dispatcher.py reads
+    // KB_MIGRATION_WORKER_FUNCTION_NAME. Every tick raised
+    // `RuntimeError: KB_MIGRATION_WORKER_FUNCTION_NAME is not set` and no
+    // knowledge base could migrate. Its sibling kb-sync works precisely
+    // because kb-sync.test.ts asserts the same thing.
+    const t = synth();
+    const p = lambdaFor(t, HANDLERS.dispatcher);
+    expect(env(p).KB_MIGRATION_WORKER_FUNCTION_NAME).toBeDefined();
+    expect(env(p).MANAGED_KB_WORKER_FUNCTION_NAME).toBeUndefined();
+  });
+
+  it('gives the worker the retention window under the name it reads', () => {
+    // worker._retain_days() reads KB_MIGRATION_RETAIN_DAYS. Published as
+    // MANAGED_KB_RETENTION_WINDOW_DAYS, the configured window was silently
+    // replaced by the code's 30-day floor.
+    const t = synth();
+    const p = lambdaFor(t, HANDLERS.worker);
+    expect(env(p).KB_MIGRATION_RETAIN_DAYS).toBe('30');
+    expect(env(p).MANAGED_KB_RETENTION_WINDOW_DAYS).toBeUndefined();
+  });
+
   it('forwards the byte caps and retention window', () => {
     const t = synth();
     const p = lambdaFor(t, HANDLERS.worker);
     expect(env(p).MANAGED_KB_PER_OWNER_DEFAULT_BYTES).toBe(String(100 * 1024 * 1024));
     expect(env(p).MANAGED_KB_PER_OWNER_ELEVATED_BYTES).toBe(String(1024 * 1024 * 1024));
     expect(env(p).MANAGED_KB_PER_KB_CEILING_BYTES).toBe(String(500 * 1024 * 1024));
-    expect(env(p).MANAGED_KB_RETENTION_WINDOW_DAYS).toBe('30');
+    // KB_MIGRATION_RETAIN_DAYS, not MANAGED_KB_RETENTION_WINDOW_DAYS. This
+    // assertion previously pinned the latter — which the construct set and
+    // `worker._retain_days()` never read, so it confirmed the construct against
+    // itself and passed while the configured window was being dropped.
+    expect(env(p).KB_MIGRATION_RETAIN_DAYS).toBe('30');
   });
 
   it('keeps the standard per-owner cap below the 1 GB user-files precedent', () => {
