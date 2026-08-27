@@ -136,6 +136,14 @@ class TestCreateOffloadsToS3:
     @pytest.mark.asyncio
     async def test_storage_unavailable_raises(self, monkeypatch):
         monkeypatch.setenv("SHARED_CONVERSATIONS_TABLE_NAME", "shares-table")
+        # `bucket_name=None` means "no bucket configured", but the store falls back
+        # to this variable when the argument is None — so the test only asserted
+        # what it meant to while the variable happened to be absent from the
+        # environment. Any developer with a populated `backend/src/.env` (which
+        # `load_dotenv(override=True)` reads) gave the store a real bucket, and the
+        # assertion became a live S3 HeadObject against it. Deleted explicitly so
+        # "unavailable" is a property of the test rather than of the machine.
+        monkeypatch.delenv("SHARED_CONVERSATIONS_BUCKET_NAME", raising=False)
         with patch("boto3.resource"):
             svc = ShareService(snapshot_store=ShareSnapshotStore(bucket_name=None))
         svc._table = MagicMock()

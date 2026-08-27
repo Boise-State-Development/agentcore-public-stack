@@ -195,9 +195,16 @@ describe('PlatformStack', () => {
       // Every other SSM publish was dead weight: the value was either
       // consumed only by sibling CDK constructs (now sourced via typed
       // PlatformComputeRefs) or never read by anyone.
+      //
+      // Upper bound raised 45 → 49 for the four kb-migration
+      // function-name publishes (dispatcher / worker / reconciler /
+      // ingestion-consumer). Those functions are deliberately unnamed so
+      // CDK generates their physical names, which means the backend
+      // workflow's `update-function-code` step has no way to find them
+      // except through SSM — the deploy-time-discovery bucket above.
       const params = template.findResources('AWS::SSM::Parameter');
       expect(Object.keys(params).length).toBeGreaterThanOrEqual(30);
-      expect(Object.keys(params).length).toBeLessThanOrEqual(45);
+      expect(Object.keys(params).length).toBeLessThanOrEqual(49);
     });
   });
 

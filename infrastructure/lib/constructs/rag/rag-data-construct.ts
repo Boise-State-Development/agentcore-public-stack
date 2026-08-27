@@ -193,6 +193,26 @@ export class RagDataConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Sparse work-discovery index for managed-KB migration
+    // (.kiro/specs/managed-kb-migration). Third use of the same physics as
+    // DueSyncIndex and AgentDirectoryIndex above: GSI7 keys are written only while
+    // a KB# record is actually eligible for background work, so a knowledge base
+    // that is pinned, terminal, or simply not enrolled is invisible to the
+    // dispatcher's query rather than being filtered out of it. That distinction
+    // matters here because the dispatcher drives creation and deletion of billed
+    // AWS resources — a filter bug would act on knowledge bases nobody asked to
+    // migrate, whereas a missing key can only ever mean "do nothing".
+    //   GSI7_PK = KBWORK#{state}   GSI7_SK = {dueAt ISO-8601}  (oldest-due first)
+    // Written exclusively by apis/shared/kb_backend/records.py; the generic
+    // assistant update lists GSI7_* as immutable, mirroring GSI5_*, so a routine
+    // author edit cannot resurrect a work key on a KB that has left the queue.
+    this.assistantsTable.addGlobalSecondaryIndex({
+      indexName: 'KbWorkIndex',
+      partitionKey: { name: 'GSI7_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI7_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // ── SSM publications (consumed by restore tooling, app-api/inference-api runtime) ──
     new ssm.StringParameter(this, 'RagAssistantsTableNameParameter', {
       parameterName: `/${config.projectPrefix}/rag/assistants-table-name`,

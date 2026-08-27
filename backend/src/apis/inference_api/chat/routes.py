@@ -1542,6 +1542,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     if input_data.rag_assistant_id and not is_resume and not is_continuation:
         # Local imports to avoid circular dependency
+        from apis.shared.assistants.kb_access import granted
         from apis.shared.assistants.rag_service import (
             augment_prompt_with_context,
             search_assistant_knowledgebase_with_formatting,
@@ -1661,9 +1662,25 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             assistant = await _get_assistant_cloud_without_ownership_check(
                 input_data.rag_assistant_id, table_name
             )
+            # No permission was resolved, because this path deliberately bypassed the
+            # gate that resolves one. Left as None so the knowledge base read below
+            # fails closed (Requirement 25.1): `granted(...)` treats None as "grants
+            # nothing", and the marketplace scope is authority to *review a
+            # submission*, not evidence of a read grant on that owner's corpus.
+            #
+            # ⚠️ Consequence worth owning: a reviewer test-drives with an empty
+            # knowledge base, which is a degraded review of a RAG-backed Agent — the
+            # same class of problem develop's comment above warns about. Whether a
+            # marketplace reviewer should receive corpus read is a policy decision for
+            # the marketplace owner, not something to settle inside a merge conflict.
+            # Tracked rather than guessed; failing closed is the safe default meanwhile.
+            assistant_permission = None
         else:
             logger.info("Loading assistant with access check...")
-            assistant, _ = await get_assistant_with_access_check(
+            # The permission is kept, not discarded: it is what the knowledge base
+            # retrieval below runs under (Requirement 25.1), so the grant that governs
+            # the corpus read is provably the same one that admitted this turn.
+            assistant, assistant_permission = await get_assistant_with_access_check(
                 assistant_id=input_data.rag_assistant_id,
                 user_id=user_id,
                 user_email=current_user.email,
@@ -1795,7 +1812,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         try:
             logger.info("Searching knowledge base for assistant...")
             context_chunks = await search_assistant_knowledgebase_with_formatting(
-                assistant_id=input_data.rag_assistant_id, query=input_data.message, top_k=5
+                assistant_id=input_data.rag_assistant_id,
+                query=input_data.message,
+                top_k=5,
+                access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
             )
             logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
             if context_chunks:

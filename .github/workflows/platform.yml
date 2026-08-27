@@ -146,6 +146,43 @@ jobs:
       # cdk.context.json stay inert.
       CDK_MCP_TOKEN_ENRICHMENT_ENABLED: ${{ vars.CDK_MCP_TOKEN_ENRICHMENT_ENABLED }}
       CDK_MCP_TOKEN_ENRICHMENT_CLAIMS: ${{ vars.CDK_MCP_TOKEN_ENRICHMENT_CLAIMS }}
+      # Managed knowledge bases (.kiro/specs/managed-kb-migration). THREE
+      # INDEPENDENT OPT-IN flags, all defaulting to OFF — the inverse of the
+      # kill-switch flags above, and the difference matters here. An unset
+      # GitHub Actions variable renders as an EMPTY STRING, not as absent, so
+      # a `!== 'false'` reading of an unset variable would resolve to TRUE and
+      # arm the feature on every fork. config.ts reads these with
+      # parseBooleanEnv, which maps both unset and empty to undefined and falls
+      # through to `false` (Requirement 19.8). Leave all three unset to deploy
+      # the managed backend without starting a fleet migration.
+      #
+      #   CDK_MANAGED_KB_NEW_DEFAULT       new KBs are created managed
+      #   CDK_MANAGED_KB_MIGRATION_ENABLED the background migrator runs at all
+      #   CDK_MANAGED_KB_RECONCILER_ARMED  the daily reconciler DELETES orphans
+      #                                    rather than only reporting them
+      #
+      # reconcilerArmed is the inverted one: the Reconciler is deployed and
+      # running from day one but DISARMED, so its judgement can be reviewed
+      # against real data before it deletes anything (Requirements 14.7, 19.7).
+      CDK_MANAGED_KB_NEW_DEFAULT: ${{ vars.CDK_MANAGED_KB_NEW_DEFAULT }}
+      CDK_MANAGED_KB_MIGRATION_ENABLED: ${{ vars.CDK_MANAGED_KB_MIGRATION_ENABLED }}
+      CDK_MANAGED_KB_RECONCILER_ARMED: ${{ vars.CDK_MANAGED_KB_RECONCILER_ARMED }}
+      # Storage cost controls. Byte_Caps are in BYTES (Requirement 12.2),
+      # defaulting to 100 MB standard / 1 GB elevated / 500 MB per knowledge
+      # base; the retention window is in DAYS and must stay >= 30
+      # (Requirement 15.11). Leave unset to take those defaults — these exist
+      # so an environment can tune them without a code change.
+      CDK_MANAGED_KB_PER_OWNER_BYTES: ${{ vars.CDK_MANAGED_KB_PER_OWNER_BYTES }}
+      CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES: ${{ vars.CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES }}
+      CDK_MANAGED_KB_PER_KB_CEILING_BYTES: ${{ vars.CDK_MANAGED_KB_PER_KB_CEILING_BYTES }}
+      CDK_MANAGED_KB_RETENTION_WINDOW_DAYS: ${{ vars.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS }}
+      # Fleet-level alarm thresholds (Requirement 12.13). The Byte_Caps above
+      # bound ONE owner; these two bound the whole account, which is the gap
+      # between ~$169/month expected and ~$15,000/month that per-owner caps
+      # alone permit. Storage is in GB (default 500), daily cost in USD
+      # (default 100). Leave unset to take those defaults.
+      CDK_MANAGED_KB_STORAGE_ALARM_GB: ${{ vars.CDK_MANAGED_KB_STORAGE_ALARM_GB }}
+      CDK_MANAGED_KB_DAILY_COST_ALARM_USD: ${{ vars.CDK_MANAGED_KB_DAILY_COST_ALARM_USD }}
       # Secrets
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

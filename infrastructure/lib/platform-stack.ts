@@ -45,6 +45,8 @@ import { SharedConversationsConstruct } from './constructs/data/shared-conversat
 import { RagDataConstruct } from './constructs/rag/rag-data-construct';
 import { RagIngestionLambdaConstruct } from './constructs/rag-ingestion/rag-ingestion-lambda-construct';
 import { KbSyncConstruct } from './constructs/kb-sync/kb-sync-construct';
+import { ManagedKbRoleConstruct } from './constructs/managed-kb/managed-kb-role-construct';
+import { KbMigrationConstruct } from './constructs/managed-kb/kb-migration-construct';
 import { ScheduledRunsConstruct } from './constructs/scheduled-runs/scheduled-runs-construct';
 
 // Artifacts (data + render Lambda + CloudFront distribution).
@@ -179,6 +181,9 @@ export class PlatformStack extends cdk.Stack {
   public readonly ragVectorIndexName: string;
   public readonly ragVectorBucket: CfnResource;
   public readonly ragVectorIndex: CfnResource;
+
+  // ── Managed knowledge bases (Bedrock service role; one for all KBs)
+  public readonly managedKbServiceRoleArn: string;
 
   // ── SPA edge
   public readonly spaBucket: s3.IBucket;
@@ -449,6 +454,58 @@ export class PlatformStack extends cdk.Stack {
       oauthProvidersTable: this.oauthProvidersTable,
       workloadIdentityName: this.platformWorkloadIdentity.name,
     });
+
+    // ============================================================
+    // Managed knowledge bases — Bedrock service role (IAM only)
+    // One role shared by every Managed_KB (Requirement 8.9). Creates
+    // no knowledge base and mutates nothing existing; the migration
+    // Lambdas that call grantProvisioning()/grantDirectIngestion()
+    // arrive in task 2.1. The compute identities pick up the
+    // retrieval-only grant in wireCompute(); the ARN is threaded
+    // through refs so no consumer has to read back an SSM parameter
+    // this same stack publishes.
+    // ============================================================
+    const managedKbRole = new ManagedKbRoleConstruct(this, 'ManagedKbRole', {
+      config,
+      documentsBucket: this.ragDocumentsBucket,
+    });
+    this.managedKbServiceRoleArn = managedKbRole.serviceRoleArn;
+
+    // ============================================================
+    // Managed knowledge bases — migration control plane
+    //
+    // Four Lambdas on one image (dispatcher, worker, reconciler,
+    // ingestion consumer) plus their schedules, DLQ and account-level
+    // alarms. Purely additive: it creates new resources and mutates
+    // none. All three managedKb flags ship off, so the dispatcher's
+    // rule and the ingestion consumer's trigger are both created
+    // DISABLED; the reconciler's daily rule is enabled on purpose
+    // because report-only is the initial deployed mode (Req 14.7).
+    //
+    // `managedKbRole` is passed by construct ref so the Lambda roles
+    // can receive the provisioning/direct-ingestion grants without
+    // anyone reading back the service-role ARN from an SSM parameter
+    // this same stack publishes.
+    // ============================================================
+    new KbMigrationConstruct(this, 'KbMigration', {
+      config,
+      assistantsTable: this.ragAssistantsTable,
+      documentsBucket: this.ragDocumentsBucket,
+      managedKbRole,
+    });
+
+    // The ingestion consumer is triggered through EventBridge rather
+    // than a second bucket notification, because S3 rejects two
+    // notification configurations with overlapping prefixes for the
+    // same event type — and the legacy rag-ingestion subscription above
+    // already claims `s3:ObjectCreated:*` under `assistants/`. Enabling
+    // EventBridge delivery ADDS an `EventBridgeConfiguration` to the
+    // bucket's notification config; it does not touch the existing
+    // `LambdaFunctionConfigurations`, so the current subscription keeps
+    // working exactly as before. Called here rather than inside the
+    // construct for the same reason the rag-ingestion notification is:
+    // a construct never mutates a bucket handed to it as a prop.
+    ragData.documentsBucket.enableEventBridgeNotification();
 
     // ============================================================
     // Fine-tuning data
@@ -736,6 +793,7 @@ export class PlatformStack extends cdk.Stack {
       ragAssistantsTable: this.ragAssistantsTable,
       ragVectorBucketName: this.ragVectorBucketName,
       ragVectorIndexName: this.ragVectorIndexName,
+      managedKbServiceRoleArn: this.managedKbServiceRoleArn,
       artifactsContentBucket: this.artifactsContentBucket,
       artifactsTable: this.artifactsTable,
       artifactRenderTokenSecret: this.artifactRenderTokenSecret,

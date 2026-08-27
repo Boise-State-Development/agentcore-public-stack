@@ -588,9 +588,17 @@ async def _update_assistant_cloud(assistant: Assistant, table_name: str) -> None
         # edit would re-write a stale GSI5 key onto a delisted agent and silently put it
         # back in the store. ``listing`` is excluded for the same reason in the other
         # direction: a stale in-memory copy must not clobber a concurrent review decision.
+        #
+        # GSI7_* belongs to the managed-KB migration write path
+        # (``apis.shared.kb_backend.records``). Unlike GSI5, those keys live on a
+        # separate item (``SK = KB#{app_kb_id}``) rather than on this METADATA item, so
+        # this path cannot reach them today — the entry is here so the invariant "GSI
+        # keys are never written from the generic update" holds uniformly, and a reader
+        # does not have to know which index lives on which item to trust it.
         immutable_fields = {
             "PK", "SK",
             "GSI_PK", "GSI_SK", "GSI2_PK", "GSI2_SK", "GSI5_PK", "GSI5_SK",
+            "GSI7_PK", "GSI7_SK",
             "assistantId", "createdAt", "ownerId",
             "listing",
         }

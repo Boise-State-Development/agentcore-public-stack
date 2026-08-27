@@ -38,6 +38,30 @@ function clearRagEnv(): void {
   }
 }
 
+/**
+ * The `CDK_MANAGED_KB_*` environment variables. Scrubbed before AND after every
+ * test for the same reason as the RAG keys, but the stakes are higher here: all
+ * three Managed_KB flags default to **false**, so a value leaking in from the
+ * ambient environment or a prior test would flip a flag ON and the
+ * "defaults to off" assertions would pass for the wrong reason — exactly the
+ * silent-arming failure Requirement 19.8 exists to prevent.
+ */
+const MANAGED_KB_ENV_KEYS = [
+  'CDK_MANAGED_KB_NEW_DEFAULT',
+  'CDK_MANAGED_KB_MIGRATION_ENABLED',
+  'CDK_MANAGED_KB_RECONCILER_ARMED',
+  'CDK_MANAGED_KB_PER_OWNER_BYTES',
+  'CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES',
+  'CDK_MANAGED_KB_PER_KB_CEILING_BYTES',
+  'CDK_MANAGED_KB_RETENTION_WINDOW_DAYS',
+] as const;
+
+function clearManagedKbEnv(): void {
+  for (const key of MANAGED_KB_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
 describe('RAG Ingestion Configuration', () => {
   let app: cdk.App;
   let originalEnv: NodeJS.ProcessEnv;
@@ -49,6 +73,7 @@ describe('RAG Ingestion Configuration', () => {
     process.env = { ...originalEnv };
     // Hermetic start: drop any RAG keys a prior test may have leaked.
     clearRagEnv();
+    clearManagedKbEnv();
 
     // Create a fresh CDK app for each test
     app = new cdk.App();
@@ -111,6 +136,7 @@ describe('RAG Ingestion Configuration', () => {
     // Drop any RAG keys this test set so they can't leak forward, then restore
     // the original environment object.
     clearRagEnv();
+    clearManagedKbEnv();
     process.env = originalEnv;
   });
 
@@ -457,6 +483,347 @@ describe('RAG Ingestion Configuration', () => {
       app.node.setContext('agents', { enabled: false });
 
       expect(loadConfig(app).agents.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // Managed_KB flags — default OFF, opt-in (the inverse posture of
+  // every kill-switch flag above, which is the whole point of these
+  // tests). Validates Requirements 19.1-19.5, 19.8, 12.2, 14.7, 15.11.
+  // ============================================================
+
+  describe('Managed_KB feature flags', () => {
+    // --- Requirement 19.5: all three default to off ---
+
+    test('newDefault defaults to false when CDK_MANAGED_KB_NEW_DEFAULT is unset', () => {
+      delete process.env.CDK_MANAGED_KB_NEW_DEFAULT;
+
+      expect(loadConfig(app).managedKb.newDefault).toBe(false);
+    });
+
+    test('migrationEnabled defaults to false when CDK_MANAGED_KB_MIGRATION_ENABLED is unset', () => {
+      delete process.env.CDK_MANAGED_KB_MIGRATION_ENABLED;
+
+      expect(loadConfig(app).managedKb.migrationEnabled).toBe(false);
+    });
+
+    test('reconcilerArmed defaults to false when CDK_MANAGED_KB_RECONCILER_ARMED is unset', () => {
+      delete process.env.CDK_MANAGED_KB_RECONCILER_ARMED;
+
+      expect(loadConfig(app).managedKb.reconcilerArmed).toBe(false);
+    });
+
+    // --- Requirement 19.8: empty string is OFF, not ON ---
+    //
+    // This is the case that actually bites. `${{ vars.CDK_MANAGED_KB_* }}`
+    // renders to "" when the variable is unset, so every fork that never
+    // configures these gets an empty string, not an absent variable. The
+    // `X ? X !== 'false' : default` shape used by the default-ON flags would
+    // read "" as the default — harmless when the default is on, and a silent
+    // fleet migration when the default is off.
+
+    test('treats empty-string newDefault (unset GitHub Actions variable) as OFF', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = '';
+
+      expect(loadConfig(app).managedKb.newDefault).toBe(false);
+    });
+
+    test('treats empty-string migrationEnabled (unset GitHub Actions variable) as OFF', () => {
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = '';
+
+      expect(loadConfig(app).managedKb.migrationEnabled).toBe(false);
+    });
+
+    test('treats empty-string reconcilerArmed (unset GitHub Actions variable) as OFF', () => {
+      process.env.CDK_MANAGED_KB_RECONCILER_ARMED = '';
+
+      expect(loadConfig(app).managedKb.reconcilerArmed).toBe(false);
+    });
+
+    test('an empty string leaves all three flags off simultaneously', () => {
+      // The realistic deploy: a fork sets none of them, so the workflow
+      // forwards three empty strings at once.
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = '';
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = '';
+      process.env.CDK_MANAGED_KB_RECONCILER_ARMED = '';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.newDefault).toBe(false);
+      expect(managedKb.migrationEnabled).toBe(false);
+      expect(managedKb.reconcilerArmed).toBe(false);
+    });
+
+    // --- Requirements 19.1-19.3: each flag can be turned on ---
+
+    test('CDK_MANAGED_KB_NEW_DEFAULT="true" turns newDefault on', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = 'true';
+
+      expect(loadConfig(app).managedKb.newDefault).toBe(true);
+    });
+
+    test('CDK_MANAGED_KB_MIGRATION_ENABLED="true" turns migrationEnabled on', () => {
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = 'true';
+
+      expect(loadConfig(app).managedKb.migrationEnabled).toBe(true);
+    });
+
+    test('CDK_MANAGED_KB_RECONCILER_ARMED="true" arms the reconciler', () => {
+      process.env.CDK_MANAGED_KB_RECONCILER_ARMED = 'true';
+
+      expect(loadConfig(app).managedKb.reconcilerArmed).toBe(true);
+    });
+
+    test('"1" and "0" are accepted as on and off', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = '1';
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = '0';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.newDefault).toBe(true);
+      expect(managedKb.migrationEnabled).toBe(false);
+    });
+
+    test('an explicit "false" stays off', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = 'false';
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = 'false';
+      process.env.CDK_MANAGED_KB_RECONCILER_ARMED = 'false';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.newDefault).toBe(false);
+      expect(managedKb.migrationEnabled).toBe(false);
+      expect(managedKb.reconcilerArmed).toBe(false);
+    });
+
+    test('an unrecognised flag value fails fast rather than guessing', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = 'yes';
+
+      expect(() => loadConfig(app)).toThrow(/Invalid boolean value/);
+    });
+
+    // --- Requirement 19.4: the three flags are independently settable ---
+
+    test('arming migrationEnabled alone leaves the other two off', () => {
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = 'true';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.migrationEnabled).toBe(true);
+      expect(managedKb.newDefault).toBe(false);
+      expect(managedKb.reconcilerArmed).toBe(false);
+    });
+
+    test('arming newDefault alone leaves the other two off', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = 'true';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.newDefault).toBe(true);
+      expect(managedKb.migrationEnabled).toBe(false);
+      expect(managedKb.reconcilerArmed).toBe(false);
+    });
+
+    test('arming reconcilerArmed alone leaves the other two off', () => {
+      // Requirement 14.7: report-only is the initial deployed mode, so the
+      // reconciler is the one flag an operator flips WITHOUT any migration
+      // running. It must not drag the others on with it.
+      process.env.CDK_MANAGED_KB_RECONCILER_ARMED = 'true';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.reconcilerArmed).toBe(true);
+      expect(managedKb.newDefault).toBe(false);
+      expect(managedKb.migrationEnabled).toBe(false);
+    });
+
+    // --- The load-env.sh --context chain ---
+    //
+    // build_cdk_context_params emits `--context managedKb.<flag>=...`, which
+    // sets context["managedKb.<flag>"] — a FLAT dotted key, not a nested
+    // object. A section reading only tryGetContext('managedKb')?.flag would
+    // accept the CLI flag and silently ignore it.
+
+    test('the flat dotted context key from --context is honoured', () => {
+      delete process.env.CDK_MANAGED_KB_NEW_DEFAULT;
+      app.node.setContext('managedKb.newDefault', 'true');
+
+      expect(loadConfig(app).managedKb.newDefault).toBe(true);
+    });
+
+    test('a nested cdk.context.json managedKb object is honoured', () => {
+      delete process.env.CDK_MANAGED_KB_MIGRATION_ENABLED;
+      app.node.setContext('managedKb', { migrationEnabled: true });
+
+      expect(loadConfig(app).managedKb.migrationEnabled).toBe(true);
+    });
+
+    test('the environment variable outranks the dotted context key', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = 'false';
+      app.node.setContext('managedKb.newDefault', 'true');
+
+      expect(loadConfig(app).managedKb.newDefault).toBe(false);
+    });
+
+    // --- Requirement 12.2: Byte_Cap defaults by role tier ---
+    //
+    // Asserted as literal byte counts on purpose. Comparing against the
+    // exported MANAGED_KB_* constants would be a tautology: the assertion
+    // would follow the constant wherever it moved, so silently halving a cap
+    // (or slipping a unit) would keep every test green.
+
+    test('the standard per-owner Byte_Cap defaults to 100 MB', () => {
+      expect(loadConfig(app).managedKb.perOwnerDefaultBytes).toBe(104857600);
+    });
+
+    test('the elevated per-owner Byte_Cap defaults to 1 GB', () => {
+      expect(loadConfig(app).managedKb.perOwnerElevatedBytes).toBe(1073741824);
+    });
+
+    test('the per-knowledge-base ceiling defaults to 500 MB', () => {
+      expect(loadConfig(app).managedKb.perKnowledgeBaseCeilingBytes).toBe(524288000);
+    });
+
+    test('the byte caps are expressed in bytes, not megabytes', () => {
+      // A unit slip is the likeliest way these go wrong, and a 100-vs-100 MB
+      // mixup is invisible to an equality check on the wrong constant. Every
+      // cap must be a whole number of MiB and far larger than its MB count.
+      const { managedKb } = loadConfig(app);
+
+      for (const bytes of [
+        managedKb.perOwnerDefaultBytes,
+        managedKb.perOwnerElevatedBytes,
+        managedKb.perKnowledgeBaseCeilingBytes,
+      ]) {
+        expect(bytes % (1024 * 1024)).toBe(0);
+        expect(bytes).toBeGreaterThan(1024 * 1024);
+      }
+    });
+
+    test('the tiers are ordered standard < per-KB ceiling < elevated', () => {
+      // The ceiling sits between the tiers deliberately: it must bound a
+      // single runaway corpus for an elevated owner, while still leaving a
+      // standard owner's whole allowance usable by one knowledge base.
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.perOwnerDefaultBytes).toBeLessThan(
+        managedKb.perKnowledgeBaseCeilingBytes,
+      );
+      expect(managedKb.perKnowledgeBaseCeilingBytes).toBeLessThan(
+        managedKb.perOwnerElevatedBytes,
+      );
+    });
+
+    test('each Byte_Cap is overridable, resolvable by role tier', () => {
+      // Requirement 12.2 requires all three to be configurable.
+      process.env.CDK_MANAGED_KB_PER_OWNER_BYTES = '52428800';
+      process.env.CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES = '2147483648';
+      process.env.CDK_MANAGED_KB_PER_KB_CEILING_BYTES = '262144000';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.perOwnerDefaultBytes).toBe(52428800);
+      expect(managedKb.perOwnerElevatedBytes).toBe(2147483648);
+      expect(managedKb.perKnowledgeBaseCeilingBytes).toBe(262144000);
+    });
+
+    test('a Byte_Cap override arrives via the flat dotted context key too', () => {
+      delete process.env.CDK_MANAGED_KB_PER_OWNER_BYTES;
+      app.node.setContext('managedKb.perOwnerDefaultBytes', '52428800');
+
+      expect(loadConfig(app).managedKb.perOwnerDefaultBytes).toBe(52428800);
+    });
+
+    // --- Requirement 15.11: rollback retention window ---
+
+    test('the retention window defaults to 30 days', () => {
+      expect(loadConfig(app).managedKb.retentionWindowDays).toBe(30);
+    });
+
+    test('the default retention window satisfies the 30-day floor', () => {
+      // Requirement 15.11 states "at least 30 days". Asserting the floor
+      // separately from the exact default keeps the requirement checked even
+      // if the shipped default is later raised.
+      expect(loadConfig(app).managedKb.retentionWindowDays).toBeGreaterThanOrEqual(30);
+    });
+
+    test('the retention window is overridable', () => {
+      process.env.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS = '45';
+
+      expect(loadConfig(app).managedKb.retentionWindowDays).toBe(45);
+    });
+
+    test('the retention window arrives via the flat dotted context key too', () => {
+      delete process.env.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS;
+      app.node.setContext('managedKb.retentionWindowDays', '60');
+
+      expect(loadConfig(app).managedKb.retentionWindowDays).toBe(60);
+    });
+
+    // --- Requirement 12.13: fleet-level alarm thresholds ---
+    //
+    // Per-owner Byte_Caps bound one user; only these two bound the account,
+    // and the gap they cover is ~$169/month expected versus ~$15,000/month
+    // permitted by the per-owner caps alone. Each is asserted through all
+    // three legs of the precedence chain because the dotted-context leg is
+    // the one that was missing: load-env.sh emits
+    // `--context managedKb.storageAlarmGb=...`, which sets the FLAT key
+    // context['managedKb.storageAlarmGb'], so a nested-only read accepts the
+    // flag and ignores it — an operator raises a threshold, the CLI takes the
+    // flag without complaint, and the alarm keeps firing at the old number.
+
+    test('the fleet alarm thresholds have documented defaults', () => {
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.storageAlarmGb).toBe(500);
+      expect(managedKb.dailyCostAlarmUsd).toBe(100);
+    });
+
+    test('the fleet alarm thresholds are overridable by environment variable', () => {
+      process.env.CDK_MANAGED_KB_STORAGE_ALARM_GB = '750';
+      process.env.CDK_MANAGED_KB_DAILY_COST_ALARM_USD = '250';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.storageAlarmGb).toBe(750);
+      expect(managedKb.dailyCostAlarmUsd).toBe(250);
+    });
+
+    test('the storage alarm threshold arrives via the flat dotted context key', () => {
+      delete process.env.CDK_MANAGED_KB_STORAGE_ALARM_GB;
+      app.node.setContext('managedKb.storageAlarmGb', '750');
+
+      expect(loadConfig(app).managedKb.storageAlarmGb).toBe(750);
+    });
+
+    test('the daily cost alarm threshold arrives via the flat dotted context key', () => {
+      delete process.env.CDK_MANAGED_KB_DAILY_COST_ALARM_USD;
+      app.node.setContext('managedKb.dailyCostAlarmUsd', '250');
+
+      expect(loadConfig(app).managedKb.dailyCostAlarmUsd).toBe(250);
+    });
+
+    test('the environment variable outranks the dotted key for both thresholds', () => {
+      process.env.CDK_MANAGED_KB_STORAGE_ALARM_GB = '900';
+      process.env.CDK_MANAGED_KB_DAILY_COST_ALARM_USD = '300';
+      app.node.setContext('managedKb.storageAlarmGb', '750');
+      app.node.setContext('managedKb.dailyCostAlarmUsd', '250');
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.storageAlarmGb).toBe(900);
+      expect(managedKb.dailyCostAlarmUsd).toBe(300);
+    });
+
+    test('a nested managedKb object still supplies both thresholds', () => {
+      delete process.env.CDK_MANAGED_KB_STORAGE_ALARM_GB;
+      delete process.env.CDK_MANAGED_KB_DAILY_COST_ALARM_USD;
+      app.node.setContext('managedKb', { storageAlarmGb: 111, dailyCostAlarmUsd: 22 });
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.storageAlarmGb).toBe(111);
+      expect(managedKb.dailyCostAlarmUsd).toBe(22);
     });
   });
 

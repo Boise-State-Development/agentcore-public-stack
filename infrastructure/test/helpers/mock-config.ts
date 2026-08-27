@@ -6,7 +6,12 @@
  * without hitting AWS.
  */
 import * as cdk from 'aws-cdk-lib';
-import { AppConfig } from '../../lib/config';
+import { AppConfig,
+  MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
+  MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
+  MANAGED_KB_PER_KB_CEILING_BYTES,
+  MANAGED_KB_RETENTION_WINDOW_DAYS,
+} from '../../lib/config';
 
 /** Default mock account and region used across all tests. */
 export const MOCK_ACCOUNT = '123456789012';
@@ -47,6 +52,23 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     kbSync: {
       enabled: false,
+    },
+    // Managed_KB ships with all three flags OFF and the byte caps /
+    // alarm thresholds at their production defaults. Tests that need a
+    // flag on opt in explicitly via
+    // createMockConfig({ managedKb: { ...base.managedKb, migrationEnabled: true } }),
+    // which keeps "off" the thing a test has to work to escape rather
+    // than the thing it has to remember to assert.
+    managedKb: {
+      newDefault: false,
+      migrationEnabled: false,
+      reconcilerArmed: false,
+      perOwnerDefaultBytes: MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
+      perOwnerElevatedBytes: MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
+      perKnowledgeBaseCeilingBytes: MANAGED_KB_PER_KB_CEILING_BYTES,
+      retentionWindowDays: MANAGED_KB_RETENTION_WINDOW_DAYS,
+      storageAlarmGb: 500,
+      dailyCostAlarmUsd: 100,
     },
     scheduledRuns: {
       enabled: false,
