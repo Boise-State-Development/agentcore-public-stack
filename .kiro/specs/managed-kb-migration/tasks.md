@@ -637,7 +637,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       keying on service code alone blends it into the AgentCore Runtime memory line
     - _Requirements: 22.7_
 
-  - [ ] 14.3 Build the upgrade UX
+  - [x] 14.3 Build the upgrade UX
     - In `frontend/ai.client/src/app/knowledge-base/knowledge-base-section.component.ts`,
       add the opt-in upgrade card, non-blocking progress, one-time success notice,
       and a failure state with a retry control
@@ -646,15 +646,68 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Gate on the existing `_require_edit_permission`; viewers never see the control
     - Angular signals, `OnPush`, Tailwind utilities, both light and dark modes,
       WCAG AA
+    - **Spec gap, found during implementation.** This task was written as
+      frontend-only, but **nothing enrolled a knowledge base**. The worker picks
+      up records already in `shadow`; the dispatcher sweeps GSI7; no code path
+      wrote either. Group 14 could have been called complete with the feature
+      still unreachable. Required a new HTTP surface:
+      `backend/src/apis/app_api/kb_upgrade/` (`models.py`, `service.py`,
+      `routes.py`) — `GET`/`POST` `…/knowledge-base/upgrade`, `POST …/retry`,
+      `POST …/notice`.
+    - Kept in its **own package**, not `app_api/kb_migration/`: that package's
+      modules share one size-constrained Lambda image, and this one imports
+      `apis.shared.assistants` for the permission model, which pulls the
+      embeddings stack at module scope.
+    - Enrolment is **two conditional writes**, not one put. `KbRecord.to_item`
+      does not write `GSI7_PK`/`GSI7_SK` — only `set_migration_state` maintains
+      them — so the obvious one-put enrolment produces a record that claims to be
+      migrating and is invisible to the dispatcher *forever*, behind a spinner
+      that never moves. Asserted by
+      `test_enrolment_writes_the_dispatcher_work_keys` and
+      `test_the_created_record_does_not_claim_to_be_migrating`.
+    - The **offer is gated on `MANAGED_KB_MIGRATION_ENABLED`**, the dispatcher's
+      own flag, read at call time with the same allow-list. Offering an upgrade
+      the worker cannot perform is a spinner with no engine behind it, so
+      "available" is made to mean actionable. Off ⇒ phase `none` ⇒ renders
+      nothing, which is also 23.1's required behaviour.
+    - Two public transitions added to `kb_backend/records.py`:
+      `retry_from_failed` (one atomic write — generation bump, re-enter `shadow`,
+      work keys, `REMOVE migrationError`; guarded on the old generation **and**
+      still being `failed`) and `dismiss_upgrade_notice`.
+    - Client (`kb-upgrade.service.ts`) **fails soft**: `getStatus` resolves to
+      phase `none` rather than rejecting, so a broken upgrade endpoint cannot take
+      down the documents section it decorates.
     - _Requirements: 23.1, 23.2, 23.3, 23.4, 23.5, 23.6, 23.7, 23.8_
 
-  - [ ] 14.4 Surface failed and stuck documents
+  - [ ] 14.4 Surface failed and stuck documents — **surfacing done, one-click
+        retry deferred** (still open: see the deferral note below)
     - During the upgrade flow, list any non-`complete` document that will not be
       carried across and offer retry; 200 of 1,692 production `DOC#` records
       (11.8%) are affected, including 95 `failed` whose owners believe the uploads
       worked
     - Distinguish an unsupported file format from a processing failure in messaging
-    - _Requirements: 21.1, 21.2, 21.3, 21.4_
+    - **Done:** `classify_document` splits `unsupported_format` /
+      `processing_failure` / `being_removed` / `still_processing` (Req 21.4), and
+      the card discloses them collapsed above the offer — *before* the user
+      commits, so the choice to fix or accept the loss is theirs (Reqs 21.1, 21.3).
+    - The unsupported-format set is **imported** from
+      `docling_processor.DOCLING_SUPPORTED_EXTENSIONS`, never copied. A copied
+      list is the tag-contract defect's exact shape. Its module scope is
+      stdlib-only, so the import is free.
+    - `deleting` documents are **deliberately surfaced**, though
+      `list_assistant_documents` filters them out as soft-deleted: they are 101 of
+      the 200 affected records, and a user never shown them cannot tell they are
+      stuck. That filter — plus its stale-document auto-fail *write* — is why this
+      surface runs its own raw `DOC#` query.
+    - **Deferred, Req 21.2 (one-click retry).** Ingestion is S3-event-triggered
+      (`documents/ingestion/handler.py`) and no reprocess endpoint exists, so a
+      retry control needs new backend that re-fires that pipeline for bytes
+      already in S3. Not built: it is a change to a live ingestion path and was
+      explicitly deferred rather than improvised. The card currently directs the
+      user to re-upload via "Add files", which is a retry path that works today
+      and needs nothing new. **Close this subtask by either building the
+      reprocess endpoint or amending Req 21.2 to accept re-upload.**
+    - _Requirements: 21.1, 21.3, 21.4 (21.2 partial — see above)_
 
   - [ ] 14.5 Build the admin surface
     - Knowledge bases filterable by engine, with stored bytes and document counts,

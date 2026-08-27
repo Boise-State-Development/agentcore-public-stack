@@ -237,6 +237,19 @@ export function buildAppApiEnvironment(
     MANAGED_KB_PER_OWNER_DEFAULT_BYTES: String(config.managedKb.perOwnerDefaultBytes),
     MANAGED_KB_PER_OWNER_ELEVATED_BYTES: String(config.managedKb.perOwnerElevatedBytes),
     MANAGED_KB_PER_KB_CEILING_BYTES: String(config.managedKb.perKnowledgeBaseCeilingBytes),
+    // Gates the owner-facing upgrade offer (Requirement 23.1), which is served by
+    // THIS task — `apis/app_api/kb_upgrade/service.py` reads this exact variable.
+    //
+    // It is deliberately the same flag the dispatcher reads rather than a second
+    // one: offering an upgrade the worker cannot perform is a progress spinner
+    // with no engine behind it. One flag means the offer and the capability
+    // cannot disagree.
+    //
+    // Set explicitly to 'false' rather than omitted when off. The service reads
+    // it through an allow-list of affirmative spellings, so absent and 'false'
+    // behave identically — but an explicit value makes the shipped state visible
+    // in the task definition instead of having to be inferred from silence.
+    MANAGED_KB_MIGRATION_ENABLED: String(config.managedKb.migrationEnabled),
     // Kept in step with the IAM condition by deriving both from one helper; a
     // mismatch would make every metric publish silently denied.
     MANAGED_KB_METRIC_NAMESPACE: managedKbMetricNamespace(config),

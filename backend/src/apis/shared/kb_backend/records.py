@@ -564,3 +564,62 @@ def acquire_lease(
         ),
         ExpressionAttributeValues={":until": lease_until, ":now": now_iso},
     )
+
+
+def retry_from_failed(
+    assistant_id: str,
+    app_kb_id: str,
+    generation: int,
+    due_at: str,
+) -> None:
+    """Re-enter ``shadow`` from ``failed`` on the next generation, atomically.
+
+    One write, not two. Split into "bump the generation" then
+    "set_migration_state", a crash between them leaves a record carrying a new
+    generation while still ``failed`` — and with no work keys, so it is invisible
+    to the dispatcher while the retry control has already reported success. The
+    user would wait forever on an upgrade nothing owns.
+
+    Guarded on **both** the old generation and still being ``failed``, so two
+    concurrent retries yield one new attempt and one :class:`TransitionLost`. The
+    generation bump is also what fences the abandoned attempt: every conditional
+    write belonging to it is guarded on the old value, so a straggler worker
+    cannot land on the new generation.
+
+    ``migrationError`` is removed rather than left behind, so a subsequent
+    failure's reason cannot be mistaken for this one's.
+    """
+    _conditional(
+        _table().update_item,
+        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        UpdateExpression=(
+            "SET migrationState = :shadow, migrationGeneration = :next, "
+            "GSI7_PK = :wpk, GSI7_SK = :wsk REMOVE migrationError"
+        ),
+        ConditionExpression="migrationGeneration = :gen AND migrationState = :failed",
+        ExpressionAttributeValues={
+            ":shadow": SHADOW,
+            ":failed": MIGRATION_FAILED,
+            ":gen": Decimal(generation),
+            ":next": Decimal(generation + 1),
+            ":wpk": work_pk(SHADOW),
+            ":wsk": due_at,
+        },
+    )
+
+
+def dismiss_upgrade_notice(assistant_id: str, app_kb_id: str, now_iso: str) -> None:
+    """Retire the one-time post-upgrade notice.
+
+    Unconditional on purpose: dismissing an already-dismissed notice is not a
+    race worth losing, and the attribute's only reader treats any value as
+    "dismissed". Guarded only on the record existing, so a dismissal for a
+    knowledge base that never had a record cannot conjure one.
+    """
+    _conditional(
+        _table().update_item,
+        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        UpdateExpression="SET upgradeNoticeDismissedAt = :now",
+        ConditionExpression="attribute_exists(PK) AND attribute_exists(SK)",
+        ExpressionAttributeValues={":now": now_iso},
+    )

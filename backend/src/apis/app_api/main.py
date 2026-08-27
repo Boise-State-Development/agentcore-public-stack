@@ -192,6 +192,7 @@ from apis.app_api.files.routes import router as files_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.agent_designer.routes import router as agents_router
 from apis.app_api.documents.routes import router as documents_router
+from apis.app_api.kb_upgrade.routes import router as kb_upgrade_router
 from apis.app_api.users.routes import router as users_router
 from apis.app_api.user_settings.routes import router as user_settings_router
 from apis.app_api.connectors.routes import router as connectors_router
@@ -217,6 +218,7 @@ app.include_router(admin_router)
 app.include_router(assistants_router)
 app.include_router(agents_router)  # Agent Designer /agents surface; 404s while AGENTS_API_ENABLED off
 app.include_router(documents_router)
+app.include_router(kb_upgrade_router)  # Owner-facing KB upgrade card; phase "none" (renders nothing) while MANAGED_KB_MIGRATION_ENABLED is off
 app.include_router(users_router)
 app.include_router(user_settings_router)
 app.include_router(models_router)

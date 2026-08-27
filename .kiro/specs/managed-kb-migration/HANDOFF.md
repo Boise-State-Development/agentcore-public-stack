@@ -1,6 +1,6 @@
 # Managed KB Migration — Handoff
 
-**Last updated:** 2026-08-26 (groups 11–13, group 14 backend half, tag contract) · **Branch:** `feature/kb-migration` · **Nothing deployed**
+**Last updated:** 2026-08-26 (groups 11–13, group 14 backend half, tag contract, **14.3 upgrade UX + enrolment surface**) · **Branch:** `feature/kb-migration` · **Nothing deployed**
 
 Working state for this feature so a fresh session can pick it up without re-deriving
 anything. Read this, then `tasks.md`.
@@ -12,12 +12,12 @@ anything. Read this, then `tasks.md`.
 | | |
 |---|---|
 | Spec | Complete, audited 3× to clean. 25 requirements, 201 criteria, 0 dangling refs |
-| Implementation | Groups **1–13** done, plus group 14's backend/infra half. 6 subtasks left: 14.3–14.5 (frontend) and group 15 |
-| Tests | **617** infra (jest) · **6,530** backend (pytest) · 5 pre-existing unrelated failures |
+| Implementation | Groups **1–13** done, plus group 14 except 14.5. 14.4's one-click document retry is deferred. 4 subtasks left: 14.4's retry, 14.5, and group 15 |
+| Tests | 617 infra (jest) · **6,603** backend (pytest, 6 m 20 s) · **1,886** frontend (vitest, 7 s) · 5 pre-existing unrelated failures |
 | Deployed | **Nothing.** No `cdk deploy`, no AWS mutation, at any point |
-| Feature flags | All three ship **off** |
+| Feature flags | `migrationEnabled` **on in development**, off in production. `newDefault` and `reconcilerArmed` off in both (explicit `false`, set as GitHub Environment variables) |
 
-### Commits (16 on the branch)
+### Commits (16 on the branch, all pushed)
 
 ```
 45239838  one source of truth for the managed KB tag contract
@@ -39,18 +39,22 @@ ffa7a408  KB_Record data layer with conditional state transitions        (group 
 5f2c98b1  spec, schema and worker platform                              (groups 1, 2)
 ```
 
+**Uncommitted working tree:** the 14.3 upgrade surface — `apis/app_api/kb_upgrade/`,
+two transitions appended to `kb_backend/records.py`, the Angular card and service,
+three test files. See §7 for the file map and §2 for how to run it.
+
 ### Is the feature reachable yet?
 
-**Servable, but nothing routes to it.** The managed backend is now registered in
-the resolver at import (group 14.0), so a record saying `retrievalEngine:
-"managed"` is served correctly instead of raising `BackendUnavailable`. What is
-still missing is anything that *writes* that value: the migration flag ships off,
-so a dispatcher tick invokes nothing, and there is no enrollment surface — that is
-groups 14.3–14.5.
+**Yes, end to end, once the flag is on — except that nothing performs the work.**
+Group 14.3 closed the last gap in the *control* path: a user can now enrol a
+knowledge base, which writes a `KB#` record in `shadow` with the GSI7 work keys.
+Before it, nothing wrote either, so every group could have been finished with the
+feature unreachable (§5 defect 21).
 
-The dual-read pilot is in the same position: `dualReadPilot: true` on a record now
-genuinely starts an observational managed read, because a managed backend exists to
-compare against. It stays off unless the attribute is set by hand.
+What is still missing is the **worker's deployment**, not its code. The dispatcher
+and worker are Lambdas behind an undeployed image, so an enrolled record sits in
+`shadow` indefinitely and the card shows perpetual progress. That is the correct
+local behaviour, not a bug.
 
 **Three behaviour changes ARE live on the existing path** and are the only things
 worth testing by hand right now:
@@ -74,9 +78,39 @@ cd infrastructure && npm run build          # tsc
 cd infrastructure && npx jest               # 611 passing
 
 # backend
-cd backend && uv run python -m pytest tests/ -q     # ~6 min, 6301 passing
+cd backend && uv run python -m pytest tests/ -q     # 6 m 20 s, 6,603 passing
 cd backend && uv run ruff check <your files>
+
+# frontend
+cd frontend/ai.client && npx ng test --watch=false   # 1,886 passing, ~7 s
+cd frontend/ai.client && npx ng test --watch=false --include="**/kb-upgrade*"
+cd frontend/ai.client && npx tsc -p tsconfig.app.json --noEmit
 ```
+
+There is **no eslint config** in the repo despite the steering docs mentioning
+ESLint; `npx eslint` fails with "couldn't find an eslint.config.*". Type-check
+with `tsc --noEmit` and build with `ng build` instead.
+
+### Running the upgrade UI locally
+
+```bash
+# 1. turn the offer on (LOCAL ONLY — backend/src/.env is gitignored)
+echo 'MANAGED_KB_MIGRATION_ENABLED=true' >> backend/src/.env
+
+# 2. app_api on :8000, reading the dev account's DynamoDB via backend/src/.env
+cd backend/src/apis/app_api && uv run python main.py
+
+# 3. SPA on :4200 — environment.ts already points at localhost:8000
+cd frontend/ai.client && npm run start
+```
+
+Then edit an assistant that has documents. Without the flag the card renders
+nothing at all, which is correct rather than broken.
+
+⚠️ **The local API writes to the real dev tables.** Enrolling writes a genuine
+`KB#{id}` item under `AST#{id}`. Use a throwaway assistant; undo by deleting that
+item. The upgrade will sit at "Upgrading…" forever because the worker Lambda is
+not deployed — expected, not a bug.
 
 **Baselines that are NOT your fault:**
 - 5 backend failures in `tests/agents/main_agent/{session/test_async_persistence.py,streaming/test_cancellation_state.py}` — Strands SDK contract tests looking for `cancel_signal`/`async_mode` that the installed SDK lacks. Pre-existing, unrelated.
@@ -130,6 +164,20 @@ stack at module scope. Pulling that into a Lambda image blows the size budget.
 Never `def f(timeout=MODULE_CONSTANT)`. Python binds default arguments once at import,
 so the constant becomes unpatchable. This cost a 33-second test that silently ignored
 its own override. Use `timeout: Optional[float] = None` and resolve inside.
+
+### The knowledge-base component spec needs every collaborator stubbed
+
+`KnowledgeBaseSectionComponent` loads documents, crawls, sync policies and
+connectors on hydration. Leave any of those services real and their HTTP requests
+stay pending, so `fixture.whenStable()` never settles and **every test in the file
+times out at 5 s** with "Test timed out in 5000ms" and no hint as to why. 30 of 31
+failed this way before the stubs went in.
+
+`quietCollaborators()` in `knowledge-base-section.component.spec.ts` provides all
+six (`DocumentService`, `FileSourceService`, `WebSourceService`,
+`SyncPolicyService`, `UserConnectorsService`, `OAuthConsentService`). Note
+`OAuthConsentService`'s `completion` and `inFlightProviders` must be **signals**,
+not plain values — the component calls them.
 
 ---
 
@@ -265,15 +313,77 @@ saying why that number is a property of AWS rather than a knob.
 
 ---
 
+21. **Nothing enrolled a knowledge base (group 14.3).** The mirror image of
+    defect 17, and missed by it. `register_backend` made a promoted record
+    *servable*; this is about a record ever reaching `shadow` in the first place.
+    The worker only picks up records already in a migration state and the
+    dispatcher only sweeps GSI7, so with no enrolment surface both were correct
+    and inert. Task 14.3 was written as frontend-only, which is how it hid: the
+    missing piece was an **HTTP surface** nobody had scoped. Now
+    `apis/app_api/kb_upgrade/`.
+
+22. **A one-put enrolment would have stranded every knowledge base (group 14.3).**
+    `KbRecord.to_item` does not write `GSI7_PK`/`GSI7_SK` — only
+    `set_migration_state` maintains them. So the obvious enrolment (one
+    `put_item` with `migrationState="shadow"`) yields a record that reports an
+    upgrade in progress to every surface while being invisible to the dispatcher's
+    sweep **forever**: a spinner with nothing behind it, and no error anywhere.
+    Enrolment is therefore `create_provisioning` *then* `set_migration_state`,
+    both conditional. Two tests pin it, including one asserting the created record
+    does **not** carry `migrationState`.
+
+23. **An unrecognised failure reason leaked the operator's string (group 14.3).**
+    Found by mutation, not review. `_failure_reason` maps known tokens to
+    plain-language copy, and the test proved that for `ByteCapExceeded` — so
+    mutating the fallback to `return stored or _FAILURE_FALLBACK` **survived**, and
+    a user would have read `ClientError: An error occurred
+    (AccessDeniedException)…` in the card. Testing the mapped path proved nothing
+    about the unmapped one; that is the whole lesson.
+    `test_an_unrecognised_failure_does_not_leak_the_operator_string` pins it.
+
+24. **The upgrade flag never reached the service that reads it (pre-merge).**
+    Third instance of this feature's signature failure, and the most nearly
+    shipped. `kb-migration-construct.ts` sets all three `MANAGED_KB_*` booleans on
+    the four migration Lambdas; `app-api-environment.ts` set the byte caps and the
+    metric namespace but **not** `MANAGED_KB_MIGRATION_ENABLED` — which
+    `apis/app_api/kb_upgrade/service.py` reads to decide whether to offer the
+    upgrade at all.
+
+    Setting the environment variable in GitHub would therefore have changed
+    nothing: the card would render `phase: "none"` for every user in every
+    environment, forever, with a clean deploy and no log line. Found only by
+    tracing where the flag is actually consumed before setting it.
+
+    Now wired, shipped as an explicit `'false'` rather than omitted so the state
+    is readable in the task definition, and guarded by three tests in
+    `app-api-environment.test.ts`. The mutation — deleting the line, which is
+    precisely what the defect was — is caught.
+
+    ⚠️ `managedKb.newDefault` has **no reader anywhere in `backend/src`**. It is
+    set on the Lambdas' environment and consumed by nothing, because
+    "new knowledge bases are created managed" is a follow-up spec (design §14.7
+    steps 5–8), not this phase. Leave it off; turning it on is a no-op that reads
+    like a behaviour change.
+
+---
+
 ## 6. Remaining work
 
 | Group | Subtasks | Notes |
 |---|---|---|
-| **14** Surfaces (frontend only) | 3 | 14.3 upgrade UX, 14.4 failed/stuck document surfacing (200 of 1,692 production `DOC#` records are affected, incl. 95 `failed` whose owners believe the uploads worked), 14.5 admin surface. Metrics, cost attribution, teardown and backend registration are **done**. |
+| **14** Surfaces | 1½ | **14.5** admin surface (filter by engine, stored bytes + document counts, bulk migrate, per-KB retry) — not started. **14.4** is surfaced but its one-click document retry is deferred; see the deferral below. 14.0–14.3, 14.6, 14.7 are **done**. |
 | **15** Pre-promotion verification | 3 | The gate before any real traffic moves. |
 
 ### Known deferrals (correct, not oversights)
 
+- **One-click document reprocess (Req 21.2).** Ingestion is S3-event-triggered
+  (`documents/ingestion/handler.py`) and there is **no reprocess endpoint** — the
+  only document writes are upload-url, import, upload-failed and delete. A retry
+  control therefore needs new backend that re-fires the pipeline against bytes
+  already in S3, which is a change to a live ingestion path. Deliberately not
+  improvised. The card directs the user to re-upload via "Add files", a retry path
+  that works today. **Close by building the endpoint or by amending Req 21.2 to
+  accept re-upload** — do not leave it ambiguous.
 - **`backend/Dockerfile.kb-migration`** does not exist yet, on purpose. The real image
   needs five artefacts that do not exist: the handler modules, their
   `requirements.txt`, a case in `scripts/build/build-one.sh`, `backend.yml` jobs, and
@@ -321,6 +431,19 @@ backend/src/apis/app_api/kb_migration/
   reconciler.py           daily join, report-only
   dispatcher.py           sparse-index sweep, bounded, no-ops when the flag is off
   worker.py               ONE step per invocation, leased, resumable
+
+backend/src/apis/app_api/kb_upgrade/     the OWNER-FACING surface (HTTP only)
+  models.py               camelCase wire models; UpgradePhase + DocumentIssueKind
+  service.py              phase derivation, enrolment, retry, notice, doc triage
+  routes.py               4 endpoints; read is any permission, writes are edit-only
+                          NOT in kb_migration/: that package's modules share one
+                          size-constrained Lambda image and this one imports the
+                          embeddings-pulling assistants package
+
+frontend/ai.client/src/app/knowledge-base/
+  kb-upgrade.service.ts             fails soft; getStatus resolves to phase 'none'
+  knowledge-base-section.component.*  the card: offer / progress / notice / failure
+                                      + the stranded-document disclosure
 
 scripts/teardown/
   managed-kb.sh                   delete tag-matched KBs BEFORE any stack

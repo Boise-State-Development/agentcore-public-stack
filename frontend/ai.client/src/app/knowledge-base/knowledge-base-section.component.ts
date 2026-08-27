@@ -14,10 +14,14 @@ import {
   heroArrowDownTray,
   heroArrowPath,
   heroBookOpen,
+  heroCheckCircle,
+  heroExclamationTriangle,
   heroGlobeAlt,
   heroLink,
   heroPlus,
+  heroSparkles,
   heroTrash,
+  heroXMark,
 } from '@ng-icons/heroicons/outline';
 import { Dialog } from '@angular/cdk/dialog';
 import { DocumentService, DocumentUploadError } from '../assistants/services/document.service';
@@ -51,6 +55,11 @@ import {
 import { UserConnectorsService } from '../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../services/toast/toast.service';
+import {
+  DocumentNotCarried,
+  KbUpgradeService,
+  UpgradeStatus,
+} from './kb-upgrade.service';
 import { parseIso } from '../utils/date';
 
 /**
@@ -78,10 +87,14 @@ import { parseIso } from '../utils/date';
       heroArrowDownTray,
       heroArrowPath,
       heroBookOpen,
+      heroCheckCircle,
+      heroExclamationTriangle,
       heroGlobeAlt,
       heroLink,
       heroPlus,
+      heroSparkles,
       heroTrash,
+      heroXMark,
     }),
   ],
 })
@@ -94,6 +107,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
   private readonly consentService = inject(OAuthConsentService);
   private readonly dialog = inject(Dialog);
   private readonly toast = inject(ToastService);
+  private readonly kbUpgrade = inject(KbUpgradeService);
 
   // ── Inputs ────────────────────────────────────────────────────────────
 
@@ -172,6 +186,101 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
   readonly isLoadingCrawls = signal<boolean>(false);
   /** Source refs (document/crawl ids) with a sync mutation in flight. */
   readonly syncBusySourceRefs = signal<Set<string>>(new Set());
+
+  // ── Knowledge base upgrade (managed-kb-migration, Requirements 21 & 23) ──
+  //
+  // The whole surface hangs off one server-derived phase. Nothing here decides
+  // *whether* an upgrade is available — that judgement needs the record's
+  // migration state and a platform flag, neither of which belongs in a
+  // component. The client's job is to render honestly and never nag.
+
+  /** Server-derived upgrade state. `null` until read; renders nothing either way. */
+  readonly upgradeStatus = signal<UpgradeStatus | null>(null);
+  /** True while a start/retry request is in flight. */
+  readonly upgradeBusy = signal<boolean>(false);
+  /** Locally hidden the moment the user dismisses, before the server confirms. */
+  readonly upgradeNoticeHidden = signal<boolean>(false);
+  /** Whether the stranded-document list is expanded. Collapsed by default. */
+  readonly strandedExpanded = signal<boolean>(false);
+  private upgradeHydratedForId: string | null = null;
+  private upgradePollHandle: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * The phase to render, or `'none'` for nothing at all.
+   *
+   * Requirement 23.1: a legacy knowledge base needing no action shows no badge,
+   * no banner and no prompt. That is the default here rather than a special
+   * case — an unread status is indistinguishable from nothing to say.
+   */
+  readonly upgradePhase = computed(() => this.upgradeStatus()?.phase ?? 'none');
+
+  /** Requirement 23.2 — the opt-in card. Only ever for owners and editors. */
+  readonly showUpgradeOffer = computed(
+    () => this.upgradePhase() === 'available' && (this.upgradeStatus()?.canUpgrade ?? false),
+  );
+
+  /** Requirement 23.3 — non-blocking progress; the user may navigate away. */
+  readonly showUpgradeProgress = computed(() => this.upgradePhase() === 'in_progress');
+
+  /** Requirement 23.5 — a plain-language failure with a way forward. */
+  readonly showUpgradeFailure = computed(() => this.upgradePhase() === 'failed');
+
+  /**
+   * Requirement 23.4 — a one-time dismissible notice, never a permanent badge.
+   *
+   * Gated on the local hide as well as the server's flag so the notice
+   * disappears on click rather than on the next poll.
+   */
+  readonly showUpgradeNotice = computed(
+    () =>
+      this.upgradePhase() === 'succeeded' &&
+      (this.upgradeStatus()?.noticePending ?? false) &&
+      !this.upgradeNoticeHidden(),
+  );
+
+  /**
+   * Documents the upgrade will not carry across (Requirement 21.1).
+   *
+   * Surfaced alongside the offer — before the user commits — because the
+   * decision to retry or accept the loss is theirs to make with the facts in
+   * hand. 200 of 1,692 production documents are affected, including 95 whose
+   * owners believe the upload worked.
+   */
+  readonly strandedDocuments = computed<DocumentNotCarried[]>(
+    () => this.upgradeStatus()?.documentsNotCarried ?? [],
+  );
+
+  /**
+   * Whether to show the stranded-document warning at all.
+   *
+   * Shown with the offer and with a failure, but not during progress: mid-run is
+   * the one moment the user can do nothing about it, and a warning you cannot
+   * act on is just noise.
+   */
+  readonly showStrandedDocuments = computed(
+    () =>
+      this.strandedDocuments().length > 0 &&
+      (this.showUpgradeOffer() || this.showUpgradeFailure()),
+  );
+
+  /** Human progress text. Falls back to an honest vaguer form when counts are absent. */
+  readonly upgradeProgressLabel = computed(() => {
+    const progress = this.upgradeStatus()?.progress;
+    if (!progress || progress.total <= 0) {
+      return 'Upgrading your knowledge base…';
+    }
+    return `Upgrading — ${progress.completed} of ${progress.total} documents`;
+  });
+
+  /** Percentage for the progress bar, clamped so a bad count cannot overflow it. */
+  readonly upgradeProgressPercent = computed(() => {
+    const progress = this.upgradeStatus()?.progress;
+    if (!progress || progress.total <= 0) {
+      return 0;
+    }
+    return Math.min(100, Math.max(0, Math.round((progress.completed / progress.total) * 100)));
+  });
+
   /** Provider whose consent popup was opened from a "Reconnect" affordance. */
   readonly reconnectingProviderId = signal<string | null>(null);
 
@@ -319,12 +428,156 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
       }
     });
 
+    // Read the upgrade status once the id is known AND the permission is
+    // resolved. Gated on the permission for the same reason the sync surface is:
+    // issuing it with the default 'owner' guess would ask about a control the
+    // user may not have. Failure inside loadUpgradeStatus leaves the phase at
+    // 'none', which renders nothing — the correct outcome for an optional card.
+    effect(() => {
+      const id = this.id();
+      if (!id || !this.permissionResolved() || id === this.upgradeHydratedForId) {
+        return;
+      }
+      this.upgradeHydratedForId = id;
+      void this.loadUpgradeStatus();
+    });
+
     // Load the connectors the user can import documents from (create or edit).
     void this.loadFileSources();
   }
 
   ngOnDestroy(): void {
     this.stopCrawlWatcher();
+    this.stopUpgradePoll();
+  }
+
+  // ── Knowledge base upgrade ──────────────────────────────────────────────
+
+  /**
+   * Read the upgrade status and start or stop polling to match.
+   *
+   * The service resolves rather than rejects on failure, so there is no error
+   * path here: an unreadable status is `phase: 'none'`, which renders nothing.
+   */
+  async loadUpgradeStatus(): Promise<void> {
+    const id = this.id();
+    if (!id) {
+      return;
+    }
+    const status = await this.kbUpgrade.getStatus(id);
+    this.upgradeStatus.set(status);
+    if (status.phase === 'in_progress') {
+      this.startUpgradePoll();
+    } else {
+      this.stopUpgradePoll();
+    }
+  }
+
+  /**
+   * Opt in to the upgrade (Requirement 23.2).
+   *
+   * Optimistically moves to `in_progress` so the card responds immediately, then
+   * reconciles from the server. A refusal restores the real state rather than
+   * leaving a spinner over a knowledge base that never enrolled.
+   */
+  async startUpgrade(): Promise<void> {
+    const id = this.id();
+    if (!id || this.upgradeBusy()) {
+      return;
+    }
+    this.upgradeBusy.set(true);
+    try {
+      const result = await this.kbUpgrade.start(id);
+      this.toast.success(result.message);
+      await this.loadUpgradeStatus();
+    } catch (err: unknown) {
+      this.toast.error(err instanceof Error ? err.message : 'Could not start the upgrade.');
+      // Re-read rather than guess: the refusal may itself have been "already
+      // running", in which case the truthful phase is not the one we started at.
+      await this.loadUpgradeStatus();
+    } finally {
+      this.upgradeBusy.set(false);
+    }
+  }
+
+  /** Restart a failed upgrade (Requirement 23.5). Never a dead end. */
+  async retryUpgrade(): Promise<void> {
+    const id = this.id();
+    if (!id || this.upgradeBusy()) {
+      return;
+    }
+    this.upgradeBusy.set(true);
+    try {
+      const result = await this.kbUpgrade.retry(id);
+      this.toast.success(result.message);
+      await this.loadUpgradeStatus();
+    } catch (err: unknown) {
+      this.toast.error(err instanceof Error ? err.message : 'Could not restart the upgrade.');
+      await this.loadUpgradeStatus();
+    } finally {
+      this.upgradeBusy.set(false);
+    }
+  }
+
+  /**
+   * Dismiss the one-time success notice (Requirement 23.4).
+   *
+   * Hidden locally first so the click feels instant; the server call only stops
+   * it coming back on the next load, and is allowed to fail quietly.
+   */
+  async dismissUpgradeNotice(): Promise<void> {
+    const id = this.id();
+    this.upgradeNoticeHidden.set(true);
+    if (id) {
+      await this.kbUpgrade.dismissNotice(id);
+    }
+  }
+
+  toggleStrandedDocuments(): void {
+    this.strandedExpanded.update((open) => !open);
+  }
+
+  /**
+   * Group heading for a stranded document (Requirement 21.4).
+   *
+   * The two failure kinds get different words because they need different
+   * actions from the user.
+   */
+  strandedHeading(kind: DocumentNotCarried['kind']): string {
+    switch (kind) {
+      case 'unsupported_format':
+        return 'Cannot be read by this platform';
+      case 'processing_failure':
+        return 'Could not be processed';
+      case 'being_removed':
+        return 'Currently being removed';
+      default:
+        return 'Still being processed';
+    }
+  }
+
+  /**
+   * Poll while an upgrade runs.
+   *
+   * Deliberately a plain interval rather than anything cleverer: the upgrade
+   * takes minutes and the page must stay usable throughout, so a slow refresh
+   * of one small payload is the whole requirement. Cleared in ngOnDestroy —
+   * without that, navigating away leaves a timer polling a dead component.
+   */
+  private startUpgradePoll(): void {
+    if (this.upgradePollHandle) {
+      return;
+    }
+    this.upgradePollHandle = setInterval(() => {
+      void this.loadUpgradeStatus();
+    }, 15000);
+  }
+
+  private stopUpgradePoll(): void {
+    if (this.upgradePollHandle) {
+      clearInterval(this.upgradePollHandle);
+      this.upgradePollHandle = null;
+    }
   }
 
   /**
