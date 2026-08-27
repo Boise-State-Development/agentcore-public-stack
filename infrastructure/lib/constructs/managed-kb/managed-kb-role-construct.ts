@@ -127,6 +127,25 @@ export function grantManagedKbProvisioning(
       'bedrock:DeleteKnowledgeBase',
       'bedrock:CreateDataSource',
       'bedrock:DeleteDataSource',
+      // `CreateKnowledgeBase` is called WITH tags (provisioning.py passes
+      // `tags=build_tags(...)`), and AWS authorises the tagging as a separate
+      // `bedrock:TagResource` action against `knowledge-base/*` — the resource
+      // does not exist yet, so the wildcard is the only thing it can match.
+      // Without this the create fails outright:
+      //
+      //   AccessDeniedException: not authorized to perform bedrock:TagResource
+      //
+      // and it fails *after* passing every review, because the create action
+      // itself is granted. Those tags are not decoration: they are what the
+      // reconciler and teardown match knowledge bases on, so creating untagged
+      // would be worse than failing.
+      'bedrock:TagResource',
+      // The reconciler reads tags to decide what belongs to this project
+      // (`tombstones.iter_project_knowledge_bases` → `list_tags_for_resource`).
+      // It fails closed on a read error, so without this permission every
+      // knowledge base looks untagged, matches nothing, and the orphan sweep
+      // silently reports a clean account forever.
+      'bedrock:ListTagsForResource',
     ],
     resources: [knowledgeBaseArnWildcard(config)],
   }));
