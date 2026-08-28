@@ -257,24 +257,32 @@ class FineTuningJobsRepository:
     ) -> List[dict]:
         """Query the StatusIndex GSI for jobs with a given status in a date range.
 
+        Training and inference records share this table and this GSI, so the
+        query filters on the ``JOB#`` sort-key prefix. Without it an inference
+        record comes back as a training job, and any caller that also queries
+        the inference repository counts its cost twice.
+
         Args:
-            status_value: Job status (e.g. "Completed", "Stopped").
+            status_value: Stored job status, case-sensitive on the GSI key
+                (e.g. "COMPLETED", "FAILED", "STOPPED").
             start_date: ISO date string (inclusive lower bound on createdAt).
             end_date: ISO date string (inclusive upper bound on createdAt).
 
         Returns:
-            List of job dicts.
+            List of training job dicts.
         """
         try:
             items: List[dict] = []
             response = self._table.query(
                 IndexName="StatusIndex",
                 KeyConditionExpression="#s = :status AND createdAt BETWEEN :start AND :end",
+                FilterExpression="begins_with(SK, :sk_prefix)",
                 ExpressionAttributeNames={"#s": "status"},
                 ExpressionAttributeValues={
                     ":status": status_value,
                     ":start": start_date,
                     ":end": end_date,
+                    ":sk_prefix": "JOB#",
                 },
                 ScanIndexForward=False,
             )
@@ -284,11 +292,13 @@ class FineTuningJobsRepository:
                 response = self._table.query(
                     IndexName="StatusIndex",
                     KeyConditionExpression="#s = :status AND createdAt BETWEEN :start AND :end",
+                    FilterExpression="begins_with(SK, :sk_prefix)",
                     ExpressionAttributeNames={"#s": "status"},
                     ExpressionAttributeValues={
                         ":status": status_value,
                         ":start": start_date,
                         ":end": end_date,
+                        ":sk_prefix": "JOB#",
                     },
                     ScanIndexForward=False,
                     ExclusiveStartKey=response["LastEvaluatedKey"],
