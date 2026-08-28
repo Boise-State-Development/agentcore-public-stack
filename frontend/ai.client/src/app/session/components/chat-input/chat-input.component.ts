@@ -407,8 +407,17 @@ export class ChatInputComponent {
     }
 
     void this.mentionService.load();
-    this.mentionToken.set({ query: match[1], start: caret - match[1].length - 1 });
-    this.mentionActiveIndex.set(0);
+    const next: MentionToken = { query: match[1], start: caret - match[1].length - 1 };
+
+    // Reset the highlight only when the token itself changed. This runs on `keyup` too,
+    // and arrow keys are `preventDefault`ed in `onKeyDown` — so an unconditional reset
+    // here would drag the selection back to the first row on the keyup of every
+    // ArrowDown, making the menu impossible to walk.
+    const current = this.mentionToken();
+    if (!current || current.query !== next.query || current.start !== next.start) {
+      this.mentionActiveIndex.set(0);
+    }
+    this.mentionToken.set(next);
   }
 
   /** Caret moves that are not edits — a click or an arrow key — also open or close the menu. */
