@@ -162,19 +162,81 @@ def resolve_max_context_length(config, tokenizer):
     return min(valid_vals) if valid_vals else None
 
 
-def find_csv_in_channel(channel_dir):
-    """Find the first CSV file in a SageMaker input channel directory.
+# Dataset formats the trainer can read, mapped to the pandas reader that loads
+# them. A training record has to carry both a "text" and a "label" field, which
+# is why plain .txt is absent: it has no way to express the label. (.txt stays
+# valid for *inference* input, which is unlabelled — one record per line.)
+#
+# Kept as data rather than an if/elif chain so the supported-format contract can
+# be asserted without importing pandas, which only exists inside the SageMaker
+# training container and not in the backend venv.
+DATASET_READERS = {
+    ".csv": ("read_csv", {}),
+    ".jsonl": ("read_json", {"lines": True}),
+    ".json": ("read_json", {}),
+}
 
-    Raises FileNotFoundError if no CSV file is found.
+SUPPORTED_DATASET_EXTENSIONS = tuple(DATASET_READERS)
+
+REQUIRED_DATASET_COLUMNS = ("text", "label")
+
+
+def find_dataset_in_channel(channel_dir):
+    """Find the first supported dataset file in a SageMaker input channel.
+
+    Raises FileNotFoundError if the directory is missing, or if it holds no
+    file with a supported extension.
     """
     if not os.path.isdir(channel_dir):
         raise FileNotFoundError(f"Channel directory does not exist: {channel_dir}")
 
     for f in sorted(os.listdir(channel_dir)):
-        if f.lower().endswith(".csv"):
+        if f.lower().endswith(SUPPORTED_DATASET_EXTENSIONS):
             return os.path.join(channel_dir, f)
 
-    raise FileNotFoundError(f"No CSV file found in {channel_dir}")
+    supported = ", ".join(SUPPORTED_DATASET_EXTENSIONS)
+    raise FileNotFoundError(
+        f"No dataset file found in {channel_dir}. Supported formats: {supported}"
+    )
+
+
+def resolve_dataset_reader(dataset_path):
+    """Return the (pandas reader name, kwargs) pair for a dataset file.
+
+    Raises ValueError for an extension the trainer cannot read.
+    """
+    extension = os.path.splitext(dataset_path)[1].lower()
+
+    if extension not in DATASET_READERS:
+        supported = ", ".join(SUPPORTED_DATASET_EXTENSIONS)
+        raise ValueError(
+            f"Unsupported dataset format '{extension}'. Supported formats: {supported}"
+        )
+
+    return DATASET_READERS[extension]
+
+
+def validate_dataset_columns(columns, dataset_path):
+    """Raise ValueError if a required column is absent from the dataset."""
+    missing = [c for c in REQUIRED_DATASET_COLUMNS if c not in columns]
+    if missing:
+        raise ValueError(
+            f"Dataset {os.path.basename(dataset_path)} is missing required "
+            f"column(s): {', '.join(missing)}. Each record needs a \"text\" "
+            f'and a "label" field.'
+        )
+
+
+def load_dataset_frame(dataset_path):
+    """Load a dataset file into a DataFrame with "text" and "label" columns."""
+    import pandas as pd
+
+    reader_name, reader_kwargs = resolve_dataset_reader(dataset_path)
+    df = getattr(pd, reader_name)(dataset_path, **reader_kwargs)
+
+    validate_dataset_columns(df.columns, dataset_path)
+
+    return df
 
 
 def copy_inference_script(model_output_dir):
@@ -221,10 +283,10 @@ def train(args):
     )
     model_dir = os.environ.get("SM_MODEL_DIR", "/opt/ml/model")
 
-    # Find and load CSV dataset
-    csv_path = find_csv_in_channel(train_channel)
-    logger.info(f"Loading dataset from {csv_path}")
-    df = pd.read_csv(csv_path)
+    # Find and load the dataset (CSV / JSONL / JSON)
+    dataset_path = find_dataset_in_channel(train_channel)
+    logger.info(f"Loading dataset from {dataset_path}")
+    df = load_dataset_frame(dataset_path)
 
     # Label normalization — support non-numeric class labels
     label_names = sorted(list(pd.Series(df["label"]).astype(str).unique()))

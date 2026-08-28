@@ -119,6 +119,25 @@ class TestPresign:
         assert "s3_key" in body
         assert "expires_at" in body
 
+    @pytest.mark.parametrize("filename", ["notes.txt", "data.parquet"])
+    def test_rejects_format_the_trainer_cannot_read(self, make_user, filename):
+        """Reject before upload, not several billed GPU-minutes into training."""
+        app = _create_app()
+        user = make_user(email="user@example.com")
+
+        mock_s3 = MagicMock()
+        _setup_deps(app, user, SAMPLE_GRANT, s3_service=mock_s3)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/fine-tuning/presign",
+            json={"filename": filename, "content_type": "text/plain"},
+        )
+
+        assert resp.status_code == 400
+        assert "Unsupported dataset format" in resp.json()["detail"]
+        mock_s3.generate_upload_url.assert_not_called()
+
 
 class TestCreateJob:
 
@@ -158,6 +177,31 @@ class TestCreateJob:
         assert resp.status_code == 201
         body = resp.json()
         assert body["model_id"] == "distilgpt2"
+
+    def test_rejects_dataset_the_trainer_cannot_read(self, make_user):
+        """Last gate before SageMaker: no GPU is provisioned for a doomed job."""
+        app = _create_app()
+        user = make_user(email="user@example.com")
+
+        mock_s3 = MagicMock()
+        mock_s3.check_object_exists.return_value = True
+
+        mock_sm = MagicMock()
+
+        _setup_deps(app, user, SAMPLE_GRANT, s3_service=mock_s3, sagemaker=mock_sm)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/fine-tuning/jobs",
+            json={
+                "model_id": "distilgpt2",
+                "dataset_s3_key": "datasets/user-001/abc/notes.txt",
+            },
+        )
+
+        assert resp.status_code == 400
+        assert "Unsupported dataset format" in resp.json()["detail"]
+        mock_sm.create_training_job.assert_not_called()
 
     @patch.dict("os.environ", {"PROJECT_PREFIX": "test-prefix"})
     def test_sagemaker_job_name_includes_project_prefix(self, make_user):
