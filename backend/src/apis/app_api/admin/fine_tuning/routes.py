@@ -235,6 +235,13 @@ async def list_all_inference_jobs(
 
 # ========== Cost Dashboard ==========
 
+# Terminal statuses AWS bills for, in the exact casing persisted on the job
+# record by the status maps in ``fine_tuning/routes.py``. The StatusIndex GSI
+# compares its partition key case-sensitively, so SageMaker's own "Completed"
+# spelling matches nothing here.
+BILLED_TERMINAL_STATUSES = ("COMPLETED", "FAILED", "STOPPED")
+
+
 def _date_range_for_period(period: str) -> tuple[str, str]:
     """Return (start_iso, end_iso) for a YYYY-MM period string."""
     year, month = int(period[:4]), int(period[5:7])
@@ -259,8 +266,16 @@ async def get_cost_dashboard(
 ):
     """Get aggregated fine-tuning cost dashboard for a billing period.
 
-    Queries the StatusIndex GSI for Completed and Stopped jobs within
-    the requested month, then aggregates costs by user in application code.
+    Queries the StatusIndex GSI for every billed terminal status within the
+    requested month, then aggregates costs by user in application code.
+
+    Two things are easy to get wrong here. The GSI partition key is compared
+    case-sensitively, so the status values must be the ones actually stored
+    (``COMPLETED``/``FAILED``/``STOPPED`` — see the status maps in
+    ``fine_tuning/routes.py``), not SageMaker's own ``Completed``/``Stopped``
+    spelling. And FAILED belongs in the list: AWS bills a job that fails
+    partway through, so leaving it out understates real spend. The user-facing
+    quota counter already charges for failures; this dashboard matches it.
     """
     period = month or datetime.now(timezone.utc).strftime("%Y-%m")
     safe_period = period.replace("\n", "").replace("\r", "")
@@ -269,15 +284,19 @@ async def get_cost_dashboard(
     try:
         start_iso, end_iso = _date_range_for_period(period)
 
-        # Query training jobs (Completed + Stopped) via StatusIndex GSI
-        training_completed = jobs_repo.query_jobs_by_status_and_date("Completed", start_iso, end_iso)
-        training_stopped = jobs_repo.query_jobs_by_status_and_date("Stopped", start_iso, end_iso)
-        all_training = training_completed + training_stopped
+        # Query training jobs in every billed terminal status via StatusIndex GSI
+        all_training = [
+            job
+            for status_value in BILLED_TERMINAL_STATUSES
+            for job in jobs_repo.query_jobs_by_status_and_date(status_value, start_iso, end_iso)
+        ]
 
-        # Query inference jobs (Completed + Stopped) via StatusIndex GSI
-        inf_completed = inf_repo.query_jobs_by_status_and_date("Completed", start_iso, end_iso)
-        inf_stopped = inf_repo.query_jobs_by_status_and_date("Stopped", start_iso, end_iso)
-        all_inference = inf_completed + inf_stopped
+        # Query inference jobs in every billed terminal status via StatusIndex GSI
+        all_inference = [
+            job
+            for status_value in BILLED_TERMINAL_STATUSES
+            for job in inf_repo.query_jobs_by_status_and_date(status_value, start_iso, end_iso)
+        ]
 
         # Aggregate by user email
         user_data: dict[str, dict] = defaultdict(

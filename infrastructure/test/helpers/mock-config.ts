@@ -85,7 +85,10 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     agentMarketplace: {
       enabled: false,
     },
-    fineTuning: {},
+    fineTuning: {
+      enabled: true,
+      defaultQuotaHours: 0,
+    },
     artifacts: {
       retentionDays: 90,
       extraFrameAncestors: [],

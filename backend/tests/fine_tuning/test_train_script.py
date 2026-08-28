@@ -6,7 +6,11 @@ from unittest.mock import MagicMock, patch, call
 
 from apis.app_api.fine_tuning.sagemaker_scripts.train import (
     resolve_max_context_length,
-    find_csv_in_channel,
+    find_dataset_in_channel,
+    load_dataset_frame,
+    resolve_dataset_reader,
+    validate_dataset_columns,
+    SUPPORTED_DATASET_EXTENSIONS,
     copy_inference_script,
     DynamoDBProgressCallback,
     SageMakerLoggingCallback,
@@ -59,32 +63,117 @@ class TestResolveMaxContextLength:
         assert result == 768
 
 
-class TestFindCsvInChannel:
+class TestFindDatasetInChannel:
 
     def test_finds_csv_file(self, tmp_path):
         csv_file = tmp_path / "dataset.csv"
         csv_file.write_text("text,label\nhello,1\n")
 
-        result = find_csv_in_channel(str(tmp_path))
+        result = find_dataset_in_channel(str(tmp_path))
         assert result == str(csv_file)
 
-    def test_raises_when_no_csv(self, tmp_path):
-        txt_file = tmp_path / "readme.txt"
-        txt_file.write_text("not a csv")
+    @pytest.mark.parametrize("filename", ["dataset.jsonl", "dataset.json"])
+    def test_finds_json_formats(self, tmp_path, filename):
+        """The UI offers JSONL/JSON, so the trainer has to find them too."""
+        dataset = tmp_path / filename
+        dataset.write_text('{"text": "hello", "label": "a"}\n')
 
-        with pytest.raises(FileNotFoundError, match="No CSV file found"):
-            find_csv_in_channel(str(tmp_path))
+        result = find_dataset_in_channel(str(tmp_path))
+        assert result == str(dataset)
+
+    def test_raises_when_no_supported_dataset(self, tmp_path):
+        txt_file = tmp_path / "readme.txt"
+        txt_file.write_text("not a dataset")
+
+        with pytest.raises(FileNotFoundError, match="No dataset file found"):
+            find_dataset_in_channel(str(tmp_path))
 
     def test_case_insensitive_extension(self, tmp_path):
         csv_file = tmp_path / "DATA.CSV"
         csv_file.write_text("text,label\nhello,1\n")
 
-        result = find_csv_in_channel(str(tmp_path))
+        result = find_dataset_in_channel(str(tmp_path))
         assert result == str(csv_file)
 
     def test_raises_when_dir_missing(self):
         with pytest.raises(FileNotFoundError, match="does not exist"):
-            find_csv_in_channel("/nonexistent/path")
+            find_dataset_in_channel("/nonexistent/path")
+
+
+class TestResolveDatasetReader:
+    """Every format the upload UI accepts must actually be readable.
+
+    A JSONL dataset previously uploaded and dispatched fine, then died on the
+    GPU several billed minutes in because the trainer only read CSV. These
+    assert the dispatch table directly so they run without pandas, which
+    exists only inside the SageMaker training container.
+    """
+
+    def test_supports_the_formats_the_ui_offers(self):
+        assert set(SUPPORTED_DATASET_EXTENSIONS) == {".csv", ".jsonl", ".json"}
+
+    def test_csv_uses_read_csv(self):
+        assert resolve_dataset_reader("/data/dataset.csv") == ("read_csv", {})
+
+    def test_jsonl_reads_line_delimited(self):
+        assert resolve_dataset_reader("/data/dataset.jsonl") == (
+            "read_json",
+            {"lines": True},
+        )
+
+    def test_json_reads_whole_document(self):
+        assert resolve_dataset_reader("/data/dataset.json") == ("read_json", {})
+
+    def test_extension_match_is_case_insensitive(self):
+        assert resolve_dataset_reader("/data/DATA.CSV") == ("read_csv", {})
+
+    def test_raises_on_unsupported_extension(self):
+        with pytest.raises(ValueError, match="Unsupported dataset format"):
+            resolve_dataset_reader("/data/dataset.parquet")
+
+
+class TestValidateDatasetColumns:
+
+    def test_accepts_required_columns(self):
+        validate_dataset_columns(["text", "label"], "/data/dataset.csv")
+
+    def test_raises_when_label_missing(self):
+        with pytest.raises(ValueError, match="missing required column"):
+            validate_dataset_columns(["text"], "/data/dataset.csv")
+
+    def test_raises_when_text_missing(self):
+        with pytest.raises(ValueError, match="missing required column"):
+            validate_dataset_columns(["label"], "/data/dataset.csv")
+
+
+class TestLoadDatasetFrame:
+    """End-to-end load, where pandas is available (the training container)."""
+
+    @pytest.mark.parametrize(
+        "filename,content",
+        [
+            ("dataset.csv", "text,label\nhello,positive\nbye,negative\n"),
+            (
+                "dataset.jsonl",
+                '{"text": "hello", "label": "positive"}\n'
+                '{"text": "bye", "label": "negative"}\n',
+            ),
+            (
+                "dataset.json",
+                '[{"text": "hello", "label": "positive"},'
+                ' {"text": "bye", "label": "negative"}]',
+            ),
+        ],
+    )
+    def test_loads_each_supported_format(self, tmp_path, filename, content):
+        pytest.importorskip("pandas")
+        path = tmp_path / filename
+        path.write_text(content)
+
+        df = load_dataset_frame(str(path))
+
+        assert df["text"].tolist() == ["hello", "bye"]
+        assert df["label"].tolist() == ["positive", "negative"]
 
 
 class TestCopyInferenceScript:

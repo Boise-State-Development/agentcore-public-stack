@@ -188,9 +188,16 @@ export class AppApiServiceConstruct extends Construct {
     environment['S3_MEMORY_SPACES_BUCKET_NAME'] = props.refs.memorySpacesBucket.bucketName;
     environment['DYNAMODB_MEMORY_SPACES_TABLE_NAME'] = props.refs.memorySpacesTable.tableName;
 
-    // Fine-tuning env vars (always-on). Names verified against
+    // Fine-tuning env vars. Names verified against
     // backend/src/apis/app_api/fine_tuning/* to match the exact env
     // var names Python reads via os.environ.get(...).
+    //
+    // FINE_TUNING_ENABLED is what mounts the routers in app_api/main.py and
+    // admin/routes.py, and it defaults to "false" in Python. Storage and IAM
+    // below are provisioned unconditionally, so omitting this flag left every
+    // deployed environment serving 404s from a fully-built feature.
+    environment['FINE_TUNING_ENABLED'] = String(config.fineTuning.enabled);
+    environment['FINE_TUNING_DEFAULT_QUOTA_HOURS'] = String(config.fineTuning.defaultQuotaHours);
     environment['DYNAMODB_FINE_TUNING_JOBS_TABLE_NAME'] = props.refs.fineTuningJobsTable.tableName;
     environment['DYNAMODB_FINE_TUNING_ACCESS_TABLE_NAME'] = props.refs.fineTuningAccessTable.tableName;
     environment['S3_FINE_TUNING_BUCKET_NAME'] = props.refs.fineTuningDataBucket.bucketName;

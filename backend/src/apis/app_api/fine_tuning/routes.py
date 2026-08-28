@@ -20,6 +20,7 @@ from .repository import (
 from .job_models import (
     AVAILABLE_MODELS,
     MODEL_CATALOG,
+    SUPPORTED_DATASET_EXTENSIONS,
     PresignRequest,
     PresignResponse,
     CreateJobRequest,
@@ -193,6 +194,23 @@ async def search_huggingface_models(
 # Presigned URL
 # =========================================================================
 
+def _validate_dataset_format(name: str) -> None:
+    """Reject a dataset filename the training script could not read.
+
+    Checked before upload and again before the job is submitted, so an
+    unreadable dataset never reaches a billed GPU instance.
+    """
+    if not name.lower().endswith(SUPPORTED_DATASET_EXTENSIONS):
+        supported = ", ".join(SUPPORTED_DATASET_EXTENSIONS)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported dataset format. Supported formats: {supported}. "
+                'Each record needs a "text" and a "label" field.'
+            ),
+        )
+
+
 @router.post("/presign", response_model=PresignResponse)
 async def presign_upload(
     request: PresignRequest,
@@ -201,6 +219,8 @@ async def presign_upload(
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
 ):
     """Generate a presigned PUT URL for dataset upload."""
+    _validate_dataset_format(request.filename)
+
     try:
         presigned_url, s3_key = s3_service.generate_upload_url(
             user_id=user.user_id,
@@ -248,7 +268,9 @@ async def create_job(
         if not hf_id or len(hf_id) > 200:
             raise HTTPException(status_code=400, detail="Invalid HuggingFace model ID.")
 
-    # Verify dataset exists in S3
+    # Verify the dataset is readable by the training script and exists in S3
+    _validate_dataset_format(request.dataset_s3_key)
+
     if not s3_service.check_object_exists(request.dataset_s3_key):
         raise HTTPException(status_code=400, detail="Dataset not found in S3. Upload your dataset first.")
 

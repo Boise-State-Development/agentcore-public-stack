@@ -133,6 +133,25 @@ jobs:
       # and see the ones their role grants. Which skills a cohort gets is a
       # role's `grantedSkills`, managed in the admin roles UI.
       CDK_SKILLS_ENABLED: ${{ vars.CDK_SKILLS_ENABLED }}
+      # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
+      # grants deploy unconditionally, but these two decide whether the feature
+      # is reachable and how it is rationed, and neither was forwarded before —
+      # so every deployed environment served 404s from `/fine-tuning/*` while
+      # the repo variable `CDK_FINE_TUNING_ENABLED` read "true".
+      #
+      # ENABLED is default ON with a kill switch: unset resolves to empty
+      # string, which config.ts treats as the default (on). Set it to "false"
+      # to dark-stop the routes; storage is untouched either way, so no dataset
+      # or trained model is orphaned.
+      #
+      # DEFAULT_QUOTA_HOURS picks the access model: `0` (the default) is
+      # whitelist-only, where an admin grants each user explicitly; a positive
+      # value auto-grants that monthly GPU-hour budget to any signed-in user.
+      CDK_FINE_TUNING_ENABLED: ${{ vars.CDK_FINE_TUNING_ENABLED }}
+      CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS: ${{ vars.CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS }}
+      # Extra CORS origins for the fine-tuning data bucket, beyond the global
+      # CDK_CORS_ORIGINS above. Also never forwarded until now.
+      CDK_FINE_TUNING_CORS_ORIGINS: ${{ vars.CDK_FINE_TUNING_CORS_ORIGINS }}
       # Agent Designer /agents surface. Default OFF (opt-in) until the Phase-4
       # Designer UI ships — a headless API helps no forker. Set the
       # `CDK_AGENTS_API_ENABLED` variable to "true" in an environment (e.g. dev)
