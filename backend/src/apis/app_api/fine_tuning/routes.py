@@ -19,6 +19,7 @@ from .repository import (
 )
 from .job_models import (
     AVAILABLE_MODELS,
+    INSTANCE_COST_PER_HOUR,
     MODEL_CATALOG,
     SUPPORTED_DATASET_EXTENSIONS,
     PresignRequest,
@@ -211,6 +212,31 @@ def _validate_dataset_format(name: str) -> None:
         )
 
 
+def _validate_instance_type(instance_type: str) -> None:
+    """Reject an instance type we have no price for.
+
+    ``calculate_cost`` falls back to $0.00/hour for anything absent from
+    INSTANCE_COST_PER_HOUR, so an unlisted type runs real GPUs and records no
+    spend — invisible to the admin cost dashboard, the same blind spot the
+    StatusIndex casing bug produced by a different route.
+
+    The quota does not bound the damage either: it meters GPU-*hours*, not
+    dollars, so the same ten hours buys ~$14 on an ml.g5.xlarge or several
+    hundred on a larger instance. `instance_type` arrives straight off the
+    request body, so this is the only thing standing between a caller and an
+    unpriced instance.
+    """
+    if instance_type not in INSTANCE_COST_PER_HOUR:
+        supported = ", ".join(sorted(INSTANCE_COST_PER_HOUR))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported instance type '{instance_type}'. "
+                f"Supported types: {supported}"
+            ),
+        )
+
+
 @router.post("/presign", response_model=PresignResponse)
 async def presign_upload(
     request: PresignRequest,
@@ -302,6 +328,8 @@ async def create_job(
         }
         huggingface_id = request.custom_huggingface_model_id.strip()
         model_name = huggingface_id
+
+    _validate_instance_type(instance_type)
 
     if request.hyperparameters:
         hyperparameters.update(request.hyperparameters)
@@ -739,6 +767,7 @@ async def create_inference_job(
 
     # Resolve instance type (default to training job's instance type)
     instance_type = request.instance_type or training_job["instance_type"]
+    _validate_instance_type(instance_type)
 
     # Generate identifiers
     job_id = uuid.uuid4().hex
