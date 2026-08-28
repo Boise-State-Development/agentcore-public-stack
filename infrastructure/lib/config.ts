@@ -302,6 +302,21 @@ export interface AgentMarketplaceConfig {
 
 export interface FineTuningConfig {
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
+  /**
+   * Mounts the `/fine-tuning` and `/admin/fine-tuning` routers in app-api.
+   *
+   * Distinct from the long-deleted `CDK_FINE_TUNING_ENABLED`, which gated
+   * whether the SageMaker *stack* deployed and went away with the single-stack
+   * migration (#396). The tables, bucket and SageMaker role are provisioned
+   * unconditionally; this only decides whether the routes are reachable.
+   */
+  enabled: boolean;
+  /**
+   * Monthly GPU-hour quota granted to any authenticated user on first use.
+   * `0` keeps the original whitelist-only behaviour, where an admin has to
+   * grant each user explicitly.
+   */
+  defaultQuotaHours: number;
 }
 
 /**
@@ -700,6 +715,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,
+      // Default ON with a kill switch, same empty-string-safe ternary as
+      // `agentMarketplace` above: the workflow forwards an EMPTY STRING when the
+      // variable is unset, so treat empty/unset as the default (on) and only the
+      // literal "false" as off.
+      enabled: process.env.CDK_FINE_TUNING_ENABLED
+        ? process.env.CDK_FINE_TUNING_ENABLED !== 'false'
+        : scope.node.tryGetContext('fineTuning')?.enabled ?? true,
+      defaultQuotaHours:
+        parseIntEnv(process.env.CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS)
+        ?? scope.node.tryGetContext('fineTuning')?.defaultQuotaHours
+        ?? 0,
     },
     artifacts: {
       certificateArn: process.env.CDK_ARTIFACTS_CERTIFICATE_ARN || scope.node.tryGetContext('artifacts')?.certificateArn,

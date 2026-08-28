@@ -43,6 +43,7 @@ GitHub provides two mechanisms for storing configuration values:
 | CDK_FILE_UPLOAD_CORS_ORIGINS | Variable | No | None | Platform | Additional CORS origins for the file upload S3 bucket only (appended to global CORS origins) |
 | CDK_FILE_UPLOAD_MAX_SIZE_MB | Variable | No | `10` | Platform | Maximum file upload size in megabytes |
 | CDK_FINE_TUNING_CORS_ORIGINS | Variable | No | None | SageMaker Fine-Tuning | Additional CORS origins for the fine-tuning S3 bucket only (appended to global CORS origins) |
+| CDK_FINE_TUNING_ENABLED | Variable | No | `true` | App API | Mounts the `/fine-tuning` and `/admin/fine-tuning` routers (sets the container's `FINE_TUNING_ENABLED`). Default ON; set to `false` as a kill switch. Storage and IAM are provisioned either way, so switching off never orphans datasets or trained models. |
 | CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS | Variable | No | `0` | App API | Default monthly GPU-hour quota for all authenticated users. `0` = whitelist-only (admin must grant each user). Positive value (e.g. `5`) = open access with that default budget. |
 | CDK_FRONTEND_BUCKET_NAME | Variable | No | None | Frontend | S3 bucket name for frontend assets (defaults to generated name with account ID) |
 | CDK_FRONTEND_CORS_ORIGINS | Variable | No | None | Frontend | Additional CORS origins for the frontend SSM export only (appended to global CORS origins) |
