@@ -321,8 +321,34 @@ describe('ManagedKbRoleConstruct — caller grants', () => {
       'bedrock:DeleteKnowledgeBase',
       'bedrock:CreateDataSource',
       'bedrock:DeleteDataSource',
+      'bedrock:TagResource',
+      'bedrock:ListTagsForResource',
     ]);
     expect(s.Resource).toBe(KB_ARN_WILDCARD);
+  });
+
+  it('can tag a knowledge base at create time', () => {
+    // `CreateKnowledgeBase` is called WITH tags, and AWS authorises the tagging
+    // as a separate action. Missing it, provisioning failed in dev with
+    //
+    //   AccessDeniedException: not authorized to perform bedrock:TagResource
+    //
+    // *after* passing review, because the create action itself was granted. The
+    // tags are what the reconciler and teardown match on, so an untagged
+    // knowledge base would be worse than a failed create.
+    const s = statementBySid(t, 'ManagedKbProvisionCrud');
+    expect(s.Action).toContain('bedrock:TagResource');
+    // Must be the wildcard: at create time the knowledge base has no ARN, so a
+    // resource-specific grant could never match.
+    expect(s.Resource).toBe(KB_ARN_WILDCARD);
+  });
+
+  it('can read tags, which is how the reconciler recognises its own resources', () => {
+    // `iter_project_knowledge_bases` fails closed on a tag read error, so
+    // without this the orphan sweep sees every knowledge base as untagged,
+    // matches nothing, and reports a clean account forever.
+    const s = statementBySid(t, 'ManagedKbProvisionCrud');
+    expect(s.Action).toContain('bedrock:ListTagsForResource');
   });
 
   it('keeps the non-resource-scopable create/list actions in their own statement', () => {
