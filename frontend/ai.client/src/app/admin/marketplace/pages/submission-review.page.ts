@@ -88,6 +88,8 @@ import {
           Review queue
         </a>
 
+        <!-- Load failures only. A *decision* failure renders down by the decision bar
+             instead — see the note there. -->
         @if (error(); as message) {
           <div
             role="alert"
@@ -277,8 +279,25 @@ import {
           <!-- Decision. Pinned at the foot so the reviewer acts where they finished
                reading, rather than scrolling back to the header. -->
           <div
-            class="sticky bottom-0 mt-8 flex flex-col gap-3 border-t border-gray-200 bg-white/95 py-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between dark:border-gray-700 dark:bg-gray-900/95"
+            class="sticky bottom-0 mt-8 flex flex-col gap-3 border-t border-gray-200 bg-white/95 py-4 backdrop-blur dark:border-gray-700 dark:bg-gray-900/95"
           >
+            <!-- ⚠️ A refused decision reports itself HERE, not at the top of the page.
+                 The decision bar is sticky and the read above it is not, so on a submission
+                 with real instructions the reviewer presses Approve at the bottom of a
+                 scrolled page and a message rendered at the top is simply off-screen. That
+                 is the gap the global toast used to paper over; removing the toast without
+                 moving the message would have made the failure silent rather than
+                 duplicated. -->
+            @if (decisionError(); as message) {
+              <p
+                role="alert"
+                class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+              >
+                {{ message }}
+              </p>
+            }
+
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p class="text-sm/6 text-gray-500 dark:text-gray-400">
               @if (isWithdrawal()) {
                 The author asked to pull this listing. Decide it from the queue.
@@ -319,6 +338,7 @@ import {
                 </button>
               </div>
             }
+            </div>
           </div>
         }
       </div>
@@ -334,6 +354,15 @@ export class SubmissionReviewPage implements OnInit {
   readonly submission = signal<AdminSubmissionReview | null>(null);
   readonly loading = signal(true);
   readonly error = signal<string | null>(null);
+  /**
+   * A refused decision, kept apart from ``error`` so it can render beside the buttons.
+   *
+   * Two error regions rather than one because they are read at different moments and from
+   * different scroll positions: a load failure is the first thing on an otherwise empty
+   * page, while a decision failure answers a button in a sticky bar the reviewer may have
+   * scrolled a long way to reach.
+   */
+  readonly decisionError = signal<string | null>(null);
   readonly busy = signal(false);
 
   private readonly agentId = signal('');
@@ -399,6 +428,7 @@ export class SubmissionReviewPage implements OnInit {
     }
     this.loading.set(true);
     this.error.set(null);
+    this.decisionError.set(null);
     try {
       this.submission.set(await this.service.loadSubmission(id));
     } catch (err) {
@@ -459,12 +489,12 @@ export class SubmissionReviewPage implements OnInit {
     note?: string;
   }): Promise<void> {
     this.busy.set(true);
-    this.error.set(null);
+    this.decisionError.set(null);
     try {
       await this.service.review(this.agentId(), request);
       await this.router.navigate(['/admin/marketplace/review']);
     } catch (err) {
-      this.error.set(this.detail(err) ?? 'Failed to record the decision.');
+      this.decisionError.set(this.detail(err) ?? 'Failed to record the decision.');
       this.busy.set(false);
     }
   }

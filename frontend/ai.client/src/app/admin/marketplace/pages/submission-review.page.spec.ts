@@ -237,6 +237,26 @@ describe('SubmissionReviewPage', () => {
     expect(text(fixture)).toContain('no marketplace listing to review');
   });
 
+  it('reports a refused decision beside the buttons, not at the top of the page', async () => {
+    // The decision bar is sticky and the read above it is not, so on a submission with
+    // real instructions a message rendered at the top is off-screen at the moment the
+    // reviewer presses the button. That gap is what the global toast used to cover.
+    mockService.review.mockRejectedValue({ error: { detail: 'Visibility is now Private.' } });
+    const fixture = await render();
+    button(fixture, 'Approve').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const alert = [...el.querySelectorAll('[role="alert"]')].find((a) =>
+      a.textContent?.includes('Visibility is now Private.'),
+    );
+    expect(alert).toBeTruthy();
+    // In the same sticky container as the decision buttons.
+    const bar = button(fixture, 'Approve').closest('.sticky');
+    expect(bar?.contains(alert!)).toBe(true);
+  });
+
   it('keeps the reviewer on the page when a decision fails', async () => {
     mockService.review.mockRejectedValue({ error: { detail: 'Visibility is now Private.' } });
     const fixture = await render();
