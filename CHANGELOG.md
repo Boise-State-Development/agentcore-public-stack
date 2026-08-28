@@ -4,6 +4,69 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.16.0] - 2026-08-28
+
+Minor release on knowledge bases, the marketplace review flow, and fine-tuning. The Bedrock Managed Knowledge Base migration lands **inert** — every managed-KB flag is default OFF, and the owner-facing upgrade card only appears where `CDK_MANAGED_KB_MIGRATION_ENABLED=true`. Marketplace admins can finally read, test-drive and decline a submission instead of approving on a name and a category alone. Fine-tuning was unreachable in every deployed environment and now isn't — it becomes **reachable by default** on this deploy, with `CDK_FINE_TUNING_ENABLED=false` as the kill switch. Two live RAG behaviours change regardless of flags: queries clamp at 10,000 characters on both backends, and the document-status filter now fails **closed**. **Requires a CDK deploy** — `platform.yml` (set `CDK_TAG_ENVIRONMENT` first), then `backend.yml` (two new kb-migration jobs), then `frontend-deploy.yml`.
+
+### 🚀 Added
+
+- **Bedrock Managed Knowledge Base migration**, shipped dormant behind nine `CDK_MANAGED_KB_*` flags. Adds a shared Bedrock KB service role, four `DockerImageFunction`s on one image (worker, dispatcher, reconciler, ingestion consumer) with a DLQ, three EventBridge rules, four CloudWatch alarms, and a sparse `KbWorkIndex` GSI (#884)
+- Owner-facing knowledge-base upgrade card and `/assistants/{id}/knowledge-base/upgrade` router (`GET` status, `POST` enroll, `/retry`, `/notice`) with derived phases `none|available|in_progress|succeeded|failed`; also surfaces stranded documents the ordinary list hides (#884)
+- Marketplace submission review — `GET /admin/agents/{agent_id}/submission` returns the frozen `submittedVersion` snapshot (instructions, bound capabilities, model, starters, publisher, reachability) behind a new SPA route `/admin/marketplace/review/:agentId` (#882)
+- Reviewer **test drive** — a `review_preview` invocation resolves the reviewed snapshot and bypasses the PRIVATE check after re-resolving `admin.marketplace` against the caller's own roles (new `has_admin_scope` predicate); runs on a `preview-` session and skips bookkeeping writes (#882)
+- New terminal listing state **`rejected`** — admin-only from `in_review`, requires a reason, allows revise-and-resubmit; `rejected → private` keeps delete reachable. No edge to `published` (#882)
+- `@`-mentions are set apart in the user's own message, matched against the known agent-name list rather than `@\w+` so names with spaces work and `@here`/npm scopes/emails aren't bolded (`mention-text.component.ts`)
+- `scripts/teardown/managed-kb.sh` — tag-scoped teardown for managed KBs, which are created at runtime and are not CloudFormation children; `destroy.sh` runs it as Phase 0 and aborts the teardown on failure (#884)
+- `scripts/local-dev/refresh-env.py` — rebuilds `backend/src/.env` from the deployed app-api task definition, preserving a `KEEP_LOCAL` set; dry-run by default (#884)
+
+### ✨ Improved
+
+- Submitting an agent no longer requires ticking a mandatory "make public" checkbox — an amber disclosure states that submitting makes the agent public, and `makePublic` is always sent. Backend `_visibility_block` is unchanged, so a direct API caller that omits it is still refused
+- The review test-drive panel is viewport-sized and sticky while the reviewer scrolls the instructions, with an expand control that spans both columns by class change only, so the reviewer's conversation survives the toggle. Empty summary/system prompt render explicit "none" text (#883)
+
+### 🐛 Fixed
+
+- **Fine-tuning was unreachable in every deployed environment** — `/api/fine-tuning/access` returned 404 because `FINE_TUNING_ENABLED` was never set on the app-api container, and `CDK_FINE_TUNING_ENABLED` had had no reader since the single-stack migration (#396). `config.ts`, `app-api-service-construct.ts` and `platform.yml` now wire it, plus `CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS` and the never-forwarded `CDK_FINE_TUNING_CORS_ORIGINS`
+- **A JSONL dataset — the format the upload page names first — died ~5 billed GPU-minutes into training** with `No CSV file found`. `sagemaker_scripts/train.py` reads JSONL and JSON alongside CSV via a dispatch table and validates the promised `text`/`label` columns; unreadable formats are rejected at `/presign` and again at `POST /jobs`, the last gate before SageMaker provisions a GPU (#893)
+- **The admin fine-tuning cost dashboard reported $0.00 and 0 jobs for every period** while jobs were billing. Three stacked faults: the `StatusIndex` PK was queried with SageMaker's `"Completed"`/`"Stopped"` casing against records stored `"COMPLETED"`/`"STOPPED"`; `FAILED` was excluded although AWS bills partial runs; and training/inference share the table and index, so training is now filtered on the `JOB#` sort-key prefix
+- **An unpriced `instance_type` ran real GPUs and recorded $0.00** — it arrived unvalidated off the request body on both create paths, and `calculate_cost` falls back to `0.0` outside its 11-entry map. The quota meters GPU-hours, not dollars, so a 10-hour allowance buys ~$14 on `ml.g5.xlarge` or several hundred on a larger unlisted type. Both paths validate the resolved type and 400 with the supported list (#894)
+- **Arrow keys could not walk the `@`-mention menu** — `keyup` re-ran `syncMentionToken`, resetting the highlight to row one on every press. The highlight now resets only when the token itself changed, and the active row scrolls into view (#895)
+- **JWT role mappings rejected IdP group names containing spaces**, 400-ing the whole `PATCH /api/admin/roles/{role}` payload including untouched entries. The pattern now allows single internal spaces; the error names the offending entry with invisible characters escaped as `<U+XXXX>`, and `_FORBIDDEN_PROTECTED_MAPPINGS` compares case-folded with space/hyphen/underscore as one separator so `All Users` stays blocked now that it's typeable (#880)
+- Image attachments showed the browser's broken-image glyph in long turns — presigned GET URLs live 10 minutes and `loading="lazy"` tiles often fetch after expiry. All three render sites now re-mint once on `(error)`; the lightbox pre-refreshes within 30s of expiry (#879)
+- The managed-KB dispatcher raised `KB_MIGRATION_WORKER_FUNCTION_NAME is not set` on every tick — the construct published `MANAGED_KB_WORKER_FUNCTION_NAME`. A second mismatch silently replaced the operator's configured retention window with the 30-day code floor. A new contract test parses every `os.environ` read in the handlers and asserts the construct sets each and publishes nothing unread (#887)
+- The first real migration failed with `AccessDeniedException` on `bedrock:TagResource` — AWS authorizes tagging separately from `CreateKnowledgeBase`. Adds `bedrock:TagResource` and `bedrock:ListTagsForResource`; without the second, the daily orphan sweep would have reported a clean account forever (#888)
+- A dev deploy tagged its managed KBs `ManagedKbEnvironment=prod` — `config.production` is `true` everywhere and `config.tags` had no `Environment` key — so the tag-scoped teardown would have matched nothing and reported success, leaving billed KBs alive. New `CDK_TAG_ENVIRONMENT` variable, forwarded as flat-dotted `--context tags.Environment=` (#885)
+- A refused marketplace decision showed the backend message twice, inline and as a global toast. `SUPPRESS_ERROR_TOAST` is set on exactly the four calls that render inline; takedown on the Listings page has no inline region and keeps its toast, pinned by a test (#890)
+- The inline decision error rendered 565px above the sticky decision bar — off-screen at the moment of the click. Load failures stay at the top; a new `decisionError()` renders inside the sticky bar directly above Approve / Request changes / Decline
+
+### ⚠️ Changed
+
+- **The RAG document-status filter now fails CLOSED.** Both table-level fallbacks in `_filter_vectors_by_document_status` (unset `DYNAMODB_ASSISTANTS_TABLE_NAME`, and the outer `except`) drop every chunk instead of returning them unfiltered, log at ERROR and emit `KbStatusFilterFailClosed`. Any retrieval-serving service missing that variable now returns zero chunks (#884)
+- **Retrieval queries clamp at 10,000 characters on both backends**, including the legacy S3 Vectors path that previously accepted ~32,000. Applied in the facade before dispatch, emits `KbQueryClamped`, never raises (#884)
+- Retrieval runs under an explicit `kb_access.granted(...)` grant threaded from both call sites instead of the facade re-resolving. On the marketplace `review_preview` path the permission is deliberately `None`, so **a reviewer test-drives a RAG-backed agent with an empty knowledge base** — fail-closed by design (#882, #884)
+- `rag_service.py` is now a facade over a `KnowledgeBaseBackend` protocol with score direction normalized to `relevance` (higher-is-better) inside the S3 Vectors adapter; the `distance` key is still emitted for the existing HTTP consumer. Public signature and both call sites unchanged (#884)
+- `.txt` dropped from the fine-tuning **training** upload copy — it cannot express a label. It remains valid for inference input (#893)
+
+### 🏗️ Infrastructure
+
+- New GSI **`KbWorkIndex`** (`GSI7_PK`/`GSI7_SK`, projection ALL) on the existing rag-assistants table — sparse, written exclusively by `kb_backend/records.py`, registered in `gsi-inventory.json`. This is the release's one GSI operation; anything else adding an index to that table must ship separately (#884)
+- `ManagedKbRoleConstruct` — one Bedrock KB service role with `aws:SourceAccount` + `ArnLike AWS:SourceArn` confused-deputy conditions, S3 read conditioned on `aws:ResourceAccount`, `bedrock:InvokeModel` pinned to `amazon.titan-embed-text-v2:0`, and `iam:PassRole` conditioned on `iam:PassedToService` (#884)
+- `KbMigrationConstruct` — four Lambdas + DLQ + log groups; dispatcher rule `rate(15 min)` created **disabled** unless `migrationEnabled`, reconciler rule `rate(1 day)` **always enabled** in report-only mode, documents rule enabled when either flag is on; four alarms in namespace `${projectPrefix}/ManagedKb`, all NOT_BREACHING on missing data; SSM parameters publishing the four function names (#884)
+- `documentsBucket.enableEventBridgeNotification()` — additive, because S3 rejects two overlapping-prefix notification configs and the existing rag-ingestion notification is untouched (#884)
+- Nine new `CDK_MANAGED_KB_*` variables. The three booleans deliberately invert the repo's default-ON idiom — managed storage is $5.00/GB-month against ~$0.15 — using `parseBooleanEnv`, which maps unset *and* empty to `undefined` so an unset Actions variable cannot arm them (#884)
+- `scripts/common/load-env.sh` forwards each `CDK_MANAGED_KB_*` only when non-empty, as **flat dotted** `--context managedKb.<key>=` (`--context a.b=c` sets `context["a.b"]`; it does not build a nested object), and fails at deploy time naming any boolean that isn't `true|false|1|0|empty` (#884, #885)
+- New app-api env vars: `MANAGED_KB_MIGRATION_ENABLED`, the byte caps, `MANAGED_KB_METRIC_NAMESPACE`, `FINE_TUNING_ENABLED`, `FINE_TUNING_DEFAULT_QUOTA_HOURS`
+
+### 🔧 CI/CD
+
+- `backend.yml` gains `build-kb-migration` (ubuntu-24.04-arm) and `deploy-kb-migration-code`, which points all four functions at the one image tag. Until they run, the Lambdas stay bootstrap no-ops (#886)
+- `Dockerfile.kb-migration` pins `boto3==1.43.68` **functionally, not for hygiene** — the base image's 1.40.4 has no `managedKnowledgeBaseConfiguration` shape and every `CreateKnowledgeBase` fails with `ParamValidationError`. Three tests guard the pin (#886)
+
+### 📚 Docs
+
+- Weekly kaizen research scan and review prep for 2026-08-28; review queue trimmed 39 → 38 open, retiring the tool-mutation-probe entry and striking two MCP Apps prerequisites and a stale Strands #3758 caveat (#891, #892)
+- `.github/docs/deploy/step-03-github-config.md` documents the managed-KB flags and their deliberate default-OFF posture (#884)
+
 ## [1.15.0] - 2026-08-17
 
 Minor release on attachments and external tools. PowerPoint decks can now be uploaded and handed to the PowerPoint toolset, and attachment cards survive a reload — a gap that also affected spreadsheets. OAuth-gated MCP servers no longer lose their tools permanently when the pre-flight runs on a cold token cache, and an abandoned consent prompt no longer bricks every later message in the conversation. Two IAM grants missing in production are fixed, and ALB access logs are enabled so a mid-stream disconnect can be attributed to whoever actually ended the connection. **Requires a CDK deploy** — run `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`.

@@ -318,6 +318,8 @@ export class ReportsPage implements OnInit {
         return 'Changes requested';
       case 'private':
         return 'Unpublished';
+      case 'rejected':
+        return 'Declined';
       default:
         return state;
     }

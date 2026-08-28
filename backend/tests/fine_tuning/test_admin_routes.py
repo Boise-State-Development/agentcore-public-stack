@@ -383,3 +383,106 @@ class TestListAllInferenceJobs:
         client = TestClient(app)
         resp = client.get("/admin/fine-tuning/inference-jobs")
         assert resp.status_code == 403
+
+
+class TestCostDashboard:
+    """The dashboard reported $0.00 while real jobs were being billed.
+
+    Two causes, both regression-guarded here: the StatusIndex GSI partition key
+    is compared case-sensitively and was queried with SageMaker's "Completed"
+    spelling instead of the stored "COMPLETED"; and FAILED jobs were excluded
+    even though AWS bills a job that dies partway through.
+    """
+
+    @staticmethod
+    def _job(email, status_value, billable, cost):
+        return {
+            "email": email,
+            "status": status_value,
+            "billable_seconds": billable,
+            "estimated_cost_usd": cost,
+        }
+
+    def _client(self, make_user, training_by_status, inference_by_status=None):
+        app = _create_app()
+        _override_auth(app, make_user(email="admin@example.com", roles=["Admin"]))
+
+        jobs_repo = MagicMock()
+        jobs_repo.query_jobs_by_status_and_date.side_effect = (
+            lambda status_value, *_: list(training_by_status.get(status_value, []))
+        )
+        _override_jobs_repo(app, jobs_repo)
+
+        inf_repo = MagicMock()
+        inf_repo.query_jobs_by_status_and_date.side_effect = (
+            lambda status_value, *_: list((inference_by_status or {}).get(status_value, []))
+        )
+        _override_inf_repo(app, inf_repo)
+
+        return TestClient(app), jobs_repo, inf_repo
+
+    def test_queries_stored_uppercase_statuses(self, make_user):
+        """SageMaker's "Completed" casing matches nothing on the GSI."""
+        client, jobs_repo, inf_repo = self._client(make_user, {})
+
+        resp = client.get("/admin/fine-tuning/costs?month=2026-08")
+
+        assert resp.status_code == 200
+        for repo in (jobs_repo, inf_repo):
+            queried = {
+                call.args[0] for call in repo.query_jobs_by_status_and_date.call_args_list
+            }
+            assert queried == {"COMPLETED", "FAILED", "STOPPED"}
+
+    def test_aggregates_completed_jobs(self, make_user):
+        client, _, _ = self._client(
+            make_user,
+            {"COMPLETED": [self._job("user@example.com", "COMPLETED", 300, 0.1175)]},
+        )
+
+        body = client.get("/admin/fine-tuning/costs?month=2026-08").json()
+
+        assert body["total_cost_usd"] == pytest.approx(0.1175)
+        # Rounded to 2dp by the route: 300s = 0.0833h -> 0.08
+        assert body["total_gpu_hours"] == pytest.approx(0.08)
+        assert body["training_job_count"] == 1
+        assert body["active_user_count"] == 1
+        assert body["users"][0]["email"] == "user@example.com"
+
+    def test_counts_failed_jobs_because_aws_bills_them(self, make_user):
+        client, _, _ = self._client(
+            make_user,
+            {"FAILED": [self._job("user@example.com", "FAILED", 296, 0.1159)]},
+        )
+
+        body = client.get("/admin/fine-tuning/costs?month=2026-08").json()
+
+        assert body["total_cost_usd"] == pytest.approx(0.1159)
+        assert body["training_job_count"] == 1
+
+    def test_sums_training_and_inference_per_user(self, make_user):
+        client, _, _ = self._client(
+            make_user,
+            {
+                "COMPLETED": [self._job("user@example.com", "COMPLETED", 300, 0.1175)],
+                "FAILED": [self._job("user@example.com", "FAILED", 296, 0.1159)],
+            },
+            {"COMPLETED": [self._job("user@example.com", "COMPLETED", 230, 0.09)]},
+        )
+
+        body = client.get("/admin/fine-tuning/costs?month=2026-08").json()
+
+        assert body["total_cost_usd"] == pytest.approx(0.1175 + 0.1159 + 0.09)
+        assert body["training_job_count"] == 2
+        assert body["inference_job_count"] == 1
+        assert body["active_user_count"] == 1
+
+    def test_requires_admin_role(self):
+        app = _create_app()
+
+        def _raise_403():
+            raise HTTPException(status_code=403, detail="Forbidden")
+        override_admin_auth(app, _raise_403)
+
+        resp = TestClient(app).get("/admin/fine-tuning/costs")
+        assert resp.status_code == 403

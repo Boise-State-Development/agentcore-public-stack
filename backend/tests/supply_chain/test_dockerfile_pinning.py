@@ -16,6 +16,7 @@ DOCKERFILES = [
     BACKEND_DIR / "Dockerfile.inference-api",
     BACKEND_DIR / "Dockerfile.rag-ingestion",
     BACKEND_DIR / "Dockerfile.kb-sync",
+    BACKEND_DIR / "Dockerfile.kb-migration",
     BACKEND_DIR / "Dockerfile.scheduled-runs",
 ]
 
@@ -172,3 +173,96 @@ def test_dockerfile_apt_get_packages_have_version_pins():
         f"Found {len(violations)} package(s) without version pins "
         f"(out of {total_packages} total):\n" + "\n".join(violations)
     )
+
+
+class TestTheKbMigrationBoto3PinIsLoadBearing:
+    """The kb-migration image's boto3 pin is not hygiene — it is the feature.
+
+    `public.ecr.aws/lambda/python:3.12` at the digest every Lambda image here
+    pins bundles **boto3 1.40.4**, whose packaged `bedrock-agent` model offers
+    `type` enum ``['VECTOR', 'KENDRA', 'SQL']`` and has **no**
+    ``managedKnowledgeBaseConfiguration`` shape at all. Measured, not assumed::
+
+        docker run --rm --entrypoint python public.ecr.aws/lambda/python:3.12@sha256:745b... \\
+          -c "import boto3; print(boto3.__version__)"        # 1.40.4
+
+    So without the pin installed over the bundled copy, every
+    `CreateKnowledgeBase` call from these Lambdas fails with a
+    ParamValidationError naming a parameter that looks perfectly correct in our
+    source, and the managed knowledge base feature cannot work at all.
+
+    Deleting or downgrading the pin therefore breaks the feature silently at
+    runtime rather than loudly at build time — nothing else in the repo would
+    notice. Hence this test.
+    """
+
+    REQUIREMENTS = BACKEND_DIR / "src/apis/app_api/kb_migration/requirements.txt"
+
+    #: The floor is the version whose packaged model first carries the managed
+    #: shapes, established by the spec's evaluation. Pinned as a literal because
+    #: it is a property of AWS's published service model, not a knob: comparing
+    #: it against the repo's own pin would be a tautology that follows the pin
+    #: wherever it moves.
+    MINIMUM_BOTO3 = (1, 43, 68)
+
+    def test_boto3_is_pinned_exactly(self):
+        body = self.REQUIREMENTS.read_text(encoding="utf-8")
+        assert re.search(r"^boto3==", body, re.MULTILINE), (
+            "kb-migration requirements.txt does not pin boto3 exactly; the image "
+            "would fall back to the base image's 1.40.4, whose service model has "
+            "no MANAGED knowledge base support"
+        )
+
+    def test_the_pin_is_at_or_above_the_managed_kb_floor(self):
+        body = self.REQUIREMENTS.read_text(encoding="utf-8")
+        m = re.search(r"^boto3==(\d+)\.(\d+)\.(\d+)", body, re.MULTILINE)
+        assert m, "could not parse the boto3 pin"
+        pinned = tuple(int(g) for g in m.groups())
+        assert pinned >= self.MINIMUM_BOTO3, (
+            f"boto3=={'.'.join(map(str, pinned))} predates managed knowledge base "
+            f"support (need >= {'.'.join(map(str, self.MINIMUM_BOTO3))})"
+        )
+
+    def test_the_installed_model_actually_carries_the_managed_shapes(self):
+        """Asserts the capability, not just the number.
+
+        A version string is evidence only if the shapes are really there. This
+        reads the *packaged* model with no ``AWS_DATA_PATH`` side-load, which is
+        exactly what the Lambda will do.
+        """
+        import botocore.session
+
+        model = botocore.session.get_session().get_service_model("bedrock-agent")
+        config = model.operation_model("CreateKnowledgeBase").input_shape.members[
+            "knowledgeBaseConfiguration"
+        ]
+
+        assert "MANAGED" in (config.members["type"].enum or []), (
+            "the installed botocore's bedrock-agent model has no MANAGED knowledge "
+            "base type; the kb-migration image cannot provision"
+        )
+        assert "managedKnowledgeBaseConfiguration" in config.members
+
+        managed = config.members["managedKnowledgeBaseConfiguration"]
+        # Requirement 8.5's embedding pin has to be expressible, which is why
+        # `managedKnowledgeBaseConfiguration={}` was wrong despite the shape
+        # having no required members.
+        assert "embeddingModelArn" in managed.members
+        assert "embeddingModelConfiguration" in managed.members
+
+        # Uppercase. The enum rejects `float32`, which cost this feature a defect.
+        data_type = managed.members["embeddingModelConfiguration"].members[
+            "bedrockEmbeddingModelConfiguration"
+        ].members["embeddingDataType"]
+        assert "FLOAT32" in (data_type.enum or [])
+
+        for operation in (
+            "IngestKnowledgeBaseDocuments",
+            "GetKnowledgeBaseDocuments",
+            "ListKnowledgeBaseDocuments",
+            "DeleteKnowledgeBaseDocuments",
+        ):
+            assert operation in model.operation_names, (
+                f"{operation} is absent from the installed model; direct ingestion "
+                f"is how this feature adds documents without an S3 data source"
+            )

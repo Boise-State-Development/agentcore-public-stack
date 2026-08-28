@@ -53,7 +53,17 @@ This document specifies the requirements for reliable document deletion in the R
 1. WHEN the RAG_Search_Service receives vector search results, THE RAG_Search_Service SHALL extract unique document_id values from the result metadata and look up their status in the Assistants_Table.
 2. THE RAG_Search_Service SHALL return only chunks from documents where the status equals "complete" in the Assistants_Table.
 3. WHEN a document record does not exist in the Assistants_Table for a given document_id, THE RAG_Search_Service SHALL exclude chunks from that document.
-4. IF the Assistants_Table lookup fails due to a DynamoDB error, THEN THE RAG_Search_Service SHALL fall back to returning unfiltered vector results.
+4. ~~IF the Assistants_Table lookup fails due to a DynamoDB error, THEN THE RAG_Search_Service SHALL fall back to returning unfiltered vector results.~~
+   **SUPERSEDED** by Requirement 5 of `.kiro/specs/managed-kb-migration`, which
+   inverts this to fail **closed**: an unconfirmable status now drops the chunks.
+
+   This was a deliberate choice here, not an oversight, so retiring it is recorded
+   rather than silently contradicted. What changed is evidence: the fail-open path
+   was measured in production, and 936 retrievals in a trailing 30-day window had
+   chunks removed by this filter — so the documents it guards are real, not
+   hypothetical, and a lookup failure would have served users content they believe
+   they deleted. The per-document lookup failure in criterion 3 already failed
+   closed and is unchanged; only the table-level fallback moved.
 
 ### Requirement 4: Inline Cleanup with Retries
 

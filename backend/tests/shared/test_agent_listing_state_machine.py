@@ -338,3 +338,60 @@ def test_sort_key_is_created_at_so_browse_is_newest_first():
 def test_default_categories_are_non_empty_and_unique():
     assert DEFAULT_CATEGORIES
     assert len(set(DEFAULT_CATEGORIES)) == len(DEFAULT_CATEGORIES)
+
+
+# ── rejected: the third review decision ──────────────────────────────────────────────
+def test_an_admin_may_decline_a_submission_outright():
+    """The gap ``rejected`` closes: approve and request_changes were the only exits.
+
+    An admin who judged a submission not a fit had to publish it or say "fix this", and
+    the second one promises a review they do not intend to give.
+    """
+    assert_transition("in_review", "rejected")
+
+
+def test_only_a_pending_submission_can_be_rejected():
+    """Not a general-purpose "no". A live listing comes down via ``taken_down``, which is a
+    different act with a different record and a different message to the author."""
+    for state in [s for s in LISTING_STATES if s != "in_review"] + [None]:
+        with pytest.raises(ListingTransitionError):
+            assert_transition(state, "rejected")
+
+
+def test_a_rejected_author_can_revise_and_come_back():
+    """The difference from ``changes_requested`` is intent, not a locked door.
+
+    Making rejection terminal needs an appeal path and an admin escape hatch; an honest
+    "no" the author can answer needs neither.
+    """
+    assert_transition("rejected", "in_review")
+
+
+def test_a_rejected_author_can_shelve_it_so_it_can_be_deleted():
+    """``delete_assistant`` refuses every state but ``private``, so without this exit a
+    declined agent would be undeletable — the same reason ``taken_down → private`` exists."""
+    assert_transition("rejected", "private")
+
+
+def test_rejected_cannot_reach_the_store_without_a_second_review():
+    """``rejected`` must not become a side door. The only way back is another submission."""
+    assert "published" not in ALLOWED_TRANSITIONS["rejected"]
+    publishable = {s for s in ALLOWED_TRANSITIONS if "published" in ALLOWED_TRANSITIONS[s]}
+    assert publishable == {"in_review", "withdrawal_requested"}
+
+
+def test_a_rejected_listing_is_never_on_the_shelf():
+    """State beats a stale pointer, exactly as for ``private`` and ``taken_down``.
+
+    Without this, a rejected listing carrying a leftover ``published_version`` would read
+    as live and route an author's withdrawal into an admin queue for something no user can
+    see.
+    """
+    assert not is_on_shelf("rejected", 3)
+    assert not is_on_shelf("rejected", None)
+    assert not is_listed("rejected")
+
+
+def test_rejected_clears_the_review_queue():
+    """It is a decision, not a deferral — the badge must not keep counting it."""
+    assert "rejected" not in PENDING_DECISION_STATES

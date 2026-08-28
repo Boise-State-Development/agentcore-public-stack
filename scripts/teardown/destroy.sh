@@ -151,6 +151,38 @@ destroy_stack() {
 }
 
 # ---------------------------------------------------------------
+# Phase 0: Runtime-created Managed Knowledge Bases
+#
+# Before any stack, because these are NOT CloudFormation children —
+# the provisioning saga creates them at runtime, so `delete-stack`
+# does not touch them and they would survive the teardown, still
+# billing at $5.00/GB-month and invisible in the CFN console
+# (Requirement 20.8).
+#
+# Ordering is load-bearing: the Bedrock service role lives in
+# PlatformStack and Bedrock needs it to perform the delete. Taking the
+# stack down first is a plausible route into DELETE_UNSUCCESSFUL, a
+# terminal state that retrying does not clear (Requirement 13.5).
+#
+# A failure here therefore aborts the whole teardown rather than being
+# logged and stepped over. Leaving paid resources behind is the one
+# outcome worse than a teardown that stops and says why.
+# ---------------------------------------------------------------
+log_info ""
+log_info "Phase 0: Runtime-created resources (before any stack)..."
+
+if ! bash "${SCRIPT_DIR}/managed-kb.sh"; then
+    log_warn "============================================"
+    log_warn "Managed Knowledge Base teardown did not complete."
+    log_warn "Stopping BEFORE any stack is deleted, because the Bedrock"
+    log_warn "service role lives in PlatformStack and its knowledge bases"
+    log_warn "cannot be deleted without it."
+    log_warn "Resolve the knowledge bases listed above, then re-run."
+    log_warn "============================================"
+    exit 1
+fi
+
+# ---------------------------------------------------------------
 # Phase 1: Destroy application stacks in parallel
 # ---------------------------------------------------------------
 log_info ""

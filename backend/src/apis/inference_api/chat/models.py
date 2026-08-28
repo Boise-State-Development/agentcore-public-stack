@@ -117,6 +117,23 @@ class InvocationRequest(BaseModel):
     # `get_assistant_with_access_check` still gates the Agent itself, so the
     # worst a forged flag can do is decline to persist a binding.
     agent_mention: Optional[bool] = None
+    # Marketplace D2: this turn is a marketplace **reviewer** test-driving a submission
+    # before deciding on it. Two things change, and nothing else does.
+    #
+    # 1. The Agent resolves to the snapshot under review (`submittedVersion` while one is
+    #    pending, `publishedVersion` otherwise) rather than to the published-or-draft rule
+    #    every other caller gets. A reviewer who test-drove the author's live draft would
+    #    be testing something approval is not going to publish.
+    # 2. The PRIVATE access check is bypassed, because a PRIVATE Agent can be — and often
+    #    is — sitting in the review queue, and `get_assistant_with_access_check` refuses a
+    #    non-owner outright on one.
+    #
+    # ⚠️ Unlike `agent_mention`, this is NOT merely a claim about intent, so it cannot be
+    # treated like one: it widens access. The route re-checks `admin.marketplace` against
+    # the caller's own roles before honoring it, and a caller without the scope gets a 403
+    # rather than a quietly-ignored flag — a silently downgraded preview would run the
+    # wrong configuration and report it as the reviewed one.
+    review_preview: Optional[bool] = None
     # When set, the route resumes a paused agent turn instead of starting a
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.

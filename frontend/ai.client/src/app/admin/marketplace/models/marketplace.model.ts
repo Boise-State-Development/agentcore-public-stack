@@ -138,10 +138,77 @@ export interface AdminListingsResponse {
 }
 
 export interface ReviewListingRequest {
-  decision: 'approve' | 'request_changes';
+  /**
+   * `reject` is a third decision, not a harsher `request_changes`.
+   *
+   * Both return the submission with a required reason; they differ in what the author is
+   * told and what the admin is committing to. Before it existed, an admin who judged a
+   * submission not a fit had to publish it or say "fix this" — promising a review they did
+   * not intend to give, and re-reading the same submission every time it came back.
+   */
+  decision: 'approve' | 'request_changes' | 'reject';
   note?: string;
   category?: string;
   publisherId?: string;
+}
+
+/**
+ * One capability the reviewed snapshot binds, by name.
+ *
+ * Names, never refs — the same rule the store's detail page follows.
+ */
+export interface AgentCapability {
+  label: string;
+  kind: string;
+}
+
+/**
+ * The reviewer's full read of a submission — instructions, capabilities, model.
+ *
+ * ⚠️ **Every field here comes from the frozen snapshot, not the live record**, and that is
+ * the design rather than an implementation detail. The live record is the author's draft
+ * and they can keep editing it while the row sits in the queue; approval promotes
+ * `submittedVersion`. A page that read the draft would show the reviewer one configuration
+ * and publish another.
+ *
+ * The one deliberate exception is `reachability`, which is a fact about *now* — `visibility`
+ * is not snapshotted, and cannot be, because fusing it with listing state is exactly the
+ * trap the version model exists to avoid.
+ */
+export interface AdminSubmissionReview {
+  agentId: string;
+  name: string;
+  description: string;
+  tagline?: string;
+  /** The system prompt as submitted — the thing being reviewed. */
+  instructions: string;
+  starters: string[];
+  emoji?: string;
+  iconUrl?: string;
+  ownerName: string;
+  publisher?: PublisherProfile | null;
+  category: string;
+  categoryLabel?: string;
+  state: ListingState;
+  capabilities: AgentCapability[];
+  modelLabel?: string;
+  /** Which snapshot this read is of; absent when none backs it — see `snapshotUnavailable`. */
+  reviewVersion?: number;
+  publishedVersion?: number;
+  /**
+   * The content above came from the **live record**, which the author can still change.
+   * True for submissions that predate version snapshots.
+   *
+   * Reported rather than refused: a reviewer looking at a row in their own queue needs
+   * something to read, and the flag is what lets the page say the content is not frozen
+   * instead of implying it is.
+   */
+  snapshotUnavailable: boolean;
+  submittedAt?: string;
+  withdrawalRequestedAt?: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+  reachability: ListingReachability;
 }
 
 export interface TakedownRequest {

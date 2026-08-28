@@ -114,6 +114,55 @@ def emit_prompt_cache_metrics(
         logger.debug("EMF emission skipped: %s", e)
 
 
+def emit_emf_metrics(
+    namespace: str,
+    metrics: dict,
+    properties: Optional[dict] = None,
+    units: Optional[dict] = None,
+) -> None:
+    """Emit one EMF record into ``namespace``. Never raises.
+
+    The generic form of the two functions above, for callers whose namespace is not
+    the prompt-cache one. It lives here rather than being re-implemented per feature
+    because the parts that are easy to get wrong are not the JSON — they are the
+    dedicated non-propagating logger and the message-only formatter above. A record
+    written through the app's normal logger acquires an ``[INFO] name:`` prefix,
+    CloudWatch Logs silently declines to extract it, and the metric simply never
+    appears. Nothing errors; there is just no data, which is indistinguishable from
+    "the thing being measured never happened".
+
+    ``metrics`` maps metric name to numeric value; ``units`` optionally maps the
+    same names to a CloudWatch unit, defaulting to ``None`` (a bare number).
+    ``properties`` ride along as queryable log fields and are **not** dimensions —
+    dimensions multiply metric streams, and every caller here so far wants
+    fleet-wide aggregates with the detail available in Logs Insights.
+    """
+    try:
+        units = units or {}
+        record = {
+            "_aws": {
+                "Timestamp": int(time.time() * 1000),
+                "CloudWatchMetrics": [
+                    {
+                        "Namespace": namespace,
+                        "Dimensions": [[]],
+                        "Metrics": [
+                            {"Name": name, "Unit": units.get(name, "None")}
+                            for name in metrics
+                        ],
+                    }
+                ],
+            },
+        }
+        record.update({name: value for name, value in metrics.items()})
+        for key, value in (properties or {}).items():
+            if value is not None:
+                record[key] = value
+        _emf_logger.info(json.dumps(record, separators=(",", ":")))
+    except Exception as e:  # noqa: BLE001 - metrics must never break a caller
+        logger.debug("EMF emission skipped: %s", e)
+
+
 def emit_session_cache_rollup(
     session_id: str,
     partial_miss_usd: float,

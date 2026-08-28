@@ -96,6 +96,14 @@ export interface PlatformComputeRefs {
   ragVectorBucketName: string;
   ragVectorIndexName: string;
 
+  // ── Managed knowledge bases
+  /**
+   * Bedrock managed-KB service role ARN. Threaded (not read from SSM)
+   * because PlatformStack publishes this parameter itself — see the
+   * first-deploy deadlock explained at the top of this file.
+   */
+  managedKbServiceRoleArn: string;
+
   // ── Artifacts
   artifactsContentBucket: s3.IBucket;
   artifactsTable: dynamodb.ITable;

@@ -52,6 +52,7 @@ from apis.shared.assistants.service import (
     update_assistant,
     update_share_permission,
 )
+from apis.shared.assistants.kb_access import granted
 from apis.shared.assistants.rag_service import augment_prompt_with_context, search_assistant_knowledgebase_with_formatting
 
 logger = logging.getLogger(__name__)
@@ -521,7 +522,15 @@ async def test_chat_endpoint(assistant_id: str, request: AssistantTestChatReques
         session_id = request.session_id or f"test-{uuid.uuid4().hex[:12]}"
 
         # 4. Search vector store for relevant context
-        context_chunks = await search_assistant_knowledgebase_with_formatting(assistant_id=assistant_id, query=request.message, top_k=5)
+        # The permission resolved in step 1 is handed to the facade rather than
+        # re-resolved there (Requirement 25.1): one lookup, and the grant the
+        # retrieval runs under is provably the one this route checked.
+        context_chunks = await search_assistant_knowledgebase_with_formatting(
+            assistant_id=assistant_id,
+            query=request.message,
+            top_k=5,
+            access=granted(assistant_id, user_id, permission),
+        )
 
         # 5. Augment user message with retrieved context
         augmented_message = augment_prompt_with_context(user_message=request.message, context_chunks=context_chunks)

@@ -57,6 +57,11 @@ jobs:
       CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
       CDK_DOMAIN_NAME: ${{ vars.CDK_DOMAIN_NAME }}
       CDK_CORS_ORIGINS: ${{ vars.CDK_CORS_ORIGINS }}
+      # The Environment tag value. Not cosmetic: it is the filter the managed-KB
+      # reconciler and scripts/teardown/managed-kb.sh match knowledge bases on, so
+      # an unset value here made a dev deploy tag its knowledge bases 'prod' while
+      # teardown looked for 'dev' — matching nothing and reporting success.
+      CDK_TAG_ENVIRONMENT: ${{ vars.CDK_TAG_ENVIRONMENT }}
       CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
@@ -128,6 +133,25 @@ jobs:
       # and see the ones their role grants. Which skills a cohort gets is a
       # role's `grantedSkills`, managed in the admin roles UI.
       CDK_SKILLS_ENABLED: ${{ vars.CDK_SKILLS_ENABLED }}
+      # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
+      # grants deploy unconditionally, but these two decide whether the feature
+      # is reachable and how it is rationed, and neither was forwarded before —
+      # so every deployed environment served 404s from `/fine-tuning/*` while
+      # the repo variable `CDK_FINE_TUNING_ENABLED` read "true".
+      #
+      # ENABLED is default ON with a kill switch: unset resolves to empty
+      # string, which config.ts treats as the default (on). Set it to "false"
+      # to dark-stop the routes; storage is untouched either way, so no dataset
+      # or trained model is orphaned.
+      #
+      # DEFAULT_QUOTA_HOURS picks the access model: `0` (the default) is
+      # whitelist-only, where an admin grants each user explicitly; a positive
+      # value auto-grants that monthly GPU-hour budget to any signed-in user.
+      CDK_FINE_TUNING_ENABLED: ${{ vars.CDK_FINE_TUNING_ENABLED }}
+      CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS: ${{ vars.CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS }}
+      # Extra CORS origins for the fine-tuning data bucket, beyond the global
+      # CDK_CORS_ORIGINS above. Also never forwarded until now.
+      CDK_FINE_TUNING_CORS_ORIGINS: ${{ vars.CDK_FINE_TUNING_CORS_ORIGINS }}
       # Agent Designer /agents surface. Default OFF (opt-in) until the Phase-4
       # Designer UI ships — a headless API helps no forker. Set the
       # `CDK_AGENTS_API_ENABLED` variable to "true" in an environment (e.g. dev)
@@ -146,6 +170,43 @@ jobs:
       # cdk.context.json stay inert.
       CDK_MCP_TOKEN_ENRICHMENT_ENABLED: ${{ vars.CDK_MCP_TOKEN_ENRICHMENT_ENABLED }}
       CDK_MCP_TOKEN_ENRICHMENT_CLAIMS: ${{ vars.CDK_MCP_TOKEN_ENRICHMENT_CLAIMS }}
+      # Managed knowledge bases (.kiro/specs/managed-kb-migration). THREE
+      # INDEPENDENT OPT-IN flags, all defaulting to OFF — the inverse of the
+      # kill-switch flags above, and the difference matters here. An unset
+      # GitHub Actions variable renders as an EMPTY STRING, not as absent, so
+      # a `!== 'false'` reading of an unset variable would resolve to TRUE and
+      # arm the feature on every fork. config.ts reads these with
+      # parseBooleanEnv, which maps both unset and empty to undefined and falls
+      # through to `false` (Requirement 19.8). Leave all three unset to deploy
+      # the managed backend without starting a fleet migration.
+      #
+      #   CDK_MANAGED_KB_NEW_DEFAULT       new KBs are created managed
+      #   CDK_MANAGED_KB_MIGRATION_ENABLED the background migrator runs at all
+      #   CDK_MANAGED_KB_RECONCILER_ARMED  the daily reconciler DELETES orphans
+      #                                    rather than only reporting them
+      #
+      # reconcilerArmed is the inverted one: the Reconciler is deployed and
+      # running from day one but DISARMED, so its judgement can be reviewed
+      # against real data before it deletes anything (Requirements 14.7, 19.7).
+      CDK_MANAGED_KB_NEW_DEFAULT: ${{ vars.CDK_MANAGED_KB_NEW_DEFAULT }}
+      CDK_MANAGED_KB_MIGRATION_ENABLED: ${{ vars.CDK_MANAGED_KB_MIGRATION_ENABLED }}
+      CDK_MANAGED_KB_RECONCILER_ARMED: ${{ vars.CDK_MANAGED_KB_RECONCILER_ARMED }}
+      # Storage cost controls. Byte_Caps are in BYTES (Requirement 12.2),
+      # defaulting to 100 MB standard / 1 GB elevated / 500 MB per knowledge
+      # base; the retention window is in DAYS and must stay >= 30
+      # (Requirement 15.11). Leave unset to take those defaults — these exist
+      # so an environment can tune them without a code change.
+      CDK_MANAGED_KB_PER_OWNER_BYTES: ${{ vars.CDK_MANAGED_KB_PER_OWNER_BYTES }}
+      CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES: ${{ vars.CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES }}
+      CDK_MANAGED_KB_PER_KB_CEILING_BYTES: ${{ vars.CDK_MANAGED_KB_PER_KB_CEILING_BYTES }}
+      CDK_MANAGED_KB_RETENTION_WINDOW_DAYS: ${{ vars.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS }}
+      # Fleet-level alarm thresholds (Requirement 12.13). The Byte_Caps above
+      # bound ONE owner; these two bound the whole account, which is the gap
+      # between ~$169/month expected and ~$15,000/month that per-owner caps
+      # alone permit. Storage is in GB (default 500), daily cost in USD
+      # (default 100). Leave unset to take those defaults.
+      CDK_MANAGED_KB_STORAGE_ALARM_GB: ${{ vars.CDK_MANAGED_KB_STORAGE_ALARM_GB }}
+      CDK_MANAGED_KB_DAILY_COST_ALARM_USD: ${{ vars.CDK_MANAGED_KB_DAILY_COST_ALARM_USD }}
       # Secrets
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

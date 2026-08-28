@@ -1,0 +1,78 @@
+# kb-migration Lambda image — the four managed-knowledge-base Lambdas.
+#
+# ONE image, FOUR Lambda functions. The CDK construct
+# (infrastructure/lib/constructs/managed-kb/kb-migration-construct.ts) points
+# all four at this image and selects a handler per function through
+# `ImageConfig.Command`. The command override is function *configuration*, so
+# the workflow's `update-function-code --image-uri` swaps code on all four
+# without touching their handlers:
+#
+#   dispatcher          apis.app_api.kb_migration.dispatcher.lambda_handler
+#   worker              apis.app_api.kb_migration.worker.lambda_handler
+#   reconciler          apis.app_api.kb_migration.reconciler.lambda_handler
+#   ingestion consumer  apis.app_api.kb_migration.ingestion_consumer.lambda_handler
+#
+# THIS IMAGE REPLACES A BOOTSTRAP STUB.
+# `infrastructure/bootstrap-assets/kb-migration/` is what PlatformStack ships on
+# first deploy: four no-op handlers that log and return. Until this image is
+# pushed, an enrolled knowledge base sits in `shadow` while the dispatcher ticks
+# into a stub — which is safe, because work keys are sparse and the first real
+# dispatcher tick picks up everything that accumulated. The stub directory must
+# stay byte-stable; see the warning in its Dockerfile.
+#
+# WHY THE COPY SURFACE IS THIS SMALL
+# The whole import closure of the four handlers is 16 first-party modules. That
+# is not luck: `kb_backend` is a separate package with an EMPTY `__init__.py`
+# and stdlib-only module scope, specifically so this image does not have to
+# carry `apis.shared.assistants` — whose `__init__` imports `rag_service`, which
+# imports the embeddings stack at module scope, which blows the image-size
+# budget. `backend/tests/architecture/test_kb_backend_boundary.py` enforces it.
+#
+# Keep this surface minimal but COMPLETE: it must cover the handlers' whole
+# closure INCLUDING function-local imports, which still run on invocation. A
+# module the closure reaches but this list omits either kills every cold start
+# or — worse — trips an `except ImportError` branch and silently no-ops.
+# `backend/tests/supply_chain/test_lambda_image_imports.py` enforces the closure.
+# When adding a COPY here, also add the path to the kb-migration
+# SOURCE_DIRS/MANIFESTS in scripts/build/build-one.sh so the content-hash tag
+# notices the change — otherwise the image is rebuilt under an unchanged tag and
+# the deploy is a silent no-op.
+#
+# Base image digest-pinned to the same digest as the other Lambda images
+# (backend/Dockerfile.kb-sync, .rag-ingestion, .scheduled-runs); the
+# supply-chain dockerfile-pinning test asserts they agree.
+
+FROM public.ecr.aws/lambda/python:3.12@sha256:745b0eb8a9787e9c4bfd4fc4cae942399a2225831c96394ae70c0c2a7c7c6168
+
+# Dependencies (exact pins). The boto3 pin is what makes the managed knowledge
+# base API reachable at all — the base image's bundled copy predates it. See the
+# requirements file for the specifics.
+COPY backend/src/apis/app_api/kb_migration/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Application code — namespace-package layout mirrors backend/src.
+# `apis/` and `apis/app_api/` have no `__init__.py` in the repo and rely on
+# implicit namespace packages, exactly as the kb-sync image does.
+COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
+
+# observability/emf.py — the metrics helpers publish through it. Copied as the
+# package so its `__init__` resolves.
+COPY backend/src/apis/shared/observability/ ${LAMBDA_TASK_ROOT}/apis/shared/observability/
+
+# kb_backend/ — the whole package. Ten of its modules are in the closure
+# (records, protocol, provisioning, managed_backend, byte_cap, tombstones,
+# idleness, metrics, tags, and the empty __init__); the remaining few
+# (resolver, s3vectors_backend, dual_read, query_guard, resource_policy) are
+# not reached from these handlers but ride along because they are small, pure
+# Python, and copying the package whole means a future function-local import
+# cannot silently fall outside the image.
+COPY backend/src/apis/shared/kb_backend/ ${LAMBDA_TASK_ROOT}/apis/shared/kb_backend/
+
+# The handlers themselves.
+COPY backend/src/apis/app_api/kb_migration/ ${LAMBDA_TASK_ROOT}/apis/app_api/kb_migration/
+
+# Default command: the dispatcher. The other three functions override CMD
+# through their ImageConfig, so this default is only what an unconfigured
+# function would run.
+CMD ["apis.app_api.kb_migration.dispatcher.lambda_handler"]

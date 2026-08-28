@@ -66,12 +66,20 @@ export interface LightboxImage {
       }
 
       <figure class="flex max-h-full max-w-full flex-col items-center gap-3">
-        <img
-          [src]="currentImage().url"
-          [alt]="currentImage().filename"
-          class="max-h-[85vh] max-w-full rounded-lg object-contain shadow-2xl"
-          (click)="$event.stopPropagation()"
-        />
+        @if (currentImage().url) {
+          <img
+            [src]="currentImage().url"
+            [alt]="currentImage().filename"
+            class="max-h-[85vh] max-w-full rounded-lg object-contain shadow-2xl"
+            (click)="$event.stopPropagation()"
+            (error)="imageError.emit(activeIndex())"
+          />
+        } @else {
+          <div class="flex size-40 items-center justify-center rounded-lg bg-white/10 text-white/70">
+            <div class="size-8 animate-pulse rounded-full bg-white/40" aria-hidden="true"></div>
+            <span class="sr-only">Loading {{ currentImage().filename }}</span>
+          </div>
+        }
         <figcaption class="max-w-full truncate text-sm text-white/80">
           {{ currentImage().filename }}
           @if (hasMultiple()) {
@@ -86,6 +94,11 @@ export class ImageLightboxComponent {
   readonly images = input.required<LightboxImage[]>();
   readonly startIndex = input<number>(0);
   readonly close = output<void>();
+  /**
+   * The image at this index failed to load — almost always an expired
+   * presigned URL. The owner re-mints and pushes a new `images` value.
+   */
+  readonly imageError = output<number>();
 
   protected readonly activeIndex = signal(0);
 

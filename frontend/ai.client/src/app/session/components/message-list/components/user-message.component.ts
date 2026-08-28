@@ -11,6 +11,7 @@ import {
 } from '@angular/core';
 import { ContentBlock, Message, FileAttachmentData } from '../../../services/models/message.model';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
+import { MentionTextComponent } from './mention-text.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 import { parseIso } from '../../../../utils/date';
 
@@ -23,7 +24,7 @@ const MAX_HEIGHT_PX = 200;
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent],
+  imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent, MentionTextComponent],
   template: `
     @if (hasTextContent() || hasFileAttachments()) {
       <div class="group relative flex w-full flex-col items-end gap-2">
@@ -48,12 +49,12 @@ const MAX_HEIGHT_PX = 200;
                 class="overflow-hidden transition-[max-height] duration-300 ease-in-out"
                 [style.max-height]="expanded() ? 'none' : maxHeightPx + 'px'"
               >
-                @if (displayText()) {
-                  <p class="whitespace-pre-wrap">{{ displayText() }}</p>
+                @if (displayText(); as text) {
+                  <p class="whitespace-pre-wrap"><app-mention-text [text]="text" /></p>
                 } @else {
                   @for (block of message().content; track $index) {
                     @if (block.type === 'text' && block.text) {
-                      <p class="whitespace-pre-wrap">{{ block.text }}</p>
+                      <p class="whitespace-pre-wrap"><app-mention-text [text]="block.text" /></p>
                     }
                   }
                 }

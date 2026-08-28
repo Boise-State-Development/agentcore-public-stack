@@ -23,6 +23,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { AppConfig } from '../../config';
 import { PlatformComputeRefs } from '../platform-compute-refs';
+import { grantManagedKbRetrieval } from '../managed-kb/managed-kb-role-construct';
 
 export interface AppApiIamGrantsProps {
   scope: Construct;
@@ -648,6 +649,13 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       ],
     }),
   );
+
+  // ── Managed knowledge bases (Bedrock Retrieve) ──
+  // Query-only, same posture as the Runtime role: the App API may
+  // retrieve from a Managed_KB but never create or delete one
+  // (Requirement 20.6). Provisioning CRUD belongs to the migration
+  // Lambdas alone.
+  grantManagedKbRetrieval(config, taskRole);
 
   // ── AgentCore WorkloadIdentity (OAuth vault token minting) ──
   // Grants the App API the data-plane actions used by /connectors/*

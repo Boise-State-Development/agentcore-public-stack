@@ -1,7 +1,7 @@
 import { Component, ChangeDetectionStrategy, OnInit, computed, inject, signal } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash } from '@ng-icons/heroicons/outline';
+import { heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash, heroGlobeAlt } from '@ng-icons/heroicons/outline';
 import { AgentListingService } from '../services/agent-listing.service';
 import { ListingReachability } from '../models/reachability';
 import {
@@ -40,17 +40,29 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
  *   the form is hidden and the backend's message (which names the space) explains why.
  *   The author learns this before filling in a category, not after clicking.
  * * **Going public** — the marketplace is public-only, and every Agent starts PRIVATE,
- *   so most first submissions need visibility widened. That is a *checkbox here*, not a
- *   block: `makePublic` rides the submit request and the backend widens in the same
- *   write. Sending the author to the agent editor to change a setting and come back was
- *   the whole reason this needed fixing — but it stays consent, so the box starts
- *   unticked and Submit is disabled until it is ticked.
+ *   so most first submissions need visibility widened. `makePublic` rides the submit
+ *   request and the backend widens in the same write, so the author never leaves this
+ *   dialog to change a setting on another screen.
+ *
+ *   ⚠️ It is a **disclosure, not a checkbox**. It used to be an unticked box that
+ *   disabled Submit until ticked, on the reasoning that widening access must be
+ *   consented to. The reasoning holds; the control did not serve it. There is no
+ *   submission that leaves an Agent private — the store is one public shelf — so the box
+ *   had exactly one valid answer, and a required control with one valid answer is
+ *   ceremony that trains people to click past it, not consent. What consent actually
+ *   needs is that the author *knows*, and that is the notice's job. Pressing "Submit for
+ *   review" underneath a notice saying what submitting does is the consent.
+ *
+ *   The backend gate is deliberately unchanged: `_visibility_block` still refuses a
+ *   submission whose request omits `makePublic`, so a direct API caller — who sees no
+ *   notice — cannot widen an Agent by accident. This dialog is where the notice is
+ *   shown, so this dialog is where the flag is now always set.
  */
 @Component({
   selector: 'app-submit-listing-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DialogDismissDirective, NgIcon],
-  providers: [provideIcons({ heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash })],
+  providers: [provideIcons({ heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash, heroGlobeAlt })],
   host: {
     class: 'block',
     '(keydown.escape)': 'onCancel()',
@@ -118,31 +130,28 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
               <p>{{ reason }}</p>
             </div>
           } @else {
-            <!-- Going public. Above the form because it is the one thing here that changes
-                 who can reach the agent, and it is a *choice*, not a warning: the author
-                 acts on it in place rather than being sent to another screen. -->
+            <!-- Going public. Above the form because it is the one thing here that
+                 changes who can reach the agent, and first because a consequence
+                 disclosed after the form is one the author reads after deciding.
+
+                 A statement, not a control: submitting is what makes it public, so the
+                 notice says so plainly and the Submit button carries the consent. -->
             @if (requiresPublic()) {
               <div
                 class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-900/20"
               >
                 <div class="flex gap-3">
-                  <input
-                    id="listing-make-public"
-                    type="checkbox"
-                    [checked]="makePublic()"
-                    (change)="onMakePublicChange($event)"
-                    [attr.aria-describedby]="'listing-make-public-help'"
-                    class="mt-1 size-4 shrink-0 rounded border-gray-300 text-blue-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                  <ng-icon
+                    name="heroGlobeAlt"
+                    class="mt-0.5 size-5 shrink-0 text-amber-700 dark:text-amber-400"
+                    aria-hidden="true"
                   />
-                  <div>
-                    <label
-                      for="listing-make-public"
-                      class="block text-sm/6 font-medium text-amber-900 dark:text-amber-200"
-                    >
-                      Make this agent public
-                    </label>
-                    <p id="listing-make-public-help" class="text-sm/6 text-amber-900 dark:text-amber-200">
-                      {{ makePublicHelp() }}
+                  <div class="min-w-0">
+                    <p class="text-sm/6 font-medium text-amber-900 dark:text-amber-200">
+                      Submitting makes this agent public
+                    </p>
+                    <p class="text-sm/6 text-amber-900 dark:text-amber-200">
+                      {{ goingPublicNotice() }}
                     </p>
                   </div>
                 </div>
@@ -300,14 +309,13 @@ export class SubmitListingDialogComponent implements OnInit {
   readonly exposedSkills = signal<SkillExposure[]>([]);
   readonly blockReason = signal<string | null>(null);
   /**
-   * This agent is not PUBLIC yet. Not a block: the checkbox below resolves it, and
-   * submitting widens visibility in the same write. The marketplace is public-only, and
-   * every agent starts PRIVATE, so this is the ordinary first-submission path.
+   * This agent is not PUBLIC yet. Not a block and no longer a question: submitting widens
+   * visibility in the same write, and this is what decides whether the notice explaining
+   * that is shown. The marketplace is public-only and every agent starts PRIVATE, so this
+   * is the ordinary first-submission path, not an edge case.
    */
   readonly requiresPublic = signal(false);
-  /** The author's consent. Starts unticked — going public is a decision, not a default. */
-  readonly makePublic = signal(false);
-  /** The current reachability, kept to word the consent copy for what it actually changes. */
+  /** The current reachability, kept to word the notice for what it actually changes. */
   private readonly reachability = signal<ListingReachability>('everyone');
   readonly loading = signal(true);
   readonly submitting = signal(false);
@@ -330,26 +338,28 @@ export class SubmitListingDialogComponent implements OnInit {
    */
   readonly isUpdate = computed(() => !!this.data.listing?.publishedVersion);
 
+  /**
+   * ⚠️ `requiresPublic` is deliberately **not** a term here any more. Needing to go public
+   * is not a reason to hold Submit — the notice above the form has already said that
+   * submitting does it, and there is no second answer for the author to give. `blockReason`
+   * is still a term, because that one really is a dead end.
+   */
   readonly canSubmit = computed(
-    () =>
-      !!this.category() &&
-      !this.submitting() &&
-      !this.blockReason() &&
-      // Consent is required, not implied: the backend refuses an omitted flag, so a
-      // Submit that looked enabled here would fail on the round trip.
-      (!this.requiresPublic() || this.makePublic()),
+    () => !!this.category() && !this.submitting() && !this.blockReason(),
   );
 
   /**
    * Says what going public actually changes *from*, so "shared with 3 people → everyone"
    * and "only me → everyone" do not read as the same sentence.
    */
-  readonly makePublicHelp = computed(() =>
+  readonly goingPublicNotice = computed(() =>
     this.reachability() === 'shared_only'
       ? 'Right now only the people it is shared with can open it. The store is public, so ' +
-        'publishing it makes it available to everyone at Boise State.'
-      : 'Right now only you can open it. The store is public, so publishing it makes it ' +
-        'available to everyone at Boise State.',
+        'submitting changes its visibility to Public — everyone at Boise State can open ' +
+        'it, starting now rather than when an admin approves it.'
+      : 'Right now only you can open it. The store is public, so submitting changes its ' +
+        'visibility to Public — everyone at Boise State can open it, starting now rather ' +
+        'than when an admin approves it.',
   );
 
   /** A resubmission is answering an admin; a first submission is introducing itself. */
@@ -400,10 +410,6 @@ export class SubmitListingDialogComponent implements OnInit {
     this.tagline.set((event.target as HTMLInputElement).value);
   }
 
-  onMakePublicChange(event: Event): void {
-    this.makePublic.set((event.target as HTMLInputElement).checked);
-  }
-
   async onSubmit(): Promise<void> {
     if (!this.canSubmit()) return;
     this.submitting.set(true);
@@ -412,9 +418,12 @@ export class SubmitListingDialogComponent implements OnInit {
       const response = await this.listings.submit(this.data.agentId, {
         category: this.category(),
         note: this.note().trim() || undefined,
-        // Sent only when it is actually being asked for, so an already-public agent's
-        // request does not carry a consent it never sought.
-        makePublic: this.requiresPublic() ? this.makePublic() : undefined,
+        // Always true when widening is needed — the notice above the form is what the
+        // author read, and pressing Submit under it is the consent the backend's flag
+        // stands for. Still omitted when the agent is already PUBLIC, so the request does
+        // not carry a widening it never needed and the backend's no-op guard is never
+        // asked to catch one.
+        makePublic: this.requiresPublic() ? true : undefined,
         // Omitted rather than blanked when empty — the backend reads `undefined` as
         // "leave the existing tagline alone".
         tagline: this.tagline().trim() || undefined,

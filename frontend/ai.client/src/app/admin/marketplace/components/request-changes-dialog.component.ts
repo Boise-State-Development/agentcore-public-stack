@@ -2,11 +2,18 @@ import { Component, ChangeDetectionStrategy, inject, signal } from '@angular/cor
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark } from '@ng-icons/heroicons/outline';
-import { AdminListingRow } from '../models/marketplace.model';
 import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
 
 export interface RequestChangesDialogData {
-  listing: AdminListingRow;
+  /**
+   * Just the two fields the copy names.
+   *
+   * Narrowed from the full `AdminListingRow` when the submission review page arrived: that
+   * page holds an `AdminSubmissionReview`, not a queue row, and both surfaces send the same
+   * decision. Widening the type to a union would have been the other option and is worse —
+   * the dialog would then know about two shapes to render one sentence.
+   */
+  listing: { name: string; ownerName: string };
 }
 
 /** The reason, or undefined if cancelled. */
