@@ -1,7 +1,7 @@
 # Managed KB Migration — Handoff
 
-**Last updated:** 2026-08-31 · **Shipped to production in 1.16.0, inert behind flags** ·
-**A migration has now completed end to end in dev**
+**Last updated:** 2026-08-31 14:30 · **Shipped to production in 1.16.0, inert behind flags** ·
+**A migration has completed end to end in dev; adding a document to it needed one more IAM action**
 
 Working state for this feature so a fresh session can pick it up without
 re-deriving anything. Read this, then `tasks.md`.
@@ -10,19 +10,29 @@ re-deriving anything. Read this, then `tasks.md`.
 
 ## 0. Read this first
 
-Three things invalidate earlier versions of this document:
+Four things invalidate earlier versions of this document:
 
 1. **It is deployed.** The feature shipped to production in release 1.16.0 and the
    platform deploy succeeded on 2026-08-28, so `GSI7`, the Bedrock service role and
    the four Lambdas exist in **both** dev and prod. Earlier revisions of this file
    said "Nothing deployed"; that is no longer true.
-2. **Five defects were found only by running it**, in a row, each one step further
-   along than the last. Every one reviewed clean and deployed clean. They are
-   §5 items 24–28 and they are the most useful part of this document.
-3. **Iterate locally.** `scripts/local-dev/run-kb-migration.py` drives the whole
-   state machine in-process against dev with your SSO credentials. Three of the
+2. **Seven defects were found only by running it**, each one step further along than
+   the last. Every one reviewed clean and deployed clean. They are §5 items 25–31
+   and they are the most useful part of this document.
+3. **The `document_id` "known unknown" was a false alarm** and is now resolved with
+   measurements — see §6. An earlier revision listed it as the top open risk. The
+   probe was reading facade keys that have never existed. Two genuine findings came
+   out of checking it (§5.32, §5.33), both still open.
+4. **Iterate locally, but do not trust it for IAM.**
+   `scripts/local-dev/run-kb-migration.py` drives the whole state machine
+   in-process against dev with your SSO credentials. Three of the
    five defects would have been minutes of work instead of a merge → image build →
    deploy → 15-minute-tick cycle each. Use it.
+
+   But your SSO identity is **broader than every Lambda role**, so the driver is
+   structurally blind to IAM gaps — that is how §5.31 shipped after a migration had
+   already "completed end to end". Get the logic right locally; prove the
+   permissions by deploying and letting the real roles do the work.
 
 ---
 
@@ -30,12 +40,12 @@ Three things invalidate earlier versions of this document:
 
 | | |
 |---|---|
-| Spec | Complete. Requirement **8.5 was amended by measurement on 2026-08-31** — see §5.28 |
+| Spec | Complete. Requirement **8.5 was amended by measurement on 2026-08-31** — see §5.29 |
 | Implementation | Groups 1–14 except 14.5. A migration has completed `shadow → verify → promote → retain` in dev and serves from the managed backend |
-| Tests | 626 infra (jest) · ~6,780 backend (pytest) · 1,936 frontend (vitest) · 5 pre-existing unrelated Strands failures |
+| Tests | 634 infra (jest) · ~6,780 backend (pytest) · 1,936 frontend (vitest) · 5 pre-existing unrelated Strands failures |
 | Deployed | **dev and prod.** Flags off in prod; `migrationEnabled` on in dev |
-| Open PRs | **#898** (persist + adopt-by-name) — validated locally, still needs merging |
-| Uncommitted | the 8.5 amendment, the reranking/embedding change, the verify-defer, the local driver |
+| Open PRs | **#898** — three commits: persist + adopt-by-name, the 8.5 amendment / verify-defer, and the `StartIngestionJob` grant (§5.31). All four CI checks green, `MERGEABLE`. **Merging it triggers a PlatformStack deploy**, because the third commit touches `infrastructure/lib/constructs/**` |
+| Uncommitted | none — working tree clean as of 2026-08-31 14:30 |
 
 ### Flag state (GitHub Environment variables)
 
@@ -54,7 +64,17 @@ nothing, which is worth knowing before someone flips it expecting an effect.
 because nothing enrols while `migrationEnabled` is false. Do not turn that flag on
 in prod until #898 and the uncommitted work have landed and shipped.
 
-### Commits (16 on the branch, all pushed)
+### Commits
+
+**On `fix/kb-persist-and-adopt-knowledge-base-id` — PR #898, open, all pushed:**
+
+```
+fdf15d21  grant bedrock:StartIngestionJob, which authorizes direct ingestion  (§5.31)
+6420f148  drop the embedding pin, defer verify, complete a migration in dev   (§5.29, §5.30)
+7542d907  record the knowledge base id before anything else can fail          (§5.28)
+```
+
+**Already merged (16, on develop):**
 
 ```
 45239838  one source of truth for the managed KB tag contract
@@ -76,9 +96,9 @@ ffa7a408  KB_Record data layer with conditional state transitions        (group 
 5f2c98b1  spec, schema and worker platform                              (groups 1, 2)
 ```
 
-**Uncommitted working tree:** the 14.3 upgrade surface — `apis/app_api/kb_upgrade/`,
-two transitions appended to `kb_backend/records.py`, the Angular card and service,
-three test files. See §7 for the file map and §2 for how to run it.
+**Working tree: clean.** An earlier revision listed the 14.3 upgrade surface and
+then the 8.5 amendment as uncommitted; both have landed. `apis/app_api/kb_upgrade/`
+is merged — see §7 for the file map and §2 for how to run it.
 
 ### Is the feature reachable yet?
 
@@ -88,14 +108,29 @@ knowledge base, which writes a `KB#` record in `shadow` with the GSI7 work keys.
 Before it, nothing wrote either, so every group could have been finished with the
 feature unreachable (§5 defect 21).
 
-What is still missing is the **worker's deployment**, not its code. The dispatcher
-and worker are Lambdas behind an undeployed image, so an enrolled record sits in
-`shadow` indefinitely and the card shows perpetual progress. That is the correct
-local behaviour, not a bug.
+The worker's image **is deployed** — PR #886 shipped `Dockerfile.kb-migration` and
+all four Lambdas run real handlers. An earlier revision of this section said the
+image was undeployed and a `shadow` record would sit forever; that is no longer
+true. The dispatcher's rule is `ENABLED` and ticking every 15 minutes in dev.
 
-**Three behaviour changes ARE live on the existing path** and are the only things
-worth testing by hand right now:
-1. The document-status filter now **fails closed** (group 6).
+⚠️ **That tick is a hazard while #898 is unmerged.** The deployed worker predates
+it, so an enrolled record can be picked up by pre-fix code and failed at `verify`.
+Always drive a local migration with `--break-lease`, which defers `dueAt` 20 minutes
+out so the deployed dispatcher skips it.
+
+### What works today, verified live in dev
+
+| | |
+|---|---|
+| Chat against a promoted KB | **Yes.** `ast-1a90784a7f18` is `retain` / `managed` and serves real chunks |
+| Add a document to a promoted KB | **Yes, once #898 deploys.** Blocked before that by §5.31. The consumer's EventBridge rule is `ENABLED`, the bucket has EventBridge notification on, and `grantRetrieval` is attached for the retrievability poll |
+| Create a knowledge base that is managed from birth | **No — not implemented.** `newDefault` has **zero readers** in `backend/src` (grep for `NEW_DEFAULT`, `newDefault`, `new_default`: no matches). Design §14.7 steps 5–8, a follow-up spec. The only route onto the managed engine is enrol → migrate |
+| Whole local chain | **Yes.** SPA :4200 → app_api :8000 → inference_api :8001. `chat-http.service.ts` posts to `{appApiUrl}/chat/stream`; the app_api proxy forwards to `INFERENCE_API_URL`, which defaults to and is set to `http://localhost:8001`. Retrieval runs at `inference_api/chat/routes.py:1814`, so the RAG code answering a local chat is the code on disk |
+
+**Three behaviour changes are live on the existing legacy path** regardless of any
+flag:
+1. The document-status filter now **fails closed** (group 6) — except for the one
+   fail-open line in §5.33.
 2. Retrieval queries are **clamped to 10,000 chars** (group 5).
 3. Retrieval requires a resolved access grant (group 11). Both production callers
    pass one; the parameter is required and keyword-only, so a third caller added
@@ -112,7 +147,7 @@ macOS host, tooling installed locally. **There is no devcontainer.**
 ```bash
 # infrastructure
 cd infrastructure && npm run build          # tsc
-cd infrastructure && npx jest               # 611 passing
+cd infrastructure && npx jest               # 634 passing, 30 suites
 
 # backend
 cd backend && uv run python -m pytest tests/ -q     # 6 m 20 s, 6,603 passing
@@ -219,6 +254,25 @@ stack at module scope. Pulling that into a Lambda image blows the size budget.
   function-local.
 - Enforced by `backend/tests/architecture/test_kb_backend_boundary.py`.
 - `apis.shared.embeddings` is a *separate* package and is fine to use.
+
+### AWS authorizes some Bedrock APIs under a *different* action name ⚠️
+
+Three times now, a grant listing exactly the API the code calls has deployed clean,
+reviewed clean, and failed on first real use:
+
+| API called | IAM action actually checked | Symptom |
+|---|---|---|
+| `CreateKnowledgeBase` with tags | `bedrock:TagResource` | fails the moment a real KB is created (§5.26) |
+| (reconciler tag read) | `bedrock:ListTagsForResource` | fails closed — every KB looks untagged, orphan sweep reports a clean account forever (§5.26) |
+| `IngestKnowledgeBaseDocuments` | **`bedrock:StartIngestionJob`** | every document upload `AccessDenied` (§5.31) |
+
+The action name and the API name are not the same namespace. **Check the service
+authorization reference or the feature's own prerequisites page before assuming a
+grant is complete**, and never infer completeness from a successful local run — SSO
+identities are broader than every Lambda role here.
+
+Corollary: an action in a grant that no code calls is not necessarily dead. Read the
+docblock before deleting it.
 
 ### Module constants must be read at call time
 
@@ -428,13 +482,13 @@ saying why that number is a property of AWS rather than a knob.
 
 ---
 
-### The five that only running it revealed
+### The six that only running it revealed
 
 These came out in sequence over 2026-08-27 to 08-31, each one step further into the
 saga than the last. Every one reviewed clean, deployed clean, and did nothing or
 failed on first real use. If you read only one section of this file, read this one.
 
-24. **The dispatcher could not find the worker.** The construct set
+25. **The dispatcher could not find the worker.** The construct set
     `MANAGED_KB_WORKER_FUNCTION_NAME`; `dispatcher.py` reads
     `KB_MIGRATION_WORKER_FUNCTION_NAME` — the convention its siblings use. Every
     tick raised `RuntimeError: ... is not set`, on a fifteen-minute schedule, in
@@ -448,14 +502,14 @@ failed on first real use. If you read only one section of this file, read this o
     `os.environ` name the handlers read is set by the construct, and that the
     construct publishes nothing unread.
 
-25. **`bedrock:TagResource` was not granted.** `CreateKnowledgeBase` is called
+26. **`bedrock:TagResource` was not granted.** `CreateKnowledgeBase` is called
     *with* tags and AWS authorises the tagging as a separate action, so the grant
     reviewed as complete and failed the moment a real knowledge base was created.
     `bedrock:ListTagsForResource` was missing for the same reason, with a quieter
     failure: the reconciler fails closed on a tag read, so every knowledge base
     would look untagged and the orphan sweep would report a clean account forever.
 
-26. **`CreateDataSource` ran against a `CREATING` knowledge base.**
+27. **`CreateDataSource` ran against a `CREATING` knowledge base.**
     `CreateKnowledgeBase` returns before the knowledge base is usable — this
     module's own header records 47–124 s to `ACTIVE` — and the code called
     `CreateDataSource` immediately. `ConflictException` is deliberately not
@@ -463,7 +517,7 @@ failed on first real use. If you read only one section of this file, read this o
     explicit. **Why no test caught it:** `FakeBedrockAgent.create_knowledge_base`
     returned `status: "ACTIVE"`, which the real API never does.
 
-27. **The knowledge base id was never recorded until both creates succeeded.**
+28. **The knowledge base id was never recorded until both creates succeeded.**
     `attach_aws_ids` needs both identifiers, so a failure between them left a
     record with no `awsKbId` — and every later attempt re-entered the create path
     and was refused, permanently, because the *name* was taken. **The
@@ -478,7 +532,7 @@ failed on first real use. If you read only one section of this file, read this o
     all. The fake now enforces name uniqueness and treats tokens as expired by
     default.
 
-28. **The embedding pin and managed reranking are mutually exclusive.** Req 8.5
+29. **The embedding pin and managed reranking are mutually exclusive.** Req 8.5
     pinned `titan-embed-text-v2:0` via `embeddingModelType: CUSTOM`; Req 11.2
     requires `rerankingModelType: MANAGED`. AWS rejects the combination, and the
     §13 evaluation had measured the two **separately, never together**. Req 8.5 is
@@ -488,7 +542,7 @@ failed on first real use. If you read only one section of this file, read this o
     Confirmed in dev: pinned + `NONE` gives flat 1.00/0.982/0.952; unpinned +
     `MANAGED` gives 0.413/0.199.
 
-29. **`verify` failed a good migration for being asked too early.** The canary
+30. **`verify` failed a good migration for being asked too early.** The canary
     retrieval returned nothing because the freshly-ingested document was not yet
     queryable, and that was treated as terminal. Measured: **~45 s** from ingest to
     retrievable on a fresh knowledge base, against the docstring's "0.75–1.03 s"
@@ -499,43 +553,144 @@ failed on first real use. If you read only one section of this file, read this o
 
 ---
 
+### The seventh, from adding a document rather than migrating one
+
+31. **`bedrock:StartIngestionJob` was not granted, so direct ingestion could not
+    run at all.** Found by uploading a second document to the already-promoted
+    knowledge base in dev. The `DOC#` record went to `failed` carrying:
+
+    ```
+    AccessDeniedException ... IngestKnowledgeBaseDocuments ... not authorized
+    to perform: bedrock:StartIngestionJob on resource: knowledge-base/M8WQZVQJ8X
+    ```
+
+    AWS authorises `IngestKnowledgeBaseDocuments` under the **adjacent action
+    name** `bedrock:StartIngestionJob`. Both are listed in one statement in AWS's
+    direct-ingestion prerequisites
+    (`bedrock/latest/userguide/kb-direct-ingestion-prereq.html`).
+    `grantManagedKbDirectIngestion` carried only the name matching the API call,
+    so it reviewed as complete, deployed clean, and failed on first real use —
+    identical in shape to §5.26's missing `bedrock:TagResource`. Third occurrence
+    of that pattern; assume a fourth exists.
+
+    **The worker had the same gap.** It receives the same grant and calls the same
+    API, so the first migration driven by the *deployed* dispatcher would have
+    failed the same way. It stayed hidden because every migration to date was
+    driven by `run-kb-migration.py` under an SSO identity broader than either
+    Lambda role — the exact limitation §2 names. The local driver cannot find this
+    class of defect, ever. Only a deployed run can.
+
+    ⚠️ **The action looks like a mistake and is not.** Requirement 9.2 forbids
+    *calling* `StartIngestionJob` (0.1 RPS account-wide — one document per ten
+    seconds) and nothing calls it. Holding it is authorisation, not invocation. A
+    docblock on the grant and a separately-named test carry that reason so the
+    obvious cleanup fails a test that explains itself.
+    `bedrock:ListKnowledgeBaseDocuments` is in AWS's example policy and omitted
+    deliberately: no code path calls it.
+
+    Guards: three tests across `managed-kb.test.ts` and `kb-migration.test.ts`,
+    one asserting **both** the worker and ingestion-consumer roles carry it.
+    Mutation-tested — removing the action fails exactly four tests, each named for
+    the reason.
+
+---
+
+### Open, not yet fixed — found 2026-08-31 while diagnosing the above
+
+32. **Routing exclusivity is only enforced on one side, so a document added to a
+    managed knowledge base is indexed twice.** design.md §537 states "a document
+    is indexed on exactly one backend outside a deliberate migration or dual-read
+    pilot, so no double-indexing", and task 9.2 claims tests for it. The
+    ingestion consumer does return immediately for a legacy document. But the
+    **legacy handler has no engine gate at all** — confirmed absent from both
+    copies, `src/apis/app_api/documents/ingestion/handler.py` and
+    `infrastructure/bootstrap-assets/rag-ingestion/handler.py` — and its
+    `s3:ObjectCreated:*` notification on `assistants/` is still live alongside the
+    (now enabled) EventBridge rule. Both fire.
+
+    Visible in real data on `DOC#DOC-dc8b65658e29`: `chunkCount: 8` and
+    `vectorStoreId: assistants-index` were written by the legacy pipeline
+    succeeding, while the managed side failed with §5.31. So the legacy index is
+    still growing for a promoted knowledge base.
+
+    Not a wrong-answer bug — retrieval resolves to `managed` only, so the S3
+    Vectors copy is never read — but it is double ingestion cost and a legacy
+    index nobody expects to be live. **Why no test caught it:** every exclusivity
+    test in `test_kb_ingestion_consumer.py` is on the consumer's side
+    (`test_a_legacy_document_is_not_ingested_here` and siblings). Nothing asserts
+    the legacy handler skips a managed document, which is the half that is
+    missing. Note the two writers also both drive `DOC#` status, so their
+    interaction on a partial failure is unexamined.
+
+33. **The document-status filter has one fail-*open* line in an otherwise
+    fail-closed function.** `_filter_vectors_by_document_status` opens with
+    `if not doc_ids: return vectors` — so a batch of chunks carrying no
+    `document_id` at all bypasses the DynamoDB check entirely and is served
+    unverified. Every other unprovable path in that function returns `[]` and
+    emits `METRIC_STATUS_FILTER_FAIL_CLOSED`.
+
+    Not firing today: managed chunks do carry the id (§6 below), and legacy
+    chunks always have. It predates this feature. But `_document_id` returns `""`
+    when `location.customDocumentLocation.id` and both metadata mirrors are
+    absent, which is exactly the input that would trip it, and the failure is
+    silent in the serving direction.
+
+---
+
 ## 6. Remaining work
 
 ### Do these first
 
 | | |
 |---|---|
-| **Merge #898** | persist-the-id + adopt-by-name. Validated locally; it is what unstuck the dev record |
-| **Commit the uncommitted** | Req 8.5 amendment, the embedding/reranking change, the verify-defer, the adoption `DELETING` filter, `scripts/local-dev/run-kb-migration.py` |
-| **Then deploy and click through in dev** | the local run proves the logic; the deploy proves the IAM and the wiring |
+| **Merge #898** | The only blocking item. Three commits: persist-the-id + adopt-by-name, the 8.5 amendment + verify-defer, and the `StartIngestionJob` grant. All four checks green. **Merging triggers a PlatformStack deploy** (the grant is under `infrastructure/lib/constructs/**`, a `platform.yml` trigger path), which is what actually applies the IAM fix |
+| **Then re-add a document in dev** | `DOC#DOC-dc8b65658e29` is parked at `failed` from §5.31 and is not retried retroactively — there is no reprocess endpoint (task 14.4). Re-upload; that path works |
+| **Then drive a migration from the *deployed* dispatcher, not the local driver** | §5.31 is the proof that the local driver cannot see IAM defects: its SSO identity is broader than either Lambda role. Every remaining unknown in this feature is of that class |
 
 ### Open, in rough order
 
 | Group | Notes |
 |---|---|
+| **§5.32** legacy handler engine gate | Double-indexing. Add the mirror of the consumer's check to the legacy handler — **both** copies — plus the test on that side that has never existed. Decide first whether keeping the legacy index warm during `retain` is wanted for rollback; if so, amend design.md §537 instead of the code, because the doc currently claims something untrue either way |
+| **§5.33** the one fail-open line | `if not doc_ids: return vectors` in `_filter_vectors_by_document_status`. Make it fail closed with `METRIC_STATUS_FILTER_FAIL_CLOSED` like every other unprovable path in that function, and pin it with a test that mutation-fails |
 | **14.4** one-click document retry | Req 21.2. Ingestion is S3-event-triggered and there is no reprocess endpoint, so this needs new backend against a live pipeline. The card currently directs the user to re-upload, which works today. Close it by building the endpoint **or** by amending Req 21.2 to accept re-upload |
 | **14.5** admin surface | not started. Filter by engine, stored bytes, document counts, bulk migrate, per-KB retry |
 | **15.1** packaged-SDK probe | the *static* half is done and passing (`boto3==1.43.68` carries `MANAGED`, the embedding members, `FLOAT32`, all four document ops, no `AWS_DATA_PATH`). The live half has now effectively been done by hand — a real create → ingest → retrieve → promote succeeded in dev |
 | **15.2** ingestion-concurrency probe | unanswered. Do not size a wide fleet migration before it |
 | **15.3** full matrix | run it once the above land |
 
-### Known unknown, picked up mid-flight
+### RESOLVED — the `document_id` / `relevance` "known unknown" was a false alarm
 
-**`document_id` and `relevance` come back empty from the facade.** After promotion,
-`search_assistant_knowledgebase_with_formatting` returned two real chunks with
-correct content and correct `distance` ordering (−0.4226 then −0.1616 — negation of
-relevance, so ascending distance is descending relevance, as designed). But
-`document_id` was `None` and `relevance` was `None` on the facade output.
+An earlier revision of this file reported that
+`search_assistant_knowledgebase_with_formatting` returned `document_id: None` and
+`relevance: None` after promotion, and inferred that the status filter was either
+not running on the managed path or losing the id. **Both inferences were wrong.**
+Measured against the live dev knowledge base (`M8WQZVQJ8X`) on 2026-08-31 with the
+pinned boto3 1.43.68:
 
-`document_id` is the **join key for the document-status filter**, which fails
-closed — so chunks with no `document_id` should have been dropped and were not.
-Either the filter is not being applied on the managed path, or the id is being lost
-between `managed_backend._to_chunk` and the facade. Worth resolving before any real
-traffic moves; it was found with ~5 minutes of context left rather than chased.
+| Layer | Result |
+|---|---|
+| Raw `Retrieve` | `location.customDocumentLocation.id = "DOC-ae5cc5434f2d"` on both chunks |
+| `ManagedKbBackend._to_chunk` | `document_id='DOC-ae5cc5434f2d'`, `relevance=0.4226 / 0.1616` |
+| Facade output | `metadata.document_id = 'DOC-ae5cc5434f2d'`, `distance = −0.4226 / −0.1616` |
 
-Reproduce with `scripts/local-dev/run-kb-migration.py ast-1a90784a7f18 --show`
-followed by a facade query — note `resolver` has no `get_backend`; find the real
-accessor.
+The probe read `result["document_id"]` and `result["relevance"]` at the **top level**
+of the facade output. Those keys have never existed. The facade has emitted exactly
+four keys — `text`, `distance`, `metadata`, `key` — since the function was first
+written (`git log -L` on the `formatted_results.append` block confirms it, back
+through `e34d928c`). The id lives at `metadata.document_id`; relevance is exposed as
+`distance`, its exact negation. Reading a key outside the contract returns `None` on
+**both** backends, so the observation said nothing about the managed path.
+
+The status filter is genuinely running, not bypassed: it collected
+`{DOC-ae5cc5434f2d}`, looked it up, found `status = "complete"`, and kept both
+chunks. Verified independently — that `DOC#` record does read `complete`.
+
+**The lesson is about the probe, not the code.** Asserting on a response shape
+nobody had checked against the producing function turned four correct layers into a
+reported defect, and it was written up as the highest-priority open item. Confirm
+the contract before believing a `None`. (While confirming it, §5.33 turned up as a
+genuine finding in the same function.)
 
 ### Known deferrals (correct, not oversights)
 
