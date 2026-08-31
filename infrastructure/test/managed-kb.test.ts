@@ -361,10 +361,48 @@ describe('ManagedKbRoleConstruct — caller grants', () => {
     const s = statementBySid(t, 'ManagedKbDirectIngestion');
     expect(s.Action).toEqual([
       'bedrock:IngestKnowledgeBaseDocuments',
+      'bedrock:StartIngestionJob',
       'bedrock:DeleteKnowledgeBaseDocuments',
       'bedrock:GetKnowledgeBaseDocuments',
     ]);
     expect(s.Resource).toBe(KB_ARN_WILDCARD);
+  });
+
+  it('grants bedrock:StartIngestionJob, which is what authorizes IngestKnowledgeBaseDocuments', () => {
+    // Regression. AWS authorizes `IngestKnowledgeBaseDocuments` under the
+    // adjacent action name `bedrock:StartIngestionJob` — both appear in one
+    // statement in AWS's direct-ingestion prerequisites. Granting only the
+    // name that matches the API call deploys clean, reviews clean, and then
+    // fails every real upload:
+    //
+    //   AccessDeniedException ... not authorized to perform:
+    //   bedrock:StartIngestionJob on resource: knowledge-base/XXXXXXXXXX
+    //
+    // That is what happened in dev: a document added to a promoted knowledge
+    // base went straight to `failed`. It had been masked because the local
+    // driver runs under a broader SSO identity than the Lambda role.
+    //
+    // Asserted on its own, not just inside the array above, so the reason
+    // survives a future reordering or trimming of that list — and so the
+    // "obvious cleanup" of an action nothing calls fails a test that says why.
+    const s = statementBySid(t, 'ManagedKbDirectIngestion');
+    expect(s.Action).toContain('bedrock:StartIngestionJob');
+
+    // Both halves are required together; neither alone is sufficient.
+    expect(s.Action).toContain('bedrock:IngestKnowledgeBaseDocuments');
+  });
+
+  it('gives every holder of the ingestion grant the StartIngestionJob authorization', () => {
+    // This suite attaches the grant to one fake role; the real pairing of
+    // worker + ingestion consumer is asserted in kb-migration.test.ts. What
+    // matters here is that whoever holds the statement holds both halves,
+    // since neither action alone permits an upload.
+    const holders = policiesWithSid(t, 'ManagedKbDirectIngestion');
+    expect(holders).toHaveLength(1);
+    for (const holder of holders) {
+      expect(holder.json).toContain('bedrock:StartIngestionJob');
+      expect(holder.json).toContain('bedrock:IngestKnowledgeBaseDocuments');
+    }
   });
 
   it('grants PutMetricData on the same non-reserved namespace to every calling identity', () => {

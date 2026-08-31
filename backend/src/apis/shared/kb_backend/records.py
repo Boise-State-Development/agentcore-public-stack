@@ -306,6 +306,49 @@ def create_provisioning(
     return item
 
 
+def attach_knowledge_base_id(
+    assistant_id: str,
+    app_kb_id: str,
+    aws_kb_id: str,
+    now_iso: str,
+) -> None:
+    """Record ``awsKbId`` the moment the knowledge base exists in AWS.
+
+    Deliberately separate from :func:`attach_aws_ids`, which needs both
+    identifiers and flips the record to ``active``. This one runs *between* the
+    two AWS creates, and exists because the gap between them is where a paying
+    resource can be lost.
+
+    Without it: ``CreateKnowledgeBase`` succeeds, ``CreateDataSource`` fails, and
+    nothing has recorded the identifier — so the retry re-enters the create path
+    and AWS refuses it, permanently, because the *name* is already taken:
+
+        ConflictException: KnowledgeBase with name ... already exists.
+
+    The ``clientToken`` does not save this. AWS idempotency tokens expire within
+    minutes, so a retry hours or days later is a genuinely new request that
+    collides on the unique name. A record stuck this way can never be retried
+    successfully — which is exactly what happened to the first real migration.
+
+    Guarded on ``attribute_not_exists(awsKbId)`` so a late-returning create from
+    an abandoned attempt cannot overwrite the identifier a newer one recorded,
+    and on still being ``provisioning`` so it cannot resurrect a torn-down record.
+    """
+    _conditional(
+        _table().update_item,
+        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        UpdateExpression="SET awsKbId = :kb, updatedAt = :now",
+        ConditionExpression=(
+            "attribute_not_exists(awsKbId) AND provisioningState = :provisioning"
+        ),
+        ExpressionAttributeValues={
+            ":kb": aws_kb_id,
+            ":now": now_iso,
+            ":provisioning": PROVISIONING,
+        },
+    )
+
+
 def attach_aws_ids(
     assistant_id: str,
     app_kb_id: str,
@@ -537,6 +580,46 @@ def set_migration_state(
         ConditionExpression=condition,
         ExpressionAttributeValues=values,
     )
+
+
+def defer_verify(
+    assistant_id: str,
+    app_kb_id: str,
+    generation: int,
+    due_at: str,
+) -> int:
+    """Push ``verify`` out and count the attempt. Returns the new attempt count.
+
+    "The corpus is not queryable yet" is not a verification failure — it is a
+    verification that has not happened. Treating it as terminal marked a migration
+    `failed` for the crime of being asked too early: the document was ingested
+    correctly and became retrievable ~45 s later.
+
+    The module docstring's "INDEXED precedes retrievable by 0.75-1.03 s" was
+    measured on a warm knowledge base; a first ingest into a fresh one is far
+    slower. Rather than encode either number, this defers and re-asks, bounded by
+    the caller so it cannot defer forever.
+
+    Guarded on still being ``verify`` at this generation, so a deferral cannot
+    resurrect a migration that has since been promoted, failed or rolled back.
+    """
+    response = _conditional(
+        _table().update_item,
+        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        UpdateExpression="SET GSI7_SK = :due ADD verifyAttempts :one",
+        ConditionExpression=(
+            "migrationGeneration = :gen AND migrationState = :verify"
+        ),
+        ExpressionAttributeValues={
+            ":due": due_at,
+            ":one": Decimal(1),
+            ":gen": Decimal(generation),
+            ":verify": VERIFY,
+        },
+        ReturnValues="UPDATED_NEW",
+    )
+    attempts = (response or {}).get("Attributes", {}).get("verifyAttempts")
+    return int(attempts) if attempts is not None else 1
 
 
 def acquire_lease(
