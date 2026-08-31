@@ -74,9 +74,12 @@ class FakeBedrockAgent:
         *,
         on_create=None,
         create_failures: Optional[List[Exception]] = None,
+        status_sequence: Optional[List[str]] = None,
     ) -> None:
         self.create_kb_calls: List[Dict[str, Any]] = []
         self.create_ds_calls: List[Dict[str, Any]] = []
+        self.get_kb_calls: List[Dict[str, Any]] = []
+        self._status_sequence = list(status_sequence or ["ACTIVE"])
         self.ingest_calls: List[Dict[str, Any]] = []
         self.delete_calls: List[Dict[str, Any]] = []
         self.start_ingestion_job_calls: List[Dict[str, Any]] = []
@@ -105,7 +108,26 @@ class FakeBedrockAgent:
         if token not in self._by_token:
             self._counter += 1
             self._by_token[token] = f"KB{self._counter:08d}"
-        return {"knowledgeBase": {"knowledgeBaseId": self._by_token[token], "status": "ACTIVE"}}
+        # CREATING, not ACTIVE — what the real API returns. The fake previously
+        # claimed ACTIVE here, which is why nothing caught the provisioner calling
+        # CreateDataSource against a knowledge base that was still creating and
+        # getting a ConflictException in dev.
+        return {"knowledgeBase": {"knowledgeBaseId": self._by_token[token], "status": "CREATING"}}
+
+    def get_knowledge_base(self, **kwargs):
+        """Status poll. Yields each queued status once, then settles on the last.
+
+        Default is a single ACTIVE so tests that do not care about the wait are
+        unaffected; `status_sequence` lets one drive CREATING -> ACTIVE or a
+        terminal failure.
+        """
+        self.thread_idents.append(threading.get_ident())
+        self.get_kb_calls.append(kwargs)
+        if len(self._status_sequence) > 1:
+            status = self._status_sequence.pop(0)
+        else:
+            status = self._status_sequence[0]
+        return {"knowledgeBase": {"knowledgeBaseId": kwargs["knowledgeBaseId"], "status": status}}
 
     def create_data_source(self, **kwargs):
         self.thread_idents.append(threading.get_ident())
@@ -745,6 +767,89 @@ class TestCrashBetweenCreateAndRecordUpdate:
 # ===========================================================================
 # 20.7 — synchronous boto3 calls run off the event loop
 # ===========================================================================
+
+
+class TestWaitsForActiveBeforeTheDataSource:
+    """The defect that orphaned the first real knowledge base in dev.
+
+    `CreateKnowledgeBase` returns while the knowledge base is `CREATING` — this
+    module's header records 47-124 s to `ACTIVE` (n=7) — and `CreateDataSource`
+    against a creating knowledge base is refused:
+
+        ConflictException: The Knowledge Base is not in a valid status.
+
+    The create succeeded, the data source did not, `attach_aws_ids` never ran, and
+    the knowledge base was left in AWS with nothing pointing at it.
+
+    Nothing caught it because the fake returned `ACTIVE` from `create_knowledge_base`,
+    which the real API never does. The fake now returns `CREATING`, so these tests
+    exercise the wait rather than skipping past it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_data_source_is_created_only_after_active(self, table):
+        client = FakeBedrockAgent(status_sequence=["CREATING", "CREATING", "ACTIVE"])
+        await _provision(client)
+
+        assert client.create_kb_calls, "no knowledge base was created"
+        assert client.create_ds_calls, "no data source was created"
+        # Polled until ACTIVE rather than charging ahead.
+        assert len(client.get_kb_calls) == 3, (
+            f"expected three status polls, saw {len(client.get_kb_calls)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_data_source_while_the_knowledge_base_is_creating(self, table):
+        """The precondition is waited on, not retried through."""
+        client = FakeBedrockAgent(status_sequence=["CREATING"])
+        with pytest.raises(p.KnowledgeBaseNotReady, match="still CREATING"):
+            await _provision(client, budget_seconds=10.0, interval_seconds=5.0)
+
+        assert client.create_kb_calls, "the knowledge base should still be created"
+        assert client.create_ds_calls == [], (
+            "CreateDataSource must not be attempted against a CREATING knowledge "
+            "base — that is the ConflictException this wait exists to prevent"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_terminal_status_fails_immediately(self, table):
+        """FAILED will never become ACTIVE, so waiting only delays the report."""
+        client = FakeBedrockAgent(status_sequence=["FAILED"])
+        with pytest.raises(p.KnowledgeBaseNotReady, match="FAILED"):
+            await _provision(client, budget_seconds=300.0, interval_seconds=5.0)
+
+        assert len(client.get_kb_calls) == 1, (
+            "a terminal status should be acted on after one poll, not waited out"
+        )
+        assert client.create_ds_calls == []
+
+    @pytest.mark.asyncio
+    async def test_the_budget_is_read_at_call_time(self, table):
+        """Bound as a default argument the budget would be unpatchable.
+
+        Asserted by giving two calls different budgets on the same import.
+        """
+        slow = FakeBedrockAgent(status_sequence=["CREATING"])
+        with pytest.raises(p.KnowledgeBaseNotReady):
+            await _provision(slow, budget_seconds=5.0, interval_seconds=5.0)
+        few = len(slow.get_kb_calls)
+
+        slower = FakeBedrockAgent(status_sequence=["CREATING"])
+        with pytest.raises(p.KnowledgeBaseNotReady):
+            await _provision(slower, budget_seconds=25.0, interval_seconds=5.0)
+
+        assert len(slower.get_kb_calls) > few, (
+            "a larger budget polled no more than a smaller one, so the value is "
+            "not being read at call time"
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_failure_message_says_the_retry_is_safe(self, table):
+        """An operator reading this needs to know a retry will not duplicate."""
+        client = FakeBedrockAgent(status_sequence=["CREATING"])
+        with pytest.raises(p.KnowledgeBaseNotReady) as excinfo:
+            await _provision(client, budget_seconds=5.0, interval_seconds=5.0)
+        assert "adopts this knowledge base" in str(excinfo.value)
 
 
 class TestOffEventLoop:

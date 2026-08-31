@@ -447,8 +447,90 @@ async def _call(
 
 
 # ── The saga ─────────────────────────────────────────────────────────────────
-def _complete(item: Mapping[str, Any]) -> bool:
-    return bool(item.get("awsKbId")) and bool(item.get("awsDataSourceId"))
+#: Statuses a knowledge base can hold while still on its way to usable.
+KB_PENDING_STATUSES = ("CREATING", "UPDATING")
+
+#: The status the data-source create requires.
+KB_ACTIVE_STATUS = "ACTIVE"
+
+#: Terminal-bad statuses. Waiting on these would burn the whole budget to reach
+#: the same conclusion the first poll already supports.
+KB_FAILED_STATUSES = ("FAILED", "DELETING", "DELETE_UNSUCCESSFUL")
+
+#: Ceiling on the wait. The measured range to ACTIVE is 47-124 s (n=7), so this
+#: is roughly 2.5x the observed worst case — comfortably inside the worker's
+#: 15-minute Lambda timeout, and short enough that a genuinely stuck creation is
+#: reported within one migration step rather than silently holding a lease.
+KB_ACTIVE_WAIT_SECONDS = 300.0
+
+#: Poll interval. Not a tuning knob worth an env var: the operation being waited
+#: on takes tens of seconds, so anything finer just adds API calls.
+KB_ACTIVE_POLL_SECONDS = 5.0
+
+
+class KnowledgeBaseNotReady(Exception):
+    """A knowledge base did not reach ``ACTIVE`` within the wait budget."""
+
+
+async def _wait_for_knowledge_base_active(
+    client: Any,
+    aws_kb_id: str,
+    *,
+    what: str,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    budget_seconds: Optional[float] = None,
+    interval_seconds: Optional[float] = None,
+) -> str:
+    """Block until ``aws_kb_id`` is ``ACTIVE``, or raise.
+
+    ``CreateKnowledgeBase`` returns while the knowledge base is still
+    ``CREATING``; anything that touches it before ``ACTIVE`` is refused with a
+    ``ConflictException`` telling you to wait. Retrying the *dependent* call is
+    the wrong shape — it burns attempts on a precondition rather than waiting for
+    it — so the precondition is waited on directly.
+
+    Budget and interval are resolved at call time, never bound as default
+    arguments: a module-level default is captured at import and silently ignores a
+    test's override, which has already cost this feature a 33-second test.
+    """
+    budget = KB_ACTIVE_WAIT_SECONDS if budget_seconds is None else budget_seconds
+    interval = KB_ACTIVE_POLL_SECONDS if interval_seconds is None else interval_seconds
+
+    waited = 0.0
+    last_status = "UNKNOWN"
+    while True:
+        described = await asyncio.to_thread(
+            lambda: client.get_knowledge_base(knowledgeBaseId=aws_kb_id)
+        )
+        last_status = str(
+            (described.get("knowledgeBase") or {}).get("status") or "UNKNOWN"
+        )
+        if last_status == KB_ACTIVE_STATUS:
+            if waited:
+                logger.info(
+                    f"kb {aws_kb_id} reached {KB_ACTIVE_STATUS} after {waited:.0f}s; "
+                    f"proceeding to {what}"
+                )
+            return last_status
+        if last_status in KB_FAILED_STATUSES:
+            # Failing here rather than waiting out the budget: the status is
+            # terminal, so the only thing more waiting buys is a later report.
+            raise KnowledgeBaseNotReady(
+                f"kb {aws_kb_id} is {last_status}, which will never reach "
+                f"{KB_ACTIVE_STATUS}; refusing {what}"
+            )
+        if waited >= budget:
+            raise KnowledgeBaseNotReady(
+                f"kb {aws_kb_id} was still {last_status} after {waited:.0f}s "
+                f"(budget {budget:.0f}s); refusing {what}. The migration is "
+                f"resumable: the clientToken is deterministic, so the next attempt "
+                f"adopts this knowledge base rather than creating another."
+            )
+        await sleep(interval)
+        waited += interval
+
+
+def _complete(item: Mapping[str, Any]) -> bool:    return bool(item.get("awsKbId")) and bool(item.get("awsDataSourceId"))
 
 
 def _resource_name(app_kb_id: str, project_prefix: Optional[str] = None) -> str:
@@ -478,6 +560,11 @@ async def provision_managed_kb(
     environment: Optional[str] = None,
     max_attempts: int = MAX_PROVISION_ATTEMPTS,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    # How long to wait for the knowledge base to reach ACTIVE before creating its
+    # data source. Optional-None rather than a bound module constant so a test can
+    # actually override them (see _wait_for_knowledge_base_active).
+    budget_seconds: Optional[float] = None,
+    interval_seconds: Optional[float] = None,
 ) -> ProvisionedKnowledgeBase:
     """Provision, or adopt, the managed knowledge base for ``app_kb_id``.
 
@@ -585,6 +672,33 @@ async def provision_managed_kb(
         )
         aws_kb_id = response["knowledgeBase"]["knowledgeBaseId"]
 
+    # CreateKnowledgeBase returns as soon as the knowledge base is CREATING, not
+    # when it is usable — this module's own header records 47–124 s to ACTIVE
+    # (n=7). CreateDataSource against a CREATING knowledge base is refused:
+    #
+    #   ConflictException: The Knowledge Base is not in a valid status.
+    #   Wait for the knowledge base to reach a valid status and try again.
+    #
+    # `ConflictException` is deliberately absent from RETRYABLE_ERROR_CODES — a
+    # genuine conflict must fail fast — and `_call`'s backoff tops out around 60 s
+    # anyway, short of the measured upper bound. So the wait is explicit rather
+    # than a widened retry set.
+    #
+    # This is also why the failure orphaned a knowledge base on first run: the
+    # create succeeded, the data source did not, and `attach_aws_ids` never ran, so
+    # nothing recorded the id. The deterministic `clientToken` means a retry adopts
+    # that knowledge base rather than creating a second one, and the tags written
+    # at create make it discoverable by the reconciler — but the orphan existed at
+    # all only because of this missing wait.
+    await _wait_for_knowledge_base_active(
+        client,
+        aws_kb_id,
+        what="CreateDataSource",
+        sleep=sleep,
+        budget_seconds=budget_seconds,
+        interval_seconds=interval_seconds,
+    )
+
     aws_data_source_id = (existing or {}).get("awsDataSourceId")
     if not aws_data_source_id:
         ds_response = await _call(
@@ -646,6 +760,7 @@ __all__ = [
     "EMBEDDING_MODEL_ID",
     "EMBEDDING_MODEL_TYPE",
     "IMAGE_EXTRACTION_STATUS",
+    "KnowledgeBaseNotReady",
     "KNOWLEDGE_BASE_TYPE",
     "ProvisionedKnowledgeBase",
     "ProvisioningError",
