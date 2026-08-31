@@ -298,20 +298,39 @@ def knowledge_base_payload(
     ``storageConfiguration`` is absent by construction — there is no key to
     accidentally set to ``None``, because a managed knowledge base has no vector
     store and sending one is rejected.
+
+    NO EMBEDDING PIN. Requirement 8.5 originally pinned
+    ``amazon.titan-embed-text-v2:0`` via ``embeddingModelType: CUSTOM``, and that
+    was carried over from the legacy path without re-deriving it. It does not
+    apply here, for two independent reasons:
+
+    1. **The pin protected a failure mode that cannot occur in managed mode.** On
+       S3 Vectors *we* embed the user's question (``s3vectors_backend`` calls
+       ``apis.shared.embeddings``), so the query model must match the model that
+       indexed the documents or the similarity search compares vectors from
+       different spaces. Managed retrieval sends ``retrievalQuery={"text": ...}``
+       and ingestion sends ``inlineContent`` text — we never produce a vector, so
+       Bedrock embeds both sides itself and consistency is the service's
+       invariant, not ours to get wrong.
+    2. **AWS refuses the pin together with managed reranking.** Measured, both
+       ways::
+
+           CUSTOM  + rerankingModelType=MANAGED -> ValidationException
+           CUSTOM  + NONE                       -> ok, scores 1.0/0.982/0.952 (flat)
+           default + MANAGED                    -> ok
+           default + NONE                       -> ok
+
+       The evaluation recorded the pin as worth nothing measurable ("identical
+       answer quality — 9/9 either way") and reranking as worth a lot ("the
+       reranker is what makes a small context cap defensible"). Given they are
+       mutually exclusive, keeping reranking is the side with evidence behind it.
+
+    The choice is immutable per knowledge base, which is why it is argued here
+    rather than left as a default someone might flip casually.
     """
     validate_client_token(client_token)
 
-    managed: Dict[str, Any] = {
-        # Requirement 8.5: pinned, and immutable from here on.
-        "embeddingModelType": EMBEDDING_MODEL_TYPE,
-        "embeddingModelArn": embedding_model_arn(region),
-        "embeddingModelConfiguration": {
-            "bedrockEmbeddingModelConfiguration": {
-                "dimensions": EMBEDDING_DIMENSIONS,
-                "embeddingDataType": EMBEDDING_DATA_TYPE,
-            }
-        },
-    }
+    managed: Dict[str, Any] = {}
     if kms_key_arn:
         # Requirement 20.5, only where customer-managed encryption is required.
         managed["serverSideEncryptionConfiguration"] = {"kmsKeyArn": kms_key_arn}
@@ -510,8 +529,22 @@ async def _find_knowledge_base_by_name(client, name: str) -> Optional[str]:
             kwargs["nextToken"] = next_token
         page = await asyncio.to_thread(lambda: client.list_knowledge_bases(**kwargs))
         for summary in page.get("knowledgeBaseSummaries") or []:
-            if summary.get("name") == name:
-                return summary.get("knowledgeBaseId")
+            if summary.get("name") != name:
+                continue
+            status = str(summary.get("status") or "")
+            if status in KB_FAILED_STATUSES:
+                # Adopting a knowledge base that is on its way out guarantees a
+                # failure one step later, at the ACTIVE wait. Skip it: the name is
+                # about to free up, so a fresh create is the right move and the
+                # next attempt will make it. Observed while recreating a knowledge
+                # base locally — the delete had not finished, adoption took the
+                # DELETING one, and the run failed on a resource nobody wanted.
+                logger.info(
+                    f"ignoring knowledge base {summary.get('knowledgeBaseId')} named "
+                    f"{name}: it is {status} and cannot be adopted"
+                )
+                continue
+            return summary.get("knowledgeBaseId")
         next_token = page.get("nextToken")
         if not next_token:
             return None
@@ -673,8 +706,12 @@ async def provision_managed_kb(
             owner_user_id=owner_user_id,
             provisioning_state=r.PROVISIONING,
             client_token=kb_token,
-            embedding_model_id=EMBEDDING_MODEL_ID,
-            embedding_dimensions=EMBEDDING_DIMENSIONS,
+            # Not recorded: with no pin, Bedrock chooses the embedding model and
+            # nothing here would know which. A field naming Titan on a knowledge
+            # base Bedrock embedded with something else is worse than an absent
+            # one — nothing reads these for retrieval, so they can only mislead.
+            embedding_model_id=None,
+            embedding_dimensions=0,
             image_extraction=True,
             parser_config={
                 "imageExtractionStatus": IMAGE_EXTRACTION_STATUS,

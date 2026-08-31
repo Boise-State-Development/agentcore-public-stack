@@ -75,6 +75,15 @@ RETAIN_DAYS = 30
 #: worker's knowledge base is picked up again the same hour. Requirement 15.13.
 LEASE_MINUTES = 15
 
+#: How long to wait before re-asking whether the managed corpus is queryable.
+#: Measured ~45 s for a first ingest into a fresh knowledge base, so this re-asks
+#: a little either side of that rather than guessing a single number.
+VERIFY_RETRY_SECONDS = 60
+
+#: Bound on those deferrals. Ten minutes of "not queryable" is no longer latency,
+#: it is a corpus that will never answer — and the owner deserves to be told.
+MAX_VERIFY_ATTEMPTS = 10
+
 #: Catch-up passes before the worker gives up waiting for quiet. A knowledge base
 #: whose owner is actively uploading may never converge; stopping is correct —
 #: the record stays in ``shadow``, the dispatcher brings it back, and the corpus
@@ -578,9 +587,36 @@ async def run_verify(
     canary_text = _canary_query(complete)
     chunks = await backend.search(app_kb_id, canary_text, 5)
     if not chunks:
-        raise VerificationFailed(
-            f"canary retrieval on kb {app_kb_id} returned nothing; the managed "
-            f"corpus is not queryable yet"
+        # NOT a verification failure — a verification that has not happened yet.
+        # A first ingest into a fresh knowledge base took ~45 s to become
+        # retrievable when measured against dev; the docstring's 0.75-1.03 s was a
+        # warm-knowledge-base figure. Failing here marked a perfectly good
+        # migration `failed` for being asked too early, and the owner then saw a
+        # retry button for a problem that would have resolved itself.
+        attempts = await asyncio.to_thread(
+            r.defer_verify,
+            assistant_id,
+            app_kb_id,
+            generation,
+            _iso(_now() + timedelta(seconds=VERIFY_RETRY_SECONDS)),
+        )
+        if attempts > MAX_VERIFY_ATTEMPTS:
+            raise VerificationFailed(
+                f"canary retrieval on kb {app_kb_id} still returned nothing after "
+                f"{attempts} attempts over ~"
+                f"{attempts * VERIFY_RETRY_SECONDS // 60} minutes; the corpus "
+                f"never became queryable"
+            )
+        logger.info(
+            f"kb {app_kb_id}: corpus not queryable yet (attempt {attempts}); "
+            f"deferring verify by {VERIFY_RETRY_SECONDS}s"
+        )
+        return StepResult(
+            assistant_id=assistant_id,
+            app_kb_id=app_kb_id,
+            from_state=r.VERIFY,
+            to_state=r.VERIFY,
+            detail=f"corpus not queryable yet; deferred (attempt {attempts})",
         )
 
     retrieved_ids = {chunk.document_id for chunk in chunks if chunk.document_id}

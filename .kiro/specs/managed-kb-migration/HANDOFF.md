@@ -1,9 +1,28 @@
 # Managed KB Migration — Handoff
 
-**Last updated:** 2026-08-26 (groups 11–13, group 14 backend half, tag contract, **14.3 upgrade UX + enrolment surface**) · **Branch:** `feature/kb-migration` · **Nothing deployed**
+**Last updated:** 2026-08-31 · **Shipped to production in 1.16.0, inert behind flags** ·
+**A migration has now completed end to end in dev**
 
-Working state for this feature so a fresh session can pick it up without re-deriving
-anything. Read this, then `tasks.md`.
+Working state for this feature so a fresh session can pick it up without
+re-deriving anything. Read this, then `tasks.md`.
+
+---
+
+## 0. Read this first
+
+Three things invalidate earlier versions of this document:
+
+1. **It is deployed.** The feature shipped to production in release 1.16.0 and the
+   platform deploy succeeded on 2026-08-28, so `GSI7`, the Bedrock service role and
+   the four Lambdas exist in **both** dev and prod. Earlier revisions of this file
+   said "Nothing deployed"; that is no longer true.
+2. **Five defects were found only by running it**, in a row, each one step further
+   along than the last. Every one reviewed clean and deployed clean. They are
+   §5 items 24–28 and they are the most useful part of this document.
+3. **Iterate locally.** `scripts/local-dev/run-kb-migration.py` drives the whole
+   state machine in-process against dev with your SSO credentials. Three of the
+   five defects would have been minutes of work instead of a merge → image build →
+   deploy → 15-minute-tick cycle each. Use it.
 
 ---
 
@@ -11,11 +30,29 @@ anything. Read this, then `tasks.md`.
 
 | | |
 |---|---|
-| Spec | Complete, audited 3× to clean. 25 requirements, 201 criteria, 0 dangling refs |
-| Implementation | Groups **1–13** done, plus group 14 except 14.5. 14.4's one-click document retry is deferred. 4 subtasks left: 14.4's retry, 14.5, and group 15 |
-| Tests | 617 infra (jest) · **6,603** backend (pytest, 6 m 20 s) · **1,886** frontend (vitest, 7 s) · 5 pre-existing unrelated failures |
-| Deployed | **Nothing.** No `cdk deploy`, no AWS mutation, at any point |
-| Feature flags | `migrationEnabled` **on in development**, off in production. `newDefault` and `reconcilerArmed` off in both (explicit `false`, set as GitHub Environment variables) |
+| Spec | Complete. Requirement **8.5 was amended by measurement on 2026-08-31** — see §5.28 |
+| Implementation | Groups 1–14 except 14.5. A migration has completed `shadow → verify → promote → retain` in dev and serves from the managed backend |
+| Tests | 626 infra (jest) · ~6,780 backend (pytest) · 1,936 frontend (vitest) · 5 pre-existing unrelated Strands failures |
+| Deployed | **dev and prod.** Flags off in prod; `migrationEnabled` on in dev |
+| Open PRs | **#898** (persist + adopt-by-name) — validated locally, still needs merging |
+| Uncommitted | the 8.5 amendment, the reranking/embedding change, the verify-defer, the local driver |
+
+### Flag state (GitHub Environment variables)
+
+| Flag | development | production |
+|---|---|---|
+| `CDK_MANAGED_KB_MIGRATION_ENABLED` | `true` | `false` |
+| `CDK_MANAGED_KB_NEW_DEFAULT` | `false` | `false` |
+| `CDK_MANAGED_KB_RECONCILER_ARMED` | `false` | `false` |
+| `CDK_TAG_ENVIRONMENT` | `dev` | `prod` |
+
+`newDefault` has **no reader anywhere in `backend/src`** — "new knowledge bases are
+created managed" is design §14.7 steps 5–8, a follow-up spec. Setting it does
+nothing, which is worth knowing before someone flips it expecting an effect.
+
+⚠️ **Production carries every defect fixed after 1.16.0 shipped.** It cannot fire,
+because nothing enrols while `migrationEnabled` is false. Do not turn that flag on
+in prod until #898 and the uncommitted work have landed and shipped.
 
 ### Commits (16 on the branch, all pushed)
 
@@ -90,6 +127,30 @@ cd frontend/ai.client && npx tsc -p tsconfig.app.json --noEmit
 There is **no eslint config** in the repo despite the steering docs mentioning
 ESLint; `npx eslint` fails with "couldn't find an eslint.config.*". Type-check
 with `tsc --noEmit` and build with `ng build` instead.
+
+### Driving a migration locally (do this before deploying anything)
+
+```bash
+cd backend
+uv run python ../scripts/local-dev/run-kb-migration.py <assistant-id> --show
+uv run python ../scripts/local-dev/run-kb-migration.py <assistant-id> --break-lease
+```
+
+Runs the worker's steps in-process against dev with your SSO credentials, so the
+whole state machine iterates in seconds. `--break-lease` clears the 15-minute lease
+between steps and defers `dueAt` 20 minutes out so the deployed dispatcher does not
+race you.
+
+It needs five variables in `backend/src/.env` that the app-api task definition does
+not carry — copy them from the deployed worker Lambda:
+`MANAGED_KB_SERVICE_ROLE_ARN`, `MANAGED_KB_TAG_VALUE_PREFIX`,
+`MANAGED_KB_TAG_VALUE_ENVIRONMENT`, `MANAGED_KB_METRIC_NAMESPACE`,
+`KB_MIGRATION_RETAIN_DAYS`.
+
+**What it does not prove:** the worker Lambda's IAM role (your SSO identity is
+broader), the CDK environment wiring, or the image contents. Those are deploy-time
+concerns — check them by deploying. Getting the logic right here first is the point,
+and two of the five defects below were IAM/wiring and could only surface that way.
 
 ### Running the upgrade UI locally
 
@@ -367,36 +428,120 @@ saying why that number is a property of AWS rather than a knob.
 
 ---
 
+### The five that only running it revealed
+
+These came out in sequence over 2026-08-27 to 08-31, each one step further into the
+saga than the last. Every one reviewed clean, deployed clean, and did nothing or
+failed on first real use. If you read only one section of this file, read this one.
+
+24. **The dispatcher could not find the worker.** The construct set
+    `MANAGED_KB_WORKER_FUNCTION_NAME`; `dispatcher.py` reads
+    `KB_MIGRATION_WORKER_FUNCTION_NAME` — the convention its siblings use. Every
+    tick raised `RuntimeError: ... is not set`, on a fifteen-minute schedule, in
+    silence unless someone read the logs. `kb-sync` does not have this bug for
+    exactly one reason: `kb-sync.test.ts` asserts the variable exists.
+    A second mismatch found by the same sweep: the construct published
+    `MANAGED_KB_RETENTION_WINDOW_DAYS`, which nothing reads, while
+    `worker._retain_days()` reads `KB_MIGRATION_RETAIN_DAYS` — so Req 15.11's
+    configured window was silently replaced by the code's 30-day floor. **Guard:**
+    `tests/supply_chain/test_kb_migration_env_contract.py` now asserts every
+    `os.environ` name the handlers read is set by the construct, and that the
+    construct publishes nothing unread.
+
+25. **`bedrock:TagResource` was not granted.** `CreateKnowledgeBase` is called
+    *with* tags and AWS authorises the tagging as a separate action, so the grant
+    reviewed as complete and failed the moment a real knowledge base was created.
+    `bedrock:ListTagsForResource` was missing for the same reason, with a quieter
+    failure: the reconciler fails closed on a tag read, so every knowledge base
+    would look untagged and the orphan sweep would report a clean account forever.
+
+26. **`CreateDataSource` ran against a `CREATING` knowledge base.**
+    `CreateKnowledgeBase` returns before the knowledge base is usable — this
+    module's own header records 47–124 s to `ACTIVE` — and the code called
+    `CreateDataSource` immediately. `ConflictException` is deliberately not
+    retryable and `_call`'s backoff tops out near 60 s, so the wait had to be
+    explicit. **Why no test caught it:** `FakeBedrockAgent.create_knowledge_base`
+    returned `status: "ACTIVE"`, which the real API never does.
+
+27. **The knowledge base id was never recorded until both creates succeeded.**
+    `attach_aws_ids` needs both identifiers, so a failure between them left a
+    record with no `awsKbId` — and every later attempt re-entered the create path
+    and was refused, permanently, because the *name* was taken. **The
+    `clientToken` does not save this**: AWS idempotency tokens expire within
+    minutes. Earlier revisions of this document and of the module header claimed
+    otherwise; they were wrong. Fixed by `records.attach_knowledge_base_id`
+    (persist immediately) plus adopt-by-name for records already stuck.
+    **Why no test caught it:** two tests *certified* the bug —
+    `test_the_record_survives_as_a_discoverable_retry_anchor` asserted
+    `"awsKbId" not in anchor`, and its sibling relied on the fake modelling
+    `clientToken` dedup as **permanent** while not modelling name uniqueness at
+    all. The fake now enforces name uniqueness and treats tokens as expired by
+    default.
+
+28. **The embedding pin and managed reranking are mutually exclusive.** Req 8.5
+    pinned `titan-embed-text-v2:0` via `embeddingModelType: CUSTOM`; Req 11.2
+    requires `rerankingModelType: MANAGED`. AWS rejects the combination, and the
+    §13 evaluation had measured the two **separately, never together**. Req 8.5 is
+    now amended: the pin protected a failure mode that cannot occur in managed mode
+    (we never embed the query — Bedrock embeds both sides), and the evaluation
+    measured the pin as worth nothing while reranking measurably separates scores.
+    Confirmed in dev: pinned + `NONE` gives flat 1.00/0.982/0.952; unpinned +
+    `MANAGED` gives 0.413/0.199.
+
+29. **`verify` failed a good migration for being asked too early.** The canary
+    retrieval returned nothing because the freshly-ingested document was not yet
+    queryable, and that was treated as terminal. Measured: **~45 s** from ingest to
+    retrievable on a fresh knowledge base, against the docstring's "0.75–1.03 s"
+    (a warm-knowledge-base figure). `verify` now defers via
+    `records.defer_verify`, bounded at `MAX_VERIFY_ATTEMPTS`. Adoption also learned
+    to skip knowledge bases in `DELETING`, found the same way: a local recreate
+    adopted one mid-delete.
+
+---
+
 ## 6. Remaining work
 
-| Group | Subtasks | Notes |
-|---|---|---|
-| **14** Surfaces | 1½ | **14.5** admin surface (filter by engine, stored bytes + document counts, bulk migrate, per-KB retry) — not started. **14.4** is surfaced but its one-click document retry is deferred; see the deferral below. 14.0–14.3, 14.6, 14.7 are **done**. |
-| **15** Pre-promotion verification | 3 | The gate before any real traffic moves. |
+### Do these first
+
+| | |
+|---|---|
+| **Merge #898** | persist-the-id + adopt-by-name. Validated locally; it is what unstuck the dev record |
+| **Commit the uncommitted** | Req 8.5 amendment, the embedding/reranking change, the verify-defer, the adoption `DELETING` filter, `scripts/local-dev/run-kb-migration.py` |
+| **Then deploy and click through in dev** | the local run proves the logic; the deploy proves the IAM and the wiring |
+
+### Open, in rough order
+
+| Group | Notes |
+|---|---|
+| **14.4** one-click document retry | Req 21.2. Ingestion is S3-event-triggered and there is no reprocess endpoint, so this needs new backend against a live pipeline. The card currently directs the user to re-upload, which works today. Close it by building the endpoint **or** by amending Req 21.2 to accept re-upload |
+| **14.5** admin surface | not started. Filter by engine, stored bytes, document counts, bulk migrate, per-KB retry |
+| **15.1** packaged-SDK probe | the *static* half is done and passing (`boto3==1.43.68` carries `MANAGED`, the embedding members, `FLOAT32`, all four document ops, no `AWS_DATA_PATH`). The live half has now effectively been done by hand — a real create → ingest → retrieve → promote succeeded in dev |
+| **15.2** ingestion-concurrency probe | unanswered. Do not size a wide fleet migration before it |
+| **15.3** full matrix | run it once the above land |
+
+### Known unknown, picked up mid-flight
+
+**`document_id` and `relevance` come back empty from the facade.** After promotion,
+`search_assistant_knowledgebase_with_formatting` returned two real chunks with
+correct content and correct `distance` ordering (−0.4226 then −0.1616 — negation of
+relevance, so ascending distance is descending relevance, as designed). But
+`document_id` was `None` and `relevance` was `None` on the facade output.
+
+`document_id` is the **join key for the document-status filter**, which fails
+closed — so chunks with no `document_id` should have been dropped and were not.
+Either the filter is not being applied on the managed path, or the id is being lost
+between `managed_backend._to_chunk` and the facade. Worth resolving before any real
+traffic moves; it was found with ~5 minutes of context left rather than chased.
+
+Reproduce with `scripts/local-dev/run-kb-migration.py ast-1a90784a7f18 --show`
+followed by a facade query — note `resolver` has no `get_backend`; find the real
+accessor.
 
 ### Known deferrals (correct, not oversights)
 
-- **One-click document reprocess (Req 21.2).** Ingestion is S3-event-triggered
-  (`documents/ingestion/handler.py`) and there is **no reprocess endpoint** — the
-  only document writes are upload-url, import, upload-failed and delete. A retry
-  control therefore needs new backend that re-fires the pipeline against bytes
-  already in S3, which is a change to a live ingestion path. Deliberately not
-  improvised. The card directs the user to re-upload via "Add files", a retry path
-  that works today. **Close by building the endpoint or by amending Req 21.2 to
-  accept re-upload** — do not leave it ambiguous.
-- **`backend/Dockerfile.kb-migration`** does not exist yet, on purpose. The real image
-  needs five artefacts that do not exist: the handler modules, their
-  `requirements.txt`, a case in `scripts/build/build-one.sh`, `backend.yml` jobs, and
-  entries in the **hand-maintained** lists in
-  `backend/tests/supply_chain/test_dockerfile_pinning.py` and
-  `test_lambda_image_imports.py`. Per platform-as-bootstrap, CDK ships the bootstrap
-  stub and the **workflow** ships the real image.
-- **Reconciler EventBridge wiring** (Reqs 14.1, 14.7) — `infrastructure/`, platform
-  group. Backend code never deploys before the IAM and resources it requires.
-- **Group 7's snapshot reservation now has its caller** (`run_shadow`), reserving
-  the whole corpus before anything is provisioned.
-
----
+- **Reconciler EventBridge wiring** (Reqs 14.1, 14.7) — the rule exists and is
+  enabled; `reconcilerArmed` stays off so it reports rather than deletes.
+- **Group 7's snapshot reservation** has its caller (`run_shadow`).
 
 ## 7. File map
 

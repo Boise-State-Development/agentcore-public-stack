@@ -625,22 +625,51 @@ class TestVerify:
         assert worker.manifest_entry(item) == "d9:2026-08-01T00:00:00Z"
 
     @pytest.mark.asyncio
-    async def test_verify_requires_a_canary_retrieval_to_return_something(self):
-        """Requirement 15.7. Bedrock reporting a document INDEXED precedes it being
-        retrievable by 0.75-1.03 s, and a knowledge base can hold documents while
-        returning nothing, so "we ingested everything" and "retrieval works" are
-        separate claims."""
+    async def test_an_unqueryable_corpus_defers_instead_of_failing(self):
+        """Requirement 15.7, corrected by measurement.
+
+        "Not queryable yet" is a verification that has not happened, not one that
+        failed. The docstring's 0.75-1.03 s was measured on a warm knowledge base;
+        a first ingest into a fresh one took ~45 s in dev, and treating that as
+        terminal marked a good migration `failed` and showed its owner a retry
+        button for a problem that resolves itself.
+        """
+        backend = StubBackend(chunks=[])
+        deferred = []
+
+        def _defer(_assistant, _kb, _generation, due_at):
+            deferred.append(due_at)
+            return len(deferred)
+
+        with patch.dict("os.environ", BASE_ENV, clear=True), patch.object(
+            worker, "list_document_items", return_value=[_doc("d1")]
+        ), patch.object(r, "defer_verify", _defer):
+            result = await worker.run_verify(
+                ASSISTANT_ID, ASSISTANT_ID, _kb_record(r.VERIFY), backend
+            )
+
+        assert deferred, "did not defer; an early canary would fail the migration"
+        assert result.to_state == r.VERIFY, "left verify on a deferral"
+        assert "not queryable" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_deferring_forever_eventually_fails(self):
+        """Bounded, because "not queryable" past some point is not latency.
+
+        Matched on the attempt count rather than "not queryable", so this cannot
+        be satisfied by the deferral path it is meant to sit past.
+        """
         backend = StubBackend(chunks=[])
 
         with patch.dict("os.environ", BASE_ENV, clear=True), patch.object(
             worker, "list_document_items", return_value=[_doc("d1")]
+        ), patch.object(
+            r, "defer_verify", lambda *a, **k: worker.MAX_VERIFY_ATTEMPTS + 1
         ):
-            # Matched on "not queryable", not on "canary": both failure messages
-            # mention the canary, so the looser pattern passed even with the
-            # empty-result check removed — the *other* check raised and the test
-            # could not tell the difference.
-            with pytest.raises(worker.VerificationFailed, match="not queryable"):
-                await worker.run_verify(ASSISTANT_ID, ASSISTANT_ID, _kb_record(r.VERIFY), backend)
+            with pytest.raises(worker.VerificationFailed, match="attempts over"):
+                await worker.run_verify(
+                    ASSISTANT_ID, ASSISTANT_ID, _kb_record(r.VERIFY), backend
+                )
 
     @pytest.mark.asyncio
     async def test_verify_rejects_a_canary_that_returns_foreign_documents(self):

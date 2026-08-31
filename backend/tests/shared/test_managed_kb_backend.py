@@ -434,22 +434,42 @@ class TestKnowledgeBasePayload:
     def test_role_arn_is_passed(self):
         assert self._payload()["roleArn"] == ROLE_ARN
 
-    def test_embedding_is_pinned_to_titan_v2_float32_1024(self):
-        """Requirement 8.5, and immutable from here on (8.8).
+    def test_no_embedding_pin_is_sent(self):
+        """Requirement 8.5, as amended.
 
-        A drift in any of these three values is not a migration but a rebuild, so
-        the numbers are asserted rather than merely present.
+        The pin was carried over from the legacy path without re-deriving it, and
+        it does not apply here:
+
+        * On S3 Vectors *we* embed the user's question, so the query model must
+          match the model that indexed the documents. Managed retrieval sends
+          text and managed ingestion sends text — we never produce a vector, so
+          Bedrock embeds both sides and consistency is its invariant.
+        * AWS rejects the pin together with ``rerankingModelType: MANAGED``, and
+          the evaluation measured the pin as worth nothing ("identical answer
+          quality — 9/9") against reranking being "what makes a small context cap
+          defensible".
+
+        Asserted as *absence*, because sending any of these keys is what breaks
+        reranking — and the failure is a ValidationException at query time, long
+        after the immutable choice was made.
         """
         managed = self._payload()["knowledgeBaseConfiguration"][
             "managedKnowledgeBaseConfiguration"
         ]
-        assert managed["embeddingModelType"] == "CUSTOM"
-        assert managed["embeddingModelArn"].endswith("amazon.titan-embed-text-v2:0")
-        bedrock_config = managed["embeddingModelConfiguration"][
-            "bedrockEmbeddingModelConfiguration"
-        ]
-        assert bedrock_config["dimensions"] == 1024
-        assert bedrock_config["embeddingDataType"] == "FLOAT32"
+        assert "embeddingModelType" not in managed
+        assert "embeddingModelArn" not in managed
+        assert "embeddingModelConfiguration" not in managed
+
+    def test_reranking_stays_managed(self):
+        """The half of the tradeoff that has evidence behind it (Req 11.2).
+
+        Kept next to the pin test on purpose: these two are mutually exclusive in
+        AWS, so anyone reinstating the pin should see this failing beside it.
+        """
+        from apis.shared.kb_backend.managed_backend import retrieval_configuration
+
+        managed = retrieval_configuration()["managedSearchConfiguration"]
+        assert managed["rerankingModelType"] == "MANAGED"
 
     def test_kms_key_is_only_sent_when_supplied(self):
         assert "serverSideEncryptionConfiguration" not in self._payload()[
@@ -662,7 +682,13 @@ class TestProvisioningSaga:
         )
 
     @pytest.mark.asyncio
-    async def test_provisioning_requires_a_service_role(self, table):
+    async def test_provisioning_requires_a_service_role(self, table, monkeypatch):
+        # `role_arn=None` falls back to MANAGED_KB_SERVICE_ROLE_ARN, so this only
+        # asserted what it meant while that variable happened to be absent from the
+        # environment. It is now present in `backend/src/.env` for the local
+        # migration driver — which `load_dotenv(override=True)` reads — so the
+        # absence has to be made explicit rather than assumed.
+        monkeypatch.delenv("MANAGED_KB_SERVICE_ROLE_ARN", raising=False)
         with pytest.raises(p.ProvisioningError, match="service role"):
             await _provision(FakeBedrockAgent(), role_arn=None)
 
@@ -804,6 +830,29 @@ class TestCrashBetweenCreateAndRecordUpdate:
         )
         assert client.distinct_knowledge_base_ids == {"KB00000001"}
         assert result.aws_kb_id == "KB00000001"
+
+    @pytest.mark.asyncio
+    async def test_adoption_ignores_a_knowledge_base_being_deleted(self, table):
+        """Adopting a dying knowledge base guarantees a failure one step later.
+
+        Seen while recreating one locally: the delete had not finished, adoption
+        took the DELETING knowledge base, and the ACTIVE wait then refused it. The
+        name is about to free up, so skipping is correct — the next attempt creates
+        fresh.
+        """
+        from apis.shared.kb_backend import provisioning as prov
+
+        class _Dying:
+            def list_knowledge_bases(self, **_kwargs):
+                return {
+                    "knowledgeBaseSummaries": [
+                        {"knowledgeBaseId": "KBDYING", "name": "wanted",
+                         "status": "DELETING"},
+                    ]
+                }
+
+        found = await prov._find_knowledge_base_by_name(_Dying(), "wanted")
+        assert found is None, "adopted a knowledge base that is being deleted"
 
     @pytest.mark.asyncio
     async def test_a_lost_identifier_is_recovered_by_adopting_the_name(self, table):
