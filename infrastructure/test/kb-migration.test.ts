@@ -859,6 +859,26 @@ describe('KbMigrationConstruct — IAM', () => {
     expect(holders.some((id) => /IngestionConsumerLambdaServiceRole/.test(id))).toBe(true);
   });
 
+  it('gives both ingesting roles bedrock:StartIngestionJob, not just the Ingest action', () => {
+    // Regression for the defect that failed a real upload in dev. AWS
+    // authorizes `IngestKnowledgeBaseDocuments` under the adjacent action
+    // name `bedrock:StartIngestionJob`, so a grant carrying only the
+    // matching name deploys and reviews clean, then returns
+    // AccessDeniedException on the first document.
+    //
+    // Both roles are checked because both call
+    // `ingest_knowledge_base_documents`: the ingestion consumer surfaced it,
+    // and the worker had the identical gap — invisible until now only
+    // because every migration so far was driven locally under a broader SSO
+    // identity than the Lambda role.
+    const statements = allStatements(t).filter((s) => s.Sid === 'ManagedKbDirectIngestion');
+    expect(statements).toHaveLength(2);
+    for (const s of statements) {
+      expect(s.Action).toContain('bedrock:StartIngestionJob');
+      expect(s.Action).toContain('bedrock:IngestKnowledgeBaseDocuments');
+    }
+  });
+
   it('gives the dispatcher namespace-conditioned metrics and nothing Bedrock-shaped', () => {
     const statements = allStatements(t).filter((s) => s.Sid === 'ManagedKbDispatchMetrics');
     expect(statements).toHaveLength(1);
