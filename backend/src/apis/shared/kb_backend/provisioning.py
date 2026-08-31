@@ -468,6 +468,55 @@ KB_ACTIVE_WAIT_SECONDS = 300.0
 KB_ACTIVE_POLL_SECONDS = 5.0
 
 
+#: Fragments that identify a "name already taken" conflict, as opposed to the
+#: status conflict the ACTIVE wait handles. Matched on the message because AWS
+#: uses one error code (``ConflictException``) for both.
+_NAME_CONFLICT_FRAGMENTS = ("already exists",)
+
+
+def _is_name_conflict(exc: BaseException) -> bool:
+    """Whether ``exc`` is AWS refusing a duplicate knowledge base *name*.
+
+    Distinguished from the status conflict by message, because both arrive as
+    ``ConflictException``. Getting this wrong in either direction is bad: treating
+    a status conflict as a name conflict would adopt while still CREATING, and
+    treating a name conflict as fatal leaves a record that can never be retried.
+    """
+    message = str(exc).lower()
+    if not any(f in message for f in _NAME_CONFLICT_FRAGMENTS):
+        return False
+    response = getattr(exc, "response", None)
+    if isinstance(response, Mapping):
+        code = response.get("Error", {}).get("Code")
+        # Only trust the message when the code agrees it is a conflict.
+        return code in ("ConflictException", "ValidationException")
+    return True
+
+
+async def _find_knowledge_base_by_name(client, name: str) -> Optional[str]:
+    """Return the id of the knowledge base called ``name``, or ``None``.
+
+    Names are unique per account and derived from ``app_kb_id``, so a match is
+    always this knowledge base's own earlier attempt — never someone else's.
+
+    Paginated fully rather than reading the first page: a truncated scan that
+    missed the match would fall through to "the name is taken but I cannot find
+    it", turning a recoverable state into a permanent failure.
+    """
+    next_token: Optional[str] = None
+    while True:
+        kwargs: Dict[str, Any] = {"maxResults": 100}
+        if next_token:
+            kwargs["nextToken"] = next_token
+        page = await asyncio.to_thread(lambda: client.list_knowledge_bases(**kwargs))
+        for summary in page.get("knowledgeBaseSummaries") or []:
+            if summary.get("name") == name:
+                return summary.get("knowledgeBaseId")
+        next_token = page.get("nextToken")
+        if not next_token:
+            return None
+
+
 class KnowledgeBaseNotReady(Exception):
     """A knowledge base did not reach ``ACTIVE`` within the wait budget."""
 
@@ -523,8 +572,8 @@ async def _wait_for_knowledge_base_active(
             raise KnowledgeBaseNotReady(
                 f"kb {aws_kb_id} was still {last_status} after {waited:.0f}s "
                 f"(budget {budget:.0f}s); refusing {what}. The migration is "
-                f"resumable: the clientToken is deterministic, so the next attempt "
-                f"adopts this knowledge base rather than creating another."
+                f"resumable: the id is already recorded on the KB_Record, so the "
+                f"next attempt resumes from it rather than creating another."
             )
         await sleep(interval)
         waited += interval
@@ -655,22 +704,70 @@ async def provision_managed_kb(
 
     aws_kb_id = (existing or {}).get("awsKbId")
     if not aws_kb_id:
-        response = await _call(
-            client.create_knowledge_base,
-            knowledge_base_payload(
-                name=name,
-                role_arn=role_arn,
-                client_token=kb_token,
-                description=f"Managed knowledge base for {app_kb_id}",
-                tags=build_tags(app_kb_id, owner_user_id, project_prefix, environment),
-                region=region,
-                kms_key_arn=kms_key_arn,
-            ),
-            what="CreateKnowledgeBase",
-            max_attempts=max_attempts,
-            sleep=sleep,
-        )
-        aws_kb_id = response["knowledgeBase"]["knowledgeBaseId"]
+        try:
+            response = await _call(
+                client.create_knowledge_base,
+                knowledge_base_payload(
+                    name=name,
+                    role_arn=role_arn,
+                    client_token=kb_token,
+                    description=f"Managed knowledge base for {app_kb_id}",
+                    tags=build_tags(app_kb_id, owner_user_id, project_prefix, environment),
+                    region=region,
+                    kms_key_arn=kms_key_arn,
+                ),
+                what="CreateKnowledgeBase",
+                max_attempts=max_attempts,
+                sleep=sleep,
+            )
+            aws_kb_id = response["knowledgeBase"]["knowledgeBaseId"]
+        except Exception as exc:
+            # ADOPT-BY-NAME. A knowledge base already carrying this name means a
+            # previous attempt created one and did not get to record its id, so
+            # this record has no `awsKbId` to resume from and the create can never
+            # succeed again — the name is taken, permanently.
+            #
+            # The `clientToken` does NOT cover this, contrary to what the module
+            # header implies. AWS idempotency tokens expire in minutes; a retry an
+            # hour later is a new request that collides on the unique name. This is
+            # exactly how the first real migration became unretryable.
+            #
+            # Adopting is safe because the name is derived from `app_kb_id`, so a
+            # collision can only be *this* knowledge base's own earlier attempt.
+            if not _is_name_conflict(exc):
+                raise
+            adopted = await _find_knowledge_base_by_name(client, name)
+            if not adopted:
+                # The name is taken but nothing matching is visible — do not guess.
+                raise
+            logger.warning(
+                f"kb {app_kb_id}: adopting existing knowledge base {adopted}; its "
+                f"name was already taken, which means an earlier attempt created it "
+                f"without recording the id"
+            )
+            aws_kb_id = adopted
+            emit_count(METRIC_PROVISION_ADOPTED, dimensions={"appKbId": app_kb_id})
+
+        # Persist the identifier NOW, before anything else can fail. Everything
+        # after this point is resumable; before it, a failure loses a paying
+        # resource and blocks every future attempt on the name.
+        try:
+            await asyncio.to_thread(
+                r.attach_knowledge_base_id,
+                assistant_id,
+                app_kb_id,
+                aws_kb_id,
+                _now_iso(),
+            )
+        except r.TransitionLost:
+            # Another worker recorded an id first. Theirs wins; ours is either the
+            # same knowledge base (adopted by name) or a duplicate that the
+            # reconciler will find by tag.
+            logger.info(
+                f"kb {app_kb_id}: another worker recorded awsKbId first; deferring"
+            )
+            refreshed = await asyncio.to_thread(r.get_kb_record, assistant_id, app_kb_id)
+            aws_kb_id = (refreshed or {}).get("awsKbId") or aws_kb_id
 
     # CreateKnowledgeBase returns as soon as the knowledge base is CREATING, not
     # when it is usable — this module's own header records 47–124 s to ACTIVE
@@ -683,13 +780,6 @@ async def provision_managed_kb(
     # genuine conflict must fail fast — and `_call`'s backoff tops out around 60 s
     # anyway, short of the measured upper bound. So the wait is explicit rather
     # than a widened retry set.
-    #
-    # This is also why the failure orphaned a knowledge base on first run: the
-    # create succeeded, the data source did not, and `attach_aws_ids` never ran, so
-    # nothing recorded the id. The deterministic `clientToken` means a retry adopts
-    # that knowledge base rather than creating a second one, and the tags written
-    # at create make it discoverable by the reconciler — but the orphan existed at
-    # all only because of this missing wait.
     await _wait_for_knowledge_base_active(
         client,
         aws_kb_id,

@@ -306,6 +306,49 @@ def create_provisioning(
     return item
 
 
+def attach_knowledge_base_id(
+    assistant_id: str,
+    app_kb_id: str,
+    aws_kb_id: str,
+    now_iso: str,
+) -> None:
+    """Record ``awsKbId`` the moment the knowledge base exists in AWS.
+
+    Deliberately separate from :func:`attach_aws_ids`, which needs both
+    identifiers and flips the record to ``active``. This one runs *between* the
+    two AWS creates, and exists because the gap between them is where a paying
+    resource can be lost.
+
+    Without it: ``CreateKnowledgeBase`` succeeds, ``CreateDataSource`` fails, and
+    nothing has recorded the identifier — so the retry re-enters the create path
+    and AWS refuses it, permanently, because the *name* is already taken:
+
+        ConflictException: KnowledgeBase with name ... already exists.
+
+    The ``clientToken`` does not save this. AWS idempotency tokens expire within
+    minutes, so a retry hours or days later is a genuinely new request that
+    collides on the unique name. A record stuck this way can never be retried
+    successfully — which is exactly what happened to the first real migration.
+
+    Guarded on ``attribute_not_exists(awsKbId)`` so a late-returning create from
+    an abandoned attempt cannot overwrite the identifier a newer one recorded,
+    and on still being ``provisioning`` so it cannot resurrect a torn-down record.
+    """
+    _conditional(
+        _table().update_item,
+        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        UpdateExpression="SET awsKbId = :kb, updatedAt = :now",
+        ConditionExpression=(
+            "attribute_not_exists(awsKbId) AND provisioningState = :provisioning"
+        ),
+        ExpressionAttributeValues={
+            ":kb": aws_kb_id,
+            ":now": now_iso,
+            ":provisioning": PROVISIONING,
+        },
+    )
+
+
 def attach_aws_ids(
     assistant_id: str,
     app_kb_id: str,
