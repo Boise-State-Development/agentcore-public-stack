@@ -91,6 +91,11 @@ case "$SERVICE" in
         SOURCE_DIRS=(
             "backend/src/apis/app_api/documents/ingestion"
             "backend/src/apis/shared/embeddings"
+            # handler.py reads records.resolve_engine to skip documents whose
+            # knowledge base is promoted to the managed engine. Without this
+            # entry a change to that gate would not move the content hash, and
+            # the Lambda would keep running the previous image.
+            "backend/src/apis/shared/kb_backend"
         )
         # shared/__init__.py and shared/timestamps.py are single files,
         # hashed as manifests. The requirements.lock lives inside the
