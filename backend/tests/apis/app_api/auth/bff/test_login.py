@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import urllib.parse
 
 import pytest
 from fastapi.testclient import TestClient
+
+from apis.app_api.auth.bff import routes as bff_routes
+from apis.app_api.auth.bff.cookies import OAUTH_STATE_COOKIE_NAME
 
 from .conftest import (
     BFF_CLIENT_ID,
@@ -209,3 +214,125 @@ def test_login_rejects_unsafe_return_to(app_for_login, bad_return_to):
     assert ok is True
     assert data is not None
     assert data.return_to is None
+
+
+# ─── Browser binding, PKCE, nonce (f-8c4f312a) ─────────────────────────
+
+
+def _set_cookie_header(response, name: str) -> str:
+    matches = [
+        h for h in response.headers.get_list("set-cookie") if h.startswith(name)
+    ]
+    assert matches, f"{name} was not set. Set-Cookie: {response.headers.get_list('set-cookie')}"
+    return matches[0]
+
+
+def _binding_secret_from(response) -> str:
+    header = _set_cookie_header(response, OAUTH_STATE_COOKIE_NAME)
+    return header.split(";", 1)[0].split("=", 1)[1]
+
+
+def test_login_sets_browser_binding_cookie(app_for_login):
+    """The 302 must carry the binding cookie. The reported finding was that
+    /auth/login emitted no Set-Cookie at all, leaving `state` — a value that
+    travels in a redirect URL — as the only thing the callback checked."""
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get("/auth/login")
+
+    header = _set_cookie_header(response, OAUTH_STATE_COOKIE_NAME)
+    assert "HttpOnly" in header  # script must not be able to forge a binding
+    assert "Secure" in header  # required by the __Host- prefix
+    assert "Path=/" in header
+    assert "Domain=" not in header  # __Host- forbids it; sibling hosts can't plant one
+    # `lax`, not `strict`: the IdP returns the user via a top-level cross-site
+    # GET, and `strict` would withhold the cookie and break every login.
+    assert "SameSite=lax" in header
+    assert f"Max-Age={bff_routes._STATE_TTL_SECONDS}" in header
+
+
+def test_login_stores_only_the_digest_of_the_binding_secret(app_for_login):
+    """A read-only leak of the state table must not yield a replayable
+    binding, so the row holds SHA-256(secret) and never the secret."""
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get("/auth/login")
+
+    secret = _binding_secret_from(response)
+    state = _authorize_params(response)["state"]
+    ok, data = bff_routes._get_state_store().get_and_delete_state(state)
+
+    assert ok is True
+    assert data.browser_binding_hash == hashlib.sha256(secret.encode()).hexdigest()
+    assert secret not in (data.browser_binding_hash or "")
+
+
+def test_login_binding_secret_is_unique_per_request(app_for_login):
+    """Two logins must not share a binding, or one user's state would be
+    redeemable using another's cookie."""
+    client = TestClient(app_for_login, follow_redirects=False)
+    first = _binding_secret_from(client.get("/auth/login"))
+    second = _binding_secret_from(client.get("/auth/login"))
+    assert first != second
+
+
+def test_login_binding_secret_is_not_leaked_in_the_redirect_url(app_for_login):
+    """The secret's whole value is that it lives only in the cookie jar. If it
+    also appeared in the authorize URL, anyone who could read the URL (Referer,
+    proxy log, browser history) could rebuild the binding."""
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get("/auth/login")
+
+    assert _binding_secret_from(response) not in response.headers["location"]
+
+
+def test_login_sends_pkce_s256_challenge_derived_from_stored_verifier(app_for_login):
+    """Cognito supports S256 only. The verifier stays in the state row; only
+    its challenge goes on the wire."""
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get("/auth/login")
+    params = _authorize_params(response)
+
+    assert params["code_challenge_method"] == "S256"
+
+    ok, data = bff_routes._get_state_store().get_and_delete_state(params["state"])
+    assert ok is True
+    assert data.code_verifier
+    # RFC 7636 §4.1: 43..128 chars.
+    assert 43 <= len(data.code_verifier) <= 128
+    expected = (
+        base64.urlsafe_b64encode(hashlib.sha256(data.code_verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
+    assert params["code_challenge"] == expected
+    # Unpadded base64url — Cognito rejects the `=`-suffixed form.
+    assert "=" not in params["code_challenge"]
+    # The verifier itself must never reach the browser.
+    assert data.code_verifier not in response.headers["location"]
+
+
+def test_login_sends_nonce_matching_the_stored_state(app_for_login):
+    """Cognito echoes `nonce` into the ID token; the callback compares it, so
+    the two must agree."""
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get("/auth/login")
+    params = _authorize_params(response)
+
+    ok, data = bff_routes._get_state_store().get_and_delete_state(params["state"])
+    assert ok is True
+    assert data.nonce
+    assert params["nonce"] == data.nonce
+
+
+def test_login_secrets_are_independent_of_each_other(app_for_login):
+    """state, verifier, nonce and binding must be four separate draws —
+    deriving any from another would let a leak of the public `state` or
+    `nonce` reconstruct a server-side secret."""
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get("/auth/login")
+    params = _authorize_params(response)
+    secret = _binding_secret_from(response)
+
+    ok, data = bff_routes._get_state_store().get_and_delete_state(params["state"])
+    assert ok is True
+    values = {params["state"], data.code_verifier, data.nonce, secret}
+    assert len(values) == 4

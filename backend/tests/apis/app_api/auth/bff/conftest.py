@@ -35,6 +35,13 @@ BFF_CLIENT_ID = "test-bff-client-id"
 BFF_CLIENT_SECRET_ARN = "arn:aws:secretsmanager:us-east-1:0:secret:bff-test"
 COOKIE_KMS_ARN = "arn:aws:kms:us-east-1:0:key/test"
 
+# Fixed per-login secrets used by the callback tests. Production mints these
+# per request; pinning them here lets a test seed a state row and hand the
+# matching binding cookie to a TestClient in one step.
+SEEDED_BINDING_SECRET = "test-browser-binding-secret"
+SEEDED_CODE_VERIFIER = "test-pkce-code-verifier"
+SEEDED_NONCE = "test-oidc-nonce"
+
 
 def _make_codec() -> CookieCodec:
     """Real CookieCodec with a deterministic in-memory AES key — no KMS."""
@@ -150,8 +157,15 @@ def make_id_token(
     picture: Optional[str] = None,
     custom_roles: Optional[str] = None,
     cognito_groups: Optional[list] = None,
+    nonce: Optional[str] = SEEDED_NONCE,
 ) -> str:
-    """Unsigned JWT good enough for `decode_id_token_claims`."""
+    """Unsigned JWT good enough for `decode_id_token_claims`.
+
+    `nonce` defaults to `SEEDED_NONCE` so tokens minted here satisfy the
+    callback's nonce check against a state row seeded by `_seed_state`.
+    Pass `nonce=None` to simulate an IdP that dropped the claim, or a
+    different string to simulate token substitution.
+    """
     import json
     import base64
 
@@ -171,5 +185,7 @@ def make_id_token(
         claims["custom:roles"] = custom_roles
     if cognito_groups is not None:
         claims["cognito:groups"] = cognito_groups
+    if nonce is not None:
+        claims["nonce"] = nonce
     body = _b64(claims)
     return f"{header}.{body}."
