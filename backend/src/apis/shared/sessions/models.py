@@ -258,6 +258,21 @@ class SessionMetadata(BaseModel):
         alias="lastTurnInterruptedAt",
         description="ISO 8601 timestamp when the interruption was detected",
     )
+    pending_attachment_upload_ids: Optional[List[str]] = Field(
+        default=None,
+        alias="pendingAttachmentUploadIds",
+        description=(
+            "Upload IDs sent inline on the turn currently in flight, recorded before the "
+            "model call. Inline document bytes are stripped from restored history, so a turn "
+            "that dies before the model reads them consumes them for good — these let the "
+            "next turn re-send them. Cleared as soon as a turn produces assistant content"
+        ),
+    )
+    pending_attachments_at: Optional[str] = Field(
+        default=None,
+        alias="pendingAttachmentsAt",
+        description="ISO 8601 timestamp the pending-attachment marker was written; recovery is TTL-bounded against it",
+    )
 
     # Denormalized cost + context aggregates for the session-cost badge.
     # Maintained by _bump_session_aggregates after each turn (write-time

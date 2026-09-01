@@ -1359,3 +1359,124 @@ class TestListContractOnMarker:
 
         sessions, _ = await md.list_user_sessions("u1")
         assert [s.session_id for s in sessions] == ["leg"]  # fell back to legacy, not blank
+
+
+class TestPendingAttachmentsMarker:
+    """Write-ahead marker that lets a failed turn's attachments be re-sent.
+
+    Regression cover for prod session `5f34d2b0` (2026-08-31): a ConverseStream
+    carrying two PDFs failed with ServiceUnavailableException, the inline bytes
+    were stripped from restored history, and the user had to re-upload by hand.
+    """
+
+    @pytest.mark.asyncio
+    async def test_set_then_pop_returns_ids_and_clears(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            set_pending_attachments,
+            pop_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+
+        await set_pending_attachments("s1", "u1", ["up-1", "up-2"])
+        assert await pop_pending_attachments("s1", "u1") == ["up-1", "up-2"]
+
+        # The pop cleared it — a second turn must not recover them again.
+        assert await pop_pending_attachments("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_pop_with_no_marker_returns_empty(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import store_session_metadata, pop_pending_attachments
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+        assert await pop_pending_attachments("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_clear_prevents_recovery_after_a_successful_turn(self, sessions_metadata_table):
+        """The success path clears the marker, so the next turn re-sends nothing."""
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            set_pending_attachments,
+            clear_pending_attachments,
+            pop_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+
+        await set_pending_attachments("s1", "u1", ["up-1"])
+        await clear_pending_attachments("s1", "u1")
+        assert await pop_pending_attachments("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_stale_marker_is_discarded_but_still_cleared(self, sessions_metadata_table):
+        """A session abandoned for hours must not silently re-send documents
+        onto an unrelated follow-up question."""
+        from datetime import datetime, timedelta, timezone
+
+        from apis.shared.sessions.metadata import (
+            PENDING_ATTACHMENT_RECOVERY_TTL_SECONDS,
+            store_session_metadata,
+            set_pending_attachments,
+            pop_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+        await set_pending_attachments("s1", "u1", ["up-1"])
+
+        stale = datetime.now(timezone.utc) - timedelta(
+            seconds=PENDING_ATTACHMENT_RECOVERY_TTL_SECONDS + 60
+        )
+        sessions_metadata_table.update_item(
+            Key={"PK": "USER#u1", "SK": "S#s1"},
+            UpdateExpression="SET pendingAttachmentsAt = :t",
+            ExpressionAttributeValues={":t": stale.isoformat()},
+        )
+
+        assert await pop_pending_attachments("s1", "u1") == []
+        # Still cleared, so it can't linger and fire later.
+        assert "pendingAttachmentUploadIds" not in sessions_metadata_table.get_item(
+            Key={"PK": "USER#u1", "SK": "S#s1"}
+        )["Item"]
+
+    @pytest.mark.asyncio
+    async def test_empty_upload_ids_writes_nothing(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            set_pending_attachments,
+            pop_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+        await set_pending_attachments("s1", "u1", [])
+        assert await pop_pending_attachments("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_missing_session_is_a_noop(self, sessions_metadata_table):
+        """Best-effort contract: no session row → no write, no raise."""
+        from apis.shared.sessions.metadata import set_pending_attachments, pop_pending_attachments
+        await set_pending_attachments("nope", "u1", ["up-1"])
+        assert await pop_pending_attachments("nope", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_marker_is_scoped_to_its_own_session(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            set_pending_attachments,
+            pop_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+        await store_session_metadata(session_id="s2", user_id="u1", session_metadata=_make_session_metadata(session_id="s2"))
+
+        await set_pending_attachments("s1", "u1", ["up-1"])
+        assert await pop_pending_attachments("s2", "u1") == []
+        assert await pop_pending_attachments("s1", "u1") == ["up-1"]
+
+    @pytest.mark.asyncio
+    async def test_marker_survives_the_metadata_read_model(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+        await set_pending_attachments("s1", "u1", ["up-1", "up-2"])
+
+        meta = await get_session_metadata("s1", "u1")
+        assert meta.pending_attachment_upload_ids == ["up-1", "up-2"]
+        assert meta.pending_attachments_at is not None
