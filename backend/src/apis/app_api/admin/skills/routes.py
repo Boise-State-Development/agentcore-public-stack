@@ -3,6 +3,15 @@
 Mirrors apis/app_api/admin/tools/routes.py. All routes require admin access.
 There is no /discover endpoint — skills are authored, not discovered; the
 create/edit form populates its tool picker from GET /admin/tools.
+
+SECURITY — catalog scope: ``admin.skills`` governs the *admin catalog*
+(``owner_id == "system"``). User-authored skills live in the same table but are
+governed by ownership, and their instruction bodies are instruction-trusted
+content that steers their owner's agent. Every per-object route here must
+therefore apply the catalog predicate (``get_catalog_skill`` /
+``require_catalog_skill``) and report a non-catalog row as 404 — matching
+``GET /admin/skills/``, which is scoped the same way. Enforced by
+tests/apis/app_api/skills/test_admin_skill_routes.py.
 """
 
 import logging
@@ -35,6 +44,17 @@ router = APIRouter(prefix="/skills", tags=["admin-skills"])
 require_skills_admin = require_admin_scope("admin.skills")
 
 
+def _skill_value_error(e: ValueError) -> HTTPException:
+    """Map a service ValueError to 404 (missing / not a catalog skill) or 400.
+
+    The catalog predicate raises a uniform "not found" for both "no such skill"
+    and "user-authored skill", so this mapping never discloses the existence of
+    a private skill to an admin who cannot govern it.
+    """
+    status = 404 if "not found" in str(e).lower() else 400
+    return HTTPException(status_code=status, detail=str(e))
+
+
 @router.get("/", response_model=AdminSkillListResponse)
 async def admin_list_all_skills(
     status: Optional[str] = Query(
@@ -59,11 +79,15 @@ async def admin_get_skill(
     skill_id: str,
     admin: User = Depends(require_skills_admin),
 ):
-    """Get a specific skill by ID, with its directly-granting roles."""
+    """Get a specific catalog skill by ID, with its directly-granting roles.
+
+    Catalog-scoped: a user-authored skill reports 404, exactly as it is absent
+    from the list route.
+    """
     logger.info("Admin getting skill")
 
     service = get_skill_catalog_service()
-    skill = await service.get_skill(skill_id)
+    skill = await service.get_catalog_skill(skill_id)
     if not skill:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
 
@@ -117,7 +141,11 @@ async def admin_update_skill(
     request: SkillUpdateRequest,
     admin: User = Depends(require_skills_admin),
 ):
-    """Update skill metadata. Re-validates bound tools when they change."""
+    """Update catalog skill metadata. Re-validates bound tools when they change.
+
+    Catalog-scoped: a user-authored skill reports 404 and is never rewritten
+    here — its instructions are instruction-trusted content owned by its author.
+    """
     logger.info("Admin updating skill")
 
     service = get_skill_catalog_service()
@@ -177,7 +205,7 @@ async def get_skill_roles(
     logger.info("Admin getting roles for skill")
 
     service = get_skill_catalog_service()
-    skill = await service.get_skill(skill_id)
+    skill = await service.get_catalog_skill(skill_id)
     if not skill:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
 
@@ -199,7 +227,7 @@ async def set_skill_roles(
         await service.set_roles_for_skill(skill_id, request.app_role_ids, admin)
         return {"message": f"Roles updated for skill '{skill_id}'"}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _skill_value_error(e)
 
 
 @router.post("/{skill_id}/roles/add")
@@ -216,7 +244,7 @@ async def add_roles_to_skill(
         await service.add_roles_to_skill(skill_id, request.app_role_ids, admin)
         return {"message": f"Roles added to skill '{skill_id}'"}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _skill_value_error(e)
 
 
 @router.post("/{skill_id}/roles/remove")
@@ -233,7 +261,7 @@ async def remove_roles_from_skill(
         await service.remove_roles_from_skill(skill_id, request.app_role_ids, admin)
         return {"message": f"Roles removed from skill '{skill_id}'"}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _skill_value_error(e)
 
 
 # =============================================================================
@@ -241,25 +269,19 @@ async def remove_roles_from_skill(
 # =============================================================================
 
 
-def _resource_value_error(e: ValueError) -> HTTPException:
-    """Map a service ValueError to 404 (missing) or 400 (validation)."""
-    status = 404 if "not found" in str(e).lower() else 400
-    return HTTPException(status_code=status, detail=str(e))
-
-
 @router.get("/{skill_id}/resources", response_model=SkillResourcesResponse)
 async def list_skill_resources(
     skill_id: str,
     admin: User = Depends(require_skills_admin),
 ):
-    """List a skill's reference-file manifest (no bytes)."""
+    """List a catalog skill's reference-file manifest (no bytes)."""
     logger.info("Admin listing skill reference files")
 
     service = get_skill_catalog_service()
     try:
         resources = await service.list_resources(skill_id)
     except ValueError as e:
-        raise _resource_value_error(e)
+        raise _skill_value_error(e)
 
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
 
@@ -271,7 +293,7 @@ async def upload_skill_resource(
     kind: str = Form("reference"),
     admin: User = Depends(require_skills_admin),
 ):
-    """Upload (or replace) one supporting file for a skill.
+    """Upload (or replace) one supporting file for a catalog skill.
 
     Bytes are stored in the standard agentskills.io bundle layout
     (``references/`` | ``scripts/`` | ``assets/`` per ``kind``); the catalog
@@ -284,6 +306,7 @@ async def upload_skill_resource(
     service = get_skill_catalog_service()
     content = await file.read()
     try:
+        await service.require_catalog_skill(skill_id)
         resources = await service.add_resource(
             skill_id,
             filename=file.filename or "",
@@ -293,7 +316,7 @@ async def upload_skill_resource(
             kind=kind,
         )
     except ValueError as e:
-        raise _resource_value_error(e)
+        raise _skill_value_error(e)
 
     from apis.shared.skills.freshness import invalidate as invalidate_freshness
 
@@ -308,14 +331,15 @@ async def read_skill_resource(
     filename: str,
     admin: User = Depends(require_skills_admin),
 ):
-    """Return the raw bytes of one reference file with its content type."""
+    """Return the raw bytes of one catalog-skill reference file."""
     logger.info("Admin reading skill reference file")
 
     service = get_skill_catalog_service()
     try:
+        await service.require_catalog_skill(skill_id)
         ref, content = await service.read_resource(skill_id, filename)
     except ValueError as e:
-        raise _resource_value_error(e)
+        raise _skill_value_error(e)
 
     return Response(
         content=content,
@@ -332,14 +356,15 @@ async def delete_skill_resource(
     filename: str,
     admin: User = Depends(require_skills_admin),
 ):
-    """Delete one reference file from a skill. Returns the updated manifest."""
+    """Delete one reference file from a catalog skill. Returns the manifest."""
     logger.info("Admin deleting skill reference file")
 
     service = get_skill_catalog_service()
     try:
+        await service.require_catalog_skill(skill_id)
         resources = await service.delete_resource(skill_id, filename, admin)
     except ValueError as e:
-        raise _resource_value_error(e)
+        raise _skill_value_error(e)
 
     from apis.shared.skills.freshness import invalidate as invalidate_freshness
 
