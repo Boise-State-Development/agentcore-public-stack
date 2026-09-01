@@ -44,6 +44,7 @@ import type {
   UiResourceEvent,
   ToolInputPartialEvent,
   SessionTitleEvent,
+  ModelRetryEvent,
   ToolProgress,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
@@ -111,6 +112,11 @@ export interface StreamParserCallbacks {
   // Server-generated conversation title, pushed mid-stream on a session's
   // first turn once concurrent generation finishes (see SessionTitleEvent)
   onSessionTitle?: (data: SessionTitleEvent) => void;
+
+  // A failed model call is being retried rather than surfaced as an error.
+  // Advisory only — the turn continues; this exists so the resulting silence
+  // reads as "working" instead of "hung".
+  onModelRetry?: (data: ModelRetryEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -542,6 +548,27 @@ export function validateSessionTitleEvent(data: unknown): data is SessionTitleEv
 }
 
 /**
+ * Validate ModelRetryEvent structure. `attempt` is 1-based; `delaySeconds`
+ * may legitimately be 0 (an unparseable delay is reported as 0 rather than
+ * dropped, so the retry still reaches the user).
+ */
+export function validateModelRetryEvent(data: unknown): data is ModelRetryEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<ModelRetryEvent>;
+
+  return (
+    event.type === 'model_retry' &&
+    typeof event.attempt === 'number' &&
+    event.attempt > 0 &&
+    typeof event.delaySeconds === 'number' &&
+    event.delaySeconds >= 0
+  );
+}
+
+/**
  * Validate Citation structure
  */
 export function validateCitation(data: unknown): data is Citation {
@@ -767,6 +794,14 @@ export function processStreamEvent(
           callbacks.onSessionTitle?.(data);
         } else {
           callbacks.onParseError?.('session_title: invalid data structure');
+        }
+        break;
+
+      case 'model_retry':
+        if (validateModelRetryEvent(data)) {
+          callbacks.onModelRetry?.(data);
+        } else {
+          callbacks.onParseError?.('model_retry: invalid data structure');
         }
         break;
 

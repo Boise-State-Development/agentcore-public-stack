@@ -139,6 +139,37 @@ def http_status_to_error_code(status_code: int) -> ErrorCode:
     return mapping.get(status_code, ErrorCode.INTERNAL_ERROR)
 
 
+# Substrings that identify a transient "the provider is down right now" fault,
+# as opposed to a problem with the request. Matched against a LOWERCASED error
+# string. Kept as a shared predicate because two independent classifiers need
+# the same answer: this module's `build_conversational_error_event`, and the
+# force-stop classifier in the agent's stream_processor. They previously
+# disagreed by omission — neither recognized a 503 — and a user got "I ran into
+# a problem with the AI model" for an outage that had nothing to do with them.
+#
+# Deliberately narrow. "unavailable" alone would swallow unrelated copy such as
+# "the model or feature you're trying to use isn't available", so every entry
+# names a modeled Bedrock fault or an unambiguous service-level phrase.
+_SERVICE_UNAVAILABLE_MARKERS = (
+    "serviceunavailable",
+    "service unavailable",
+    "service is unavailable",
+    "internalserverexception",
+    "modelnotready",
+    "modeltimeout",
+    "503",
+)
+
+
+def is_service_unavailable_error(error_lower: str) -> bool:
+    """Whether a lowercased error string names a transient provider outage.
+
+    Args:
+        error_lower: The error text, ALREADY lowercased by the caller.
+    """
+    return any(marker in error_lower for marker in _SERVICE_UNAVAILABLE_MARKERS)
+
+
 def build_conversational_error_event(
     code: ErrorCode,
     error: Exception,
@@ -251,6 +282,24 @@ Please try again."""
     # Override with specific actionable messages for known Bedrock errors
     # that can arrive as raw exceptions (not force_stop events) depending
     # on where in the call stack Strands surfaces them.
+    #
+    # Service-unavailable is checked here rather than inside one code branch
+    # precisely because it arrives under several codes depending on where it
+    # surfaces (MODEL_ERROR, STREAM_ERROR, AGENT_ERROR). In prod session
+    # `5f34d2b0` it landed on the generic "I ran into a problem with the AI
+    # model" text, which told the user nothing about the failure being
+    # temporary. Reaching this point means the automatic retries were already
+    # spent (see BedrockTransientRetryStrategy), so the copy says so.
+    if is_service_unavailable_error(error_lower):
+        message = (
+            "⚠️ The model service is temporarily unavailable.\n\n"
+            f"> {error_str}\n\n"
+            "This is a problem on the AI provider's side, not with your "
+            "request — I already retried it a few times. Send your message "
+            "again in a moment, or switch models if it keeps happening."
+        )
+        recoverable = True
+
     if "duplicate document name" in error_lower or "can't contain duplicate document" in error_lower:
         message = (
             "⚠️ A file you attached has the same name as one already in this "

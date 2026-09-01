@@ -63,6 +63,7 @@ export {
   validateUiResourceEvent,
   validateToolInputPartialEvent,
   validateSessionTitleEvent,
+  validateModelRetryEvent,
 } from './stream-parser-core';
 
 // Types
@@ -89,6 +90,7 @@ export type {
   UiResourceEvent,
   ToolInputPartialEvent,
   SessionTitleEvent,
+  ModelRetryEvent,
   McpUiCsp,
   McpUiPermissions,
   StreamEventType,

@@ -3019,3 +3019,208 @@ async def clear_interrupted_turn(session_id: str, user_id: str) -> Optional[str]
     except Exception as e:
         logger.error("Failed to clear interrupted_turn: %s", e, exc_info=True)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Unconsumed-attachment recovery
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS
+# Inline document bytes are deliberately stripped from restored history
+# (`TurnBasedSessionManager._strip_document_bytes`) — Bedrock rejects any
+# request where two document blocks share a sanitized name, so an attachment
+# is a one-shot: it reaches the model on the turn it was sent, and every later
+# turn sees only a `[Document placeholder: ...]`.
+#
+# That is correct when the turn succeeds. When the turn DIES before the model
+# ever read the documents — prod session `5f34d2b0`, 2026-08-31, where a
+# ConverseStream carrying two PDFs failed with ServiceUnavailableException —
+# the attachments are consumed by a turn that produced nothing, and the only
+# recovery is for the user to notice and re-upload them by hand. In that
+# incident the model had to ask for a re-upload, and the re-upload turn failed
+# the same way.
+#
+# The marker is a write-ahead record of "these upload IDs were sent to the
+# model this turn and have not been answered yet". It is written before the
+# stream starts, cleared as soon as a turn produces an answer, and popped at
+# the start of the next turn — so it can only ever influence the single turn
+# that immediately follows a failure.
+#
+# The upload IDs are stable S3-backed references (see `get_file_resolver`), so
+# storing them costs a handful of bytes and re-resolving them on the next turn
+# reproduces exactly the bytes the user already uploaded. Nothing is copied
+# into the session row.
+
+# How long a pending-attachment marker stays eligible for recovery. Bounds the
+# surprise case: a user who abandons a failed turn and returns to the same
+# session days later, types something unrelated, and would otherwise silently
+# pay to re-send documents they have forgotten about.
+PENDING_ATTACHMENT_RECOVERY_TTL_SECONDS = 3600
+
+
+async def set_pending_attachments(
+    session_id: str, user_id: str, upload_ids: List[str]
+) -> None:
+    """Record the upload IDs this turn is sending inline, before the model call.
+
+    Idempotent overwrite. Best-effort: a write failure logs and never breaks
+    the turn — the only consequence is that a failed turn's attachments are
+    not recoverable, i.e. the behavior before this existed.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table or not upload_ids:
+        return
+
+    try:
+        import boto3
+        from datetime import datetime, timezone
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            logger.info(
+                "Skipping pending_attachments write — session %s not found", session_id
+            )
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            logger.warning(
+                "Session %s has no SK; cannot update pending_attachments", session_id
+            )
+            return
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET #pau = :pau, #paa = :paa",
+            ExpressionAttributeNames={
+                "#pau": "pendingAttachmentUploadIds",
+                "#paa": "pendingAttachmentsAt",
+            },
+            ExpressionAttributeValues={
+                ":pau": list(upload_ids),
+                ":paa": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        logger.info(
+            "Recorded %d pending attachment(s) for session %s",
+            len(upload_ids), session_id,
+        )
+    except Exception as e:
+        logger.error("Failed to persist pending_attachments: %s", e, exc_info=True)
+
+
+async def clear_pending_attachments(session_id: str, user_id: str) -> None:
+    """Drop the pending-attachment marker — the model answered this turn.
+
+    Called once a turn produces assistant content: whatever happens after
+    that, Bedrock accepted and read the documents, so re-sending them on the
+    next turn would only duplicate context the model already has.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        return
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            return
+
+        if "pendingAttachmentUploadIds" not in existing:
+            return  # Already clear
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="REMOVE #pau, #paa",
+            ExpressionAttributeNames={
+                "#pau": "pendingAttachmentUploadIds",
+                "#paa": "pendingAttachmentsAt",
+            },
+        )
+        logger.info("Cleared pending_attachments for session %s", session_id)
+    except Exception as e:
+        logger.error("Failed to clear pending_attachments: %s", e, exc_info=True)
+
+
+async def pop_pending_attachments(session_id: str, user_id: str) -> List[str]:
+    """Atomically take the pending-attachment upload IDs, clearing the marker.
+
+    Returns the IDs only when the marker is younger than
+    ``PENDING_ATTACHMENT_RECOVERY_TTL_SECONDS``; an older marker is still
+    cleared but returns ``[]``, so a long-abandoned session never silently
+    re-sends documents on an unrelated question.
+
+    The REMOVE uses ``ReturnValues=UPDATED_OLD`` so the read and the clear are
+    one write — a concurrent turn cannot recover the same attachments twice.
+    Best-effort like its siblings: any failure returns ``[]``.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        return []
+
+    try:
+        import boto3
+        from datetime import datetime, timezone
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            return []
+
+        sk = existing.get("SK")
+        if not sk:
+            return []
+
+        if "pendingAttachmentUploadIds" not in existing:
+            return []
+
+        response = table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="REMOVE #pau, #paa",
+            ExpressionAttributeNames={
+                "#pau": "pendingAttachmentUploadIds",
+                "#paa": "pendingAttachmentsAt",
+            },
+            ReturnValues="UPDATED_OLD",
+        )
+        old = response.get("Attributes") or {}
+        upload_ids = [u for u in (old.get("pendingAttachmentUploadIds") or []) if isinstance(u, str)]
+        if not upload_ids:
+            return []
+
+        recorded_at = old.get("pendingAttachmentsAt")
+        if isinstance(recorded_at, str):
+            try:
+                age = (
+                    datetime.now(timezone.utc) - datetime.fromisoformat(recorded_at)
+                ).total_seconds()
+            except ValueError:
+                age = 0.0
+            if age > PENDING_ATTACHMENT_RECOVERY_TTL_SECONDS:
+                logger.info(
+                    "Discarding %d pending attachment(s) for session %s — marker is %.0fs old",
+                    len(upload_ids), session_id, age,
+                )
+                return []
+
+        logger.info(
+            "Recovered %d unconsumed attachment(s) for session %s",
+            len(upload_ids), session_id,
+        )
+        return upload_ids
+    except Exception as e:
+        logger.error("Failed to pop pending_attachments: %s", e, exc_info=True)
+        return []
