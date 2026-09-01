@@ -16,9 +16,10 @@ Four things invalidate earlier versions of this document:
    platform deploy succeeded on 2026-08-28, so `GSI7`, the Bedrock service role and
    the four Lambdas exist in **both** dev and prod. Earlier revisions of this file
    said "Nothing deployed"; that is no longer true.
-2. **Seven defects were found only by running it**, each one step further along than
-   the last. Every one reviewed clean and deployed clean. They are §5 items 25–31
-   and they are the most useful part of this document.
+2. **Eleven defects were found only by running it**, each reviewed clean and
+   deployed clean. They are §5 items 25–36 and they are the most useful part of
+   this document. Items 32–36 all trace to one root cause — the two engines were
+   never made exclusive — and are fixed in PR #900.
 3. **The `document_id` "known unknown" was a false alarm** and is now resolved with
    measurements — see §6. An earlier revision listed it as the top open risk. The
    probe was reading facade keys that have never existed. Two genuine findings came
@@ -42,9 +43,9 @@ Four things invalidate earlier versions of this document:
 |---|---|
 | Spec | Complete. Requirement **8.5 was amended by measurement on 2026-08-31** — see §5.29 |
 | Implementation | Groups 1–14 except 14.5. A migration has completed `shadow → verify → promote → retain` in dev and serves from the managed backend |
-| Tests | 634 infra (jest) · ~6,780 backend (pytest) · 1,936 frontend (vitest) · 5 pre-existing unrelated Strands failures |
+| Tests | 640 infra (jest) · ~6,780 backend (pytest) · 1,936 frontend (vitest) · 5 pre-existing unrelated Strands failures |
 | Deployed | **dev and prod.** Flags off in prod; `migrationEnabled` on in dev |
-| Open PRs | **#898** — three commits: persist + adopt-by-name, the 8.5 amendment / verify-defer, and the `StartIngestionJob` grant (§5.31). All four CI checks green, `MERGEABLE`. **Merging it triggers a PlatformStack deploy**, because the third commit touches `infrastructure/lib/constructs/**` |
+| Open PRs | **#900** — engine exclusivity: the legacy pipeline stands down for a promoted KB (§5.32, §5.34) and deletion propagates to the managed engine (§5.36). Four CI checks green. Merging triggers **both** `backend.yml` (rag-ingestion + kb-sync images) and `platform.yml` (two new IAM grants). · **#899** — this document. · #898 merged as `ef2f4c9e` |
 | Uncommitted | none — working tree clean as of 2026-08-31 14:30 |
 
 ### Flag state (GitHub Environment variables)
@@ -66,7 +67,14 @@ in prod until #898 and the uncommitted work have landed and shipped.
 
 ### Commits
 
-**On `fix/kb-persist-and-adopt-knowledge-base-id` — PR #898, open, all pushed:**
+**On `fix/kb-legacy-pipeline-engine-gate` — PR #900, open:**
+
+```
+e3398f30  propagate document deletion to the managed knowledge base       (§5.36)
+8a35dbc6  the legacy pipeline stands down for a promoted knowledge base   (§5.32, §5.34)
+```
+
+**Merged as `ef2f4c9e` (was PR #898):**
 
 ```
 fdf15d21  grant bedrock:StartIngestionJob, which authorizes direct ingestion  (§5.31)
@@ -125,6 +133,8 @@ out so the deployed dispatcher skips it.
 | Chat against a promoted KB | **Yes.** `ast-1a90784a7f18` is `retain` / `managed` and serves real chunks |
 | Add a document to a promoted KB | **Yes, once #898 deploys.** Blocked before that by §5.31. The consumer's EventBridge rule is `ENABLED`, the bucket has EventBridge notification on, and `grantRetrieval` is attached for the retrievability poll |
 | Create a knowledge base that is managed from birth | **No — not implemented.** `newDefault` has **zero readers** in `backend/src` (grep for `NEW_DEFAULT`, `newDefault`, `new_default`: no matches). Design §14.7 steps 5–8, a follow-up spec. The only route onto the managed engine is enrol → migrate |
+| Image-only PDFs | **Managed yes, legacy no.** A pure-diagram flowchart fails Docling outright (`zero chunks` → `failed`, permanently) and is served fine by managed via `imageExtractionStatus: ENABLED` (§5.35) |
+| Deleting a document | **Propagates to managed only after #900 deploys.** Before that the managed copy is orphaned; the fail-closed status filter is what keeps it unserved (§5.36) |
 | Whole local chain | **Yes.** SPA :4200 → app_api :8000 → inference_api :8001. `chat-http.service.ts` posts to `{appApiUrl}/chat/stream`; the app_api proxy forwards to `INFERENCE_API_URL`, which defaults to and is set to `http://localhost:8001`. Retrieval runs at `inference_api/chat/routes.py:1814`, so the RAG code answering a local chat is the code on disk |
 
 **Three behaviour changes are live on the existing legacy path** regardless of any
@@ -147,7 +157,7 @@ macOS host, tooling installed locally. **There is no devcontainer.**
 ```bash
 # infrastructure
 cd infrastructure && npm run build          # tsc
-cd infrastructure && npx jest               # 634 passing, 30 suites
+cd infrastructure && npx jest               # 640 passing, 30 suites
 
 # backend
 cd backend && uv run python -m pytest tests/ -q     # 6 m 20 s, 6,603 passing
@@ -186,6 +196,53 @@ not carry — copy them from the deployed worker Lambda:
 broader), the CDK environment wiring, or the image contents. Those are deploy-time
 concerns — check them by deploying. Getting the logic right here first is the point,
 and two of the five defects below were IAM/wiring and could only surface that way.
+
+### Two read-only diagnostics worth knowing before you debug anything
+
+```bash
+cd backend
+# Per-document ingestion timing, and WHICH engine did the work.
+uv run python ../scripts/local-dev/kb-doc-timings.py <assistant-id>
+
+# The same query through BOTH engines, side by side.
+uv run python ../scripts/local-dev/kb-compare-engines.py <assistant-id> "CS434"
+uv run python ../scripts/local-dev/kb-compare-engines.py <assistant-id> -f queries.txt
+```
+
+`kb-doc-timings.py` derives the engine from the record rather than guessing:
+`chunkCount`/`vectorStoreId` are only ever written by the legacy pipeline,
+`indexedAt`/`retrievableAt` only by the managed consumer, so a document carrying
+both was double-indexed (§5.32). Measured on a 132 KB PDF: legacy `complete` at
+30 s, managed retrievable at **95 s**, `INDEXED → retrievable` **0.9 s** — which
+independently confirms the evaluation's 0.75–1.03 s.
+
+⚠️ It reports legacy as `(lost)` for a double-indexed document, and that is a real
+limit, not a bug: the managed consumer overwrites `updatedAt`, so the legacy
+finish time is unrecoverable afterwards. Capture it live if you need it.
+
+`kb-compare-engines.py` exploits the `retain` window — promotion moves no data, so
+for 30 days **both** indexes hold the corpus and the same query can be put to
+both. Marks each chunk `[in ]`/`[CUT]` against `MAX_CONTEXT_CHARS`, which is the
+detail that makes the comparison meaningful: only ~2,000 characters reach the
+model, so in practice **one or two chunks**, and precision@1 is nearly the whole
+game. Absolute scores are not comparable across engines (legacy is a negated
+cosine distance); order and **spread** are.
+
+The clearest measured difference, and the one to reach for first — exact-token
+search, where legacy is pure vector and managed is hybrid:
+
+| query `CS434` | top chunk | spread |
+|---|---|---|
+| legacy | `SECTION 4: TECHNICAL ELECTIVES…` (does not contain CS434) | **0.0561** |
+| managed | `- Algorithms of Machine Learning (3) CS434 - Applied Deep…` | **0.4988** |
+
+Legacy's five chunks sit within 0.056 of each other — flat, so its ranking is
+close to arbitrary. Nine times the separation on managed, with the literal match
+first.
+
+⚠️ **PR #900 ends this trick.** Once the legacy pipeline stands down for a
+promoted knowledge base, new uploads land in the managed index only, so a
+like-for-like A/B needs two assistants or documents that predate promotion.
 
 ### Running the upgrade UI locally
 
@@ -595,45 +652,135 @@ failed on first real use. If you read only one section of this file, read this o
 
 ---
 
-### Open, not yet fixed — found 2026-08-31 while diagnosing the above
+### The eighth through eleventh, all from one evening of running it — fixed in PR #900
 
-32. **Routing exclusivity is only enforced on one side, so a document added to a
-    managed knowledge base is indexed twice.** design.md §537 states "a document
-    is indexed on exactly one backend outside a deliberate migration or dual-read
-    pilot, so no double-indexing", and task 9.2 claims tests for it. The
-    ingestion consumer does return immediately for a legacy document. But the
-    **legacy handler has no engine gate at all** — confirmed absent from both
-    copies, `src/apis/app_api/documents/ingestion/handler.py` and
-    `infrastructure/bootstrap-assets/rag-ingestion/handler.py` — and its
-    `s3:ObjectCreated:*` notification on `assistants/` is still live alongside the
-    (now enabled) EventBridge rule. Both fire.
+These four are one root cause wearing four costumes: **the two engines were never
+made exclusive.** The consumer stands down for a legacy document; nothing made the
+legacy pipeline stand down for a managed one, and nothing propagated a deletion to
+the managed engine at all. Every symptom below follows from that.
+
+32. ✅ **Routing exclusivity was enforced on only one side, so a document added to
+    a managed knowledge base was indexed twice.** design.md §537 states "a
+    document is indexed on exactly one backend outside a deliberate migration or
+    dual-read pilot, so no double-indexing", and task 9.2 claims tests for it. The
+    consumer does return immediately for a legacy document. But the **legacy
+    handler had no engine gate at all**, and its `s3:ObjectCreated:*` notification
+    on `assistants/` is still live alongside the (now enabled) EventBridge rule.
+    Both fired.
 
     Visible in real data on `DOC#DOC-dc8b65658e29`: `chunkCount: 8` and
-    `vectorStoreId: assistants-index` were written by the legacy pipeline
-    succeeding, while the managed side failed with §5.31. So the legacy index is
-    still growing for a promoted knowledge base.
+    `vectorStoreId: assistants-index` written by the legacy pipeline, while the
+    managed side failed with §5.31.
 
-    Not a wrong-answer bug — retrieval resolves to `managed` only, so the S3
-    Vectors copy is never read — but it is double ingestion cost and a legacy
-    index nobody expects to be live. **Why no test caught it:** every exclusivity
-    test in `test_kb_ingestion_consumer.py` is on the consumer's side
-    (`test_a_legacy_document_is_not_ingested_here` and siblings). Nothing asserts
-    the legacy handler skips a managed document, which is the half that is
-    missing. Note the two writers also both drive `DOC#` status, so their
-    interaction on a partial failure is unexamined.
+    **Why no test caught it:** every exclusivity test in
+    `test_kb_ingestion_consumer.py` is on the consumer's side
+    (`test_a_legacy_document_is_not_ingested_here` and siblings). Nothing asserted
+    the legacy handler skips a managed document, which is precisely the half that
+    did not exist. A test suite can be thorough about the side that works.
 
-33. **The document-status filter has one fail-*open* line in an otherwise
-    fail-closed function.** `_filter_vectors_by_document_status` opens with
-    `if not doc_ids: return vectors` — so a batch of chunks carrying no
+    Fixed: `handler.py` resolves the engine before writing anything and returns
+    early for `managed`. An earlier revision of this entry said the gate was
+    missing from "both copies" including
+    `infrastructure/bootstrap-assets/rag-ingestion/handler.py` — that was
+    misleading. The bootstrap copy is a 33-line no-op placeholder that indexes
+    nothing and needs no gate.
+
+33. ⚠️ **STILL OPEN. The document-status filter has one fail-*open* line in an
+    otherwise fail-closed function.** `_filter_vectors_by_document_status` opens
+    with `if not doc_ids: return vectors` — so a batch of chunks carrying no
     `document_id` at all bypasses the DynamoDB check entirely and is served
     unverified. Every other unprovable path in that function returns `[]` and
     emits `METRIC_STATUS_FILTER_FAIL_CLOSED`.
 
-    Not firing today: managed chunks do carry the id (§6 below), and legacy
-    chunks always have. It predates this feature. But `_document_id` returns `""`
-    when `location.customDocumentLocation.id` and both metadata mirrors are
-    absent, which is exactly the input that would trip it, and the failure is
-    silent in the serving direction.
+    Not firing today: managed chunks do carry the id (§6 below), and legacy chunks
+    always have. It predates this feature. But `_document_id` returns `""` when
+    `location.customDocumentLocation.id` and both metadata mirrors are absent,
+    which is exactly the input that would trip it, and the failure is silent in
+    the serving direction.
+
+34. ✅ **Two writers owned one `status` field, so "ready" was decided by a
+    coin toss.** The sharpest consequence of §5.32, and worth its own entry
+    because the duplicate vectors are the cheap half of that defect.
+
+    Both outcomes were observed within an hour of each other in dev:
+
+    | document | what happened |
+    |---|---|
+    | `DOC-b5d5d8019f44` | legacy wrote `complete` at **+30 s**; the managed KB could not answer until **+95 s**. Sixty-five seconds of "your document is ready" followed by an answer that does not mention it. |
+    | `DOC-d637491d6cb1` | Docling produced **zero chunks** → `failed`. Bedrock indexed it fine and served it. It only ended up reading `complete` because the consumer finished **second**. |
+
+    That second row is the alarming one, and the ordering was luck: reverse it —
+    purely a function of parse time — and a good, retrievable document reads
+    `failed` permanently, with no retry endpoint to recover it (task 14.4 open).
+
+    It also defeated the exact protection `ingestion_consumer.py` documents in its
+    header: *"the UI says the upload worked, the user asks a question straight
+    away, and the answer does not mention their document."* The consumer polls
+    until the document is genuinely retrievable to prevent that. A second,
+    ungated writer undid it in one line.
+
+    ⚠️ **The lesson generalises past this feature: any field two components can
+    write needs a stated owner.** Nobody chose this race; it appeared because a
+    new writer was added beside an old one and the question was never asked.
+
+35. ✅ **Bedrock's image extraction works, and it makes the legacy pipeline's
+    hard failure visible.** Not a defect in the new code — a capability
+    difference nobody had measured, found while testing an image-only PDF.
+
+    A 4-year curriculum flowchart (465 KB, pure diagram, no text layer) on a
+    **legacy** assistant: `ValueError: Docling produced zero chunks`, status
+    `failed`, permanently unusable — `docling_processor.py` sets `do_ocr=False`
+    and `generate_page_images=False`. On the **promoted** assistant the same file
+    was retrievable in 94.5 s, and the chunks show Bedrock's vision model output
+    (`<analysis> <image_type> Hierarchical and Timeline Diagram`), including
+    prerequisite chains that exist nowhere in the document as text.
+
+    `imageExtractionStatus: ENABLED` is set by `provisioning.py` and was confirmed
+    live on the dev data source. Note the old bundled `aws` CLI does **not** echo
+    `mediaExtractionConfiguration` back from `get-data-source` — it looked
+    unset until re-read with the pinned boto3. Do not conclude a field was not
+    applied from CLI output alone.
+
+36. ✅ **Deletion was never propagated to the managed engine, so a promoted
+    corpus could only grow.** `cleanup_service` removed the legacy S3 Vectors copy
+    and the `DOC#` row and never touched the managed knowledge base. The managed
+    delete path existed — `kb_backend/tombstones.py` — but its only callers are in
+    the reconciler, which is report-only with `reconcilerArmed` off.
+
+    Three consequences, none of which raised anything:
+
+    * storage paid for indefinitely at **$5.00/GB-month** against S3 Vectors'
+      ~$0.15 — orphans on the expensive engine;
+    * **silent retrieval degradation**, because the status filter runs *after*
+      retrieval: each orphan consumed a slot in `top_k` and was then dropped, so a
+      query could return five chunks and the model see two;
+    * the only thing preventing deleted content from being **served** was the
+      fail-closed status filter — which made §5.33's one fail-open line
+      load-bearing in a way it was never designed to be.
+
+    Fixed with a third, engine-gated phase in `cleanup_document_resources`,
+    conjoined into `all_succeeded` so a failure blocks the hard delete.
+
+    ⚠️ **The gate here is deliberately the opposite of the ingestion gate, and
+    that asymmetry is the interesting part.** On ingest, an unreadable KB record
+    resolves to *legacy*: being wrong costs a duplicate index while the consumer
+    still drives the document to a correct terminal state. On delete it must
+    **fail**: the `DOC#` row is what the status filter joins against, so reporting
+    success on a failed managed delete would remove the row *and* leave the
+    content — the one combination that turns a storage leak into a disclosure.
+    Same question, opposite answers, for a reason worth keeping.
+
+    IAM again had no code to give it away: neither the app-api task role nor the
+    kb-sync worker could delete from a managed knowledge base, so this would have
+    deployed clean and failed on first use. New `grantManagedKbDocumentDeletion`,
+    narrower than `grantDirectIngestion` on purpose — these callers only remove,
+    so a bug in the delete path cannot add content and a bug in the ingest path
+    cannot remove it. Fourth instance of the §3 adjacent-action pattern, so it
+    carries `StartIngestionJob` pre-emptively rather than waiting to be taught.
+
+    kb-sync needed the image change too: its worker calls
+    `cleanup_document_resources` after soft-deleting a document whose upstream
+    source has vanished.
 
 ---
 
@@ -643,7 +790,7 @@ failed on first real use. If you read only one section of this file, read this o
 
 | | |
 |---|---|
-| **Merge #898** | The only blocking item. Three commits: persist-the-id + adopt-by-name, the 8.5 amendment + verify-defer, and the `StartIngestionJob` grant. All four checks green. **Merging triggers a PlatformStack deploy** (the grant is under `infrastructure/lib/constructs/**`, a `platform.yml` trigger path), which is what actually applies the IAM fix |
+| **Merge #900** | Engine exclusivity, both halves. Triggers `backend.yml` (rebuilds rag-ingestion **and** kb-sync — the content hash moves because `kb_backend` was added to both images' `SOURCE_DIRS`) and `platform.yml` (the two new IAM grants). Wait for the platform deploy before testing a deletion on a promoted assistant, or the delete fails on IAM and the `DOC#` row is deliberately kept |
 | **Then re-add a document in dev** | `DOC#DOC-dc8b65658e29` is parked at `failed` from §5.31 and is not retried retroactively — there is no reprocess endpoint (task 14.4). Re-upload; that path works |
 | **Then drive a migration from the *deployed* dispatcher, not the local driver** | §5.31 is the proof that the local driver cannot see IAM defects: its SSO identity is broader than either Lambda role. Every remaining unknown in this feature is of that class |
 
@@ -651,8 +798,8 @@ failed on first real use. If you read only one section of this file, read this o
 
 | Group | Notes |
 |---|---|
-| **§5.32** legacy handler engine gate | Double-indexing. Add the mirror of the consumer's check to the legacy handler — **both** copies — plus the test on that side that has never existed. Decide first whether keeping the legacy index warm during `retain` is wanted for rollback; if so, amend design.md §537 instead of the code, because the doc currently claims something untrue either way |
-| **§5.33** the one fail-open line | `if not doc_ids: return vectors` in `_filter_vectors_by_document_status`. Make it fail closed with `METRIC_STATUS_FILTER_FAIL_CLOSED` like every other unprovable path in that function, and pin it with a test that mutation-fails |
+| **§5.33** the one fail-open line | The only finding from 2026-08-31 still open. `if not doc_ids: return vectors` in `_filter_vectors_by_document_status`. Make it fail closed with `METRIC_STATUS_FILTER_FAIL_CLOSED` like every other unprovable path in that function, and pin it with a test that mutation-fails. Lower stakes now that §5.36 removes deleted content from the managed engine, but still the one silent-serving path left |
+| **engine visibility** | Nothing logs *which* engine served a query — the resolver only logs on failure — so "is the new one actually working?" can only be answered from the KB record. One INFO line in the facade, plus a `Managed`/`Classic` badge in the knowledge base section, both unbuilt. Wanted before a wide rollout, because this feature's whole risk profile is silent regressions |
 | **14.4** one-click document retry | Req 21.2. Ingestion is S3-event-triggered and there is no reprocess endpoint, so this needs new backend against a live pipeline. The card currently directs the user to re-upload, which works today. Close it by building the endpoint **or** by amending Req 21.2 to accept re-upload |
 | **14.5** admin surface | not started. Filter by engine, stored bytes, document counts, bulk migrate, per-KB retry |
 | **15.1** packaged-SDK probe | the *static* half is done and passing (`boto3==1.43.68` carries `MANAGED`, the embedding members, `FLOAT32`, all four document ops, no `AWS_DATA_PATH`). The live half has now effectively been done by hand — a real create → ingest → retrieve → promote succeeded in dev |
@@ -744,6 +891,11 @@ frontend/ai.client/src/app/knowledge-base/
   kb-upgrade.service.ts             fails soft; getStatus resolves to phase 'none'
   knowledge-base-section.component.*  the card: offer / progress / notice / failure
                                       + the stranded-document disclosure
+
+scripts/local-dev/
+  run-kb-migration.py             drive the real worker in-process; --break-lease
+  kb-doc-timings.py               per-document ingest timing + which engine did it
+  kb-compare-engines.py           one query, both engines, side by side
 
 scripts/teardown/
   managed-kb.sh                   delete tag-matched KBs BEFORE any stack
