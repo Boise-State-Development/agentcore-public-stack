@@ -538,6 +538,14 @@ export class KbMigrationConstruct extends Construct {
         },
       },
     });
+    // NO RetryPolicy here, deliberately. It would look like the fix for slow
+    // indexing and would do nothing: for a Lambda target EventBridge hands the
+    // event off asynchronously, and from that point the function's OWN async
+    // retry config governs — `retryAttempts: 2` above, which is Lambda's hard
+    // maximum. That is the 1 + 2 attempts observed in dev before a document was
+    // dead-lettered. Redelivery therefore spans only a few minutes and cannot be
+    // extended, which is why the consumer waits for indexing WITHIN one
+    // invocation (INDEXED_POLL_TIMEOUT_SECONDS) rather than relying on retries.
     this.documentsEventRule.addTarget(
       new targets.LambdaFunction(this.ingestionConsumerLambda, {
         deadLetterQueue: this.ingestionConsumerDlq,

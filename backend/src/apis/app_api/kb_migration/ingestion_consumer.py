@@ -75,6 +75,37 @@ STATUS_FAILED = "failed"
 RETRIEVABLE_POLL_TIMEOUT_SECONDS = 30.0
 RETRIEVABLE_POLL_INTERVAL_SECONDS = 0.5
 
+#: How long ONE invocation waits for Bedrock to finish indexing.
+#:
+#: This has to cover the whole indexing time, because redelivery cannot. Lambda's
+#: asynchronous retry is capped at **2** attempts — a hard service limit, not a
+#: setting we chose — so an event gets 1 + 2 tries spread over a few minutes and
+#: then dead-letters. Raising a retry policy on the EventBridge target does not
+#: change that: for a Lambda target EventBridge hands the event off and the
+#: function's own async retry config takes over.
+#:
+#: So the budget is sized from measurement, not convenience. The §5.1 benchmark
+#: measured PDF ingestion at 37–264 s, and a 1.5 MB PDF in dev reached INDEXED
+#: 5 m 30 s after upload — image-heavy files run longer because the vision model
+#: runs per page. 10 minutes covers that with headroom and still leaves 5 minutes
+#: under the Lambda's 15-minute timeout, so a slow-but-succeeding document is never
+#: killed mid-wait.
+#:
+#: The cost of waiting is real but small: this Lambda is 1024 MB and handles one
+#: user upload at a time, so a 6-minute wait is a fraction of a cent. The cost of
+#: NOT waiting was a permanently stuck document with a fully retrievable copy in
+#: the knowledge base and no writer left to reconcile it.
+#:
+#: ⚠️ Keep the sum of this and RETRIEVABLE_POLL_TIMEOUT_SECONDS below the Lambda's
+#: timeout. `tests/supply_chain/test_kb_migration_env_contract.py` asserts it
+#: against the value in the CDK construct.
+INDEXED_POLL_TIMEOUT_SECONDS = 600.0
+
+#: 5 s rather than sub-second: over a 10-minute budget this is ~120 control-plane
+#: calls instead of ~1,200, and indexing progress is measured in tens of seconds,
+#: so a finer interval buys nothing.
+INDEXED_POLL_INTERVAL_SECONDS = 5.0
+
 #: Bounded retries on the record update. The event source already redelivers, so
 #: this only covers a transient DynamoDB failure inside one invocation; unbounded
 #: retries would burn the Lambda timeout and lose the DLQ signal.
@@ -216,6 +247,109 @@ def set_document_terminal(
     )
 
 
+#: Bedrock's own view of a document, from the packaged service model's
+#: ``DocumentStatus`` enum rather than guessed. Read at call time from
+#: ``GetKnowledgeBaseDocuments``, which is the only way to know whether indexing
+#: has finished — the ``IngestKnowledgeBaseDocuments`` call returns as soon as the
+#: request is accepted and says nothing about progress.
+DOC_STATUS_INDEXED = "INDEXED"
+DOC_STATUS_NOT_FOUND = "NOT_FOUND"
+
+#: Bedrock is still working. Re-ingesting a document in one of these states is
+#: pointless at best: the work is already queued, and re-submitting it discards
+#: whatever progress has been made and starts the clock again. That is what turned
+#: a slow success into a permanent failure in dev — three redeliveries each
+#: re-ingested, and the document only reached INDEXED 54 s after the last attempt
+#: had already been dead-lettered.
+DOC_STATUSES_IN_FLIGHT = frozenset({"STARTING", "PENDING", "IN_PROGRESS"})
+
+#: Terminal and unusable. Worth failing the document rather than retrying forever.
+DOC_STATUSES_FAILED = frozenset({"FAILED", "METADATA_UPDATE_FAILED"})
+
+#: Indexed, but not everything made it. Treated as usable — the document IS
+#: retrievable — because the alternative is failing a document the user can see
+#: content from. Logged so the partiality is not silent.
+DOC_STATUSES_PARTIAL = frozenset({"PARTIALLY_INDEXED", "METADATA_PARTIALLY_INDEXED"})
+
+
+def document_status(backend: Any, kb_ref: str, document_id: str) -> Tuple[str, Optional[str]]:
+    """Ask Bedrock for a document's ingestion status and its own timestamp.
+
+    Returns ``(status, updated_at_iso)``. ``NOT_FOUND`` covers both "Bedrock has
+    never heard of it" and "the call failed", because both mean the same thing to
+    the caller: there is no evidence the document is already being worked on, so
+    ingesting is the right next move. A probe failure must not be mistaken for a
+    document failure.
+
+    This exists because the ingest call is fire-and-forget. Without it the consumer
+    cannot distinguish "not indexed yet" from "never submitted", so every
+    redelivery re-submits — see :data:`DOC_STATUSES_IN_FLIGHT`.
+    """
+    try:
+        # Imported here, not at module scope: this module's module-level imports are
+        # stdlib only so the shared Lambda image stays small
+        # (tests/architecture/test_kb_backend_boundary.py). Reused rather than
+        # redefined so the connector type has one definition.
+        from apis.shared.kb_backend.managed_backend import CONTENT_DATA_SOURCE_TYPE
+
+        client = backend._agent()  # noqa: SLF001 - same package, deliberate reuse
+        aws_kb_id, data_source_id = backend._locate(kb_ref)  # noqa: SLF001
+        response = client.get_knowledge_base_documents(
+            knowledgeBaseId=aws_kb_id,
+            dataSourceId=data_source_id,
+            documentIdentifiers=[
+                {"dataSourceType": CONTENT_DATA_SOURCE_TYPE, "custom": {"id": document_id}}
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001 - a probe failure is not a document failure
+        logger.warning(f"document status probe for {document_id} failed: {exc}")
+        return DOC_STATUS_NOT_FOUND, None
+
+    for detail in response.get("documentDetails") or []:
+        status = str(detail.get("status") or DOC_STATUS_NOT_FOUND)
+        updated = detail.get("updatedAt")
+        return status, (updated.isoformat() if hasattr(updated, "isoformat") else updated)
+    return DOC_STATUS_NOT_FOUND, None
+
+
+def wait_until_indexed(
+    backend: Any,
+    kb_ref: str,
+    document_id: str,
+    timeout_seconds: Optional[float] = None,
+    interval_seconds: Optional[float] = None,
+    sleep: Any = time.sleep,
+) -> Tuple[str, Optional[str]]:
+    """Poll Bedrock's document status until it settles, or give up.
+
+    Returns the last ``(status, updated_at)`` seen. Giving up is an ordinary
+    outcome, not an error: the caller leaves the document non-terminal and lets
+    redelivery come back to it, by which time indexing has usually finished.
+
+    Why a *bounded* in-invocation wait rather than pure redelivery: most documents
+    index in a few seconds, and making every one of them wait for an EventBridge
+    retry would add a minute of latency to the common case for the sake of the rare
+    slow one. Why bounded at all: PDF ingestion was measured at 37–264 s and
+    image-heavy files run longer, so waiting for the worst case in-invocation would
+    hold a concurrency slot for minutes and bill for it.
+
+    Same call-time constant resolution as :func:`wait_until_retrievable`, and for
+    the same reason — a default argument is bound once at import and cannot be
+    patched by a test.
+    """
+    if timeout_seconds is None:
+        timeout_seconds = INDEXED_POLL_TIMEOUT_SECONDS
+    if interval_seconds is None:
+        interval_seconds = INDEXED_POLL_INTERVAL_SECONDS
+
+    deadline = time.monotonic() + timeout_seconds
+    status, updated_at = document_status(backend, kb_ref, document_id)
+    while status in DOC_STATUSES_IN_FLIGHT and time.monotonic() < deadline:
+        sleep(interval_seconds)
+        status, updated_at = document_status(backend, kb_ref, document_id)
+    return status, updated_at
+
+
 def wait_until_retrievable(
     backend: Any,
     kb_ref: str,
@@ -308,22 +442,90 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
     backend = ManagedKbBackend(bucket=bucket)
     source = DocumentSource(document_id=document_id, filename=filename, s3_key=key)
 
-    try:
-        asyncio.run(backend.ingest(assistant_id, source))
-    except Exception as exc:
-        logger.error(f"direct ingestion of {document_id} failed: {exc}", exc_info=True)
-        set_document_terminal(assistant_id, document_id, STATUS_FAILED, error=str(exc))
-        raise
+    # Ask Bedrock what it already knows BEFORE ingesting. The ingest call is
+    # fire-and-forget — it returns as soon as the request is accepted — so without
+    # this the consumer cannot tell "not indexed yet" from "never submitted", and
+    # every redelivery re-submits a document that is already being worked on.
+    #
+    # That is not merely wasteful. In dev a 1.5 MB PDF was re-ingested on each of
+    # three redeliveries and reached INDEXED only 54 s after the final attempt had
+    # been dead-lettered, leaving a perfectly retrievable document parked at
+    # `uploading` with nothing left to reconcile it.
+    status, bedrock_updated_at = document_status(backend, assistant_id, document_id)
 
-    indexed_at = _now_iso()
+    if status in DOC_STATUSES_FAILED:
+        # Terminal on Bedrock's side. Retrying cannot help.
+        logger.error(f"document {document_id} is {status} in the knowledge base")
+        set_document_terminal(
+            assistant_id, document_id, STATUS_FAILED,
+            error=f"the knowledge base reports this document as {status}",
+        )
+        return {"routed": "managed", "ingested": False, "document_id": document_id,
+                "status": status}
+
+    if status in DOC_STATUSES_IN_FLIGHT:
+        # Already being indexed. Do NOT ingest again — that would discard the
+        # progress this invocation is waiting on. Leave it non-terminal so the
+        # event source brings us back, by which time Bedrock may have finished.
+        logger.info(
+            f"document {document_id} is {status} in the knowledge base; not "
+            f"re-ingesting, waiting for redelivery"
+        )
+        raise IngestionRoutingError(
+            f"document {document_id} is still {status}; leaving it for redelivery"
+        )
+
+    if status in DOC_STATUSES_PARTIAL:
+        logger.warning(
+            f"document {document_id} is {status}: it is retrievable but some of its "
+            f"content or metadata did not index"
+        )
+
+    already_indexed = status == DOC_STATUS_INDEXED or status in DOC_STATUSES_PARTIAL
+
+    if not already_indexed:
+        try:
+            asyncio.run(backend.ingest(assistant_id, source))
+        except Exception as exc:
+            logger.error(f"direct ingestion of {document_id} failed: {exc}", exc_info=True)
+            set_document_terminal(assistant_id, document_id, STATUS_FAILED, error=str(exc))
+            raise
+
+        # Submitted. Wait briefly for indexing so a small document finishes in this
+        # one invocation, then hand the slow ones back to redelivery.
+        status, bedrock_updated_at = wait_until_indexed(backend, assistant_id, document_id)
+
+        if status in DOC_STATUSES_FAILED:
+            logger.error(f"document {document_id} became {status} during indexing")
+            set_document_terminal(
+                assistant_id, document_id, STATUS_FAILED,
+                error=f"the knowledge base reports this document as {status}",
+            )
+            return {"routed": "managed", "ingested": True, "document_id": document_id,
+                    "status": status}
+
+        if status not in (DOC_STATUS_INDEXED, *DOC_STATUSES_PARTIAL):
+            # Still indexing. Deliberately NOT marked terminal, and deliberately
+            # not given an invented timestamp — the next delivery will find it
+            # INDEXED and record Bedrock's own.
+            raise IngestionRoutingError(
+                f"document {document_id} is {status} after submission; leaving it "
+                f"for redelivery to confirm indexing"
+            )
+
+    # INDEXED. `indexedAt` is Bedrock's OWN timestamp, not this process's clock —
+    # an earlier version recorded `_now_iso()` immediately after the ingest call
+    # returned, which measured when the request was accepted and was reported as
+    # the moment indexing completed. The two can be minutes apart.
+    indexed_at = bedrock_updated_at or _now_iso()
     retrievable_at = wait_until_retrievable(backend, assistant_id, document_id)
 
     if retrievable_at is None:
-        # Ingested but not confirmed retrievable. Left non-terminal deliberately so
-        # the event source redelivers, rather than the record claiming a success the
-        # user cannot yet observe.
+        # INDEXED but not yet queryable. This is the one short, real gap the poll
+        # window was always sized for (measured at 0.75–1.03 s); a timeout here is
+        # unusual rather than routine, so leave it for redelivery.
         raise IngestionRoutingError(
-            f"document {document_id} was ingested but not retrievable within the "
+            f"document {document_id} is INDEXED but was not retrievable within the "
             f"poll window; leaving it for redelivery"
         )
 

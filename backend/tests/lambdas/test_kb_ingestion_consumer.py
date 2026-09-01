@@ -13,6 +13,7 @@ The routing is therefore deliberately asymmetric, and both halves are asserted:
 legacy must ingest NOTHING here, managed must ingest here and NOT fall back.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import boto3
@@ -79,12 +80,67 @@ def _eventbridge_event(key=KEY):
     return {"detail": {"bucket": {"name": BUCKET}, "object": {"key": key}}}
 
 
+class _FakeAgentClient:
+    """The control-plane surface the consumer reads document status from."""
+
+    def __init__(self, owner):
+        self._owner = owner
+
+    def get_knowledge_base_documents(self, **kwargs):
+        self._owner.status_calls += 1
+        status = self._owner.next_status()
+        if status == "NOT_FOUND":
+            return {"documentDetails": []}
+        return {
+            "documentDetails": [
+                {
+                    "knowledgeBaseId": "KB123",
+                    "dataSourceId": "DS456",
+                    "status": status,
+                    "identifier": {
+                        "dataSourceType": "CUSTOM",
+                        "custom": {"id": DOCUMENT_ID},
+                    },
+                    "updatedAt": datetime(2026, 9, 1, 14, 53, 19, tzinfo=timezone.utc),
+                }
+            ]
+        }
+
+
 class _FakeBackend:
-    """Records ingest calls; reports the document retrievable immediately."""
+    """Models the parts of ManagedKbBackend the consumer actually leans on.
 
-    def __init__(self):
+    Deliberately models Bedrock's document STATUS, not just the ingest call.
+    Ingestion is fire-and-forget: the API returns once the request is accepted and
+    says nothing about progress, so a fake that only recorded ingests could not
+    express the state the consumer now has to reason about — and a fake that
+    reported instant success is what let the 30 s poll window look adequate for
+    documents that take minutes.
+
+    ``statuses`` is the sequence returned by successive status probes. The default
+    models a small document: unknown, then indexed. Pass a longer sequence to model
+    a slow one; the last value repeats forever.
+    """
+
+    def __init__(self, statuses=None):
         self.ingested = []
+        self.status_calls = 0
+        self._statuses = list(statuses or ["NOT_FOUND", "INDEXED"])
+        self._agent_client = _FakeAgentClient(self)
 
+    def next_status(self):
+        if len(self._statuses) > 1:
+            return self._statuses.pop(0)
+        return self._statuses[0]
+
+    # -- the private surface `document_status` reuses --------------------------
+    def _agent(self):
+        return self._agent_client
+
+    def _locate(self, kb_ref):
+        return ("KB123", "DS456")
+
+    # -- the protocol surface --------------------------------------------------
     async def ingest(self, kb_ref, source):
         self.ingested.append(source.document_id)
         return None
@@ -211,6 +267,31 @@ class TestManagedRouting:
         assert "retrievableAt" in item
         assert result["indexedAt"] and result["retrievableAt"]
 
+    def test_indexed_at_is_bedrocks_timestamp_not_our_clock(self, table):
+        """`indexedAt` must be the value Bedrock reports, not the local time.
+
+        The original code set `indexed_at = _now_iso()` immediately after the
+        ingest call returned. That call is fire-and-forget — it returns when the
+        request is accepted — so the field recorded "when we asked", presented as
+        "when indexing finished". For a 1.5 MB PDF in dev those were 5.5 minutes
+        apart, and because the field was always populated the error was invisible:
+        the pre-existing test asserted only that the key existed and was truthy,
+        which a fabricated value satisfies perfectly.
+        """
+        self._seed_managed(table)
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_FakeBackend(),
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        # The fake reports 2026-09-01T14:53:19+00:00 from GetKnowledgeBaseDocuments.
+        assert result["indexedAt"].startswith("2026-09-01T14:53:19"), (
+            f"indexedAt is {result['indexedAt']!r}, which is not the timestamp "
+            f"Bedrock reported — it looks like a local clock reading"
+        )
+        assert _doc(table)["indexedAt"].startswith("2026-09-01T14:53:19")
+
     def test_a_managed_document_never_falls_back_to_legacy(self, table):
         """Managed engine but unprovisioned must FAIL, not silently degrade.
 
@@ -330,3 +411,152 @@ class TestNoInProcessOrchestration:
         }
         assert "ensure_future" not in called
         assert "create_task" not in called
+
+
+# ---------------------------------------------------------------------------
+# A slow document must converge, not die
+# ---------------------------------------------------------------------------
+class TestSlowIndexingConverges:
+    """The defect a 1.5 MB PDF exposed in dev on 2026-09-01.
+
+    Ingestion succeeded, but the consumer polled a *retrieval* for 30 s starting
+    the instant the ingest call returned — before Bedrock had indexed anything.
+    That poll window was sized against the INDEXED -> retrievable gap
+    (0.75-1.03 s), while it actually had to cover ingest -> INDEXED -> retrievable,
+    which the §5.1 benchmark measured at 37-264 s for PDFs.
+
+    Each of the three redeliveries then RE-INGESTED, discarding progress and
+    restarting the clock. The document reached INDEXED 54 s after the final attempt
+    was dead-lettered, leaving a fully retrievable document parked at `uploading`
+    with nothing left to reconcile it — the legacy pipeline no longer writes status
+    for a promoted knowledge base, so there was no second writer to mask it.
+    """
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def test_a_document_already_being_indexed_is_not_re_ingested(self, table):
+        """The core fix. Re-submitting restarts the work we are waiting for."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["IN_PROGRESS"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError, match="IN_PROGRESS"):
+                ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [], (
+            "a document Bedrock was already indexing was submitted again; that "
+            "discards the progress this invocation is waiting on"
+        )
+
+    def test_a_document_still_indexing_is_left_non_terminal(self, table):
+        """Not complete and not failed — the next delivery decides."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["IN_PROGRESS"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        item = _doc(table)
+        assert item["status"] not in ("complete", "failed")
+        assert "indexedAt" not in item, "no timestamp may be invented before indexing"
+
+    def test_a_redelivery_completes_the_document_without_a_second_ingest(self, table):
+        """Delivery 1 submits and defers; delivery 2 finds it INDEXED and finishes.
+
+        This is the whole convergence property: the document ends up `complete`
+        having been handed to Bedrock exactly once.
+        """
+        self._seed_managed(table)
+
+        # Delivery 1: never seen, then still working for the whole in-invocation wait.
+        first = _FakeBackend(statuses=["NOT_FOUND", "IN_PROGRESS"])
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=first
+        ), patch.object(ic, "INDEXED_POLL_TIMEOUT_SECONDS", 0.01):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+        assert first.ingested == [DOCUMENT_ID]
+        assert _doc(table)["status"] not in ("complete", "failed")
+
+        # Delivery 2: Bedrock has finished.
+        second = _FakeBackend(statuses=["INDEXED"])
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=second
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert second.ingested == [], "the second delivery must not re-ingest"
+        item = _doc(table)
+        assert item["status"] == "complete"
+        assert item["indexedAt"].startswith("2026-09-01T14:53:19")
+
+    def test_a_small_document_still_finishes_in_one_invocation(self, table):
+        """The fast path must not regress into waiting for a retry.
+
+        Deferring every document would add a minute of EventBridge backoff to the
+        common case, which is why the in-invocation wait exists at all.
+        """
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["NOT_FOUND", "INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert result["ingested"] is True
+        assert _doc(table)["status"] == "complete"
+        assert fake.ingested == [DOCUMENT_ID]
+
+    def test_a_failed_document_is_marked_failed_and_not_retried(self, table):
+        """Terminal on Bedrock's side. Redelivering cannot help."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["FAILED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            result = ic.handle_object(BUCKET, KEY)  # must NOT raise
+
+        assert fake.ingested == []
+        item = _doc(table)
+        assert item["status"] == "failed"
+        assert "FAILED" in item["ingestionError"]
+        assert result["status"] == "FAILED"
+
+    def test_a_partially_indexed_document_is_treated_as_usable(self, table):
+        """It IS retrievable, so failing it would hide content the user can see."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["PARTIALLY_INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [], "already indexed, even if partially"
+        assert _doc(table)["status"] == "complete"
+
+    def test_a_status_probe_failure_does_not_fail_the_document(self, table):
+        """An unreadable probe means "no evidence", so ingesting is correct."""
+        self._seed_managed(table)
+
+        class _ProbeBroken(_FakeBackend):
+            def _agent(self):
+                raise RuntimeError("bedrock control plane unavailable")
+
+        fake = _ProbeBroken(statuses=["NOT_FOUND"])
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ), patch.object(ic, "INDEXED_POLL_TIMEOUT_SECONDS", 0.01):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [DOCUMENT_ID], "a probe failure must not block ingestion"
+        assert _doc(table)["status"] != "failed"

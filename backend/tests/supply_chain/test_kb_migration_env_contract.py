@@ -201,3 +201,64 @@ class TestTheConstructSetsWhatTheHandlersRead:
     def test_known_load_bearing_variables_stay_wired(self, name):
         """Spot-pins for variables whose absence is silent rather than loud."""
         assert name in _names_set_by_construct()
+
+
+# ---------------------------------------------------------------------------
+# The poll budget must fit inside the Lambda that runs it
+# ---------------------------------------------------------------------------
+class TestTheIngestionPollBudgetFitsTheLambdaTimeout:
+    """A wait longer than the timeout is a killed invocation, not a wait.
+
+    The consumer waits for Bedrock to finish indexing inside a single invocation,
+    because Lambda's asynchronous retry is capped at 2 attempts and cannot be
+    extended — so redelivery spans only minutes and a slow document would
+    dead-letter. That makes the in-invocation budget load-bearing, and it now lives
+    in two files that have no compiler between them: the timeout in the CDK
+    construct and the poll constants in Python.
+
+    Raise either past the other and a slow-but-succeeding document is killed
+    mid-wait and dead-lettered — which is exactly the failure this budget was
+    introduced to remove. Hence a test rather than a comment.
+    """
+
+    def _lambda_timeout_minutes(self) -> int:
+        import re
+
+        text = CONSTRUCT.read_text(encoding="utf-8")
+        # The consumer's own timeout, not another function's: anchor on its
+        # construct id and read the first timeout that follows.
+        start = text.index("KbIngestionConsumerLambda'")
+        match = re.search(r"timeout:\s*cdk\.Duration\.minutes\((\d+)\)", text[start:])
+        assert match, "could not find the ingestion consumer's timeout in the construct"
+        return int(match.group(1))
+
+    def test_the_poll_budget_leaves_headroom_under_the_lambda_timeout(self):
+        from apis.app_api.kb_migration import ingestion_consumer as ic
+
+        budget = ic.INDEXED_POLL_TIMEOUT_SECONDS + ic.RETRIEVABLE_POLL_TIMEOUT_SECONDS
+        timeout = self._lambda_timeout_minutes() * 60
+
+        assert budget < timeout, (
+            f"the consumer can wait {budget:.0f}s but its Lambda times out at "
+            f"{timeout}s — a slow document would be killed mid-wait and "
+            f"dead-lettered, which is the bug this budget exists to prevent"
+        )
+        # Headroom for the ingest call, the S3 read and cold start.
+        assert timeout - budget >= 120, (
+            f"only {timeout - budget:.0f}s of headroom between the poll budget and "
+            f"the Lambda timeout; leave at least 120s for the ingest call itself"
+        )
+
+    def test_the_budget_covers_the_measured_indexing_tail(self):
+        """264 s was the slowest PDF in the §5.1 benchmark; dev saw 5 m 30 s.
+
+        Pinned as a literal rather than compared to a constant, because asserting a
+        constant against itself proves nothing. This number is a property of
+        Bedrock's indexing behaviour, not a knob.
+        """
+        from apis.app_api.kb_migration import ingestion_consumer as ic
+
+        assert ic.INDEXED_POLL_TIMEOUT_SECONDS >= 330, (
+            "the budget no longer covers the 5 m 30 s indexing time observed in dev "
+            "for a 1.5 MB PDF"
+        )
