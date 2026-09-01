@@ -1122,6 +1122,18 @@ async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
         if existing is not None:
             return False
 
+        # A row exists but belongs to someone else — do NOT create a second one.
+        # The put below would succeed (different PK, so attribute_not_exists
+        # can't see the other row) and fork the session id across two users.
+        # The invocations route rejects these turns outright; this is the
+        # backstop for every other path that pre-creates metadata.
+        if await session_owned_by_other_user(session_id, user_id):
+            logger.warning(
+                "Refusing to create metadata for session %s — already owned by another user",
+                session_id,
+            )
+            return False
+
         now = datetime.now(timezone.utc).isoformat()
         item = {
             "PK": f"USER#{user_id}",
@@ -1492,6 +1504,60 @@ async def set_selected_prompt_id(
         return False
 
 
+async def session_owned_by_other_user(session_id: str, user_id: str) -> bool:
+    """Whether this session id already has a metadata row owned by someone else.
+
+    WHY THIS EXISTS:
+    `_get_session_by_gsi` returns None both for "no such session" and for
+    "exists, but belongs to another user". Callers could not tell those apart,
+    so `ensure_session_metadata_exists` read the second case as the first and
+    created a SECOND metadata row on the same session id under the requester.
+    Its `attribute_not_exists(PK)` guard cannot catch this: the new row has a
+    different PK (`USER#{requester}`), so the conditional put succeeds.
+
+    That is exactly what happened in prod on 2026-08-31 — someone opened the
+    CIO's `/s/{sessionId}` link, the platform silently forked the session, and
+    the resulting duplicate META row made the original owner's session resolve
+    non-deterministically afterwards (see the item-scan in `_get_session_by_gsi`).
+
+    NOT a data-disclosure fix: conversation content lives in AgentCore Memory
+    keyed by actor id, so the second user always saw an empty conversation,
+    never the owner's messages. What leaked was the id, and what broke was the
+    owner's session record.
+
+    Returns True only when at least one META row exists AND none of them belong
+    to `user_id` — so a session the caller legitimately owns is never blocked,
+    including one that already has a fork attached to it.
+
+    Best-effort: any failure returns False (fail open), because this guards a
+    rare misuse and must never take the chat path down.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table or is_preview_session(session_id):
+        return False
+
+    try:
+        import boto3
+        from boto3.dynamodb.conditions import Key
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        response = table.query(
+            IndexName="SessionLookupIndex",
+            KeyConditionExpression=Key("GSI_PK").eq(f"SESSION#{session_id}")
+            & Key("GSI_SK").eq("META"),
+        )
+        items = response.get("Items", [])
+        if not items:
+            return False
+
+        return all(item.get("userId") != user_id for item in items)
+    except Exception as e:
+        logger.debug(f"Session ownership probe failed, allowing: {e}")
+        return False
+
+
 async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[dict]:
     """
     Get session record using GSI (SessionLookupIndex)
@@ -1518,14 +1584,23 @@ async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[
         if not items:
             return None
 
-        item = items[0]
+        # Scan ALL matching rows for this user's, rather than trusting items[0].
+        #
+        # A session id is supposed to have exactly one META row, but a
+        # cross-user fork could create a second one (see
+        # `session_owned_by_other_user`, and prod session 5f34d2b0 where it
+        # actually happened). Both rows share GSI_PK/GSI_SK, so DynamoDB
+        # returns them in an unspecified order — reading items[0] meant the
+        # rightful owner's own session could resolve to the other row, fail
+        # the ownership check, and look "not found" to every marker helper
+        # that routes through here. Matching by userId makes the lookup
+        # deterministic even where a fork already exists in the table.
+        for item in items:
+            if item.get('userId') == user_id:
+                return _convert_decimal_to_float(item)
 
-        # Verify user ownership
-        if item.get('userId') != user_id:
-            logger.warning(f"Session {session_id} belongs to different user")
-            return None
-
-        return _convert_decimal_to_float(item)
+        logger.warning(f"Session {session_id} belongs to different user")
+        return None
 
     except Exception as e:
         # JUSTIFICATION: GSI lookup is a fallback mechanism for finding sessions.
@@ -2017,10 +2092,12 @@ async def _get_session_metadata_cloud(
             logger.info(f"Session metadata not found in DynamoDB: {session_id}")
             return None
 
-        item = items[0]
-
-        # Verify user ownership
-        if item.get('userId') != user_id:
+        # Match on userId across every row rather than trusting items[0] — see
+        # the same scan in `_get_session_by_gsi` for why a session id can have
+        # more than one META row, and why picking the wrong one costs the
+        # rightful owner their own session.
+        item = next((i for i in items if i.get('userId') == user_id), None)
+        if item is None:
             logger.warning(f"Session {session_id} belongs to different user")
             return None
 

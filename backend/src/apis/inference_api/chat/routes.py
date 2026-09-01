@@ -44,7 +44,10 @@ from apis.inference_api.chat.agent_binding_resolver import (
     AgentBindingBlockedError,
     resolve_agent_invocation,
 )
-from apis.shared.sessions.metadata import ensure_session_metadata_exists
+from apis.shared.sessions.metadata import (
+    ensure_session_metadata_exists,
+    session_owned_by_other_user,
+)
 from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
@@ -1183,6 +1186,27 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     input_data = request
     user_id = current_user.user_id
     auth_token = current_user.raw_token
+
+    # Refuse a turn against a session id another user already owns.
+    #
+    # Session ids travel in shareable URLs (`/s/{sessionId}`). Opening someone
+    # else's link 404s on the metadata read, but the SPA then treats the
+    # session as new and lets the user send — which used to fork the id: a
+    # SECOND metadata row under the requester, on the same session, invisible
+    # to both parties. In prod on 2026-08-31 that also left the original
+    # owner's session resolving non-deterministically between the two rows.
+    #
+    # Not a confidentiality fix — conversation content is keyed by actor id in
+    # AgentCore Memory, so the second user only ever saw an empty thread. This
+    # stops the id from being forked at all. 404 rather than 403 so the
+    # response says nothing about whether the session exists, matching what
+    # `GET /sessions/{id}/metadata` already returns for the same case.
+    if await session_owned_by_other_user(input_data.session_id, user_id):
+        logger.warning(
+            "Rejected invocation for session %s — owned by a different user",
+            input_data.session_id,
+        )
+        raise HTTPException(status_code=404, detail="Session not found")
     # Resume requests reuse the cached agent and its paused interrupt state;
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
