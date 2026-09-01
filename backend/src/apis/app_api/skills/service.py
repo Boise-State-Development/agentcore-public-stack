@@ -30,6 +30,7 @@ from apis.shared.skills.repository import (
     get_skill_catalog_repository,
 )
 from apis.shared.skills.bundle import generate_skill_md
+from apis.shared.skills.resource_types import resolve_upload_content_type
 from apis.shared.skills.resource_store import (
     SkillResourceStore,
     SkillResourceStoreError,
@@ -322,10 +323,21 @@ class SkillCatalogService:
         garbage-collected. ``script`` files are accept-and-inert (stored,
         listed, never executed — D5).
 
+        SECURITY — the caller-supplied ``content_type`` is accepted for
+        signature compatibility and then **ignored**. The stored type is derived
+        from the filename extension against
+        ``apis.shared.skills.resource_types``' allowlist, because both tiers'
+        upload routes are reachable by an unprivileged author while the bytes
+        are downloaded by other users from the SPA's own origin. Letting a
+        caller label their upload ``text/html`` made an uploaded file a
+        same-origin script-execution primitive against whoever opened it.
+
         Returns the skill's updated manifest.
 
         Raises:
             ValueError: If the skill is missing, the kind or filename is invalid,
+                the file type is not allowed
+                (:class:`~apis.shared.skills.resource_types.SkillResourceTypeError`),
                 the file is too large, or the per-skill file cap is exceeded.
         """
         if kind not in VALID_RESOURCE_KINDS:
@@ -339,6 +351,9 @@ class SkillCatalogService:
             raise ValueError(f"Skill '{skill_id}' not found")
 
         self._validate_filename(filename)
+        # Type allowlist before any byte handling: an unacceptable filename is
+        # rejected without ever reaching S3 or the manifest.
+        resolved_type = resolve_upload_content_type(filename)
         if len(content) > MAX_RESOURCE_BYTES:
             raise ValueError(
                 f"Reference file '{filename}' is {len(content)} bytes; "
@@ -357,7 +372,6 @@ class SkillCatalogService:
                 f"{MAX_RESOURCES_PER_SKILL} reference files."
             )
 
-        resolved_type = content_type or "application/octet-stream"
         digest = compute_content_hash(content)
         s3_key = self.resource_store.put(
             skill_id=skill_id,
