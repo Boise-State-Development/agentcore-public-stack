@@ -20,7 +20,7 @@ Four things invalidate earlier versions of this document:
    deployed clean. They are §5 items 25–39 and they are the most useful part of
    this document. Two clusters: 32–36 trace to the two engines never being made
    exclusive (PR #900), and 37–39 to the ingestion consumer never actually knowing
-   when a document was ready (PRs #901, #902). Only §5.33 is still open.
+   when a document was ready (PRs #901, #908). Only §5.33 is still open.
 3. **The `document_id` "known unknown" was a false alarm** and is now resolved with
    measurements — see §6. An earlier revision listed it as the top open risk. The
    probe was reading facade keys that have never existed. Two genuine findings came
@@ -46,7 +46,7 @@ Four things invalidate earlier versions of this document:
 | Implementation | Groups 1–14 except 14.5. A migration has completed `shadow → verify → promote → retain` in dev and serves from the managed backend |
 | Tests | 640 infra (jest) · ~6,840 backend (pytest) · 1,936 frontend (vitest) · 5 pre-existing unrelated Strands failures |
 | Deployed | **dev and prod.** Flags off in prod; `migrationEnabled` on in dev |
-| Open PRs | **#902** — the filtered retrievability probe (§5.38) and `TEXT_INDEXED` (§5.39), plus this document. · merged: #898 `ef2f4c9e`, #899, #900 `df93471c`, #901 `a4b660ba` |
+| Open PRs | **#908** — the filtered retrievability probe (§5.38) and `TEXT_INDEXED` (§5.39), plus this document. · merged: #898 `ef2f4c9e`, #899, #900 `df93471c`, #901 `a4b660ba` |
 | Uncommitted | none |
 
 ### Flag state (GitHub Environment variables)
@@ -822,7 +822,7 @@ and every mechanism it used to answer was measuring something else.
     homes.**
 
 38. ✅ **The retrievability probe searched for the document id as query text and
-    could not find its own document** (fixed in PR #902). `wait_until_retrievable`
+    could not find its own document** (fixed in PR #908). `wait_until_retrievable`
     ran `search(kb_ref, document_id, 5)` — the id *as the query* — then checked
     whether that document appeared. A document id is meaningless to an embedding
     model, so the search returned whatever the reranker preferred. Measured in dev
@@ -850,7 +850,7 @@ and every mechanism it used to answer was measuring something else.
     retrievable. A number agreeing with your expectation is not confirmation.
 
 39. ✅ **The live service returns `TEXT_INDEXED`, which is not in the packaged
-    SDK's `DocumentStatus` enum** (handled in PR #902). Observed on a document with
+    SDK's `DocumentStatus` enum** (handled in PR #908). Observed on a document with
     image extraction enabled: `TEXT_INDEXED` (text searchable, media still
     processing) then `INDEXED`. The enum in the packaged model lists twelve values
     and this is not among them, so **do not derive status handling from the SDK
