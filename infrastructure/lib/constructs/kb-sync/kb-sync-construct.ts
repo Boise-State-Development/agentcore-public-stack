@@ -12,6 +12,7 @@ import * as path from 'path';
 import { Construct } from 'constructs';
 
 import { AppConfig } from '../../config';
+import { grantManagedKbDocumentDeletion } from '../managed-kb/managed-kb-role-construct';
 
 export interface KbSyncConstructProps {
   config: AppConfig;
@@ -143,6 +144,15 @@ export class KbSyncConstruct extends Construct {
     // Worker: read connector config, stage changed bytes for re-ingestion.
     oauthProvidersTable.grantReadData(this.workerLambda);
     documentsBucket.grantPut(this.workerLambda);
+
+    // Worker: remove a vanished document from a promoted knowledge base.
+    // `kb_sync/worker.py` soft-deletes a document whose upstream source is
+    // gone and then calls `cleanup_service.cleanup_document_resources`, which
+    // deletes from the managed knowledge base when the assistant has been
+    // promoted. Same grant and same reasoning as the app-api task role: the
+    // sync worker removes documents, it never writes a corpus, so this is the
+    // deletion grant and not `grantDirectIngestion`.
+    grantManagedKbDocumentDeletion(config, this.workerLambda.role!);
 
     // Worker: retrieve the policy creator's stored 3LO token from the
     // AgentCore Identity vault with no live user session. Mirrors app-api's

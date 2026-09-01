@@ -86,6 +86,37 @@ describe('KbSyncConstruct', () => {
     });
   });
 
+  it('worker may delete documents from a promoted managed knowledge base', () => {
+    // `kb_sync/worker.py` soft-deletes a document whose upstream source has
+    // vanished, then calls `cleanup_service.cleanup_document_resources`, which
+    // removes it from the managed knowledge base when the assistant has been
+    // promoted. Without the grant that delete fails, the DOC# row is kept on
+    // purpose so the fail-closed status filter keeps hiding the chunks, and the
+    // managed corpus grows forever at $5.00/GB-month.
+    //
+    // This assertion exists because the same class of gap has shipped twice on
+    // this feature: code that reads correctly with no IAM behind it.
+    t.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'ManagedKbDocumentDeletion',
+            Action: Match.arrayWith(['bedrock:DeleteKnowledgeBaseDocuments']),
+          }),
+        ]),
+      },
+    });
+  });
+
+  it('worker may not ingest into a managed knowledge base', () => {
+    // The sync worker removes documents; writing a corpus belongs to the
+    // migration worker and the ingestion consumer alone.
+    const policies = t.findResources('AWS::IAM::Policy');
+    const json = JSON.stringify(policies);
+    expect(json).not.toContain('IngestKnowledgeBaseDocuments');
+    expect(json).not.toContain('CreateKnowledgeBase');
+  });
+
   it('custom metrics are namespace-conditioned', () => {
     t.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {

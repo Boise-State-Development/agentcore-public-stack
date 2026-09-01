@@ -168,9 +168,15 @@ COPY backend/src/apis/app_api/documents/ingestion/ ${LAMBDA_TASK_ROOT}
 # tag notices changes.
 #   embeddings/   — ingestion/embeddings/bedrock_embeddings.py re-exports it
 #   timestamps.py — ingestion/status.py imports utc_now_iso
+#   kb_backend/   — handler.py reads `records.resolve_engine` to skip documents
+#                   whose knowledge base has been promoted to the managed engine.
+#                   Cheap to carry: the package's module-level imports are stdlib
+#                   only (enforced by tests/architecture/test_kb_backend_boundary.py),
+#                   so this adds files, not dependencies.
 COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
 COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
 COPY backend/src/apis/shared/embeddings/ ${LAMBDA_TASK_ROOT}/apis/shared/embeddings/
+COPY backend/src/apis/shared/kb_backend/ ${LAMBDA_TASK_ROOT}/apis/shared/kb_backend/
 RUN touch ${LAMBDA_TASK_ROOT}/apis/__init__.py
 
 CMD [ "handler.lambda_handler" ]

@@ -106,11 +106,52 @@ if not os.environ.get("AWS_EXECUTION_ENV"):  # Not in Lambda
         pass  # dotenv not installed, running in Lambda
 
 
+def _resolve_engine(assistant_id: str) -> str:
+    """Which engine serves this knowledge base: ``managed`` or ``s3vectors``.
+
+    Delegates to ``records.resolve_engine`` rather than reading the attribute
+    here, so "absence means legacy" has exactly one definition in the codebase —
+    the same call the managed ingestion consumer makes for the mirror-image
+    decision.
+
+    **Failures resolve to legacy, deliberately.** The two ways to be wrong are
+    not symmetric:
+
+    * Wrong towards legacy on a promoted knowledge base: the document is indexed
+      twice and the two writers race on status. Wasteful and untidy, but the
+      document still ends up correct, because the managed consumer is also
+      running and it owns the terminal state.
+    * Wrong towards skipping on a legacy knowledge base: nothing indexes the
+      document at all. It sits un-ingested with no error, and the only path back
+      is a re-upload.
+
+    The second is much worse, so an unreadable record runs the legacy pipeline.
+    This is the same convention as ``resolver.load_record``, which treats a
+    failed read and an absent record identically on the grounds that "an absent
+    opinion is the legacy opinion".
+    """
+    from apis.shared.kb_backend.records import ENGINE_LEGACY, get_kb_record, resolve_engine
+
+    try:
+        return resolve_engine(get_kb_record(assistant_id, assistant_id))
+    except Exception as exc:  # noqa: BLE001 — see the docstring: legacy is the safe default
+        logger.warning(
+            f"could not resolve the retrieval engine for assistant {assistant_id}; "
+            f"running the legacy pipeline, which is the safe default: {exc}"
+        )
+        return ENGINE_LEGACY
+
+
 async def async_lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Async implementation of the Lambda handler
     """
     from status import create_status_manager
+
+    # Function-local like every other import in this module: the Lambda image
+    # keeps its cold start down by not importing anything at module scope that a
+    # given invocation might not need.
+    from apis.shared.kb_backend.records import ENGINE_MANAGED
 
     # Initialize status manager
     status_manager = create_status_manager()
@@ -120,6 +161,49 @@ async def async_lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str,
 
         # 1. Parse event and extract metadata
         event_data = _parse_s3_event(event)
+
+        # 1a. Routing exclusivity (design §537, Requirement 10.5). A promoted
+        # knowledge base is served by the managed backend, and the managed
+        # ingestion consumer is triggered by the same S3 upload through
+        # EventBridge. So for those documents this pipeline must do NOTHING:
+        # not parse, not embed, and above all not write document status.
+        #
+        # Both halves matter, and the status half is the one that bit us:
+        #
+        #   * Indexing anyway spends Docling time and S3 Vectors storage on
+        #     vectors that retrieval will never read, because `resolve_backend`
+        #     sends a promoted record to the managed adapter with no fallback.
+        #   * Writing status anyway means two writers own one field and the last
+        #     one wins by luck. Measured in dev: a PDF was marked `complete` by
+        #     this pipeline 65 s before the managed KB could answer for it, and
+        #     an image-only PDF that Docling could not parse at all was marked
+        #     `failed` while the managed KB was serving it perfectly. Reverse the
+        #     finishing order and a good document reads `failed` forever.
+        #
+        # Deliberately keyed on the *engine*, not on "has a KB record" or on
+        # `migrationState`: during `shadow` and `verify` the legacy path is still
+        # authoritative and must keep working (Requirements 16.1, 16.6). Only
+        # `promote` writes `retrievalEngine`, so only a promoted knowledge base
+        # is skipped here.
+        engine = _resolve_engine(event_data["assistant_id"])
+        if engine == ENGINE_MANAGED:
+            logger.info(
+                f"skipping document {event_data['document_id']} for assistant "
+                f"{event_data['assistant_id']}: it is served by the {engine!r} "
+                f"engine, so the managed ingestion consumer owns this document "
+                f"and its status"
+            )
+            return {
+                "statusCode": 200,
+                "body": json.dumps(
+                    {
+                        "message": "Skipped: knowledge base is served by the managed engine",
+                        "assistant_id": event_data["assistant_id"],
+                        "document_id": event_data["document_id"],
+                        "engine": engine,
+                    }
+                ),
+            }
 
         # 2. Update status to 'chunking'
         logger.info("Starting document processing")

@@ -12,6 +12,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 
 import {
+  grantManagedKbDocumentDeletion,
   grantManagedKbRetrieval,
   ManagedKbRoleConstruct,
 } from '../lib/constructs/managed-kb/managed-kb-role-construct';
@@ -66,6 +67,7 @@ function synthConstruct(): Template {
   const ingestor = new iam.Role(stack, 'FakeIngestor', { assumedBy: lambdaPrincipal });
   const retriever = new iam.Role(stack, 'FakeRetriever', { assumedBy: lambdaPrincipal });
   const sharer = new iam.Role(stack, 'FakeSharer', { assumedBy: lambdaPrincipal });
+  const deleter = new iam.Role(stack, 'FakeDeleter', { assumedBy: lambdaPrincipal });
 
   // Exercise the public methods (the surface task 2.1 calls) for
   // provisioning/ingestion and the free function for retrieval (the
@@ -75,6 +77,7 @@ function synthConstruct(): Template {
   managedKb.grantResourcePolicyAdmin(sharer);
   managedKb.grantMetricsRead(provisioner);
   grantManagedKbRetrieval(config, retriever);
+  grantManagedKbDocumentDeletion(config, deleter);
 
   return Template.fromStack(stack);
 }
@@ -402,6 +405,34 @@ describe('ManagedKbRoleConstruct — caller grants', () => {
     for (const holder of holders) {
       expect(holder.json).toContain('bedrock:StartIngestionJob');
       expect(holder.json).toContain('bedrock:IngestKnowledgeBaseDocuments');
+    }
+  });
+
+  it('scopes document deletion to its own statement, separate from ingestion', () => {
+    // The app-api task role and the kb-sync worker delete documents from a
+    // promoted knowledge base; neither may write a corpus. Splitting the grants
+    // means a bug in the delete path cannot add content and a bug in the ingest
+    // path cannot remove it.
+    const s = statementBySid(t, 'ManagedKbDocumentDeletion');
+    expect(s.Action).toEqual([
+      'bedrock:DeleteKnowledgeBaseDocuments',
+      'bedrock:StartIngestionJob',
+    ]);
+    expect(s.Resource).toBe(KB_ARN_WILDCARD);
+  });
+
+  it('keeps the deleting caller away from ingestion and from knowledge-base CRUD', () => {
+    // Deletion of a *document* is not deletion of a knowledge base, and it is
+    // certainly not permission to write one.
+    const holders = policiesWithSid(t, 'ManagedKbDocumentDeletion');
+    expect(holders).toHaveLength(1);
+    for (const forbidden of [
+      'IngestKnowledgeBaseDocuments',
+      'CreateKnowledgeBase',
+      'DeleteKnowledgeBase"',
+      'iam:PassRole',
+    ]) {
+      expect(holders[0].json).not.toContain(forbidden);
     }
   });
 
