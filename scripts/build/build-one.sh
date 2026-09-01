@@ -121,6 +121,9 @@ case "$SERVICE" in
         # would ship stale code under an unchanged content-hash tag.
         SOURCE_DIRS=(
             "backend/src/apis/app_api/kb_sync"
+            # cleanup_service.py reads records.resolve_engine and calls
+            # ManagedKbBackend to delete from a promoted knowledge base.
+            "backend/src/apis/shared/kb_backend"
             "backend/src/apis/app_api/file_sources"
             "backend/src/apis/app_api/documents"
             "backend/src/apis/app_api/web_sources"

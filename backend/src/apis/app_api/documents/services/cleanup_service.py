@@ -79,6 +79,16 @@ async def cleanup_document_resources(
         vectors_deleted = False
 
     try:
+        managed_deleted = await _delete_managed_documents_with_retries(
+            assistant_id, document_id, max_retries, base_delay
+        )
+    except Exception as e:
+        logger.error(
+            f"Unexpected error in managed-KB deletion for {document_id}: {e}", exc_info=True
+        )
+        managed_deleted = False
+
+    try:
         s3_deleted = await _delete_s3_with_retries(
             s3_key, max_retries, base_delay
         )
@@ -86,7 +96,7 @@ async def cleanup_document_resources(
         logger.error(f"Unexpected error in S3 deletion for {document_id}: {e}", exc_info=True)
         s3_deleted = False
 
-    all_succeeded = vectors_deleted and s3_deleted
+    all_succeeded = vectors_deleted and managed_deleted and s3_deleted
 
     if all_succeeded:
         try:
@@ -236,6 +246,98 @@ async def _delete_vectors_with_retries(
                 await asyncio.sleep(delay)
 
     logger.error(f"Vector deletion failed after {max_retries} attempts for {document_id}")
+    return False
+
+
+async def _delete_managed_documents_with_retries(
+    assistant_id: str,
+    document_id: str,
+    max_retries: int,
+    base_delay: float,
+) -> bool:
+    """Remove the document from the managed knowledge base, if there is one.
+
+    The mirror of the legacy vector deletion above, and the reason it exists:
+    before this, deletion removed the S3 Vectors copy and the ``DOC#`` row but
+    never touched the managed knowledge base. On a promoted knowledge base the
+    content therefore stayed indexed forever. The corpus could only grow, at
+    $5.00/GB-month, and each orphan kept consuming a slot in every ``top_k``
+    before the status filter dropped it — so answers quietly got thinner while
+    nothing errored.
+
+    Returns ``True`` when there is nothing to do
+    -------------------------------------------
+    A knowledge base that is not promoted has no managed copy, so "no managed
+    copy to delete" is success, not failure. Returning ``False`` there would
+    block ``hard_delete_document`` for every legacy document in the system.
+
+    Why a failure here must block the hard delete
+    ---------------------------------------------
+    The caller only hard-deletes the ``DOC#`` row when every phase succeeds, and
+    that row is what the fail-closed status filter joins against. Leaving it in
+    place is what keeps a still-indexed managed chunk from being served while
+    this deletion is retried. Reporting success on a failed managed delete would
+    remove the row *and* leave the content — the one combination that turns a
+    storage leak into a disclosure.
+
+    Deletion is idempotent
+    ----------------------
+    ``DeleteKnowledgeBaseDocuments`` on an absent document is not an error, so a
+    retry after a partial failure is safe and needs no bookkeeping.
+    """
+    from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
+
+    try:
+        # App_KB_Id == assistant_id in this phase, so one value serves both.
+        engine = resolve_engine(get_kb_record(assistant_id, assistant_id))
+    except Exception as e:
+        # Unlike the ingestion gate — where an unreadable record resolves to
+        # legacy so the upload still gets indexed — an unreadable record HERE
+        # must fail. If this knowledge base is in fact promoted, reporting
+        # success would hard-delete the row that keeps its chunks unserved.
+        logger.error(
+            f"could not resolve the retrieval engine for assistant {assistant_id} "
+            f"while deleting {document_id}; treating the managed deletion as failed "
+            f"so the document record survives for a retry: {e}"
+        )
+        return False
+
+    if engine != ENGINE_MANAGED:
+        return True
+
+    from apis.shared.kb_backend.managed_backend import ManagedKbBackend, ManagedKbNotProvisioned
+
+    backend = ManagedKbBackend()
+    for attempt in range(max_retries):
+        try:
+            await backend.delete_document(assistant_id, document_id)
+            logger.info(
+                f"deleted document {document_id} from the managed knowledge base "
+                f"for assistant {assistant_id}"
+            )
+            return True
+        except ManagedKbNotProvisioned:
+            # Promoted but carrying no AWS identifiers is not a state a real
+            # migration produces — `promote` runs after provisioning. Nothing was
+            # ever indexed, so there is nothing to remove and no reason to retry.
+            logger.warning(
+                f"assistant {assistant_id} names the managed engine but has no AWS "
+                f"identifiers; nothing to delete for {document_id}"
+            )
+            return True
+        except Exception as e:
+            delay = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
+            logger.warning(
+                f"Managed-KB deletion attempt {attempt + 1}/{max_retries} failed for "
+                f"{document_id}: {e}, retrying in {delay:.2f}s"
+            )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay)
+
+    logger.error(
+        f"Managed-KB deletion failed after {max_retries} attempts for {document_id}; "
+        f"the document record is being kept so the status filter continues to hide it"
+    )
     return False
 
 

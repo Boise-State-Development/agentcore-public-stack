@@ -219,6 +219,44 @@ export function grantManagedKbDirectIngestion(config: AppConfig, role: iam.IRole
 }
 
 /**
+ * Document-deletion grant: remove one document's content from a managed
+ * knowledge base. Held by the identities that service a user deleting a
+ * document — the app-api task role and the kb-sync worker — neither of
+ * which has any business ingesting.
+ *
+ * Separate from `grantManagedKbDirectIngestion` on purpose. That grant
+ * belongs to the migration worker and the ingestion consumer, which write
+ * corpora; these callers only ever remove. Splitting them means a bug in
+ * the delete path cannot add content and a bug in the ingest path cannot
+ * remove it.
+ *
+ * `bedrock:StartIngestionJob` IS REQUIRED HERE TOO, and again it looks
+ * wrong. AWS lists the whole `KnowledgeBaseDocs` family — ingest, get,
+ * list and delete — in one statement alongside `StartIngestionJob` in its
+ * direct-ingestion prerequisites, and we have already shipped one grant
+ * that named only the matching API and failed on first real use
+ * (`IngestKnowledgeBaseDocuments` authorized as `StartIngestionJob`).
+ * Rather than rediscover whether delete is authorized the same way from a
+ * production AccessDeniedException, it is granted. The cost of including
+ * it is nothing: it confers no ability this caller does not already need,
+ * because `DeleteKnowledgeBaseDocuments` is itself the destructive verb.
+ */
+export function grantManagedKbDocumentDeletion(config: AppConfig, role: iam.IRole): void {
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbDocumentDeletion',
+    effect: iam.Effect.ALLOW,
+    actions: [
+      'bedrock:DeleteKnowledgeBaseDocuments',
+      // See the docblock: the IAM action AWS actually checks for the
+      // document-plane operations, not an invocation of the 0.1 RPS
+      // ingestion-job API that Requirement 9.2 forbids calling.
+      'bedrock:StartIngestionJob',
+    ],
+    resources: [knowledgeBaseArnWildcard(config)],
+  }));
+}
+
+/**
  * Sharing grant: administer a knowledge base's *resource* policy
  * (Requirement 25.6). Separate from every other grant because it is the
  * only one that can change who else may read a corpus — a caller that
