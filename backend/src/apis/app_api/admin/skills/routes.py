@@ -32,6 +32,10 @@ from apis.shared.skills.models import (
     SkillRolesResponse,
     SkillUpdateRequest,
 )
+from apis.shared.skills.resource_types import (
+    resource_download_headers,
+    safe_download_content_type,
+)
 from apis.app_api.skills.service import get_skill_catalog_service
 
 logger = logging.getLogger(__name__)
@@ -331,7 +335,16 @@ async def read_skill_resource(
     filename: str,
     admin: User = Depends(require_skills_admin),
 ):
-    """Return the raw bytes of one catalog-skill reference file."""
+    """Return the raw bytes of one catalog-skill reference file.
+
+    SECURITY — the served media type is re-derived from the filename
+    (``safe_download_content_type``) instead of reflecting the stored
+    ``content_type``, and the response is ``attachment`` + ``nosniff`` + an
+    inert CSP. app-api shares an origin with the SPA, so an ``inline`` response
+    carrying a stored ``text/html`` would execute as a document in the reader's
+    authenticated session. Re-deriving at serve time also neutralizes rows
+    written before the upload allowlist existed, with no data migration.
+    """
     logger.info("Admin reading skill reference file")
 
     service = get_skill_catalog_service()
@@ -343,10 +356,8 @@ async def read_skill_resource(
 
     return Response(
         content=content,
-        media_type=ref.content_type or "application/octet-stream",
-        headers={
-            "Content-Disposition": f'inline; filename="{ref.filename}"',
-        },
+        media_type=safe_download_content_type(ref.filename),
+        headers=resource_download_headers(ref.filename),
     )
 
 
