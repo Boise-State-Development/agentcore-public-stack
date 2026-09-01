@@ -1,6 +1,6 @@
 # Managed KB Migration — Handoff
 
-**Last updated:** 2026-08-31 14:30 · **Shipped to production in 1.16.0, inert behind flags** ·
+**Last updated:** 2026-09-01 17:00 · **Shipped to production in 1.16.0, inert behind flags** ·
 **A migration has completed end to end in dev; adding a document to it needed one more IAM action**
 
 Working state for this feature so a fresh session can pick it up without
@@ -16,10 +16,11 @@ Four things invalidate earlier versions of this document:
    platform deploy succeeded on 2026-08-28, so `GSI7`, the Bedrock service role and
    the four Lambdas exist in **both** dev and prod. Earlier revisions of this file
    said "Nothing deployed"; that is no longer true.
-2. **Eleven defects were found only by running it**, each reviewed clean and
-   deployed clean. They are §5 items 25–36 and they are the most useful part of
-   this document. Items 32–36 all trace to one root cause — the two engines were
-   never made exclusive — and are fixed in PR #900.
+2. **Fourteen defects were found only by running it**, each reviewed clean and
+   deployed clean. They are §5 items 25–39 and they are the most useful part of
+   this document. Two clusters: 32–36 trace to the two engines never being made
+   exclusive (PR #900), and 37–39 to the ingestion consumer never actually knowing
+   when a document was ready (PRs #901, #902). Only §5.33 is still open.
 3. **The `document_id` "known unknown" was a false alarm** and is now resolved with
    measurements — see §6. An earlier revision listed it as the top open risk. The
    probe was reading facade keys that have never existed. Two genuine findings came
@@ -43,10 +44,10 @@ Four things invalidate earlier versions of this document:
 |---|---|
 | Spec | Complete. Requirement **8.5 was amended by measurement on 2026-08-31** — see §5.29 |
 | Implementation | Groups 1–14 except 14.5. A migration has completed `shadow → verify → promote → retain` in dev and serves from the managed backend |
-| Tests | 640 infra (jest) · ~6,780 backend (pytest) · 1,936 frontend (vitest) · 5 pre-existing unrelated Strands failures |
+| Tests | 640 infra (jest) · ~6,840 backend (pytest) · 1,936 frontend (vitest) · 5 pre-existing unrelated Strands failures |
 | Deployed | **dev and prod.** Flags off in prod; `migrationEnabled` on in dev |
-| Open PRs | **#900** — engine exclusivity: the legacy pipeline stands down for a promoted KB (§5.32, §5.34) and deletion propagates to the managed engine (§5.36). Four CI checks green. Merging triggers **both** `backend.yml` (rag-ingestion + kb-sync images) and `platform.yml` (two new IAM grants). · **#899** — this document. · #898 merged as `ef2f4c9e` |
-| Uncommitted | none — working tree clean as of 2026-08-31 14:30 |
+| Open PRs | **#902** — the filtered retrievability probe (§5.38) and `TEXT_INDEXED` (§5.39), plus this document. · merged: #898 `ef2f4c9e`, #899, #900 `df93471c`, #901 `a4b660ba` |
+| Uncommitted | none |
 
 ### Flag state (GitHub Environment variables)
 
@@ -784,6 +785,92 @@ the managed engine at all. Every symptom below follows from that.
 
 ---
 
+### The twelfth through fourteenth: the ingestion consumer never actually knew when a document was ready
+
+All three are one theme. The consumer had to answer "is this document usable yet?"
+and every mechanism it used to answer was measuring something else.
+
+37. ✅ **Three stacked bugs left a fully retrievable document parked at
+    `uploading` forever** (fixed in PR #901). A 1.5 MB PDF, uploaded to a promoted
+    knowledge base:
+
+    | | |
+    |---|---|
+    | **Wrong measurement** | The consumer polled a *retrieval* for 30 s, justified in its own header by the `INDEXED → retrievable` gap of "0.75–1.03 s". But the poll starts when the ingest call returns, so it had to cover `ingest → INDEXED → retrievable` — measured at 37–264 s for PDFs in the evaluation's §5.1, and 5 m 30 s for this file. The budget was smaller than the documented *lower bound*. |
+    | **Self-defeating retries** | `IngestKnowledgeBaseDocuments` is fire-and-forget and nothing asked Bedrock what it already knew, so "not indexed yet" and "never submitted" were indistinguishable. All three deliveries re-ingested, discarding progress. The document reached INDEXED **54 s after the final attempt was dead-lettered**. |
+    | **Fabricated timestamp** | `indexed_at = _now_iso()` ran right after the ingest call returned — recording when we *asked*, labelled as when indexing *finished*. |
+
+    Fixed by probing `GetKnowledgeBaseDocuments` first and branching on the real
+    status, never re-ingesting work already in flight, and using Bedrock's own
+    `updatedAt`.
+
+    ⚠️ **Lambda's async retry is capped at 2 attempts.** A hard service limit, and
+    it is why the wait has to happen *inside* one invocation. I first "fixed" this
+    with a `RetryPolicy` on the EventBridge target, which does nothing: for a
+    Lambda target EventBridge hands the event off and the function's own async
+    retry config governs. The construct now carries a comment saying so instead of
+    the useless setting. Do not add it back.
+
+    **Why no test caught the fabricated timestamp:** the test asserted only that
+    `indexedAt` existed and was truthy, which any fabricated value satisfies. Same
+    shape as §5.28 — the fake modelled instant success, so a 30 s window looked
+    adequate for work that takes minutes.
+
+    This is §5.30 for a second time. `verify` had the identical bug against the
+    identical 0.75–1.03 s figure; that fix never reached this component, which
+    inherited the constant. **When a wrong constant is found, grep for its other
+    homes.**
+
+38. ✅ **The retrievability probe searched for the document id as query text and
+    could not find its own document** (fixed in PR #902). `wait_until_retrievable`
+    ran `search(kb_ref, document_id, 5)` — the id *as the query* — then checked
+    whether that document appeared. A document id is meaningless to an embedding
+    model, so the search returned whatever the reranker preferred. Measured in dev
+    with two documents present:
+
+    ```
+    query=DOC-40e985680a63 -> 5 chunks, ALL from DOC-db44eaf8f072   FOUND ITSELF: False
+    ```
+
+    A perfectly retrievable document reported as not retrievable. **It scales the
+    wrong way:** the more documents a knowledge base holds, the less likely the
+    target lands in an unfiltered top-5, so every upload to a mature knowledge base
+    would burn its poll budget and dead-letter. It only ever worked while the
+    knowledge base held exactly one document — where anything returned was
+    necessarily the right thing.
+
+    Fixed with an `equals` filter on `document_id`, so a non-empty result *is*
+    proof and an empty one is a true negative. Verified in dev: each document
+    returns 5 of its own chunks, a fabricated id returns none.
+
+    ⚠️ **This is the third iteration on this one function, and I was wrong about
+    what it measured twice.** Note also that yesterday's claim that a measured
+    0.9 s gap "confirmed the 0.75–1.03 s figure" was false — with the fabricated
+    timestamp it was measuring ingest-return → retrievable, not INDEXED →
+    retrievable. A number agreeing with your expectation is not confirmation.
+
+39. ✅ **The live service returns `TEXT_INDEXED`, which is not in the packaged
+    SDK's `DocumentStatus` enum** (handled in PR #902). Observed on a document with
+    image extraction enabled: `TEXT_INDEXED` (text searchable, media still
+    processing) then `INDEXED`. The enum in the packaged model lists twelve values
+    and this is not among them, so **do not derive status handling from the SDK
+    enum** — it is incomplete against the running service.
+
+    Treated as in-flight, not done: marking a document complete at `TEXT_INDEXED`
+    would tell a user an image-only page is ready while the vision model is still
+    running, which is the exact report the consumer exists to prevent. Unrecognised
+    statuses now also default to "keep waiting" rather than "unknown, give up", so
+    the next undeclared value AWS adds does not dead-letter documents.
+
+    **A mutation-testing note worth keeping:** removing `TEXT_INDEXED` from the
+    in-flight set is *behaviour-equivalent*, because the unknown-status fallback
+    also waits — so the mutation survived every behavioural assertion. The honest
+    resolution was to assert the only thing that genuinely differs: that the status
+    is classified, and does not fall through the unknown branch. Not every
+    surviving mutant means a missing test; some mean the mutation changes nothing.
+
+---
+
 ## 6. Remaining work
 
 ### Do these first
@@ -798,7 +885,7 @@ the managed engine at all. Every symptom below follows from that.
 
 | Group | Notes |
 |---|---|
-| **§5.33** the one fail-open line | The only finding from 2026-08-31 still open. `if not doc_ids: return vectors` in `_filter_vectors_by_document_status`. Make it fail closed with `METRIC_STATUS_FILTER_FAIL_CLOSED` like every other unprovable path in that function, and pin it with a test that mutation-fails. Lower stakes now that §5.36 removes deleted content from the managed engine, but still the one silent-serving path left |
+| **§5.33** the one fail-open line — THE ONLY OPEN FINDING | The only finding from 2026-08-31 still open. `if not doc_ids: return vectors` in `_filter_vectors_by_document_status`. Make it fail closed with `METRIC_STATUS_FILTER_FAIL_CLOSED` like every other unprovable path in that function, and pin it with a test that mutation-fails. Lower stakes now that §5.36 removes deleted content from the managed engine, but still the one silent-serving path left |
 | **engine visibility** | Nothing logs *which* engine served a query — the resolver only logs on failure — so "is the new one actually working?" can only be answered from the KB record. One INFO line in the facade, plus a `Managed`/`Classic` badge in the knowledge base section, both unbuilt. Wanted before a wide rollout, because this feature's whole risk profile is silent regressions |
 | **14.4** one-click document retry | Req 21.2. Ingestion is S3-event-triggered and there is no reprocess endpoint, so this needs new backend against a live pipeline. The card currently directs the user to re-upload, which works today. Close it by building the endpoint **or** by amending Req 21.2 to accept re-upload |
 | **14.5** admin surface | not started. Filter by engine, stored bytes, document counts, bulk migrate, per-KB retry |
