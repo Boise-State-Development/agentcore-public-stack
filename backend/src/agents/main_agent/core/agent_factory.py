@@ -179,12 +179,27 @@ class AgentFactory:
             raise ValueError(f"Unsupported model provider: {provider}")
 
         # Build SDK-level retry strategy for Bedrock provider
-        # This is the second retry layer (agent event loop), retries on ModelThrottledException
-        # with exponential backoff. Only applies to Bedrock; other providers handle retries internally.
+        # This is the second retry layer (agent event loop), retries with
+        # exponential backoff. Only applies to Bedrock; other providers handle
+        # retries internally.
+        #
+        # Stock ModelRetryStrategy retries ModelThrottledException ONLY, which
+        # leaves Bedrock's transient service faults (ServiceUnavailableException,
+        # InternalServerException, ...) unretried — they arrive as raw
+        # botocore ClientErrors. BedrockTransientRetryStrategy widens the
+        # predicate to cover those when they fire before the response stream
+        # opens; see its module docstring for why mid-stream faults are excluded.
         retry_strategy = None
         if provider == ModelProvider.BEDROCK and model_config.retry_config:
             from strands import ModelRetryStrategy
-            retry_strategy = ModelRetryStrategy(
+            from agents.main_agent.core.retry_strategy import BedrockTransientRetryStrategy
+
+            strategy_cls = (
+                BedrockTransientRetryStrategy
+                if model_config.retry_config.retry_transient_service_errors
+                else ModelRetryStrategy
+            )
+            retry_strategy = strategy_cls(
                 max_attempts=model_config.retry_config.sdk_max_attempts,
                 initial_delay=model_config.retry_config.sdk_initial_delay,
                 max_delay=model_config.retry_config.sdk_max_delay,
@@ -193,7 +208,8 @@ class AgentFactory:
                 f"Configured retry strategy: boto={model_config.retry_config.boto_max_attempts} attempts "
                 f"({model_config.retry_config.boto_retry_mode}), "
                 f"sdk={model_config.retry_config.sdk_max_attempts} attempts "
-                f"({model_config.retry_config.sdk_initial_delay}s-{model_config.retry_config.sdk_max_delay}s backoff)"
+                f"({model_config.retry_config.sdk_initial_delay}s-{model_config.retry_config.sdk_max_delay}s backoff), "
+                f"strategy={strategy_cls.__name__}"
             )
 
         # Bedrock prompt caching: give the system prompt its own cachePoint by
