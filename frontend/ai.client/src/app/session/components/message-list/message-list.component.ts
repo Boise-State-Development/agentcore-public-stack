@@ -27,6 +27,7 @@ import {
 } from '../../../services/tool-approval/tool-approval.service';
 import { CompactionSummaryService } from '../../services/chat/compaction-summary.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
+import { StreamParserService } from '../../services/chat/stream-parser.service';
 
 @Component({
   selector: 'app-message-list',
@@ -83,6 +84,28 @@ export class MessageListComponent {
   private artifactState = inject(ArtifactStateService);
   private mcpAppCardState = inject(McpAppCardStateService);
   private chatStateService = inject(ChatStateService);
+  private streamParser = inject(StreamParserService);
+
+  /**
+   * Copy for the loading indicator while the backend retries a failed model
+   * call. Null during a normal response, which leaves the usual cycling
+   * phrases in place. Read straight off the parser by session id rather than
+   * threaded through every `[isChatLoading]` binding — preview and test-drive
+   * hosts have no session id and correctly get nothing.
+   */
+  protected readonly retryNotice = computed<string | null>(() => {
+    const sessionId = this.sessionId();
+    if (!sessionId) {
+      return null;
+    }
+    const retry = this.streamParser.modelRetryFor(sessionId)();
+    if (!retry) {
+      return null;
+    }
+    return retry.attempt === 1
+      ? 'The model is busy. Retrying\u2026'
+      : `The model is busy. Retrying \u2014 attempt ${retry.attempt}.`;
+  });
 
   /** Persisted app-initiated tool cards, hydrated on reload (PR #6). */
   protected mcpAppCards = this.mcpAppCardState.cards;

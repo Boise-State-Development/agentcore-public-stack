@@ -30,6 +30,7 @@ import type {
   UiResourceEvent,
   ToolInputPartialEvent,
   SessionTitleEvent,
+  ModelRetryEvent,
 } from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
@@ -96,6 +97,14 @@ interface ParserSessionState {
   /** Tool progress indicator state */
   toolProgress: WritableSignal<ToolProgress>;
 
+  /**
+   * The most recent model-call retry this turn, or null. Set by the
+   * `model_retry` SSE event and cleared as soon as content arrives, so the
+   * loading indicator can explain the silence instead of leaving the user to
+   * read it as a hang.
+   */
+  modelRetry: WritableSignal<ModelRetryEvent | null>;
+
   /** Error state */
   error: WritableSignal<string | null>;
 
@@ -152,6 +161,7 @@ export class StreamParserService {
   private readonly allMessagesCache = new Map<string, Signal<Message[]>>();
   private readonly streamingMessageIdCache = new Map<string, Signal<string | null>>();
   private readonly toolProgressCache = new Map<string, Signal<ToolProgress>>();
+  private readonly modelRetryCache = new Map<string, Signal<ModelRetryEvent | null>>();
   private readonly citationsCache = new Map<string, Signal<Citation[]>>();
   private readonly errorCache = new Map<string, Signal<string | null>>();
   private readonly isStreamCompleteCache = new Map<string, Signal<boolean>>();
@@ -180,6 +190,14 @@ export class StreamParserService {
   /** Tool progress indicator state for a session. */
   toolProgressFor(sessionId: string): Signal<ToolProgress> {
     return this.cachedAccessor(this.toolProgressCache, sessionId, (state) => state.toolProgress(), { visible: false });
+  }
+
+  /**
+   * The current model-call retry notice for a session, or null when the model
+   * is responding normally. Drives the "still working" copy on the loader.
+   */
+  modelRetryFor(sessionId: string): Signal<ModelRetryEvent | null> {
+    return this.cachedAccessor(this.modelRetryCache, sessionId, (state) => state.modelRetry(), null);
   }
 
   /** Pending citations for a session's next assistant message. */
@@ -346,6 +364,7 @@ export class StreamParserService {
       currentMessageBuilder,
       completedMessages,
       toolProgress: signal<ToolProgress>({ visible: false }),
+      modelRetry: signal<ModelRetryEvent | null>(null),
       error: signal<string | null>(null),
       isStreamComplete,
       metadata: signal<MetadataEvent | null>(null),
@@ -432,6 +451,13 @@ export class StreamParserService {
       onToolUse: (data) => this.handleToolUseProgress(state, data),
       onToolResult: (data) => this.handleToolResult(state, data),
       onToolProgress: (progress) => state.toolProgress.set(progress),
+
+      onModelRetry: (data: ModelRetryEvent) => {
+        // Not viewed-session-scoped on purpose: this signal is read per
+        // session id, so a background conversation's retry stays with that
+        // conversation instead of leaking into the one on screen.
+        state.modelRetry.set(data);
+      },
 
       onMetadata: (data) => this.handleMetadata(state, data),
       onReasoning: (data) => this.handleReasoning(state, data),
@@ -571,6 +597,9 @@ export class StreamParserService {
 
     // Clear any previous errors
     state.error.set(null);
+
+    // Content is arriving, so whatever retry we were explaining is over.
+    state.modelRetry.set(null);
 
     // If there's an existing message, finalize it before starting a new one
     const currentBuilder = state.currentMessageBuilder();
@@ -826,6 +855,7 @@ export class StreamParserService {
     this.finalizeCurrentMessage(state);
     state.isStreamComplete.set(true);
     state.toolProgress.set({ visible: false });
+    state.modelRetry.set(null);
     state.streamState = StreamState.Completed;
 
     // Automatic cleanup after delay. Guarded on the stream ID so a session
