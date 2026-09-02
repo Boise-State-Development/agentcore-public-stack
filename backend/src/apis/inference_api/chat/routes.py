@@ -1204,7 +1204,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if await session_owned_by_other_user(input_data.session_id, user_id):
         logger.warning(
             "Rejected invocation for session %s — owned by a different user",
-            input_data.session_id,
+            _sanitize_log(input_data.session_id),
         )
         raise HTTPException(status_code=404, detail="Session not found")
     # Resume requests reuse the cached agent and its paused interrupt state;
