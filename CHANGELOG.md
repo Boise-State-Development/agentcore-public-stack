@@ -4,6 +4,40 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [Unreleased]
+
+Production observability baseline. Every CloudWatch alarm in the stack now publishes to a single SNS topic — before this, the stack had 13 alarms and **none of them notified anybody**, and two of those watched metric names that exist in no CloudWatch namespace, so they had sat in `INSUFFICIENT_DATA` since creation and read as healthy. **Requires a CDK deploy**, and one manual step after it: subscribe your team to the new alarm topic (see [step-05-verify](.github/docs/deploy/step-05-verify.md#6-subscribe-to-platform-alarms-required--not-automated)). Subscriptions are deliberately not infrastructure-as-code.
+
+### 🚀 Added
+
+- **Single SNS alarm topic** (`{prefix}-alarms`) that every alarm routes to, encrypted with a customer-managed KMS key. The CMK is required, not a preference: CloudWatch cannot publish to a topic encrypted with the AWS-managed `alias/aws/sns` key, and that failure is silent — the alarm fires, the console shows it, the notification is dropped. Topic ARN published to SSM at `/{prefix}/observability/alarm-topic-arn` and as a CfnOutput
+- **`AlarmFactory`** — the only sanctioned way to create an alarm. Attaches `AlarmActions` *and* `OKActions` as a consequence of being used, so an unrouted alarm now requires deliberately bypassing it. A source-level test fails the build if any file under `lib/` calls `new cloudwatch.Alarm()` directly
+- **ALB alarms** (6): ELB 5xx, target 5xx, unhealthy hosts, target connection errors, rejected connections, and a streaming-aware p99 latency floor
+- **ECS service alarms** (3): CPU, memory, and running-task-count below desired
+- **DynamoDB alarms** (27): a combined read+write throttle alarm per table naming that table, plus one account-level `UserErrors` alarm
+- **Lambda alarms** (21): errors and throttles across every runtime function, including `artifact-render`, `rag-ingestion` and the four kb-migration functions which previously had none, plus dead-letter-queue depth on the kb-ingestion DLQ
+- **AI-path alarms** (9): Bedrock invocation throttles, server errors and `EstimatedTPMQuotaUsage` (the only *leading* indicator in the set — visible before throttling starts), AgentCore Memory hot-path errors and throttles, Gateway MCP errors and throttles, Code Interpreter session errors and concurrent-session count
+- **`{prefix}-platform-health` dashboard** — one pane answering "is the platform healthy right now": traffic and errors, then saturation, then every alarm's current state. Links to the two existing dashboards rather than restating them, which keeps the stack at exactly 3 (CloudWatch's free ceiling)
+- **`observability` configuration section** — 18 single-scalar tunables with `CDK_OBSERVABILITY_*` overrides, cost-conscious defaults, and validation that rejects retention values CloudWatch does not accept and X-Ray sampling rates given as percentages
+- `.kiro/steering/observability.md` — the gotchas that silently break alarms, plus a first-response runbook for every alarm
+
+### 🐛 Fixed
+
+- **The two AgentCore Runtime alarms were watching metrics that do not exist.** They used namespace `bedrock-agentcore` with `InvocationCount` / `InvocationErrors` / `InvocationLatency`. Verified against the live account: that namespace is real but holds only the OpenTelemetry/Strands *application* metrics, and those three names exist in no namespace at all. Corrected to `AWS/Bedrock-AgentCore` with the verified `Resource` + `Operation` + `Name` dimension set, and split into four alarms — `SystemErrors` (AWS's fault) separated from `UserErrors` (ours), plus a new throttle alarm
+- **The AgentCore latency alarm would have fired on healthy traffic.** Its 30-second threshold sat *below* the observed maximum: measured over 14 days, average turns run 3.0–4.5s with daily maxima reaching 24.4s, because the chat path is SSE and the runtime does not finish a request until the stream closes. Floors now default to 120s
+- **The `agentcore-observability` dashboard's token-usage widget was always empty** — `InputTokens`/`OutputTokens` do not exist, and the token metrics that do exist in that namespace are Memory-strategy counters dimensioned by `StrategyId`, not model tokens. Removed; the header now points at the prompt-cache dashboard for real token accounting
+- **X-Ray recorded a trace for every single agent invocation** in any deployment that never set `production` — `fixedRate` was `1.0` with a 50/sec reservoir on that branch, at $5 per million traces recorded. Now a single configured value defaulting to 1% with a 1/sec reservoir
+- **The AgentCore Runtime's log group had no retention policy and grew forever.** It is created by the AgentCore service rather than CloudFormation, so a CDK `LogGroup` cannot set it. An `AwsCustomResource` calls `logs:PutRetentionPolicy` instead — idempotent, and it creates the group if the runtime has not yet been invoked
+
+### ⚠️ Changed
+
+- **Log retention is one configured value** (`observability.logRetentionDays`, default 30) applied to all 14 log groups through `logRetentionFor(config)`. Previously every construct hardcoded `ONE_WEEK`, except AgentCore Memory which used `ONE_MONTH` — differing silently rather than deliberately. A source guard fails the build on any hardcoded `RetentionDays`
+- **No `config.production` branching in observability code.** This repo is forked by many institutions: a fork with one environment should not have to reason about a `production` boolean, and a fork with three should not be limited to two. Per-environment differences now live in the forker's deployment config as single values. Enforced by test
+
+### 📚 Docs
+
+- Deploy guide gains a required post-deploy step for subscribing to the alarm topic, with protocol options and verification
+
 ## [1.16.0] - 2026-08-28
 
 Minor release on knowledge bases, the marketplace review flow, and fine-tuning. The Bedrock Managed Knowledge Base migration lands **inert** — every managed-KB flag is default OFF, and the owner-facing upgrade card only appears where `CDK_MANAGED_KB_MIGRATION_ENABLED=true`. Marketplace admins can finally read, test-drive and decline a submission instead of approving on a name and a category alone. Fine-tuning was unreachable in every deployed environment and now isn't — it becomes **reachable by default** on this deploy, with `CDK_FINE_TUNING_ENABLED=false` as the kill switch. Two live RAG behaviours change regardless of flags: queries clamp at 10,000 characters on both backends, and the document-status filter now fails **closed**. **Requires a CDK deploy** — `platform.yml` (set `CDK_TAG_ENVIRONMENT` first), then `backend.yml` (two new kb-migration jobs), then `frontend-deploy.yml`.

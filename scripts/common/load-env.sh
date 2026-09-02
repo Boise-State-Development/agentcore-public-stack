@@ -253,6 +253,72 @@ build_cdk_context_params() {
         context_params="${context_params} --context managedKb.dailyCostAlarmUsd=\"${CDK_MANAGED_KB_DAILY_COST_ALARM_USD}\""
     fi
 
+    # Observability — alarm routing, alarm thresholds, log retention, X-Ray
+    # sampling. Every one is a SINGLE value with a cost-conscious default in
+    # config.ts; there is deliberately no prod/non-prod branching in code.
+    # An institution running several environments sets these per environment
+    # (GitHub Variables scoped to a GitHub Environment), which is what makes
+    # the same committed defaults correct for every fork.
+    #
+    # Forwarded only when non-empty, same as the managed-KB flags above: an
+    # unset GitHub Actions variable arrives as the empty string, CDK context
+    # cannot express one, and omitting the flag correctly means "use the
+    # default". Read by config.ts as the FLAT dotted key.
+    if [ -n "${CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED:-}" ]; then
+        context_params="${context_params} --context observability.alarmTopicEnabled=\"${CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_LOG_RETENTION_DAYS:-}" ]; then
+        context_params="${context_params} --context observability.logRetentionDays=\"${CDK_OBSERVABILITY_LOG_RETENTION_DAYS}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD:-}" ]; then
+        context_params="${context_params} --context observability.albTarget5xxThreshold=\"${CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_ALB_P99_LATENCY_MS:-}" ]; then
+        context_params="${context_params} --context observability.albP99LatencyMs=\"${CDK_OBSERVABILITY_ALB_P99_LATENCY_MS}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS:-}" ]; then
+        context_params="${context_params} --context observability.agentCoreLatencyMs=\"${CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD:-}" ]; then
+        context_params="${context_params} --context observability.agentCoreErrorThreshold=\"${CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD:-}" ]; then
+        context_params="${context_params} --context observability.lambdaErrorThreshold=\"${CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT:-}" ]; then
+        context_params="${context_params} --context observability.lambdaDurationPercentOfTimeout=\"${CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_DYNAMO_THROTTLE_THRESHOLD:-}" ]; then
+        context_params="${context_params} --context observability.dynamoThrottleThreshold=\"${CDK_OBSERVABILITY_DYNAMO_THROTTLE_THRESHOLD}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_ECS_CPU_PERCENT:-}" ]; then
+        context_params="${context_params} --context observability.ecsCpuPercent=\"${CDK_OBSERVABILITY_ECS_CPU_PERCENT}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_ECS_MEMORY_PERCENT:-}" ]; then
+        context_params="${context_params} --context observability.ecsMemoryPercent=\"${CDK_OBSERVABILITY_ECS_MEMORY_PERCENT}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_XRAY_SAMPLING_RATE:-}" ]; then
+        context_params="${context_params} --context observability.xraySamplingRate=\"${CDK_OBSERVABILITY_XRAY_SAMPLING_RATE}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR:-}" ]; then
+        context_params="${context_params} --context observability.xraySamplingReservoir=\"${CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS:-}" ]; then
+        context_params="${context_params} --context observability.xrayInsightsNotifications=\"${CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED:-}" ]; then
+        context_params="${context_params} --context observability.agentCoreApplicationLogsEnabled=\"${CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD:-}" ]; then
+        context_params="${context_params} --context observability.promptCacheAvoidableMissThreshold=\"${CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD:-}" ]; then
+        context_params="${context_params} --context observability.promptCacheWastedUsdThreshold=\"${CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD:-}" ]; then
+        context_params="${context_params} --context observability.promptCacheSessionWastedUsdThreshold=\"${CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD}\""
+    fi
+
     echo "${context_params}"
 }
 
@@ -467,6 +533,23 @@ if [ "${LOAD_ENV_QUIET:-false}" != "true" ]; then
     if [ -n "${CDK_CERTIFICATE_ARN:-}" ]; then
         log_config "  Certificate:    ${CDK_CERTIFICATE_ARN:0:50}..." # Truncate for display
         log_config "  HTTPS Enabled:  Yes"
+    fi
+
+    # Observability overrides. Only the ones actually set are shown — anything
+    # absent here is using the cost-conscious default from config.ts, which the
+    # synth itself prints as a resolved value. Two lines that disagree is the
+    # signal that a GitHub Variable never reached --context.
+    if [ -n "${CDK_OBSERVABILITY_LOG_RETENTION_DAYS:-}" ]; then
+        log_config "  Log Retention:  ${CDK_OBSERVABILITY_LOG_RETENTION_DAYS} days (override)"
+    fi
+    if [ -n "${CDK_OBSERVABILITY_XRAY_SAMPLING_RATE:-}" ]; then
+        log_config "  X-Ray Sampling: ${CDK_OBSERVABILITY_XRAY_SAMPLING_RATE} (override)"
+    fi
+    if [ -n "${CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED:-}" ]; then
+        log_config "  Alarm Topic:    ${CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED} (override)"
+    fi
+    if [ -n "${CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED:-}" ]; then
+        log_config "  AC App Logs:    ${CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED} (override)"
     fi
 
     # Check AWS credentials

@@ -138,8 +138,14 @@ describe('PlatformStack', () => {
     });
 
     it('creates KMS keys', () => {
-      // OAuth token encryption + BFF cookie signing
-      template.resourceCountIs('AWS::KMS::Key', 2);
+      // OAuth token encryption + BFF cookie signing + alarm topic encryption.
+      //
+      // The third is the alarm topic's CMK. It is customer-managed rather than
+      // alias/aws/sns out of necessity, not preference: CloudWatch cannot be
+      // granted kms:GenerateDataKey* on an AWS-managed key, so an
+      // alias/aws/sns-encrypted topic accepts the alarm and silently drops the
+      // notification. See constructs/observability/alarm-topic-construct.ts.
+      template.resourceCountIs('AWS::KMS::Key', 3);
     });
   });
 

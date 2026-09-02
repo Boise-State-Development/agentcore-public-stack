@@ -66,6 +66,7 @@ export interface AppConfig {
    * AppConfig by hand does not have to know this feature exists.
    */
   tokenExchange?: TokenExchangeConfig;
+  observability: ObservabilityConfig;
   appVersion: string;
   tags: { [key: string]: string };
 }
@@ -420,6 +421,167 @@ export interface TokenExchangeConfig {
   url: string;
   /** client_id this deployment authenticates as. */
   clientId: string;
+}
+
+// ============================================================
+// Observability defaults
+// ============================================================
+//
+// These are the values a fork gets when it configures NOTHING, so every one is
+// chosen as the cheapest setting that still leaves alerting useful. Diagnostic
+// depth is opt-in, not inherited.
+//
+// Deliberately NOT expressed as `config.production ? a : b`. This repo is
+// forked by many institutions; a fork with one environment should never have to
+// reason about a `production` boolean, and a fork with three should not be
+// limited to two. Environment differentiation belongs in the forker's own
+// deployment config (GitHub Variables per environment, or cdk.context.json),
+// which reaches these fields through CDK_OBSERVABILITY_* / --context.
+
+/** CloudWatch Logs retention, in days, for EVERY log group this stack creates.
+ *  Ingestion ($0.50/GB) dominates storage ($0.03/GB-month), so retention is a
+ *  modest cost lever; 30 days is the shortest window that still supports
+ *  month-over-month incident review. */
+export const OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS = 30;
+
+/** X-Ray trace sampling rate for the /invocations path (0.0-1.0).
+ *  The single largest observability cost lever in this stack: X-Ray bills $5
+ *  per million traces recorded, and this construct previously defaulted a
+ *  non-production fork to 1.0 — a trace for EVERY agent invocation, inherited
+ *  without ever being chosen. 1% is enough to characterise latency shape. */
+export const OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE = 0.01;
+
+/** X-Ray reservoir: traces per second recorded before the rate applies.
+ *  1/sec guarantees a low-traffic fork still gets samples, versus the 50/sec
+ *  floor that was previously the non-production default. */
+export const OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR = 1;
+
+/** Alarm threshold for ALB target 5xx responses, per 5-minute period. */
+export const OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD = 10;
+
+/** p99 latency alarm floor (ms) for the ALB and the AgentCore Runtime.
+ *
+ *  STREAMING-AWARE ON PURPOSE. The chat path is SSE: the ALB does not consider
+ *  a request complete until the stream closes, so `TargetResponseTime` and
+ *  AgentCore `Latency` are legitimately tens of seconds for a healthy agent
+ *  turn. The previous AgentCore alarm sat at 30s, which is BELOW normal — it
+ *  could only ever have produced noise. 120s is above a normal long turn and
+ *  below a hung one. */
+export const OBSERVABILITY_DEFAULT_P99_LATENCY_MS = 120_000;
+
+/** Alarm threshold for AgentCore Runtime errors, per 5-minute period. */
+export const OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD = 10;
+
+/** Alarm threshold for Lambda `Errors`, per 5-minute period. */
+export const OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD = 5;
+
+/** Lambda duration alarm expressed as a percentage of each function's own
+ *  configured timeout, so one value works across functions with very
+ *  different timeouts. */
+export const OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT = 80;
+
+/** Alarm threshold for DynamoDB throttle events, per 5-minute period.
+ *  On-demand tables rarely throttle, so a low threshold costs nothing in
+ *  noise and catches a real capacity problem early. */
+export const OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD = 10;
+
+/** ECS service CPU / memory utilisation alarm thresholds (percent). */
+export const OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT = 80;
+export const OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT = 85;
+
+/** Avoidable prompt-cache misses per 5-minute period before alarming.
+ *  Previously `config.production ? 10 : 50`. The tighter production value
+ *  becomes the single default: a prefix-stability regression is a cost leak,
+ *  and catching it earlier is the cheaper outcome for every fork. */
+export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD = 10;
+
+/** Dollars of prompt-cache waste per 5-minute period before alarming.
+ *  Previously `config.production ? 1 : 5`, normalised for the same reason. */
+export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD = 1;
+
+/** Cumulative partial-miss waste for a SINGLE session, in dollars, before
+ *  alarming. A fleet-wide sum cannot see one conversation re-writing its prefix
+ *  every turn: the motivating incident spent $27 over five days at ~$0.43 a
+ *  turn without ever stepping a fleet number. */
+export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD = 5;
+
+/**
+ * Observability configuration — alarm routing, alarm thresholds, log
+ * retention, and trace sampling.
+ *
+ * Every field is a SINGLE scalar with one default. See the block comment above
+ * the default constants for why there is no prod/non-prod branching here.
+ *
+ * Precedence for each field, highest first:
+ *   1. CDK_OBSERVABILITY_* environment variable
+ *   2. `--context observability.<field>=...` (the FLAT dotted key)
+ *   3. a nested `observability: { ... }` object in cdk.context.json
+ *   4. the OBSERVABILITY_DEFAULT_* constant above
+ */
+export interface ObservabilityConfig {
+  /** Create the SNS alarm topic and route every alarm to it. Subscriptions to
+   *  the topic are deliberately NOT infrastructure-as-code: teams subscribe
+   *  out-of-band so adding a recipient never requires a pull request. */
+  alarmTopicEnabled: boolean;
+
+  /** Retention, in days, applied to every log group this stack creates. */
+  logRetentionDays: number;
+
+  /** ALB target 5xx count per 5-minute period before alarming. */
+  albTarget5xxThreshold: number;
+
+  /** ALB p99 `TargetResponseTime` alarm floor, in ms. Streaming-aware. */
+  albP99LatencyMs: number;
+
+  /** AgentCore Runtime p99 `Latency` alarm floor, in ms. Streaming-aware. */
+  agentCoreLatencyMs: number;
+
+  /** AgentCore Runtime error count per 5-minute period before alarming. */
+  agentCoreErrorThreshold: number;
+
+  /** Lambda `Errors` count per 5-minute period before alarming. */
+  lambdaErrorThreshold: number;
+
+  /** Lambda duration alarm as a percentage of the function's own timeout. */
+  lambdaDurationPercentOfTimeout: number;
+
+  /** DynamoDB throttle events per 5-minute period before alarming. */
+  dynamoThrottleThreshold: number;
+
+  /** ECS service CPU utilisation percentage before alarming. */
+  ecsCpuPercent: number;
+
+  /** ECS service memory utilisation percentage before alarming. */
+  ecsMemoryPercent: number;
+
+  /** Avoidable prompt-cache misses per 5-minute period before alarming. */
+  promptCacheAvoidableMissThreshold: number;
+
+  /** Dollars of fleet prompt-cache waste per 5-minute period before alarming. */
+  promptCacheWastedUsdThreshold: number;
+
+  /** Cumulative partial-miss waste for one session, in dollars, before
+   *  alarming. */
+  promptCacheSessionWastedUsdThreshold: number;
+
+  /** X-Ray sampling rate (0.0-1.0) for the agent invocation path. */
+  xraySamplingRate: number;
+
+  /** X-Ray reservoir size: traces/second recorded before the rate applies. */
+  xraySamplingReservoir: number;
+
+  /** Enable X-Ray Insights notifications. A diagnostic opt-in rather than a
+   *  golden signal, so off by default. */
+  xrayInsightsNotifications: boolean;
+
+  /** Enable the AgentCore Runtime's APPLICATION_LOGS vended log delivery.
+   *
+   *  Off by default for two independent reasons: those records carry the full
+   *  `request_payload` and `response_payload` of every invocation, making this
+   *  the highest-volume log source available in the stack (ingestion is the
+   *  dominant CloudWatch Logs cost), and those payloads are user prompts and
+   *  model responses — a PII surface a fork should opt into knowingly. */
+  agentCoreApplicationLogsEnabled: boolean;
 }
 
 /**
@@ -782,6 +944,115 @@ export function loadConfig(scope: cdk.App): AppConfig {
           clientId: tokenExchangeClientId,
         }
       : undefined,
+    // Observability — alarm routing, thresholds, log retention, trace sampling.
+    //
+    // Same three-step precedence as managedKb above, INCLUDING the flat dotted
+    // read at step 2. `--context observability.logRetentionDays=90` sets the
+    // FLAT key context['observability.logRetentionDays']; it does NOT merge
+    // into a nested `observability` object. Reading only the nested form would
+    // accept the operator's flag and silently ignore it — the exact trap that
+    // has already bitten the managed-KB byte caps and the managed-KB alarm
+    // thresholds in this file. Do not "simplify" the dotted reads away.
+    //
+    // Defaults live in the OBSERVABILITY_DEFAULT_* constants so the reasoning
+    // for each number sits next to the number, and so tests and docs can cite
+    // one source rather than a literal repeated per call site.
+    observability: {
+      alarmTopicEnabled:
+        parseBooleanEnv(process.env.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED)
+        ?? parseBooleanEnv(scope.node.tryGetContext('observability.alarmTopicEnabled'))
+        ?? scope.node.tryGetContext('observability')?.alarmTopicEnabled
+        ?? true,
+      logRetentionDays:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.logRetentionDays'))
+        ?? scope.node.tryGetContext('observability')?.logRetentionDays
+        ?? OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+      albTarget5xxThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.albTarget5xxThreshold'))
+        ?? scope.node.tryGetContext('observability')?.albTarget5xxThreshold
+        ?? OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+      albP99LatencyMs:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_ALB_P99_LATENCY_MS)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.albP99LatencyMs'))
+        ?? scope.node.tryGetContext('observability')?.albP99LatencyMs
+        ?? OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+      agentCoreLatencyMs:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.agentCoreLatencyMs'))
+        ?? scope.node.tryGetContext('observability')?.agentCoreLatencyMs
+        ?? OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+      agentCoreErrorThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.agentCoreErrorThreshold'))
+        ?? scope.node.tryGetContext('observability')?.agentCoreErrorThreshold
+        ?? OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+      lambdaErrorThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.lambdaErrorThreshold'))
+        ?? scope.node.tryGetContext('observability')?.lambdaErrorThreshold
+        ?? OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
+      lambdaDurationPercentOfTimeout:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.lambdaDurationPercentOfTimeout'))
+        ?? scope.node.tryGetContext('observability')?.lambdaDurationPercentOfTimeout
+        ?? OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+      dynamoThrottleThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_DYNAMO_THROTTLE_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.dynamoThrottleThreshold'))
+        ?? scope.node.tryGetContext('observability')?.dynamoThrottleThreshold
+        ?? OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
+      ecsCpuPercent:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_ECS_CPU_PERCENT)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.ecsCpuPercent'))
+        ?? scope.node.tryGetContext('observability')?.ecsCpuPercent
+        ?? OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
+      ecsMemoryPercent:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_ECS_MEMORY_PERCENT)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.ecsMemoryPercent'))
+        ?? scope.node.tryGetContext('observability')?.ecsMemoryPercent
+        ?? OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
+      promptCacheAvoidableMissThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.promptCacheAvoidableMissThreshold'))
+        ?? scope.node.tryGetContext('observability')?.promptCacheAvoidableMissThreshold
+        ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
+      // Dollar amounts, so parseFloatEnv — an operator setting 0.5 must not be
+      // silently rounded to 0 and turned into "alarm on any waste at all".
+      promptCacheWastedUsdThreshold:
+        parseFloatEnv(process.env.CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD)
+        ?? parseFloatEnv(scope.node.tryGetContext('observability.promptCacheWastedUsdThreshold'))
+        ?? scope.node.tryGetContext('observability')?.promptCacheWastedUsdThreshold
+        ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
+      promptCacheSessionWastedUsdThreshold:
+        parseFloatEnv(process.env.CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD)
+        ?? parseFloatEnv(scope.node.tryGetContext('observability.promptCacheSessionWastedUsdThreshold'))
+        ?? scope.node.tryGetContext('observability')?.promptCacheSessionWastedUsdThreshold
+        ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+      // Fractional, so parseFloatEnv rather than parseIntEnv — parseIntEnv
+      // would silently turn 0.05 into 0 and disable sampling entirely.
+      xraySamplingRate:
+        parseFloatEnv(process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE)
+        ?? parseFloatEnv(scope.node.tryGetContext('observability.xraySamplingRate'))
+        ?? scope.node.tryGetContext('observability')?.xraySamplingRate
+        ?? OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
+      xraySamplingReservoir:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.xraySamplingReservoir'))
+        ?? scope.node.tryGetContext('observability')?.xraySamplingReservoir
+        ?? OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+      xrayInsightsNotifications:
+        parseBooleanEnv(process.env.CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS)
+        ?? parseBooleanEnv(scope.node.tryGetContext('observability.xrayInsightsNotifications'))
+        ?? scope.node.tryGetContext('observability')?.xrayInsightsNotifications
+        ?? false,
+      agentCoreApplicationLogsEnabled:
+        parseBooleanEnv(process.env.CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED)
+        ?? parseBooleanEnv(scope.node.tryGetContext('observability.agentCoreApplicationLogsEnabled'))
+        ?? scope.node.tryGetContext('observability')?.agentCoreApplicationLogsEnabled
+        ?? false,
+    },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
       // `--context tags.Environment=dev` sets the FLAT dotted key
@@ -824,6 +1095,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(`   Retain Data on Delete: ${config.retainDataOnDelete}`);
   console.log(`   Manage DNS Records: ${config.manageDnsRecords}`);
   console.log(`   App Version: ${config.appVersion}`);
+  // Printed so a deploy log proves which observability values actually took
+  // effect. Task-14-style per-environment overrides are invisible otherwise:
+  // a GitHub Variable that never reaches --context looks identical to one that
+  // does until you read the resolved value here.
+  console.log(
+    `   Observability: alarmTopic=${config.observability.alarmTopicEnabled}`
+    + ` logRetentionDays=${config.observability.logRetentionDays}`
+    + ` xraySamplingRate=${config.observability.xraySamplingRate}`
+    + ` xrayReservoir=${config.observability.xraySamplingReservoir}`
+    + ` agentCoreAppLogs=${config.observability.agentCoreApplicationLogsEnabled}`
+  );
 
   // Validate configuration
   validateConfig(config);
@@ -873,6 +1155,23 @@ function parseIntEnv(value: string | undefined): number | undefined {
     return undefined;
   }
   const parsed = parseInt(value, 10);
+  return isNaN(parsed) ? undefined : parsed;
+}
+
+/**
+ * Parse a floating-point environment/context value.
+ *
+ * Separate from parseIntEnv because the fractional observability tunables
+ * (notably the X-Ray sampling rate) round to 0 under parseInt — "0.05" would
+ * become 0 and switch sampling off entirely rather than setting it to 5%.
+ * Returns undefined for unset/empty/invalid input so nullish coalescing can
+ * fall through to a context value or default.
+ */
+function parseFloatEnv(value: string | undefined): number | undefined {
+  if (value === undefined || value === '') {
+    return undefined;
+  }
+  const parsed = parseFloat(value);
   return isNaN(parsed) ? undefined : parsed;
 }
 
@@ -1061,6 +1360,54 @@ function validateConfig(config: AppConfig): void {
   // and the respective certificate ARNs for a real deployment. Synth and
   // tests proceed without them (constructs handle the undefined case by
   // falling back to CloudFront default domains).
+
+  // ── Observability ──
+  //
+  // Fail fast on values that CloudWatch or X-Ray would reject at deploy time
+  // (or, worse, silently accept and misapply). These are the ones an operator
+  // can plausibly get wrong from a GitHub Variable typo.
+
+  // CloudWatch Logs accepts only a fixed set of retention values. An arbitrary
+  // number is rejected by CloudFormation at deploy time — long after synth,
+  // tsc, and CI have gone green — so it is worth catching here where the error
+  // can name the valid set.
+  const validRetentionDays = [
+    1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096,
+    1827, 2192, 2557, 2922, 3288, 3653,
+  ];
+  if (!validRetentionDays.includes(config.observability.logRetentionDays)) {
+    throw new Error(
+      `Invalid observability.logRetentionDays: ${config.observability.logRetentionDays}. ` +
+      `CloudWatch Logs accepts only: ${validRetentionDays.join(', ')}. ` +
+      `Set CDK_OBSERVABILITY_LOG_RETENTION_DAYS to one of those values.`
+    );
+  }
+
+  // X-Ray sampling is a rate, not a percentage. Passing 5 instead of 0.05 is
+  // the obvious operator error, and it is a 100x cost error in the expensive
+  // direction, so reject it rather than clamping silently.
+  const rate = config.observability.xraySamplingRate;
+  if (rate < 0 || rate > 1) {
+    throw new Error(
+      `Invalid observability.xraySamplingRate: ${rate}. ` +
+      `Expected a rate between 0.0 and 1.0 (e.g. 0.05 for 5%), not a percentage. ` +
+      `X-Ray bills per trace recorded, so a value above 1.0 is rejected rather ` +
+      `than clamped.`
+    );
+  }
+
+  const percentFields: Array<[string, number]> = [
+    ['ecsCpuPercent', config.observability.ecsCpuPercent],
+    ['ecsMemoryPercent', config.observability.ecsMemoryPercent],
+    ['lambdaDurationPercentOfTimeout', config.observability.lambdaDurationPercentOfTimeout],
+  ];
+  for (const [name, value] of percentFields) {
+    if (value <= 0 || value > 100) {
+      throw new Error(
+        `Invalid observability.${name}: ${value}. Expected a percentage between 1 and 100.`
+      );
+    }
+  }
 }
 
 /**

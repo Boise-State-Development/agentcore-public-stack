@@ -9,6 +9,7 @@ import * as path from 'path';
 import { Construct } from 'constructs';
 
 import { AppConfig } from '../../config';
+import { logRetentionFor } from '../observability/log-retention';
 
 export interface ArtifactRenderLambdaConstructProps {
   config: AppConfig;
@@ -79,7 +80,7 @@ export class ArtifactRenderLambdaConstruct extends Construct {
     // Auto-generated log group name (no `logGroupName`) so a
     // failed-deploy orphan can't collide with a redeploy.
     const renderLogGroup = new logs.LogGroup(this, 'RenderFunctionLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 

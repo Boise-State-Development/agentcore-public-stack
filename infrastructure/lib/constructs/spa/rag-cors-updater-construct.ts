@@ -6,6 +6,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 
 import { AppConfig } from '../../config';
+import { logRetentionFor } from '../observability/log-retention';
 
 export interface RagCorsUpdaterConstructProps {
   config: AppConfig;
@@ -46,8 +47,9 @@ export class RagCorsUpdaterConstruct extends Construct {
   ) {
     super(scope, id);
 
-    const { config: _config, frontendUrl, documentsBucket } = props;
-    void _config;
+    // `config` is used for the log-group retention below. It was previously
+    // destructured as `_config` and explicitly voided as unused.
+    const { config, frontendUrl, documentsBucket } = props;
 
     const ragDocumentsBucketName = documentsBucket.bucketName;
     const ragDocumentsBucketArn = documentsBucket.bucketArn;
@@ -55,7 +57,7 @@ export class RagCorsUpdaterConstruct extends Construct {
     // Auto-generated log group name — see ArtifactRenderLambdaConstruct
     // for the same pattern + rationale.
     const updateCorsLogGroup = new logs.LogGroup(this, 'UpdateRagCorsFnLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 

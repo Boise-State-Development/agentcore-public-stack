@@ -1,5 +1,17 @@
 import * as cdk from 'aws-cdk-lib';
-import { loadConfig, AppConfig } from '../lib/config';
+import { loadConfig, AppConfig,
+  OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+  OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
+  OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
+  OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
+  OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+  OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+  OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+  OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
+  OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+} from '../lib/config';
 
 /**
  * Unit Tests for RAG Ingestion Configuration
@@ -62,6 +74,42 @@ function clearManagedKbEnv(): void {
   }
 }
 
+/**
+ * The `CDK_OBSERVABILITY_*` environment variables. Scrubbed before AND after
+ * every test for the same reason as the keys above, and with a specific hazard
+ * of its own: these tests assert the *defaults*, which are the values a fork
+ * inherits when it configures nothing. A leaked value would make a
+ * "defaults to the cost-conscious value" assertion pass while reading someone
+ * else's override — the failure mode where the cheap default is believed to be
+ * in place and the expensive one is actually deployed.
+ */
+const OBSERVABILITY_ENV_KEYS = [
+  'CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED',
+  'CDK_OBSERVABILITY_LOG_RETENTION_DAYS',
+  'CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD',
+  'CDK_OBSERVABILITY_ALB_P99_LATENCY_MS',
+  'CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS',
+  'CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD',
+  'CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD',
+  'CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT',
+  'CDK_OBSERVABILITY_DYNAMO_THROTTLE_THRESHOLD',
+  'CDK_OBSERVABILITY_ECS_CPU_PERCENT',
+  'CDK_OBSERVABILITY_ECS_MEMORY_PERCENT',
+  'CDK_OBSERVABILITY_XRAY_SAMPLING_RATE',
+  'CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR',
+  'CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS',
+  'CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED',
+  'CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD',
+  'CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD',
+  'CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD',
+] as const;
+
+function clearObservabilityEnv(): void {
+  for (const key of OBSERVABILITY_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
 describe('RAG Ingestion Configuration', () => {
   let app: cdk.App;
   let originalEnv: NodeJS.ProcessEnv;
@@ -74,6 +122,7 @@ describe('RAG Ingestion Configuration', () => {
     // Hermetic start: drop any RAG keys a prior test may have leaked.
     clearRagEnv();
     clearManagedKbEnv();
+    clearObservabilityEnv();
 
     // Create a fresh CDK app for each test
     app = new cdk.App();
@@ -137,6 +186,7 @@ describe('RAG Ingestion Configuration', () => {
     // the original environment object.
     clearRagEnv();
     clearManagedKbEnv();
+    clearObservabilityEnv();
     process.env = originalEnv;
   });
 
@@ -1443,6 +1493,347 @@ describe('RAG Ingestion Configuration', () => {
       expect(loadConfig(app).mcpIdentity.tokenEnrichment?.accessTokenClaims).toEqual({
         'ctx:claim': 'custom:from_context',
       });
+    });
+  });
+});
+
+// ============================================================
+// Observability Configuration
+// ============================================================
+
+/**
+ * Observability config tests.
+ *
+ * Two things are being protected here, and only one of them is ordinary
+ * config plumbing.
+ *
+ * 1. **The defaults themselves.** They are what a fork inherits when it
+ *    configures nothing, so each one is asserted against its exported constant
+ *    rather than a literal. Someone raising the X-Ray sampling default from 1%
+ *    to 100% has to change a test that says, in words, why it is 1%.
+ *
+ * 2. **That the FLAT dotted context key is read.** `--context observability.x=y`
+ *    sets context['observability.x']; it does NOT build a nested object. A
+ *    section that reads only the nested form accepts an operator's --context
+ *    flag and silently ignores it. That trap has already cost this repo twice
+ *    (managed-KB byte caps, then managed-KB alarm thresholds), so it is pinned
+ *    here for every field rather than trusted.
+ */
+describe('Observability Configuration', () => {
+  let app: cdk.App;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  /** Minimum context for loadConfig() to reach the observability section. */
+  function setRequiredContext(a: cdk.App): void {
+    a.node.setContext('projectPrefix', 'test-project');
+    a.node.setContext('awsRegion', 'us-east-1');
+    a.node.setContext('awsAccount', '123456789012');
+    a.node.setContext('vpcCidr', '10.0.0.0/16');
+    a.node.setContext('frontend', { cloudFrontPriceClass: 'PriceClass_100' });
+    a.node.setContext('appApi', {
+      cpu: 256, memory: 512, desiredCount: 1, maxCapacity: 4,
+    });
+    a.node.setContext('ragIngestion', {
+      lambdaMemorySize: 10240,
+      lambdaTimeout: 900,
+      embeddingModel: 'amazon.titan-embed-text-v2',
+      vectorDimension: 1024,
+      vectorDistanceMetric: 'cosine',
+    });
+  }
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+    process.env = { ...originalEnv };
+    clearObservabilityEnv();
+    app = new cdk.App();
+    setRequiredContext(app);
+  });
+
+  afterEach(() => {
+    clearObservabilityEnv();
+    process.env = originalEnv;
+  });
+
+  describe('cost-conscious defaults', () => {
+    test('log retention defaults to the exported constant', () => {
+      expect(loadConfig(app).observability.logRetentionDays).toBe(
+        OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+      );
+    });
+
+    // The single most expensive knob in the stack. Before this config section
+    // existed, a fork that never set `production` got fixedRate 1.0 — a
+    // recorded X-Ray trace for EVERY agent invocation at $5/million. This
+    // assertion exists so that regression cannot come back quietly.
+    test('X-Ray sampling defaults to 1%, not 100%', () => {
+      const { xraySamplingRate } = loadConfig(app).observability;
+      expect(xraySamplingRate).toBe(OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE);
+      expect(xraySamplingRate).toBeLessThanOrEqual(0.05);
+    });
+
+    test('X-Ray reservoir defaults to 1 trace/sec', () => {
+      expect(loadConfig(app).observability.xraySamplingReservoir).toBe(
+        OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+      );
+    });
+
+    // Full request/response payloads: highest-volume log source in the stack
+    // and a PII surface. Must be opt-in.
+    test('AgentCore APPLICATION_LOGS default to OFF', () => {
+      expect(loadConfig(app).observability.agentCoreApplicationLogsEnabled).toBe(false);
+    });
+
+    test('X-Ray Insights notifications default to OFF', () => {
+      expect(loadConfig(app).observability.xrayInsightsNotifications).toBe(false);
+    });
+
+    // Routing is the entire point of the feature, so this one defaults ON.
+    test('alarm topic defaults to ON', () => {
+      expect(loadConfig(app).observability.alarmTopicEnabled).toBe(true);
+    });
+
+    // Streaming-aware. The chat path is SSE, so a healthy agent turn can run
+    // for tens of seconds; the pre-existing 30s AgentCore alarm sat BELOW
+    // normal and could only ever have produced noise.
+    test('latency floors are streaming-aware, well above a normal agent turn', () => {
+      const obs = loadConfig(app).observability;
+      expect(obs.agentCoreLatencyMs).toBe(OBSERVABILITY_DEFAULT_P99_LATENCY_MS);
+      expect(obs.albP99LatencyMs).toBe(OBSERVABILITY_DEFAULT_P99_LATENCY_MS);
+      expect(obs.agentCoreLatencyMs).toBeGreaterThan(30_000);
+    });
+
+    test('threshold and percentage defaults match their constants', () => {
+      const obs = loadConfig(app).observability;
+      expect(obs.albTarget5xxThreshold).toBe(OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD);
+      expect(obs.agentCoreErrorThreshold).toBe(OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD);
+      expect(obs.lambdaErrorThreshold).toBe(OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD);
+      expect(obs.lambdaDurationPercentOfTimeout).toBe(
+        OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+      );
+      expect(obs.dynamoThrottleThreshold).toBe(OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD);
+      expect(obs.ecsCpuPercent).toBe(OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT);
+      expect(obs.ecsMemoryPercent).toBe(OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT);
+    });
+  });
+
+  describe('environment variable overrides', () => {
+    test('CDK_OBSERVABILITY_LOG_RETENTION_DAYS reaches config', () => {
+      process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = '90';
+      expect(loadConfig(app).observability.logRetentionDays).toBe(90);
+    });
+
+    // parseFloatEnv, not parseIntEnv: parseInt('0.25') is 0, which would
+    // switch sampling off entirely instead of setting it to 25%.
+    test('fractional X-Ray sampling rate survives parsing', () => {
+      process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '0.25';
+      expect(loadConfig(app).observability.xraySamplingRate).toBe(0.25);
+    });
+
+    test('booleans parse from env', () => {
+      process.env.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED = 'false';
+      process.env.CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED = 'true';
+      const obs = loadConfig(app).observability;
+      expect(obs.alarmTopicEnabled).toBe(false);
+      expect(obs.agentCoreApplicationLogsEnabled).toBe(true);
+    });
+
+    test('every numeric field is settable from its env var', () => {
+      process.env.CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD = '1';
+      process.env.CDK_OBSERVABILITY_ALB_P99_LATENCY_MS = '2000';
+      process.env.CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS = '3000';
+      process.env.CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD = '4';
+      process.env.CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD = '5';
+      process.env.CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT = '60';
+      process.env.CDK_OBSERVABILITY_DYNAMO_THROTTLE_THRESHOLD = '7';
+      process.env.CDK_OBSERVABILITY_ECS_CPU_PERCENT = '65';
+      process.env.CDK_OBSERVABILITY_ECS_MEMORY_PERCENT = '70';
+      process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR = '9';
+
+      const obs = loadConfig(app).observability;
+      expect(obs.albTarget5xxThreshold).toBe(1);
+      expect(obs.albP99LatencyMs).toBe(2000);
+      expect(obs.agentCoreLatencyMs).toBe(3000);
+      expect(obs.agentCoreErrorThreshold).toBe(4);
+      expect(obs.lambdaErrorThreshold).toBe(5);
+      expect(obs.lambdaDurationPercentOfTimeout).toBe(60);
+      expect(obs.dynamoThrottleThreshold).toBe(7);
+      expect(obs.ecsCpuPercent).toBe(65);
+      expect(obs.ecsMemoryPercent).toBe(70);
+      expect(obs.xraySamplingReservoir).toBe(9);
+    });
+  });
+
+  describe('flat dotted context key (what --context actually sets)', () => {
+    // `--context observability.logRetentionDays=90` sets THIS key. Reading only
+    // the nested object would accept the operator's flag and ignore it.
+    test('flat dotted key is honoured for a number', () => {
+      app.node.setContext('observability.logRetentionDays', '90');
+      expect(loadConfig(app).observability.logRetentionDays).toBe(90);
+    });
+
+    test('flat dotted key is honoured for a fractional rate', () => {
+      app.node.setContext('observability.xraySamplingRate', '0.5');
+      expect(loadConfig(app).observability.xraySamplingRate).toBe(0.5);
+    });
+
+    test('flat dotted key is honoured for a boolean', () => {
+      app.node.setContext('observability.agentCoreApplicationLogsEnabled', 'true');
+      app.node.setContext('observability.promptCacheAvoidableMissThreshold', '22');
+      app.node.setContext('observability.promptCacheWastedUsdThreshold', '2.5');
+      app.node.setContext('observability.promptCacheSessionWastedUsdThreshold', '23');
+      expect(loadConfig(app).observability.agentCoreApplicationLogsEnabled).toBe(true);
+    });
+
+    test('every field is reachable via its flat dotted key', () => {
+      app.node.setContext('observability.alarmTopicEnabled', 'false');
+      app.node.setContext('observability.logRetentionDays', '7');
+      app.node.setContext('observability.albTarget5xxThreshold', '11');
+      app.node.setContext('observability.albP99LatencyMs', '12');
+      app.node.setContext('observability.agentCoreLatencyMs', '13');
+      app.node.setContext('observability.agentCoreErrorThreshold', '14');
+      app.node.setContext('observability.lambdaErrorThreshold', '15');
+      app.node.setContext('observability.lambdaDurationPercentOfTimeout', '16');
+      app.node.setContext('observability.dynamoThrottleThreshold', '17');
+      app.node.setContext('observability.ecsCpuPercent', '18');
+      app.node.setContext('observability.ecsMemoryPercent', '19');
+      app.node.setContext('observability.xraySamplingRate', '0.2');
+      app.node.setContext('observability.xraySamplingReservoir', '21');
+      app.node.setContext('observability.xrayInsightsNotifications', 'true');
+      app.node.setContext('observability.agentCoreApplicationLogsEnabled', 'true');
+      app.node.setContext('observability.promptCacheAvoidableMissThreshold', '22');
+      app.node.setContext('observability.promptCacheWastedUsdThreshold', '2.5');
+      app.node.setContext('observability.promptCacheSessionWastedUsdThreshold', '23');
+
+      expect(loadConfig(app).observability).toEqual({
+        alarmTopicEnabled: false,
+        logRetentionDays: 7,
+        albTarget5xxThreshold: 11,
+        albP99LatencyMs: 12,
+        agentCoreLatencyMs: 13,
+        agentCoreErrorThreshold: 14,
+        lambdaErrorThreshold: 15,
+        lambdaDurationPercentOfTimeout: 16,
+        dynamoThrottleThreshold: 17,
+        ecsCpuPercent: 18,
+        ecsMemoryPercent: 19,
+        xraySamplingRate: 0.2,
+        xraySamplingReservoir: 21,
+        xrayInsightsNotifications: true,
+        agentCoreApplicationLogsEnabled: true,
+        promptCacheAvoidableMissThreshold: 22,
+        promptCacheWastedUsdThreshold: 2.5,
+        promptCacheSessionWastedUsdThreshold: 23,
+      });
+    });
+  });
+
+  describe('nested context object (cdk.context.json)', () => {
+    test('nested object is honoured', () => {
+      app.node.setContext('observability', {
+        logRetentionDays: 365,
+        xraySamplingRate: 0.1,
+        alarmTopicEnabled: false,
+      });
+      const obs = loadConfig(app).observability;
+      expect(obs.logRetentionDays).toBe(365);
+      expect(obs.xraySamplingRate).toBe(0.1);
+      expect(obs.alarmTopicEnabled).toBe(false);
+    });
+
+    test('unset fields in a nested object still take their defaults', () => {
+      app.node.setContext('observability', { logRetentionDays: 365 });
+      const obs = loadConfig(app).observability;
+      expect(obs.logRetentionDays).toBe(365);
+      expect(obs.xraySamplingRate).toBe(OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE);
+    });
+  });
+
+  describe('precedence: env > flat dotted context > nested context > default', () => {
+    test('env beats both context forms', () => {
+      process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = '7';
+      app.node.setContext('observability.logRetentionDays', '90');
+      app.node.setContext('observability', { logRetentionDays: 365 });
+      expect(loadConfig(app).observability.logRetentionDays).toBe(7);
+    });
+
+    test('flat dotted context beats nested context', () => {
+      app.node.setContext('observability.logRetentionDays', '90');
+      app.node.setContext('observability', { logRetentionDays: 365 });
+      expect(loadConfig(app).observability.logRetentionDays).toBe(90);
+    });
+
+    // An unset GitHub Actions variable arrives as the empty string. It must
+    // fall through, not parse as 0 — a 0-day retention or 0.0 sampling rate
+    // silently applied would be indistinguishable from a working config.
+    test('empty env var falls through to the default', () => {
+      process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = '';
+      process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '';
+      const obs = loadConfig(app).observability;
+      expect(obs.logRetentionDays).toBe(OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS);
+      expect(obs.xraySamplingRate).toBe(OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE);
+    });
+
+    // false is a legitimate value, not "absent". parseBooleanEnv distinguishes
+    // them; `||` would not, and would silently re-enable a disabled feature.
+    test('an explicit false is not overwritten by the ON default', () => {
+      process.env.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED = 'false';
+      expect(loadConfig(app).observability.alarmTopicEnabled).toBe(false);
+    });
+  });
+
+  describe('validation', () => {
+    // CloudWatch Logs accepts only a fixed set of retention values. Without
+    // this check the failure surfaces at CFN deploy time, long after synth,
+    // tsc, and CI have all gone green.
+    test('rejects a retention value CloudWatch does not accept', () => {
+      process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = '45';
+      expect(() => loadConfig(app)).toThrow(/logRetentionDays/);
+    });
+
+    test('accepts every documented CloudWatch retention value', () => {
+      for (const days of [1, 7, 30, 90, 365, 3653]) {
+        const freshApp = new cdk.App();
+        setRequiredContext(freshApp);
+        process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = String(days);
+        expect(loadConfig(freshApp).observability.logRetentionDays).toBe(days);
+      }
+    });
+
+    // Passing 5 for "5%" instead of 0.05 is a 100x cost error in the expensive
+    // direction. Reject rather than clamp so it cannot be deployed unnoticed.
+    test('rejects an X-Ray sampling rate given as a percentage', () => {
+      process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '5';
+      expect(() => loadConfig(app)).toThrow(/xraySamplingRate/);
+    });
+
+    test('rejects a negative X-Ray sampling rate', () => {
+      process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '-0.1';
+      expect(() => loadConfig(app)).toThrow(/xraySamplingRate/);
+    });
+
+    test('accepts the boundary sampling rates 0.0 and 1.0', () => {
+      for (const rate of ['0', '1']) {
+        const freshApp = new cdk.App();
+        setRequiredContext(freshApp);
+        process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = rate;
+        expect(() => loadConfig(freshApp)).not.toThrow();
+      }
+    });
+
+    test('rejects out-of-range percentages', () => {
+      const cases: Array<[string, string]> = [
+        ['CDK_OBSERVABILITY_ECS_CPU_PERCENT', '101'],
+        ['CDK_OBSERVABILITY_ECS_MEMORY_PERCENT', '0'],
+        ['CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT', '150'],
+      ];
+      for (const [key, value] of cases) {
+        const freshApp = new cdk.App();
+        setRequiredContext(freshApp);
+        clearObservabilityEnv();
+        process.env[key] = value;
+        expect(() => loadConfig(freshApp)).toThrow(/Expected a percentage/);
+      }
     });
   });
 });
