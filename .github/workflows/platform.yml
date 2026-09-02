@@ -207,27 +207,8 @@ jobs:
       # (default 100). Leave unset to take those defaults.
       CDK_MANAGED_KB_STORAGE_ALARM_GB: ${{ vars.CDK_MANAGED_KB_STORAGE_ALARM_GB }}
       CDK_MANAGED_KB_DAILY_COST_ALARM_USD: ${{ vars.CDK_MANAGED_KB_DAILY_COST_ALARM_USD }}
-      # Observability — alarm routing, alarm thresholds, log retention, X-Ray
-      # sampling. EVERY one of these is optional: leave it unset and config.ts
-      # supplies a cost-conscious default that is correct for a fork which never
-      # thinks about observability at all.
-      #
-      # There is deliberately no prod/non-prod branching inside the CDK code.
-      # These variables are the mechanism that replaces it: an institution
-      # running several environments scopes different values to different GitHub
-      # Environments, so the committed defaults stay right for everyone else.
-      # That is also why they live in this job-level env block — `vars.*` in a
-      # workflow-level env resolves to an empty string, because environment
-      # scoping only exists on a job that declares `environment:`.
-      #
-      # The two that matter most for cost:
-      #   CDK_OBSERVABILITY_XRAY_SAMPLING_RATE   default 0.01 (1%). X-Ray bills
-      #       $5 per million traces recorded. This is a RATE, 0.0-1.0 — passing
-      #       5 instead of 0.05 is rejected by config.ts rather than clamped.
-      #   CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED  default false.
-      #       Those records carry the full prompt and model response of every
-      #       invocation: the highest-volume log source in the stack, and a PII
-      #       surface. Turn it on knowingly, for diagnostics, not by default.
+      # Observability. All optional — unset means the default in config.ts.
+      # XRAY_SAMPLING_RATE is a rate (0.0-1.0), not a percentage.
       CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED: ${{ vars.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED }}
       CDK_OBSERVABILITY_LOG_RETENTION_DAYS: ${{ vars.CDK_OBSERVABILITY_LOG_RETENTION_DAYS }}
       CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD }}
@@ -243,9 +224,6 @@ jobs:
       CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR: ${{ vars.CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR }}
       CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS: ${{ vars.CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS }}
       CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED: ${{ vars.CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED }}
-      # Prompt-cache waste alarms. These watch the EMF metrics from
-      # backend/src/apis/shared/observability/emf.py and are the ones that catch
-      # a prompt-prefix regression quietly re-writing cache on every turn.
       CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD }}
       CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD }}
       CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD }}

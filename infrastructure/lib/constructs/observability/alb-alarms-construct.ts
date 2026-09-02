@@ -18,30 +18,14 @@ export interface AlbAlarmsConstructProps {
 }
 
 /**
- * AlbAlarmsConstruct — golden-signal alarms for the platform's front door.
+ * Front-door alarms.
  *
- * ## The streaming problem, and why latency is not the headline signal here
+ * The chat path is SSE, so TargetResponseTime is legitimately tens of seconds and
+ * latency is a weak signal in both directions — the discrete metrics (5xx counts,
+ * unhealthy hosts, rejected connections) are the reliable ones.
  *
- * The chat path is Server-Sent Events. The ALB does not consider a request
- * complete until the stream closes, so `TargetResponseTime` for a healthy agent
- * turn is legitimately tens of seconds — and a *fast* response can mean the
- * agent failed early. Latency on this load balancer is therefore a weak health
- * signal in both directions, and a tight threshold on it produces noise that
- * gets the alarm muted, at which point it is worth less than nothing.
- *
- * So the reliable signals here are the discrete ones: 5xx counts, unhealthy
- * hosts, rejected connections, and connection errors. A p99 latency alarm is
- * included, but with a deliberately high floor
- * (`observability.albP99LatencyMs`, default 120s) chosen to sit above a normal
- * long turn and below a hung one.
- *
- * ## ELB 5xx vs Target 5xx are different incidents
- *
- * `HTTPCode_ELB_5XX_Count` is the load balancer failing — no healthy target,
- * or a request it could not hand off. `HTTPCode_Target_5XX_Count` is the
- * application returning an error while perfectly reachable. They are alarmed
- * separately because the first response is "check whether anything is running"
- * and the second is "read the application logs".
+ * ELB 5xx and target 5xx are separate alarms because the first response differs:
+ * "is anything running" versus "read the application logs".
  */
 export class AlbAlarmsConstruct extends Construct {
   constructor(scope: Construct, id: string, props: AlbAlarmsConstructProps) {
@@ -55,9 +39,6 @@ export class AlbAlarmsConstruct extends Construct {
     // Errors
     // ============================================================
 
-    // The load balancer itself failing to serve. Most commonly: no healthy
-    // target to route to. NOT_BREACHING on missing data because a period with
-    // no traffic emits nothing, and silence here is genuinely fine.
     alarms.alarm('AlbElb5xxAlarm', {
       name: 'alb-elb-5xx',
       alarmDescription:
@@ -72,8 +53,6 @@ export class AlbAlarmsConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // The application erroring while reachable. Bound to the target group, so
-    // this counts only app-api's responses.
     alarms.alarm('AlbTarget5xxAlarm', {
       name: 'alb-target-5xx',
       alarmDescription:
@@ -92,17 +71,8 @@ export class AlbAlarmsConstruct extends Construct {
     // Availability
     // ============================================================
 
-    /**
-     * BREACHING on missing data, and this is the one alarm in the stack where
-     * that is essential.
-     *
-     * `UnHealthyHostCount` is only reported while targets are registered. If
-     * the service scales to zero, the task definition fails to launch, or the
-     * whole service is deleted, the metric stops arriving entirely — and with
-     * NOT_BREACHING (the sensible default everywhere else) the alarm would sit
-     * quietly in INSUFFICIENT_DATA reporting nothing wrong while the platform
-     * is completely down. Absence of data IS the outage here.
-     */
+    // BREACHING: UnHealthyHostCount stops being published entirely when no
+    // targets are registered, so absent data is the outage, not health.
     alarms.alarm('AlbUnhealthyHostAlarm', {
       name: 'alb-unhealthy-hosts',
       alarmDescription:
@@ -117,9 +87,6 @@ export class AlbAlarmsConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.BREACHING,
     });
 
-    // The ALB could not open a connection to a target at all — a security-group
-    // or network-path fault rather than an application error, so it is worth
-    // separating from the 5xx alarms above.
     alarms.alarm('AlbTargetConnectionErrorAlarm', {
       name: 'alb-target-connection-errors',
       alarmDescription:
@@ -138,10 +105,8 @@ export class AlbAlarmsConstruct extends Construct {
     // Saturation
     // ============================================================
 
-    // Non-zero means the ALB hit its connection limit and turned users away at
-    // the door. Threshold 0: any rejection at all is worth knowing about,
-    // because it is invisible from inside the application — the request never
-    // arrives, so nothing is logged.
+    // Threshold 0: a rejected connection never reaches the app, so it appears
+    // in no application log.
     alarms.alarm('AlbRejectedConnectionAlarm', {
       name: 'alb-rejected-connections',
       alarmDescription:
@@ -171,10 +136,7 @@ export class AlbAlarmsConstruct extends Construct {
         period: ALARM_PERIOD,
         statistic: 'p99',
       }),
-      // CloudWatch reports TargetResponseTime in SECONDS; the config value is
-      // in milliseconds so it reads consistently with the AgentCore latency
-      // knob. Converting here rather than storing seconds keeps one unit in
-      // config and avoids a 1000x threshold error at the call site.
+      // CloudWatch reports this metric in SECONDS; config is in ms.
       threshold: obs.albP99LatencyMs / 1000,
       evaluationPeriods: 3,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,

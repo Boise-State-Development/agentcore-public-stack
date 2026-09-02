@@ -84,14 +84,8 @@ describe('Lambda and DLQ alarms', () => {
     }
   });
 
-  /**
-   * kb-sync and scheduled-runs deliberately keep their own error alarms, which
-   * use different thresholds per role: the dispatcher alarms at 1 error because
-   * it is the sole initiator of scheduled work and any failure stalls the
-   * pipeline, while the worker tolerates 3 because one failed document or run is
-   * recoverable. A second error alarm at one shared threshold would either
-   * duplicate the page or contradict it.
-   */
+  // Those constructs keep their own error alarms with role-tuned thresholds
+  // (dispatcher 1, worker 3); a second at one shared threshold would conflict.
   it('does not duplicate error alarms that already exist elsewhere', () => {
     for (const fn of THROTTLE_ONLY) {
       byName(`lambda-${fn}-throttles`);
@@ -104,17 +98,7 @@ describe('Lambda and DLQ alarms', () => {
     expect(byName('scheduled-runs-worker-errors').Properties.Threshold).toBe(3);
   });
 
-  /**
-   * THE coverage guard: every Lambda in the template must have an error alarm
-   * somewhere, whether from this construct or its own.
-   *
-   * Derived from the template's own AWS::Lambda::Function resources rather than
-   * a hardcoded list, so a new Lambda added without an alarm fails here.
-   *
-   * rag-cors-updater and the CDK-generated custom-resource providers are
-   * excluded: they are deploy-time machinery, and their failure fails the
-   * CloudFormation deploy directly and loudly.
-   */
+  // Deploy-time machinery is excluded: its failure fails the deploy directly.
   it('every runtime Lambda has an error alarm', () => {
     const alarmNames = names();
     const functions = template.findResources('AWS::Lambda::Function');
@@ -130,12 +114,6 @@ describe('Lambda and DLQ alarms', () => {
     expect(runtimeFunctions.length).toBeGreaterThan(0);
   });
 
-  /**
-   * A throttle is not the function failing — it is concurrency exhaustion, and
-   * the remedy is a reserved-concurrency or account-limit change rather than a
-   * code fix. Threshold 0 because a throttled invocation is either dropped or
-   * deferred, and neither is visible from inside the function.
-   */
   it('throttle alarms fire on any throttle at all', () => {
     for (const fn of [...FULLY_ALARMED, ...THROTTLE_ONLY]) {
       const alarm = byName(`lambda-${fn}-throttles`);
@@ -153,24 +131,14 @@ describe('Lambda and DLQ alarms', () => {
     expect(JSON.stringify(dims[0].Value)).toMatch(/Ref|Fn::GetAtt/);
   });
 
-  /**
-   * No duration alarms. A function that exceeds its timeout is killed and
-   * records an Errors datapoint, so the failure that matters is already covered;
-   * a duration alarm mostly reports "slower than usual", which is a dashboard
-   * question. Dropping them reclaimed 12 of the stack's 500-resource
-   * CloudFormation budget.
-   */
+  // A timed-out invocation already records an Errors datapoint.
   it('creates no per-function duration alarms', () => {
     expect(names().filter((n) => /duration/i.test(n))).toEqual([]);
   });
 
   describe('dead-letter queue', () => {
-    /**
-     * Threshold 0 and a single evaluation period: a message on a DLQ is work the
-     * platform accepted and then failed after every retry. Unlike a Lambda
-     * error, it does not resolve itself — the message sits there until someone
-     * drains or replays it, so the alarm should not clear on its own either.
-     */
+    // DLQ messages persist until drained or replayed, so this must not
+    // self-clear.
     it('alarms when the kb-ingestion DLQ is not empty', () => {
       const alarm = byName('dlq-kb-ingestion-not-empty');
       expect(alarm.Properties.Namespace).toBe('AWS/SQS');

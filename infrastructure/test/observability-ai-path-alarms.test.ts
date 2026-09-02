@@ -56,9 +56,6 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
     });
 
     it('uses the account-wide roll-up rather than per-model alarms', () => {
-      // Models are added and removed through the admin UI at runtime, so a
-      // per-ModelId alarm set fixed at synth time would drift out of step with
-      // whatever is actually enabled.
       for (const name of ['bedrock-invocation-throttles', 'bedrock-tpm-quota-usage']) {
         expect(byName(name).Properties.Dimensions).toBeUndefined();
       }
@@ -68,16 +65,10 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
       const alarm = byName('bedrock-invocation-throttles');
       expect(alarm.Properties.MetricName).toBe('InvocationThrottles');
       expect(alarm.Properties.Threshold).toBe(0);
-      // Had zero streams when verified — never fired, rather than absent. This
-      // keeps it silent until the first real occurrence.
+      // Zero streams when verified — never fired, rather than absent.
       expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
     });
 
-    /**
-     * The only leading indicator in this construct: quota usage climbing is
-     * visible before throttling begins, so acting on it means requesting an
-     * increase before users see failures rather than after.
-     */
     it('quota-usage alarm is a percentage gauge on a metric that has live data', () => {
       const alarm = byName('bedrock-tpm-quota-usage');
       expect(alarm.Properties.MetricName).toBe('EstimatedTPMQuotaUsage');
@@ -99,11 +90,7 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
       }
     });
 
-    /**
-     * Extraction and Consolidation are excluded on purpose: they are async
-     * background strategies whose failures do not break a live turn, so
-     * including them would make the alarm fire for something no user notices.
-     */
+    // Extraction and Consolidation are async and do not break a live turn.
     it('sums only the conversation hot-path operations', () => {
       const json = JSON.stringify(byName('agentcore-memory-system-errors').Properties.Metrics);
       for (const op of [
@@ -123,7 +110,6 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
       expect(JSON.stringify(resource.Value)).toMatch(/Fn::GetAtt|Ref|arn:/);
     });
 
-    /** Five metrics, well inside CloudWatch's 10-per-expression alarm cap. */
     it('stays inside the 10-metric math limit', () => {
       const metrics = byName('agentcore-memory-system-errors').Properties.Metrics;
       expect(metrics.filter((m: any) => m.MetricStat).length).toBe(5);
@@ -160,12 +146,8 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
       }
     });
 
-    /**
-     * The asymmetry worth pinning: Code Interpreter publishes `Resource` as a
-     * BARE ID while Memory and Gateway publish full ARNs for the same dimension
-     * key. Verified by enumerating live streams. Passing an ARN here would
-     * produce an alarm that matches nothing and stays permanently green.
-     */
+    // Memory and Gateway use full ARNs for this same key; an ARN here matches
+    // no stream.
     it('binds Resource to the bare Code Interpreter ID, not an ARN', () => {
       const metrics = byName('agentcore-code-interpreter-system-errors').Properties.Metrics;
       const stat = metrics.find((m: any) => m.MetricStat);
@@ -182,17 +164,8 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
   });
 
   describe('deliberate omissions', () => {
-    /**
-     * AWS/Cognito publishes ONLY success metrics — SignInSuccesses,
-     * SignUpSuccesses, TokenRefreshSuccesses, FederationSuccesses. Failure and
-     * threat metrics require the Cognito Plus feature plan and this pool runs on
-     * ESSENTIALS, so a sign-in failure alarm has no metric to watch. Creating one
-     * would produce exactly the permanently-green dead alarm this whole effort
-     * exists to eliminate.
-     *
-     * The real auth-path failure signal is the token-enrichment Lambda's Errors
-     * metric, covered by LambdaAlarmsConstruct.
-     */
+    // AWS/Cognito publishes only success metrics on the ESSENTIALS plan; failure
+    // metrics need Plus. The auth signal is the token-enrichment Lambda.
     it('creates no Cognito alarm, because no failure metric exists to watch', () => {
       for (const alarm of Object.values(alarms)) {
         expect((alarm as any).Properties.Namespace).not.toBe('AWS/Cognito');
@@ -200,7 +173,6 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
       expect(allNames().filter((n) => /cognito|sign-in/i.test(n))).toEqual([]);
     });
 
-    /** No metric streams exist for Browser — provisioned but unused. */
     it('creates no AgentCore Browser alarm', () => {
       expect(allNames().filter((n) => /browser/i.test(n))).toEqual([]);
     });

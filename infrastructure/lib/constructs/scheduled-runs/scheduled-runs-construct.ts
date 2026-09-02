@@ -41,7 +41,6 @@ export interface ScheduledRunsConstructProps {
    * only HTTP dependency (via run_agent_headless). */
   inferenceApiRuntimeEndpointUrl: string;
   cognitoRegion: string;
-  /** Platform alarm topic. Undefined leaves these alarms console-only. */
   alarmTopic?: sns.ITopic;
 }
 
@@ -287,7 +286,6 @@ export class ScheduledRunsConstruct extends Construct {
     });
     this.scheduleRule.addTarget(new targets.LambdaFunction(this.dispatcherLambda));
 
-    // Error visibility, routed to the platform alarm topic via AlarmFactory.
     const alarms = new AlarmFactory(this, config, props.alarmTopic);
     alarms.alarm('ScheduledRunsDispatcherErrorAlarm', {
       name: 'scheduled-runs-dispatcher-errors',

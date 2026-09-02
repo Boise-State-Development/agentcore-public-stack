@@ -139,11 +139,8 @@ export interface PlatformStackProps extends cdk.StackProps {
  * a stack to avoid a circular dependency).
  */
 export class PlatformStack extends cdk.Stack {
-  // ── Observability
-  // The single SNS topic every alarm in this stack publishes to. Undefined when
-  // observability.alarmTopicEnabled is false, in which case alarms are created
-  // without actions (console-only). Passed by typed reference to every
-  // construct that raises an alarm.
+  /** SNS topic every alarm publishes to. Undefined when alarmTopicEnabled is
+   *  false, leaving alarms console-only. */
   public readonly alarmTopic?: sns.ITopic;
 
   // ── Network
@@ -263,10 +260,7 @@ export class PlatformStack extends cdk.Stack {
   // ── Internal handles for the two-step wiring methods
   private readonly _config: AppConfig;
 
-  // Constructs created in the constructor whose Lambdas are alarmed in
-  // wireCompute(). Held as fields rather than re-derived, so the alarms bind to
-  // the same function objects (and therefore the same CloudWatch dimensions)
-  // that were actually created.
+  // Created in the constructor, alarmed in wireCompute().
   private _kbSync?: KbSyncConstruct;
   private _gatewayArn!: string;
   private _artifactRenderFunction!: lambda.IFunction;
@@ -285,27 +279,14 @@ export class PlatformStack extends cdk.Stack {
     this._config = config;
     applyStandardTags(this, config);
 
-    // Force the configured log retention onto EVERY log group in the stack,
-    // including the ones CDK creates for its own machinery (the
-    // AwsCustomResource provider Lambda and the BucketDeployment Lambda both get
-    // a 731-day default otherwise). Those groups are declared nowhere in this
-    // codebase, so no per-site discipline would catch them — an Aspect visits the
-    // whole tree and does.
+    // Covers log groups CDK creates for its own machinery, which default to
+    // 731 days and are declared nowhere in this codebase.
     cdk.Aspects.of(this).add(new LogRetentionAspect(config));
 
     // ============================================================
     // Observability routing
     // ============================================================
-    // FIRST, before any resource that might want to alarm on itself. Every
-    // alarm in this stack routes here, and both the constructor and
-    // wireCompute() need the reference, so it is created up front and passed
-    // down by typed reference — never re-read from SSM, which cannot resolve
-    // within the stack that writes it.
-    //
-    // Optional: with observability.alarmTopicEnabled=false the topic, its CMK,
-    // and every alarm action are absent, and alarms fall back to being
-    // console-only. That is the pre-existing behaviour of this stack, kept
-    // reachable for a fork that routes alerts by some other means.
+    // First, so every later construct can take the reference.
     this.alarmTopic = config.observability.alarmTopicEnabled
       ? new AlarmTopicConstruct(this, 'AlarmTopic', { config }).topic
       : undefined;
@@ -920,14 +901,7 @@ export class PlatformStack extends cdk.Stack {
       sagemakerPrivateSubnetIds,
     });
 
-    // ============================================================
-    // Front-door and compute alarms
-    // ============================================================
-    // Both must land AFTER AppApiServiceConstruct: the ALB alarms bind to its
-    // target group and the ECS alarms to its service, so that the CloudWatch
-    // dimensions come from the real resources rather than being reconstructed
-    // from strings. A dimension-less ALB or ECS alarm is a valid alarm that
-    // silently watches an account-wide aggregate.
+    // After AppApiServiceConstruct: these bind to its target group and service.
     new AlbAlarmsConstruct(this, 'AlbAlarms', {
       config: this._config,
       loadBalancer: this.alb,
@@ -961,19 +935,6 @@ export class PlatformStack extends cdk.Stack {
       cognitoRegion: this._config.awsRegion,
     });
 
-    // ============================================================
-    // Lambda + DLQ alarms
-    // ============================================================
-    // Errors and throttles for every Lambda in the stack, plus depth on the
-    // kb-ingestion dead-letter queue.
-    //
-    // kb-sync and scheduled-runs are throttleOnly: their own constructs already
-    // define error alarms with deliberately different thresholds (dispatcher at
-    // 1, worker at 3), and re-alarming them here at one shared threshold would
-    // either duplicate the page or quietly contradict it.
-    //
-    // rag-cors-updater is absent on purpose — it is a deploy-time custom
-    // resource, so its failure fails the CloudFormation deploy directly.
     new LambdaAlarmsConstruct(this, 'LambdaAlarms', {
       config: this._config,
       alarmTopic: this.alarmTopic,
@@ -981,13 +942,7 @@ export class PlatformStack extends cdk.Stack {
         { name: 'artifact-render', fn: this._artifactRenderFunction },
         { name: 'rag-ingestion', fn: this._ragIngestionFunction },
         ...(this._tokenEnrichment
-          ? [{
-              // Fail-open handler: an error means MCP tools silently lose their
-              // user-identity claims, not a blocked login. Invisible without
-              // this alarm, which is precisely why it is here.
-              name: 'token-enrichment',
-              fn: this._tokenEnrichment.enrichmentFunction,
-            }]
+          ? [{ name: 'token-enrichment', fn: this._tokenEnrichment.enrichmentFunction }]
           : []),
         ...(this._kbMigration
           ? [
@@ -1011,16 +966,8 @@ export class PlatformStack extends cdk.Stack {
         : [],
     });
 
-    // ============================================================
-    // AI-path alarms
-    // ============================================================
-    // Bedrock, AgentCore Memory / Gateway / Code Interpreter. These are the
-    // managed dependencies whose failures present as application bugs, so
-    // alarming them is what stops an investigation starting in the wrong place.
-    //
-    // Note the Code Interpreter argument is an ID while the other two are ARNs —
-    // that asymmetry is in AWS's metric emission, not a mistake here. See the
-    // construct docstring.
+    // Code Interpreter takes an ID while the others take ARNs — that asymmetry
+    // is in AWS's metric emission. See the construct docstring.
     new AiPathAlarmsConstruct(this, 'AiPathAlarms', {
       config: this._config,
       alarmTopic: this.alarmTopic,
@@ -1029,17 +976,8 @@ export class PlatformStack extends cdk.Stack {
       codeInterpreterId: this.agentCoreCodeInterpreterId,
     });
 
-    // ============================================================
-    // Data-layer alarms
-    // ============================================================
-    // Every table in the stack, by typed ref. The list is exhaustive by
-    // construction: a test asserts the alarm count matches the number of
-    // AWS::DynamoDB::Table resources in the template, so adding a table
-    // without adding it here fails CI rather than shipping a silently
-    // unmonitored table.
-    //
-    // Landing in wireCompute() rather than the constructor only because it is
-    // the last phase — every table already exists by the time either runs.
+    // A test asserts this list covers every AWS::DynamoDB::Table in the
+    // template, so a new table without an alarm fails CI.
     new DynamoDbAlarmsConstruct(this, 'DynamoDbAlarms', {
       config: this._config,
       alarmTopic: this.alarmTopic,
@@ -1073,15 +1011,8 @@ export class PlatformStack extends cdk.Stack {
       ],
     });
 
-    // ============================================================
-    // Unified health dashboard
-    // ============================================================
-    // LAST in wireCompute() on purpose: collectAlarms() walks the construct tree,
-    // so every alarm must already exist for the status widget to be complete.
-    // Discovering them beats passing a hand-maintained list, which would go
-    // stale silently — a future alarm would still be routed to SNS (the factory
-    // guarantees that) but would quietly vanish from the one dashboard an
-    // on-call engineer actually opens.
+    // Last: collectAlarms() walks the construct tree, so every alarm must
+    // already exist.
     new PlatformDashboardConstruct(this, 'PlatformDashboard', {
       config: this._config,
       loadBalancer: this.alb,

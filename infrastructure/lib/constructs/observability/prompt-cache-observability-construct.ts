@@ -8,12 +8,6 @@ import { AlarmFactory } from './alarm-factory';
 
 export interface PromptCacheObservabilityConstructProps {
   config: AppConfig;
-  /**
-   * The SNS topic alarms publish to. Undefined when
-   * observability.alarmTopicEnabled is false, which leaves these alarms
-   * console-only — the state the whole stack was in before the alarm topic
-   * existed.
-   */
   alarmTopic?: sns.ITopic;
   /**
    * The log group the AgentCore Runtime actually writes to, from
@@ -49,10 +43,8 @@ export interface PromptCacheObservabilityConstructProps {
  * per-session drill-down counterpart is the cost-anatomy admin endpoint
  * (`GET /admin/costs/sessions/{id}/calls`).
  *
- * Alarms route to the platform SNS alarm topic via AlarmFactory. They use
- * NOT_BREACHING for missing data because the
- * `PROMPT_CACHE_OBSERVABILITY_ENABLED=false` kill switch (or simply zero
- * traffic) makes the metrics absent entirely.
+ * NOT_BREACHING on missing data: the PROMPT_CACHE_OBSERVABILITY_ENABLED=false
+ * kill switch, or simply no traffic, makes the metrics absent entirely.
  */
 export class PromptCacheObservabilityConstruct extends Construct {
   constructor(
@@ -252,13 +244,8 @@ export class PromptCacheObservabilityConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // Session-level accumulation (#833 PR-1). A fleet sum never notices one
-    // conversation spending $0.43 a turn for five days — the incident this
-    // alarm exists for would have tripped it on day 2, at ~10 turns. The
-    // metric is the session's cumulative partial-miss waste and the statistic
-    // is Maximum, so this reads as "a session at or over the threshold of
-    // partial-miss waste was active in the last 24h"; it clears once that
-    // session stops.
+    // Maximum, not Sum: reads as "a session over the threshold was active in
+    // the last 24h". A fleet sum cannot see one conversation doing this (#833).
     alarms.alarm('PromptCacheSessionPartialMissAlarm', {
       name: 'prompt-cache-session-partial-miss',
       alarmDescription:

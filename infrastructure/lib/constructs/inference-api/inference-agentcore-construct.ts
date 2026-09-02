@@ -50,7 +50,6 @@ export interface InferenceAgentCoreConstructProps {
   browserArn: string;
   /** AgentCore Browser ID — same provenance as browserArn. */
   browserId: string;
-  /** Platform alarm topic. Undefined leaves these alarms console-only. */
   alarmTopic?: sns.ITopic;
 }
 
@@ -82,14 +81,8 @@ export class InferenceAgentCoreConstruct extends Construct {
    * stack query the group that has data in it.
    */
   public readonly runtimeLogGroupName: string;
-  /**
-   * The `Name` dimension value on every AgentCore Runtime metric:
-   * `{agentRuntimeName}::{endpointName}`.
-   *
-   * Exposed so the platform dashboard binds to the SAME string this construct's
-   * own alarms use. Two places deriving it independently is how one of them ends
-   * up watching a stream that is never published.
-   */
+  /** The `Name` dimension on every runtime metric: `{runtimeName}::DEFAULT`.
+   *  Shared with the dashboard so both bind identically. */
   public readonly runtimeMetricName: string;
 
   constructor(scope: Construct, id: string, props: InferenceAgentCoreConstructProps) {
@@ -286,11 +279,8 @@ export class InferenceAgentCoreConstruct extends Construct {
     // Single CDK-Managed AgentCore Runtime with Cognito JWT Authorizer
     // ============================================================
 
-    // Hoisted to a const because the CloudWatch `Name` dimension for every
-    // runtime metric is `{agentRuntimeName}::{endpointName}`. Deriving both the
-    // resource name and the alarm dimension from one expression is what keeps
-    // the alarms bound if the naming ever changes — an alarm whose dimension no
-    // longer matches a published stream does not fail, it just goes quiet.
+    // Also the basis of the CloudWatch `Name` dimension on every runtime
+    // metric, so both derive from one expression.
     const agentRuntimeName = getResourceName(config, 'agentcore_runtime').replace(/-/g, '_');
 
     this.runtime = new bedrock.CfnRuntime(this, 'AgentCoreRuntime', {
@@ -499,19 +489,9 @@ export class InferenceAgentCoreConstruct extends Construct {
       `/aws/bedrock-agentcore/runtimes/${this.runtime.attrAgentRuntimeId}-DEFAULT`;
     this.runtimeMetricName = `${agentRuntimeName}::DEFAULT`;
 
-    // Apply the platform's configured retention to that service-created group.
-    //
-    // `logs:PutRetentionPolicy` is idempotent and, usefully, CREATES the log
-    // group if it does not exist yet — which matters on a first deploy, when the
-    // runtime has been created but has not yet been invoked and so has never
-    // written a log line. Without that behaviour this would race the first
-    // invocation.
-    //
-    // onUpdate as well as onCreate so that changing
-    // `observability.logRetentionDays` actually re-applies. No onDelete: the
-    // group belongs to the AgentCore service, and removing a retention policy on
-    // the way out would silently convert it back to "keep forever", which is the
-    // cost problem this exists to fix.
+    // PutRetentionPolicy is idempotent and creates the group if absent, which
+    // matters before the runtime's first invocation. No onDelete: dropping the
+    // policy on teardown would revert the group to "keep forever".
     const runtimeLogRetention = new cr.AwsCustomResource(this, 'RuntimeLogRetention', {
       onCreate: {
         service: 'CloudWatchLogs',
@@ -520,8 +500,7 @@ export class InferenceAgentCoreConstruct extends Construct {
           logGroupName: this.runtimeLogGroupName,
           retentionInDays: config.observability.logRetentionDays,
         },
-        // Changing the retention value changes this id, which is what makes CFN
-        // re-invoke the call rather than treating the resource as unchanged.
+        // Embeds the value so CFN re-invokes when it changes.
         physicalResourceId: cr.PhysicalResourceId.of(
           `${this.runtimeLogGroupName}-retention-${config.observability.logRetentionDays}`,
         ),
@@ -540,8 +519,6 @@ export class InferenceAgentCoreConstruct extends Construct {
       policy: cr.AwsCustomResourcePolicy.fromStatements([
         new iam.PolicyStatement({
           actions: ['logs:PutRetentionPolicy', 'logs:CreateLogGroup'],
-          // Scoped to this runtime's own group. The trailing :* matches the
-          // log-stream ARN form CloudWatch Logs requires for group-level calls.
           resources: [
             `arn:aws:logs:${config.awsRegion}:${config.awsAccount}:log-group:${this.runtimeLogGroupName}:*`,
           ],
@@ -616,49 +593,25 @@ export class InferenceAgentCoreConstruct extends Construct {
       defaultInterval: cdk.Duration.hours(3),
     });
 
-    // ── Metric binding (verified against the live account, not inferred) ──
+    // Namespace and metric names verified with `aws cloudwatch list-metrics`.
+    // The lowercase `bedrock-agentcore` namespace exists but holds only the
+    // OpenTelemetry/Strands application metrics, and the names this used before
+    // (InvocationCount / InvocationErrors / InvocationLatency) exist nowhere —
+    // so both alarms had sat in INSUFFICIENT_DATA since creation. Pinned by test.
     //
-    // This block previously used namespace `bedrock-agentcore` with metric names
-    // `InvocationCount`, `InvocationErrors`, and `InvocationLatency`. A
-    // read-only `aws cloudwatch list-metrics` sweep proved all three are wrong:
-    //
-    //   * `bedrock-agentcore` DOES exist, but holds only the OpenTelemetry /
-    //     Strands APPLICATION metrics the agent emits itself — gen_ai.*,
-    //     http.server.*, strands.event_loop.*, strands.tool.*.
-    //   * `InvocationCount` / `InvocationErrors` / `InvocationLatency` exist in
-    //     NO namespace in the account.
-    //   * `AWS/BedrockAgentCore` (unhyphenated) has zero metric streams.
-    //
-    // So both alarms below sat in INSUFFICIENT_DATA from the day they were
-    // created, and every dashboard widget rendered empty — which reads as
-    // "no errors, no traffic" rather than "this query is broken". That is the
-    // same failure this repo already hit with a guessed log-group name, and it
-    // is the reason the metric names here are pinned by a test.
-    //
-    // The service metrics live in `AWS/Bedrock-AgentCore` and are DIMENSIONED.
-    // An undimensioned metric in this namespace matches nothing, because every
-    // published stream carries at least an Operation.
+    // Every stream here is dimensioned; an undimensioned metric matches nothing.
     const agentCoreNamespace = 'AWS/Bedrock-AgentCore';
 
-    // The runtime's own three-dimension set. The `Name` dimension is
-    // `{agentRuntimeName}::{endpointName}` and the endpoint is DEFAULT, matching
-    // the qualifier already used for the log group above.
-    //
-    // A four-dimension variant also exists that adds ComputeType=MicroVM.
-    // Deliberately not used: the compute type is an AgentCore implementation
-    // detail, and pinning an alarm to it would silently unbind the alarm if AWS
-    // ever changed how the runtime is executed.
+    // A four-dimension variant adding ComputeType=MicroVM also exists; not used,
+    // since that is an implementation detail an alarm should not depend on.
     const runtimeDimensions = {
       Resource: this.runtime.attrAgentRuntimeArn,
       Operation: 'InvokeAgentRuntime',
       Name: this.runtimeMetricName,
     };
 
-    // No `label` here on purpose. Setting one forces CDK to render an alarm's
-    // metric as a Metrics[] array rather than flat Namespace/MetricName/
-    // ExtendedStatistic properties, which breaks straightforward assertions on
-    // the binding — and the binding is the thing that was wrong before.
-    // CloudWatch labels percentile series adequately on its own.
+    // No `label`: it forces CDK to render the alarm as a Metrics[] array rather
+    // than flat Namespace/MetricName properties.
     const runtimeMetric = (
       metricName: string,
       statistic: string,
@@ -679,10 +632,7 @@ export class InferenceAgentCoreConstruct extends Construct {
     const latencyP90Metric = runtimeMetric('Latency', 'p90');
     const latencyP99Metric = runtimeMetric('Latency', 'p99');
 
-    // Real-time gauge of concurrent sessions, published once a minute per
-    // service type and dimensioned only by Service. This is the saturation
-    // signal for session quota consumption — `Sessions` is a cumulative
-    // creation counter and cannot answer "how many are running right now".
+    // `Sessions` is a cumulative creation counter; this is the live gauge.
     const activeSessionsMetric = new cloudwatch.Metric({
       namespace: agentCoreNamespace,
       metricName: 'ActiveSessionCount',
@@ -743,11 +693,8 @@ export class InferenceAgentCoreConstruct extends Construct {
 
     const alarms = new AlarmFactory(this, config, props.alarmTopic);
 
-    // Split by blame. SystemErrors are AgentCore's fault and mean escalate to
-    // AWS; UserErrors are ours and mean a malformed request, a missing
-    // permission, or a payload the runtime rejected. Folding them together
-    // would produce one alarm whose first diagnostic step is always "find out
-    // which kind" — which is what the split answers for free.
+    // Split by blame: SystemErrors means escalate to AWS, UserErrors means our
+    // request was wrong.
     alarms.alarm('AgentCoreSystemErrorAlarm', {
       name: 'agentcore-system-errors',
       alarmDescription:
@@ -759,9 +706,7 @@ export class InferenceAgentCoreConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // Retains the original logical id and alarm name so the existing alarm is
-    // UPDATED in place rather than replaced — it just finally points at a
-    // metric that exists.
+    // Original logical id and name retained so CFN updates in place.
     alarms.alarm('AgentCoreHighErrorRateAlarm', {
       name: 'agentcore-high-error-rate',
       alarmDescription:
@@ -773,10 +718,7 @@ export class InferenceAgentCoreConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // Throttling means the account is over its AgentCore TPS or session quota.
-    // Threshold 0 and a short window: unlike an error, a throttle is never
-    // ambiguous and never self-corrects without either less traffic or a quota
-    // increase, and quota increases take lead time.
+    // Threshold 0: a throttle is unambiguous and does not self-correct.
     alarms.alarm('AgentCoreThrottleAlarm', {
       name: 'agentcore-throttles',
       alarmDescription:
@@ -792,18 +734,9 @@ export class InferenceAgentCoreConstruct extends Construct {
       name: 'agentcore-high-latency',
       alarmDescription: 'AgentCore Runtime p99 latency exceeded threshold',
       metric: latencyP99Metric,
-      // Streaming-aware floor (default 120000), NOT the old hardcoded 30000.
-      //
-      // Units are Milliseconds — verified against live data, because this is
-      // exactly where a 1000x threshold error hides (the ALB's
-      // TargetResponseTime, by contrast, is reported in SECONDS).
-      //
-      // Measured over 14 days in dev: average turn 3.0-4.5s, with daily maxima
-      // reaching 16.7s, 16.9s, and 24.4s. The old 30s threshold sat just above
-      // the observed maximum, so a single slow-but-healthy agent turn could trip
-      // it — and an alarm that fires on normal behaviour earns a mute rule and
-      // then means nothing. 120s is well clear of a legitimate long turn while
-      // still catching a genuinely hung request.
+      // Milliseconds here, unlike the ALB's TargetResponseTime which is seconds.
+      // Measured turns average 3-4.5s and peak near 25s, so the previous 30s
+      // threshold sat just above normal.
       threshold: config.observability.agentCoreLatencyMs,
       evaluationPeriods: 3,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,

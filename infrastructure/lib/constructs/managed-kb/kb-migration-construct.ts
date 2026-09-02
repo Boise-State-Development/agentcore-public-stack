@@ -118,7 +118,6 @@ export interface KbMigrationConstructProps {
    * left unattached there, waiting for these Lambda roles.
    */
   managedKbRole: ManagedKbRoleConstruct;
-  /** Platform alarm topic. Undefined leaves these alarms console-only. */
   alarmTopic?: sns.ITopic;
 }
 

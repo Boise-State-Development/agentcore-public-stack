@@ -17,27 +17,14 @@ export interface EcsServiceAlarmsConstructProps {
 }
 
 /**
- * EcsServiceAlarmsConstruct — saturation and capacity alarms for the app-api
- * Fargate service.
+ * Saturation and capacity alarms for the app-api service.
  *
- * ## Dimensions are the whole game here
+ * Uses the service's own metric helpers so ClusterName + ServiceName come from
+ * the resource — a dimension-less AWS/ECS alarm silently averages every service
+ * in the account.
  *
- * `AWS/ECS` metrics are published at several dimension granularities, and a
- * `CPUUtilization` alarm with NO dimensions is a valid CloudWatch alarm that
- * silently watches the average across every ECS service in the account. It
- * deploys, it evaluates, it never fires for the thing you meant. This construct
- * uses the CDK service's own `metricCpuUtilization()` helpers precisely so the
- * ClusterName + ServiceName dimensions come from the service resource and
- * cannot be forgotten — and the test asserts both are present.
- *
- * ## Why running-task count matters more than CPU here
- *
- * CPU and memory tell you the service is under strain. `RunningTaskCount`
- * below desired tells you capacity has actually been lost — a task that keeps
- * crashing on startup, an image that will not pull, a subnet that ran out of
- * IPs. The ALB's UnHealthyHostCount alarm catches the case where tasks are
- * running but failing health checks; this catches the case where they are not
- * running at all.
+ * RunningTaskCount complements the ALB's UnHealthyHostCount: that one catches
+ * tasks running but failing health checks, this one catches tasks not running.
  */
 export class EcsServiceAlarmsConstruct extends Construct {
   constructor(scope: Construct, id: string, props: EcsServiceAlarmsConstructProps) {
@@ -65,10 +52,6 @@ export class EcsServiceAlarmsConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // Memory gets a higher default threshold than CPU (85 vs 80): a Fargate
-    // task that exhausts memory is killed outright, whereas high CPU merely
-    // slows down, so the memory signal needs less headroom to be actionable but
-    // more headroom to avoid firing on normal steady-state usage.
     alarms.alarm('AppApiMemoryAlarm', {
       name: 'app-api-memory-high',
       alarmDescription:
@@ -87,27 +70,15 @@ export class EcsServiceAlarmsConstruct extends Construct {
     // Capacity
     // ============================================================
 
-    /**
-     * Fewer tasks running than desired.
-     *
-     * BREACHING on missing data, for the same reason as the ALB's unhealthy-host
-     * alarm: if the service is deleted or has zero tasks, the metric stops
-     * being published rather than reporting zero. NOT_BREACHING would render
-     * this alarm silent in exactly the total-outage case it exists to catch.
-     *
-     * Comparison is LESS_THAN against desiredCount, so a service scaled up by
-     * autoscaling does not trip it — only one that has fallen below the floor
-     * it was asked to hold.
-     */
+    // BREACHING: a service at zero tasks stops publishing rather than
+    // publishing zero. LESS_THAN desiredCount, so autoscaling up never trips it.
     alarms.alarm('AppApiRunningTaskAlarm', {
       name: 'app-api-running-tasks-low',
       alarmDescription:
         `Fewer than the desired ${desiredCount} App API task(s) are running — tasks are failing to start or being killed, which the ALB health-check alarm would not catch`,
       metric: new cloudwatch.Metric({
-        // Container Insights metric, already enabled on the cluster
-        // (containerInsightsV2). Not available from the service.metric* helpers,
-        // so the dimensions are supplied explicitly from the service resource —
-        // never hardcoded.
+        // Container Insights: no service.metric* helper, so dimensions come
+        // explicitly from the service resource.
         namespace: 'ECS/ContainerInsights',
         metricName: 'RunningTaskCount',
         dimensionsMap: {

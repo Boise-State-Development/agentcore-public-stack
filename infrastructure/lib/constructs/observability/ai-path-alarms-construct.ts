@@ -29,52 +29,22 @@ export interface AiPathAlarmsConstructProps {
 }
 
 /**
- * AiPathAlarmsConstruct — alarms for the managed AI services a chat turn depends
- * on: Bedrock inference, AgentCore Memory, Gateway, and Code Interpreter.
+ * Alarms for the managed AI services a chat turn depends on. These failures
+ * present as application bugs — a Bedrock throttle reaches the user as a chat
+ * that never responds, a Memory error as an agent that has forgotten the
+ * conversation.
  *
- * These are the dependencies whose failures look like application bugs. A
- * Bedrock throttle reaches a user as a chat that will not respond; a Memory
- * error reaches them as an agent that has forgotten the conversation. With no
- * alarms here the first hypothesis is always "our code broke", when the cause is
- * a quota or an AWS-side fault two layers down.
+ * Dimension values were enumerated with `aws cloudwatch list-metrics`, which
+ * surfaced one asymmetry: Memory and Gateway publish `Resource` as a full ARN,
+ * but Code Interpreter publishes a bare id.
  *
- * ## Every dimension value here was read off the live account
+ * Memory and Code Interpreter publish a stream per API operation, so those alarms
+ * sum operations via metric math (CloudWatch caps that at 10 metrics).
  *
- * Metric names and dimension keys were enumerated with
- * `aws cloudwatch list-metrics` rather than taken from documentation, because
- * this construct's sibling (the AgentCore Runtime alarms) had spent its entire
- * life watching three metric names that exist in no namespace at all — sitting
- * in INSUFFICIENT_DATA and reading as healthy.
- *
- * That sweep turned up an inconsistency worth stating plainly, because it is
- * invisible until an alarm silently matches nothing:
- *
- *   - Memory publishes `Resource` as a full ARN
- *     (`arn:aws:bedrock-agentcore:...:memory/name-SUFFIX`)
- *   - Gateway publishes `Resource` as a full ARN
- *   - **Code Interpreter publishes `Resource` as a bare id** (`name-SUFFIX`),
- *     with no ARN prefix
- *
- * ## Metric math, because these metrics are dimensioned per Operation
- *
- * Unlike the Runtime, whose `Operation` is always `InvokeAgentRuntime`, Memory
- * and Code Interpreter publish a separate stream per API operation, so a single
- * alarm has to sum the operations that matter. Each expression stays well inside
- * CloudWatch's limit of 10 individual metrics per math-expression alarm.
- *
- * ## What is deliberately NOT alarmed
- *
- * **Cognito.** The plan called for a sign-in failure alarm. `AWS/Cognito`
- * publishes only `SignInSuccesses`, `SignUpSuccesses`, `TokenRefreshSuccesses`
- * and `FederationSuccesses` — there is no failure or throttle metric, because
- * those require the Cognito **Plus** feature plan and this pool runs on
- * `ESSENTIALS`. An alarm on a non-existent metric is exactly the dead alarm this
- * effort exists to remove, so it is omitted rather than written hopefully. The
- * real auth-path failure signal is the token-enrichment Lambda's `Errors`
- * metric, covered by LambdaAlarmsConstruct.
- *
- * **AgentCore Browser.** No metric streams exist for it in the account — the
- * feature is provisioned but unused. Same reasoning: the alarm would be blind.
+ * NOT alarmed: Cognito, because AWS/Cognito on the ESSENTIALS feature plan
+ * publishes only success metrics (failure metrics need Plus) — the auth-path
+ * signal is the token-enrichment Lambda instead. And Browser, which has no metric
+ * streams.
  */
 export class AiPathAlarmsConstruct extends Construct {
   constructor(scope: Construct, id: string, props: AiPathAlarmsConstructProps) {
@@ -121,22 +91,14 @@ export class AiPathAlarmsConstruct extends Construct {
     const bedrockMetric = (metricName: string, statistic = 'Sum') => new cloudwatch.Metric({
       namespace: BEDROCK_NAMESPACE,
       metricName,
-      // No dimensions: the account-wide roll-up. A per-ModelId variant exists,
-      // but models are added and removed through the admin UI at runtime, so a
-      // per-model alarm set fixed at synth time would drift out of step with
-      // whatever is actually enabled.
+      // Account-wide roll-up. A per-ModelId variant exists, but models are
+      // managed through the admin UI at runtime so a synth-time set would drift.
       statistic,
       period: ALARM_PERIOD,
     });
 
-    // Bedrock throttling is the most likely cause of "the chat is broken" that
-    // is not a bug. Threshold 0: a throttle means the account is at a model's
-    // TPM/RPM quota, which does not resolve without less traffic or a quota
-    // increase.
-    //
-    // This metric had NO streams when the bindings were verified, meaning it has
-    // never fired rather than that it does not exist. NOT_BREACHING keeps the
-    // alarm quiet until the first real occurrence.
+    // Had no metric streams when verified — never fired, rather than absent.
+    // NOT_BREACHING keeps it quiet until the first occurrence.
     alarms.alarm('BedrockThrottleAlarm', {
       name: 'bedrock-invocation-throttles',
       alarmDescription:
@@ -162,9 +124,7 @@ export class AiPathAlarmsConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // Saturation, and the only LEADING indicator in this file: quota usage
-    // climbing toward the limit is visible before throttling starts. Unlike the
-    // two metrics above, this one has live data in the account today.
+    // The only leading indicator here: quota usage climbs before throttling.
     alarms.alarm('BedrockQuotaUsageAlarm', {
       name: 'bedrock-tpm-quota-usage',
       alarmDescription:
@@ -182,14 +142,8 @@ export class AiPathAlarmsConstruct extends Construct {
     // AgentCore Memory
     // ============================================================
 
-    // The operations on the conversation hot path. CreateEvent writes each turn,
-    // RetrieveMemoryRecords reads context back, and the Get/List calls serve the
-    // memory dashboard.
-    //
-    // Extraction and Consolidation are excluded on purpose: they are
-    // asynchronous background strategies whose failures do not break a live
-    // turn, so including them would make this alarm fire for something no user
-    // ever notices.
+    // Extraction and Consolidation are excluded: async background strategies
+    // whose failure does not break a live turn.
     const MEMORY_HOT_PATH = [
       'CreateEvent',
       'RetrieveMemoryRecords',
@@ -228,10 +182,8 @@ export class AiPathAlarmsConstruct extends Construct {
     // AgentCore Gateway (MCP tools)
     // ============================================================
 
-    // Gateway streams carry Protocol, plus a Method dimension for the specific
-    // MCP call. The [Resource, Operation, Protocol] set is the roll-up across
-    // methods, which is what an alarm wants — a per-Method alarm set would
-    // multiply with every tool the gateway exposes.
+    // The roll-up across MCP methods; a per-Method set would multiply with
+    // every tool the gateway exposes.
     const gatewayDimensions = {
       Resource: gatewayArn,
       Operation: 'InvokeGateway',
@@ -277,10 +229,8 @@ export class AiPathAlarmsConstruct extends Construct {
     // AgentCore Code Interpreter
     // ============================================================
 
-    // NOTE the `Resource` value: a bare id, NOT an ARN. Memory and Gateway above
-    // both use full ARNs for the same dimension key. Verified by enumerating the
-    // live streams — passing an ARN here would produce an alarm that matches
-    // nothing and stays permanently green.
+    // `Resource` is a bare id here, NOT an ARN as it is for Memory and Gateway.
+    // An ARN would match no stream and the alarm would stay green.
     alarms.expressionAlarm('CodeInterpreterSystemErrorAlarm', {
       name: 'agentcore-code-interpreter-system-errors',
       alarmDescription:
@@ -298,10 +248,8 @@ export class AiPathAlarmsConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // Concurrent session ceiling. Published per service type with only a
-    // `Service` dimension, so this is an account-level gauge rather than a
-    // per-resource one — which is the right granularity, since the quota it
-    // consumes is also account-level.
+    // Account-level gauge (only a Service dimension), matching the quota it
+    // consumes.
     alarms.alarm('CodeInterpreterActiveSessionAlarm', {
       name: 'agentcore-code-interpreter-active-sessions',
       alarmDescription:

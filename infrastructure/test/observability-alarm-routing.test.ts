@@ -7,20 +7,9 @@ import { PlatformStack } from '../lib/platform-stack';
 import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
 
 /**
- * Alarm routing guard.
- *
- * ## The failure this exists to prevent
- *
- * Before this work, PlatformStack had 13 CloudWatch alarms and not one of them
- * notified anybody. Three separate constructs carried a comment saying "no SNS
- * wiring in this stack yet". Nobody had been careless: `new cloudwatch.Alarm()`
- * is the obvious API, and it produces a console-only alarm that looks entirely
- * complete. An alarm with no action still turns red in the console, so the gap
- * is invisible from the one place an operator would look to check.
- *
- * A convention cannot protect against that, because the broken form is the
- * shorter one. So the protection is mechanical: this file fails if ANY alarm in
- * the synthesized template lacks an action.
+ * Fails if any alarm in the template lacks an action. An unrouted alarm still
+ * turns red in the console, so the gap is invisible from the one place an
+ * operator would look — a convention cannot protect against that.
  */
 describe('Alarm routing — every alarm reaches a human', () => {
   let template: Template;
@@ -61,10 +50,9 @@ describe('Alarm routing — every alarm reaches a human', () => {
     template = Template.fromStack(stack);
   });
 
+  // Floor, so the guard below cannot pass trivially on an empty set.
   it('synthesizes a substantial number of alarms', () => {
     const alarms = template.findResources('AWS::CloudWatch::Alarm');
-    // Sanity floor: if this drops sharply, alarms were deleted rather than the
-    // guard below being satisfied trivially by an empty set.
     expect(Object.keys(alarms).length).toBeGreaterThanOrEqual(13);
   });
 
@@ -84,11 +72,6 @@ describe('Alarm routing — every alarm reaches a human', () => {
     expect(unrouted).toEqual([]);
   });
 
-  /**
-   * Recovery notifications matter as much as the alarm itself: an operator who
-   * was paged and never told the condition cleared has to go and check the
-   * console, which is the behaviour this whole effort exists to remove.
-   */
   it('every alarm also notifies on recovery (OKActions)', () => {
     const alarms = template.findResources('AWS::CloudWatch::Alarm');
     const noOk: string[] = [];
@@ -130,12 +113,8 @@ describe('Alarm routing — every alarm reaches a human', () => {
 });
 
 /**
- * Static source guard.
- *
- * The template guard above only sees alarms that a synth actually produces. An
- * alarm behind a feature flag that no test enables would slip past it. This
- * catches the raw constructor at the source level instead, so the rule holds
- * for code paths the tests do not reach.
+ * Source-level guards, which also cover flag-gated code paths a synth never
+ * reaches.
  */
 describe('Alarm routing — source-level guard', () => {
   const libDir = path.join(__dirname, '..', 'lib');
@@ -152,8 +131,6 @@ describe('Alarm routing — source-level guard', () => {
     const offenders: string[] = [];
 
     for (const file of walk(libDir)) {
-      // The factory is the one legitimate caller: it is where the SNS action
-      // gets attached.
       if (file.endsWith(path.join('observability', 'alarm-factory.ts'))) continue;
 
       const source = fs.readFileSync(file, 'utf-8');
@@ -165,13 +142,6 @@ describe('Alarm routing — source-level guard', () => {
     expect(offenders).toEqual([]);
   });
 
-  /**
-   * The single-value rule. This repo is forked by many institutions: a fork with
-   * one environment should not have to reason about a `production` boolean, and
-   * a fork with three should not be limited to two. Environment differences
-   * belong in the forker's deployment config, reaching the code as a single
-   * configured value.
-   */
   it('no config.production branching in the observability constructs', () => {
     const obsDir = path.join(libDir, 'constructs', 'observability');
     const offenders: string[] = [];

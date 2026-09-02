@@ -83,14 +83,7 @@ export interface AppApiServiceConstructProps {
  */
 export class AppApiServiceConstruct extends Construct {
   public readonly ecsService: ecs.FargateService;
-  /**
-   * The ALB target group fronting this service.
-   *
-   * Exposed so the observability constructs can bind alarms to the real
-   * target group and load balancer dimensions. An ALB metric without both
-   * dimensions is an account-wide aggregate across every load balancer, which
-   * looks like a working alarm and answers a question nobody asked.
-   */
+  /** Exposed so alarms bind to the real target-group dimensions. */
   public readonly targetGroup: elbv2.ApplicationTargetGroup;
 
   constructor(scope: Construct, id: string, props: AppApiServiceConstructProps) {

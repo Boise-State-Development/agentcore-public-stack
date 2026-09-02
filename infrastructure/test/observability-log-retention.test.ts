@@ -47,11 +47,6 @@ describe('Log retention — one configured value everywhere', () => {
     }
   });
 
-  /**
-   * The point of the single-value design: changing one number changes every log
-   * group. Previously each construct hardcoded ONE_WEEK — and Memory's used
-   * ONE_MONTH, differing silently rather than deliberately.
-   */
   it('changing the configured value moves every log group together', () => {
     const groups = synth(90).findResources('AWS::Logs::LogGroup');
     const values = new Set(
@@ -70,23 +65,9 @@ describe('Log retention — one configured value everywhere', () => {
     }
   });
 
-  /**
-   * Covers the log groups CDK creates for its OWN machinery — the
-   * `AwsCustomResource` provider Lambda and the `BucketDeployment` Lambda — which
-   * default to **731 days** (two years) and are declared nowhere in this
-   * codebase.
-   *
-   * This gap was found by diffing a real `cdk synth` against the configured
-   * value, not by a test, and that is the point worth remembering: a bare
-   * `new cdk.App()` does not carry the feature flags from `cdk.json` that cause
-   * CDK to materialise these groups as explicit resources, so the template a unit
-   * test sees and the template a deploy produces genuinely differ here.
-   *
-   * The fix is `LogRetentionAspect`, which visits the whole construct tree rather
-   * than relying on per-site discipline. This test simulates the flagged
-   * environment by declaring the same kind of CDK-managed group inside the stack
-   * and asserting the Aspect rewrites it.
-   */
+  // CDK gives its own provider Lambdas a 731-day default, and those groups are
+  // declared nowhere here. A bare cdk.App lacks the cdk.json feature flags that
+  // materialise them, so this stands one in instead.
   it('overrides CDK-generated log groups that default to 731 days', () => {
     const cert = 'arn:aws:acm:us-east-1:123456789012:certificate/test';
     const base = createMockConfig({
@@ -123,17 +104,7 @@ describe('Log retention — one configured value everywhere', () => {
     expect(values).toEqual(new Set([30]));
   });
 
-  /**
-   * The AgentCore Runtime's log group is created by the AgentCore SERVICE, not
-   * by CloudFormation, so a CDK `LogGroup` construct cannot set its retention —
-   * declaring one would either collide on create or manage a second, empty
-   * group. Left alone it grows forever; dev alone was carrying several such
-   * groups in the hundreds of MB.
-   *
-   * A custom resource calling `logs:PutRetentionPolicy` closes that gap. The API
-   * is idempotent AND creates the group if absent, which matters on a first
-   * deploy when the runtime exists but has never been invoked.
-   */
+  // Service-created, so a CDK LogGroup construct cannot set its retention.
   describe('service-created AgentCore Runtime log group', () => {
     it('applies retention via a custom resource', () => {
       const template = synth(30);
@@ -153,10 +124,6 @@ describe('Log retention — one configured value everywhere', () => {
       expect(props).toMatch(/retentionInDays\\*":30/);
     });
 
-    /**
-     * onUpdate as well as onCreate, so changing the configured value actually
-     * re-applies rather than being treated as unchanged.
-     */
     it('re-applies on update, not just on create', () => {
       const template = synth(30);
       const customResources = template.findResources('Custom::AWS');
@@ -167,10 +134,6 @@ describe('Log retention — one configured value everywhere', () => {
       expect(retentionResource.Properties.Update).toBeDefined();
     });
 
-    /**
-     * The physical id embeds the retention value, which is what makes
-     * CloudFormation re-invoke the call when the config changes.
-     */
     it('varies its physical id with the retention value', () => {
       const idFor = (days: number) => {
         const customResources = synth(days).findResources('Custom::AWS');
@@ -197,13 +160,7 @@ describe('Log retention — one configured value everywhere', () => {
   });
 });
 
-/**
- * Source-level guard.
- *
- * The template assertions above only see log groups a synth actually produces.
- * This catches a hardcoded literal at the source, so the rule holds for
- * flag-gated code paths the tests do not reach.
- */
+/** Source guard, covering flag-gated paths a synth never reaches. */
 describe('Log retention — source guard', () => {
   const libDir = path.join(__dirname, '..', 'lib');
 
@@ -218,7 +175,6 @@ describe('Log retention — source guard', () => {
   it('no construct hardcodes a RetentionDays value', () => {
     const offenders: string[] = [];
     for (const file of walk(libDir)) {
-      // The helper is the one legitimate place these constants appear.
       if (file.endsWith(path.join('observability', 'log-retention.ts'))) continue;
       const source = fs.readFileSync(file, 'utf-8');
       if (/retention:\s*logs\.RetentionDays\./.test(source)) {

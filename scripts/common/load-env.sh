@@ -253,17 +253,8 @@ build_cdk_context_params() {
         context_params="${context_params} --context managedKb.dailyCostAlarmUsd=\"${CDK_MANAGED_KB_DAILY_COST_ALARM_USD}\""
     fi
 
-    # Observability — alarm routing, alarm thresholds, log retention, X-Ray
-    # sampling. Every one is a SINGLE value with a cost-conscious default in
-    # config.ts; there is deliberately no prod/non-prod branching in code.
-    # An institution running several environments sets these per environment
-    # (GitHub Variables scoped to a GitHub Environment), which is what makes
-    # the same committed defaults correct for every fork.
-    #
-    # Forwarded only when non-empty, same as the managed-KB flags above: an
-    # unset GitHub Actions variable arrives as the empty string, CDK context
-    # cannot express one, and omitting the flag correctly means "use the
-    # default". Read by config.ts as the FLAT dotted key.
+    # Observability. Forwarded only when non-empty, same as the managed-KB flags
+    # above, and read by config.ts as the FLAT dotted key.
     if [ -n "${CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED:-}" ]; then
         context_params="${context_params} --context observability.alarmTopicEnabled=\"${CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED}\""
     fi
@@ -535,10 +526,7 @@ if [ "${LOAD_ENV_QUIET:-false}" != "true" ]; then
         log_config "  HTTPS Enabled:  Yes"
     fi
 
-    # Observability overrides. Only the ones actually set are shown — anything
-    # absent here is using the cost-conscious default from config.ts, which the
-    # synth itself prints as a resolved value. Two lines that disagree is the
-    # signal that a GitHub Variable never reached --context.
+    # Only overrides that are actually set; the synth prints resolved values.
     if [ -n "${CDK_OBSERVABILITY_LOG_RETENTION_DAYS:-}" ]; then
         log_config "  Log Retention:  ${CDK_OBSERVABILITY_LOG_RETENTION_DAYS} days (override)"
     fi

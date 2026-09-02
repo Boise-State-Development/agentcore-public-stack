@@ -5,12 +5,8 @@ import { PlatformStack } from '../lib/platform-stack';
 import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_PREFIX, MOCK_REGION } from './helpers/mock-config';
 
 /**
- * ALB + ECS alarm tests.
- *
- * Synthesized from the real PlatformStack rather than from the constructs in
- * isolation, because the thing most worth verifying is that the alarms bound to
- * the actual load balancer, target group, cluster, and service — see the
- * dimension tests below for why that is the failure mode that matters.
+ * Synthesized from the real PlatformStack, because what matters here is that the
+ * alarms bound to the actual load balancer, target group, cluster and service.
  */
 describe('ALB and ECS service alarms', () => {
   let template: Template;
@@ -60,13 +56,8 @@ describe('ALB and ECS service alarms', () => {
       }
     });
 
-    /**
-     * A `HTTPCode_Target_5XX_Count` alarm with no dimensions is a perfectly
-     * valid CloudWatch alarm that watches the aggregate across every load
-     * balancer in the account. It deploys, it evaluates, and it never means what
-     * was intended. Both dimensions must be present and must reference the
-     * stack's own resources.
-     */
+    // An undimensioned ALB alarm silently watches every load balancer in the
+    // account: it deploys, evaluates, and never means what was intended.
     it('target alarms carry BOTH LoadBalancer and TargetGroup dimensions', () => {
       for (const name of ['alb-target-5xx', 'alb-unhealthy-hosts', 'alb-target-p99-latency']) {
         const dims = byName(name).Properties.Dimensions;
@@ -102,15 +93,8 @@ describe('ALB and ECS service alarms', () => {
       }
     });
 
-    /**
-     * The single most important treatMissingData decision in the stack.
-     *
-     * UnHealthyHostCount is only published while targets are registered. Scale
-     * to zero, fail every task launch, or delete the service, and the metric
-     * stops arriving rather than reporting a bad value. With NOT_BREACHING the
-     * alarm would sit in INSUFFICIENT_DATA — reporting nothing wrong — during a
-     * total outage, which is precisely the case it exists for.
-     */
+    // The metric stops arriving when no targets are registered, so absent data
+    // is the outage. NOT_BREACHING would leave this silent during one.
     it('unhealthy-host alarm treats missing data as BREACHING', () => {
       expect(byName('alb-unhealthy-hosts').Properties.TreatMissingData).toBe('breaching');
     });
@@ -121,13 +105,7 @@ describe('ALB and ECS service alarms', () => {
       }
     });
 
-    /**
-     * The chat path is SSE, so a healthy agent turn holds the connection open
-     * for tens of seconds. CloudWatch reports TargetResponseTime in SECONDS
-     * while the config value is in milliseconds, so the construct divides by
-     * 1000 — getting that wrong in either direction is a 1000x error that would
-     * make the alarm either permanently firing or permanently useless.
-     */
+    // CloudWatch reports this metric in seconds, config is in ms.
     it('latency threshold is converted from config ms to CloudWatch seconds', () => {
       const alarm = byName('alb-target-p99-latency');
       // Default albP99LatencyMs is 120000 ms -> 120 s.
@@ -145,11 +123,6 @@ describe('ALB and ECS service alarms', () => {
       }
     });
 
-    /**
-     * A dimension-less AWS/ECS CPUUtilization alarm averages every service in
-     * the account. This is the classic mistake for ECS alarms, and it is
-     * invisible: the alarm exists, evaluates, and stays green.
-     */
     it('CPU and memory alarms carry BOTH ClusterName and ServiceName', () => {
       for (const name of ['app-api-cpu-high', 'app-api-memory-high']) {
         const dims = byName(name).Properties.Dimensions;
@@ -167,8 +140,6 @@ describe('ALB and ECS service alarms', () => {
       const mem = byName('app-api-memory-high');
       expect(mem.Properties.Namespace).toBe('AWS/ECS');
       expect(mem.Properties.MetricName).toBe('MemoryUtilization');
-      // Higher than CPU on purpose: a Fargate task that exhausts memory is
-      // killed outright, whereas high CPU merely slows down.
       expect(mem.Properties.Threshold).toBe(85);
     });
 
@@ -180,12 +151,6 @@ describe('ALB and ECS service alarms', () => {
       expect(keys).toEqual(['ClusterName', 'ServiceName']);
     });
 
-    /**
-     * LESS_THAN desiredCount, so autoscaling upward never trips it — only
-     * falling below the floor the service was asked to hold. BREACHING for the
-     * same reason as UnHealthyHostCount: a service with zero tasks stops
-     * publishing rather than publishing zero.
-     */
     it('running-task alarm fires below desired count and treats missing data as BREACHING', () => {
       const alarm = byName('app-api-running-tasks-low');
       expect(alarm.Properties.ComparisonOperator).toBe('LessThanThreshold');

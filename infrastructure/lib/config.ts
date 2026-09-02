@@ -423,164 +423,82 @@ export interface TokenExchangeConfig {
   clientId: string;
 }
 
-// ============================================================
-// Observability defaults
-// ============================================================
-//
-// These are the values a fork gets when it configures NOTHING, so every one is
-// chosen as the cheapest setting that still leaves alerting useful. Diagnostic
-// depth is opt-in, not inherited.
-//
-// Deliberately NOT expressed as `config.production ? a : b`. This repo is
-// forked by many institutions; a fork with one environment should never have to
-// reason about a `production` boolean, and a fork with three should not be
-// limited to two. Environment differentiation belongs in the forker's own
-// deployment config (GitHub Variables per environment, or cdk.context.json),
-// which reaches these fields through CDK_OBSERVABILITY_* / --context.
+// Observability defaults. Tuned for cost: these are what a fork inherits when it
+// configures nothing. See .kiro/steering/observability.md.
 
-/** CloudWatch Logs retention, in days, for EVERY log group this stack creates.
- *  Ingestion ($0.50/GB) dominates storage ($0.03/GB-month), so retention is a
- *  modest cost lever; 30 days is the shortest window that still supports
- *  month-over-month incident review. */
+/** Retention for every log group in the stack. */
 export const OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS = 30;
 
-/** X-Ray trace sampling rate for the /invocations path (0.0-1.0).
- *  The single largest observability cost lever in this stack: X-Ray bills $5
- *  per million traces recorded, and this construct previously defaulted a
- *  non-production fork to 1.0 — a trace for EVERY agent invocation, inherited
- *  without ever being chosen. 1% is enough to characterise latency shape. */
+/** X-Ray sampling rate, 0.0-1.0. Billed per trace recorded, so keep it low. */
 export const OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE = 0.01;
 
-/** X-Ray reservoir: traces per second recorded before the rate applies.
- *  1/sec guarantees a low-traffic fork still gets samples, versus the 50/sec
- *  floor that was previously the non-production default. */
+/** Traces per second recorded before the sampling rate applies. */
 export const OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR = 1;
 
-/** Alarm threshold for ALB target 5xx responses, per 5-minute period. */
+/** ALB target 5xx per 5-minute period. */
 export const OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD = 10;
 
-/** p99 latency alarm floor (ms) for the ALB and the AgentCore Runtime.
- *
- *  STREAMING-AWARE ON PURPOSE. The chat path is SSE: the ALB does not consider
- *  a request complete until the stream closes, so `TargetResponseTime` and
- *  AgentCore `Latency` are legitimately tens of seconds for a healthy agent
- *  turn. The previous AgentCore alarm sat at 30s, which is BELOW normal — it
- *  could only ever have produced noise. 120s is above a normal long turn and
- *  below a hung one. */
+/** p99 latency floor (ms). High because the chat path is SSE: a healthy turn
+ *  runs for seconds and peaks around 25s, so a tight threshold only makes noise. */
 export const OBSERVABILITY_DEFAULT_P99_LATENCY_MS = 120_000;
 
-/** Alarm threshold for AgentCore Runtime errors, per 5-minute period. */
+/** AgentCore Runtime errors per 5-minute period. */
 export const OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD = 10;
 
-/** Alarm threshold for Lambda `Errors`, per 5-minute period. */
+/** Lambda errors per 5-minute period. */
 export const OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD = 5;
 
-/** Lambda duration alarm expressed as a percentage of each function's own
- *  configured timeout, so one value works across functions with very
- *  different timeouts. */
+/** Lambda duration alarm as a percentage of the function's own timeout. */
 export const OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT = 80;
 
-/** Alarm threshold for DynamoDB throttle events, per 5-minute period.
- *  On-demand tables rarely throttle, so a low threshold costs nothing in
- *  noise and catches a real capacity problem early. */
+/** DynamoDB throttle events per 5-minute period. */
 export const OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD = 10;
 
 /** ECS service CPU / memory utilisation alarm thresholds (percent). */
 export const OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT = 80;
 export const OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT = 85;
 
-/** Avoidable prompt-cache misses per 5-minute period before alarming.
- *  Previously `config.production ? 10 : 50`. The tighter production value
- *  becomes the single default: a prefix-stability regression is a cost leak,
- *  and catching it earlier is the cheaper outcome for every fork. */
+/** Avoidable prompt-cache misses per 5-minute period. */
 export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD = 10;
 
-/** Dollars of prompt-cache waste per 5-minute period before alarming.
- *  Previously `config.production ? 1 : 5`, normalised for the same reason. */
+/** Dollars of fleet prompt-cache waste per 5-minute period. */
 export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD = 1;
 
-/** Cumulative partial-miss waste for a SINGLE session, in dollars, before
- *  alarming. A fleet-wide sum cannot see one conversation re-writing its prefix
- *  every turn: the motivating incident spent $27 over five days at ~$0.43 a
- *  turn without ever stepping a fleet number. */
+/** Cumulative partial-miss waste for one session, in dollars. A fleet sum
+ *  cannot see a single conversation re-writing its prefix every turn. */
 export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD = 5;
 
 /**
- * Observability configuration — alarm routing, alarm thresholds, log
- * retention, and trace sampling.
+ * Observability configuration.
  *
- * Every field is a SINGLE scalar with one default. See the block comment above
- * the default constants for why there is no prod/non-prod branching here.
- *
- * Precedence for each field, highest first:
- *   1. CDK_OBSERVABILITY_* environment variable
- *   2. `--context observability.<field>=...` (the FLAT dotted key)
- *   3. a nested `observability: { ... }` object in cdk.context.json
- *   4. the OBSERVABILITY_DEFAULT_* constant above
+ * Precedence per field: CDK_OBSERVABILITY_* env var, then the flat dotted
+ * context key, then a nested `observability` object, then the default constant.
  */
 export interface ObservabilityConfig {
-  /** Create the SNS alarm topic and route every alarm to it. Subscriptions to
-   *  the topic are deliberately NOT infrastructure-as-code: teams subscribe
-   *  out-of-band so adding a recipient never requires a pull request. */
+  /** Create the SNS alarm topic and route every alarm to it. */
   alarmTopicEnabled: boolean;
-
-  /** Retention, in days, applied to every log group this stack creates. */
   logRetentionDays: number;
-
-  /** ALB target 5xx count per 5-minute period before alarming. */
   albTarget5xxThreshold: number;
-
-  /** ALB p99 `TargetResponseTime` alarm floor, in ms. Streaming-aware. */
+  /** ALB p99 TargetResponseTime floor, in ms. */
   albP99LatencyMs: number;
-
-  /** AgentCore Runtime p99 `Latency` alarm floor, in ms. Streaming-aware. */
+  /** AgentCore Runtime p99 Latency floor, in ms. */
   agentCoreLatencyMs: number;
-
-  /** AgentCore Runtime error count per 5-minute period before alarming. */
   agentCoreErrorThreshold: number;
-
-  /** Lambda `Errors` count per 5-minute period before alarming. */
   lambdaErrorThreshold: number;
-
-  /** Lambda duration alarm as a percentage of the function's own timeout. */
   lambdaDurationPercentOfTimeout: number;
-
-  /** DynamoDB throttle events per 5-minute period before alarming. */
   dynamoThrottleThreshold: number;
-
-  /** ECS service CPU utilisation percentage before alarming. */
   ecsCpuPercent: number;
-
-  /** ECS service memory utilisation percentage before alarming. */
   ecsMemoryPercent: number;
 
-  /** Avoidable prompt-cache misses per 5-minute period before alarming. */
   promptCacheAvoidableMissThreshold: number;
-
-  /** Dollars of fleet prompt-cache waste per 5-minute period before alarming. */
   promptCacheWastedUsdThreshold: number;
-
-  /** Cumulative partial-miss waste for one session, in dollars, before
-   *  alarming. */
   promptCacheSessionWastedUsdThreshold: number;
 
-  /** X-Ray sampling rate (0.0-1.0) for the agent invocation path. */
   xraySamplingRate: number;
-
-  /** X-Ray reservoir size: traces/second recorded before the rate applies. */
   xraySamplingReservoir: number;
-
-  /** Enable X-Ray Insights notifications. A diagnostic opt-in rather than a
-   *  golden signal, so off by default. */
   xrayInsightsNotifications: boolean;
-
-  /** Enable the AgentCore Runtime's APPLICATION_LOGS vended log delivery.
-   *
-   *  Off by default for two independent reasons: those records carry the full
-   *  `request_payload` and `response_payload` of every invocation, making this
-   *  the highest-volume log source available in the stack (ingestion is the
-   *  dominant CloudWatch Logs cost), and those payloads are user prompts and
-   *  model responses — a PII surface a fork should opt into knowingly. */
+  /** AgentCore APPLICATION_LOGS vended delivery. Off by default: the records
+   *  carry full prompts and responses, so it is both high-volume and PII. */
   agentCoreApplicationLogsEnabled: boolean;
 }
 
@@ -944,19 +862,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
           clientId: tokenExchangeClientId,
         }
       : undefined,
-    // Observability — alarm routing, thresholds, log retention, trace sampling.
-    //
-    // Same three-step precedence as managedKb above, INCLUDING the flat dotted
-    // read at step 2. `--context observability.logRetentionDays=90` sets the
-    // FLAT key context['observability.logRetentionDays']; it does NOT merge
-    // into a nested `observability` object. Reading only the nested form would
-    // accept the operator's flag and silently ignore it — the exact trap that
-    // has already bitten the managed-KB byte caps and the managed-KB alarm
-    // thresholds in this file. Do not "simplify" the dotted reads away.
-    //
-    // Defaults live in the OBSERVABILITY_DEFAULT_* constants so the reasoning
-    // for each number sits next to the number, and so tests and docs can cite
-    // one source rather than a literal repeated per call site.
+    // Same precedence as managedKb above. The flat dotted read at step 2 is
+    // load-bearing: `--context observability.x=y` sets context['observability.x'],
+    // it does NOT build a nested object.
     observability: {
       alarmTopicEnabled:
         parseBooleanEnv(process.env.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED)
@@ -1018,8 +926,6 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseIntEnv(scope.node.tryGetContext('observability.promptCacheAvoidableMissThreshold'))
         ?? scope.node.tryGetContext('observability')?.promptCacheAvoidableMissThreshold
         ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
-      // Dollar amounts, so parseFloatEnv — an operator setting 0.5 must not be
-      // silently rounded to 0 and turned into "alarm on any waste at all".
       promptCacheWastedUsdThreshold:
         parseFloatEnv(process.env.CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD)
         ?? parseFloatEnv(scope.node.tryGetContext('observability.promptCacheWastedUsdThreshold'))
@@ -1030,8 +936,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseFloatEnv(scope.node.tryGetContext('observability.promptCacheSessionWastedUsdThreshold'))
         ?? scope.node.tryGetContext('observability')?.promptCacheSessionWastedUsdThreshold
         ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
-      // Fractional, so parseFloatEnv rather than parseIntEnv — parseIntEnv
-      // would silently turn 0.05 into 0 and disable sampling entirely.
+      // parseFloatEnv: parseIntEnv turns 0.05 into 0, disabling sampling.
       xraySamplingRate:
         parseFloatEnv(process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE)
         ?? parseFloatEnv(scope.node.tryGetContext('observability.xraySamplingRate'))
@@ -1095,10 +1000,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(`   Retain Data on Delete: ${config.retainDataOnDelete}`);
   console.log(`   Manage DNS Records: ${config.manageDnsRecords}`);
   console.log(`   App Version: ${config.appVersion}`);
-  // Printed so a deploy log proves which observability values actually took
-  // effect. Task-14-style per-environment overrides are invisible otherwise:
-  // a GitHub Variable that never reaches --context looks identical to one that
-  // does until you read the resolved value here.
+  // Printed so a deploy log shows which values actually took effect.
   console.log(
     `   Observability: alarmTopic=${config.observability.alarmTopicEnabled}`
     + ` logRetentionDays=${config.observability.logRetentionDays}`
@@ -1362,15 +1264,8 @@ function validateConfig(config: AppConfig): void {
   // falling back to CloudFront default domains).
 
   // ── Observability ──
-  //
-  // Fail fast on values that CloudWatch or X-Ray would reject at deploy time
-  // (or, worse, silently accept and misapply). These are the ones an operator
-  // can plausibly get wrong from a GitHub Variable typo.
-
-  // CloudWatch Logs accepts only a fixed set of retention values. An arbitrary
-  // number is rejected by CloudFormation at deploy time — long after synth,
-  // tsc, and CI have gone green — so it is worth catching here where the error
-  // can name the valid set.
+  // CloudWatch Logs accepts only a fixed set of retention values; an arbitrary
+  // number is rejected at deploy time, long after CI has gone green.
   const validRetentionDays = [
     1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096,
     1827, 2192, 2557, 2922, 3288, 3653,
@@ -1383,9 +1278,7 @@ function validateConfig(config: AppConfig): void {
     );
   }
 
-  // X-Ray sampling is a rate, not a percentage. Passing 5 instead of 0.05 is
-  // the obvious operator error, and it is a 100x cost error in the expensive
-  // direction, so reject it rather than clamping silently.
+  // A rate, not a percentage: 5 instead of 0.05 is a 100x cost error.
   const rate = config.observability.xraySamplingRate;
   if (rate < 0 || rate > 1) {
     throw new Error(

@@ -46,12 +46,7 @@ describe('Unified platform dashboard', () => {
     });
   });
 
-  /**
-   * CloudWatch gives three dashboards free and charges $3/month for each one
-   * after. agentcore-observability + prompt-cache-observability + this one lands
-   * exactly on the ceiling, which is why this dashboard links out to those two
-   * rather than restating their widgets.
-   */
+  // CloudWatch charges $3/month beyond three.
   it('keeps the stack at exactly three dashboards (the CloudWatch free ceiling)', () => {
     template.resourceCountIs('AWS::CloudWatch::Dashboard', 3);
   });
@@ -65,11 +60,7 @@ describe('Unified platform dashboard', () => {
     expect(dashboardBody).toContain(`${MOCK_PREFIX}-alarms`);
   });
 
-  /**
-   * The SSE caveat is on the dashboard itself, not just in code comments,
-   * because the person reading it at 3am is not reading the CDK source. A drop
-   * in latency can mean turns are failing early rather than getting faster.
-   */
+  // On the dashboard, not just in code: whoever reads it is not reading CDK.
   it('warns on-dashboard that SSE makes long response times normal', () => {
     expect(dashboardBody).toMatch(/SSE/);
   });
@@ -101,7 +92,6 @@ describe('Unified platform dashboard', () => {
       expect(dashboardBody).toContain('MemoryUtilization');
     });
 
-    /** The only predictive graph on the dashboard. */
     it('graphs Bedrock quota headroom, the leading indicator', () => {
       expect(dashboardBody).toContain('EstimatedTPMQuotaUsage');
       expect(dashboardBody).toContain('InvocationThrottles');
@@ -113,12 +103,7 @@ describe('Unified platform dashboard', () => {
   });
 
   describe('row 3 — alarm status', () => {
-    /**
-     * The widget's alarm list is discovered by walking the construct tree rather
-     * than hand-maintained, so an alarm added later cannot silently go missing
-     * from the one dashboard an on-call engineer opens. This asserts the
-     * discovery actually found everything.
-     */
+    // The list is discovered by walking the tree, so this checks it found all.
     it('includes every alarm in the stack', () => {
       expect(alarmCount).toBeGreaterThan(60);
       // The widget references each alarm by ARN, which renders as
@@ -140,12 +125,6 @@ describe('Unified platform dashboard', () => {
     });
   });
 
-  /**
-   * The dashboard and the AgentCore alarms must bind the `Name` dimension to the
-   * same string. Two places deriving it independently is how one ends up
-   * watching a stream that is never published — the failure this whole effort
-   * started by finding.
-   */
   it('binds the runtime Name dimension identically to the alarms', () => {
     expect(dashboardBody).toContain('::DEFAULT');
   });

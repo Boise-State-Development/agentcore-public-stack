@@ -21,29 +21,13 @@ export interface PlatformDashboardConstructProps {
 }
 
 /**
- * PlatformDashboardConstruct — the one dashboard that answers "is the platform
- * healthy right now".
+ * The on-call dashboard: "is the platform healthy right now".
  *
- * ## Why this is the third dashboard and not the fourth
+ * Rows follow triage order — is traffic being served, then why not, then which
+ * alarms are already firing.
  *
- * CloudWatch gives three dashboards free and charges $3/month for each one
- * after. The stack already has `agentcore-observability` (runtime detail) and
- * `prompt-cache-observability` (token and cache economics), so this lands
- * exactly on the free ceiling.
- *
- * That constraint is also good design pressure: rather than restating widgets
- * those two already own, this dashboard carries only the top-line health signals
- * an on-call engineer needs in the first thirty seconds, and links out for
- * anything deeper. Duplicating the AgentCore latency percentiles here would cost
- * money AND create a second place to update when a metric binding changes.
- *
- * ## Layout follows the triage order, not the service inventory
- *
- * Row 1 answers "is traffic being served" — requests and errors at the front
- * door, agent invocations and errors behind it, tasks actually running.
- * Row 2 answers "why" — saturation across compute and the data layer.
- * Row 3 is every alarm's current state, which is the fastest way to see whether
- * something already known-broken explains what you are looking at.
+ * Links to the two existing dashboards rather than restating their widgets, which
+ * keeps the stack at three (CloudWatch charges $3/month beyond that).
  */
 export class PlatformDashboardConstruct extends Construct {
   public readonly dashboard: cloudwatch.Dashboard;
@@ -178,8 +162,6 @@ export class PlatformDashboardConstruct extends Construct {
             period: ALARM_PERIOD,
           }),
         ],
-        // The one graph here that predicts rather than reports: quota usage
-        // climbing is visible before throttling starts.
         leftYAxis: { min: 0, max: 100 },
         right: [
           new cloudwatch.Metric({
@@ -211,9 +193,6 @@ export class PlatformDashboardConstruct extends Construct {
     // Row 3 — what is already known to be broken?
     // ============================================================
 
-    // Every alarm in the stack, in one place. This is deliberately the last row:
-    // it answers "is this already a known problem" once the graphs above have
-    // shown that something is wrong.
     this.dashboard.addWidgets(
       new cloudwatch.AlarmStatusWidget({
         title: `All platform alarms (${alarms.length})`,

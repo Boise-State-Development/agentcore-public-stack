@@ -38,14 +38,7 @@ describe('DynamoDB per-table alarms', () => {
     tableCount = Object.keys(template.findResources('AWS::DynamoDB::Table')).length;
   });
 
-  /**
-   * THE coverage guard.
-   *
-   * Ties alarm coverage to the actual table count in the template, so adding a
-   * 27th table without adding it to the alarm list fails here rather than
-   * shipping a silently unmonitored table. A hardcoded number would have to be
-   * updated by the same person who forgot the table, which is no guard at all.
-   */
+  // Tied to the real table count, so a new table without an alarm fails here.
   it('covers every table in the stack — one throttle alarm each', () => {
     expect(tableCount).toBe(26);
     // 26 per-table throttle alarms + 1 account-level UserErrors alarm.
@@ -65,14 +58,6 @@ describe('DynamoDB per-table alarms', () => {
     expect(missing).toEqual([]);
   });
 
-  /**
-   * Read and write throttles share one alarm because the split cost 26 of the
-   * stack's 500-resource CloudFormation budget for a signal with ZERO recorded
-   * occurrences in the live account — every table is on-demand, so capacity
-   * scales automatically and throttling has never happened. The expression sums
-   * both metrics and the alarm description names them, so the read-vs-write
-   * diagnosis is written down rather than lost.
-   */
   it('throttle alarm sums read and write events in one expression', () => {
     const alarm = Object.values(alarms).find(
       (a) => a.Properties.AlarmName === `${MOCK_PREFIX}-ddb-users-throttle`,
@@ -88,12 +73,7 @@ describe('DynamoDB per-table alarms', () => {
     expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
   });
 
-  /**
-   * Two metrics, far inside CloudWatch's cap of 10 individual metrics per
-   * math-expression alarm. That cap is not theoretical: CDK's
-   * metricSystemErrorsForOperations() defaults to all 14 DynamoDB operations and
-   * throws TooManyMetricsInMathExpression at synth.
-   */
+  // CloudWatch caps math-expression alarms at 10 metrics.
   it('throttle expression stays well inside the 10-metric math limit', () => {
     const alarm = Object.values(alarms).find(
       (a) => a.Properties.AlarmName === `${MOCK_PREFIX}-ddb-users-throttle`,
@@ -102,11 +82,6 @@ describe('DynamoDB per-table alarms', () => {
     expect(metricCount).toBe(2);
   });
 
-  /**
-   * The TableName dimension must come from the real resource. A dimension built
-   * from a name string produces an alarm that looks correct and watches a table
-   * that may not exist.
-   */
   it('throttle alarms bind TableName to the real table resource', () => {
     const alarm = Object.values(alarms).find(
       (a) => a.Properties.AlarmName === `${MOCK_PREFIX}-ddb-sessions-metadata-throttle`,
@@ -121,15 +96,8 @@ describe('DynamoDB per-table alarms', () => {
     }
   });
 
-  /**
-   * Replaces the 26 per-table SystemErrors alarms.
-   *
-   * Verified against the live account: SystemErrors had ZERO metric streams (it
-   * has never fired, and AWS-side 5xx affect more than one table anyway), while
-   * account-level UserErrors had real data — 3 errors one day and 7 another in
-   * the trailing fortnight. So 26 alarms on a signal that has never fired were
-   * traded for 1 alarm on a signal that is firing today.
-   */
+  // Replaces 26 per-table SystemErrors alarms: that metric had zero streams in
+  // the live account, while account-level UserErrors had real data.
   it('has one account-level UserErrors alarm instead of per-table system errors', () => {
     const alarm = Object.values(alarms).find(
       (a) => a.Properties.AlarmName === `${MOCK_PREFIX}-ddb-user-errors`,
@@ -156,13 +124,8 @@ describe('DynamoDB per-table alarms', () => {
     }
   });
 
-  /**
-   * CloudFormation caps a stack at 500 resources, and this is a deliberate
-   * single-stack architecture with no second stack to spill into. Per-table
-   * alarms are the largest single consumer of that budget, so the ceiling is
-   * asserted here: if the stack approaches it, this test fails while there is
-   * still room to react, rather than a deploy failing after CI has gone green.
-   */
+  // Single-stack architecture against a hard 500-resource CFN limit, so the
+  // ceiling is asserted while there is still room to react.
   it('stack stays clear of the 500-resource CloudFormation limit', () => {
     const total = Object.keys(template.toJSON().Resources).length;
     expect(total).toBeLessThan(460);

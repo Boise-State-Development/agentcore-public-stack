@@ -47,8 +47,6 @@ export class RagCorsUpdaterConstruct extends Construct {
   ) {
     super(scope, id);
 
-    // `config` is used for the log-group retention below. It was previously
-    // destructured as `_config` and explicitly voided as unused.
     const { config, frontendUrl, documentsBucket } = props;
 
     const ragDocumentsBucketName = documentsBucket.bucketName;

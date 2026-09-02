@@ -31,7 +31,6 @@ export interface KbSyncConstructProps {
    * MUST be the same identity app-api/inference-api use.
    */
   workloadIdentityName: string;
-  /** Platform alarm topic. Undefined leaves these alarms console-only. */
   alarmTopic?: sns.ITopic;
 }
 
@@ -237,7 +236,6 @@ export class KbSyncConstruct extends Construct {
     });
     this.scheduleRule.addTarget(new targets.LambdaFunction(this.dispatcherLambda));
 
-    // Error visibility, routed to the platform alarm topic via AlarmFactory.
     const alarms = new AlarmFactory(this, config, props.alarmTopic);
     alarms.alarm('KbSyncDispatcherErrorAlarm', {
       name: 'kb-sync-dispatcher-errors',

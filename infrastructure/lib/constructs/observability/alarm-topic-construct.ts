@@ -12,36 +12,15 @@ export interface AlarmTopicConstructProps {
 }
 
 /**
- * AlarmTopicConstruct — the one SNS topic every CloudWatch alarm in this stack
- * publishes to.
+ * The SNS topic every alarm publishes to.
  *
- * ## Why the topic is created but never subscribed
+ * Subscriptions are intentionally absent — teams subscribe out-of-band so adding
+ * a recipient needs no deploy. The ARN is published to SSM and as a CfnOutput.
  *
- * There are deliberately NO `sns.Subscription` resources here. Subscriptions
- * are managed out-of-band (console, CLI, or a separate operator-owned process)
- * for a specific reason: an institution running this platform has several teams
- * who each want to hear about failures, and their membership changes far more
- * often than the infrastructure does. Encoding subscribers in CDK would mean a
- * pull request, a review, and a CloudFormation deploy to add one person's email
- * — so in practice the list goes stale and people stop trusting it.
- *
- * The topic ARN is therefore published to SSM and as a CfnOutput, and adding a
- * recipient is a one-line `aws sns subscribe` that touches no code.
- *
- * ## Why a customer-managed KMS key
- *
- * This is the part that silently breaks. An SNS topic encrypted with the
- * AWS-managed `alias/aws/sns` key CANNOT receive messages from CloudWatch:
- * the alarm's publish call is made by the CloudWatch service principal, and an
- * AWS-managed key's policy cannot be edited to grant that principal
- * `kms:GenerateDataKey*`. The alarm transitions to ALARM, the console shows it
- * firing, and the notification is dropped — a monitoring system that looks
- * healthy precisely when it has stopped working.
- *
- * A customer-managed key whose policy grants `cloudwatch.amazonaws.com` both
- * `kms:GenerateDataKey*` and `kms:Decrypt` is the fix. Leaving the topic
- * unencrypted would also "work", but alarm bodies quote metric names, resource
- * names, and alarm descriptions, so the topic is worth encrypting.
+ * The key must be customer-managed: CloudWatch cannot publish to a topic
+ * encrypted with alias/aws/sns, because that key's policy cannot be edited to
+ * grant the service principal kms:GenerateDataKey*. The failure is silent — the
+ * alarm fires and the notification is dropped.
  */
 export class AlarmTopicConstruct extends Construct {
   /** The topic every alarm action targets. */
@@ -62,24 +41,15 @@ export class AlarmTopicConstruct extends Construct {
 
     this.key = new kms.Key(this, 'AlarmTopicKey', {
       alias: getResourceName(config, 'alarm-topic-key'),
-      description:
-        'Encrypts the platform alarm SNS topic. Customer-managed rather than '
-        + 'alias/aws/sns because CloudWatch must be granted GenerateDataKey to '
-        + 'publish, which is not possible on an AWS-managed key.',
+      description: 'Encrypts the platform alarm SNS topic.',
       enableKeyRotation: true,
-      // NOT getRemovalPolicy(config). This key protects no durable data — it
-      // wraps in-flight notifications only — so retaining it on stack delete
-      // would leave an orphaned billable key ($1/month each) behind with
-      // nothing to decrypt. Alarm history lives in CloudWatch, not here.
+      // Not getRemovalPolicy(config): this wraps in-flight notifications only,
+      // so retaining it would strand a billable key with nothing to decrypt.
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // The grant that makes alarm delivery actually work. `kms:Decrypt` alone is
-    // not enough: SNS envelope encryption has the publisher generate the data
-    // key, so CloudWatch needs GenerateDataKey* as well.
-    //
-    // Scoped with an SourceAccount condition so the grant cannot be leveraged
-    // by CloudWatch acting for a different account.
+    // Decrypt alone is not enough: SNS envelope encryption has the publisher
+    // generate the data key, so GenerateDataKey* is required too.
     this.key.addToResourcePolicy(
       new iam.PolicyStatement({
         sid: 'AllowCloudWatchAlarmsToPublishToEncryptedTopic',
@@ -101,15 +71,9 @@ export class AlarmTopicConstruct extends Construct {
       topicName: getResourceName(config, 'alarms'),
       displayName: `${config.projectPrefix} platform alarms`,
       masterKey: this.key,
-      // Deny non-TLS publishes/subscribes. Cheap, and this topic's messages
-      // name internal resources.
       enforceSSL: true,
     });
 
-    // CloudWatch must also be allowed to Publish. CDK adds this automatically
-    // when an SnsAction is attached to an alarm, but stating it here means the
-    // topic is correct even for a publisher wired up later, and it documents
-    // the second half of the permission pair alongside the KMS half above.
     this.topic.addToResourcePolicy(
       new iam.PolicyStatement({
         sid: 'AllowCloudWatchAlarmsToPublish',
@@ -127,11 +91,6 @@ export class AlarmTopicConstruct extends Construct {
     // Discovery
     // ============================================================
 
-    // Published so an operator (or a subscription script) can find the topic
-    // without reading the CloudFormation template. This is a WRITE from this
-    // stack; nothing in this stack reads it back via valueForStringParameter,
-    // which would be unsatisfiable on first deploy — in-stack consumers take
-    // the typed `topic` reference instead.
     new ssm.StringParameter(this, 'AlarmTopicArnParam', {
       parameterName: `/${config.projectPrefix}/observability/alarm-topic-arn`,
       stringValue: this.topic.topicArn,

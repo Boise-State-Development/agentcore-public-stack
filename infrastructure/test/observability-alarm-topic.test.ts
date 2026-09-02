@@ -42,19 +42,9 @@ describe('AlarmTopicConstruct', () => {
     expect(JSON.stringify(topic.Properties.KmsMasterKeyId)).not.toContain('alias/aws/sns');
   });
 
-  /**
-   * THE test in this file.
-   *
-   * CloudWatch publishes alarm notifications as the `cloudwatch.amazonaws.com`
-   * service principal. Against an SNS topic encrypted with the AWS-managed
-   * `alias/aws/sns` key, that publish is denied and the message is dropped
-   * silently: the alarm still goes to ALARM in the console, so the monitoring
-   * system looks healthy at exactly the moment it has stopped delivering.
-   *
-   * `kms:Decrypt` alone is insufficient — SNS envelope encryption has the
-   * PUBLISHER generate the data key, so GenerateDataKey* is required too.
-   * Both are asserted because dropping either one reintroduces silent failure.
-   */
+  // Without both actions the publish is denied and the message dropped
+  // silently. Decrypt alone is insufficient: SNS envelope encryption has the
+  // publisher generate the data key.
   it('key policy lets CloudWatch generate a data key AND decrypt', () => {
     const key = Object.values(t.findResources('AWS::KMS::Key'))[0];
     const statements = key.Properties.KeyPolicy.Statement;
@@ -93,15 +83,7 @@ describe('AlarmTopicConstruct', () => {
     expect(doc).toContain('SecureTransport');
   });
 
-  /**
-   * Subscriptions are deliberately NOT infrastructure-as-code. Several teams
-   * need to hear about failures and their membership changes far more often
-   * than the infrastructure does; requiring a PR and a CloudFormation deploy to
-   * add one address is how notification lists go stale and stop being trusted.
-   *
-   * This assertion is the guard on that decision — if someone adds a
-   * subscription here, this test explains why not to.
-   */
+  // Subscriptions are managed out-of-band so adding a recipient needs no deploy.
   it('creates NO subscriptions (managed out-of-band on purpose)', () => {
     t.resourceCountIs('AWS::SNS::Subscription', 0);
   });
@@ -116,22 +98,13 @@ describe('AlarmTopicConstruct', () => {
     expect(outputJson).toContain(`${MOCK_PREFIX}-AlarmTopicArn`);
   });
 
-  /**
-   * The CMK wraps in-flight notifications only — it protects no durable data,
-   * and alarm history lives in CloudWatch. Retaining it on stack delete would
-   * strand a billable key with nothing left to decrypt, so this one key
-   * deliberately does NOT follow getRemovalPolicy(config).
-   */
   it('destroys the CMK on stack delete rather than stranding a billable key', () => {
     const key = Object.values(t.findResources('AWS::KMS::Key'))[0];
     expect(key.DeletionPolicy).toBe('Delete');
   });
 });
 
-/**
- * The alarmTopicEnabled gate lives in PlatformStack, not in the construct, so
- * it can only be exercised against a real stack synth.
- */
+/** The gate lives in PlatformStack, so it needs a real stack synth. */
 describe('PlatformStack alarm topic gating', () => {
   function synthStack(alarmTopicEnabled: boolean): { stack: PlatformStack; template: Template } {
     const cert = 'arn:aws:acm:us-east-1:123456789012:certificate/test';
@@ -166,11 +139,6 @@ describe('PlatformStack alarm topic gating', () => {
     });
   });
 
-  /**
-   * The opt-out path. A fork that routes alerts some other way gets no topic,
-   * no CMK, and no alarm actions — which is this stack's pre-existing
-   * console-only behaviour, deliberately kept reachable rather than removed.
-   */
   it('creates no topic, no CMK, and no alarm actions when disabled', () => {
     const { stack, template } = synthStack(false);
     expect(stack.alarmTopic).toBeUndefined();
@@ -178,9 +146,7 @@ describe('PlatformStack alarm topic gating', () => {
     const topics = template.findResources('AWS::SNS::Topic');
     expect(Object.keys(topics)).toHaveLength(0);
 
-    // No key aliased for the alarm topic. Other CMKs in the stack (BFF cookie
-    // key, OAuth token key) are unaffected, so assert on the alias rather than
-    // on a bare resource count.
+    // On the alias, not a bare count: the stack has other CMKs.
     const aliases = template.findResources('AWS::KMS::Alias');
     const aliasNames = Object.values(aliases).map((a: any) => a.Properties.AliasName);
     expect(aliasNames).not.toContain(`alias/${MOCK_PREFIX}-alarm-topic-key`);

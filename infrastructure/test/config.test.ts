@@ -75,13 +75,8 @@ function clearManagedKbEnv(): void {
 }
 
 /**
- * The `CDK_OBSERVABILITY_*` environment variables. Scrubbed before AND after
- * every test for the same reason as the keys above, and with a specific hazard
- * of its own: these tests assert the *defaults*, which are the values a fork
- * inherits when it configures nothing. A leaked value would make a
- * "defaults to the cost-conscious value" assertion pass while reading someone
- * else's override — the failure mode where the cheap default is believed to be
- * in place and the expensive one is actually deployed.
+ * Scrubbed before AND after every test: these assert the defaults, so a leaked
+ * value would make a "defaults to X" assertion pass while reading an override.
  */
 const OBSERVABILITY_ENV_KEYS = [
   'CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED',
@@ -1502,22 +1497,10 @@ describe('RAG Ingestion Configuration', () => {
 // ============================================================
 
 /**
- * Observability config tests.
- *
- * Two things are being protected here, and only one of them is ordinary
- * config plumbing.
- *
- * 1. **The defaults themselves.** They are what a fork inherits when it
- *    configures nothing, so each one is asserted against its exported constant
- *    rather than a literal. Someone raising the X-Ray sampling default from 1%
- *    to 100% has to change a test that says, in words, why it is 1%.
- *
- * 2. **That the FLAT dotted context key is read.** `--context observability.x=y`
- *    sets context['observability.x']; it does NOT build a nested object. A
- *    section that reads only the nested form accepts an operator's --context
- *    flag and silently ignores it. That trap has already cost this repo twice
- *    (managed-KB byte caps, then managed-KB alarm thresholds), so it is pinned
- *    here for every field rather than trusted.
+ * Defaults are asserted against their exported constants, and every field is
+ * checked through the FLAT dotted context key — `--context observability.x=y`
+ * sets context['observability.x'] and does NOT build a nested object, a trap
+ * that has already cost this repo twice.
  */
 describe('Observability Configuration', () => {
   let app: cdk.App;
@@ -1562,10 +1545,7 @@ describe('Observability Configuration', () => {
       );
     });
 
-    // The single most expensive knob in the stack. Before this config section
-    // existed, a fork that never set `production` got fixedRate 1.0 — a
-    // recorded X-Ray trace for EVERY agent invocation at $5/million. This
-    // assertion exists so that regression cannot come back quietly.
+    // Was fixedRate 1.0 for any fork that never set `production`.
     test('X-Ray sampling defaults to 1%, not 100%', () => {
       const { xraySamplingRate } = loadConfig(app).observability;
       expect(xraySamplingRate).toBe(OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE);
@@ -1578,8 +1558,6 @@ describe('Observability Configuration', () => {
       );
     });
 
-    // Full request/response payloads: highest-volume log source in the stack
-    // and a PII surface. Must be opt-in.
     test('AgentCore APPLICATION_LOGS default to OFF', () => {
       expect(loadConfig(app).observability.agentCoreApplicationLogsEnabled).toBe(false);
     });
@@ -1588,14 +1566,10 @@ describe('Observability Configuration', () => {
       expect(loadConfig(app).observability.xrayInsightsNotifications).toBe(false);
     });
 
-    // Routing is the entire point of the feature, so this one defaults ON.
     test('alarm topic defaults to ON', () => {
       expect(loadConfig(app).observability.alarmTopicEnabled).toBe(true);
     });
 
-    // Streaming-aware. The chat path is SSE, so a healthy agent turn can run
-    // for tens of seconds; the pre-existing 30s AgentCore alarm sat BELOW
-    // normal and could only ever have produced noise.
     test('latency floors are streaming-aware, well above a normal agent turn', () => {
       const obs = loadConfig(app).observability;
       expect(obs.agentCoreLatencyMs).toBe(OBSERVABILITY_DEFAULT_P99_LATENCY_MS);
@@ -1623,8 +1597,7 @@ describe('Observability Configuration', () => {
       expect(loadConfig(app).observability.logRetentionDays).toBe(90);
     });
 
-    // parseFloatEnv, not parseIntEnv: parseInt('0.25') is 0, which would
-    // switch sampling off entirely instead of setting it to 25%.
+    // parseInt('0.25') is 0, which would switch sampling off entirely.
     test('fractional X-Ray sampling rate survives parsing', () => {
       process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '0.25';
       expect(loadConfig(app).observability.xraySamplingRate).toBe(0.25);
@@ -1665,8 +1638,6 @@ describe('Observability Configuration', () => {
   });
 
   describe('flat dotted context key (what --context actually sets)', () => {
-    // `--context observability.logRetentionDays=90` sets THIS key. Reading only
-    // the nested object would accept the operator's flag and ignore it.
     test('flat dotted key is honoured for a number', () => {
       app.node.setContext('observability.logRetentionDays', '90');
       expect(loadConfig(app).observability.logRetentionDays).toBe(90);
@@ -1763,9 +1734,7 @@ describe('Observability Configuration', () => {
       expect(loadConfig(app).observability.logRetentionDays).toBe(90);
     });
 
-    // An unset GitHub Actions variable arrives as the empty string. It must
-    // fall through, not parse as 0 — a 0-day retention or 0.0 sampling rate
-    // silently applied would be indistinguishable from a working config.
+    // An unset GitHub Actions variable arrives as the empty string.
     test('empty env var falls through to the default', () => {
       process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = '';
       process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '';
@@ -1774,8 +1743,7 @@ describe('Observability Configuration', () => {
       expect(obs.xraySamplingRate).toBe(OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE);
     });
 
-    // false is a legitimate value, not "absent". parseBooleanEnv distinguishes
-    // them; `||` would not, and would silently re-enable a disabled feature.
+    // false is a legitimate value, not "absent".
     test('an explicit false is not overwritten by the ON default', () => {
       process.env.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED = 'false';
       expect(loadConfig(app).observability.alarmTopicEnabled).toBe(false);
@@ -1783,9 +1751,6 @@ describe('Observability Configuration', () => {
   });
 
   describe('validation', () => {
-    // CloudWatch Logs accepts only a fixed set of retention values. Without
-    // this check the failure surfaces at CFN deploy time, long after synth,
-    // tsc, and CI have all gone green.
     test('rejects a retention value CloudWatch does not accept', () => {
       process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = '45';
       expect(() => loadConfig(app)).toThrow(/logRetentionDays/);
@@ -1800,8 +1765,7 @@ describe('Observability Configuration', () => {
       }
     });
 
-    // Passing 5 for "5%" instead of 0.05 is a 100x cost error in the expensive
-    // direction. Reject rather than clamp so it cannot be deployed unnoticed.
+    // 5 instead of 0.05 is a 100x cost error; reject rather than clamp.
     test('rejects an X-Ray sampling rate given as a percentage', () => {
       process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '5';
       expect(() => loadConfig(app)).toThrow(/xraySamplingRate/);

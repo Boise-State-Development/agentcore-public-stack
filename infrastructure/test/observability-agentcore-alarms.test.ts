@@ -5,29 +5,10 @@ import { PlatformStack } from '../lib/platform-stack';
 import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_PREFIX, MOCK_REGION } from './helpers/mock-config';
 
 /**
- * AgentCore Runtime metric-binding tests.
- *
- * ## Why this file exists
- *
- * The construct previously alarmed on namespace `bedrock-agentcore` with metric
- * names `InvocationCount`, `InvocationErrors`, and `InvocationLatency`. A
- * read-only `aws cloudwatch list-metrics` sweep of the live account established
- * that:
- *
- *   - `bedrock-agentcore` exists but holds ONLY the OpenTelemetry / Strands
- *     application metrics (`gen_ai.*`, `http.server.*`, `strands.*`);
- *   - those three metric names exist in NO namespace in the account;
- *   - the real service metrics are in `AWS/Bedrock-AgentCore` and every stream
- *     carries dimensions.
- *
- * Both alarms had therefore been in INSUFFICIENT_DATA since creation, and the
- * dashboard's widgets rendered empty — which an operator reads as "no errors"
- * rather than "broken query". Nothing failed loudly, which is precisely why it
- * survived.
- *
- * These assertions are the tripwire. A rename, a "tidy-up" of the namespace
- * string, or a dropped dimension will fail here instead of quietly producing
- * another permanently-green alarm.
+ * Pins the AgentCore metric binding, which was previously wrong: namespace
+ * `bedrock-agentcore` with InvocationCount / InvocationErrors /
+ * InvocationLatency, none of which exist. Both alarms had been in
+ * INSUFFICIENT_DATA since creation, reading as healthy.
  */
 describe('AgentCore Runtime alarms — verified metric binding', () => {
   const NAMESPACE = 'AWS/Bedrock-AgentCore';
@@ -74,17 +55,13 @@ describe('AgentCore Runtime alarms — verified metric binding', () => {
     for (const name of AGENTCORE_ALARMS) byName(name);
   });
 
-  /** The namespace that actually receives service metrics. */
   it('uses the AWS/Bedrock-AgentCore namespace', () => {
     for (const name of AGENTCORE_ALARMS) {
       expect(byName(name).Properties.Namespace).toBe(NAMESPACE);
     }
   });
 
-  /**
-   * The dead names must never come back. Asserted across the whole template so
-   * a dashboard widget cannot reintroduce them either.
-   */
+  // Whole-template, so a dashboard widget cannot reintroduce them either.
   it('no alarm or dashboard references the non-existent metric names', () => {
     const whole = JSON.stringify(template.toJSON());
     for (const dead of ['InvocationCount', 'InvocationErrors', 'InvocationLatency']) {
@@ -104,11 +81,7 @@ describe('AgentCore Runtime alarms — verified metric binding', () => {
     expect(byName('agentcore-high-latency').Properties.MetricName).toBe('Latency');
   });
 
-  /**
-   * Every stream in this namespace is dimensioned; an undimensioned metric here
-   * matches nothing at all. The three-dimension set is Resource + Operation +
-   * Name, where Name is `{agentRuntimeName}::{endpointName}`.
-   */
+  // Every stream here is dimensioned; an undimensioned metric matches nothing.
   it('binds the three-dimension runtime set on every alarm', () => {
     for (const name of AGENTCORE_ALARMS) {
       const dims = byName(name).Properties.Dimensions;
@@ -129,12 +102,6 @@ describe('AgentCore Runtime alarms — verified metric binding', () => {
     }
   });
 
-  /**
-   * ComputeType=MicroVM exists as a fourth dimension on a parallel set of
-   * streams. Binding to it would tie the alarm to an AgentCore implementation
-   * detail; if AWS changed the compute type the alarm would not fail, it would
-   * simply stop matching any stream and go quiet.
-   */
   it('does not bind the ComputeType implementation detail', () => {
     for (const name of AGENTCORE_ALARMS) {
       const keys = byName(name).Properties.Dimensions.map((d: any) => d.Name);
@@ -142,13 +109,8 @@ describe('AgentCore Runtime alarms — verified metric binding', () => {
     }
   });
 
-  /**
-   * Measured in dev over 14 days: average turn 3.0-4.5s, daily maxima up to
-   * 24.4s. Units are Milliseconds (verified via get-metric-statistics), so the
-   * config value is used directly — unlike the ALB's TargetResponseTime, which
-   * is in seconds and must be divided. The old 30000 threshold sat just above
-   * the observed maximum and would fire on a healthy long turn.
-   */
+  // Milliseconds, unlike the ALB metric. Measured turns peak near 25s, so the
+  // previous 30000 threshold sat just above normal.
   it('latency threshold is in milliseconds and clears a real long turn', () => {
     const alarm = byName('agentcore-high-latency');
     expect(alarm.Properties.Threshold).toBe(120_000);
@@ -156,19 +118,12 @@ describe('AgentCore Runtime alarms — verified metric binding', () => {
     expect(alarm.Properties.Threshold).toBeGreaterThan(24_400);
   });
 
-  /**
-   * SystemErrors (AWS's fault, escalate) and UserErrors (ours: malformed
-   * request, missing permission, rejected payload) are separate alarms so the
-   * notification itself carries the blame assignment.
-   */
   it('separates system errors from user errors', () => {
     expect(byName('agentcore-system-errors').Properties.MetricName)
       .not.toBe(byName('agentcore-high-error-rate').Properties.MetricName);
   });
 
   it('throttle alarm fires on any throttle at all', () => {
-    // A throttle is never ambiguous and never self-corrects without either less
-    // traffic or a quota increase, and quota increases take lead time.
     expect(byName('agentcore-throttles').Properties.Threshold).toBe(0);
   });
 
@@ -197,15 +152,8 @@ describe('AgentCore Runtime alarms — verified metric binding', () => {
       }
     });
 
-    /**
-     * The old dashboard graphed `InputTokens`/`OutputTokens` in the wrong
-     * namespace. Those names do not exist, and the token metrics that DO exist
-     * in this namespace (`InputTokenUsage`, `TokenCount`) are dimensioned by
-     * StrategyId/StrategyType — they are Memory-strategy counters, not model
-     * token usage. Real LLM token accounting lives on the prompt-cache
-     * dashboard, and the header text points there instead of showing a
-     * plausible-looking empty graph.
-     */
+    // InputTokens/OutputTokens do not exist; the token metrics in this namespace
+    // are Memory-strategy counters, not model tokens.
     it('does not graph non-existent token metrics, and points at the right dashboard', () => {
       const dashboards = template.findResources('AWS::CloudWatch::Dashboard');
       const agentcore = Object.values(dashboards).find((d: any) =>
