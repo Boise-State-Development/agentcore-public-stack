@@ -1183,6 +1183,40 @@ class StreamCoordinator:
             except Exception as e:
                 logger.error(f"Failed to clear pending attachments: {e}", exc_info=True)
 
+            # Same reasoning, applied to the interrupted-turn marker: a turn
+            # that reached here produced a COMPLETE answer, so it was not
+            # interrupted — whatever the client signalled.
+            #
+            # WHY THE MARKER CAN BE HERE AT ALL. The client's Stop writes
+            # `lastTurnInterrupted` immediately (app-api, `source=client_signal`),
+            # but the server only observes the armed cancel on the lease
+            # heartbeat, which sleeps LEASE_HEARTBEAT_SECONDS (10s) BEFORE its
+            # first check. A turn that finishes inside that window races the
+            # first tick and wins: the stream completes normally and the
+            # cooperative-stop arm never runs, leaving a marker that describes
+            # a turn which was never actually cut short.
+            #
+            # Left in place, the NEXT turn pops it and prepends
+            # `_build_interruption_note("user_stopped")`, telling the model
+            # that its own complete reply "was the partial that was delivered"
+            # and to treat it as rejected feedback. Every clause of that is
+            # false, and it measurably steers the next answer. Observed in dev
+            # on 2026-09-02: Stop at 2.6s on a 10.4s turn, full answer
+            # persisted, and the follow-up turn logged
+            # "Cleared interrupted_turn ... (reason=user_stopped)".
+            #
+            # Narrowing the heartbeat interval does NOT fix this — any turn
+            # shorter than one tick is unstoppable no matter how the ticks are
+            # spaced, so the marker has to be reconciled against what actually
+            # happened. That is what this does. The real interruption arms
+            # below re-set it after persisting their partial, so a genuine
+            # interruption is unaffected.
+            try:
+                from apis.shared.sessions.metadata import clear_interrupted_turn
+                await clear_interrupted_turn(session_id, user_id)
+            except Exception as e:
+                logger.error(f"Failed to clear stale interrupted_turn: {e}", exc_info=True)
+
         except _CooperativeStopSignal:
             # Deliberate user Stop observed mid-stream (see the in-loop check).
             # Unlike the CancelledError/GeneratorExit backstop below — which
