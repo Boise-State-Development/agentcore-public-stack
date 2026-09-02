@@ -9,6 +9,7 @@ import * as path from 'path';
 import { Construct } from 'constructs';
 
 import { AppConfig } from '../../config';
+import { logRetentionFor } from '../observability/log-retention';
 
 export interface RagIngestionLambdaConstructProps {
   config: AppConfig;
@@ -87,7 +88,7 @@ export class RagIngestionLambdaConstruct extends Construct {
     } = props;
 
     const ingestionLogGroup = new logs.LogGroup(this, 'RagIngestionLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
