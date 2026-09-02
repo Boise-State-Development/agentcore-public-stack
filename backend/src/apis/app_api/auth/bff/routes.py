@@ -1,22 +1,33 @@
 """BFF Token Handler auth routes (Phase 3).
 
 `GET  /auth/login`     — initiates the OAuth code flow against the Cognito
-                         Hosted UI.
-`GET  /auth/callback`  — completes the flow, persists a session row,
-                         writes sealed cookies, redirects to the SPA.
+                         Hosted UI. Mints the browser-binding cookie, the
+                         PKCE verifier, and the OIDC nonce.
+`GET  /auth/callback`  — completes the flow: verifies the state is bound to
+                         *this* browser, redeems the code with the PKCE
+                         verifier, checks the ID-token nonce, persists a
+                         session row, writes sealed cookies, redirects to
+                         the SPA.
 `GET  /auth/session`   — returns the current user + CSRF token. Read by
                          the SPA on bootstrap to confirm "am I logged in?"
 `POST /auth/logout`    — drops the session row, clears both cookies, and
                          returns the Cognito Hosted UI logout URL so the
                          SPA can finish the round-trip.
 
-These routes are dormant until Phase 5 wires the SPA — a /auth/login hit
-today will work end-to-end as long as Phase 1 env vars are set, but no
-production code path consumes the cookies yet.
+Security invariant for the login round-trip: `state` is a public value —
+it rides in a redirect URL and anyone can mint one anonymously — so it is
+never sufficient on its own. A callback is only honoured when it also
+presents the `__Host-bff_oauth_state` cookie whose digest was recorded with
+that state. Without that pairing, an attacker can complete their own
+authorization request in a victim's browser and the victim silently
+transacts inside the attacker's account (OAuth login CSRF / session
+fixation). See `bff_login` and `_binding_matches`.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import re
 import secrets
@@ -47,7 +58,13 @@ from apis.shared.sessions_bff.refresh import resolve_bff_client_secret
 from apis.shared.sessions_bff.repository import SessionRepository
 
 from .config import BFFAuthConfig
-from .cookies import clear_session_cookies, set_session_cookies
+from .cookies import (
+    OAUTH_STATE_COOKIE_NAME,
+    clear_oauth_state_cookie,
+    clear_session_cookies,
+    set_oauth_state_cookie,
+    set_session_cookies,
+)
 from .token_exchange import (
     IdTokenClaims,
     TokenExchangeError,
@@ -70,6 +87,34 @@ router = APIRouter(prefix="/auth", tags=["auth-bff"])
 # matches the OIDC state-store default and gives slow IdPs ample headroom.
 _STATE_TTL_SECONDS = 600
 _AUTHORIZE_SCOPES = "openid email profile"
+
+# Entropy budgets for the three per-login secrets. `token_urlsafe(n)` yields
+# ceil(n * 4/3) characters, so 64 bytes lands at 86 chars — comfortably inside
+# the 43..128 character window RFC 7636 §4.1 mandates for a PKCE verifier.
+_CODE_VERIFIER_BYTES = 64
+_NONCE_BYTES = 32
+_BROWSER_BINDING_BYTES = 32
+
+
+def _pkce_code_challenge(code_verifier: str) -> str:
+    """S256 challenge for `code_verifier` — base64url(SHA-256(v)), unpadded.
+
+    Padding is stripped because RFC 7636 §4.2 specifies base64url *without*
+    padding; Cognito rejects the `=`-suffixed form.
+    """
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def _browser_binding_digest(binding_secret: str) -> str:
+    """SHA-256 hex of the state cookie's value.
+
+    Only the digest goes into the state store, so the stored row is not
+    itself a usable credential. Plain SHA-256 (no salt/KDF) is right here:
+    the input is 32 bytes of CSPRNG output, so there is no guessable
+    preimage for a rainbow table to cover.
+    """
+    return hashlib.sha256(binding_secret.encode("utf-8")).hexdigest()
 
 
 # ─── Lazy-initialized collaborators ────────────────────────────────────
@@ -240,6 +285,25 @@ async def bff_login(
 ) -> RedirectResponse:
     """302 to the Cognito Hosted UI authorize endpoint with a fresh state.
 
+    Three per-login secrets are minted here, and all three are what make the
+    round-trip safe:
+
+    1. **Browser binding.** A random secret goes back to the caller in the
+       HttpOnly `__Host-bff_oauth_state` cookie while only its SHA-256 digest
+       is committed to the state row. `state` on its own is a *public* value —
+       it travels in a redirect URL — so without this cookie any party who can
+       read a `state` (including one they minted anonymously themselves) can
+       have a *different* browser complete the flow, and that browser is
+       issued a session for whoever the exchanged code names. That's OAuth
+       login CSRF / session fixation; the cookie is the control that stops it.
+    2. **PKCE (S256).** `code_verifier` stays server-side in the state row;
+       only its challenge goes on the wire. An authorization code lifted from
+       the redirect (proxy log, Referer leak, shoulder-surfed URL) is then
+       unredeemable without the verifier.
+    3. **Nonce.** Echoed by the IdP into the ID token and checked at the
+       callback, so an ID token minted for some other authorize request can't
+       be substituted into this one.
+
     Uses the existing `state_store` (in-memory locally, DynamoDB in cloud)
     to bind one-time-use state tokens to a TTL — the callback validates and
     deletes the state in one atomic step.
@@ -255,17 +319,32 @@ async def bff_login(
     post-login URL — so a deep link the user followed before logging in
     survives the round-trip. Values are filtered through
     `_sanitized_return_to` to keep the redirect same-origin only.
+
+    Note on concurrent logins: the binding cookie holds exactly one in-flight
+    authorization request, so starting a second login in the same browser
+    supersedes the first. Whichever flow the user finishes last is the one
+    that completes; the abandoned one fails closed with `state_not_bound` and
+    the user simply re-runs login. Tracking a set of live bindings per browser
+    would avoid that, at the cost of turning a single cookie compare into
+    list-management for a case a user hits by accident, if ever.
     """
     config = BFFAuthConfig.from_env()
     _require_ready(config)
 
     state = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(_CODE_VERIFIER_BYTES)
+    nonce = secrets.token_urlsafe(_NONCE_BYTES)
+    binding_secret = secrets.token_urlsafe(_BROWSER_BINDING_BYTES)
+
     _get_state_store().store_state(
         state,
         OIDCStateData(
             redirect_uri=config.callback_url,
             provider_id="cognito-bff",
             return_to=_sanitized_return_to(return_to),
+            code_verifier=code_verifier,
+            nonce=nonce,
+            browser_binding_hash=_browser_binding_digest(binding_secret),
         ),
         ttl_seconds=_STATE_TTL_SECONDS,
     )
@@ -276,6 +355,9 @@ async def bff_login(
         "scope": _AUTHORIZE_SCOPES,
         "redirect_uri": config.callback_url,
         "state": state,
+        "code_challenge": _pkce_code_challenge(code_verifier),
+        "code_challenge_method": "S256",
+        "nonce": nonce,
     }
     sanitized_provider = _sanitized_provider_id(provider)
     if sanitized_provider:
@@ -283,10 +365,59 @@ async def bff_login(
 
     params = urllib.parse.urlencode(authorize_params)
     authorize_url = f"{config.cognito_domain_url}/oauth2/authorize?{params}"
-    return RedirectResponse(url=authorize_url, status_code=status.HTTP_302_FOUND)
+    response = RedirectResponse(
+        url=authorize_url, status_code=status.HTTP_302_FOUND
+    )
+    # Cookie lifetime matches the state TTL: once the state row is gone the
+    # binding is useless, so there's no reason for it to outlive the flow.
+    set_oauth_state_cookie(
+        response,
+        binding_secret=binding_secret,
+        max_age_seconds=_STATE_TTL_SECONDS,
+    )
+    return response
 
 
 # ─── /auth/callback ────────────────────────────────────────────────────
+
+
+def _binding_matches(
+    state_data: Optional[OIDCStateData], binding_secret: str
+) -> bool:
+    """True iff the callback's cookie is the one minted with this state.
+
+    Fails closed on a state row that carries no binding digest. Such a row can
+    only come from a revision of this service that predates browser binding,
+    so during a rolling deploy a login started on an old task and finished on
+    a new one is rejected and the user re-runs login. That is the correct
+    trade: accepting unbound rows would keep the login-CSRF hole open for the
+    whole rollout window, which is exactly what an attacker holding a
+    pre-minted state would wait for.
+    """
+    if state_data is None or not state_data.browser_binding_hash:
+        return False
+    return secrets.compare_digest(
+        _browser_binding_digest(binding_secret),
+        state_data.browser_binding_hash,
+    )
+
+
+def _nonce_matches(
+    state_data: Optional[OIDCStateData], claims: IdTokenClaims
+) -> bool:
+    """True iff the ID token echoes the nonce issued with this request.
+
+    A state row with no stored nonce passes: it predates this check, and
+    `_binding_matches` has already rejected those rows on the binding digest,
+    so this is not a bypass — it just keeps the failure attributed to the
+    binding.
+    """
+    if state_data is None or not state_data.nonce:
+        return True
+    if not claims.nonce:
+        return False
+    return secrets.compare_digest(claims.nonce, state_data.nonce)
+
 
 
 @router.get("/callback", summary="Complete the BFF OAuth code flow")
@@ -299,9 +430,21 @@ async def bff_callback(
 ) -> Response:
     """Validate state, exchange code, persist session, set cookies, redirect.
 
+    Order of checks matters. The browser-binding cookie is required *before*
+    the code is exchanged, so a request that isn't the continuation of a login
+    this browser started never reaches Cognito's token endpoint and never
+    mints a session row.
+
     Failure modes all converge on "clear cookies + redirect to a generic
     auth-failed URL". We deliberately don't echo Cognito's error_description
     into the response — that string is attacker-controlled in some flows.
+
+    On why there's no `Origin`/`Sec-Fetch-Site` check here: the legitimate
+    arrival at this endpoint *is* a top-level cross-site GET (the IdP redirects
+    the browser back), so it carries `Sec-Fetch-Site: cross-site` and no
+    `Origin`. Rejecting on those headers would reject every real login while
+    an attacker-crafted link looks identical. Browser binding is the control
+    that actually distinguishes the two.
     """
     config = BFFAuthConfig.from_env()
     _require_ready(config)
@@ -313,11 +456,35 @@ async def bff_callback(
     if not code or not state:
         return _redirect_with_cookies_cleared(config, reason="missing_params")
 
+    # Read the binding before touching the state store: no cookie means this
+    # browser never started a login, so there's nothing to consume.
+    binding_secret = request.cookies.get(OAUTH_STATE_COOKIE_NAME)
+    if not binding_secret:
+        logger.warning(
+            "BFF callback rejected: no %s cookie on the request. Either the "
+            "browser dropped it (check that the response to /auth/login is "
+            "served over HTTPS so the __Host- prefix is accepted) or this "
+            "callback was not initiated by this browser.",
+            OAUTH_STATE_COOKIE_NAME,
+        )
+        return _redirect_with_cookies_cleared(config, reason="missing_state_cookie")
+
     state_ok, state_data = _get_state_store().get_and_delete_state(state)
     if not state_ok:
         # Either the state was forged, replayed, or expired. All three are
         # terminal — the user re-initiates from /auth/login.
         return _redirect_with_cookies_cleared(config, reason="bad_state")
+
+    if not _binding_matches(state_data, binding_secret):
+        # The state is real but was minted for a different browser. This is
+        # the login-CSRF / session-fixation attempt: someone is trying to get
+        # *this* browser to finish *their* authorization request. Log loudly —
+        # unlike the checks above, there is no benign path to here.
+        logger.warning(
+            "BFF callback rejected: OAuth state is not bound to this browser "
+            "(possible login-CSRF attempt)."
+        )
+        return _redirect_with_cookies_cleared(config, reason="state_not_bound")
 
     try:
         client_secret = resolve_bff_client_secret(
@@ -334,6 +501,7 @@ async def bff_callback(
             client_secret=client_secret,
             code=code,
             redirect_uri=config.callback_url,
+            code_verifier=state_data.code_verifier if state_data else None,
         )
     except TokenExchangeError:
         return _redirect_with_cookies_cleared(config, reason="exchange_failed")
@@ -345,6 +513,13 @@ async def bff_callback(
         claims = decode_id_token_claims(tokens.id_token)
     except TokenExchangeError:
         return _redirect_with_cookies_cleared(config, reason="bad_id_token")
+
+    if not _nonce_matches(state_data, claims):
+        logger.warning(
+            "BFF callback rejected: ID token nonce does not match the nonce "
+            "issued with this authorization request."
+        )
+        return _redirect_with_cookies_cleared(config, reason="bad_nonce")
 
     now = int(time.time())
     session_id = secrets.token_urlsafe(24)
@@ -408,6 +583,9 @@ async def bff_callback(
         csrf_token=csrf_token,
         max_age_seconds=config.bff_config.session_ttl_seconds,
     )
+    # The binding cookie has done its job — the state row it guarded is
+    # consumed. Drop it so it can't be paired with a later state.
+    clear_oauth_state_cookie(response)
     return response
 
 
@@ -441,10 +619,16 @@ def _redirect_with_cookies_cleared(
     config: BFFAuthConfig, *, reason: str
 ) -> RedirectResponse:
     """Clear any stale BFF cookies and bounce to the post-login URL with a
-    `?auth_error=<reason>` query string the SPA can surface."""
+    `?auth_error=<reason>` query string the SPA can surface.
+
+    Also drops the OAuth binding cookie: every path through here ends the
+    in-flight authorization request, so keeping the binding around would only
+    let it be replayed against a subsequent state.
+    """
     target = _append_query(config.post_login_redirect_url, {"auth_error": reason})
     response = RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
     clear_session_cookies(response)
+    clear_oauth_state_cookie(response)
     return response
 
 

@@ -13,6 +13,7 @@ import { AppConfig, getResourceName } from '../../config';
 import { resolveAppApiParams, buildAppApiEnvironment } from './app-api-environment';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import { grantAppApiPermissions } from './app-api-iam-grants';
+import { logRetentionFor } from '../observability/log-retention';
 
 export interface AppApiServiceConstructProps {
   config: AppConfig;
@@ -82,6 +83,8 @@ export interface AppApiServiceConstructProps {
  */
 export class AppApiServiceConstruct extends Construct {
   public readonly ecsService: ecs.FargateService;
+  /** Exposed so alarms bind to the real target-group dimensions. */
+  public readonly targetGroup: elbv2.ApplicationTargetGroup;
 
   constructor(scope: Construct, id: string, props: AppApiServiceConstructProps) {
     super(scope, id);
@@ -122,7 +125,7 @@ export class AppApiServiceConstruct extends Construct {
     // Auto-generated log group name (no `logGroupName` set) so a
     // failed-deploy orphan can't collide with a redeploy.
     const logGroup = new logs.LogGroup(this, 'AppApiLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -242,7 +245,7 @@ export class AppApiServiceConstruct extends Construct {
     });
 
     // ── Target group ──
-    const targetGroup = new elbv2.ApplicationTargetGroup(this, 'AppApiTargetGroup', {
+    const targetGroup = this.targetGroup = new elbv2.ApplicationTargetGroup(this, 'AppApiTargetGroup', {
       vpc,
       targetGroupName: getResourceName(config, 'app-api-tg'),
       port: 8000,

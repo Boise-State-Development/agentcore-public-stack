@@ -222,6 +222,27 @@ export interface SessionTitleEvent {
 }
 
 /**
+ * Model retry event — emitted each time the backend retries a failed model
+ * call instead of surfacing the failure. Turns an unexplained silence into a
+ * visible "still working" state.
+ *
+ * TIMING: Strands sleeps for the backoff delay before this event is yielded,
+ * so it arrives as the NEXT attempt begins, not when the wait starts. Treat
+ * `delaySeconds` as "how long the gap you just sat through was", not as a
+ * countdown to render. It does not cover the failing model call itself, which
+ * is indistinguishable from a slow but healthy one.
+ *
+ * `attempt` is 1-based and counts retries within the current turn (the first
+ * retry is 1). Purely advisory: the turn continues either way, and the event
+ * never appears if the first attempt succeeds.
+ */
+export interface ModelRetryEvent {
+  type: 'model_retry';
+  attempt: number;
+  delaySeconds: number;
+}
+
+/**
  * CSP domain allowlists declared by an MCP App resource (SEP-1865
  * `McpUiResourceCsp`). The sandbox proxy composes the inner iframe's CSP
  * from these plus the spec's deny-by-default fallbacks.
@@ -358,7 +379,8 @@ export type StreamEventType =
   | 'artifact'
   | 'ui_resource'
   | 'ui_tool_input_partial'
-  | 'session_title';
+  | 'session_title'
+  | 'model_retry';
 
 /**
  * Union type of all possible event data types
@@ -385,6 +407,7 @@ export type StreamEventData =
   | UiResourceEvent
   | ToolInputPartialEvent
   | SessionTitleEvent
+  | ModelRetryEvent
   | null
   | undefined;
 

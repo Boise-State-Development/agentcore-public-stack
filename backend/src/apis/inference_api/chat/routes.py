@@ -44,7 +44,10 @@ from apis.inference_api.chat.agent_binding_resolver import (
     AgentBindingBlockedError,
     resolve_agent_invocation,
 )
-from apis.shared.sessions.metadata import ensure_session_metadata_exists
+from apis.shared.sessions.metadata import (
+    ensure_session_metadata_exists,
+    session_owned_by_other_user,
+)
 from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
@@ -892,6 +895,57 @@ def _build_interruption_note(reason: str) -> str:
     return f"<interruption_note>\n{guidance}\n</interruption_note>"
 
 
+def _select_recovered_attachments(
+    recovered_upload_ids: list[str],
+    *,
+    request_upload_ids: Optional[list] = None,
+    request_files: Optional[list] = None,
+) -> list[str]:
+    """Decide whether a previous turn's unconsumed attachments may be re-sent.
+
+    Returns the IDs to re-attach, or ``[]`` to leave the turn alone.
+
+    The user's own attachments always win: when this turn carries anything of
+    its own, recovered IDs are dropped entirely rather than merged. Two
+    reasons. The resolver caps a turn at 5 files, so prepending stale IDs
+    could silently push out a file the user deliberately attached now. And a
+    user who re-uploads by hand has already expressed what they want sent —
+    merging would duplicate those bytes, which Bedrock rejects outright once
+    two document blocks share a sanitized name.
+    """
+    if not recovered_upload_ids:
+        return []
+    if request_upload_ids or request_files:
+        logger.info(
+            "Dropping %d recovered attachment(s) — this turn carries its own",
+            len(recovered_upload_ids),
+        )
+        return []
+    return list(recovered_upload_ids)
+
+
+def _build_attachment_recovery_note(filenames: list[str]) -> str:
+    """Note prepended when this turn re-sends attachments the previous turn
+    never got an answer for (see `pop_pending_attachments`).
+
+    Without it the model sees documents the user's current message says
+    nothing about — the `[Attached files: …]` marker is appended by
+    `PromptBuilder.build_prompt` whether the user attached them this turn or
+    the server recovered them — and is left to guess whether the user meant
+    to re-send them. Rides the same `original_message` displayText split as
+    the interruption note, so the user never sees it.
+    """
+    names = ", ".join(filenames)
+    return (
+        "<attachment_recovery_note>\n"
+        f"The attachment(s) {names} are re-sent from the user's previous turn, "
+        "which failed before you could read them. The user did not attach them "
+        "again — treat them as part of the request they were originally sent "
+        "with, and do not ask the user to upload them.\n"
+        "</attachment_recovery_note>"
+    )
+
+
 async def _build_tabular_inventory(
     session_id: str,
     assistant_id: str | None,
@@ -1132,6 +1186,27 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     input_data = request
     user_id = current_user.user_id
     auth_token = current_user.raw_token
+
+    # Refuse a turn against a session id another user already owns.
+    #
+    # Session ids travel in shareable URLs (`/s/{sessionId}`). Opening someone
+    # else's link 404s on the metadata read, but the SPA then treats the
+    # session as new and lets the user send — which used to fork the id: a
+    # SECOND metadata row under the requester, on the same session, invisible
+    # to both parties. In prod on 2026-08-31 that also left the original
+    # owner's session resolving non-deterministically between the two rows.
+    #
+    # Not a confidentiality fix — conversation content is keyed by actor id in
+    # AgentCore Memory, so the second user only ever saw an empty thread. This
+    # stops the id from being forked at all. 404 rather than 403 so the
+    # response says nothing about whether the session exists, matching what
+    # `GET /sessions/{id}/metadata` already returns for the same case.
+    if await session_owned_by_other_user(input_data.session_id, user_id):
+        logger.warning(
+            "Rejected invocation for session %s — owned by a different user",
+            _sanitize_log(input_data.session_id),
+        )
+        raise HTTPException(status_code=404, detail="Session not found")
     # Resume requests reuse the cached agent and its paused interrupt state;
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
@@ -1286,6 +1361,43 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if input_data.enabled_tools:
         logger.info(f"Enabled tools ({len(input_data.enabled_tools)})")
 
+    # Recover attachments the PREVIOUS turn sent but never got an answer for.
+    #
+    # Inline document bytes are one-shot: they are stripped out of restored
+    # history (see `TurnBasedSessionManager._strip_document_bytes`, which
+    # exists because Bedrock rejects duplicate document names), so a turn that
+    # dies before the model reads them consumes them for good. Prod session
+    # `5f34d2b0` is the case this fixes — a ConverseStream carrying two PDFs
+    # failed with ServiceUnavailableException, the PDFs were gone, and the
+    # model's only recourse was to ask the user to upload them again.
+    #
+    # `pop_pending_attachments` clears the marker as it reads, and the marker
+    # is TTL-bounded, so this can only ever influence the one turn directly
+    # after a failure. Skipped entirely when the user attached something to
+    # THIS turn — their own attachments are the authoritative intent, and the
+    # 5-file resolver cap means silently prepending stale IDs could push a
+    # deliberate attachment out of the request. See the write-ahead half of
+    # this pair (`set_pending_attachments`) further down.
+    recovered_upload_ids: list[str] = []
+    if not is_resume and not is_continuation:
+        try:
+            from apis.shared.sessions.metadata import pop_pending_attachments
+            recovered_upload_ids = await pop_pending_attachments(input_data.session_id, user_id)
+        except Exception as e:
+            logger.error("Failed to recover pending attachments: %s", e, exc_info=True)
+
+        recovered_upload_ids = _select_recovered_attachments(
+            recovered_upload_ids,
+            request_upload_ids=input_data.file_upload_ids,
+            request_files=input_data.files,
+        )
+        if recovered_upload_ids:
+            logger.info(
+                "Re-attaching %d file(s) from the previous unanswered turn",
+                len(recovered_upload_ids),
+            )
+            input_data.file_upload_ids = recovered_upload_ids
+
     if input_data.files:
         logger.info(f"Files attached: {len(input_data.files)} files")
         for file in input_data.files:
@@ -1425,6 +1537,23 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             interrupted_turn_reason = await clear_interrupted_turn(input_data.session_id, user_id)
         except Exception as e:
             logger.error("Failed to clear stale interrupted_turn on new turn: %s", e, exc_info=True)
+
+        # Write-ahead half of the unconsumed-attachment pair (the pop lives
+        # up with the file-resolution block). Recorded BEFORE the model call
+        # so it survives every way a turn can die — including the ones no
+        # error handler sees, like the AgentCore data plane dropping the
+        # stream. Cleared by StreamCoordinator the moment the turn produces
+        # assistant content, so a turn that succeeds never leaves a marker
+        # behind. Runs after ensure_session_metadata_exists above, which is
+        # what guarantees the session row exists to update.
+        if input_data.file_upload_ids:
+            try:
+                from apis.shared.sessions.metadata import set_pending_attachments
+                await set_pending_attachments(
+                    input_data.session_id, user_id, input_data.file_upload_ids
+                )
+            except Exception as e:
+                logger.error("Failed to record pending attachments: %s", e, exc_info=True)
 
     # First turn → kick off title generation concurrently with the stream.
     # Runs as a background task so it doesn't add latency to TTFT. The
@@ -2421,6 +2550,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # it while it stays an honest part of persisted history.
                 # Continuation turns skip this (Strands ignores the message
                 # there — the model just continues the persisted partial).
+                # Unconsumed-attachment recovery: this turn is re-sending
+                # files the previous turn never got an answer for. Say so, or
+                # the model has to guess why documents it was not asked about
+                # are attached to the message.
+                if recovered_upload_ids and attachment_marker_names:
+                    final_message = (
+                        f"{_build_attachment_recovery_note(attachment_marker_names)}\n\n{final_message}"
+                    )
+
                 if interrupted_turn_reason:
                     final_message = (
                         f"{_build_interruption_note(interrupted_turn_reason)}\n\n{final_message}"

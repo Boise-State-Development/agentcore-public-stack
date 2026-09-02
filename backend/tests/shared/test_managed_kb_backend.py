@@ -57,6 +57,16 @@ AWS_DS_ID = "DSAAAAAAAA"
 # ---------------------------------------------------------------------------
 
 
+def _conflict(message: str) -> Exception:
+    """A ClientError shaped like the real ConflictException."""
+    from botocore.exceptions import ClientError
+
+    return ClientError(
+        {"Error": {"Code": "ConflictException", "Message": message}},
+        "CreateKnowledgeBase",
+    )
+
+
 class FakeBedrockAgent:
     """A ``bedrock-agent`` control-plane stub with real idempotency semantics.
 
@@ -74,9 +84,17 @@ class FakeBedrockAgent:
         *,
         on_create=None,
         create_failures: Optional[List[Exception]] = None,
+        status_sequence: Optional[List[str]] = None,
+        token_still_valid: bool = False,
     ) -> None:
         self.create_kb_calls: List[Dict[str, Any]] = []
         self.create_ds_calls: List[Dict[str, Any]] = []
+        self.get_kb_calls: List[Dict[str, Any]] = []
+        self.list_kb_calls: List[Dict[str, Any]] = []
+        self._by_name: Dict[str, str] = {}
+        self._names_by_id: Dict[str, str] = {}
+        self.token_still_valid = token_still_valid
+        self._status_sequence = list(status_sequence or ["ACTIVE"])
         self.ingest_calls: List[Dict[str, Any]] = []
         self.delete_calls: List[Dict[str, Any]] = []
         self.start_ingestion_job_calls: List[Dict[str, Any]] = []
@@ -102,10 +120,63 @@ class FakeBedrockAgent:
             raise self._create_failures.pop(0)
 
         token = kwargs["clientToken"]
-        if token not in self._by_token:
-            self._counter += 1
-            self._by_token[token] = f"KB{self._counter:08d}"
-        return {"knowledgeBase": {"knowledgeBaseId": self._by_token[token], "status": "ACTIVE"}}
+        name = kwargs["name"]
+
+        # NAME UNIQUENESS, which is what AWS actually enforces and what this fake
+        # used to ignore. `clientToken` deduplication is real but *expires* within
+        # minutes, so a retry an hour later is a new request that collides on the
+        # name. Modelling the token as permanent is why two tests certified a
+        # design that could not recover: the first real migration created a
+        # knowledge base, failed before recording its id, and every retry
+        # thereafter was refused with "already exists".
+        #
+        # `token_still_valid` selects which side of that expiry is being modelled.
+        # It defaults to False — the realistic case for any retry that is not
+        # within the same few minutes.
+        if token in self._by_token and self.token_still_valid:
+            return {
+                "knowledgeBase": {
+                    "knowledgeBaseId": self._by_token[token],
+                    "status": "CREATING",
+                }
+            }
+        if name in self._by_name:
+            raise _conflict(f"KnowledgeBase with name {name} already exists.")
+
+        self._counter += 1
+        kb_id = f"KB{self._counter:08d}"
+        self._by_token[token] = kb_id
+        self._by_name[name] = kb_id
+        self._names_by_id[kb_id] = name
+        # CREATING, not ACTIVE — what the real API returns. The fake previously
+        # claimed ACTIVE here, which is why nothing caught the provisioner calling
+        # CreateDataSource against a knowledge base that was still creating.
+        return {"knowledgeBase": {"knowledgeBaseId": kb_id, "status": "CREATING"}}
+
+    def list_knowledge_bases(self, **kwargs):
+        """Summaries, so adopt-by-name can find a knowledge base it did not record."""
+        self.list_kb_calls.append(kwargs)
+        return {
+            "knowledgeBaseSummaries": [
+                {"knowledgeBaseId": kb_id, "name": name, "status": "ACTIVE"}
+                for kb_id, name in self._names_by_id.items()
+            ]
+        }
+
+    def get_knowledge_base(self, **kwargs):
+        """Status poll. Yields each queued status once, then settles on the last.
+
+        Default is a single ACTIVE so tests that do not care about the wait are
+        unaffected; `status_sequence` lets one drive CREATING -> ACTIVE or a
+        terminal failure.
+        """
+        self.thread_idents.append(threading.get_ident())
+        self.get_kb_calls.append(kwargs)
+        if len(self._status_sequence) > 1:
+            status = self._status_sequence.pop(0)
+        else:
+            status = self._status_sequence[0]
+        return {"knowledgeBase": {"knowledgeBaseId": kwargs["knowledgeBaseId"], "status": status}}
 
     def create_data_source(self, **kwargs):
         self.thread_idents.append(threading.get_ident())
@@ -363,22 +434,42 @@ class TestKnowledgeBasePayload:
     def test_role_arn_is_passed(self):
         assert self._payload()["roleArn"] == ROLE_ARN
 
-    def test_embedding_is_pinned_to_titan_v2_float32_1024(self):
-        """Requirement 8.5, and immutable from here on (8.8).
+    def test_no_embedding_pin_is_sent(self):
+        """Requirement 8.5, as amended.
 
-        A drift in any of these three values is not a migration but a rebuild, so
-        the numbers are asserted rather than merely present.
+        The pin was carried over from the legacy path without re-deriving it, and
+        it does not apply here:
+
+        * On S3 Vectors *we* embed the user's question, so the query model must
+          match the model that indexed the documents. Managed retrieval sends
+          text and managed ingestion sends text — we never produce a vector, so
+          Bedrock embeds both sides and consistency is its invariant.
+        * AWS rejects the pin together with ``rerankingModelType: MANAGED``, and
+          the evaluation measured the pin as worth nothing ("identical answer
+          quality — 9/9") against reranking being "what makes a small context cap
+          defensible".
+
+        Asserted as *absence*, because sending any of these keys is what breaks
+        reranking — and the failure is a ValidationException at query time, long
+        after the immutable choice was made.
         """
         managed = self._payload()["knowledgeBaseConfiguration"][
             "managedKnowledgeBaseConfiguration"
         ]
-        assert managed["embeddingModelType"] == "CUSTOM"
-        assert managed["embeddingModelArn"].endswith("amazon.titan-embed-text-v2:0")
-        bedrock_config = managed["embeddingModelConfiguration"][
-            "bedrockEmbeddingModelConfiguration"
-        ]
-        assert bedrock_config["dimensions"] == 1024
-        assert bedrock_config["embeddingDataType"] == "FLOAT32"
+        assert "embeddingModelType" not in managed
+        assert "embeddingModelArn" not in managed
+        assert "embeddingModelConfiguration" not in managed
+
+    def test_reranking_stays_managed(self):
+        """The half of the tradeoff that has evidence behind it (Req 11.2).
+
+        Kept next to the pin test on purpose: these two are mutually exclusive in
+        AWS, so anyone reinstating the pin should see this failing beside it.
+        """
+        from apis.shared.kb_backend.managed_backend import retrieval_configuration
+
+        managed = retrieval_configuration()["managedSearchConfiguration"]
+        assert managed["rerankingModelType"] == "MANAGED"
 
     def test_kms_key_is_only_sent_when_supplied(self):
         assert "serverSideEncryptionConfiguration" not in self._payload()[
@@ -591,7 +682,13 @@ class TestProvisioningSaga:
         )
 
     @pytest.mark.asyncio
-    async def test_provisioning_requires_a_service_role(self, table):
+    async def test_provisioning_requires_a_service_role(self, table, monkeypatch):
+        # `role_arn=None` falls back to MANAGED_KB_SERVICE_ROLE_ARN, so this only
+        # asserted what it meant while that variable happened to be absent from the
+        # environment. It is now present in `backend/src/.env` for the local
+        # migration driver — which `load_dotenv(override=True)` reads — so the
+        # absence has to be made explicit rather than assumed.
+        monkeypatch.delenv("MANAGED_KB_SERVICE_ROLE_ARN", raising=False)
         with pytest.raises(p.ProvisioningError, match="service role"):
             await _provision(FakeBedrockAgent(), role_arn=None)
 
@@ -663,10 +760,24 @@ class TestCrashBetweenCreateAndRecordUpdate:
 
     The window that record-first ordering exists to make survivable: the AWS
     knowledge base exists, the record does not yet name it.
+
+    ⚠️ These tests previously certified the opposite of what they now assert, and
+    that is how the first real migration became permanently unretryable. They
+    asserted `"awsKbId" not in anchor` — the missing write, enshrined as a
+    requirement — and leaned on `clientToken` deduplication to make the retry
+    safe, which the fake modelled as **permanent**. Real AWS idempotency tokens
+    expire within minutes, so the retry was a new request that collided on the
+    unique name and was refused forever:
+
+        ConflictException: KnowledgeBase with name ... already exists.
+
+    The identifier is now persisted the moment it exists, which is what actually
+    makes the window survivable. The token is a nice-to-have inside the expiry
+    window; it is not the mechanism.
     """
 
     @pytest.mark.asyncio
-    async def test_the_record_survives_as_a_discoverable_retry_anchor(self, table):
+    async def test_the_identifier_is_recorded_before_anything_else_can_fail(self, table):
         client = FakeBedrockAgent()
         crashed = []
 
@@ -691,15 +802,15 @@ class TestCrashBetweenCreateAndRecordUpdate:
             "orphan nothing can find (Requirement 7.8)"
         )
         assert anchor["provisioningState"] == r.PROVISIONING
-        assert "awsKbId" not in anchor
-        assert anchor["clientToken"], (
-            "the anchor carries no clientToken, so a retry cannot be deduplicated "
-            "and would create a second knowledge base"
+        assert anchor.get("awsKbId") == "KB00000001", (
+            "the identifier was not recorded, so a later retry cannot resume from "
+            "it and will be refused because the name is already taken"
         )
 
     @pytest.mark.asyncio
-    async def test_the_retry_does_not_create_a_second_knowledge_base(self, table):
-        """The whole point: one knowledge base across a crash and a retry."""
+    async def test_the_retry_resumes_instead_of_re_creating(self, table):
+        """One knowledge base across a crash and a retry — by resuming, not by
+        re-issuing a create and hoping AWS deduplicates it."""
         client = FakeBedrockAgent()
 
         original = r.attach_aws_ids
@@ -712,12 +823,69 @@ class TestCrashBetweenCreateAndRecordUpdate:
 
         result = await _provision(client)  # the retry
 
-        assert len(client.create_kb_calls) == 2, "the retry did not re-issue the create"
-        assert client.distinct_knowledge_base_ids == {"KB00000001"}, (
-            "the retry created a SECOND knowledge base: the persisted clientToken "
-            "was not reused, so AWS did not deduplicate"
+        assert len(client.create_kb_calls) == 1, (
+            "the retry re-issued CreateKnowledgeBase. With an expired idempotency "
+            "token that is refused outright — the name is taken — so resuming from "
+            "the recorded id is the only thing that works"
         )
+        assert client.distinct_knowledge_base_ids == {"KB00000001"}
         assert result.aws_kb_id == "KB00000001"
+
+    @pytest.mark.asyncio
+    async def test_adoption_ignores_a_knowledge_base_being_deleted(self, table):
+        """Adopting a dying knowledge base guarantees a failure one step later.
+
+        Seen while recreating one locally: the delete had not finished, adoption
+        took the DELETING knowledge base, and the ACTIVE wait then refused it. The
+        name is about to free up, so skipping is correct — the next attempt creates
+        fresh.
+        """
+        from apis.shared.kb_backend import provisioning as prov
+
+        class _Dying:
+            def list_knowledge_bases(self, **_kwargs):
+                return {
+                    "knowledgeBaseSummaries": [
+                        {"knowledgeBaseId": "KBDYING", "name": "wanted",
+                         "status": "DELETING"},
+                    ]
+                }
+
+        found = await prov._find_knowledge_base_by_name(_Dying(), "wanted")
+        assert found is None, "adopted a knowledge base that is being deleted"
+
+    @pytest.mark.asyncio
+    async def test_a_lost_identifier_is_recovered_by_adopting_the_name(self, table):
+        """The state the first real migration was actually stuck in.
+
+        The knowledge base exists in AWS, the record has no `awsKbId` (it was
+        written before this fix), and the token has long expired. Without
+        adopt-by-name the create is refused forever and the migration can never
+        succeed — the operator's only recourse would be deleting the knowledge
+        base by hand.
+        """
+        client = FakeBedrockAgent()
+        await _provision(client)  # creates KB00000001 and records it
+
+        # Simulate the pre-fix record: identifier dropped, still provisioning.
+        table.update_item(
+            Key={"PK": r.kb_pk(ASSISTANT_ID), "SK": r.kb_sk(APP_KB_ID)},
+            UpdateExpression="REMOVE awsKbId, awsDataSourceId SET provisioningState = :p",
+            ExpressionAttributeValues={":p": r.PROVISIONING},
+        )
+
+        result = await _provision(client)
+
+        assert result.aws_kb_id == "KB00000001", "did not adopt the existing name"
+        assert client.distinct_knowledge_base_ids == {"KB00000001"}, (
+            "a second knowledge base was created; the name collision should have "
+            "been resolved by adoption, not by another create"
+        )
+        assert client.list_kb_calls, "adoption did not look the name up"
+        assert _record(table).get("awsKbId") == "KB00000001", (
+            "the adopted identifier was not persisted, so the next attempt would "
+            "have to adopt all over again"
+        )
         assert _record(table)["provisioningState"] == r.ACTIVE
 
     @pytest.mark.asyncio
@@ -745,6 +913,89 @@ class TestCrashBetweenCreateAndRecordUpdate:
 # ===========================================================================
 # 20.7 — synchronous boto3 calls run off the event loop
 # ===========================================================================
+
+
+class TestWaitsForActiveBeforeTheDataSource:
+    """The defect that orphaned the first real knowledge base in dev.
+
+    `CreateKnowledgeBase` returns while the knowledge base is `CREATING` — this
+    module's header records 47-124 s to `ACTIVE` (n=7) — and `CreateDataSource`
+    against a creating knowledge base is refused:
+
+        ConflictException: The Knowledge Base is not in a valid status.
+
+    The create succeeded, the data source did not, `attach_aws_ids` never ran, and
+    the knowledge base was left in AWS with nothing pointing at it.
+
+    Nothing caught it because the fake returned `ACTIVE` from `create_knowledge_base`,
+    which the real API never does. The fake now returns `CREATING`, so these tests
+    exercise the wait rather than skipping past it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_data_source_is_created_only_after_active(self, table):
+        client = FakeBedrockAgent(status_sequence=["CREATING", "CREATING", "ACTIVE"])
+        await _provision(client)
+
+        assert client.create_kb_calls, "no knowledge base was created"
+        assert client.create_ds_calls, "no data source was created"
+        # Polled until ACTIVE rather than charging ahead.
+        assert len(client.get_kb_calls) == 3, (
+            f"expected three status polls, saw {len(client.get_kb_calls)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_data_source_while_the_knowledge_base_is_creating(self, table):
+        """The precondition is waited on, not retried through."""
+        client = FakeBedrockAgent(status_sequence=["CREATING"])
+        with pytest.raises(p.KnowledgeBaseNotReady, match="still CREATING"):
+            await _provision(client, budget_seconds=10.0, interval_seconds=5.0)
+
+        assert client.create_kb_calls, "the knowledge base should still be created"
+        assert client.create_ds_calls == [], (
+            "CreateDataSource must not be attempted against a CREATING knowledge "
+            "base — that is the ConflictException this wait exists to prevent"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_terminal_status_fails_immediately(self, table):
+        """FAILED will never become ACTIVE, so waiting only delays the report."""
+        client = FakeBedrockAgent(status_sequence=["FAILED"])
+        with pytest.raises(p.KnowledgeBaseNotReady, match="FAILED"):
+            await _provision(client, budget_seconds=300.0, interval_seconds=5.0)
+
+        assert len(client.get_kb_calls) == 1, (
+            "a terminal status should be acted on after one poll, not waited out"
+        )
+        assert client.create_ds_calls == []
+
+    @pytest.mark.asyncio
+    async def test_the_budget_is_read_at_call_time(self, table):
+        """Bound as a default argument the budget would be unpatchable.
+
+        Asserted by giving two calls different budgets on the same import.
+        """
+        slow = FakeBedrockAgent(status_sequence=["CREATING"])
+        with pytest.raises(p.KnowledgeBaseNotReady):
+            await _provision(slow, budget_seconds=5.0, interval_seconds=5.0)
+        few = len(slow.get_kb_calls)
+
+        slower = FakeBedrockAgent(status_sequence=["CREATING"])
+        with pytest.raises(p.KnowledgeBaseNotReady):
+            await _provision(slower, budget_seconds=25.0, interval_seconds=5.0)
+
+        assert len(slower.get_kb_calls) > few, (
+            "a larger budget polled no more than a smaller one, so the value is "
+            "not being read at call time"
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_failure_message_says_the_retry_is_safe(self, table):
+        """An operator reading this needs to know a retry will not duplicate."""
+        client = FakeBedrockAgent(status_sequence=["CREATING"])
+        with pytest.raises(p.KnowledgeBaseNotReady) as excinfo:
+            await _provision(client, budget_seconds=5.0, interval_seconds=5.0)
+        assert "already recorded on the KB_Record" in str(excinfo.value)
 
 
 class TestOffEventLoop:

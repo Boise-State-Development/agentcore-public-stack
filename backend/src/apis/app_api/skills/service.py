@@ -30,6 +30,7 @@ from apis.shared.skills.repository import (
     get_skill_catalog_repository,
 )
 from apis.shared.skills.bundle import generate_skill_md
+from apis.shared.skills.resource_types import resolve_upload_content_type
 from apis.shared.skills.resource_store import (
     SkillResourceStore,
     SkillResourceStoreError,
@@ -111,8 +112,62 @@ class SkillCatalogService:
         return skills
 
     async def get_skill(self, skill_id: str) -> Optional[SkillDefinition]:
-        """Get a specific skill by ID."""
+        """Get a specific skill by ID, from EITHER authorship tier.
+
+        Tier-agnostic on purpose: it backs the catalog predicate below and the
+        shared reference-file machinery, which the user tier reuses after its
+        own ownership check.
+
+        SECURITY: never expose this directly on an admin surface. ``admin.skills``
+        governs the catalog (``owner_id == "system"``); a private user-authored
+        skill is governed by ownership and is reachable by id here. Admin
+        callers must go through :meth:`get_catalog_skill` or
+        :meth:`require_catalog_skill`.
+        """
         return await self.repository.get_skill(skill_id)
+
+    async def get_catalog_skill(self, skill_id: str) -> Optional[SkillDefinition]:
+        """Get a skill only if it belongs to the admin catalog.
+
+        Returns None both when no such skill exists and when the row is a
+        user-authored skill, so an admin surface cannot distinguish the two.
+        This is the per-object mirror of :meth:`get_all_skills`, which is
+        already scoped to ``owner_id == "system"``.
+        """
+        skill = await self.repository.get_skill(skill_id)
+        if skill is None:
+            return None
+        if skill.owner_id != SYSTEM_OWNER_ID:
+            logger.warning(
+                "Admin skills surface reached a user-authored skill; treating "
+                "as not found",
+                extra={
+                    "event": "admin_skill_cross_tier_denied",
+                    "skill_id": skill_id,
+                },
+            )
+            return None
+        return skill
+
+    async def require_catalog_skill(self, skill_id: str) -> SkillDefinition:
+        """Assert a skill exists AND belongs to the admin catalog.
+
+        Role grants and per-object admin writes are the catalog's governance
+        mechanism. A user-authored skill (Skills v2 PR-3) is reached through
+        ownership instead: its instructions are instruction-trusted content
+        that steers its owner's agent, so ``admin.skills`` — whose remit is the
+        curated catalog — must not read or rewrite one.
+
+        Raises:
+            ValueError: With a uniform ``not found`` message for both "no such
+                skill" and "not a catalog skill". Callers map that to 404; a
+                distinguishable error would confirm the existence of a private
+                skill the caller cannot see.
+        """
+        skill = await self.get_catalog_skill(skill_id)
+        if skill is None:
+            raise ValueError(f"Skill '{skill_id}' not found")
+        return skill
 
     async def create_skill(
         self, skill: SkillDefinition, admin: User
@@ -154,6 +209,9 @@ class SkillCatalogService:
         """
         Update a skill's metadata.
 
+        Scoped to the admin catalog: a user-authored skill is not updatable
+        here and reports as not found (see :meth:`require_catalog_skill`).
+
         Args:
             skill_id: Skill identifier
             updates: Fields to update (snake_case attribute names)
@@ -162,6 +220,9 @@ class SkillCatalogService:
         Returns:
             Updated SkillDefinition or None if not found
         """
+        if await self.get_catalog_skill(skill_id) is None:
+            return None
+
         updated = await self.repository.update_skill(
             skill_id, updates, admin_user_id=admin.user_id
         )
@@ -191,7 +252,8 @@ class SkillCatalogService:
         Delete a skill from the catalog.
 
         By default performs a soft delete (status -> DISABLED). A hard delete
-        removes the catalog row.
+        removes the catalog row. Scoped to the admin catalog: a user-authored
+        skill is not deletable here and reports as not found.
 
         Args:
             skill_id: Skill identifier
@@ -201,7 +263,7 @@ class SkillCatalogService:
         Returns:
             True if deleted/disabled, False if not found
         """
-        existing = await self.repository.get_skill(skill_id)
+        existing = await self.get_catalog_skill(skill_id)
         if existing is None:
             return False
 
@@ -230,14 +292,16 @@ class SkillCatalogService:
     # =========================================================================
 
     async def list_resources(self, skill_id: str) -> List[SkillResourceRef]:
-        """Return a skill's reference-file manifest.
+        """Return a catalog skill's reference-file manifest.
+
+        Admin-tier entry point — the user tier has its own owner-scoped
+        ``list_resources`` — so it applies the catalog predicate.
 
         Raises:
-            ValueError: If the skill does not exist (mapped to 404 by route).
+            ValueError: If the skill does not exist or is not a catalog skill
+                (mapped to 404 by route).
         """
-        skill = await self.repository.get_skill(skill_id)
-        if skill is None:
-            raise ValueError(f"Skill '{skill_id}' not found")
+        skill = await self.require_catalog_skill(skill_id)
         return list(skill.resources)
 
     async def add_resource(
@@ -259,10 +323,21 @@ class SkillCatalogService:
         garbage-collected. ``script`` files are accept-and-inert (stored,
         listed, never executed — D5).
 
+        SECURITY — the caller-supplied ``content_type`` is accepted for
+        signature compatibility and then **ignored**. The stored type is derived
+        from the filename extension against
+        ``apis.shared.skills.resource_types``' allowlist, because both tiers'
+        upload routes are reachable by an unprivileged author while the bytes
+        are downloaded by other users from the SPA's own origin. Letting a
+        caller label their upload ``text/html`` made an uploaded file a
+        same-origin script-execution primitive against whoever opened it.
+
         Returns the skill's updated manifest.
 
         Raises:
             ValueError: If the skill is missing, the kind or filename is invalid,
+                the file type is not allowed
+                (:class:`~apis.shared.skills.resource_types.SkillResourceTypeError`),
                 the file is too large, or the per-skill file cap is exceeded.
         """
         if kind not in VALID_RESOURCE_KINDS:
@@ -276,6 +351,9 @@ class SkillCatalogService:
             raise ValueError(f"Skill '{skill_id}' not found")
 
         self._validate_filename(filename)
+        # Type allowlist before any byte handling: an unacceptable filename is
+        # rejected without ever reaching S3 or the manifest.
+        resolved_type = resolve_upload_content_type(filename)
         if len(content) > MAX_RESOURCE_BYTES:
             raise ValueError(
                 f"Reference file '{filename}' is {len(content)} bytes; "
@@ -294,7 +372,6 @@ class SkillCatalogService:
                 f"{MAX_RESOURCES_PER_SKILL} reference files."
             )
 
-        resolved_type = content_type or "application/octet-stream"
         digest = compute_content_hash(content)
         s3_key = self.resource_store.put(
             skill_id=skill_id,
@@ -534,7 +611,7 @@ class SkillCatalogService:
             app_role_ids: AppRole IDs that should grant this skill
             admin: Admin user performing the action
         """
-        await self._require_catalog_skill(skill_id)
+        await self.require_catalog_skill(skill_id)
 
         current_roles = await self.get_roles_for_skill(skill_id)
         current_role_ids = {
@@ -565,7 +642,7 @@ class SkillCatalogService:
         self, skill_id: str, app_role_ids: List[str], admin: User
     ) -> None:
         """Add AppRoles to skill access (preserves existing)."""
-        await self._require_catalog_skill(skill_id)
+        await self.require_catalog_skill(skill_id)
         for role_id in app_role_ids:
             await self._add_skill_to_role(role_id, skill_id, admin)
 
@@ -573,28 +650,9 @@ class SkillCatalogService:
         self, skill_id: str, app_role_ids: List[str], admin: User
     ) -> None:
         """Remove AppRoles from skill access."""
-        await self._require_catalog_skill(skill_id)
+        await self.require_catalog_skill(skill_id)
         for role_id in app_role_ids:
             await self._remove_skill_from_role(role_id, skill_id, admin)
-
-    async def _require_catalog_skill(self, skill_id: str) -> SkillDefinition:
-        """Assert a skill exists AND belongs to the admin catalog.
-
-        Role grants are the catalog's governance mechanism. A user-authored
-        skill (Skills v2 PR-3) is reached through ownership — and, once PR-4
-        lands, through invoke-through on a shared Agent. Granting one to an
-        AppRole would hand a private, user-owned document to a whole role, so
-        the role endpoints refuse to touch anything outside the catalog.
-        """
-        skill = await self.get_skill(skill_id)
-        if not skill:
-            raise ValueError(f"Skill '{skill_id}' not found")
-        if skill.owner_id != SYSTEM_OWNER_ID:
-            raise ValueError(
-                f"Skill '{skill_id}' is user-authored and cannot be granted to "
-                "AppRoles. Only admin catalog skills carry role grants."
-            )
-        return skill
 
     async def _add_skill_to_role(
         self, role_id: str, skill_id: str, admin: User

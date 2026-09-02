@@ -161,6 +161,7 @@
             id="resource-upload"
             type="file"
             multiple
+            [attr.accept]="acceptedFileTypes"
             class="sr-only"
             [disabled]="uploading()"
             (change)="onFilesSelected($event)"

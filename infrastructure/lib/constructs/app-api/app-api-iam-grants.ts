@@ -23,7 +23,10 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { AppConfig } from '../../config';
 import { PlatformComputeRefs } from '../platform-compute-refs';
-import { grantManagedKbRetrieval } from '../managed-kb/managed-kb-role-construct';
+import {
+  grantManagedKbDocumentDeletion,
+  grantManagedKbRetrieval,
+} from '../managed-kb/managed-kb-role-construct';
 
 export interface AppApiIamGrantsProps {
   scope: Construct;
@@ -625,6 +628,26 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // Admin "Discover from server" invoke (POST /admin/tools/discover): the
+  // discovery request is signed with *this* task role, not the gateway role
+  // the form's credential picker names — the gateway only signs at runtime,
+  // once the target is registered. Without this, discovery against any
+  // IAM-protected Lambda Function URL comes back 403 and the admin has to
+  // type every tool name by hand. Same resource scope as McpTargetLambdaGrant
+  // above; InvokeFunctionUrl only, since discovery reaches the server over its
+  // function URL and never through the Lambda API.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'McpDiscoveryLambdaInvoke',
+      effect: iam.Effect.ALLOW,
+      actions: ['lambda:InvokeFunctionUrl'],
+      resources: [
+        `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:mcp-*`,
+        `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:${config.projectPrefix}-mcp-*`,
+      ],
+    }),
+  );
+
   // ── S3 Vectors (RAG query + document cleanup) ──
   // DeleteVectors is required by documents/services/cleanup_service.py, which
   // removes a document's (or an assistant's) chunks from the index when the
@@ -656,6 +679,19 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   // (Requirement 20.6). Provisioning CRUD belongs to the migration
   // Lambdas alone.
   grantManagedKbRetrieval(config, taskRole);
+
+  // ── Managed knowledge bases (document deletion) ──
+  // `DELETE /assistants/{id}/documents/{doc}` reaches
+  // `cleanup_service._delete_managed_documents_with_retries`, which removes
+  // the document from the managed knowledge base when that assistant has
+  // been promoted. Without this grant the delete fails, the document row is
+  // deliberately kept so the fail-closed status filter keeps hiding the
+  // chunks, and the managed corpus grows forever at $5.00/GB-month.
+  //
+  // Deletion only — NOT `grantManagedKbDirectIngestion`. The App API must
+  // not be able to write a corpus; only the migration worker and the
+  // ingestion consumer do that.
+  grantManagedKbDocumentDeletion(config, taskRole);
 
   // ── AgentCore WorkloadIdentity (OAuth vault token minting) ──
   // Grants the App API the data-plane actions used by /connectors/*

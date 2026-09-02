@@ -365,12 +365,17 @@ async def test_admin_catalog_list_excludes_user_skills(
 async def test_user_skills_cannot_be_granted_to_app_roles(
     user_skill_service, skill_service, admin_user, author_user
 ):
-    """Granting a private user skill to a role would leak it to that role."""
+    """Granting a private user skill to a role would leak it to that role.
+
+    The refusal reports "not found" rather than "user-authored": the admin
+    catalog surface must not confirm the existence of a skill it cannot
+    govern, so a cross-tier id is indistinguishable from an unknown one.
+    """
     mine = await user_skill_service.create_my_skill(
         author_user, display_name="Mine", description="d"
     )
 
-    with pytest.raises(ValueError, match="user-authored"):
+    with pytest.raises(ValueError, match="not found"):
         await skill_service.set_roles_for_skill(mine.skill_id, ["some_role"], admin_user)
-    with pytest.raises(ValueError, match="user-authored"):
+    with pytest.raises(ValueError, match="not found"):
         await skill_service.add_roles_to_skill(mine.skill_id, ["some_role"], admin_user)

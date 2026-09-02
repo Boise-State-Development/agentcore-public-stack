@@ -49,6 +49,10 @@ from apis.shared.skills.models import (
     SkillStatus,
 )
 from apis.shared.skills.repository import get_skill_catalog_repository
+from apis.shared.skills.resource_types import (
+    resource_download_headers,
+    safe_download_content_type,
+)
 
 from .user_service import (
     UserSkillError,
@@ -402,7 +406,13 @@ async def read_my_skill_resource(
     filename: str,
     user: User = Depends(get_current_user_from_session),
 ):
-    """Return the raw bytes of one of an owned skill's supporting files."""
+    """Return the raw bytes of one of an owned skill's supporting files.
+
+    Hardened identically to the admin read route: the media type is re-derived
+    from the filename and the body is served ``attachment`` + ``nosniff`` +
+    inert CSP, so a resource can never become a script-bearing document on the
+    SPA's origin (see ``apis.shared.skills.resource_types``).
+    """
     try:
         ref, content = await get_user_skill_service().read_resource(
             skill_id, filename, user
@@ -414,8 +424,8 @@ async def read_my_skill_resource(
 
     return Response(
         content=content,
-        media_type=ref.content_type or "application/octet-stream",
-        headers={"Content-Disposition": f'inline; filename="{ref.filename}"'},
+        media_type=safe_download_content_type(ref.filename),
+        headers=resource_download_headers(ref.filename),
     )
 
 

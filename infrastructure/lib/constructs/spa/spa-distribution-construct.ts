@@ -184,6 +184,57 @@ function handler(event) {
       keepaliveTimeout: cdk.Duration.seconds(60),
     });
 
+    // Security headers for the /api/* behavior. Distinct from the SPA policy
+    // above: an API response must never be usable as a *document*, and the SPA
+    // policy's `frame-src` allowances are irrelevant here.
+    //
+    // This matters because /api/* is served from the SAME origin as the SPA, so
+    // any API response a browser can be navigated to is a potential document on
+    // the SPA's origin. app-api serves user-uploaded bytes (skill resources,
+    // agent icons, exports); without `nosniff` a browser may re-sniff those
+    // bytes into text/html, and without a CSP an HTML-typed body would execute
+    // script with the viewer's session cookie and CSRF token. The app-api routes
+    // apply the same controls per-response — this policy is the origin-wide
+    // backstop so a future route cannot regress the whole origin.
+    //
+    // `default-src 'none'` is the load-bearing directive: in a document it
+    // blocks inline `<script>`, external script, and every fetch, so an
+    // HTML-typed API body has no way to reach the SPA's session even if a
+    // browser does render it. `sandbox` is deliberately NOT set here (unlike on
+    // the skill-resource responses themselves, which are only ever read over
+    // XHR): the edge policy covers every /api/* response including
+    // `Content-Disposition: attachment` bodies and OAuth navigations, and an
+    // opaque-origin directive on that whole surface risks breaking a download
+    // for no additional protection over `default-src 'none'`.
+    const apiResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
+      this,
+      'ApiResponseHeadersPolicy',
+      {
+        responseHeadersPolicyName: getResourceName(config, 'api-headers'),
+        comment: 'Security headers for /api/* (same-origin document defense)',
+        securityHeadersBehavior: {
+          contentTypeOptions: { override: true },
+          frameOptions: {
+            frameOption: cloudfront.HeadersFrameOption.DENY,
+            override: true,
+          },
+          referrerPolicy: {
+            referrerPolicy: cloudfront.HeadersReferrerPolicy.NO_REFERRER,
+            override: true,
+          },
+          strictTransportSecurity: {
+            accessControlMaxAge: cdk.Duration.seconds(31536000),
+            includeSubdomains: true,
+            override: true,
+          },
+          contentSecurityPolicy: {
+            contentSecurityPolicy: "default-src 'none'; frame-ancestors 'none'",
+            override: true,
+          },
+        },
+      },
+    );
+
     const apiBehavior: cloudfront.BehaviorOptions = {
       origin: appApiOrigin,
       viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -192,6 +243,7 @@ function handler(event) {
       cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
       originRequestPolicy:
         cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      responseHeadersPolicy: apiResponseHeadersPolicy,
       compress: false,
       functionAssociations: [
         {

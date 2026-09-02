@@ -317,8 +317,42 @@ capability we are paying for.
    real connector type in
    `managedKnowledgeBaseConnectorConfiguration.connectorParameters`.
 4. THE system SHALL use connector type `CUSTOM`.
-5. THE system SHALL set `embeddingModelType: CUSTOM` pinned to
-   `amazon.titan-embed-text-v2:0` at `FLOAT32` (the service-model enum value; lowercase is rejected) and 1024 dimensions.
+5. THE system SHALL NOT send an embedding pin — no `embeddingModelType`, no
+   `embeddingModelArn`, no `embeddingModelConfiguration` — and SHALL let Bedrock
+   choose and manage the embedding model for a managed knowledge base.
+
+   > **Amended 2026-08-31, by measurement.** This criterion previously required
+   > `embeddingModelType: CUSTOM` pinned to `amazon.titan-embed-text-v2:0` at
+   > `FLOAT32` and 1024 dimensions. That was carried over from the Legacy_Backend
+   > without re-deriving it, and it is wrong here for two independent reasons.
+   >
+   > **It protected a failure mode that cannot occur.** On S3 Vectors *we* embed
+   > the user's question (`s3vectors_backend` → `apis.shared.embeddings`), so the
+   > query model must match the model that indexed the documents or the similarity
+   > search compares vectors from different spaces. Managed retrieval sends
+   > `retrievalQuery={"text": …}` and managed ingestion sends `inlineContent`
+   > text — we never produce a vector. Bedrock embeds both sides itself, so
+   > consistency is the service's invariant and not ours to get wrong by omission.
+   >
+   > **AWS refuses the pin together with managed reranking.** Measured against
+   > dev, all four combinations:
+   >
+   > | Embedding | `rerankingModelType` | Result |
+   > |---|---|---|
+   > | `CUSTOM` (pinned) | `MANAGED` | `ValidationException` |
+   > | `CUSTOM` (pinned) | `NONE` | ok — scores 1.00 / 0.982 / 0.952 (flat) |
+   > | default (managed) | `MANAGED` | ok — scores 0.413 / 0.199 (separated) |
+   > | default (managed) | `NONE` | ok |
+   >
+   > The pin and Requirement 11.2's reranking are therefore mutually exclusive.
+   > §13 measured the pin as worth nothing ("identical cold-ingest time and
+   > identical answer quality to the built-in embedding — 9/9 either way") and
+   > reranking as worth a great deal ("the reranker is what makes a small context
+   > cap defensible"). Keeping reranking is the side with evidence behind it.
+   >
+   > Requirement 8.8's immutability still holds and now matters more: the choice
+   > cannot be revisited per knowledge base after creation.
+
 6. THE system SHALL enable
    `mediaExtractionConfiguration.imageExtractionConfiguration.imageExtractionStatus
    = ENABLED` on the data source.

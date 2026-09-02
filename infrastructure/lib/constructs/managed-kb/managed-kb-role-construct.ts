@@ -167,6 +167,35 @@ export function grantManagedKbProvisioning(
  * from CRUD so an ingestion-only caller can never delete a knowledge
  * base.
  *
+ * WHY `bedrock:StartIngestionJob` IS HERE WHEN NOTHING CALLS IT.
+ * It looks wrong, and removing it is the obvious "cleanup". It is not.
+ * `IngestKnowledgeBaseDocuments` is *authorized* under the adjacent
+ * action name `bedrock:StartIngestionJob` — AWS's own direct-ingestion
+ * prerequisites list both in one statement
+ * (bedrock/latest/userguide/kb-direct-ingestion-prereq.html). So the
+ * API this platform calls and the IAM action that permits it have
+ * different names, and granting only the matching name fails at the
+ * first real upload with:
+ *
+ *   AccessDeniedException ... not authorized to perform:
+ *   bedrock:StartIngestionJob on resource: knowledge-base/XXXXXXXXXX
+ *
+ * This is NOT a contradiction of Requirement 9.2, which forbids
+ * *calling* `StartIngestionJob` (0.1 RPS account-wide, one document
+ * every ten seconds). `managed_backend.py` never calls it and must
+ * never start; the grant is about authorization only.
+ *
+ * Same failure shape as the missing `bedrock:TagResource` — an
+ * adjacent action AWS checks separately, so the grant reviews as
+ * complete and dies on first real use. Found exactly that way: a
+ * document uploaded to a promoted knowledge base in dev went to
+ * `failed` with the message above, while the local driver's broader
+ * SSO identity had been masking it.
+ *
+ * `bedrock:ListKnowledgeBaseDocuments` is in AWS's example policy and
+ * deliberately omitted: no code path calls it, and the docs permit
+ * omitting actions. A future caller fails loudly rather than silently.
+ *
  * Also intentionally unattached for now — wired in task 2.1 alongside
  * the migration Lambdas, via
  * `ManagedKbRoleConstruct.grantDirectIngestion()`.
@@ -177,12 +206,54 @@ export function grantManagedKbDirectIngestion(config: AppConfig, role: iam.IRole
     effect: iam.Effect.ALLOW,
     actions: [
       'bedrock:IngestKnowledgeBaseDocuments',
+      // The IAM action that actually authorizes the call above. See the
+      // docblock: this is authorization, not an invocation of the 0.1 RPS
+      // ingestion-job API that Requirement 9.2 forbids.
+      'bedrock:StartIngestionJob',
       'bedrock:DeleteKnowledgeBaseDocuments',
       'bedrock:GetKnowledgeBaseDocuments',
     ],
     resources: [knowledgeBaseArnWildcard(config)],
   }));
   role.addToPrincipalPolicy(putMetricDataStatement(config, 'ManagedKbIngestMetrics'));
+}
+
+/**
+ * Document-deletion grant: remove one document's content from a managed
+ * knowledge base. Held by the identities that service a user deleting a
+ * document — the app-api task role and the kb-sync worker — neither of
+ * which has any business ingesting.
+ *
+ * Separate from `grantManagedKbDirectIngestion` on purpose. That grant
+ * belongs to the migration worker and the ingestion consumer, which write
+ * corpora; these callers only ever remove. Splitting them means a bug in
+ * the delete path cannot add content and a bug in the ingest path cannot
+ * remove it.
+ *
+ * `bedrock:StartIngestionJob` IS REQUIRED HERE TOO, and again it looks
+ * wrong. AWS lists the whole `KnowledgeBaseDocs` family — ingest, get,
+ * list and delete — in one statement alongside `StartIngestionJob` in its
+ * direct-ingestion prerequisites, and we have already shipped one grant
+ * that named only the matching API and failed on first real use
+ * (`IngestKnowledgeBaseDocuments` authorized as `StartIngestionJob`).
+ * Rather than rediscover whether delete is authorized the same way from a
+ * production AccessDeniedException, it is granted. The cost of including
+ * it is nothing: it confers no ability this caller does not already need,
+ * because `DeleteKnowledgeBaseDocuments` is itself the destructive verb.
+ */
+export function grantManagedKbDocumentDeletion(config: AppConfig, role: iam.IRole): void {
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbDocumentDeletion',
+    effect: iam.Effect.ALLOW,
+    actions: [
+      'bedrock:DeleteKnowledgeBaseDocuments',
+      // See the docblock: the IAM action AWS actually checks for the
+      // document-plane operations, not an invocation of the 0.1 RPS
+      // ingestion-job API that Requirement 9.2 forbids calling.
+      'bedrock:StartIngestionJob',
+    ],
+    resources: [knowledgeBaseArnWildcard(config)],
+  }));
 }
 
 /**

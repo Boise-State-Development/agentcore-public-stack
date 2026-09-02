@@ -37,6 +37,12 @@ COPY backend/src/apis/shared/dynamo_errors.py ${LAMBDA_TASK_ROOT}/apis/shared/dy
 COPY backend/src/apis/shared/sync_policies/ ${LAMBDA_TASK_ROOT}/apis/shared/sync_policies/
 COPY backend/src/apis/shared/oauth/ ${LAMBDA_TASK_ROOT}/apis/shared/oauth/
 COPY backend/src/apis/shared/embeddings/ ${LAMBDA_TASK_ROOT}/apis/shared/embeddings/
+# kb_backend/ — the worker reaches documents/services/cleanup_service.py,
+# which reads records.resolve_engine and calls ManagedKbBackend to remove a
+# deleted document from a promoted knowledge base. Module-level imports in
+# that package are stdlib only (test_kb_backend_boundary.py), so this adds
+# files, not dependencies.
+COPY backend/src/apis/shared/kb_backend/ ${LAMBDA_TASK_ROOT}/apis/shared/kb_backend/
 # assistants/ — document_service verifies assistant ownership via
 # get_assistant before soft-deleting; the worker's miss-eviction path
 # (_delete_missing_web_document) goes through it.

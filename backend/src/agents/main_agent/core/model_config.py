@@ -235,6 +235,14 @@ class RetryConfig:
     sdk_initial_delay: float = 2.0      # Seconds before first retry, doubles each retry
     sdk_max_delay: float = 16.0         # Cap on exponential backoff
 
+    # Widen the SDK layer beyond ModelThrottledException to Bedrock's
+    # transient PRE-STREAM faults (ServiceUnavailableException,
+    # InternalServerException, ModelNotReadyException, ...). Without this,
+    # a 503 on the first attempt reaches the user as a conversational error
+    # with no retry at all — see BedrockTransientRetryStrategy. Default on;
+    # set RETRY_TRANSIENT_SERVICE_ERRORS=false for stock Strands behavior.
+    retry_transient_service_errors: bool = True
+
     @classmethod
     def from_env(cls) -> "RetryConfig":
         """Load configuration from environment variables.
@@ -247,6 +255,7 @@ class RetryConfig:
             RETRY_SDK_MAX_ATTEMPTS=4
             RETRY_SDK_INITIAL_DELAY=2.0
             RETRY_SDK_MAX_DELAY=16.0
+            RETRY_TRANSIENT_SERVICE_ERRORS=true
         """
         return cls(
             boto_max_attempts=int(os.environ.get(EnvVars.RETRY_BOTO_MAX_ATTEMPTS, str(Defaults.RETRY_BOTO_MAX_ATTEMPTS))),
@@ -256,6 +265,12 @@ class RetryConfig:
             sdk_max_attempts=int(os.environ.get(EnvVars.RETRY_SDK_MAX_ATTEMPTS, str(Defaults.RETRY_SDK_MAX_ATTEMPTS))),
             sdk_initial_delay=float(os.environ.get(EnvVars.RETRY_SDK_INITIAL_DELAY, str(Defaults.RETRY_SDK_INITIAL_DELAY))),
             sdk_max_delay=float(os.environ.get(EnvVars.RETRY_SDK_MAX_DELAY, str(Defaults.RETRY_SDK_MAX_DELAY))),
+            # Default-on kill switch: only the literal "false" disables it, so
+            # an unset var and a workflow that injects an empty string both
+            # keep the widened retry set.
+            retry_transient_service_errors=(
+                os.environ.get(EnvVars.RETRY_TRANSIENT_SERVICE_ERRORS, "").lower() != "false"
+            ),
         )
 
 

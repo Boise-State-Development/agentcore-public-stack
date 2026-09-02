@@ -147,7 +147,7 @@
   <!-- Loading indicator -->
   @if (isChatLoading()) {
     <div class="py-4">
-      <app-pulsating-loader />
+      <app-pulsating-loader [notice]="loaderNotice()" />
     </div>
   }
 

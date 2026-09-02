@@ -840,6 +840,21 @@ class StreamCoordinator:
                                 "max_tokens: failed to persist truncated_turn marker for session %s: %s",
                                 session_id, marker_err, exc_info=True,
                             )
+                        # A truncated turn is a SUCCESSFUL read of this turn's
+                        # attachments — the model consumed the documents and
+                        # then ran out of output budget. Clear the write-ahead
+                        # marker here too, or the "Continue" turn would re-send
+                        # documents that are already in the model's context.
+                        # (This branch `return`s below, so the clear on the
+                        # normal success path is never reached.)
+                        try:
+                            from apis.shared.sessions.metadata import clear_pending_attachments
+                            await clear_pending_attachments(session_id, user_id)
+                        except Exception as marker_err:
+                            logger.error(
+                                "max_tokens: failed to clear pending attachments for session %s: %s",
+                                session_id, marker_err, exc_info=True,
+                            )
                         yield "event: done\ndata: {}\n\n"
                     else:
                         # Other errors still surface as a conversational
@@ -1153,6 +1168,54 @@ class StreamCoordinator:
                     logger.info(f"💾 Stored displayText for user message {user_message_index}")
                 except Exception as e:
                     logger.error(f"Failed to store user displayText: {e}", exc_info=True)
+
+            # The turn produced an answer, so Bedrock read whatever this turn
+            # attached — drop the write-ahead marker the invocations route set
+            # before the model call. Reaching here IS the success condition:
+            # every failure arm (in-loop stream_error, cooperative stop,
+            # disconnect, coordinator exception) either `return`s above or
+            # jumps to an `except` below, leaving the marker in place so the
+            # next turn can re-send the attachments the model never saw. See
+            # `set_pending_attachments` for the full lifecycle.
+            try:
+                from apis.shared.sessions.metadata import clear_pending_attachments
+                await clear_pending_attachments(session_id, user_id)
+            except Exception as e:
+                logger.error(f"Failed to clear pending attachments: {e}", exc_info=True)
+
+            # Same reasoning, applied to the interrupted-turn marker: a turn
+            # that reached here produced a COMPLETE answer, so it was not
+            # interrupted — whatever the client signalled.
+            #
+            # WHY THE MARKER CAN BE HERE AT ALL. The client's Stop writes
+            # `lastTurnInterrupted` immediately (app-api, `source=client_signal`),
+            # but the server only observes the armed cancel on the lease
+            # heartbeat, which sleeps LEASE_HEARTBEAT_SECONDS (10s) BEFORE its
+            # first check. A turn that finishes inside that window races the
+            # first tick and wins: the stream completes normally and the
+            # cooperative-stop arm never runs, leaving a marker that describes
+            # a turn which was never actually cut short.
+            #
+            # Left in place, the NEXT turn pops it and prepends
+            # `_build_interruption_note("user_stopped")`, telling the model
+            # that its own complete reply "was the partial that was delivered"
+            # and to treat it as rejected feedback. Every clause of that is
+            # false, and it measurably steers the next answer. Observed in dev
+            # on 2026-09-02: Stop at 2.6s on a 10.4s turn, full answer
+            # persisted, and the follow-up turn logged
+            # "Cleared interrupted_turn ... (reason=user_stopped)".
+            #
+            # Narrowing the heartbeat interval does NOT fix this — any turn
+            # shorter than one tick is unstoppable no matter how the ticks are
+            # spaced, so the marker has to be reconciled against what actually
+            # happened. That is what this does. The real interruption arms
+            # below re-set it after persisting their partial, so a genuine
+            # interruption is unaffected.
+            try:
+                from apis.shared.sessions.metadata import clear_interrupted_turn
+                await clear_interrupted_turn(session_id, user_id)
+            except Exception as e:
+                logger.error(f"Failed to clear stale interrupted_turn: {e}", exc_info=True)
 
         except _CooperativeStopSignal:
             # Deliberate user Stop observed mid-stream (see the in-loop check).

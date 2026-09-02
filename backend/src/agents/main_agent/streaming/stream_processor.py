@@ -47,7 +47,7 @@ from uuid import UUID
 
 from strands.types.exceptions import MaxTokensReachedException
 
-from apis.shared.errors import StreamErrorEvent, ErrorCode
+from apis.shared.errors import StreamErrorEvent, ErrorCode, is_service_unavailable_error
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +317,58 @@ def _handle_completion_events(event: RawEvent) -> Tuple[List[ProcessedEvent], bo
     return events, should_break
 
 
+def _handle_retry_events(event: RawEvent, retry_state: Dict[str, int]) -> List[ProcessedEvent]:
+    """Surface a model-call retry to the client as a ``model_retry`` event.
+
+    WHY THIS EXISTS:
+    Strands emits ``EventLoopThrottleEvent`` -> ``{"event_loop_throttled_delay": n}``
+    on every retried model call. Nothing consumed it, so a retry was
+    indistinguishable from a hang: the response simply went quiet. That got
+    worse when we widened the retryable set to Bedrock's transient service
+    faults (see ``BedrockTransientRetryStrategy``) — a 503 now buys several
+    seconds of extra silence that the user has no way to interpret.
+
+    TIMING, HONESTLY: Strands sleeps for the backoff delay INSIDE the hook and
+    yields this event afterwards, so it lands as the next attempt begins, not
+    when the wait starts. It therefore explains the retry in progress rather
+    than the gap that preceded it — and it does not cover the longest silence
+    of all, the failing model call itself, which looks identical to a slow but
+    healthy one from here.
+
+    ``attempt`` is counted in this processor because the raw event carries only
+    the delay. ``retry_state`` is per-turn (created fresh in
+    ``process_agent_stream``), never on the cached agent.
+    """
+    if "event_loop_throttled_delay" not in event:
+        return []
+
+    raw_delay = event.get("event_loop_throttled_delay")
+    try:
+        delay_seconds = max(0, int(raw_delay))
+    except (TypeError, ValueError):
+        logger.warning("Unparseable retry delay %r; reporting 0", raw_delay)
+        delay_seconds = 0
+
+    retry_state["attempt"] = retry_state.get("attempt", 0) + 1
+    logger.info(
+        "Model call retry %d surfaced to client (delay=%ss)",
+        retry_state["attempt"], delay_seconds,
+    )
+    # `type` is repeated inside the payload because every SPA validator
+    # discriminates on it (see validateCompactionEvent / validateSessionTitleEvent)
+    # — the SSE `event:` line alone is not what the parser checks.
+    return [
+        _create_event(
+            "model_retry",
+            {
+                "type": "model_retry",
+                "attempt": retry_state["attempt"],
+                "delaySeconds": delay_seconds,
+            },
+        )
+    ]
+
+
 def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
     """Translate raw Bedrock errors in ``force_stop_reason`` into user-facing
     markdown. Returns (message, recoverable).
@@ -397,6 +449,22 @@ def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
             "⚠️ The model is receiving too many requests right now.\n\n"
             "> " + reason_str + "\n\n"
             "Please wait a moment and try again.",
+            True,
+        )
+
+    # Bedrock's transient server-side faults. Reaching this point means the
+    # automatic retries (BedrockTransientRetryStrategy) were already spent, so
+    # the copy says so — otherwise "try again" reads as if nothing was tried.
+    # Prod session `5f34d2b0` is why this branch exists: a 503 fell through to
+    # the generic "I ran into a problem" text, which gave the user no signal
+    # that the failure was temporary and worth re-sending.
+    if is_service_unavailable_error(reason_lower):
+        return (
+            "⚠️ The model service is temporarily unavailable.\n\n"
+            "> " + reason_str + "\n\n"
+            "This is a problem on the AI provider's side, not with your "
+            "request — I already retried it a few times. Send your message "
+            "again in a moment, or switch models if it keeps happening.",
             True,
         )
 
@@ -1342,6 +1410,10 @@ async def process_agent_stream(
     # Using dict for mutability across function calls
     current_block_index: Dict[str, int] = {"index": 0}
 
+    # Per-turn retry counter for `model_retry` events. Lives here, not on the
+    # agent — the agent instance is cached across turns (#741/#751).
+    retry_state: Dict[str, int] = {"attempt": 0}
+
     try:
         # Iterate through each raw event from the agent stream
         # The agent stream is an async generator that yields events as they occur
@@ -1374,6 +1446,13 @@ async def process_agent_stream(
                     if "metrics" in event_data:
                         accumulated_metadata["metrics"].update(event_data["metrics"])
                 # Yield the metadata event
+                yield processed_event
+
+            # STEP 1.5: Surface model-call retries. Must run BEFORE the
+            # completion check: a retried call has not failed yet, and the
+            # whole point of the event is to reach the client while the turn
+            # is still in flight.
+            for processed_event in _handle_retry_events(event, retry_state):
                 yield processed_event
 
             # STEP 2: Process completion/error events (may break the loop)

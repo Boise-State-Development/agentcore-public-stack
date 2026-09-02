@@ -108,6 +108,41 @@ describe('Repo shape — new architecture files exist', () => {
   it('scripts/stack-bootstrap/ is preserved', () => {
     expect(fs.existsSync(path.join(SCRIPTS, 'stack-bootstrap'))).toBe(true);
   });
+
+  /**
+   * The observability area. Named individually rather than by a directory
+   * existence check because each file carries a guarantee the others depend on:
+   * the factory is what makes every alarm routed, and log-retention.ts is the
+   * only place a RetentionDays constant may appear.
+   */
+  const observabilityFiles = [
+    'alarm-topic-construct.ts',
+    'alarm-factory.ts',
+    'alb-alarms-construct.ts',
+    'ecs-service-alarms-construct.ts',
+    'dynamodb-alarms-construct.ts',
+    'lambda-alarms-construct.ts',
+    'ai-path-alarms-construct.ts',
+    'platform-dashboard-construct.ts',
+    'log-retention.ts',
+    'prompt-cache-observability-construct.ts',
+  ];
+  for (const file of observabilityFiles) {
+    it(`constructs/observability/${file} exists`, () => {
+      expect(
+        fs.existsSync(path.join(INFRA_LIB, 'constructs', 'observability', file)),
+      ).toBe(true);
+    });
+  }
+
+  it('the observability steering doc exists', () => {
+    // Carries the SNS+CMK gotcha, the no-config.production rule, the
+    // streaming-latency caveat, and the alarm runbook.
+    const steering = path.join(
+      __dirname, '..', '..', '.kiro', 'steering', 'observability.md',
+    );
+    expect(fs.existsSync(steering)).toBe(true);
+  });
 });
 
 describe('Workflow YAML shape', () => {

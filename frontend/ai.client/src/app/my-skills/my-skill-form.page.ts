@@ -10,6 +10,11 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { parseSkillMarkdown } from '../admin/skills/models/skill-import.util';
 import {
+  DISALLOWED_RESOURCE_MESSAGE,
+  RESOURCE_ACCEPT_ATTR,
+  isAllowedResourceFilename,
+} from '../shared/skills/skill-resource-types';
+import {
   MAX_RESOURCE_BYTES,
   MAX_RESOURCES_PER_SKILL,
   MySkillResourceRef,
@@ -45,6 +50,8 @@ export class MySkillFormPage {
 
   protected readonly resourceKinds = RESOURCE_KINDS;
   protected readonly maxFiles = MAX_RESOURCES_PER_SKILL;
+  /** `accept` filter for the file picker — the allowed extensions. */
+  protected readonly acceptedFileTypes = RESOURCE_ACCEPT_ATTR;
 
   protected readonly skillId = signal<string | null>(null);
   protected readonly isEdit = computed(() => this.skillId() !== null);
@@ -160,6 +167,18 @@ export class MySkillFormPage {
     if (oversized.length > 0) {
       this.error.set(
         `${oversized.map((f) => f.name).join(', ')} exceeds the 1 MB per-file limit.`,
+      );
+      return;
+    }
+    // Mirror of the backend type allowlist. The server is the control (it
+    // rejects these with a 400); this just turns that into an immediate,
+    // specific message instead of a failed round-trip. Web-document types are
+    // refused because a resource is downloaded by other users from this app's
+    // own origin, where a rendered document could run script in their session.
+    const disallowed = files.filter((f) => !isAllowedResourceFilename(f.name));
+    if (disallowed.length > 0) {
+      this.error.set(
+        `${disallowed.map((f) => f.name).join(', ')} ${DISALLOWED_RESOURCE_MESSAGE}`,
       );
       return;
     }

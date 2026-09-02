@@ -1,5 +1,12 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
+import * as sns from 'aws-cdk-lib/aws-sns';
+
+import {
+  AppConfig,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
+} from '../lib/config';
 
 import { PromptCacheObservabilityConstruct } from '../lib/constructs/observability/prompt-cache-observability-construct';
 import { createMockConfig, MOCK_ACCOUNT, MOCK_PREFIX, MOCK_REGION } from './helpers/mock-config';
@@ -10,15 +17,30 @@ import { createMockConfig, MOCK_ACCOUNT, MOCK_PREFIX, MOCK_REGION } from './help
 const MOCK_RUNTIME_LOG_GROUP =
   `/aws/bedrock-agentcore/runtimes/${MOCK_PREFIX}_agentcore_runtime-AbC123XyZ0-DEFAULT`;
 
-function synth(production: boolean): Template {
+/**
+ * Synthesize the construct with a real SNS topic attached.
+ *
+ * There is no `production` parameter any more. Thresholds are single configured
+ * values: this repo is forked by many institutions, so a fork with one
+ * environment should not have to reason about a `production` boolean, and a fork
+ * with three should not be limited to two. Per-environment differences live in
+ * the forker's deployment config and arrive as one value.
+ */
+function synth(observabilityOverrides: Partial<AppConfig['observability']> = {}): Template {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, 'Test', {
     env: { account: MOCK_ACCOUNT, region: MOCK_REGION },
   });
-  const config = createMockConfig({ production });
+  const base = createMockConfig();
+  const config: AppConfig = {
+    ...base,
+    observability: { ...base.observability, ...observabilityOverrides },
+  };
+  const topic = new sns.Topic(stack, 'TestAlarmTopic');
   new PromptCacheObservabilityConstruct(stack, 'PromptCacheObservability', {
     config,
     runtimeLogGroupName: MOCK_RUNTIME_LOG_GROUP,
+    alarmTopic: topic,
   });
   return Template.fromStack(stack);
 }
@@ -26,7 +48,7 @@ function synth(production: boolean): Template {
 describe('PromptCacheObservabilityConstruct', () => {
   let t: Template;
   beforeAll(() => {
-    t = synth(false);
+    t = synth();
   });
 
   it('creates the dashboard with the conventional name', () => {
@@ -64,8 +86,15 @@ describe('PromptCacheObservabilityConstruct', () => {
     for (const alarm of alarms) {
       expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
       expect(alarm.Properties.Namespace).toBe('AgentCoreStack/PromptCache');
-      // Console-only: no SNS wiring yet anywhere in the stack.
-      expect(alarm.Properties.AlarmActions).toBeUndefined();
+      // Routed to the platform alarm topic. This assertion previously read
+      // `toBeUndefined()` with the note "Console-only: no SNS wiring yet
+      // anywhere in the stack" — which was true of the whole stack, and is the
+      // gap the alarm topic + AlarmFactory closed. A cost alarm nobody is told
+      // about is the one kind that matters least in the console and most in an
+      // inbox: the motivating incident leaked $27 over five days precisely
+      // because no one was watching a screen.
+      expect(alarm.Properties.AlarmActions).toHaveLength(1);
+      expect(alarm.Properties.OKActions).toHaveLength(1);
     }
   });
 
@@ -74,7 +103,10 @@ describe('PromptCacheObservabilityConstruct', () => {
       AlarmName: `${MOCK_PREFIX}-prompt-cache-avoidable-miss`,
       MetricName: 'AvoidableMiss',
       Statistic: 'Sum',
-      Threshold: 50,
+      // The single default. Was `config.production ? 10 : 50`; the tighter
+      // value became the one default because a prefix-stability regression is
+      // a cost leak, and catching it earlier is cheaper for every fork.
+      Threshold: OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
       EvaluationPeriods: 3,
       ComparisonOperator: 'GreaterThanThreshold',
     });
@@ -82,11 +114,11 @@ describe('PromptCacheObservabilityConstruct', () => {
       AlarmName: `${MOCK_PREFIX}-prompt-cache-wasted-usd`,
       MetricName: 'WastedUsd',
       Statistic: 'Sum',
-      Threshold: 5,
+      Threshold: OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
     });
   });
 
-  it('alarms on one session accumulating $5 of partial-miss waste', () => {
+  it('alarms on one session accumulating the configured partial-miss waste', () => {
     // The fleet sums above cannot see a single conversation spending $0.43 a
     // turn for five days — this is the alarm that would have caught the
     // motivating incident, on its second day.
@@ -103,25 +135,53 @@ describe('PromptCacheObservabilityConstruct', () => {
     });
   });
 
-  it('holds the session threshold at $5 in production too', () => {
-    // Unlike the fleet alarms, this one is not traffic-scaled: $5 of waste in
-    // one conversation is the same problem in dev and in prod.
-    synth(true).hasResourceProperties('AWS::CloudWatch::Alarm', {
+  /**
+   * Every threshold is a single configured value. An institution that wants a
+   * looser dev environment sets a different value there — it does not get one
+   * implicitly from a `production` flag it may never have set. That is the
+   * whole point of the single-value rule for an OSS repo: the defaults have to
+   * be right for a fork that configures nothing.
+   */
+  it('thresholds come from config, not from a production branch', () => {
+    const custom = synth({
+      promptCacheAvoidableMissThreshold: 77,
+      promptCacheWastedUsdThreshold: 8.5,
+      promptCacheSessionWastedUsdThreshold: 42,
+    });
+    custom.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      MetricName: 'AvoidableMiss',
+      Threshold: 77,
+    });
+    custom.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      MetricName: 'WastedUsd',
+      // Fractional dollars survive: parseFloatEnv, not parseIntEnv.
+      Threshold: 8.5,
+    });
+    custom.hasResourceProperties('AWS::CloudWatch::Alarm', {
       MetricName: 'SessionPartialMissUsd',
-      Threshold: 5,
+      Threshold: 42,
     });
   });
 
-  it('uses stricter thresholds in production', () => {
-    const prod = synth(true);
-    prod.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      MetricName: 'AvoidableMiss',
-      Threshold: 10,
+  /**
+   * The opt-out path: no topic means alarms are still created, just
+   * console-only. That was the stack's behaviour before the alarm topic
+   * existed, kept reachable for a fork that routes alerts another way.
+   */
+  it('stays console-only when no alarm topic is supplied', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'NoTopic', {
+      env: { account: MOCK_ACCOUNT, region: MOCK_REGION },
     });
-    prod.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      MetricName: 'WastedUsd',
-      Threshold: 1,
+    new PromptCacheObservabilityConstruct(stack, 'PromptCacheObservability', {
+      config: createMockConfig(),
+      runtimeLogGroupName: MOCK_RUNTIME_LOG_GROUP,
     });
+    const noTopic = Template.fromStack(stack);
+    noTopic.resourceCountIs('AWS::CloudWatch::Alarm', 3);
+    for (const alarm of Object.values(noTopic.findResources('AWS::CloudWatch::Alarm'))) {
+      expect((alarm as any).Properties.AlarmActions).toBeUndefined();
+    }
   });
 
   it('exports the dashboard name', () => {

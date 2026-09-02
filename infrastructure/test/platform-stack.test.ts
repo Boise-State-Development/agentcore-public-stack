@@ -138,8 +138,14 @@ describe('PlatformStack', () => {
     });
 
     it('creates KMS keys', () => {
-      // OAuth token encryption + BFF cookie signing
-      template.resourceCountIs('AWS::KMS::Key', 2);
+      // OAuth token encryption + BFF cookie signing + alarm topic encryption.
+      //
+      // The third is the alarm topic's CMK. It is customer-managed rather than
+      // alias/aws/sns out of necessity, not preference: CloudWatch cannot be
+      // granted kms:GenerateDataKey* on an AWS-managed key, so an
+      // alias/aws/sns-encrypted topic accepts the alarm and silently drops the
+      // notification. See constructs/observability/alarm-topic-construct.ts.
+      template.resourceCountIs('AWS::KMS::Key', 3);
     });
   });
 
@@ -353,6 +359,43 @@ describe('PlatformStack', () => {
           },
         },
       });
+    });
+  });
+  describe('Managed knowledge base grants on the real compute roles', () => {
+    // The recurring failure on this feature is code that reads correctly with
+    // no IAM behind it — a grant on a fake role in a construct test proves the
+    // statement is well-formed, not that the identity which runs the code ever
+    // receives it. These assert the wiring, on the synthesized stack.
+    it('the app-api task role may delete documents from a managed KB', () => {
+      // `DELETE /assistants/{id}/documents/{doc}` reaches
+      // `cleanup_service._delete_managed_documents_with_retries`. Without this
+      // the delete fails, the DOC# row is kept so the fail-closed status filter
+      // keeps hiding the chunks, and the managed corpus grows forever.
+      const policies = {
+        ...template.findResources('AWS::IAM::Policy'),
+        ...template.findResources('AWS::IAM::ManagedPolicy'),
+      };
+      const found = Object.values(policies).some((r) => {
+        const statements =
+          (r.Properties as { PolicyDocument?: { Statement?: Array<{ Sid?: string }> } })
+            .PolicyDocument?.Statement ?? [];
+        return statements.some((st) => st.Sid === 'ManagedKbDocumentDeletion');
+      });
+      expect(found).toBe(true);
+    });
+
+    it('the app-api task role may retrieve from a managed KB', () => {
+      const policies = {
+        ...template.findResources('AWS::IAM::Policy'),
+        ...template.findResources('AWS::IAM::ManagedPolicy'),
+      };
+      const found = Object.values(policies).some((r) => {
+        const statements =
+          (r.Properties as { PolicyDocument?: { Statement?: Array<{ Sid?: string }> } })
+            .PolicyDocument?.Statement ?? [];
+        return statements.some((st) => st.Sid === 'ManagedKbRetrieve');
+      });
+      expect(found).toBe(true);
     });
   });
 });

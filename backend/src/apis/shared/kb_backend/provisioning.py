@@ -298,20 +298,39 @@ def knowledge_base_payload(
     ``storageConfiguration`` is absent by construction — there is no key to
     accidentally set to ``None``, because a managed knowledge base has no vector
     store and sending one is rejected.
+
+    NO EMBEDDING PIN. Requirement 8.5 originally pinned
+    ``amazon.titan-embed-text-v2:0`` via ``embeddingModelType: CUSTOM``, and that
+    was carried over from the legacy path without re-deriving it. It does not
+    apply here, for two independent reasons:
+
+    1. **The pin protected a failure mode that cannot occur in managed mode.** On
+       S3 Vectors *we* embed the user's question (``s3vectors_backend`` calls
+       ``apis.shared.embeddings``), so the query model must match the model that
+       indexed the documents or the similarity search compares vectors from
+       different spaces. Managed retrieval sends ``retrievalQuery={"text": ...}``
+       and ingestion sends ``inlineContent`` text — we never produce a vector, so
+       Bedrock embeds both sides itself and consistency is the service's
+       invariant, not ours to get wrong.
+    2. **AWS refuses the pin together with managed reranking.** Measured, both
+       ways::
+
+           CUSTOM  + rerankingModelType=MANAGED -> ValidationException
+           CUSTOM  + NONE                       -> ok, scores 1.0/0.982/0.952 (flat)
+           default + MANAGED                    -> ok
+           default + NONE                       -> ok
+
+       The evaluation recorded the pin as worth nothing measurable ("identical
+       answer quality — 9/9 either way") and reranking as worth a lot ("the
+       reranker is what makes a small context cap defensible"). Given they are
+       mutually exclusive, keeping reranking is the side with evidence behind it.
+
+    The choice is immutable per knowledge base, which is why it is argued here
+    rather than left as a default someone might flip casually.
     """
     validate_client_token(client_token)
 
-    managed: Dict[str, Any] = {
-        # Requirement 8.5: pinned, and immutable from here on.
-        "embeddingModelType": EMBEDDING_MODEL_TYPE,
-        "embeddingModelArn": embedding_model_arn(region),
-        "embeddingModelConfiguration": {
-            "bedrockEmbeddingModelConfiguration": {
-                "dimensions": EMBEDDING_DIMENSIONS,
-                "embeddingDataType": EMBEDDING_DATA_TYPE,
-            }
-        },
-    }
+    managed: Dict[str, Any] = {}
     if kms_key_arn:
         # Requirement 20.5, only where customer-managed encryption is required.
         managed["serverSideEncryptionConfiguration"] = {"kmsKeyArn": kms_key_arn}
@@ -447,8 +466,149 @@ async def _call(
 
 
 # ── The saga ─────────────────────────────────────────────────────────────────
-def _complete(item: Mapping[str, Any]) -> bool:
-    return bool(item.get("awsKbId")) and bool(item.get("awsDataSourceId"))
+#: The status the data-source create requires.
+KB_ACTIVE_STATUS = "ACTIVE"
+
+#: Terminal-bad statuses. Waiting on these would burn the whole budget to reach
+#: the same conclusion the first poll already supports.
+KB_FAILED_STATUSES = ("FAILED", "DELETING", "DELETE_UNSUCCESSFUL")
+
+#: Ceiling on the wait. The measured range to ACTIVE is 47-124 s (n=7), so this
+#: is roughly 2.5x the observed worst case — comfortably inside the worker's
+#: 15-minute Lambda timeout, and short enough that a genuinely stuck creation is
+#: reported within one migration step rather than silently holding a lease.
+KB_ACTIVE_WAIT_SECONDS = 300.0
+
+#: Poll interval. Not a tuning knob worth an env var: the operation being waited
+#: on takes tens of seconds, so anything finer just adds API calls.
+KB_ACTIVE_POLL_SECONDS = 5.0
+
+
+#: Fragments that identify a "name already taken" conflict, as opposed to the
+#: status conflict the ACTIVE wait handles. Matched on the message because AWS
+#: uses one error code (``ConflictException``) for both.
+_NAME_CONFLICT_FRAGMENTS = ("already exists",)
+
+
+def _is_name_conflict(exc: BaseException) -> bool:
+    """Whether ``exc`` is AWS refusing a duplicate knowledge base *name*.
+
+    Distinguished from the status conflict by message, because both arrive as
+    ``ConflictException``. Getting this wrong in either direction is bad: treating
+    a status conflict as a name conflict would adopt while still CREATING, and
+    treating a name conflict as fatal leaves a record that can never be retried.
+    """
+    message = str(exc).lower()
+    if not any(f in message for f in _NAME_CONFLICT_FRAGMENTS):
+        return False
+    response = getattr(exc, "response", None)
+    if isinstance(response, Mapping):
+        code = response.get("Error", {}).get("Code")
+        # Only trust the message when the code agrees it is a conflict.
+        return code in ("ConflictException", "ValidationException")
+    return True
+
+
+async def _find_knowledge_base_by_name(client, name: str) -> Optional[str]:
+    """Return the id of the knowledge base called ``name``, or ``None``.
+
+    Names are unique per account and derived from ``app_kb_id``, so a match is
+    always this knowledge base's own earlier attempt — never someone else's.
+
+    Paginated fully rather than reading the first page: a truncated scan that
+    missed the match would fall through to "the name is taken but I cannot find
+    it", turning a recoverable state into a permanent failure.
+    """
+    next_token: Optional[str] = None
+    while True:
+        kwargs: Dict[str, Any] = {"maxResults": 100}
+        if next_token:
+            kwargs["nextToken"] = next_token
+        page = await asyncio.to_thread(lambda: client.list_knowledge_bases(**kwargs))
+        for summary in page.get("knowledgeBaseSummaries") or []:
+            if summary.get("name") != name:
+                continue
+            status = str(summary.get("status") or "")
+            if status in KB_FAILED_STATUSES:
+                # Adopting a knowledge base that is on its way out guarantees a
+                # failure one step later, at the ACTIVE wait. Skip it: the name is
+                # about to free up, so a fresh create is the right move and the
+                # next attempt will make it. Observed while recreating a knowledge
+                # base locally — the delete had not finished, adoption took the
+                # DELETING one, and the run failed on a resource nobody wanted.
+                logger.info(
+                    f"ignoring knowledge base {summary.get('knowledgeBaseId')} named "
+                    f"{name}: it is {status} and cannot be adopted"
+                )
+                continue
+            return summary.get("knowledgeBaseId")
+        next_token = page.get("nextToken")
+        if not next_token:
+            return None
+
+
+class KnowledgeBaseNotReady(Exception):
+    """A knowledge base did not reach ``ACTIVE`` within the wait budget."""
+
+
+async def _wait_for_knowledge_base_active(
+    client: Any,
+    aws_kb_id: str,
+    *,
+    what: str,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    budget_seconds: Optional[float] = None,
+    interval_seconds: Optional[float] = None,
+) -> str:
+    """Block until ``aws_kb_id`` is ``ACTIVE``, or raise.
+
+    ``CreateKnowledgeBase`` returns while the knowledge base is still
+    ``CREATING``; anything that touches it before ``ACTIVE`` is refused with a
+    ``ConflictException`` telling you to wait. Retrying the *dependent* call is
+    the wrong shape — it burns attempts on a precondition rather than waiting for
+    it — so the precondition is waited on directly.
+
+    Budget and interval are resolved at call time, never bound as default
+    arguments: a module-level default is captured at import and silently ignores a
+    test's override, which has already cost this feature a 33-second test.
+    """
+    budget = KB_ACTIVE_WAIT_SECONDS if budget_seconds is None else budget_seconds
+    interval = KB_ACTIVE_POLL_SECONDS if interval_seconds is None else interval_seconds
+
+    waited = 0.0
+    while True:
+        described = await asyncio.to_thread(
+            lambda: client.get_knowledge_base(knowledgeBaseId=aws_kb_id)
+        )
+        last_status = str(
+            (described.get("knowledgeBase") or {}).get("status") or "UNKNOWN"
+        )
+        if last_status == KB_ACTIVE_STATUS:
+            if waited:
+                logger.info(
+                    f"kb {aws_kb_id} reached {KB_ACTIVE_STATUS} after {waited:.0f}s; "
+                    f"proceeding to {what}"
+                )
+            return last_status
+        if last_status in KB_FAILED_STATUSES:
+            # Failing here rather than waiting out the budget: the status is
+            # terminal, so the only thing more waiting buys is a later report.
+            raise KnowledgeBaseNotReady(
+                f"kb {aws_kb_id} is {last_status}, which will never reach "
+                f"{KB_ACTIVE_STATUS}; refusing {what}"
+            )
+        if waited >= budget:
+            raise KnowledgeBaseNotReady(
+                f"kb {aws_kb_id} was still {last_status} after {waited:.0f}s "
+                f"(budget {budget:.0f}s); refusing {what}. The migration is "
+                f"resumable: the id is already recorded on the KB_Record, so the "
+                f"next attempt resumes from it rather than creating another."
+            )
+        await sleep(interval)
+        waited += interval
+
+
+def _complete(item: Mapping[str, Any]) -> bool:    return bool(item.get("awsKbId")) and bool(item.get("awsDataSourceId"))
 
 
 def _resource_name(app_kb_id: str, project_prefix: Optional[str] = None) -> str:
@@ -478,6 +638,11 @@ async def provision_managed_kb(
     environment: Optional[str] = None,
     max_attempts: int = MAX_PROVISION_ATTEMPTS,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    # How long to wait for the knowledge base to reach ACTIVE before creating its
+    # data source. Optional-None rather than a bound module constant so a test can
+    # actually override them (see _wait_for_knowledge_base_active).
+    budget_seconds: Optional[float] = None,
+    interval_seconds: Optional[float] = None,
 ) -> ProvisionedKnowledgeBase:
     """Provision, or adopt, the managed knowledge base for ``app_kb_id``.
 
@@ -537,8 +702,12 @@ async def provision_managed_kb(
             owner_user_id=owner_user_id,
             provisioning_state=r.PROVISIONING,
             client_token=kb_token,
-            embedding_model_id=EMBEDDING_MODEL_ID,
-            embedding_dimensions=EMBEDDING_DIMENSIONS,
+            # Not recorded: with no pin, Bedrock chooses the embedding model and
+            # nothing here would know which. A field naming Titan on a knowledge
+            # base Bedrock embedded with something else is worse than an absent
+            # one — nothing reads these for retrieval, so they can only mislead.
+            embedding_model_id=None,
+            embedding_dimensions=0,
             image_extraction=True,
             parser_config={
                 "imageExtractionStatus": IMAGE_EXTRACTION_STATUS,
@@ -568,22 +737,90 @@ async def provision_managed_kb(
 
     aws_kb_id = (existing or {}).get("awsKbId")
     if not aws_kb_id:
-        response = await _call(
-            client.create_knowledge_base,
-            knowledge_base_payload(
-                name=name,
-                role_arn=role_arn,
-                client_token=kb_token,
-                description=f"Managed knowledge base for {app_kb_id}",
-                tags=build_tags(app_kb_id, owner_user_id, project_prefix, environment),
-                region=region,
-                kms_key_arn=kms_key_arn,
-            ),
-            what="CreateKnowledgeBase",
-            max_attempts=max_attempts,
-            sleep=sleep,
-        )
-        aws_kb_id = response["knowledgeBase"]["knowledgeBaseId"]
+        try:
+            response = await _call(
+                client.create_knowledge_base,
+                knowledge_base_payload(
+                    name=name,
+                    role_arn=role_arn,
+                    client_token=kb_token,
+                    description=f"Managed knowledge base for {app_kb_id}",
+                    tags=build_tags(app_kb_id, owner_user_id, project_prefix, environment),
+                    region=region,
+                    kms_key_arn=kms_key_arn,
+                ),
+                what="CreateKnowledgeBase",
+                max_attempts=max_attempts,
+                sleep=sleep,
+            )
+            aws_kb_id = response["knowledgeBase"]["knowledgeBaseId"]
+        except Exception as exc:
+            # ADOPT-BY-NAME. A knowledge base already carrying this name means a
+            # previous attempt created one and did not get to record its id, so
+            # this record has no `awsKbId` to resume from and the create can never
+            # succeed again — the name is taken, permanently.
+            #
+            # The `clientToken` does NOT cover this, contrary to what the module
+            # header implies. AWS idempotency tokens expire in minutes; a retry an
+            # hour later is a new request that collides on the unique name. This is
+            # exactly how the first real migration became unretryable.
+            #
+            # Adopting is safe because the name is derived from `app_kb_id`, so a
+            # collision can only be *this* knowledge base's own earlier attempt.
+            if not _is_name_conflict(exc):
+                raise
+            adopted = await _find_knowledge_base_by_name(client, name)
+            if not adopted:
+                # The name is taken but nothing matching is visible — do not guess.
+                raise
+            logger.warning(
+                f"kb {app_kb_id}: adopting existing knowledge base {adopted}; its "
+                f"name was already taken, which means an earlier attempt created it "
+                f"without recording the id"
+            )
+            aws_kb_id = adopted
+            emit_count(METRIC_PROVISION_ADOPTED, dimensions={"appKbId": app_kb_id})
+
+        # Persist the identifier NOW, before anything else can fail. Everything
+        # after this point is resumable; before it, a failure loses a paying
+        # resource and blocks every future attempt on the name.
+        try:
+            await asyncio.to_thread(
+                r.attach_knowledge_base_id,
+                assistant_id,
+                app_kb_id,
+                aws_kb_id,
+                _now_iso(),
+            )
+        except r.TransitionLost:
+            # Another worker recorded an id first. Theirs wins; ours is either the
+            # same knowledge base (adopted by name) or a duplicate that the
+            # reconciler will find by tag.
+            logger.info(
+                f"kb {app_kb_id}: another worker recorded awsKbId first; deferring"
+            )
+            refreshed = await asyncio.to_thread(r.get_kb_record, assistant_id, app_kb_id)
+            aws_kb_id = (refreshed or {}).get("awsKbId") or aws_kb_id
+
+    # CreateKnowledgeBase returns as soon as the knowledge base is CREATING, not
+    # when it is usable — this module's own header records 47–124 s to ACTIVE
+    # (n=7). CreateDataSource against a CREATING knowledge base is refused:
+    #
+    #   ConflictException: The Knowledge Base is not in a valid status.
+    #   Wait for the knowledge base to reach a valid status and try again.
+    #
+    # `ConflictException` is deliberately absent from RETRYABLE_ERROR_CODES — a
+    # genuine conflict must fail fast — and `_call`'s backoff tops out around 60 s
+    # anyway, short of the measured upper bound. So the wait is explicit rather
+    # than a widened retry set.
+    await _wait_for_knowledge_base_active(
+        client,
+        aws_kb_id,
+        what="CreateDataSource",
+        sleep=sleep,
+        budget_seconds=budget_seconds,
+        interval_seconds=interval_seconds,
+    )
 
     aws_data_source_id = (existing or {}).get("awsDataSourceId")
     if not aws_data_source_id:
@@ -646,6 +883,7 @@ __all__ = [
     "EMBEDDING_MODEL_ID",
     "EMBEDDING_MODEL_TYPE",
     "IMAGE_EXTRACTION_STATUS",
+    "KnowledgeBaseNotReady",
     "KNOWLEDGE_BASE_TYPE",
     "ProvisionedKnowledgeBase",
     "ProvisioningError",

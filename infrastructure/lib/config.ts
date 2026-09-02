@@ -66,6 +66,7 @@ export interface AppConfig {
    * AppConfig by hand does not have to know this feature exists.
    */
   tokenExchange?: TokenExchangeConfig;
+  observability: ObservabilityConfig;
   appVersion: string;
   tags: { [key: string]: string };
 }
@@ -420,6 +421,85 @@ export interface TokenExchangeConfig {
   url: string;
   /** client_id this deployment authenticates as. */
   clientId: string;
+}
+
+// Observability defaults. Tuned for cost: these are what a fork inherits when it
+// configures nothing. See .kiro/steering/observability.md.
+
+/** Retention for every log group in the stack. */
+export const OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS = 30;
+
+/** X-Ray sampling rate, 0.0-1.0. Billed per trace recorded, so keep it low. */
+export const OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE = 0.01;
+
+/** Traces per second recorded before the sampling rate applies. */
+export const OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR = 1;
+
+/** ALB target 5xx per 5-minute period. */
+export const OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD = 10;
+
+/** p99 latency floor (ms). High because the chat path is SSE: a healthy turn
+ *  runs for seconds and peaks around 25s, so a tight threshold only makes noise. */
+export const OBSERVABILITY_DEFAULT_P99_LATENCY_MS = 120_000;
+
+/** AgentCore Runtime errors per 5-minute period. */
+export const OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD = 10;
+
+/** Lambda errors per 5-minute period. */
+export const OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD = 5;
+
+/** Lambda duration alarm as a percentage of the function's own timeout. */
+export const OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT = 80;
+
+/** DynamoDB throttle events per 5-minute period. */
+export const OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD = 10;
+
+/** ECS service CPU / memory utilisation alarm thresholds (percent). */
+export const OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT = 80;
+export const OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT = 85;
+
+/** Avoidable prompt-cache misses per 5-minute period. */
+export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD = 10;
+
+/** Dollars of fleet prompt-cache waste per 5-minute period. */
+export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD = 1;
+
+/** Cumulative partial-miss waste for one session, in dollars. A fleet sum
+ *  cannot see a single conversation re-writing its prefix every turn. */
+export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD = 5;
+
+/**
+ * Observability configuration.
+ *
+ * Precedence per field: CDK_OBSERVABILITY_* env var, then the flat dotted
+ * context key, then a nested `observability` object, then the default constant.
+ */
+export interface ObservabilityConfig {
+  /** Create the SNS alarm topic and route every alarm to it. */
+  alarmTopicEnabled: boolean;
+  logRetentionDays: number;
+  albTarget5xxThreshold: number;
+  /** ALB p99 TargetResponseTime floor, in ms. */
+  albP99LatencyMs: number;
+  /** AgentCore Runtime p99 Latency floor, in ms. */
+  agentCoreLatencyMs: number;
+  agentCoreErrorThreshold: number;
+  lambdaErrorThreshold: number;
+  lambdaDurationPercentOfTimeout: number;
+  dynamoThrottleThreshold: number;
+  ecsCpuPercent: number;
+  ecsMemoryPercent: number;
+
+  promptCacheAvoidableMissThreshold: number;
+  promptCacheWastedUsdThreshold: number;
+  promptCacheSessionWastedUsdThreshold: number;
+
+  xraySamplingRate: number;
+  xraySamplingReservoir: number;
+  xrayInsightsNotifications: boolean;
+  /** AgentCore APPLICATION_LOGS vended delivery. Off by default: the records
+   *  carry full prompts and responses, so it is both high-volume and PII. */
+  agentCoreApplicationLogsEnabled: boolean;
 }
 
 /**
@@ -782,6 +862,102 @@ export function loadConfig(scope: cdk.App): AppConfig {
           clientId: tokenExchangeClientId,
         }
       : undefined,
+    // Same precedence as managedKb above. The flat dotted read at step 2 is
+    // load-bearing: `--context observability.x=y` sets context['observability.x'],
+    // it does NOT build a nested object.
+    observability: {
+      alarmTopicEnabled:
+        parseBooleanEnv(process.env.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED)
+        ?? parseBooleanEnv(scope.node.tryGetContext('observability.alarmTopicEnabled'))
+        ?? scope.node.tryGetContext('observability')?.alarmTopicEnabled
+        ?? true,
+      logRetentionDays:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.logRetentionDays'))
+        ?? scope.node.tryGetContext('observability')?.logRetentionDays
+        ?? OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+      albTarget5xxThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.albTarget5xxThreshold'))
+        ?? scope.node.tryGetContext('observability')?.albTarget5xxThreshold
+        ?? OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+      albP99LatencyMs:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_ALB_P99_LATENCY_MS)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.albP99LatencyMs'))
+        ?? scope.node.tryGetContext('observability')?.albP99LatencyMs
+        ?? OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+      agentCoreLatencyMs:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.agentCoreLatencyMs'))
+        ?? scope.node.tryGetContext('observability')?.agentCoreLatencyMs
+        ?? OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+      agentCoreErrorThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.agentCoreErrorThreshold'))
+        ?? scope.node.tryGetContext('observability')?.agentCoreErrorThreshold
+        ?? OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+      lambdaErrorThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.lambdaErrorThreshold'))
+        ?? scope.node.tryGetContext('observability')?.lambdaErrorThreshold
+        ?? OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
+      lambdaDurationPercentOfTimeout:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.lambdaDurationPercentOfTimeout'))
+        ?? scope.node.tryGetContext('observability')?.lambdaDurationPercentOfTimeout
+        ?? OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+      dynamoThrottleThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_DYNAMO_THROTTLE_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.dynamoThrottleThreshold'))
+        ?? scope.node.tryGetContext('observability')?.dynamoThrottleThreshold
+        ?? OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
+      ecsCpuPercent:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_ECS_CPU_PERCENT)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.ecsCpuPercent'))
+        ?? scope.node.tryGetContext('observability')?.ecsCpuPercent
+        ?? OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
+      ecsMemoryPercent:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_ECS_MEMORY_PERCENT)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.ecsMemoryPercent'))
+        ?? scope.node.tryGetContext('observability')?.ecsMemoryPercent
+        ?? OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
+      promptCacheAvoidableMissThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.promptCacheAvoidableMissThreshold'))
+        ?? scope.node.tryGetContext('observability')?.promptCacheAvoidableMissThreshold
+        ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
+      promptCacheWastedUsdThreshold:
+        parseFloatEnv(process.env.CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD)
+        ?? parseFloatEnv(scope.node.tryGetContext('observability.promptCacheWastedUsdThreshold'))
+        ?? scope.node.tryGetContext('observability')?.promptCacheWastedUsdThreshold
+        ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
+      promptCacheSessionWastedUsdThreshold:
+        parseFloatEnv(process.env.CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD)
+        ?? parseFloatEnv(scope.node.tryGetContext('observability.promptCacheSessionWastedUsdThreshold'))
+        ?? scope.node.tryGetContext('observability')?.promptCacheSessionWastedUsdThreshold
+        ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+      // parseFloatEnv: parseIntEnv turns 0.05 into 0, disabling sampling.
+      xraySamplingRate:
+        parseFloatEnv(process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE)
+        ?? parseFloatEnv(scope.node.tryGetContext('observability.xraySamplingRate'))
+        ?? scope.node.tryGetContext('observability')?.xraySamplingRate
+        ?? OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
+      xraySamplingReservoir:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.xraySamplingReservoir'))
+        ?? scope.node.tryGetContext('observability')?.xraySamplingReservoir
+        ?? OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+      xrayInsightsNotifications:
+        parseBooleanEnv(process.env.CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS)
+        ?? parseBooleanEnv(scope.node.tryGetContext('observability.xrayInsightsNotifications'))
+        ?? scope.node.tryGetContext('observability')?.xrayInsightsNotifications
+        ?? false,
+      agentCoreApplicationLogsEnabled:
+        parseBooleanEnv(process.env.CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED)
+        ?? parseBooleanEnv(scope.node.tryGetContext('observability.agentCoreApplicationLogsEnabled'))
+        ?? scope.node.tryGetContext('observability')?.agentCoreApplicationLogsEnabled
+        ?? false,
+    },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
       // `--context tags.Environment=dev` sets the FLAT dotted key
@@ -824,6 +1000,14 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(`   Retain Data on Delete: ${config.retainDataOnDelete}`);
   console.log(`   Manage DNS Records: ${config.manageDnsRecords}`);
   console.log(`   App Version: ${config.appVersion}`);
+  // Printed so a deploy log shows which values actually took effect.
+  console.log(
+    `   Observability: alarmTopic=${config.observability.alarmTopicEnabled}`
+    + ` logRetentionDays=${config.observability.logRetentionDays}`
+    + ` xraySamplingRate=${config.observability.xraySamplingRate}`
+    + ` xrayReservoir=${config.observability.xraySamplingReservoir}`
+    + ` agentCoreAppLogs=${config.observability.agentCoreApplicationLogsEnabled}`
+  );
 
   // Validate configuration
   validateConfig(config);
@@ -873,6 +1057,23 @@ function parseIntEnv(value: string | undefined): number | undefined {
     return undefined;
   }
   const parsed = parseInt(value, 10);
+  return isNaN(parsed) ? undefined : parsed;
+}
+
+/**
+ * Parse a floating-point environment/context value.
+ *
+ * Separate from parseIntEnv because the fractional observability tunables
+ * (notably the X-Ray sampling rate) round to 0 under parseInt — "0.05" would
+ * become 0 and switch sampling off entirely rather than setting it to 5%.
+ * Returns undefined for unset/empty/invalid input so nullish coalescing can
+ * fall through to a context value or default.
+ */
+function parseFloatEnv(value: string | undefined): number | undefined {
+  if (value === undefined || value === '') {
+    return undefined;
+  }
+  const parsed = parseFloat(value);
   return isNaN(parsed) ? undefined : parsed;
 }
 
@@ -1061,6 +1262,45 @@ function validateConfig(config: AppConfig): void {
   // and the respective certificate ARNs for a real deployment. Synth and
   // tests proceed without them (constructs handle the undefined case by
   // falling back to CloudFront default domains).
+
+  // ── Observability ──
+  // CloudWatch Logs accepts only a fixed set of retention values; an arbitrary
+  // number is rejected at deploy time, long after CI has gone green.
+  const validRetentionDays = [
+    1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096,
+    1827, 2192, 2557, 2922, 3288, 3653,
+  ];
+  if (!validRetentionDays.includes(config.observability.logRetentionDays)) {
+    throw new Error(
+      `Invalid observability.logRetentionDays: ${config.observability.logRetentionDays}. ` +
+      `CloudWatch Logs accepts only: ${validRetentionDays.join(', ')}. ` +
+      `Set CDK_OBSERVABILITY_LOG_RETENTION_DAYS to one of those values.`
+    );
+  }
+
+  // A rate, not a percentage: 5 instead of 0.05 is a 100x cost error.
+  const rate = config.observability.xraySamplingRate;
+  if (rate < 0 || rate > 1) {
+    throw new Error(
+      `Invalid observability.xraySamplingRate: ${rate}. ` +
+      `Expected a rate between 0.0 and 1.0 (e.g. 0.05 for 5%), not a percentage. ` +
+      `X-Ray bills per trace recorded, so a value above 1.0 is rejected rather ` +
+      `than clamped.`
+    );
+  }
+
+  const percentFields: Array<[string, number]> = [
+    ['ecsCpuPercent', config.observability.ecsCpuPercent],
+    ['ecsMemoryPercent', config.observability.ecsMemoryPercent],
+    ['lambdaDurationPercentOfTimeout', config.observability.lambdaDurationPercentOfTimeout],
+  ];
+  for (const [name, value] of percentFields) {
+    if (value <= 0 || value > 100) {
+      throw new Error(
+        `Invalid observability.${name}: ${value}. Expected a percentage between 1 and 100.`
+      );
+    }
+  }
 }
 
 /**
