@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentcore-tui"
-version = "1.16.0"
+version = "1.17.0"
 requires-python = ">=3.11"
 description = "Terminal client for the AgentCore Public Stack — streaming AI chat in your terminal"
 readme = "README.md"
