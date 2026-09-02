@@ -628,6 +628,26 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // Admin "Discover from server" invoke (POST /admin/tools/discover): the
+  // discovery request is signed with *this* task role, not the gateway role
+  // the form's credential picker names — the gateway only signs at runtime,
+  // once the target is registered. Without this, discovery against any
+  // IAM-protected Lambda Function URL comes back 403 and the admin has to
+  // type every tool name by hand. Same resource scope as McpTargetLambdaGrant
+  // above; InvokeFunctionUrl only, since discovery reaches the server over its
+  // function URL and never through the Lambda API.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'McpDiscoveryLambdaInvoke',
+      effect: iam.Effect.ALLOW,
+      actions: ['lambda:InvokeFunctionUrl'],
+      resources: [
+        `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:mcp-*`,
+        `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:${config.projectPrefix}-mcp-*`,
+      ],
+    }),
+  );
+
   // ── S3 Vectors (RAG query + document cleanup) ──
   // DeleteVectors is required by documents/services/cleanup_service.py, which
   // removes a document's (or an assistant's) chunks from the index when the
