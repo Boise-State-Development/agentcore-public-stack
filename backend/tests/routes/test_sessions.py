@@ -9,6 +9,8 @@ Endpoints under test:
 - DELETE /sessions/{session_id}           → 204
 - POST   /sessions/bulk-delete            → 200 with deletion results
 - GET    /sessions/{session_id}/messages  → 200 with message history
+- POST   /sessions/{session_id}/steer      → 200 (mid-turn steering)
+- DELETE /sessions/{session_id}/steer/{id} → 204
 
 Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8
 """
@@ -919,6 +921,156 @@ class TestSignalTurnInterrupted:
             json={"reason": "user_stopped"},
         )
         assert resp.status_code == 401
+
+
+class TestSteerRunningTurn:
+    """POST /sessions/{session_id}/steer — mid-turn steering.
+
+    See docs/specs/mid-turn-steering.md. On app-api, not inference-api, for
+    the same reason ``/interrupt`` is: the AgentCore Runtime data plane
+    proxies only ``/invocations`` and ``/ping``. Cookie-auth via
+    get_current_user_from_session per the app-api auth rule.
+    """
+
+    def test_queues_the_follow_up_against_the_live_turn(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        steer = AsyncMock(return_value=True)
+        with patch("apis.shared.sessions.session_lease.request_session_steer", steer):
+            resp = client.post(
+                "/sessions/sess-001/steer",
+                json={"text": "use the other file", "entryId": "e1"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"queued": True, "entryId": "e1"}
+        steer.assert_awaited_once_with(
+            "sess-001",
+            user.user_id,
+            text="use the other file",
+            entry_id="e1",
+        )
+
+    def test_reports_not_queued_when_no_turn_is_running(self, app, make_user, authenticated_client):
+        """The turn ended between the user typing and this landing.
+
+        Not an error: the SPA leaves the entry in its queue and PR #916's
+        end-of-turn flush sends it as a normal turn. 200 either way so the
+        client never has to tell a lost race apart from a failure.
+        """
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.shared.sessions.session_lease.request_session_steer",
+            AsyncMock(return_value=False),
+        ):
+            resp = client.post(
+                "/sessions/sess-001/steer",
+                json={"text": "too late", "entryId": "e1"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["queued"] is False
+
+    def test_returns_429_when_the_inbox_is_full(self, app, make_user, authenticated_client):
+        from apis.shared.sessions.session_lease import SteerQueueFullError
+
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.shared.sessions.session_lease.request_session_steer",
+            AsyncMock(side_effect=SteerQueueFullError("sess-001")),
+        ):
+            resp = client.post(
+                "/sessions/sess-001/steer",
+                json={"text": "one too many", "entryId": "e6"},
+            )
+
+        assert resp.status_code == 429
+
+    def test_rejects_empty_text(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        steer = AsyncMock(return_value=True)
+        with patch("apis.shared.sessions.session_lease.request_session_steer", steer):
+            resp = client.post(
+                "/sessions/sess-001/steer",
+                json={"text": "", "entryId": "e1"},
+            )
+
+        assert resp.status_code == 422
+        steer.assert_not_awaited()
+
+    def test_404_when_the_flag_is_off(self, app, make_user, authenticated_client, monkeypatch):
+        monkeypatch.setenv("MID_TURN_STEERING_ENABLED", "false")
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        steer = AsyncMock(return_value=True)
+        with patch("apis.shared.sessions.session_lease.request_session_steer", steer):
+            resp = client.post(
+                "/sessions/sess-001/steer",
+                json={"text": "hi", "entryId": "e1"},
+            )
+
+        assert resp.status_code == 404
+        steer.assert_not_awaited()
+
+    def test_returns_401_for_unauthenticated(self, app, unauthenticated_client):
+        client = unauthenticated_client(app)
+        resp = client.post(
+            "/sessions/sess-001/steer",
+            json={"text": "hi", "entryId": "e1"},
+        )
+        assert resp.status_code == 401
+
+
+class TestWithdrawSteer:
+    """DELETE /sessions/{session_id}/steer/{entry_id} — the user un-queued it."""
+
+    def test_withdraws_the_entry(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        remove = AsyncMock(return_value=True)
+        with patch("apis.shared.sessions.session_lease.remove_steer_entry", remove):
+            resp = client.delete("/sessions/sess-001/steer/e1")
+
+        assert resp.status_code == 204
+        remove.assert_awaited_once_with("sess-001", user.user_id, "e1")
+
+    def test_unknown_entry_still_returns_204(self, app, make_user, authenticated_client):
+        """The user's intent — don't send that — is satisfied either way."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.shared.sessions.session_lease.remove_steer_entry",
+            AsyncMock(return_value=False),
+        ):
+            resp = client.delete("/sessions/sess-001/steer/nope")
+
+        assert resp.status_code == 204
+
+    def test_a_failed_withdrawal_is_not_a_500(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.shared.sessions.session_lease.remove_steer_entry",
+            AsyncMock(side_effect=RuntimeError("dynamo down")),
+        ):
+            resp = client.delete("/sessions/sess-001/steer/e1")
+
+        assert resp.status_code == 204
+
+    def test_returns_401_for_unauthenticated(self, app, unauthenticated_client):
+        client = unauthenticated_client(app)
+        assert client.delete("/sessions/sess-001/steer/e1").status_code == 401
 
 
 class TestMarkSessionRead:
