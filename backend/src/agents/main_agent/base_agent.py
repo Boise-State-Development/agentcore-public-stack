@@ -13,6 +13,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from agents.main_agent.core import ModelConfig, SystemPromptBuilder, AgentFactory
 from agents.main_agent.session import SessionFactory
 from agents.main_agent.session.hooks import (
+    SteeringHook,
     StopHook,
     OAuthConsentHook,
     MCPExternalApprovalHook,
@@ -194,6 +195,7 @@ class BaseAgent(ABC):
         interrupt_responses: Optional[List[Dict[str, Any]]] = None,
         continue_truncated: bool = False,
         turn_agent_id: Optional[str] = None,
+        turn_lease: Any = None,
     ) -> AsyncGenerator[str, None]:
         """Stream agent responses. Subclasses must implement.
 
@@ -272,6 +274,8 @@ class BaseAgent(ABC):
 
         Includes:
         - StopHook: Always enabled, cancels tool execution on user stop
+        - SteeringHook: Injects a follow-up queued mid-turn at the next tool
+          boundary
         - OAuthConsentHook: Pauses the agent (Strands interrupt) when an
           OAuth-gated MCP tool is about to run without a cached token
         - Approval hooks: Gate dangerous operations for user confirmation
@@ -283,6 +287,18 @@ class BaseAgent(ABC):
 
         # Always-on: session cancellation
         hooks.append(StopHook(self.session_manager))
+
+        # Mid-turn steering: a follow-up the user typed while this turn was
+        # streaming is injected into the tool-result message at the next tool
+        # boundary. Registered unconditionally and inert unless the turn's
+        # lease carries a queued entry; MID_TURN_STEERING_ENABLED=false makes
+        # it return immediately. See docs/specs/mid-turn-steering.md.
+        # Held on the wrapper so the stream coordinator can drain the
+        # injections it confirmed and emit `steering_applied` for each. The
+        # hook itself holds no per-turn state beyond that ack — the lease is
+        # read off the session manager every boundary.
+        self.steering_hook = SteeringHook(self.session_manager)
+        hooks.append(self.steering_hook)
 
         # OAuth consent gate for external MCP tools. Registered unconditionally;
         # the hook is a no-op for tools that don't have a registered provider.

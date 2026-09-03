@@ -90,6 +90,7 @@ class ChatAgent(BaseAgent):
         interrupt_responses: Optional[List[Dict[str, Any]]] = None,
         continue_truncated: bool = False,
         turn_agent_id: Optional[str] = None,
+        turn_lease: Any = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -116,6 +117,11 @@ class ChatAgent(BaseAgent):
                 event loop re-runs against restored history whose tail is the
                 truncated assistant message — the model continues it
                 (assistant-prefill) instead of answering a new instruction.
+            turn_lease: This turn's single-flight `SessionLease`, which doubles
+                as the mid-turn steering inbox. Passed per turn rather than read
+                off the agent for the same reason as `turn_agent_id`: the agent
+                instance is cached across turns, so per-turn state must never
+                live on it (#741/#751).
 
         Yields:
             str: SSE formatted events
@@ -149,5 +155,6 @@ class ChatAgent(BaseAgent):
             citations=citations,
             original_message=original_message,
             turn_agent_id=turn_agent_id,
+            turn_lease=turn_lease,
         ):
             yield event

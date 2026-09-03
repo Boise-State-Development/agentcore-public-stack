@@ -2629,6 +2629,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # cached and shared across turns, so per-turn state must never live on it
                 # (see #741/#751).
                 turn_agent_id=input_data.rag_assistant_id,
+                # This turn's lease doubles as the mid-turn steering inbox
+                # (docs/specs/mid-turn-steering.md). Passed per turn for the
+                # same reason as turn_agent_id — the agent is cached, the lease
+                # is not. None for preview sessions and the local
+                # no-DynamoDB path, where steering is simply inert.
+                turn_lease=session_lease,
             ):
                 yield event
                 # Interleave the finished title between agent events (same

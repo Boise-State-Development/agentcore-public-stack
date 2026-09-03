@@ -343,8 +343,10 @@ class VoiceAgent(BaseAgent):
         original_message: Optional[str] = None,
         interrupt_responses: Optional[List] = None,
         # Accepted only to satisfy the base signature. Voice has no `@`-mention
-        # surface, so there is no turn-scoped Agent to record (#756).
+        # surface, so there is no turn-scoped Agent to record (#756), and no
+        # composer to steer from mid-turn.
         turn_agent_id: Optional[str] = None,
+        turn_lease: Any = None,
     ) -> AsyncGenerator[str, None]:
         """
         BaseAgent interface compatibility — not used for voice mode.
