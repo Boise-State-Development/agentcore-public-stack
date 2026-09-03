@@ -182,8 +182,7 @@ const URL_PATTERN = /^https?:\/\/.+/i;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../styles/theme.css";
 
     .markdown-body ::ng-deep a {
       color: var(--color-primary-500);

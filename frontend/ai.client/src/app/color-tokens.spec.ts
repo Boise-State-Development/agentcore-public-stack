@@ -5,7 +5,12 @@
 // This spec scans src/app/**/*.{ts,html} for raw Tailwind palette utilities and
 // asserts they appear only in explicitly pending palettes. Neutral colors
 // (gray, slate, zinc, neutral, stone, white, black) are always allowed per
-// .kiro/steering/tailwind-colors.md — they are not part of the themed surface.
+// .kiro/steering/tailwind-colors.md — not because they're unthemed (as of the
+// surfaces feature, `gray-*` and `white` ARE rebrandable, remapped at build
+// time from `Brand_Surface` in brand.config.ts — see
+// src/branding/README.md section 4), but because they don't need mapping to
+// a *named* token the way brand/status/category colors do: `gray-*`/`white`
+// already read through the themed ramp directly.
 //
 // A failure here means:
 // 1. A raw palette utility (e.g., bg-red-600) crept into application code.

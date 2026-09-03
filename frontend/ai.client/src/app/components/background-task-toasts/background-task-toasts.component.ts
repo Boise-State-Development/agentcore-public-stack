@@ -90,8 +90,7 @@ import { BackgroundTask, BackgroundTaskService } from '../../services/background
     </div>
   `,
   styles: `
-    @import "tailwindcss";
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../styles/theme.css";
 
     .bg-toast-enter {
       animation: bg-toast-in 260ms cubic-bezier(0.16, 1, 0.3, 1);

@@ -99,9 +99,8 @@ import { ToastService, ToastType } from '../../services/toast/toast.service';
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     /* Toast enter animation */
     [role="alert"] {

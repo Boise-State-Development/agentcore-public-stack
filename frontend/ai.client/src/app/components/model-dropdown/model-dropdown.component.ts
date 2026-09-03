@@ -111,9 +111,8 @@ import { ManagedModel } from '../../admin/manage-models/models/managed-model.mod
     </div>
   `,
   styles: `
-@import "tailwindcss";
+@reference "../../../styles/theme.css";
 
-@custom-variant dark (&:where(.dark, .dark *));
 
 @keyframes fade-in {
   from {

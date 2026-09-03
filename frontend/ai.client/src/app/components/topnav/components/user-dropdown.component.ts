@@ -213,10 +213,7 @@ export interface User {
     </div>
   `,
   styles: `
-
-@import "tailwindcss";
-
-@custom-variant dark (&:where(.dark, .dark *));
+@reference "../../../../styles/theme.css";
 
     @keyframes fade-in {
       from {

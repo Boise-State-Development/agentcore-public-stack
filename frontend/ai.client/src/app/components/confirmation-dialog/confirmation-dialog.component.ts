@@ -139,9 +139,8 @@ export interface ConfirmationDialogData {
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     /* Backdrop fade-in animation */
     .dialog-backdrop {

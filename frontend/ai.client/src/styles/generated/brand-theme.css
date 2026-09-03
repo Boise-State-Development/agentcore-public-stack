@@ -6,12 +6,13 @@
  * automatically by the `prebuild` / `prestart` npm scripts.
  *
  * Each role gets an 11-step scale plus two contrast-guaranteed aliases:
- *   --color-{role}-accessible       WCAG AA (4.5:1) against white. Use for
- *                                   solid fills with white text, and for
- *                                   brand-colored text on light surfaces.
- *   --color-{role}-accessible-dark  WCAG AA against the dark-theme surface.
- *                                   Use for the `dark:` half of the same
- *                                   call site.
+ *   --color-{role}-accessible       WCAG AA (4.5:1) against the resolved
+ *                                   light surface. Use for solid fills with
+ *                                   white text, and for brand-colored text
+ *                                   on light surfaces.
+ *   --color-{role}-accessible-dark  WCAG AA against the resolved dark
+ *                                   surface. Use for the `dark:` half of
+ *                                   the same call site.
  *
  * The aliases only move lightness — the configured hue and chroma are
  * preserved — so a brand color that is already dark enough is emitted
@@ -54,7 +55,7 @@
     --color-tertiary-950: oklch(from #0072ce calc(l - 0.3) c h);
     --color-primary-accessible: #0033a0;
     --color-primary-accessible-dark: oklch(from #0033a0 calc(l + 0.23) c h);
-    --color-secondary-accessible: #d64309;
+    --color-secondary-accessible: oklch(from #d64309 calc(l - 0.015) c h);
     --color-secondary-accessible-dark: oklch(from #d64309 calc(l + 0.035) c h);
     --color-tertiary-accessible: #0072ce;
     --color-tertiary-accessible-dark: oklch(from #0072ce calc(l + 0.055) c h);

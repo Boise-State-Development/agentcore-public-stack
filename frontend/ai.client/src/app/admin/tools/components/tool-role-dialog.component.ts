@@ -163,9 +163,8 @@ export type ToolRoleDialogResult = string[] | undefined;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     /* Backdrop fade-in animation */
     .dialog-backdrop {

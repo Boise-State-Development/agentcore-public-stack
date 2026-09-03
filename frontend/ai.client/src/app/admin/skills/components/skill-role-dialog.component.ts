@@ -144,9 +144,8 @@ export type SkillRoleDialogResult = string[] | undefined;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;

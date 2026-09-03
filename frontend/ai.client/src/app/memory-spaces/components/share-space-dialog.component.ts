@@ -210,8 +210,7 @@ interface GrantRow {
     </div>
   `,
   styles: `
-    @import "tailwindcss";
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../styles/theme.css";
     .dialog-backdrop { animation: backdrop-fade-in 200ms ease-out; }
     @keyframes backdrop-fade-in { from { opacity: 0; } to { opacity: 1; } }
     .dialog-panel { animation: dialog-fade-in-up 200ms ease-out; }

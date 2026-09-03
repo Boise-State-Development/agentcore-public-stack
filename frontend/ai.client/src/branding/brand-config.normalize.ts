@@ -17,7 +17,7 @@
  * authoritative behavior.
  */
 
-import type { BrandColors, BrandConfig, BrandConfigError, BrandLogoAssets } from './brand.types';
+import type { BrandColors, BrandConfig, BrandConfigError, BrandLogoAssets, BrandSurfaces } from './brand.types';
 import {
   DEFAULT_ALT_LABEL,
   DEFAULT_COLORS,
@@ -25,10 +25,27 @@ import {
   DEFAULT_GREETING_TEMPLATES,
   DEFAULT_LOGO,
   DEFAULT_PAGE_TITLE,
+  DEFAULT_SURFACES,
 } from './brand.defaults';
+import { HEX_COLOR_REGEX, hexToOklch, normalizeHex } from '../../scripts/branding/color-math';
 
 /** Accepts a 6-digit hex color with an optional leading '#' (Requirement 5.1, 8.3). */
-const HEX_COLOR_PATTERN = /^#?[0-9a-fA-F]{6}$/;
+const HEX_COLOR_PATTERN = HEX_COLOR_REGEX;
+
+/**
+ * Validation bands for each surface anchor, in OKLCH. `raised` additionally
+ * requires lightness >= `light`'s lightness (a cross-field check applied
+ * separately in normalizeSurfaces), since cards must sit above the page.
+ *
+ * Exported so the build-time generators (via `resolveSurfaces` below) and
+ * any test asserting on the bands can quote this table rather than
+ * re-typing it.
+ */
+export const SURFACE_BANDS: Record<keyof BrandSurfaces, { minL?: number; maxL?: number; maxC: number }> = {
+  light: { minL: 0.9, maxC: 0.04 },
+  raised: { minL: 0.95, maxC: 0.03 },
+  dark: { maxL: 0.32, maxC: 0.05 },
+};
 
 /** Greeting array bounds shared by `greetingTemplates` and `fallbackGreetings` (Requirement 4.1, 4.2). */
 const MIN_GREETING_ENTRIES = 1;
@@ -48,6 +65,7 @@ export interface NormalizedBrandConfig {
   fallbackGreetings: string[];
   colors: BrandColors;
   pageTitle: string;
+  surfaces: BrandSurfaces;
   errors: BrandConfigError[];
 }
 
@@ -209,6 +227,160 @@ export function normalizeColors(
 }
 
 /**
+ * Normalize a single surface anchor role (`light`, `dark`, or `raised`).
+ *
+ * Valid: a 6-digit hex value with an optional leading '#' (like
+ * `normalizeColorRole`) AND within that role's OKLCH lightness/chroma
+ * band (see `SURFACE_BANDS`) — a page background must stay light/dark
+ * enough, and low-chroma enough, to keep the rest of the neutral ramp's
+ * character intact. Invalid or out-of-band values fall back to the
+ * `DEFAULT_SURFACES` hex for that role (never throw), and record a
+ * `BrandConfigError` naming the rejection reason.
+ */
+export function normalizeSurfaceRole(
+  role: keyof BrandSurfaces,
+  value: unknown,
+  errors: BrandConfigError[],
+): string {
+  if (typeof value !== 'string' || !HEX_COLOR_PATTERN.test(value)) {
+    errors.push({
+      field: `surfaces.${role}`,
+      value: typeof value === 'string' ? value : undefined,
+      reason: `surfaces.${role} must be a 6-digit hexadecimal value with an optional leading '#'`,
+    });
+    return DEFAULT_SURFACES[role];
+  }
+
+  const band = SURFACE_BANDS[role];
+  const { l, c } = hexToOklch(value);
+
+  if (band.minL !== undefined && l < band.minL) {
+    errors.push({
+      field: `surfaces.${role}`,
+      value,
+      reason: `surfaces.${role} must have an OKLCH lightness of at least ${band.minL} (got ${l.toFixed(3)})`,
+    });
+    return DEFAULT_SURFACES[role];
+  }
+
+  if (band.maxL !== undefined && l > band.maxL) {
+    errors.push({
+      field: `surfaces.${role}`,
+      value,
+      reason: `surfaces.${role} must have an OKLCH lightness of at most ${band.maxL} (got ${l.toFixed(3)})`,
+    });
+    return DEFAULT_SURFACES[role];
+  }
+
+  if (c > band.maxC) {
+    errors.push({
+      field: `surfaces.${role}`,
+      value,
+      reason: `surfaces.${role} must have an OKLCH chroma of at most ${band.maxC} (got ${c.toFixed(3)})`,
+    });
+    return DEFAULT_SURFACES[role];
+  }
+
+  return value;
+}
+
+/**
+ * Normalize the `surfaces` field (light, dark, raised anchors).
+ *
+ * Each field is validated independently via `normalizeSurfaceRole` first,
+ * then a cross-field check enforces `raised` lightness >= `light`
+ * lightness (a card must never sit below the page it floats on). Only
+ * `raised` is rejected by the cross-field check, so a bad `light` value
+ * doesn't spuriously reject an otherwise-valid `raised` value.
+ */
+export function normalizeSurfaces(
+  surfaces: Partial<BrandSurfaces> | null | undefined,
+  errors: BrandConfigError[],
+): BrandSurfaces {
+  const safeSurfaces = surfaces ?? {};
+  const light = normalizeSurfaceRole('light', safeSurfaces.light, errors);
+  const dark = normalizeSurfaceRole('dark', safeSurfaces.dark, errors);
+  let raised = normalizeSurfaceRole('raised', safeSurfaces.raised, errors);
+
+  if (hexToOklch(raised).l < hexToOklch(light).l) {
+    errors.push({
+      field: 'surfaces.raised',
+      value: raised,
+      reason: `surfaces.raised must have an OKLCH lightness >= surfaces.light's lightness (raised: ${hexToOklch(raised).l.toFixed(3)}, light: ${hexToOklch(light).l.toFixed(3)})`,
+    });
+    raised = DEFAULT_SURFACES.raised;
+  }
+
+  return { light, dark, raised };
+}
+
+/**
+ * Log, for each surface role, whether the configured value was accepted
+ * or rejected — so acceptance is exactly as visible in the console as
+ * rejection already is via the `BrandConfigError`s pushed by
+ * `normalizeSurfaceRole`. Without this, a forker who edits `surfaces` to
+ * an in-band value sees no console output at all (no error, because
+ * there is nothing to reject), which looks identical to "the edit never
+ * ran".
+ *
+ * Called by each of the three build-time generators' `run()` after
+ * resolving surfaces, and takes the already-computed `errors` array so
+ * it never re-validates — it just reports what `resolveSurfaces` already
+ * decided.
+ */
+export function logSurfaceAcceptance(
+  generatorLabel: string,
+  rawSurfaces: Partial<BrandSurfaces> | null | undefined,
+  errors: readonly BrandConfigError[],
+): void {
+  const safeSurfaces = rawSurfaces ?? {};
+  const rejectedRoles = new Set(
+    errors.filter((e) => e.field.startsWith('surfaces.')).map((e) => e.field.slice('surfaces.'.length)),
+  );
+
+  for (const role of ['light', 'dark', 'raised'] as const) {
+    if (rejectedRoles.has(role)) {
+      // Already logged as a rejection via the error loop above — no
+      // separate "accepted" line, so the two states aren't printed for
+      // the same role.
+      continue;
+    }
+    const configuredValue = safeSurfaces[role];
+    console.log(`[${generatorLabel}] surfaces.${role}: ACCEPTED "${configuredValue}"`);
+  }
+}
+
+/**
+ * Resolve a (possibly partial/invalid) `surfaces` input to normalized-hex
+ * anchors, for the build-time generators (`generateSurfaceTheme`,
+ * `generateSurfaceColors`, `generateBrandTheme`).
+ *
+ * This is the one place the build-time path and the runtime path
+ * (`BrandingService`, via `normalizeBrandConfig`) share the same
+ * hex-format + OKLCH band + `raised >= light` validation — see
+ * `normalizeSurfaces` above, which this delegates to unchanged.
+ *
+ * The one difference from `normalizeSurfaces` itself: each resolved role
+ * is passed through `normalizeHex` so it always carries a leading `#`.
+ * `normalizeSurfaces` deliberately returns the forker's value verbatim
+ * (a bare `f9fafb` stays bare) because the runtime path and its spec
+ * depend on that; the generators need a leading `#` because
+ * `generateSurfaceRamp`'s zero-diff fast path and `generateWhiteOverride`
+ * compare and emit normalized hex.
+ */
+export function resolveSurfaces(
+  surfaces: Partial<BrandSurfaces> | null | undefined,
+  errors: BrandConfigError[],
+): BrandSurfaces {
+  const resolved = normalizeSurfaces(surfaces, errors);
+  return {
+    light: normalizeHex(resolved.light),
+    dark: normalizeHex(resolved.dark),
+    raised: normalizeHex(resolved.raised),
+  };
+}
+
+/**
  * Normalize `pageTitle` to a usable browser page title.
  *
  * Valid: a non-empty string of 1-200 characters. Invalid values fall back
@@ -257,6 +429,7 @@ export function normalizeBrandConfig(config: Partial<BrandConfig> | null | undef
   );
   const colors = normalizeColors(safeConfig.colors, errors);
   const pageTitle = normalizePageTitle(safeConfig.pageTitle, errors);
+  const surfaces = normalizeSurfaces(safeConfig.surfaces, errors);
 
-  return { logo, appName, greetingTemplates, fallbackGreetings, colors, pageTitle, errors };
+  return { logo, appName, greetingTemplates, fallbackGreetings, colors, pageTitle, surfaces, errors };
 }

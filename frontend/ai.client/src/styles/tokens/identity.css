@@ -120,7 +120,10 @@
    * Steps used: 50, 100, 300, 400, 600, 700, 900, 950.
    *
    * Plain-text and unknown types deliberately have no token: those call
-   * sites already use neutrals (gray-*), which are not rebrandable.
+   * sites already use neutrals (gray-*), which need no separate identity
+   * token — they read through the brand-configurable surface ramp
+   * directly (see src/branding/README.md section 4), and a "plain text
+   * file" identity has no third-party/category meaning to distinguish.
    * ================================================================== */
 
   /* PDF (Tailwind rose) */

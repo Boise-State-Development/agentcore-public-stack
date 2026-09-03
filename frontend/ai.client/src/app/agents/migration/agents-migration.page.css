@@ -5,9 +5,7 @@
    shell rather than replacing it. One decorated panel (the hero), then ordinary
    surfaces; a page that announced itself in every section would read as a takeover. */
 
-@import "tailwindcss";
-
-@custom-variant dark (&:where(.dark, .dark *));
+@reference "../../../styles/theme.css";
 
 /* ---------- Hero: graph paper over a corner wash ---------- */
 

@@ -19,6 +19,7 @@ import {
   DEFAULT_LOGO,
   DEFAULT_GREETING_TEMPLATES,
   DEFAULT_FALLBACK_GREETINGS,
+  DEFAULT_SURFACES,
 } from './brand.defaults';
 
 describe('Default_Branding golden regression (logo paths + greetings)', () => {
@@ -53,5 +54,17 @@ describe('Default_Branding golden regression (logo paths + greetings)', () => {
       'What can I do for you?',
       "Let's get started!",
     ]);
+  });
+
+  it('DEFAULT_SURFACES matches the hex round-trips of Tailwind gray-50, gray-900, and white', () => {
+    // Pinned so the surfaces feature's zero-diff property (see
+    // generate-surface-theme.spec.ts) has a stable, committed anchor: any
+    // accidental edit to these hexes would silently change the derived
+    // ramp at default config.
+    expect(DEFAULT_SURFACES).toEqual({
+      light: '#f9fafb',
+      dark: '#101828',
+      raised: '#ffffff',
+    });
   });
 });

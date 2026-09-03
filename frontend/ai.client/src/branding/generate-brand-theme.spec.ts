@@ -15,7 +15,7 @@ import {
   type BrandColorRole,
 } from '../../scripts/branding/generate-brand-theme';
 import type { BrandConfig } from './brand.types';
-import { DEFAULT_COLORS } from './brand.defaults';
+import { DEFAULT_COLORS, DEFAULT_SURFACES } from './brand.defaults';
 
 /**
  * Arbitrary for a valid 6-digit hex color input: 6 hex digits, an optional
@@ -139,6 +139,12 @@ const arbBrandConfig: fc.Arbitrary<BrandConfig> = fc.record({
     primary: arbValidHex,
     secondary: arbValidHex,
     tertiary: arbValidHex,
+  }),
+  pageTitle: fc.string({ minLength: 1, maxLength: 20 }),
+  surfaces: fc.record({
+    light: fc.constant(DEFAULT_SURFACES.light),
+    dark: fc.constant(DEFAULT_SURFACES.dark),
+    raised: fc.constant(DEFAULT_SURFACES.raised),
   }),
 });
 

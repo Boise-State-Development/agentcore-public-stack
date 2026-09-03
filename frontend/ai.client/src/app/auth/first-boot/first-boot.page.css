@@ -3,9 +3,7 @@
    system. Class names are component-scoped (Emulated view encapsulation)
    so they don't collide with the login page's identical names. */
 
-@import "tailwindcss";
-
-@custom-variant dark (&:where(.dark, .dark *));
+@reference "../../../styles/theme.css";
 
 /* ---------- Background canvas ---------- */
 .login-shell {

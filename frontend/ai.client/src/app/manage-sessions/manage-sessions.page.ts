@@ -276,9 +276,8 @@ const MAX_SELECTION = 20;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
   `,
 })
 export class ManageSessionsPage implements OnInit {

@@ -7,15 +7,17 @@
 // criteria being validated.
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { normalizeBrandConfig } from './brand-config.normalize';
-import type { BrandConfig } from './brand.types';
+import { normalizeBrandConfig, resolveSurfaces } from './brand-config.normalize';
+import type { BrandConfig, BrandSurfaces } from './brand.types';
 import {
   DEFAULT_ALT_LABEL,
   DEFAULT_COLORS,
   DEFAULT_FALLBACK_GREETINGS,
   DEFAULT_GREETING_TEMPLATES,
   DEFAULT_LOGO,
+  DEFAULT_SURFACES,
 } from './brand.defaults';
+import { hexToOklch } from '../../scripts/branding/color-math';
 
 /** Mirrors the hex acceptance rule used by brand-config.normalize.ts (Requirement 5.1, 8.3). */
 const HEX_COLOR_PATTERN = /^#?[0-9a-fA-F]{6}$/;
@@ -32,6 +34,24 @@ function isValidAppName(value: unknown): value is string {
 
 function isValidHex(value: unknown): value is string {
   return typeof value === 'string' && HEX_COLOR_PATTERN.test(value);
+}
+
+/** Mirrors SURFACE_BANDS in brand-config.normalize.ts. */
+const SURFACE_BANDS: Record<keyof BrandSurfaces, { minL?: number; maxL?: number; maxC: number }> = {
+  light: { minL: 0.9, maxC: 0.04 },
+  raised: { minL: 0.95, maxC: 0.03 },
+  dark: { maxL: 0.32, maxC: 0.05 },
+};
+
+/** Mirrors normalizeSurfaceRole's per-field validity check (hex format + band), ignoring the cross-field raised>=light check. */
+function isValidSurfaceRole(role: keyof BrandSurfaces, value: unknown): value is string {
+  if (typeof value !== 'string' || !HEX_COLOR_PATTERN.test(value)) return false;
+  const band = SURFACE_BANDS[role];
+  const { l, c } = hexToOklch(value);
+  if (band.minL !== undefined && l < band.minL) return false;
+  if (band.maxL !== undefined && l > band.maxL) return false;
+  if (c > band.maxC) return false;
+  return true;
 }
 
 /** Computes the expected normalized greeting array and whether defaulting/dropping occurred. */
@@ -140,6 +160,21 @@ const arbColors = fc.oneof(
   ),
 );
 
+/**
+ * surfaces: undefined, {}, invalid-format hex, or any well-formed hex
+ * (deliberately including both in-band and out-of-band well-formed hex —
+ * `isValidSurfaceRole` models exactly which ones the normalizer accepts).
+ */
+const arbSurfaceRoleValue = fc.oneof(fc.constant(undefined), fc.constant(null), arbInvalidHex, arbValidHex);
+const arbSurfaces = fc.oneof(
+  fc.constant(undefined),
+  fc.constant(null),
+  fc.record(
+    { light: arbSurfaceRoleValue, dark: arbSurfaceRoleValue, raised: arbSurfaceRoleValue },
+    { requiredKeys: [] },
+  ),
+);
+
 /** The whole config: null/undefined, or a partial/possibly-invalid BrandConfig. */
 const arbBrandConfigInput: fc.Arbitrary<Partial<BrandConfig> | null | undefined> = fc.oneof(
   fc.constant(undefined),
@@ -151,6 +186,7 @@ const arbBrandConfigInput: fc.Arbitrary<Partial<BrandConfig> | null | undefined>
       greetingTemplates: arbGreetingList,
       fallbackGreetings: arbGreetingList,
       colors: arbColors,
+      surfaces: arbSurfaces,
     },
     { requiredKeys: [] },
   ) as fc.Arbitrary<Partial<BrandConfig>>,
@@ -244,8 +280,144 @@ describe('normalizeBrandConfig', () => {
             expect(result.errors.some((e) => e.field === `colors.${role}`)).toBe(true);
           }
         });
+
+        // --- surfaces.{light,dark,raised} ---
+        // light/dark are independently normalized (no cross-field dependency).
+        (['light', 'dark'] as const).forEach((role) => {
+          const rawSurface = (raw as Partial<BrandConfig>).surfaces?.[role];
+          const surfaceValid = isValidSurfaceRole(role, rawSurface);
+
+          expect(typeof result.surfaces[role]).toBe('string');
+          expect(HEX_COLOR_PATTERN.test(result.surfaces[role])).toBe(true);
+          expect(result.surfaces[role]).toBe(surfaceValid ? rawSurface : DEFAULT_SURFACES[role]);
+
+          if (!surfaceValid) {
+            expect(result.errors.some((e) => e.field === `surfaces.${role}`)).toBe(true);
+          }
+        });
+
+        // raised additionally depends on the resolved `light` value via the
+        // cross-field check (raised lightness >= light lightness), so it is
+        // asserted against the *resolved* light value, not the raw input.
+        const rawRaised = (raw as Partial<BrandConfig>).surfaces?.raised;
+        const raisedValidStandalone = isValidSurfaceRole('raised', rawRaised);
+        expect(typeof result.surfaces.raised).toBe('string');
+        expect(HEX_COLOR_PATTERN.test(result.surfaces.raised)).toBe(true);
+
+        if (!raisedValidStandalone) {
+          expect(result.surfaces.raised).toBe(DEFAULT_SURFACES.raised);
+          expect(result.errors.some((e) => e.field === 'surfaces.raised')).toBe(true);
+        } else if (hexToOklch(rawRaised as string).l < hexToOklch(result.surfaces.light).l) {
+          expect(result.surfaces.raised).toBe(DEFAULT_SURFACES.raised);
+          expect(result.errors.some((e) => e.field === 'surfaces.raised')).toBe(true);
+        } else {
+          expect(result.surfaces.raised).toBe(rawRaised);
+        }
       }),
       { numRuns: 100 },
     );
+  });
+});
+
+// resolveSurfaces.spec — unit tests for the build-time adapter (task 4.3).
+//
+// resolveSurfaces is the one function the build-time generators
+// (generateSurfaceTheme, generateSurfaceColors, generateBrandTheme) and
+// BrandingService's normalizeBrandConfig ultimately share for band
+// validation. These tests pin its contract directly: hex-format + OKLCH
+// band validation identical to normalizeSurfaces, but with every resolved
+// role normalized to carry a leading '#'.
+describe('resolveSurfaces', () => {
+  it('resolves in-band values with a leading # unchanged (aside from normalization)', () => {
+    const errors: Parameters<typeof resolveSurfaces>[1] = [];
+    const result = resolveSurfaces({ light: '#fdfcf8', dark: '#0f1420', raised: '#fffdf9' }, errors);
+    expect(result).toEqual({ light: '#fdfcf8', dark: '#0f1420', raised: '#fffdf9' });
+    expect(errors).toEqual([]);
+  });
+
+  it('adds a leading # to a bare in-band hex (no leading #)', () => {
+    const errors: Parameters<typeof resolveSurfaces>[1] = [];
+    const result = resolveSurfaces({ light: 'fdfcf8', dark: '0f1420', raised: 'fffdf9' }, errors);
+    expect(result).toEqual({ light: '#fdfcf8', dark: '#0f1420', raised: '#fffdf9' });
+    expect(errors).toEqual([]);
+  });
+
+  it('accepts mixed-case hex', () => {
+    const errors: Parameters<typeof resolveSurfaces>[1] = [];
+    const result = resolveSurfaces({ light: '#FdFcF8', dark: '#0F1420', raised: '#FFFDF9' }, errors);
+    expect(result).toEqual({ light: '#FdFcF8', dark: '#0F1420', raised: '#FFFDF9' });
+    expect(errors).toEqual([]);
+  });
+
+  it('falls back to DEFAULT_SURFACES.light and records an error for malformed hex', () => {
+    const errors: Parameters<typeof resolveSurfaces>[1] = [];
+    const result = resolveSurfaces({ light: 'not-a-hex', dark: '#0f1420', raised: '#fffdf9' }, errors);
+    expect(result.light).toBe('#f9fafb');
+    expect(errors.some((e) => e.field === 'surfaces.light')).toBe(true);
+  });
+
+  it('falls back and records an error for a wrong-type value', () => {
+    const errors: Parameters<typeof resolveSurfaces>[1] = [];
+    const result = resolveSurfaces({ light: 123 as unknown as string, dark: '#0f1420', raised: '#fffdf9' }, errors);
+    expect(result.light).toBe('#f9fafb');
+    expect(errors.some((e) => e.field === 'surfaces.light')).toBe(true);
+  });
+
+  it('falls back for an absent field', () => {
+    const errors: Parameters<typeof resolveSurfaces>[1] = [];
+    const result = resolveSurfaces({ dark: '#0f1420', raised: '#fffdf9' }, errors);
+    expect(result.light).toBe('#f9fafb');
+    expect(errors.some((e) => e.field === 'surfaces.light')).toBe(true);
+  });
+
+  it('falls back to all three defaults for an absent surfaces object', () => {
+    const errors: Parameters<typeof resolveSurfaces>[1] = [];
+    const result = resolveSurfaces(undefined, errors);
+    expect(result).toEqual({ light: '#f9fafb', dark: '#101828', raised: '#ffffff' });
+  });
+
+  it('validates each role independently: one invalid role does not affect the other two valid ones', () => {
+    const errors: Parameters<typeof resolveSurfaces>[1] = [];
+    const result = resolveSurfaces({ light: 'garbage', dark: '#0f1420', raised: '#fffdf9' }, errors);
+    expect(result.light).toBe('#f9fafb'); // fell back
+    expect(result.dark).toBe('#0f1420'); // preserved
+    expect(result.raised).toBe('#fffdf9'); // preserved
+    expect(errors).toHaveLength(1);
+    expect(errors[0].field).toBe('surfaces.light');
+  });
+
+  it('accepts each band boundary just inside and rejects just outside', () => {
+    // light: minL 0.9, maxC 0.04. Just inside: L=0.90, C=0.03 -> in band.
+    // hexToOklch/oklchToSrgb round trips are used elsewhere in the spec
+    // suite for exact boundary construction; here a known in-band/out-of-
+    // band pair from the existing surface generator spec fixtures is used
+    // instead, since resolveSurfaces delegates its band math verbatim to
+    // normalizeSurfaceRole (already covered by the property test above).
+    const errorsInBand: Parameters<typeof resolveSurfaces>[1] = [];
+    const inBand = resolveSurfaces({ light: '#fdfcf8', dark: '#0f1420', raised: '#fffdf9' }, errorsInBand);
+    expect(errorsInBand).toEqual([]);
+    expect(inBand.light).toBe('#fdfcf8');
+
+    const errorsOutOfBand: Parameters<typeof resolveSurfaces>[1] = [];
+    const outOfBand = resolveSurfaces({ light: '#00ff2a', dark: '#0f1420', raised: '#fffdf9' }, errorsOutOfBand);
+    expect(errorsOutOfBand.some((e) => e.field === 'surfaces.light')).toBe(true);
+    expect(outOfBand.light).toBe('#f9fafb');
+  });
+
+  it('applies the raised < light cross-field check and falls back raised to the default', () => {
+    const errors: Parameters<typeof resolveSurfaces>[1] = [];
+    // light and raised are each independently in-band, but raised is
+    // darker than light, which violates the cross-field check.
+    const result = resolveSurfaces({ light: '#fffdf9', dark: '#0f1420', raised: '#fdfcf8' }, errors);
+    expect(result.raised).toBe('#ffffff');
+    expect(errors.some((e) => e.field === 'surfaces.raised')).toBe(true);
+  });
+
+  it('resolves the reported out-of-band config to DEFAULT_SURFACES on all three roles', () => {
+    const errors: Parameters<typeof resolveSurfaces>[1] = [];
+    const result = resolveSurfaces({ light: '#00ff2a', dark: '#9900ff', raised: '#009118' }, errors);
+    expect(result).toEqual({ light: '#f9fafb', dark: '#101828', raised: '#ffffff' });
+    expect(errors).toHaveLength(3);
+    expect(errors.map((e) => e.field).sort()).toEqual(['surfaces.dark', 'surfaces.light', 'surfaces.raised']);
   });
 });

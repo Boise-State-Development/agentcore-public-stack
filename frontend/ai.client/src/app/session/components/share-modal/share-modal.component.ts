@@ -221,8 +221,7 @@ type AccessLevel = 'public' | 'specific';
     </div>
   `,
   styles: `
-    @import "tailwindcss";
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../../styles/theme.css";
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;

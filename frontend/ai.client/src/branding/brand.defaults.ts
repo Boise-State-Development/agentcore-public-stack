@@ -11,7 +11,7 @@
  * See design.md "Data Models" and "Default_Branding" for details.
  */
 
-import type { BrandColors, BrandLogoAssets } from './brand.types';
+import type { BrandColors, BrandLogoAssets, BrandSurfaces } from './brand.types';
 
 /** Default light/dark logo paths (served from /public). */
 export const DEFAULT_LOGO: BrandLogoAssets = Object.freeze({
@@ -63,3 +63,20 @@ export const DEFAULT_COLORS: BrandColors = Object.freeze({
 
 /** Default page title. */
 export const DEFAULT_PAGE_TITLE = 'AgentCore';
+
+/**
+ * Default surface anchors — the hex round-trips of Tailwind's own
+ * gray-50, gray-900, and white, so a clean checkout's derived neutral
+ * ramp (see generate-surface-theme.ts) is byte-identical to
+ * TAILWIND_GRAY_RAMP and no pixel changes.
+ *
+ * `light` and `dark` are `hexToOklch`/`oklchToSrgb` round-trips of
+ * Tailwind v4's `--color-gray-50` / `--color-gray-900` (not hand-typed
+ * hex), so the zero-diff property in generate-surface-theme.spec.ts holds
+ * exactly rather than approximately.
+ */
+export const DEFAULT_SURFACES: BrandSurfaces = Object.freeze({
+  light: '#f9fafb',
+  dark: '#101828',
+  raised: '#ffffff',
+});

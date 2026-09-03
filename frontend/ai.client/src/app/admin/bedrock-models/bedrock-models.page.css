@@ -1,7 +1,5 @@
 /* Page-specific styles for Bedrock Models page */
-@import "tailwindcss";
-
-@custom-variant dark (&:where(.dark, .dark *));
+@reference "../../../styles/theme.css";
 
 /* Smooth transitions for hover states */
 button {

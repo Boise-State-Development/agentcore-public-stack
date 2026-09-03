@@ -1,13 +1,10 @@
 /* You can add global styles to this file, and also import other style files */
 
-@import "tailwindcss";
+/* Tailwind + the brand/surface theme overrides live in one shared entry
+   (styles/theme.css) so component stylesheets can @reference the exact
+   same theme this global sheet emits. See styles/theme.css header. */
+@import './styles/theme.css';
 @import '@ctrl/ngx-emoji-mart/picker';
-@import './styles/generated/brand-theme.css';
-/* Non-rebrandable color tokens. See each file's header for the split:
-   state.css = status meaning, identity.css = category identity. */
-@import './styles/tokens/state.css';
-@import './styles/tokens/identity.css';
-@custom-variant dark (&:where(.dark, .dark *));
 
 @font-face {
     font-family: 'InterVariable';
@@ -83,7 +80,7 @@
     }
 
     tr:nth-child(odd) td {
-        background-color: white;
+        background-color: var(--color-white);
     }
 
     tr:nth-child(even) td {

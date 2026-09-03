@@ -48,4 +48,10 @@ describe('Brand_Config shape', () => {
     expect(BRAND_CONFIG.colors.secondary).toMatch(HEX_COLOR_REGEX);
     expect(BRAND_CONFIG.colors.tertiary).toMatch(HEX_COLOR_REGEX);
   });
+
+  it('exposes surfaces.light/dark/raised as valid hex strings', () => {
+    expect(BRAND_CONFIG.surfaces.light).toMatch(HEX_COLOR_REGEX);
+    expect(BRAND_CONFIG.surfaces.dark).toMatch(HEX_COLOR_REGEX);
+    expect(BRAND_CONFIG.surfaces.raised).toMatch(HEX_COLOR_REGEX);
+  });
 });

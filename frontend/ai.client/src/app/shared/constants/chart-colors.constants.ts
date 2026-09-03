@@ -9,7 +9,16 @@
  * - Categorical series (indexed palette): `CHART_COLORS.categoricalPalette`
  * - Semantic series (cost/requests lines): `CHART_COLORS.cost` and `CHART_COLORS.requests`
  * - Chrome/UI elements: `CHART_COLORS.chrome`
+ *
+ * `CHART_CHROME_COLORS` specifically is sourced from the build-time-generated
+ * `surface-colors.ts` (scripts/branding/generate-surface-colors.ts), which
+ * resolves the Brand_Surface anchors (`surfaces.light`/`.dark`/`.raised` in
+ * brand.config.ts) into the same resolved-hex shape — so the admin cost
+ * dashboard and inline chart tooltips adopt a configured surface palette in
+ * both modes, while remaining byte-identical to the historical hand-written
+ * values at Default_Surfaces (see chart-colors-golden.spec.ts).
  */
+import { GENERATED_SURFACE_CHROME_COLORS } from '../../../styles/generated/surface-colors';
 
 /**
  * Categorical palette for indexed series (10 distinct, well-separated colors).
@@ -43,37 +52,10 @@ export const CHART_SERIES_COLORS = {
 /**
  * Chart chrome and UI element colors (backgrounds, text, grids).
  * These are intentionally resolved hex values for direct Chart.js consumption.
+ * Sourced from the generated `GENERATED_SURFACE_CHROME_COLORS` (build-time,
+ * derived from Brand_Surface) rather than hand-written literals.
  */
-export const CHART_CHROME_COLORS = {
-  light: {
-    /** Tooltip/dropdown background */
-    background: '#ffffff' as const,
-    /** Tooltip title text */
-    titleText: '#111827' as const, // gray-900
-    /** Tooltip body text */
-    bodyText: '#4b5563' as const,
-    /** Tooltip border */
-    border: '#e5e7eb' as const, // gray-200
-    /** Axis label text */
-    axisText: '#6b7280' as const, // gray-500
-    /** Grid lines */
-    gridLine: 'rgba(0, 0, 0, 0.1)' as const,
-  },
-  dark: {
-    /** Tooltip/dropdown background */
-    background: '#1f2937' as const, // gray-800
-    /** Tooltip title text */
-    titleText: '#ffffff' as const,
-    /** Tooltip body text */
-    bodyText: '#d1d5db' as const, // gray-300
-    /** Tooltip border */
-    border: '#374151' as const, // gray-700
-    /** Axis label text */
-    axisText: '#9ca3af' as const, // gray-400
-    /** Grid lines */
-    gridLine: 'rgba(255, 255, 255, 0.1)' as const,
-  },
-} as const;
+export const CHART_CHROME_COLORS = GENERATED_SURFACE_CHROME_COLORS;
 
 /**
  * Fill colors for line chart datasets (used with opacity).

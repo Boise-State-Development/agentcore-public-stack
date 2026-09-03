@@ -317,9 +317,8 @@ type SortOrder = 'asc' | 'desc';
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
   `
 })
 export class FileBrowserPage implements OnInit {

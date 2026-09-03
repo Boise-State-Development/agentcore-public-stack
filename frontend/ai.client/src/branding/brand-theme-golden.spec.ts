@@ -15,6 +15,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateBrandTheme } from '../../scripts/branding/generate-brand-theme';
 import { BRAND_CONFIG } from './brand.config';
+import { DEFAULT_SURFACES } from './brand.defaults';
 
 const SPEC_DIR = dirname(fileURLToPath(import.meta.url));
 const GOLDEN_CSS_PATH = resolve(SPEC_DIR, '../styles/generated/brand-theme.css');
@@ -52,6 +53,16 @@ describe('Color_Scale_Generator golden regression (Default_Branding)', () => {
     const { css, errors } = generateBrandTheme(BRAND_CONFIG);
 
     expect(css).toBe(expectedDeclarations);
+    // Once generateBrandTheme applies the surfaces bands (cluster B/C), an
+    // out-of-band live BRAND_CONFIG.surfaces value records a
+    // surfaces.* rejection here too — that is a correct, expected
+    // consequence of Requirement 2.5, not a regression. What this spec
+    // actually guards is that the *colors* path stays clean.
+    expect(errors.some((e) => e.field.startsWith('colors.'))).toBe(false);
+  });
+
+  it('records no errors at all for an explicit Default_Surfaces config', () => {
+    const { errors } = generateBrandTheme({ ...BRAND_CONFIG, surfaces: { ...DEFAULT_SURFACES } });
     expect(errors).toEqual([]);
   });
 });
