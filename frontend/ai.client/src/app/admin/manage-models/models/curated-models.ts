@@ -5,9 +5,17 @@ import { ManagedModelFormData, ModelProvider } from './managed-model.model';
  * one-click create a fully-configured managed model — including pricing and
  * per-param specs — plus a small amount of presentation metadata for the card.
  *
- * NOTE — Pricing and inference-profile IDs reflect Anthropic's published
- * pricing as of 2026-05. Verify against AWS Bedrock + Anthropic docs before
- * merging this PR, and bump the IDs when newer model versions ship.
+ * NOTE — Claude rates below were read from the **AWS Price List API**
+ * (`AmazonBedrockFoundationModels`, us-west-2, published 2026-09-01), not the
+ * pricing page. Re-verify there when bumping a model id:
+ *
+ *   aws pricing get-products --region us-east-1 \
+ *     --service-code AmazonBedrockFoundationModels \
+ *     --filters Type=TERM_MATCH,Field=regionCode,Value=us-west-2
+ *
+ * Newer models publish `*_tokens_standard` usagetypes; older ones publish
+ * `*TokenCount`. A query written for one shape silently returns nothing for
+ * the other — match both, or a model looks unpriced when it is merely renamed.
  */
 export interface CuratedModel {
   /** Stable key for tracking + tests. Not persisted on the model itself. */
@@ -16,6 +24,16 @@ export interface CuratedModel {
   tagline: string;
   /** Short capability badges (e.g. 'Extended thinking', 'Vision'). */
   capabilities: string[];
+  /**
+   * Which AWS pricing tier `template.modelId` actually resolves to. A `us.*` id
+   * is a Regional (CRIS) inference profile and prices ~10% ABOVE `global.*` for
+   * the same model — the mismatch this field exists to prevent was live for
+   * months, with Global rates declared under Regional ids.
+   *
+   * Not persisted: a curation-time guard, asserted against the id prefix in
+   * `model-catalog.page.spec.ts`. Omitted for providers with a single tier.
+   */
+  pricingTier?: 'regional' | 'global';
   /** Fully-baked template that can be POSTed to /admin/managed-models. */
   template: ManagedModelFormData;
 }
@@ -47,20 +65,52 @@ const claude4xDefaults = (): Pick<
   supportsCaching: true,
 });
 
+/**
+ * Bedrock publishes a Claude model's cache rates as fixed multiples of its base
+ * input rate: 5-minute cache write is **1.25x**, cache read is **0.1x** (the
+ * 1-hour write we do not use is 2x). Deriving them removes the two fields most
+ * likely to drift — the ratios were the one thing the old table got right.
+ *
+ * `input` and `output` are the only independently published numbers, and both
+ * are TIER-SPECIFIC. Pass the rates for the tier the `modelId` names, and set
+ * `pricingTier` to match; a `us.*` id costs ~10% more than the `global.*` rates
+ * for the same model, which is exactly how the two drifted apart before.
+ */
+const claudeRates = (
+  input: number,
+  output: number,
+): Pick<
+  ManagedModelFormData,
+  | 'inputPricePerMillionTokens'
+  | 'outputPricePerMillionTokens'
+  | 'cacheWritePricePerMillionTokens'
+  | 'cacheReadPricePerMillionTokens'
+> => {
+  // Binary floats turn 1.1 * 0.1 into 0.11000000000000001; these are dollar
+  // rates that get multiplied by token counts, so pin them to the published
+  // precision rather than shipping the artifact into every cost row.
+  const round = (n: number): number => Math.round(n * 1e6) / 1e6;
+  return {
+    inputPricePerMillionTokens: input,
+    outputPricePerMillionTokens: output,
+    cacheWritePricePerMillionTokens: round(input * 1.25),
+    cacheReadPricePerMillionTokens: round(input * 0.1),
+  };
+};
+
 export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
   {
     key: 'claude-opus-4-7',
     tagline: 'Anthropic\'s most capable model — for the hardest reasoning.',
     capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Prompt caching'],
+    pricingTier: 'regional',
     template: {
       ...claude4xDefaults(),
       modelId: 'us.anthropic.claude-opus-4-7',
       modelName: 'Claude Opus 4.7',
       maxOutputTokens: 64_000,
-      inputPricePerMillionTokens: 5.0,
-      outputPricePerMillionTokens: 25.0,
-      cacheWritePricePerMillionTokens: 6.25,
-      cacheReadPricePerMillionTokens: 0.5,
+      // Regional (CRIS): $5.50 / $27.50. Global is $5.00 / $25.00.
+      ...claudeRates(5.5, 27.5),
       knowledgeCutoffDate: '2025-10-01',
       supportedParams: {
         params: {
@@ -78,16 +128,16 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
     key: 'claude-sonnet-5',
     tagline: 'Anthropic\'s Sonnet 5 — 1M-token context with effort-based reasoning.',
     capabilities: ['Effort control', 'Vision', 'Long context', 'Prompt caching'],
+    pricingTier: 'global',
     template: {
       ...claude4xDefaults(),
       modelId: 'global.anthropic.claude-sonnet-5',
       modelName: 'Claude Sonnet 5',
       maxInputTokens: 1_000_000,
       maxOutputTokens: 128_000,
-      inputPricePerMillionTokens: 2.0,
-      outputPricePerMillionTokens: 10.0,
-      cacheWritePricePerMillionTokens: 2.5,
-      cacheReadPricePerMillionTokens: 0.2,
+      // Global: $2.00 / $10.00 — correct as declared, this id really is
+      // `global.*`. Regional would be $2.20 / $11.00.
+      ...claudeRates(2.0, 10.0),
       knowledgeCutoffDate: null,
       supportedParams: {
         params: {
@@ -105,15 +155,14 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
     key: 'claude-sonnet-4-6',
     tagline: 'Balanced reasoning model — Anthropic\'s default workhorse.',
     capabilities: ['Extended thinking', 'Vision', 'Prompt caching'],
+    pricingTier: 'regional',
     template: {
       ...claude4xDefaults(),
       modelId: 'us.anthropic.claude-sonnet-4-6',
       modelName: 'Claude Sonnet 4.6',
       maxOutputTokens: 64_000,
-      inputPricePerMillionTokens: 3.0,
-      outputPricePerMillionTokens: 15.0,
-      cacheWritePricePerMillionTokens: 3.75,
-      cacheReadPricePerMillionTokens: 0.3,
+      // Regional (CRIS): $3.30 / $16.50. Global is $3.00 / $15.00.
+      ...claudeRates(3.3, 16.5),
       knowledgeCutoffDate: '2025-07-01',
       supportedParams: {
         params: {
@@ -130,15 +179,15 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
     key: 'claude-haiku-4-5',
     tagline: "Anthropic's fastest model — great for high-throughput tasks.",
     capabilities: ['Extended thinking', 'Vision', 'Prompt caching'],
+    pricingTier: 'regional',
     template: {
       ...claude4xDefaults(),
       modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
       modelName: 'Claude Haiku 4.5',
       maxOutputTokens: 64_000,
-      inputPricePerMillionTokens: 1.0,
-      outputPricePerMillionTokens: 5.0,
-      cacheWritePricePerMillionTokens: 1.25,
-      cacheReadPricePerMillionTokens: 0.1,
+      // Regional (CRIS): $1.10 / $5.50. Global is $1.00 / $5.00. This is the
+      // platform default model, so this is the row every cost number rides on.
+      ...claudeRates(1.1, 5.5),
       knowledgeCutoffDate: '2025-02-01',
       supportedParams: {
         params: {
