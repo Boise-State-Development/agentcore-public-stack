@@ -2,6 +2,14 @@
 
 ## Overview
 
+> **READ `HANDOFF.md` FIRST.** Groups 1–14 are built and deployed to dev and prod,
+> but a checked box here means "written and reviewed", not "verified by running".
+> **Sixteen defects were found only by running it** — every one reviewed clean and
+> deployed clean — and they are recorded in `HANDOFF.md` §5, not here. Section 16
+> below carries the work those findings opened. Two of them (§5.40, §5.41) mean the
+> managed backend currently gives a *worse answer* than legacy on some questions,
+> which is the most important open item in the feature.
+
 Introduce Amazon Bedrock Managed Knowledge Base as a second retrieval backend
 behind a single abstraction seam, then migrate knowledge bases to it one at a time,
 opt-in, with rollback available throughout.
@@ -433,6 +441,12 @@ All three flags — managed-default, migration, and reconciler arming — ship *
   - [x] 9.2 Write unit tests for routing exclusivity
     - Legacy document routes to the old pipeline only; managed document routes to
       direct ingestion only; neither is double-indexed
+    - ⚠️ **This was only half true when first marked done.** Every test covered the
+      consumer standing down for a legacy document; nothing asserted the LEGACY
+      pipeline stands down for a managed one, and it did not — so managed documents
+      were double-indexed and both pipelines wrote `DOC#` status. Closed properly by
+      PR #900; see `HANDOFF.md` §5.32 and §5.34. A suite can be thorough about the
+      side that works.
     - File: `backend/tests/lambdas/test_kb_ingestion_consumer.py`
     - _Requirements: 10.3, 10.4, 10.5_
 
@@ -747,3 +761,62 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       dev container
     - Verify every Requirement 24 item has a corresponding passing test
     - _Requirements: 24.1, 24.2, 24.3, 24.4, 24.5, 24.6, 24.7, 24.8, 24.9, 24.10, 24.11, 24.12, 24.13, 24.14, 24.15_
+
+---
+
+- [ ] 16. Post-implementation findings (opened by running it — see `HANDOFF.md` §5)
+
+  - [ ] 16.1 Resolve the 2,000-character context cap on the managed path
+    - **The most consequential open item.** Bedrock's chunks are ~3× Docling's, so
+      only ~1 chunk clears the cap and four of reranking's five results never reach
+      the model. Measured: legacy 388/130/1035/106 chars (4 fit) vs managed
+      1111/1091/1151/1197 (1 fits). Produced a materially wrong answer — a Major
+      Core course described as an elective, because the surviving chunk had lost its
+      section header.
+    - **Not a constant bump.** The cap is a parity control (§9, §13.5), so changing
+      it for both backends forfeits attributability. Either accept a managed-only
+      cap and declare the asymmetry, or re-run the §13.6 experiment on a corpus
+      where the interpreting context sits OUTSIDE the top chunk — which is the case
+      §13.6 did not cover.
+    - Amend Requirement 3.2 with whichever is chosen (the exclusion note already
+      carries the contradicting measurement).
+    - _HANDOFF §5.40 · Requirements: 3.1, 3.2_
+
+  - [ ] 16.2 Understand diagram answer quality before promising anything
+    - Column-structured diagrams yield confident wrong answers: a curriculum
+      flowchart reported 11 credits where the chart says 19, invented a course from
+      an adjacent column, and missed four others. Correctness depends on which
+      column a box occupies and chunks carry no coordinates.
+    - Image extraction genuinely works (§5.35) — an image-only PDF that legacy
+      cannot ingest at all becomes retrievable. The capability is real; precise
+      tabular answers from it are not established.
+    - _HANDOFF §5.41_
+
+  - [ ] 16.3 Make the document-status filter fail closed on its one open path
+    - `_filter_vectors_by_document_status` opens with `if not doc_ids: return
+      vectors`. Every other unprovable path in that function returns `[]` and emits
+      `METRIC_STATUS_FILTER_FAIL_CLOSED`. Predates this feature; not firing today.
+    - _HANDOFF §5.33 · Requirements: 5.1, 5.2_
+
+  - [ ] 16.4 Give the UI one vocabulary and show which engine served a query
+    - Document status is now written only by the owning engine (PR #900), so the
+      legacy `chunking`/`embedding` words never appear for a promoted knowledge
+      base — but nothing replaced them, so the card shows `Uploading` for the whole
+      indexing wait. Agreed shape: `uploading → processing → ready` (+ `failed`),
+      with `chunking`/`embedding` retained for legacy assistants, which still emit
+      them.
+    - Nothing logs WHICH engine served a retrieval — the resolver only logs on
+      failure — so "is the new one working?" is answerable only from the KB record.
+      One INFO line in the facade, plus a `Managed`/`Classic` badge.
+    - Wanted before a wide rollout, because this feature's entire risk profile is
+      silent regressions.
+    - _HANDOFF §6_
+
+  - [ ] 16.5 Reconcile documents whose ingestion event was dead-lettered
+    - A document whose event dead-letters is stranded: `status` is written only by
+      the consumer, so nothing ever revisits it even when the content is sitting in
+      the knowledge base, fully retrievable. Two such documents occurred in dev and
+      both needed manual repair.
+    - Overlaps task 14.4 (one-click retry) and the report-only reconciler, which
+      already knows how to join Bedrock's view against ours.
+    - _HANDOFF §5.37 · Requirements: 21.2_

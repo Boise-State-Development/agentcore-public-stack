@@ -13,6 +13,7 @@ The routing is therefore deliberately asymmetric, and both halves are asserted:
 legacy must ingest NOTHING here, managed must ingest here and NOT fall back.
 """
 
+import logging
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -122,11 +123,17 @@ class _FakeBackend:
     a slow one; the last value repeats forever.
     """
 
-    def __init__(self, statuses=None):
+    def __init__(self, statuses=None, other_documents=("DOC-someone-else",)):
         self.ingested = []
         self.status_calls = 0
+        self.search_filters = []
         self._statuses = list(statuses or ["NOT_FOUND", "INDEXED"])
         self._agent_client = _FakeAgentClient(self)
+        # Models a knowledge base that holds OTHER documents too. Without this a
+        # probe that ignores its filter still passes, because the only document
+        # present is the one being looked for — which is exactly why the
+        # query-by-document-id probe survived until a second document existed.
+        self._other_documents = list(other_documents)
 
     def next_status(self):
         if len(self._statuses) > 1:
@@ -145,10 +152,56 @@ class _FakeBackend:
         self.ingested.append(source.document_id)
         return None
 
-    async def search(self, kb_ref, query, top_k=5):
-        chunk = MagicMock()
-        chunk.metadata = {"document_id": DOCUMENT_ID}
-        return [chunk]
+    async def search(self, kb_ref, query, top_k=5, retrieval_filter=None):
+        """Honours an ``equals`` filter on ``document_id``; otherwise ranks badly.
+
+        The unfiltered branch returns the *other* documents, which is what the real
+        service did: a document id is meaningless to an embedding model, so an
+        unfiltered search returns whatever the reranker prefers. Measured in dev
+        with two documents, querying one id returned five chunks that all belonged
+        to the other.
+        """
+        self.search_filters.append(retrieval_filter)
+
+        wanted = None
+        if retrieval_filter:
+            equals = retrieval_filter.get("equals") or {}
+            if equals.get("key") == "document_id":
+                wanted = equals.get("value")
+
+        if wanted is not None:
+            doc_ids = [wanted] if wanted == DOCUMENT_ID else []
+        else:
+            doc_ids = list(self._other_documents)
+
+        chunks = []
+        for doc_id in doc_ids:
+            chunk = MagicMock()
+            chunk.metadata = {"document_id": doc_id}
+            chunk.document_id = doc_id
+            chunks.append(chunk)
+        return chunks
+
+
+@pytest.fixture(autouse=True)
+def _fast_polls(monkeypatch):
+    """Never wait production durations in a unit test.
+
+    The consumer's budgets are deliberately long — INDEXED_POLL_TIMEOUT_SECONDS is
+    600 s because Lambda's async retry is capped at 2 attempts, so the wait for
+    indexing has to happen inside one invocation. Left unpatched, the handful of
+    tests that exercise a document which never finishes indexing would hold this
+    file for over twenty minutes.
+
+    This is exactly why those constants are resolved at CALL time rather than bound
+    as default arguments: a default argument is evaluated once at import and cannot
+    be patched, which an earlier version of this module got wrong and which cost a
+    33-second test that silently ignored its own override.
+    """
+    monkeypatch.setattr(ic, "INDEXED_POLL_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(ic, "INDEXED_POLL_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr(ic, "RETRIEVABLE_POLL_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(ic, "RETRIEVABLE_POLL_INTERVAL_SECONDS", 0.001)
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +531,7 @@ class TestSlowIndexingConverges:
         first = _FakeBackend(statuses=["NOT_FOUND", "IN_PROGRESS"])
         with patch(
             "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=first
-        ), patch.object(ic, "INDEXED_POLL_TIMEOUT_SECONDS", 0.01):
+        ):
             with pytest.raises(ic.IngestionRoutingError):
                 ic.handle_object(BUCKET, KEY)
         assert first.ingested == [DOCUMENT_ID]
@@ -554,9 +607,175 @@ class TestSlowIndexingConverges:
         fake = _ProbeBroken(statuses=["NOT_FOUND"])
         with patch(
             "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
-        ), patch.object(ic, "INDEXED_POLL_TIMEOUT_SECONDS", 0.01):
+        ):
             with pytest.raises(ic.IngestionRoutingError):
                 ic.handle_object(BUCKET, KEY)
 
         assert fake.ingested == [DOCUMENT_ID], "a probe failure must not block ingestion"
         assert _doc(table)["status"] != "failed"
+
+
+# ---------------------------------------------------------------------------
+# The retrievability probe must ask an exact question
+# ---------------------------------------------------------------------------
+class TestTheRetrievabilityProbeIsFiltered:
+    """Found in dev on 2026-09-01, with two documents in the knowledge base.
+
+    The probe searched for the document *id as the query text* and checked whether
+    that document came back in the top 5. A document id means nothing to an
+    embedding model, so the search returned whatever the reranker preferred:
+    querying `DOC-40e985680a63` returned five chunks and every one belonged to a
+    different document. A perfectly retrievable document was reported as not
+    retrievable.
+
+    It scales the wrong way — the more documents a knowledge base holds, the less
+    likely the target appears in an unfiltered top-5 — so every upload to a mature
+    knowledge base would burn its poll budget and dead-letter. It only ever worked
+    while the knowledge base held exactly one document, where anything returned was
+    necessarily the right thing.
+    """
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def test_the_probe_filters_to_the_document_being_confirmed(self, table):
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert fake.search_filters, "the probe never searched"
+        assert all(f is not None for f in fake.search_filters), (
+            "the retrievability probe searched WITHOUT a filter; with other "
+            "documents present it can return five chunks that all belong to "
+            "something else and report a good document as not retrievable"
+        )
+        assert fake.search_filters[0] == {
+            "equals": {"key": "document_id", "value": DOCUMENT_ID}
+        }
+
+    def test_the_filter_uses_exact_match_not_a_prefix(self, table):
+        """`startsWith` would let DOC-1 confirm DOC-10 as retrievable."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        operators = {op for f in fake.search_filters for op in (f or {})}
+        assert operators == {"equals"}, f"unsafe filter operator(s): {operators}"
+
+    def test_a_document_confirms_even_when_others_rank_higher(self, table):
+        """The regression itself: other documents present must not hide this one."""
+        self._seed_managed(table)
+        fake = _FakeBackend(
+            statuses=["INDEXED"],
+            other_documents=("DOC-noise-1", "DOC-noise-2", "DOC-noise-3"),
+        )
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert _doc(table)["status"] == "complete"
+
+
+# ---------------------------------------------------------------------------
+# Statuses the SDK does not declare
+# ---------------------------------------------------------------------------
+class TestUndeclaredStatusesAreWaitedOut:
+    """`TEXT_INDEXED` is returned by the live service and is NOT in the packaged
+    model's DocumentStatus enum. Observed in dev on a document with image
+    extraction enabled: TEXT_INDEXED first, INDEXED later."""
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def test_text_indexed_is_not_treated_as_done(self, table):
+        """Marking complete here would claim an image-only page is ready while the
+        vision model is still running — the exact report this module prevents."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["TEXT_INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        assert _doc(table)["status"] != "complete"
+
+    def test_text_indexed_does_not_cause_a_re_ingest(self, table):
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["TEXT_INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == []
+
+    def test_text_indexed_becoming_indexed_completes_the_document(self, table):
+        """The observed real sequence. It must converge, not stall."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["TEXT_INDEXED", "TEXT_INDEXED", "INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert _doc(table)["status"] == "complete"
+        assert fake.ingested == [], "already submitted; must not re-ingest"
+
+    def test_a_status_nobody_has_seen_before_is_waited_out_not_failed(self, table):
+        """A future AWS status value must not dead-letter documents."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["SOME_FUTURE_STATUS"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        item = _doc(table)
+        assert item["status"] != "failed", (
+            "an unrecognised status failed the document; unknown values must be "
+            "waited out, because the service already returns one the SDK omits"
+        )
+
+    def test_text_indexed_is_a_classified_status_not_an_unknown_one(self, table, caplog):
+        """Recognition is the only thing that distinguishes it, so test that.
+
+        Dropping TEXT_INDEXED from DOC_STATUSES_IN_FLIGHT is behaviour-equivalent:
+        `_still_working` waits on unrecognised statuses too, so the document is
+        handled identically either way. A mutation removing it therefore survives
+        every behavioural assertion — which means the only honest thing left to
+        assert is that we have CLASSIFIED it, and are not merely falling through the
+        unknown-status branch and logging a warning on every poll for a state we
+        have already seen in production and understand.
+        """
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["TEXT_INDEXED"])
+
+        with caplog.at_level(logging.WARNING):
+            with patch(
+                "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+            ):
+                with pytest.raises(ic.IngestionRoutingError):
+                    ic.handle_object(BUCKET, KEY)
+
+        assert "TEXT_INDEXED" in ic.DOC_STATUSES_IN_FLIGHT
+        assert not any("unrecognised status" in r.message for r in caplog.records), (
+            "TEXT_INDEXED was handled by the unknown-status fallback; it is a state "
+            "we have observed in production and it should be classified explicitly"
+        )
