@@ -1,10 +1,19 @@
-"""Request/response models for the render-token endpoint."""
+"""Request/response models for the artifacts API.
+
+Covers the render-token, session-list and content endpoints, plus the
+artifact-sharing surface (`artifacts/shares.py`).
+
+JSON casing is split by design and matches what already shipped: the
+render-token / list / content models are snake_case (this domain's
+original REST shape), while the sharing models are camelCase aliases to
+mirror the conversation-sharing API the SPA share modal is adapted from.
+"""
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class RenderTokenRequest(BaseModel):
@@ -64,3 +73,134 @@ class ArtifactContentResponse(BaseModel):
     content: str
     content_type: str
     version: int
+
+
+# ---------------------------------------------------------------------
+# Artifact sharing
+# ---------------------------------------------------------------------
+
+
+class CreateArtifactShareRequest(BaseModel):
+    """Request body for sharing one artifact version.
+
+    `version` is required and never defaults to the artifact's HEAD: a
+    share pins one immutable version, and a pointer that moves under the
+    recipient is a different feature with different consent semantics.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    version: int = Field(
+        ..., ge=1, description="Artifact version to share (never #HEAD)"
+    )
+    access_level: Literal["public", "specific"] = Field(
+        ...,
+        alias="accessLevel",
+        description="'public' = any authenticated tenant user; "
+        "'specific' = email allowlist",
+    )
+    allowed_emails: Optional[List[str]] = Field(
+        default=None,
+        alias="allowedEmails",
+        description="Email addresses allowed to view "
+        "(required when accessLevel is 'specific')",
+    )
+
+    @model_validator(mode="after")
+    def validate_allowed_emails(self) -> "CreateArtifactShareRequest":
+        if self.access_level == "specific" and not self.allowed_emails:
+            raise ValueError(
+                "allowed_emails is required when access_level is 'specific'"
+            )
+        return self
+
+
+class UpdateArtifactShareRequest(BaseModel):
+    """Request body for changing an existing share's access controls.
+
+    The share target — `(artifact_id, version)` — is immutable; only who
+    may view it can change.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    access_level: Optional[Literal["public", "specific"]] = Field(
+        default=None, alias="accessLevel", description="New access level"
+    )
+    allowed_emails: Optional[List[str]] = Field(
+        default=None,
+        alias="allowedEmails",
+        description="Updated email allowlist",
+    )
+
+    @model_validator(mode="after")
+    def validate_allowed_emails(self) -> "UpdateArtifactShareRequest":
+        if self.access_level == "specific" and not self.allowed_emails:
+            raise ValueError(
+                "allowed_emails is required when access_level is 'specific'"
+            )
+        return self
+
+
+class ArtifactShareResponse(BaseModel):
+    """An artifact share, as its owner sees it.
+
+    Owner-only: `allowedEmails` is other people's addresses, so this
+    shape must never be returned on a recipient-facing route.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    share_id: str = Field(..., alias="shareId")
+    artifact_id: str = Field(..., alias="artifactId")
+    version: int = Field(..., description="Pinned artifact version")
+    owner_id: str = Field(..., alias="ownerId")
+    access_level: Literal["public", "specific"] = Field(
+        ..., alias="accessLevel"
+    )
+    allowed_emails: Optional[List[str]] = Field(
+        default=None, alias="allowedEmails"
+    )
+    title: str = Field(default="", description="Denormalized artifact title")
+    content_type: str = Field(default="", alias="contentType")
+    created_at: str = Field(..., alias="createdAt")
+    updated_at: Optional[str] = Field(default=None, alias="updatedAt")
+    share_url: str = Field(
+        ...,
+        alias="shareUrl",
+        description="SPA-relative recipient route for this share",
+    )
+
+
+class ArtifactShareListResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    shares: List[ArtifactShareResponse] = Field(default_factory=list)
+
+
+class SharedArtifactResponse(BaseModel):
+    """Recipient-facing share metadata. Never carries artifact content.
+
+    Deliberately omits `ownerId`, `artifactId` and `allowedEmails`: a
+    recipient needs enough to render a header and decide what chrome to
+    show, not the owner's internal ids or the rest of the allowlist.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    share_id: str = Field(..., alias="shareId")
+    title: str = Field(default="")
+    content_type: str = Field(default="", alias="contentType")
+    version: int
+    created_at: str = Field(..., alias="createdAt")
+    owner_email: str = Field(
+        ..., alias="ownerEmail", description="Who shared this"
+    )
+    can_download: bool = Field(
+        default=True,
+        alias="canDownload",
+        description="Whether the recipient may save a local copy. The "
+        "download path is the same render URL with ?download=1, so a "
+        "recipient who can view can also download — surfaced as a field "
+        "so a future policy can withhold it without a shape change.",
+    )
