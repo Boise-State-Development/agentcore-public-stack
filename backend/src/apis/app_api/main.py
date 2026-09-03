@@ -264,8 +264,17 @@ if skills_enabled():
 # environment, so its presence is the enablement signal.
 if os.environ.get("ARTIFACTS_RENDER_TOKEN_SECRET_ARN"):
     from apis.app_api.artifacts.routes import router as artifacts_router
+    from apis.app_api.artifacts.shares import (
+        artifact_shares_router,
+        shared_artifacts_router,
+    )
     app.include_router(artifacts_router)
-    logger.info("Artifact render-token routes enabled")
+    # Artifact sharing rides the same enablement signal: a share is only
+    # ever consumed by minting a render token, so it cannot be useful
+    # without the artifacts feature being on.
+    app.include_router(artifact_shares_router)
+    app.include_router(shared_artifacts_router)
+    logger.info("Artifact render-token and sharing routes enabled")
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)
