@@ -17,6 +17,7 @@ import { UserService } from '../auth/user.service';
 import { ChatHttpService } from './services/chat/chat-http.service';
 import { StreamParserService } from './services/chat/stream-parser.service';
 import { CompactionSummaryService } from './services/chat/compaction-summary.service';
+import { SteeringService } from './services/chat/steering.service';
 import { ArtifactStateService } from './services/artifacts/artifact-state.service';
 import { ArtifactHttpService } from './services/artifacts/artifact-http.service';
 import { McpAppStateService } from './services/mcp-apps/mcp-app-state.service';
@@ -58,6 +59,7 @@ export class ConversationPage implements OnDestroy {
   private chatHttpService = inject(ChatHttpService);
   private streamParserService = inject(StreamParserService);
   private compactionSummary = inject(CompactionSummaryService);
+  private steering = inject(SteeringService);
   private artifactState = inject(ArtifactStateService);
   private mcpAppState = inject(McpAppStateService);
   private mcpAppCardState = inject(McpAppCardStateService);
@@ -428,6 +430,12 @@ export class ConversationPage implements OnDestroy {
       // bleed in. The hydration effect above will reseed from
       // currentSession.totalSummarizedTurns once the metadata fetch lands.
       this.compactionSummary.reset();
+
+      // Mid-turn steering acks and the "this turn uses tools" flag are both
+      // per-conversation. A stale ack would clear a queued follow-up in the
+      // conversation the user just moved to, whose composer minted a
+      // different entry id — a no-op today, but only by luck.
+      this.steering.reset();
 
       // Artifacts are session-scoped — clear before the next session
       // loads so a prior session's cards don't bleed in, then re-hydrate

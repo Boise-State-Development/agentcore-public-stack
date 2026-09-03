@@ -7,6 +7,7 @@ import { FileUploadService, FileMetadata } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
+import { normalizeSteeringMessages } from '../chat/steering';
 
 /** Regex to match file attachment marker in message text: [Attached files: file1.pdf, file2.png] */
 const ATTACHED_FILES_PATTERN = /\n\n\[Attached files: ([^\]]+)\]$/;
@@ -391,6 +392,14 @@ export class MessageMapService {
 
       // Process messages to match tool results and restore file attachments
       let processedMessages = this.matchToolResultsToToolUses(messagesResponse.messages);
+      // Mid-turn steering rides inside the tool-result message, so a reload
+      // hands back a user message of `[toolResult…, text]` whose text is still
+      // wrapped in the tags the model reads. Unwrap it, drop the results
+      // (already folded into their toolUse above) and mark it as steering so
+      // turn grouping doesn't split the response it interrupted. Runs after
+      // the fold and before file restoration, both of which key on shapes it
+      // leaves intact. See docs/specs/mid-turn-steering.md.
+      processedMessages = normalizeSteeringMessages(processedMessages);
       processedMessages = this.restoreFileAttachments(processedMessages, filesByName);
 
       // Update the message map with loaded messages

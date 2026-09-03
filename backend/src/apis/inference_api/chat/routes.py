@@ -26,7 +26,11 @@ from apis.shared.errors import (
     build_conversational_error_event,
 )
 from apis.inference_api.runtime_health import ping_payload
-from apis.shared.feature_flags import agents_enabled, skills_enabled
+from apis.shared.feature_flags import (
+    agents_enabled,
+    mid_turn_steering_enabled,
+    skills_enabled,
+)
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.models.managed_models import list_managed_models
 from apis.shared.quota import (
@@ -2191,6 +2195,25 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 ),
             )
 
+        # Mid-turn steering, paused-turn path (docs/specs/mid-turn-steering.md).
+        # A turn paused for consent or approval had no running loop to steer,
+        # and the pause released its lease — inbox and all. Follow-ups the user
+        # queued meanwhile ride the resume request and are seeded onto the lease
+        # we just took, so the ordinary SteeringHook injects them at this turn's
+        # first tool boundary. One injection path, one ack path, whichever way
+        # the entry arrived. Best-effort: a failed seed degrades to the
+        # composer's end-of-turn flush.
+        if input_data.steering and mid_turn_steering_enabled():
+            try:
+                from apis.shared.sessions.session_lease import seed_steer_queue
+
+                await seed_steer_queue(
+                    session_lease,
+                    [{"id": entry.id, "text": entry.text} for entry in input_data.steering],
+                )
+            except Exception:
+                logger.warning("Failed to seed carried-over steering", exc_info=True)
+
     try:
         # Resume requests rebuild the agent from the persisted PausedTurnSnapshot
         # so a refresh / cache eviction / pod restart between pause and resume
@@ -2629,6 +2652,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # cached and shared across turns, so per-turn state must never live on it
                 # (see #741/#751).
                 turn_agent_id=input_data.rag_assistant_id,
+                # This turn's lease doubles as the mid-turn steering inbox
+                # (docs/specs/mid-turn-steering.md). Passed per turn for the
+                # same reason as turn_agent_id — the agent is cached, the lease
+                # is not. None for preview sessions and the local
+                # no-DynamoDB path, where steering is simply inert.
+                turn_lease=session_lease,
             ):
                 yield event
                 # Interleave the finished title between agent events (same

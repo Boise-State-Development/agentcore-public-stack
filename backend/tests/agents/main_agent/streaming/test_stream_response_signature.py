@@ -109,6 +109,7 @@ async def test_every_kwarg_chat_agent_forwards_is_accepted():
         citations=[{"source": "doc-1"}],
         original_message="a message",
         turn_agent_id="ast-canvas",
+        turn_lease=object(),
     ):
         pass
 

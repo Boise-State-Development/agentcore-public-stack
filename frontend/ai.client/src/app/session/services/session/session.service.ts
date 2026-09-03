@@ -507,6 +507,43 @@ export class SessionService {
   }
 
   /**
+   * Queue a follow-up for injection into the turn streaming right now.
+   *
+   * Mid-turn steering (docs/specs/mid-turn-steering.md). Resolves `true` when
+   * the backend armed the entry against a live turn, `false` when there was
+   * nothing to steer — the turn ended between the user typing and this
+   * landing, or the feature is off in this environment. `false` is not an
+   * error condition: the caller leaves the entry queued and the composer's
+   * existing end-of-turn flush sends it as a normal turn.
+   */
+  async steerRunningTurn(
+    sessionId: string,
+    entryId: string,
+    text: string,
+  ): Promise<boolean> {
+    const response = await firstValueFrom(
+      this.http.post<{ queued: boolean; entryId: string }>(
+        `${this.baseUrl()}/${sessionId}/steer`,
+        { text, entryId },
+      ),
+    );
+    return response?.queued === true;
+  }
+
+  /**
+   * Withdraw a queued follow-up the user removed from the composer.
+   * Idempotent — the backend returns 204 whether or not the entry is still
+   * there, because the user's intent is satisfied either way.
+   */
+  async withdrawSteer(sessionId: string, entryId: string): Promise<void> {
+    await firstValueFrom(
+      this.http.delete<void>(
+        `${this.baseUrl()}/${sessionId}/steer/${encodeURIComponent(entryId)}`,
+      ),
+    );
+  }
+
+  /**
    * Fetches metadata for a specific session from the Python API.
    * 
    * @param sessionId - UUID of the session

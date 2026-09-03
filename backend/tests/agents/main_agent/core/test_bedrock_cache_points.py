@@ -215,3 +215,101 @@ class TestFormattedRequestCachePoints:
             system_prompt_content=[{"text": "You are a helpful assistant."}],
         )
         assert _count_cache_points(request) == 0
+
+
+class TestSteeringInjectionDoesNotDisturbCachePoints:
+    """A mid-turn steering injection rides the tool-result message.
+
+    Mid-turn steering (docs/specs/mid-turn-steering.md) appends the user's
+    words as a ``{"text": ...}`` block to the same user-role message that
+    carries the tool results, so a steered turn's history ends on a *mixed*
+    ``toolResult`` + ``text`` message. The cost claim in the spec rests on that
+    injection being append-only against the cached prefix: it must land inside
+    the segment the ``strategy="auto"`` message point already covers, behind
+    both static points, so the next call still reads the stable prefix from
+    cache rather than rewriting it.
+
+    These lock the placement. A regression here is a prompt-cache **cost** bug
+    — the class this repo's cost tenet exists to catch — not a correctness one,
+    so it would not surface in any behavioural test.
+    """
+
+    @pytest.fixture
+    def model(self, monkeypatch):
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
+
+        config = ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True)
+        return CountTokensBedrockModel(**config.to_bedrock_config())
+
+    @staticmethod
+    def _messages(steered: bool):
+        result_content = [
+            {
+                "toolResult": {
+                    "toolUseId": "t1",
+                    "content": [{"text": "thread body"}],
+                    "status": "success",
+                }
+            }
+        ]
+        if steered:
+            result_content.append(
+                {"text": "<user_message_during_turn>\nuse the other file\n</user_message_during_turn>"}
+            )
+        return [
+            {"role": "user", "content": [{"text": "first turn"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"toolUse": {"toolUseId": "t1", "name": "get_thread", "input": {}}}
+                ],
+            },
+            {"role": "user", "content": result_content},
+        ]
+
+    def _format(self, model, steered: bool):
+        return model.format_request(
+            self._messages(steered),
+            [
+                {
+                    "name": "get_thread",
+                    "description": "Fetch a thread",
+                    "inputSchema": {"json": {"type": "object", "properties": {}}},
+                }
+            ],
+            system_prompt_content=[
+                {"text": "You are a helpful assistant."},
+                {"cachePoint": {"type": "default"}},
+            ],
+        )
+
+    def test_still_exactly_three_cache_points(self, model):
+        request = self._format(model, steered=True)
+        assert _count_cache_points(request) == 3, json.dumps(
+            request, default=str, indent=2
+        )
+
+    def test_the_injection_sits_behind_the_message_cache_point(self, model):
+        """Append-only: the text lands before the trailing point, so every
+        block ahead of that point is byte-identical to the unsteered turn."""
+        request = self._format(model, steered=True)
+        last_user = [m for m in request["messages"] if m["role"] == "user"][-1]
+
+        assert last_user["content"][-1] == {"cachePoint": {"type": "default"}}
+        assert "toolResult" in last_user["content"][0]
+        assert last_user["content"][1]["text"].startswith("<user_message_during_turn>")
+
+    def test_the_static_points_are_untouched(self, model):
+        """The tools and system points are what the ~28k-token prefix rides on.
+
+        A steering injection that shifted either would rewrite that prefix at
+        the cache-write premium on every steered turn.
+        """
+        steered = self._format(model, steered=True)
+        plain = self._format(model, steered=False)
+
+        assert steered["toolConfig"] == plain["toolConfig"]
+        assert steered["system"] == plain["system"]
+        # Everything before the mixed message is identical too.
+        assert steered["messages"][:-1] == plain["messages"][:-1]

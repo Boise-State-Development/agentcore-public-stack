@@ -105,6 +105,14 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # Session control
         self.cancelled = False
 
+        # This turn's single-flight lease, which doubles as the mid-turn
+        # steering inbox (docs/specs/mid-turn-steering.md). Per-turn state, so
+        # the stream coordinator stamps it at the head of every turn — never
+        # loaded once and held, per the CLAUDE.md rule about state on a cached
+        # agent. None whenever the guard is inactive (preview sessions, local
+        # dev without DynamoDB), which makes steering inert.
+        self.turn_lease: Optional[Any] = None
+
         # Message count tracking (for stream_coordinator compatibility)
         self.message_count: int = 0
 
@@ -1124,12 +1132,19 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # are re-emitted from the map at the correct slot).
         rebuilt: List[Dict] = []
         last_index = len(messages) - 1
+        # Result turns whose non-toolResult content was already carried onto a
+        # rebuilt turn below. Populated one iteration ahead of its use (i adds
+        # i+1), so the standalone branch does not re-emit the same block and
+        # duplicate a mid-turn steering injection.
+        carried_residual_indices: set = set()
         for i, msg in enumerate(messages):
             has_use, has_result = cls._block_keys(msg)
 
             if has_result and not has_use:
                 # Standalone tool-result turn: keep only non-toolResult content
                 # (rare mixed text), drop the results themselves.
+                if i in carried_residual_indices:
+                    continue
                 residual = [b for b in msg.get("content", []) if not (isinstance(b, dict) and "toolResult" in b)]
                 if residual:
                     rebuilt.append({"role": msg.get("role", "user"), "content": residual})
@@ -1138,10 +1153,19 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             if has_use and i < last_index:
                 rebuilt.append(msg)
                 use_ids = cls._tool_use_ids(msg)
-                rebuilt.append({
-                    "role": "user",
-                    "content": [result_by_id.get(t, missing_result(t)) for t in use_ids],
-                })
+                # The result turn is rebuilt from the id map rather than
+                # copied, so any NON-toolResult block on the original result
+                # turn would be silently dropped. That block is not always
+                # incidental: mid-turn steering appends the user's own words
+                # to the tool-result message (docs/specs/mid-turn-steering.md),
+                # and a repair that discards them deletes something the user
+                # said and the model already read. Carry them across.
+                content = [result_by_id.get(t, missing_result(t)) for t in use_ids]
+                residual = cls._non_tool_result_blocks(messages, i + 1)
+                if residual:
+                    content.extend(residual)
+                    carried_residual_indices.add(i + 1)
+                rebuilt.append({"role": "user", "content": content})
                 continue
 
             # Trailing tool-use turn (last message) or any non-tool turn: emit
@@ -1172,6 +1196,25 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 merged.append({"role": msg.get("role"), "content": list(msg.get("content", []))})
 
         return merged, violations
+
+    @staticmethod
+    def _non_tool_result_blocks(messages: List[Dict], index: int) -> List[Dict]:
+        """Non-toolResult content on the user turn at ``index``, if it is one.
+
+        Used by the repair rebuild to carry a mid-turn steering injection (a
+        ``{"text": ...}`` block riding the tool-result message) onto the
+        rebuilt result turn. Returns ``[]`` for anything that is not a
+        result-bearing user turn, so ordinary histories are unaffected.
+        """
+        if index >= len(messages):
+            return []
+        candidate = messages[index]
+        if candidate.get("role") != "user":
+            return []
+        content = candidate.get("content") or []
+        if not any(isinstance(b, dict) and "toolResult" in b for b in content):
+            return []
+        return [b for b in content if not (isinstance(b, dict) and "toolResult" in b)]
 
     def _truncate_tool_contents(
         self,

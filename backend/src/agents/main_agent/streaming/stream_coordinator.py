@@ -221,6 +221,7 @@ class StreamCoordinator:
         citations: Optional[List] = None,
         original_message: Optional[str] = None,
         turn_agent_id: Optional[str] = None,
+        turn_lease: Any = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -242,6 +243,12 @@ class StreamCoordinator:
                 nondeterministic-ordering regression the fingerprints exist to catch.
                 Passed per turn rather than read off the agent: the agent instance is cached
                 and shared across turns, so per-turn state must never live on it (#741/#751).
+            turn_lease: This turn's single-flight ``SessionLease``, which doubles as the
+                mid-turn steering inbox. Stamped onto the session manager for the life of
+                the turn so ``SteeringHook`` can read it at each tool boundary — and
+                stamped *unconditionally*, including to None, for the same reason
+                ``reset_cancellation_state`` exists: a lease left behind by a previous
+                turn on a cached agent would be read against a row that no longer names us.
 
         Yields:
             str: SSE formatted events
@@ -258,6 +265,12 @@ class StreamCoordinator:
         # Same per-turn discipline: a cancel armed by a previous turn must not
         # brick this one. See ``reset_cancellation_state``.
         reset_cancellation_state(agent, session_manager)
+
+        # This turn's steering inbox handle. Set unconditionally (None included)
+        # so a lease from a previous turn on the cached agent can never be read
+        # against a row a later turn now owns.
+        if session_manager is not None:
+            session_manager.turn_lease = turn_lease
 
         # Likewise a pause armed by a previous turn: if the user abandoned an
         # OAuth/tool-approval consent and just typed again, the still-armed
@@ -928,6 +941,20 @@ class StreamCoordinator:
 
                     # Skip the original error event and exit the loop - we've handled the error
                     return
+
+                # Mid-turn steering: ack any follow-up the SteeringHook
+                # injected at a tool boundary and has since confirmed in
+                # history. Drained *before* this event is yielded rather than
+                # after, so an injection confirmed on the turn's final tool
+                # batch still lands ahead of `done` — the SPA gates events on
+                # the stream state and drops anything past it. Ordering is
+                # unaffected for every other case: the frame still follows the
+                # `tool_result` events of the batch it rode.
+                # See docs/specs/mid-turn-steering.md.
+                for steering_sse in self._drain_steering_events(
+                    main_agent_wrapper, session_id
+                ):
+                    yield steering_sse
 
                 # Format as SSE event and yield (including done event after metadata)
                 sse_event = self._format_sse_event(event)
@@ -2103,6 +2130,44 @@ class StreamCoordinator:
         except Exception as e:  # noqa: BLE001 - best-effort side channel
             logger.warning("Failed to emit ui_tool_input_partial event: %s", e)
             return []
+
+    def _drain_steering_events(
+        self, main_agent_wrapper: Any, session_id: str
+    ) -> List[str]:
+        """Emit one `steering_applied` SSE per confirmed mid-turn injection.
+
+        Drained rather than pushed because the hook runs inside Strands' event
+        loop, which has no route to the SSE stream. An entry appears here only
+        once its carrying message is in history *and* its inbox entry is
+        cleared — so the event is the client's signal that the follow-up is
+        genuinely in the conversation and its queued composer entry can be
+        dropped without risk of the text being sent twice.
+
+        Best-effort: a wrapper without a steering hook (voice, tests) and any
+        failure both yield nothing, leaving the entry queued for PR #916's
+        end-of-turn flush.
+        """
+        hook = getattr(main_agent_wrapper, "steering_hook", None)
+        if hook is None:
+            return []
+        try:
+            applied = hook.drain_applied()
+        except Exception:  # noqa: BLE001 - never break the stream on an ack
+            logger.warning("Steering ack drain failed", exc_info=True)
+            return []
+
+        events = []
+        for entry in applied:
+            payload = {
+                "type": "steering_applied",
+                "sessionId": session_id,
+                "entryId": entry.get("id"),
+                "text": entry.get("text", ""),
+            }
+            events.append(
+                f"event: steering_applied\ndata: {json.dumps(payload)}\n\n"
+            )
+        return events
 
     def _format_sse_event(self, event: Dict[str, Any]) -> str:
         """
