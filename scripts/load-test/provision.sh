@@ -24,6 +24,8 @@
 # Required environment:
 #   CDK_PROJECT_PREFIX   resolves SSM parameters
 #   CDK_AWS_REGION       (or AWS_REGION)
+#   AWS_PROFILE          unless the default credential chain is already correct
+#                        (the devcontainer sets AWS_REGION but no profile)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -95,6 +97,7 @@ cat <<EOF
 
 $(log_plan "Load-test provisioning plan")
   Project prefix   : ${CDK_PROJECT_PREFIX}
+  AWS account      : ${LOAD_TEST_AWS_ACCOUNT}
   Region           : ${CDK_AWS_REGION}
   User pool        : ${USER_POOL_ID}
   Quota table      : ${QUOTA_TABLE}

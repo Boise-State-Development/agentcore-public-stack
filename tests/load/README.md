@@ -50,7 +50,8 @@ land it in `backend/uv.lock` and in the app-api image's dependency resolution.
 | `AGENTCORE_LOAD_PROVIDER` | no | `bedrock`, `openai`, `gemini` |
 | `AGENTCORE_LOAD_ENABLED_TOOLS` | no | Comma-separated. Empty (default) = no tools |
 | `AGENTCORE_LOAD_TURNS_PER_CONVERSATION` | no | Default 3 |
-| `AGENTCORE_LOAD_PROMPTS_FILE` | no | One prompt per line; overrides the built-ins |
+| `AGENTCORE_LOAD_PROMPTS_FILE` | no | One prompt per line; `#` lines are comments. Overrides the built-ins |
+| `AGENTCORE_LOAD_ALLOW_CREDENTIAL_REUSE` | no | Let simulated users share Cognito identities. Off by default — see below |
 
 **`--host` must be https.** The session and CSRF cookies are `__Host-`
 prefixed, hence `Secure`-only. Over plain http `requests` silently drops them
@@ -82,6 +83,96 @@ One worker per core with `--processes -1`. You will not need it soon: the
 generator is never the bottleneck on a path where each user holds a stream open
 for seconds. In the devcontainer, mind the memory cap and keep `--processes`
 at or below 4.
+
+## One Cognito identity per simulated user
+
+Each simulated user is assigned its **own** credential from the manifest, and a
+run that asks for more users than the pool holds **refuses to start**:
+
+```
+Refusing to start: 50 simulated users requested but only 3 credential(s)
+available. Each user needs its own Cognito identity or the run measures
+DynamoDB partition contention that real users would not create.
+```
+
+This is deliberately a hard failure rather than a warning. Simulated users
+sharing an identity also share its `user_id`, which means one DynamoDB partition
+for session and cost writes, one quota counter, and one memory namespace. The
+resulting latency partly measures the test's own key collisions — a
+plausible-looking wrong answer, which is worse than an obviously broken run.
+
+Provision to match your target concurrency:
+
+```bash
+scripts/load-test/provision.sh --users 300 --quota-days 1
+```
+
+`AGENTCORE_LOAD_ALLOW_CREDENTIAL_REUSE=1` restores the old round-robin for cases
+where sharing genuinely does not matter — a smoke run, or measuring the login
+path alone.
+
+Under `--processes`, each worker takes a stride of the pool (`pool[i::n]`) so two
+workers never deal the same account. That needs at least one credential per
+worker.
+
+## Campus-scale runs
+
+The default profile is cheap on purpose, and that makes it **useless for
+capacity planning**. Measured against the real production deployment:
+
+| Per turn | production | default profile |
+|---|---|---|
+| input tokens | 384 | 1,781 |
+| cache-read tokens | 24,926 | 0 |
+| output tokens | 1,372 | 139 |
+| **total counted against quota** | **~26,700** | **~1,920** |
+
+Cache-read tokens count against the Bedrock TPM quota. So the default profile
+understates consumption ~14× per turn, and a run that passes comfortably can
+correspond to a production workload that throttles.
+
+Use the representative profile for anything you intend to draw conclusions from:
+
+```bash
+source tests/load/profiles/campus-representative.env
+```
+
+It enables a realistic tool set (tool schemas are what create the cached
+prefix), uses long-form prompts, and deepens conversations. Note the prompts are
+answerable *without* tool calls on purpose — the tools are there to reproduce
+prompt size, not to fire Canvas, Salesforce, and Brave Search at 300× concurrency.
+
+### The classroom burst
+
+The shape that actually threatens this platform is not 1300 users arriving
+gradually; it is one instructor saying "ask the assistant about X" and 300
+students submitting inside thirty seconds.
+
+```bash
+source tests/load/profiles/campus-representative.env
+export AGENTCORE_LOAD_TURNS_PER_CONVERSATION=2
+locust -f locustfile_classroom.py --host https://your-domain/api --headless
+```
+
+`--users`, `--spawn-rate` and `--run-time` are ignored; `ClassroomBurstShape`
+drives the run and ends it. It fires two bursts — the first against cold
+infrastructure (2 Fargate tasks, empty prompt cache), the second against warm —
+because "survives a class following another class" and "survives the 9am class"
+are different answers. Tunable via `AGENTCORE_LOAD_BURST_*`; see `shapes.py`.
+
+### Watch the quota while it runs
+
+Throttling reaches Locust as opaque failed turns. Run this alongside any chat
+scenario to see the approach to the limit instead:
+
+```bash
+scripts/load-test/watch-tpm.sh --model-id global.anthropic.claude-sonnet-5
+```
+
+It also prints implied **tokens/turn**, which is how you confirm the run is
+representative rather than trusting that it is. If that column reads ~2,000
+instead of ~26,700, the profile is not loaded and the TPM result will not
+generalise.
 
 ## Reading the results
 

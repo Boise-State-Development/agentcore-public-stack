@@ -29,9 +29,11 @@ class ConfigError(RuntimeError):
 class Credential:
     """One Cognito user the test can log in as.
 
-    Multiple simulated users may share a credential — each Locust user gets
-    its own cookie jar, so they establish independent BFF sessions. See the
-    README for why that is useful and what it distorts (quota concentration).
+    By default each simulated user gets its **own** credential — see
+    ``CredentialPool`` in ``users.py``. Sharing one is possible but has to be
+    asked for, because it concentrates every shared user's session writes on a
+    single DynamoDB partition and a single quota counter, which measures
+    contention the real workload would not have.
     """
 
     username: str
@@ -60,6 +62,11 @@ class LoadConfig:
 
     turns_per_conversation: int = 3
     prompts: list[str] = field(default_factory=list)
+
+    # Let simulated users share Cognito identities when the pool is smaller
+    # than --users. Off by default: sharing is silent and it invalidates
+    # results rather than merely degrading them (see CredentialPool).
+    allow_credential_reuse: bool = False
 
     # Ceiling on a single turn. app-api's proxy gives up at 300s
     # (_PROXY_TIMEOUT_SECONDS), so going past that measures nothing new.
@@ -138,6 +145,16 @@ def _split_list(name: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _bool_env(name: str) -> bool:
+    """Read an opt-in flag.
+
+    Deliberately strict about what counts as true. A typo like
+    ``ALLOW_CREDENTIAL_REUSE=ture`` should leave the safe default in place
+    rather than silently enabling the thing it guards.
+    """
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _positive_int(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -164,9 +181,15 @@ def load_config() -> LoadConfig:
         path = Path(prompt_file)
         if not path.is_file():
             raise ConfigError(f"AGENTCORE_LOAD_PROMPTS_FILE does not exist: {path}")
-        prompts = [line.strip() for line in path.read_text().splitlines() if line.strip()]
+        # '#' lines are comments. Without this a documented prompts file would
+        # silently send its own header to the model as a user turn.
+        prompts = [
+            line.strip()
+            for line in path.read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
         if not prompts:
-            raise ConfigError(f"{path} contains no non-empty lines.")
+            raise ConfigError(f"{path} contains no non-empty, non-comment lines.")
     else:
         prompts = list(_DEFAULT_PROMPTS)
 
@@ -178,6 +201,7 @@ def load_config() -> LoadConfig:
         enabled_tools=_split_list("AGENTCORE_LOAD_ENABLED_TOOLS"),
         turns_per_conversation=_positive_int("AGENTCORE_LOAD_TURNS_PER_CONVERSATION", 3),
         prompts=prompts,
+        allow_credential_reuse=_bool_env("AGENTCORE_LOAD_ALLOW_CREDENTIAL_REUSE"),
     )
 
 

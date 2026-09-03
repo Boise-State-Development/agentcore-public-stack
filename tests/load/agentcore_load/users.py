@@ -21,8 +21,10 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections import deque
+from collections.abc import Sequence
 
-from locust import HttpUser, between
+from locust import HttpUser, between, events
 from locust.exception import StopUser
 
 from .auth import LoginError, establish_bff_session
@@ -34,16 +36,175 @@ logger = logging.getLogger(__name__)
 TTFT_METRIC = "SSE chat: time to first token"
 TURN_METRIC = "SSE chat: full turn"
 
-# Round-robin index into the credential pool, so a pool smaller than the user
-# count spreads evenly instead of piling every user onto the first account.
-_credential_cursor = 0
+
+class CredentialExhausted(RuntimeError):
+    """Raised when more simulated users are started than there are accounts."""
 
 
-def _next_credential(config: LoadConfig) -> Credential:
-    global _credential_cursor
-    credential = config.credentials[_credential_cursor % len(config.credentials)]
-    _credential_cursor += 1
-    return credential
+class CredentialPool:
+    """Hands each simulated user its own Cognito identity.
+
+    Why unique assignment is the default and round-robin is not:
+
+    Every simulated user sharing an identity also shares that identity's
+    ``user_id``. In this platform that means one DynamoDB partition for the
+    session and cost writes, one quota counter, and one memory namespace. Ten
+    users on one account therefore generate contention no real population of
+    ten users would, and the resulting latency partly measures the test's own
+    key collisions. That is worse than a slow test — it is a plausible-looking
+    wrong answer, which is the failure mode a load test exists to avoid.
+
+    So a pool smaller than ``--users`` is a configuration error, reported
+    before any load starts. ``AGENTCORE_LOAD_ALLOW_CREDENTIAL_REUSE`` restores
+    round-robin for cases where sharing is genuinely fine (a smoke run, or
+    measuring the login path), and says so loudly.
+
+    Greenlet safety: Locust runs users as gevent greenlets, which switch only
+    on I/O. ``deque.popleft`` completes without an intervening switch, so no
+    lock is needed.
+    """
+
+    def __init__(self, credentials: Sequence[Credential], allow_reuse: bool = False) -> None:
+        if not credentials:
+            raise ConfigError("The credential pool is empty.")
+        self._all: list[Credential] = list(credentials)
+        self._available: deque[Credential] = deque(credentials)
+        self._allow_reuse = allow_reuse
+        self._reuse_cursor = 0
+
+    @property
+    def size(self) -> int:
+        return len(self._all)
+
+    @property
+    def available(self) -> int:
+        return len(self._available)
+
+    def acquire(self) -> tuple[Credential, bool]:
+        """Take a credential. Returns ``(credential, held_exclusively)``."""
+        try:
+            credential = self._available.popleft()
+        except IndexError:
+            if not self._allow_reuse:
+                raise CredentialExhausted(
+                    f"Credential pool exhausted: only {self.size} account(s) for "
+                    f"more simulated users than that. Provision more with "
+                    f"'scripts/load-test/provision.sh --users N', or set "
+                    f"AGENTCORE_LOAD_ALLOW_CREDENTIAL_REUSE=1 to accept shared "
+                    f"identities (which concentrates writes on one DynamoDB "
+                    f"partition and skews the result)."
+                ) from None
+            credential = self._all[self._reuse_cursor % self.size]
+            self._reuse_cursor += 1
+            return credential, False
+
+        return credential, True
+
+    def release(self, credential: Credential, held_exclusively: bool) -> None:
+        """Return a credential so a long run with user churn can reuse it."""
+        if held_exclusively:
+            self._available.append(credential)
+
+
+# One pool per process. Under ``--processes`` each worker builds its own, so the
+# stride partitioning in _build_pool is what stops two workers dealing the same
+# account.
+_pool: CredentialPool | None = None
+
+
+def _worker_partition(environment) -> tuple[int, int]:
+    """Return this process's ``(index, total)`` slice of the pool.
+
+    Locust workers are separate OS processes with separate module state, so
+    without partitioning every worker would deal from the top of the same deck
+    and uniqueness would hold only within a process. ``(0, 1)`` means "not
+    distributed, use the whole pool".
+    """
+    if environment is None:
+        return 0, 1
+    index = getattr(getattr(environment, "runner", None), "worker_index", None)
+    if index is None:
+        return 0, 1
+
+    options = getattr(environment, "parsed_options", None)
+    total = getattr(options, "expect_workers", None) or getattr(options, "processes", None)
+    if not total or int(total) < 1:
+        # Known worker, unknown fleet size: keep the whole pool and warn rather
+        # than silently slice it to the wrong width.
+        logger.warning(
+            "Running as worker %s but the worker count is unknown; credential "
+            "uniqueness is only guaranteed within this process.",
+            index,
+        )
+        return 0, 1
+    return int(index), int(total)
+
+
+def _build_pool(config: LoadConfig, environment) -> CredentialPool:
+    index, total = _worker_partition(environment)
+    credentials = config.credentials[index::total] if total > 1 else config.credentials
+    if not credentials:
+        raise ConfigError(
+            f"Worker {index} of {total} got no credentials: a pool of "
+            f"{len(config.credentials)} does not spread across {total} workers. "
+            f"Provision at least one account per worker."
+        )
+    return CredentialPool(credentials, allow_reuse=config.allow_credential_reuse)
+
+
+def get_pool(config: LoadConfig, environment=None) -> CredentialPool:
+    global _pool
+    if _pool is None:
+        _pool = _build_pool(config, environment)
+    return _pool
+
+
+def reset_pool() -> None:
+    """Drop the process-wide pool. For tests, and between runs in one process."""
+    global _pool
+    _pool = None
+
+
+@events.test_start.add_listener
+def _check_pool_covers_user_count(environment, **_kwargs) -> None:
+    """Fail before spending money, not after.
+
+    Without this, Locust starts, exhausts the pool partway through the ramp and
+    stops users one at a time — which reads as a flaky backend. The only place
+    a single clear message is possible is before the first login.
+    """
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        logger.error("Load test misconfigured: %s", exc)
+        if environment.runner:
+            environment.runner.quit()
+        return
+
+    reset_pool()
+    pool = get_pool(config, environment)
+
+    requested = getattr(getattr(environment, "parsed_options", None), "num_users", None)
+    if not requested:
+        # A LoadTestShape drives the count instead, so there is nothing to
+        # compare yet. Exhaustion is still caught in acquire().
+        return
+
+    if requested > pool.size and not config.allow_credential_reuse:
+        logger.error(
+            "Refusing to start: %s simulated users requested but only %s "
+            "credential(s) available%s. Each user needs its own Cognito identity "
+            "or the run measures DynamoDB partition contention that real users "
+            "would not create. Provision more with "
+            "'scripts/load-test/provision.sh --users %s', or set "
+            "AGENTCORE_LOAD_ALLOW_CREDENTIAL_REUSE=1 to override.",
+            requested,
+            pool.size,
+            " for this worker" if pool.size != len(config.credentials) else "",
+            requested,
+        )
+        if environment.runner:
+            environment.runner.quit()
 
 
 class TurnResult:
@@ -80,6 +241,7 @@ class AuthenticatedUser(HttpUser):
         self.load_config: LoadConfig | None = None
         self.csrf_token: str | None = None
         self.credential: Credential | None = None
+        self._credential_exclusive = False
 
     def on_start(self) -> None:
         try:
@@ -91,7 +253,15 @@ class AuthenticatedUser(HttpUser):
             logger.error("Load test misconfigured: %s", exc)
             raise StopUser() from exc
 
-        self.credential = _next_credential(self.load_config)
+        try:
+            self.credential, self._credential_exclusive = get_pool(
+                self.load_config, self.environment
+            ).acquire()
+        except (CredentialExhausted, ConfigError) as exc:
+            # Only reachable when a LoadTestShape drives the user count past the
+            # pool, since test_start catches the --users case up front.
+            logger.error("%s", exc)
+            raise StopUser() from exc
         try:
             self.csrf_token = establish_bff_session(self.client, self.load_config, self.credential)
         except LoginError as exc:
@@ -100,13 +270,22 @@ class AuthenticatedUser(HttpUser):
 
     def on_stop(self) -> None:
         """Drop the server-side session so a run does not leave rows behind."""
-        if not self.csrf_token:
-            return
-        self.client.post(
-            "/auth/logout",
-            headers={"X-CSRF-Token": self.csrf_token},
-            name="POST /auth/logout",
-        )
+        try:
+            if not self.csrf_token:
+                return
+            self.client.post(
+                "/auth/logout",
+                headers={"X-CSRF-Token": self.csrf_token},
+                name="POST /auth/logout",
+            )
+        finally:
+            # Return the identity even if logout failed, so a run that churns
+            # users does not leak the pool away and then report exhaustion.
+            if self.credential is not None and self.load_config is not None:
+                get_pool(self.load_config, self.environment).release(
+                    self.credential, self._credential_exclusive
+                )
+                self.credential = None
 
     @property
     def csrf_headers(self) -> dict[str, str]:

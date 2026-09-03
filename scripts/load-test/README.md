@@ -27,6 +27,7 @@ step with its own gate rather than something the locustfile does.
 ```bash
 export CDK_PROJECT_PREFIX=your-prefix
 export CDK_AWS_REGION=us-west-2
+export AWS_PROFILE=your-profile   # the devcontainer sets AWS_REGION but no profile
 
 # See the plan without changing anything
 scripts/load-test/provision.sh --users 10 --quota-days 1 --dry-run
@@ -35,6 +36,14 @@ scripts/load-test/provision.sh --users 10 --quota-days 1 --dry-run
 scripts/load-test/provision.sh --users 10 --quota-days 1
 ```
 
+Both scripts print the resolved AWS account before the plan and again in the
+plan itself. **Read it.** The prefix alone does not tell you which account you
+are aimed at, and these scripts create real users and switch off real cost
+controls.
+
+If `AWS_PROFILE` is unset, every call falls through to the default credential
+chain, which in the devcontainer is not your SSO session.
+
 `provision.sh` prints the exact environment exports for the run when it
 finishes. Then, when the run is done:
 
@@ -42,7 +51,30 @@ finishes. Then, when the run is done:
 scripts/load-test/teardown.sh --manifest ~/.config/agentcore-load/users-<run-id>.json
 ```
 
-Run inside the devcontainer — the scripts need `aws`, `python3` and `openssl`.
+Run inside the devcontainer — the scripts need `aws`, `jq`, `openssl` and GNU `date`.
+
+## Watching the Bedrock quota during a run
+
+```bash
+scripts/load-test/watch-tpm.sh --model-id global.anthropic.claude-sonnet-5
+```
+
+Read-only. Polls CloudWatch `EstimatedTPMQuotaUsage` in five-minute windows and
+prints tokens/min, percent of the **applied** quota, turns/min, and implied
+tokens/turn. It warns when the applied quota equals the AWS default, since that
+means no increase has ever landed — the usual reason a capacity plan assumes
+headroom it does not have.
+
+The quota code is discovered from the model id: a `global.` prefix resolves to
+the Global cross-region limit, `us.`/`eu.`/`apac.` to the plain cross-region one.
+Pass `--quota-code` if discovery is ambiguous, or `--quota N` to skip the lookup.
+
+Five-minute windows rather than one-minute are deliberate: a single observed
+production minute reported 546,206 quota tokens against one invocation, which
+exceeds that model's own context window, so per-minute peaks are not trustworthy.
+
+This lives here rather than in `tests/load/` because the load generator has no
+AWS credentials by design.
 
 ## The manifest
 

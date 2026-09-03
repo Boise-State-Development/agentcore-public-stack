@@ -79,6 +79,37 @@ require_env() {
         log_error "GNU date is required (BSD/macOS date lacks -d and %N)."
         exit 1
     fi
+
+    require_credentials
+}
+
+# Fail on credentials before the plan prints, and name the account.
+#
+# Two reasons this is worth its own preflight rather than letting the first API
+# call fail. The devcontainer sets AWS_REGION but no AWS_PROFILE, so an
+# unexported profile sends every call to whatever the default chain resolves —
+# which surfaced as a bogus "is your prefix correct?" on the first SSM read.
+# And this script creates users in a live pool and switches off their cost
+# limits, so which account it is aimed at is the single most important thing to
+# state out loud before doing any of that.
+require_credentials() {
+    local identity
+    local err
+    err="$(_tmpdir)/sts-err"
+
+    if ! identity="$(aws sts get-caller-identity \
+        --query "Account" --output text \
+        --region "${CDK_AWS_REGION}" 2>"${err}")"; then
+        log_error "AWS credentials are not usable."
+        if [ -s "${err}" ]; then
+            log_error "AWS said: $(tr '\n' ' ' <"${err}")"
+        fi
+        log_error "Set AWS_PROFILE (the devcontainer does not set one) or run 'aws sso login'."
+        exit 1
+    fi
+
+    export LOAD_TEST_AWS_ACCOUNT="${identity}"
+    log_info "AWS account ${identity}, region ${CDK_AWS_REGION}, profile ${AWS_PROFILE:-<default chain>}"
 }
 
 # Run IDs end up inside usernames and DynamoDB keys, so constrain them rather
@@ -110,15 +141,25 @@ confirm_or_exit() {
 _ssm_value() {
     local name="$1"
     local value
+    local err
+    err="$(_tmpdir)/ssm-err"
+
     value="$(aws ssm get-parameter \
         --name "${name}" \
         --query "Parameter.Value" \
         --output text \
-        --region "${CDK_AWS_REGION}" 2>/dev/null || echo "")"
+        --region "${CDK_AWS_REGION}" 2>"${err}" || echo "")"
 
     if [ -z "${value}" ] || [ "${value}" = "None" ]; then
         log_error "Could not resolve SSM parameter: ${name}"
-        log_error "Is CDK_PROJECT_PREFIX ('${CDK_PROJECT_PREFIX}') correct, and is the stack deployed?"
+        # Print what AWS actually said. ExpiredToken, AccessDenied and
+        # ParameterNotFound are three different problems with three different
+        # fixes, and discarding stderr made them indistinguishable — every one
+        # of them read as "your prefix is wrong".
+        if [ -s "${err}" ]; then
+            log_error "AWS said: $(tr '\n' ' ' <"${err}")"
+        fi
+        log_error "Prefix '${CDK_PROJECT_PREFIX}', region '${CDK_AWS_REGION}'."
         exit 1
     fi
     printf '%s' "${value}"

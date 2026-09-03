@@ -105,6 +105,7 @@ cat <<EOF
 
 $(log_plan "Load-test teardown plan")
   Project prefix : ${CDK_PROJECT_PREFIX}
+  AWS account    : ${LOAD_TEST_AWS_ACCOUNT}
   Region         : ${CDK_AWS_REGION}
   User pool      : ${USER_POOL_ID}
   Quota table    : ${QUOTA_TABLE}
