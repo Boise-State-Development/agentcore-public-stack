@@ -6,16 +6,23 @@ import {
   input,
   signal,
 } from '@angular/core';
+import { Dialog } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroCodeBracket,
   heroDocumentText,
   heroArrowDownTray,
   heroArrowPath,
+  heroArrowUpOnSquare,
 } from '@ng-icons/heroicons/outline';
 import type { Artifact } from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
+import {
+  ArtifactShareModalComponent,
+  type ArtifactShareModalData,
+} from './artifact-share-modal.component';
+import { UserService } from '../../../../../auth/user.service';
 import { parseIso } from '../../../../../utils/date';
 
 /** Visual treatment derived from an artifact's content type. */
@@ -58,6 +65,7 @@ interface ArtifactKind {
       heroDocumentText,
       heroArrowDownTray,
       heroArrowPath,
+      heroArrowUpOnSquare,
     }),
   ],
   template: `
@@ -99,21 +107,33 @@ interface ArtifactKind {
           </span>
         </span>
 
-        <button
-          type="button"
-          class="artifact-card__download"
-          [class.is-busy]="downloading()"
-          [attr.aria-label]="downloadAriaLabel()"
-          [attr.aria-busy]="downloading()"
-          [disabled]="downloading()"
-          (click)="download()"
-        >
-          <ng-icon
-            [name]="downloading() ? 'heroArrowPath' : 'heroArrowDownTray'"
-            aria-hidden="true"
-          />
-          <span class="artifact-card__download-label">Download</span>
-        </button>
+        <span class="artifact-card__actions">
+          <button
+            type="button"
+            class="artifact-card__action"
+            [attr.aria-label]="shareAriaLabel()"
+            (click)="share()"
+          >
+            <ng-icon name="heroArrowUpOnSquare" aria-hidden="true" />
+            <span class="artifact-card__action-label">Share</span>
+          </button>
+
+          <button
+            type="button"
+            class="artifact-card__action"
+            [class.is-busy]="downloading()"
+            [attr.aria-label]="downloadAriaLabel()"
+            [attr.aria-busy]="downloading()"
+            [disabled]="downloading()"
+            (click)="download()"
+          >
+            <ng-icon
+              [name]="downloading() ? 'heroArrowPath' : 'heroArrowDownTray'"
+              aria-hidden="true"
+            />
+            <span class="artifact-card__action-label">Download</span>
+          </button>
+        </span>
       </span>
     </div>
   `,
@@ -284,13 +304,22 @@ interface ArtifactKind {
       opacity: 0.4;
     }
 
-    /* Secondary action: a bordered, labelled download button in the
-       grid's last column. It lives inside the pointer-events:none
-       surface but re-enables them for itself, so it captures its own
-       clicks while the rest of the card falls through to the open
-       button. Resting colour clears the 3:1 non-text contrast bar. */
-    .artifact-card__download {
+    /* Secondary actions (Share, Download) sit in the grid's last column.
+       The row re-enables pointer events for itself so the buttons
+       capture their own clicks while the rest of the card falls through
+       to the stretched open button beneath. */
+    .artifact-card__actions {
       pointer-events: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    /* A bordered, labelled action button. Both actions keep a visible
+       text label, so no tooltip is needed for the accessible name
+       (WCAG 2.5.3) — the icon-only variant would. Resting colour clears
+       the 3:1 non-text contrast bar. */
+    .artifact-card__action {
       display: inline-flex;
       align-items: center;
       gap: 0.4rem;
@@ -312,47 +341,47 @@ interface ArtifactKind {
         background-color 0.18s ease;
     }
 
-    .artifact-card__download ng-icon {
+    .artifact-card__action ng-icon {
       font-size: 0.95rem;
       line-height: 1;
     }
 
-    .artifact-card:hover .artifact-card__download,
-    .artifact-card__download:hover {
+    .artifact-card:hover .artifact-card__action,
+    .artifact-card__action:hover {
       color: #374151;
     }
 
-    .artifact-card__download:hover {
+    .artifact-card__action:hover {
       background: rgba(0, 0, 0, 0.05);
     }
 
-    .artifact-card__download:focus-visible {
+    .artifact-card__action:focus-visible {
       outline: 2px solid #2563eb;
       outline-offset: 2px;
     }
 
-    .artifact-card__download:disabled {
+    .artifact-card__action:disabled {
       cursor: default;
     }
 
-    .artifact-card__download.is-busy ng-icon {
+    .artifact-card__action.is-busy ng-icon {
       animation: artifact-card-spin 0.8s linear infinite;
     }
 
-    :host-context(html.dark) .artifact-card__download {
+    :host-context(html.dark) .artifact-card__action {
       color: #9aa3b2;
     }
 
-    :host-context(html.dark) .artifact-card:hover .artifact-card__download,
-    :host-context(html.dark) .artifact-card__download:hover {
+    :host-context(html.dark) .artifact-card:hover .artifact-card__action,
+    :host-context(html.dark) .artifact-card__action:hover {
       color: #cbd2dd;
     }
 
-    :host-context(html.dark) .artifact-card__download:hover {
+    :host-context(html.dark) .artifact-card__action:hover {
       background: rgba(255, 255, 255, 0.08);
     }
 
-    :host-context(html.dark) .artifact-card__download:focus-visible {
+    :host-context(html.dark) .artifact-card__action:focus-visible {
       outline-color: #60a5fa;
     }
 
@@ -365,10 +394,10 @@ interface ArtifactKind {
     @media (prefers-reduced-motion: reduce) {
       .artifact-card__surface,
       .artifact-card__rule,
-      .artifact-card__download {
+      .artifact-card__action {
         transition: none;
       }
-      .artifact-card__download.is-busy ng-icon {
+      .artifact-card__action.is-busy ng-icon {
         animation: none;
       }
     }
@@ -379,6 +408,8 @@ export class ArtifactCardComponent {
 
   private artifactState = inject(ArtifactStateService);
   private artifactDownload = inject(ArtifactDownloadService);
+  private dialog = inject(Dialog);
+  private userService = inject(UserService);
 
   protected readonly downloading = signal(false);
 
@@ -404,12 +435,34 @@ export class ArtifactCardComponent {
       `Download ${this.kind().label} artifact ${this.artifact().title || 'Untitled'}, version ${this.artifact().version}`,
   );
 
+  protected readonly shareAriaLabel = computed(
+    () =>
+      `Share ${this.kind().label} artifact ${this.artifact().title || 'Untitled'}, version ${this.artifact().version}`,
+  );
+
   protected open(): void {
     const a = this.artifact();
     this.artifactState.openArtifactPanel({
       artifactId: a.artifactId,
       version: a.version,
       title: a.title,
+    });
+  }
+
+  /** Open the share dialog for *this* version.
+   *
+   *  The card shows one row per version, so the version it shares is the
+   *  one the user is looking at — a share pins an immutable version and
+   *  never follows HEAD. */
+  protected share(): void {
+    const a = this.artifact();
+    this.dialog.open(ArtifactShareModalComponent, {
+      data: {
+        artifactId: a.artifactId,
+        version: a.version,
+        title: a.title,
+        ownerEmail: this.userService.currentUser()?.email ?? '',
+      } as ArtifactShareModalData,
     });
   }
 
