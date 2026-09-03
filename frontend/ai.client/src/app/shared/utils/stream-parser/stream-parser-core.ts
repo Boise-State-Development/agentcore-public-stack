@@ -44,6 +44,7 @@ import type {
   UiResourceEvent,
   ToolInputPartialEvent,
   SessionTitleEvent,
+  SteeringAppliedEvent,
   ModelRetryEvent,
   ToolProgress,
 } from './stream-parser-types';
@@ -112,6 +113,11 @@ export interface StreamParserCallbacks {
   // Server-generated conversation title, pushed mid-stream on a session's
   // first turn once concurrent generation finishes (see SessionTitleEvent)
   onSessionTitle?: (data: SessionTitleEvent) => void;
+
+  // A follow-up queued mid-stream was injected into the running turn at a
+  // tool boundary and is now in history (see SteeringAppliedEvent). The SPA
+  // drops the matching composer-queue entry and renders it in the thread.
+  onSteeringApplied?: (data: SteeringAppliedEvent) => void;
 
   // A failed model call is being retried rather than surfaced as an error.
   // Advisory only — the turn continues; this exists so the resulting silence
@@ -548,6 +554,33 @@ export function validateSessionTitleEvent(data: unknown): data is SessionTitleEv
 }
 
 /**
+ * Validate SteeringAppliedEvent structure.
+ *
+ * `entryId` is the client-minted id of the queued composer entry and is what
+ * the SPA matches on, so an empty one is rejected: acking the wrong entry (or
+ * none) would either leave a duplicate queued or drop text that was never
+ * injected.
+ */
+export function validateSteeringAppliedEvent(
+  data: unknown,
+): data is SteeringAppliedEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<SteeringAppliedEvent>;
+
+  return (
+    event.type === 'steering_applied' &&
+    typeof event.sessionId === 'string' &&
+    event.sessionId.length > 0 &&
+    typeof event.entryId === 'string' &&
+    event.entryId.length > 0 &&
+    typeof event.text === 'string'
+  );
+}
+
+/**
  * Validate ModelRetryEvent structure. `attempt` is 1-based; `delaySeconds`
  * may legitimately be 0 (an unparseable delay is reported as 0 rather than
  * dropped, so the retry still reaches the user).
@@ -794,6 +827,14 @@ export function processStreamEvent(
           callbacks.onSessionTitle?.(data);
         } else {
           callbacks.onParseError?.('session_title: invalid data structure');
+        }
+        break;
+
+      case 'steering_applied':
+        if (validateSteeringAppliedEvent(data)) {
+          callbacks.onSteeringApplied?.(data);
+        } else {
+          callbacks.onParseError?.('steering_applied: invalid data structure');
         }
         break;
 

@@ -222,6 +222,29 @@ export interface SessionTitleEvent {
 }
 
 /**
+ * Steering applied event — a follow-up the user typed while this turn was
+ * still streaming has been injected into the running turn at a tool boundary
+ * and committed to conversation history (see docs/specs/mid-turn-steering.md).
+ *
+ * Emitted after the batch's `tool_result` events so the thread renders in the
+ * order the model will see, and never after `done`. It is the client's signal
+ * that the text is genuinely in the conversation: on receipt the SPA drops the
+ * matching entry from the composer queue (by `entryId`) and renders it as a
+ * user message inside the still-streaming turn.
+ *
+ * The absence of this event is the fallback, not an error. A turn that calls
+ * no tools has no boundary to inject at, and a steer can lose the race with
+ * the turn's end — in both cases the entry stays queued and PR #916's
+ * end-of-turn flush sends it as a normal turn.
+ */
+export interface SteeringAppliedEvent {
+  type: 'steering_applied';
+  sessionId: string;
+  entryId: string;
+  text: string;
+}
+
+/**
  * Model retry event — emitted each time the backend retries a failed model
  * call instead of surfacing the failure. Turns an unexplained silence into a
  * visible "still working" state.
@@ -380,6 +403,7 @@ export type StreamEventType =
   | 'ui_resource'
   | 'ui_tool_input_partial'
   | 'session_title'
+  | 'steering_applied'
   | 'model_retry';
 
 /**
@@ -407,6 +431,7 @@ export type StreamEventData =
   | UiResourceEvent
   | ToolInputPartialEvent
   | SessionTitleEvent
+  | SteeringAppliedEvent
   | ModelRetryEvent
   | null
   | undefined;
