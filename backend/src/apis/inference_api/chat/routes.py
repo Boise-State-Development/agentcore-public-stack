@@ -291,13 +291,32 @@ def _merge_inference_params(
       * supported with admin default -> use the default unless the request
         provides a value within bounds; out-of-bounds values are clamped.
 
-    Request keys for params the managed model says nothing about pass through
-    untouched — the per-provider translation table will drop unknowns.
+    **Omission means unsupported, for any model that declares a spec at all.**
+    A param the spec doesn't mention is dropped rather than passed through.
+    This inverts the original default, which forwarded any request key that
+    appeared in ``KNOWN_CANONICAL_PARAMS``. That was a latent turn-killer:
+    Anthropic deprecated ``temperature``/``top_p``/``top_k`` on Claude Opus 4.7
+    and later, where a non-default value returns a hard 400. Our curated
+    templates for those models correctly *omit* the params — but omitting is
+    not the same as declaring ``supported: false``, so a request that carried a
+    temperature reached Bedrock and killed the turn mid-stream. Inverting the
+    default closes the whole class instead of requiring every future template
+    to enumerate each newly-deprecated param and never miss one.
+
+    Models with **no** spec keep the permissive behavior: an admin who
+    hand-created a record without a ``supportedParams`` block hasn't declared
+    anything, so there is nothing to read an omission against. Every drop is
+    logged, which is what makes the inversion observable if it takes away a
+    param someone was relying on.
     """
     merged: dict = {}
     spec_map = {}
     if managed_model and managed_model.supported_params:
         spec_map = managed_model.supported_params.params or {}
+
+    # A non-empty spec is the signal that the admin described this model's
+    # params deliberately. An empty/absent one is silence, not a claim.
+    spec_is_authoritative = bool(spec_map)
 
     seen_keys: set[str] = set()
     for name, spec in spec_map.items():
@@ -347,14 +366,26 @@ def _merge_inference_params(
         elif spec.default is not None:
             merged[name] = spec.default
 
-    # Pass through request keys the admin spec doesn't mention, but only when
-    # they're in the canonical allow-list. Without this gate, a user could
-    # submit a future canonical key (or one a future provider mapping starts
-    # forwarding) and bypass the admin's per-model bounds entirely. Unknown
-    # keys are dropped here; the provider translation table is the second
-    # line of defense for ones it doesn't understand.
+    # Request keys the spec doesn't mention. For a model that declared a spec,
+    # silence means unsupported and the key is dropped. For one that declared
+    # nothing, fall back to the canonical allow-list: without that gate a user
+    # could submit a future canonical key (or one a future provider mapping
+    # starts forwarding) and bypass the admin's per-model bounds entirely.
+    # The provider translation table remains the second line of defense.
     for name, value in request_params.items():
         if name in seen_keys or value is None:
+            continue
+        if spec_is_authoritative:
+            # Logged at INFO on purpose: this is the inversion taking something
+            # away. If a param a caller depended on starts disappearing, this
+            # line is how it gets found — grep `omitted from its supportedParams`.
+            logger.info(
+                "Dropping inference param '%s' for model %s — omitted from its "
+                "supportedParams spec, which declares %d param(s)",
+                _sanitize_log(name),
+                _sanitize_log(getattr(managed_model, "model_id", "?")),
+                len(spec_map),
+            )
             continue
         if name not in KNOWN_CANONICAL_PARAMS:
             logger.info(
