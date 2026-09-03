@@ -76,6 +76,20 @@ ARG BUILDX_VERSION=0.30.1
 ARG BUILDX_SHA256_AMD64=c37114fcd034025ec68e224657c8a5a850df472ded3ddcbca75ad3a7ebb9710d
 ARG BUILDX_SHA256_ARM64=31d012d52d6df68aef4b55db62330967b562811f0de30cdfaa4505f314797c76
 
+# actionlint — static checker for GitHub Actions workflows.
+#
+# Earns its place because this repo's YAML has a documented, repeatedly-hit
+# footgun: `vars.*` / `secrets.*` in a workflow-level `env:` silently resolve
+# to empty strings, and nothing fails — the deploy just gets a blank value.
+# actionlint checks expression syntax, context availability, and job/needs
+# wiring, so that class of error surfaces locally instead of in a deploy.
+#
+# Hashes are the upstream published values from
+# actionlint_1.7.12_checksums.txt.
+ARG ACTIONLINT_VERSION=1.7.12
+ARG ACTIONLINT_SHA256_AMD64=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+ARG ACTIONLINT_SHA256_ARM64=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
+
 # uv — Python package and toolchain manager. Pinned to match
 # backend/Dockerfile.app-api and backend/Dockerfile.inference-api.
 ARG UV_VERSION=0.7.12
@@ -136,6 +150,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl wget gnupg sudo bash less procps \
         git git-lfs jq unzip xz-utils zip make \
+        shellcheck \
         build-essential pkg-config \
         libssl-dev libffi-dev zlib1g-dev \
         locales tzdata \
@@ -238,6 +253,30 @@ RUN set -eux; \
     chmod 0755 /usr/libexec/docker/cli-plugins/docker-buildx; \
     docker --version; \
     docker buildx version
+
+# -----------------------------------------------------------------------------
+# actionlint — GitHub Actions workflow linter
+#
+# Downloaded from the upstream release and verified against the sha256 embedded
+# above. Pairs with shellcheck (installed via apt in the base layer): actionlint
+# shells out to shellcheck to lint `run:` blocks, so having both means workflow
+# scripts get checked too, not just the YAML around them.
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64) actionlint_arch=amd64; actionlint_sha="${ACTIONLINT_SHA256_AMD64}" ;; \
+        arm64) actionlint_arch=arm64; actionlint_sha="${ACTIONLINT_SHA256_ARM64}" ;; \
+        *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    cd /tmp; \
+    curl -fsSLo actionlint.tgz \
+        "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${actionlint_arch}.tar.gz"; \
+    echo "${actionlint_sha}  actionlint.tgz" | sha256sum -c -; \
+    tar -xzf actionlint.tgz actionlint; \
+    install -m 0755 actionlint /usr/local/bin/actionlint; \
+    rm -f actionlint actionlint.tgz; \
+    actionlint --version; \
+    shellcheck --version
 
 # -----------------------------------------------------------------------------
 # uv — Python package and toolchain manager
@@ -343,6 +382,8 @@ HEALTHCHECK --interval=5m --timeout=15s --start-period=5s --retries=2 \
         aws --version && \
         cdk --version && \
         docker --version && \
+        actionlint --version && \
+        shellcheck --version && \
         git --version' >/dev/null 2>&1 || exit 1
 
 # Default to an interactive shell. Override with -- to run a one-off command.
