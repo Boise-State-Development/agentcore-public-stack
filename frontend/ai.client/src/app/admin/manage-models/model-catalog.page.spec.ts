@@ -233,4 +233,27 @@ describe('ModelCatalogPage', () => {
     await inFlight;
     expect(page.addingKey()).toBeNull();
   });
+
+  // These guard a mismatch that shipped and stayed live for months: every
+  // curated Claude template declared the `global.*` rates while its `modelId`
+  // named a `us.*` (Regional/CRIS) inference profile, which prices ~10% higher.
+  // Nothing failed — the numbers were merely wrong, everywhere downstream.
+  describe('curated Bedrock pricing', () => {
+    it('declares a pricingTier that matches the tier its modelId names', () => {
+      for (const model of CURATED_BEDROCK_MODELS) {
+        const expected = model.template.modelId.startsWith('global.') ? 'global' : 'regional';
+        expect(`${model.key}:${model.pricingTier}`).toBe(`${model.key}:${expected}`);
+      }
+    });
+
+    it('derives cache rates from base input at Bedrock\'s published multipliers', () => {
+      for (const model of CURATED_BEDROCK_MODELS) {
+        const t = model.template;
+        if (!t.supportsCaching) continue;
+        const input = t.inputPricePerMillionTokens;
+        expect(t.cacheWritePricePerMillionTokens).toBeCloseTo(input * 1.25, 6);
+        expect(t.cacheReadPricePerMillionTokens).toBeCloseTo(input * 0.1, 6);
+      }
+    });
+  });
 });

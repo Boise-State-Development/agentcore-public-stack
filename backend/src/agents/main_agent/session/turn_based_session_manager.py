@@ -501,8 +501,8 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         anchor is what keeps the restored prefix byte-stable (see the prompt-cache
         contract in ``CLAUDE.md``). Moving it backwards re-truncates messages that
         were previously sent whole, which rewrites the prefix — a full cache write
-        at the $2.50/MTok premium over a 35k–150k-token prefix, on a turn where
-        nothing about the conversation appeared to change.
+        over a 35k–150k-token prefix at 1.25x the model's base input rate, on a
+        turn where nothing about the conversation appeared to change.
 
         Re-reading rather than sharing the state object: the sibling may live in
         another replica, where object aliasing (#750's fix for the message list)
