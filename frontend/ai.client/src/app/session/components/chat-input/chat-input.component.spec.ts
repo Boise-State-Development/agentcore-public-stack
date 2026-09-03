@@ -29,6 +29,10 @@ class SteeringServiceStub {
   /** Set by a test to decide whether the backend "armed" the entry. */
   armResult = true;
   toolsInUse = false;
+  /** Signal, not a plain field: the hold has to re-run the flush effect when
+   *  the prompt clears, or a dismissed prompt would strand the queue. */
+  readonly held = signal(false);
+  published: { id: string; text: string }[] = [];
   readonly armCalls: { sessionId: string; entryId: string; text: string }[] = [];
   readonly withdrawCalls: { sessionId: string; entryId: string }[] = [];
 
@@ -43,6 +47,15 @@ class SteeringServiceStub {
   }
   async withdraw(sessionId: string, entryId: string): Promise<void> {
     this.withdrawCalls.push({ sessionId, entryId });
+  }
+  shouldHoldQueue(): boolean {
+    return this.held();
+  }
+  publishQueue(_sessionId: string | null, entries: { id: string; text: string }[]): void {
+    this.published = entries;
+  }
+  carriedFor(): { id: string; text: string }[] {
+    return this.published;
   }
   recordApplied(): void {}
   consumeApplied(entryId: string): void {
@@ -625,5 +638,163 @@ describe('ChatInputComponent — mid-turn steering (PR-5)', () => {
     steering.toolsInUse = true;
     setStreaming(false);
     expect(textarea.getAttribute('placeholder')).toBe('How can I help you today?');
+  });
+});
+
+
+describe('ChatInputComponent — a queue held behind a paused turn (PR-6)', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  let textarea: HTMLTextAreaElement;
+  let steering: SteeringServiceStub;
+  let submitted: { content: string }[];
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+          },
+        },
+        { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
+        { provide: ToolService, useValue: {} },
+        {
+          provide: VoiceChatService,
+          useValue: {
+            status: signal('idle'),
+            isVoiceActive: signal(false),
+            agentTranscript: signal(''),
+          },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, {
+        set: { imports: [], schemas: [NO_ERRORS_SCHEMA] },
+      })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    steering = TestBed.inject(SteeringService) as unknown as SteeringServiceStub;
+    fixture.componentRef.setInput('showFileControls', false);
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('showSettingsControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.componentRef.setInput('sessionId', 'sess-1');
+
+    submitted = [];
+    component.messageSubmitted.subscribe((m) => submitted.push(m));
+
+    fixture.detectChanges();
+    textarea = fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement;
+  });
+
+  function type(value: string): void {
+    textarea.value = value;
+    textarea.setSelectionRange(value.length, value.length);
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
+  function pressEnter(): void {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true }),
+    );
+    fixture.detectChanges();
+  }
+
+  function setStreaming(streaming: boolean): void {
+    fixture.componentRef.setInput('isChatLoading', streaming);
+    fixture.detectChanges();
+  }
+
+  /** A turn that pauses: the stream closes (loading falls) with a prompt up. */
+  function pauseTurn(): void {
+    steering.held.set(true);
+    setStreaming(false);
+  }
+
+  it('does not send a follow-up while a prompt is awaiting an answer', () => {
+    setStreaming(true);
+    type('actually use the local file');
+    pressEnter();
+
+    pauseTurn();
+
+    // Sending here starts a NEW turn, which abandons the paused one the user
+    // is in the middle of answering — and can race the resume that follows
+    // into the single-flight guard.
+    expect(submitted).toEqual([]);
+    expect(component.queuedMessages().map((q) => q.content)).toEqual([
+      'actually use the local file',
+    ]);
+  });
+
+  it('flushes as soon as the prompt is dismissed', () => {
+    setStreaming(true);
+    type('never mind the calendar');
+    pressEnter();
+    pauseTurn();
+
+    steering.held.set(false);
+    fixture.detectChanges();
+
+    // The hold must be bounded by an action the user already has, or a prompt
+    // they never answer strands the follow-up forever.
+    expect(submitted.map((m) => m.content)).toEqual(['never mind the calendar']);
+  });
+
+  it('publishes the queue so the resume request can carry it', () => {
+    setStreaming(true);
+    type('one');
+    pressEnter();
+    type('two');
+    pressEnter();
+
+    expect(steering.published.map((e) => e.text)).toEqual(['one', 'two']);
+    expect(steering.published.map((e) => e.id)).toEqual(
+      component.queuedMessages().map((q) => q.id),
+    );
+  });
+
+  it('stops publishing an entry once it is acked', async () => {
+    setStreaming(true);
+    type('use the other file');
+    pressEnter();
+    await Promise.resolve();
+
+    steering.applied.set([component.queuedMessages()[0].id]);
+    fixture.detectChanges();
+
+    // A carried entry the resumed turn already injected must not be carried
+    // again by a second resume.
+    expect(steering.published).toEqual([]);
+  });
+
+  it('explains the hold in the placeholder', () => {
+    pauseTurn();
+    // The turn is not streaming while it is paused, so without this the idle
+    // placeholder would promise immediate delivery on the slowest path.
+    expect(textarea.getAttribute('placeholder')).toContain('when you answer above');
+  });
+
+  it('still flushes normally when nothing is paused', () => {
+    setStreaming(true);
+    type('ordinary follow-up');
+    pressEnter();
+    setStreaming(false);
+
+    expect(submitted.map((m) => m.content)).toEqual(['ordinary follow-up']);
   });
 });

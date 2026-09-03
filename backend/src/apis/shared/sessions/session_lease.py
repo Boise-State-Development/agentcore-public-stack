@@ -135,10 +135,17 @@ async def acquire_session_lease(
         # lease item, so a prior turn's cancel request can't bleed into this
         # one. (Owner-scoping already protects — the new owner token won't match
         # the old cancelRequestedFor — but clearing keeps the row honest.)
+        #
+        # The steering inbox is cleared for a stronger reason than tidiness.
+        # Owner-scoping hides a stale queue from ``peek_steer_queue``, but
+        # ``seed_steer_queue`` stamps ``steerFor`` to OUR owner — which would
+        # make a previous turn's leftovers suddenly visible and inject them
+        # into this turn. Clearing here is what makes seeding safe.
         "UpdateExpression": (
             "SET leaseOwner = :owner, leaseExpiresAt = :exp, "
             "#ttl = :ttl, updatedAt = :updated "
-            "REMOVE cancelRequestedFor, cancelRequestedAt"
+            "REMOVE cancelRequestedFor, cancelRequestedAt, "
+            "steerFor, steerQueue, steerRequestedAt"
         ),
         "ExpressionAttributeNames": {"#ttl": "ttl"},
         "ExpressionAttributeValues": {
@@ -490,6 +497,80 @@ async def request_session_steer(
             return False
         logger.warning("Session steer arm failed for %s: %s", session_id, e)
         return False
+
+
+async def seed_steer_queue(
+    lease: Optional[SessionLease],
+    entries: list,
+) -> int:
+    """Install carried-over follow-ups on a turn that is just starting.
+
+    The resume path's reason for existing (docs/specs/mid-turn-steering.md,
+    "Paused turns"). A turn paused for OAuth consent or tool approval has no
+    running loop to steer, and its lease — inbox and all — is released when the
+    paused stream closes. The follow-ups the user typed meanwhile are still in
+    their composer, so the resume request carries them and they are seeded here
+    against the *resumed* turn's lease.
+
+    Deliberately reusing the inbox rather than prepending to the resume prompt:
+    that prompt is Strands' interrupt-response list, and text in it would stop
+    it being recognised as a resume at all. Seeding means one injection path and
+    one ack path for every steer, however it arrived.
+
+    ``SET``, not ``list_append``: this runs at turn start on a lease we just
+    acquired, so there is nothing legitimate to append to. Returns the number of
+    entries installed, or 0 when there is nothing to do or the write failed —
+    best-effort, because a lost seed degrades to the composer's end-of-turn
+    flush rather than losing the text.
+    """
+    if lease is None or not entries:
+        return 0
+    table = _table()
+    if table is None:
+        return 0
+
+    from botocore.exceptions import ClientError
+
+    now = datetime.now(timezone.utc).isoformat()
+    normalized = []
+    total_chars = 0
+    for entry in entries[:STEER_QUEUE_MAX_ENTRIES]:
+        text = str(entry.get("text", ""))
+        entry_id = str(entry.get("id", ""))
+        if not text or not entry_id:
+            continue
+        total_chars += len(text)
+        if total_chars > STEER_QUEUE_MAX_CHARS:
+            break
+        normalized.append({"id": entry_id, "text": text, "at": now})
+
+    if not normalized:
+        return 0
+
+    try:
+        table.update_item(
+            Key={"PK": lease.pk, "SK": lease.sk},
+            UpdateExpression=(
+                "SET steerFor = :owner, steerRequestedAt = :ts, steerQueue = :entries"
+            ),
+            ConditionExpression="leaseOwner = :owner",
+            ExpressionAttributeValues={
+                ":owner": lease.owner,
+                ":ts": now,
+                ":entries": normalized,
+            },
+        )
+        logger.info(
+            "Seeded %d carried-over steer(s) for session %s",
+            len(normalized),
+            lease.session_id,
+        )
+        return len(normalized)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return 0
+        logger.warning("Steer seed failed for %s: %s", lease.session_id, e)
+        return 0
 
 
 async def peek_steer_queue(lease: Optional[SessionLease]) -> list:

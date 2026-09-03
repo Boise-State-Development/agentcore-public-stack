@@ -222,11 +222,27 @@ export class ChatInputComponent {
    * ends, learns not to trust the affordance.
    */
   protected readonly placeholder = computed(() => {
+    // A prompt awaiting an answer holds the queue, and the turn is NOT
+    // streaming while it does — so the idle placeholder would be the most
+    // wrong of the three: it promises immediate delivery on the one path that
+    // waits the longest.
+    if (this.queueHeld()) {
+      return 'Send a follow-up — it goes in when you answer above';
+    }
     if (!this.isLoading()) return 'How can I help you today?';
     return this.canSteer()
       ? 'Send a follow-up — it goes in at the next step'
       : 'Send a follow-up — it goes out when this response finishes';
   });
+
+  /**
+   * Whether this conversation's queue is waiting on a consent / approval
+   * prompt rather than on a running turn. Read by the placeholder and the
+   * queued chips so a held follow-up explains itself instead of looking stuck.
+   */
+  protected readonly queueHeld = computed(() =>
+    this.steering.shouldHoldQueue(this.sessionId()),
+  );
 
   // Computed: can submit (has content or ready files)
   readonly canSubmit = computed(() => {
@@ -342,6 +358,19 @@ export class ChatInputComponent {
       this.focusInput();
     });
 
+    // Mirror the queue into SteeringService so the resume path can carry it
+    // into the turn it restarts without reaching into this component.
+    effect(() => {
+      const sessionId = this.sessionId();
+      const queue = this.queuedMessages();
+      untracked(() =>
+        this.steering.publishQueue(
+          sessionId,
+          queue.map(q => ({ id: q.id, text: q.content })),
+        ),
+      );
+    });
+
     // Drop entries the backend confirmed it injected mid-turn.
     //
     // This is what keeps the two delivery paths from both firing: once
@@ -386,6 +415,15 @@ export class ChatInputComponent {
         return;
       }
       if (!this.turnInFlight) return;
+      // Hold while a consent / approval prompt for this conversation is
+      // waiting on the user. Flushing here would start a new turn that
+      // abandons the paused one they are in the middle of answering, and can
+      // race the resume that follows into the single-flight guard. Answering
+      // the prompt carries the queue into the resumed turn; dismissing it
+      // clears the prompt, which re-runs this effect and flushes normally —
+      // so the hold is always bounded by an action the user already has.
+      // See docs/specs/mid-turn-steering.md ("Paused turns").
+      if (this.steering.shouldHoldQueue(this.sessionId())) return;
       const [next, ...rest] = untracked(() => this.queuedMessages());
       if (!next) return;
       // Consume the edge before emitting: the next message waits for the next

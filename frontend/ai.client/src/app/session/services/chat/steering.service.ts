@@ -1,6 +1,14 @@
-import { Injectable, inject, signal } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 import { SessionService } from '../session/session.service';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 import type { SteeringAppliedEvent } from '../../../shared/utils/stream-parser';
+
+/** One queued follow-up, as the composer holds it and the resume path sends it. */
+export interface CarriedSteerEntry {
+  id: string;
+  text: string;
+}
 
 /**
  * Mid-turn steering state, shared between the composer (which owns the queue)
@@ -14,6 +22,8 @@ import type { SteeringAppliedEvent } from '../../../shared/utils/stream-parser';
 @Injectable({ providedIn: 'root' })
 export class SteeringService {
   private readonly sessionService = inject(SessionService);
+  private readonly consentService = inject(OAuthConsentService);
+  private readonly toolApprovalService = inject(ToolApprovalService);
 
   /**
    * Entry ids the backend has confirmed are in conversation history. The
@@ -112,10 +122,67 @@ export class SteeringService {
     this.appliedIds.update((ids) => ids.filter((id) => id !== entryId));
   }
 
+  // -- paused turns -------------------------------------------------------
+  //
+  // A turn paused for OAuth consent or tool approval has no running loop to
+  // steer, and the pause released its lease — inbox and all — when the stream
+  // closed. See docs/specs/mid-turn-steering.md ("Paused turns").
+
+  /** Sessions with a prompt on screen waiting for the user to answer it. */
+  private readonly awaitingAnswer = computed<Set<string>>(() => {
+    const sessions = new Set<string>();
+    for (const request of this.consentService.pending()) {
+      if (request.sessionId && request.interruptId) sessions.add(request.sessionId);
+    }
+    for (const request of this.toolApprovalService.pending()) {
+      if (request.sessionId) sessions.add(request.sessionId);
+    }
+    return sessions;
+  });
+
+  /**
+   * Whether the composer should hold its queue rather than flushing it.
+   *
+   * True only while this session has a *resumable* prompt awaiting an answer.
+   * Flushing then would start a brand-new turn, which abandons the paused one
+   * the user is in the middle of answering — and, worse, can race the resume
+   * that follows into the single-flight guard. The follow-up waits with the
+   * prompt and rides the resumed turn instead.
+   *
+   * The hold is bounded by an action the user already has: answering the
+   * prompt resumes and carries the queue, and dismissing it clears the pending
+   * request, which drops this to false and lets the ordinary flush run. A
+   * pre-flight consent (no `interruptId`, nothing paused) never holds, because
+   * there is no turn to resume.
+   */
+  shouldHoldQueue(sessionId: string | null): boolean {
+    return !!sessionId && this.awaitingAnswer().has(sessionId);
+  }
+
+  /**
+   * The composer's live queue, mirrored per session so the resume path can
+   * carry it without reaching into a component.
+   *
+   * A mirror, not a second source of truth: the composer owns the queue and
+   * republishes on every change, and nothing here ever writes back.
+   */
+  private readonly heldQueues = signal<Record<string, CarriedSteerEntry[]>>({});
+
+  publishQueue(sessionId: string | null, entries: CarriedSteerEntry[]): void {
+    if (!sessionId) return;
+    this.heldQueues.update((map) => ({ ...map, [sessionId]: entries }));
+  }
+
+  /** Entries a resume request should carry into the turn it restarts. */
+  carriedFor(sessionId: string): CarriedSteerEntry[] {
+    return this.heldQueues()[sessionId] ?? [];
+  }
+
   /** Clear all state — called on session change. */
   reset(): void {
     this.appliedIds.set([]);
     this.turnUsedTools.set({});
+    this.heldQueues.set({});
   }
 
   private isFeatureOff(error: unknown): boolean {

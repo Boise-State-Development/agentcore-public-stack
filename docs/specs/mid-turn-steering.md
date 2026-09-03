@@ -1,6 +1,6 @@
 # Mid-turn steering
 
-**Status:** in progress — PRs 1–5 built (end to end); PR-6 open, pending a dev evaluation
+**Status:** built — PRs 1–6 complete. Pending the dev evaluation Risk 2 asks for.
 **Follow-up to:** PR #916 (`feature/queue-followup-instead-of-interrupt`)
 **Refs:** `docs/kaizen/reviews/2026-08-28.md` proposal #5
 
@@ -314,9 +314,9 @@ is still streaming — this is the one piece of visual design work in the change
 | 3 | app-api `POST /sessions/{id}/steer` + `DELETE .../steer/{entryId}`, `get_current_user_from_session` auth per the house rule. | **built** |
 | 4 | `steering_applied` SSE event: coordinator emit, parser case, CLAUDE.md table row. | **built** |
 | 5 | SPA: pending-ack queue state, POST/DELETE wiring, conditional placeholder, mid-turn user bubble rendering. | **built** |
-| 6 | Paused-turn carry-through on the resume path (D "Paused turns"). Optional, ships after the rest is live in dev. | open |
+| 6 | Paused-turn carry-through on the resume path (D "Paused turns"). Optional, ships after the rest is live in dev. | **built** |
 
-Three implementation notes worth carrying forward:
+Four implementation notes worth carrying forward:
 
 * **The ack drain runs before each SSE event is yielded, not after.** An
   injection confirmed on the turn's *final* tool batch would otherwise be
@@ -326,6 +326,25 @@ Three implementation notes worth carrying forward:
   every non-toolResult block — the injection included. It now carries the
   residual across exactly once. The concern the spec raised as "confirm this is
   fine" was real.
+* **The paused-turn case needed a client behaviour change, not just carriage.**
+  The spec framed PR-6 as "the resume path can carry the pending entries", but
+  the resume never got the chance: a pause closes the SSE stream, so
+  `isChatLoading` falls and PR #916's falling edge fires the follow-up as a
+  *new* turn — abandoning the paused turn the user is mid-answer on, and racing
+  the resume that follows into the single-flight guard. So the composer now
+  **holds** its queue while a resumable prompt is awaiting an answer, and the
+  resume carries it. The hold is bounded by an action the user already has:
+  dismissing the prompt clears it and the ordinary flush runs.
+* **Carrying is seeding, not prepending.** The resume prompt is Strands'
+  interrupt-response list, and text in it would stop `_is_interrupt_resume_prompt`
+  recognising it as a resume at all. `/invocations` seeds the carried entries
+  onto the lease it just acquired instead, so the ordinary `SteeringHook`
+  injects them at the resumed turn's first tool boundary — one injection path
+  and one ack path however an entry arrived. This made an existing latent bug
+  load-bearing: `acquire_session_lease` cleared the cancel markers but not the
+  steering inbox, and seeding stamps `steerFor` to the *new* owner, which would
+  have made a previous turn's leftovers visible and injected them into a turn
+  they were never meant for. Acquire now clears the inbox too.
 * **"Reload survival is free" was half true.** The text does come back with no
   separate hydration path, but it comes back *raw*: a user message of
   `[toolResult…, text]` whose text is still wrapped in the tags written for the
