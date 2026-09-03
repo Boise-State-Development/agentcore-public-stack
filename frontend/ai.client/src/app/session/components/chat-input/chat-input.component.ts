@@ -7,6 +7,7 @@ import {
   computed,
   viewChild,
   effect,
+  untracked,
   afterNextRender,
   ElementRef,
 } from '@angular/core';
@@ -57,6 +58,19 @@ interface Message {
    * Marketplace D11: the Agent `@`-mentioned for **this turn only**. The conversation is
    * not bound to it — the next message with no mention is plain chat again.
    */
+  mentionAgentId?: string;
+}
+
+/**
+ * A follow-up the user sent while a response was still streaming. Carries
+ * everything a real send carries except the timestamp, which is stamped at
+ * flush time: the message enters the conversation when it is actually sent, and
+ * stamping it at queue time would sort it ahead of the assistant reply that was
+ * still streaming when the user typed it.
+ */
+interface QueuedMessage {
+  content: string;
+  fileUploadIds?: string[];
   mentionAgentId?: string;
 }
 
@@ -128,8 +142,26 @@ export class ChatInputComponent {
   isFocused = signal(false);
   isDraggingOver = signal(false);
 
+  /**
+   * Follow-ups typed while a response was streaming, oldest first.
+   *
+   * Enter used to mean Stop mid-stream, so a follow-up typed out of habit
+   * killed the response the user was waiting on — and a send that raced the
+   * single-flight guard cleared the composer before the 409 came back, eating
+   * the text outright. Queueing removes both: the draft is never destroyed, so
+   * there is nothing to recover, and the guard becomes unreachable for
+   * user-typed follow-ups rather than merely survivable.
+   *
+   * A list rather than one slot, because a queue that silently drops the second
+   * entry is the same bug in a smaller box.
+   */
+  readonly queuedMessages = signal<QueuedMessage[]>([]);
+
   // Track drag enter/leave depth to handle nested elements
   private dragCounter = 0;
+
+  /** Whether a turn has been observed in flight since the last queue flush. */
+  private turnInFlight = false;
 
   // Output events
   fileAttached = output<File>();
@@ -144,6 +176,16 @@ export class ChatInputComponent {
 
   // Computed: show file attachments area
   readonly showFileAttachments = computed(() => this.pendingUploads().length > 0);
+
+  /**
+   * The composer stays usable mid-stream, so the placeholder is the only place
+   * the queueing behaviour announces itself before the user tries it.
+   */
+  protected readonly placeholder = computed(() =>
+    this.isLoading()
+      ? 'Send a follow-up — it goes out when this response finishes'
+      : 'How can I help you today?',
+  );
 
   // Computed: can submit (has content or ready files)
   readonly canSubmit = computed(() => {
@@ -258,6 +300,34 @@ export class ChatInputComponent {
       this.sessionId();
       this.focusInput();
     });
+
+    // Send one queued follow-up per completed turn.
+    //
+    // Edge-triggered on loading going true -> false, not level-triggered on
+    // "idle with something waiting". The parent only raises `isChatLoading`
+    // after `messageSubmitted` round-trips through the chat service, so a level
+    // check sees itself as still-idle immediately after emitting and drains the
+    // whole queue in one pass — straight into the single-flight guard that
+    // rejects the second turn. Consuming the edge is what holds it to one.
+    //
+    // The parent cannot tell us *how* the turn ended, and it doesn't need to:
+    // done, aborted and errored all land on the same falling edge, which is
+    // what makes the three paths symmetric without three code paths.
+    effect(() => {
+      if (this.isLoading()) {
+        this.turnInFlight = true;
+        return;
+      }
+      if (!this.turnInFlight) return;
+      const [next, ...rest] = untracked(() => this.queuedMessages());
+      if (!next) return;
+      // Consume the edge before emitting: the next message waits for the next
+      // turn to start and finish. If the parent never starts one, the follow-up
+      // stays visible and removable rather than being fired into a rejection.
+      this.turnInFlight = false;
+      this.queuedMessages.set(rest);
+      this.messageSubmitted.emit({ ...next, timestamp: new Date() });
+    });
   }
 
   private focusInput(): void {
@@ -266,12 +336,75 @@ export class ChatInputComponent {
     }
   }
 
+  /**
+   * Enter (and the send affordance when idle). While a response is streaming
+   * this **queues** rather than stopping: Enter always means "say this".
+   *
+   * Stopping stays on the button, deliberately. Making Enter ambiguous — send
+   * when idle, abort when busy — is what let a reflex keystroke kill a run the
+   * user was waiting on, and stopping is the rarer, more destructive of the two.
+   */
   onSubmit() {
+    if (this.isLoading()) {
+      this.queueChatRequest();
+    } else {
+      this.submitChatRequest();
+    }
+  }
+
+  /**
+   * The round button on the right. Unlike Enter it keeps its old meaning while
+   * streaming — it is the only Stop affordance, and taking that away to make
+   * room for a second Send would leave a user with text typed unable to stop.
+   */
+  onPrimaryButtonClick() {
     if (this.isLoading()) {
       this.cancelChatRequest();
     } else {
       this.submitChatRequest();
     }
+  }
+
+  /**
+   * Capture the composer's contents as a pending follow-up and clear it, so the
+   * user can keep typing. Mirrors `submitChatRequest`'s validation exactly —
+   * anything that would not have been sendable is not queueable either.
+   */
+  private queueChatRequest(): void {
+    const content = this.userInput().trim();
+    const fileUploadIds = this.readyUploadIds();
+
+    if (!content && fileUploadIds.length === 0) {
+      return;
+    }
+
+    if (this.hasActivePendingUploads()) {
+      this.toastService.warning('Upload in Progress', 'Please wait for file uploads to complete.');
+      return;
+    }
+
+    this.queuedMessages.update(queue => [
+      ...queue,
+      {
+        content,
+        fileUploadIds: fileUploadIds.length > 0 ? [...fileUploadIds] : undefined,
+        mentionAgentId: this.mentionedAgent()?.agentId,
+      },
+    ]);
+
+    // Clear exactly what a real send clears — the queued copy already owns the
+    // upload ids, so releasing them here is what lets the next message attach
+    // its own files.
+    this.userInput.set('');
+    this.mentionedAgent.set(null);
+    this.closeMentionMenu();
+    this.resetTextareaHeight();
+    this.fileUploadService.clearReadyUploads();
+  }
+
+  /** Drop a pending follow-up before it is sent. */
+  removeQueuedMessage(index: number): void {
+    this.queuedMessages.update(queue => queue.filter((_, i) => i !== index));
   }
 
   submitChatRequest() {

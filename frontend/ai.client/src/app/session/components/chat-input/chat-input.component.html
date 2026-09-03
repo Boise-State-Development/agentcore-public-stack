@@ -28,6 +28,40 @@
       </div>
     }
 
+    <!--
+      Queued follow-ups. The user typed these while a response was still
+      streaming; they send one at a time as each turn finishes. Shown inside the
+      composer shell rather than in the message list because they have not
+      entered the conversation yet and can still be taken back.
+    -->
+    @if (queuedMessages().length > 0) {
+      <div class="border-b border-gray-200 dark:border-gray-700 px-4 py-2">
+        <ul class="flex flex-col gap-1.5" aria-live="polite">
+          @for (queued of queuedMessages(); track $index) {
+            <li class="flex items-start gap-2 rounded-lg bg-gray-100 px-3 py-2 dark:bg-white/5">
+              <ng-icon
+                name="heroClock"
+                class="mt-0.5 size-4 shrink-0 text-gray-500 dark:text-gray-400"
+                aria-hidden="true"
+              />
+              <span class="min-w-0 flex-1 truncate text-sm text-gray-700 dark:text-gray-300">
+                <span class="sr-only">Queued, sends when the current response finishes: </span>
+                {{ queued.content }}
+              </span>
+              <button
+                type="button"
+                (click)="removeQueuedMessage($index)"
+                class="shrink-0 rounded-sm p-0.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                [attr.aria-label]="'Remove queued message: ' + queued.content"
+              >
+                <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+              </button>
+            </li>
+          }
+        </ul>
+      </div>
+    }
+
     <!-- File Attachments Area -->
     @if (showFileAttachments()) {
       <div class="border-b border-gray-200 dark:border-gray-700">
@@ -76,7 +110,7 @@
         (click)="onTextareaCaretMove($event)"
         (focus)="onFocus()"
         (blur)="onBlur()"
-        placeholder="How can I help you today?"
+        [attr.placeholder]="placeholder()"
         role="combobox"
         aria-autocomplete="list"
         [attr.aria-expanded]="isMentionMenuOpen()"
@@ -215,7 +249,7 @@
           <!-- Submit/Stop Button -->
           <button
             type="button"
-            (click)="onSubmit()"
+            (click)="onPrimaryButtonClick()"
             [disabled]="!isLoading() && hasActivePendingUploads()"
             [class]="isLoading()
               ? 'flex size-10 items-center justify-center rounded-full bg-red-500 text-white shadow-sm transition-all hover:bg-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500'
