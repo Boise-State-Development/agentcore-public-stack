@@ -2,7 +2,10 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import type { RenderToken } from './artifact-http.service';
+import type {
+  ArtifactContent,
+  RenderToken,
+} from './artifact-http.service';
 
 /** Who may open a share. `public` means any *authenticated* tenant user
  *  — never anonymous, matching conversation sharing. */
@@ -43,6 +46,12 @@ export interface SharedArtifact {
 interface RenderTokenResponseDto {
   url: string;
   expires_at: string;
+}
+
+interface ArtifactContentResponseDto {
+  content: string;
+  content_type: string;
+  version: number;
 }
 
 /**
@@ -165,5 +174,28 @@ export class ArtifactShareService {
       ),
     );
     return { url: res.url, expiresAt: res.expires_at };
+  }
+
+  /**
+   * Raw source of a shared artifact version, for the recipient's code
+   * view. The parallel of `ArtifactHttpService.getArtifactContent`,
+   * which builds its key from the authenticated user and so can only
+   * ever serve an owner.
+   *
+   * The bytes are inert text the page highlights client-side — never
+   * executed. Oversized artifacts 413 here exactly as they do for the
+   * owner, so callers steer to download.
+   */
+  async getSharedArtifactContent(shareId: string): Promise<ArtifactContent> {
+    const res = await firstValueFrom(
+      this.http.get<ArtifactContentResponseDto>(
+        `${this.sharedUrl()}/${encodeURIComponent(shareId)}/content`,
+      ),
+    );
+    return {
+      content: res.content,
+      contentType: res.content_type,
+      version: res.version,
+    };
   }
 }

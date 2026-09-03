@@ -10,13 +10,11 @@ import {
 } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { HttpErrorResponse } from '@angular/common/http';
-import { NgTemplateOutlet } from '@angular/common';
 import { Dialog } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroXMark,
   heroArrowPath,
-  heroExclamationTriangle,
   heroArrowDownTray,
   heroArrowUpOnSquare,
   heroEye,
@@ -36,7 +34,7 @@ import {
 } from '../../../../services/artifacts/artifact-http.service';
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
 import { SessionService } from '../../../../services/session/session.service';
-import { ArtifactSourceComponent } from './artifact-source.component';
+import { ArtifactViewerComponent } from './artifact-viewer.component';
 import {
   ArtifactShareModalComponent,
   type ArtifactShareModalData,
@@ -64,12 +62,11 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
 @Component({
   selector: 'app-artifact-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, NgTemplateOutlet, ArtifactSourceComponent, TooltipDirective],
+  imports: [NgIcon, ArtifactViewerComponent, TooltipDirective],
   providers: [
     provideIcons({
       heroXMark,
       heroArrowPath,
-      heroExclamationTriangle,
       heroArrowDownTray,
       heroArrowUpOnSquare,
       heroEye,
@@ -295,158 +292,25 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
           </button>
         </header>
 
-        <div class="relative min-h-0 flex-1">
-          @if (view() === 'code') {
-            @if (sourceError()) {
-              <div
-                class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
-                role="alert"
-              >
-                <ng-icon
-                  name="heroExclamationTriangle"
-                  class="text-3xl text-amber-500"
-                  aria-hidden="true"
-                />
-                <p class="text-sm text-gray-700 dark:text-gray-300">
-                  {{ sourceError() }}
-                </p>
-                <button
-                  type="button"
-                  class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
-                  (click)="retrySource()"
-                >
-                  Try again
-                </button>
-              </div>
-            } @else if (source(); as src) {
-              <app-artifact-source
-                [content]="src.content"
-                [contentType]="src.contentType"
-              />
-            } @else {
-              <ng-container
-                [ngTemplateOutlet]="skeleton"
-                [ngTemplateOutletContext]="{ label: 'Building source view…' }"
-              />
-            }
-          } @else {
-            @if (error()) {
-              <div
-                class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
-                role="alert"
-              >
-                <ng-icon
-                  name="heroExclamationTriangle"
-                  class="text-3xl text-amber-500"
-                  aria-hidden="true"
-                />
-                <p class="text-sm text-gray-700 dark:text-gray-300">
-                  {{ error() }}
-                </p>
-                <button
-                  type="button"
-                  class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
-                  (click)="retry()"
-                >
-                  Try again
-                </button>
-              </div>
-            } @else {
-              @if (safeUrl(); as url) {
-                <iframe
-                  [src]="url"
-                  class="h-full w-full border-0 bg-white"
-                  [class.pointer-events-none]="dragging()"
-                  [title]="ref.title || 'Artifact'"
-                  sandbox="allow-scripts"
-                  referrerpolicy="no-referrer"
-                  loading="lazy"
-                  (load)="onIframeLoad()"
-                ></iframe>
-              }
-              @if (!previewReady()) {
-                <ng-container
-                  [ngTemplateOutlet]="skeleton"
-                  [ngTemplateOutletContext]="{ label: 'Rendering artifact…' }"
-                />
-              }
-            }
-          }
-        </div>
+        <app-artifact-viewer
+          [safeUrl]="safeUrl()"
+          [title]="ref.title"
+          [view]="view()"
+          [source]="source()"
+          [error]="error()"
+          [sourceError]="sourceError()"
+          [previewReady]="previewReady()"
+          [inert]="dragging()"
+          (retry)="retry()"
+          (retrySource)="retrySource()"
+          (iframeLoad)="onIframeLoad()"
+        />
       </aside>
-      <ng-template #skeleton let-label="label">
-        <div
-          class="absolute inset-0 overflow-hidden bg-white p-8 dark:bg-gray-900"
-          role="status"
-          [attr.aria-label]="label"
-        >
-          <div aria-hidden="true" class="mx-auto flex max-w-2xl flex-col gap-6">
-            <div class="flex flex-col gap-3">
-              <div
-                class="skeleton-shimmer h-8 w-1/2 rounded-lg bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-4 w-1/4 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-            </div>
-            <div class="flex flex-col gap-3">
-              <div
-                class="skeleton-shimmer h-3.5 w-full rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-11/12 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-4/5 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-            </div>
-            <div
-              class="skeleton-shimmer h-48 w-full rounded-xl bg-gray-200 dark:bg-gray-700"
-            ></div>
-            <div class="flex flex-col gap-3">
-              <div
-                class="skeleton-shimmer h-3.5 w-full rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-10/12 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-2/3 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-            </div>
-          </div>
-          <span class="sr-only">{{ label }}</span>
-        </div>
-      </ng-template>
     }
   `,
   styles: `
     :host {
       display: contents;
-    }
-    .skeleton-shimmer {
-      background-image: linear-gradient(
-        90deg,
-        transparent 0%,
-        rgba(255, 255, 255, 0.45) 50%,
-        transparent 100%
-      );
-      background-size: 220% 100%;
-      background-repeat: no-repeat;
-      animation: artifact-skeleton-shimmer 1.5s ease-in-out infinite;
-    }
-    @keyframes artifact-skeleton-shimmer {
-      0% {
-        background-position: 130% 0;
-      }
-      100% {
-        background-position: -130% 0;
-      }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .skeleton-shimmer {
-        animation: none;
-      }
     }
   `,
 })

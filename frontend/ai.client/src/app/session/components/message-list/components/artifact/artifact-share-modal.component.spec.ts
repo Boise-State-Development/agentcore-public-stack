@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import {
   ArtifactShareModalComponent,
@@ -42,6 +42,8 @@ describe('ArtifactShareModalComponent', () => {
 
   /** Reach past `protected` for interaction tests, matching the
    *  conversation share-modal spec's approach. */
+  let originalClipboard: PropertyDescriptor | undefined;
+
   const api = () => component as unknown as Record<string, any>;
   const text = () => (fixture.nativeElement as HTMLElement).textContent ?? '';
 
@@ -69,12 +71,40 @@ describe('ArtifactShareModalComponent', () => {
     fixture = TestBed.createComponent(ArtifactShareModalComponent);
     component = fixture.componentInstance;
 
-    // jsdom has no clipboard; the copy path is exercised explicitly below.
+    stubClipboard();
+  });
+
+  afterEach(() => {
+    fixture?.destroy();
+    restoreClipboard();
+  });
+  /**
+   * `navigator.clipboard` doesn't exist in jsdom, so it has to be
+   * defined rather than stubbed — and `Object.defineProperty` is NOT
+   * undone by the `vi.unstubAllGlobals()` backstop in test-setup.ts.
+   * The builder runs vitest with `isolate: false`, so a leaked global
+   * here would follow the worker into unrelated spec files and surface
+   * as one randomly-chosen file timing out. Restore it explicitly.
+   */
+  function stubClipboard(writeText = vi.fn().mockResolvedValue(undefined)) {
+    originalClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      'clipboard',
+    );
     Object.defineProperty(navigator, 'clipboard', {
-      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      value: { writeText },
       configurable: true,
     });
-  });
+  }
+
+  function restoreClipboard(): void {
+    if (originalClipboard) {
+      Object.defineProperty(navigator, 'clipboard', originalClipboard);
+    } else {
+      delete (navigator as unknown as Record<string, unknown>)['clipboard'];
+    }
+    originalClipboard = undefined;
+  }
 
   async function init(): Promise<void> {
     await component.ngOnInit();
@@ -276,10 +306,7 @@ describe('ArtifactShareModalComponent', () => {
   });
 
   it('falls back to a message when the clipboard is unavailable', async () => {
-    Object.defineProperty(navigator, 'clipboard', {
-      value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
-      configurable: true,
-    });
+    stubClipboard(vi.fn().mockRejectedValue(new Error('denied')));
     await init();
 
     await api()['copyLink'](SHARE);

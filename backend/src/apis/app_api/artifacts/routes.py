@@ -128,7 +128,9 @@ async def get_artifact_content(
     """
     try:
         content, content_type = service.get(
-            user_id=user.user_id,
+            # The authenticated session user — self-scoping. See the
+            # access-control note on ArtifactContentService.
+            owner_id=user.user_id,
             artifact_id=artifact_id,
             version=version,
         )

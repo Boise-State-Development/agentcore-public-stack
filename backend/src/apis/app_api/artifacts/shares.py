@@ -28,6 +28,7 @@ from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.security.log_sanitize import scrub_log
 
 from .models import (
+    ArtifactContentResponse,
     ArtifactShareListResponse,
     ArtifactShareResponse,
     CreateArtifactShareRequest,
@@ -36,14 +37,17 @@ from .models import (
     UpdateArtifactShareRequest,
 )
 from .service import (
+    ArtifactContentService,
     ArtifactNotFoundError,
     ArtifactQueryError,
     ArtifactShareService,
+    ArtifactTooLargeError,
     NotShareOwnerError,
     RenderTokenConfigError,
     RenderTokenService,
     ShareAccessDeniedError,
     ShareNotFoundError,
+    get_artifact_content_service,
     get_artifact_share_service,
     get_render_token_service,
 )
@@ -351,4 +355,79 @@ async def mint_shared_render_token(
     return RenderTokenResponse(
         url=url,
         expires_at=datetime.fromtimestamp(exp, tz=timezone.utc).isoformat(),
+    )
+
+
+@shared_artifacts_router.get(
+    "/{share_id}/content", response_model=ArtifactContentResponse
+)
+async def get_shared_artifact_content(
+    share_id: str,
+    user: User = Depends(get_current_user_from_session),
+    shares: ArtifactShareService = Depends(get_artifact_share_service),
+    content: ArtifactContentService = Depends(get_artifact_content_service),
+) -> ArtifactContentResponse:
+    """Raw source of a shared artifact version, for the recipient's code view.
+
+    The parallel of ``GET /artifacts/{id}/content``, which builds its
+    lookup key from the authenticated session and must stay that way —
+    a recipient is not the owner, so that route can never serve them.
+
+    ############################################################
+    # SECURITY: the ACL check is the first thing that happens, and
+    # `get_for_viewer` is what performs it. Only after it admits the
+    # viewer may the owner's id be handed to ArtifactContentService,
+    # which does no access control of its own and will read whatever
+    # partition it is given. Resolving the owner before (or without)
+    # the ACL check turns this route into read-any-artifact-by-id.
+    ############################################################
+
+    The bytes are inert text the SPA highlights client-side — never
+    executed. Markdown is unwrapped back to the authored source, and an
+    oversized artifact 413s so the recipient is steered to download.
+    """
+    try:
+        share = shares.get_for_viewer(share_id=share_id, viewer=user)
+        body, content_type = content.get(
+            owner_id=str(share["owner_id"]),
+            artifact_id=str(share["artifact_id"]),
+            version=int(share["version"]),
+        )
+    except ShareNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Share not found")
+    except ShareAccessDeniedError:
+        logger.info(
+            "shared artifact content denied share=%s viewer=%s",
+            scrub_log(share_id),
+            scrub_log(user.user_id),
+        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Access denied")
+    except ArtifactNotFoundError:
+        # The share outlived the version it points at, or its content
+        # object is gone.
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Artifact version not found"
+        )
+    except ArtifactTooLargeError:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "Artifact is too large to preview — download it instead",
+        )
+    except RenderTokenConfigError:
+        logger.exception("artifact content service misconfigured")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Artifact content is unavailable",
+        )
+    except ArtifactQueryError:
+        logger.exception("shared artifact content fetch failed")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Artifact content is temporarily unavailable",
+        )
+
+    return ArtifactContentResponse(
+        content=body,
+        content_type=content_type,
+        version=int(share["version"]),
     )

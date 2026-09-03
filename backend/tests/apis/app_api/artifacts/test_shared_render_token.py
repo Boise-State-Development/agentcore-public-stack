@@ -432,3 +432,157 @@ def test_token_is_never_logged(env, caplog) -> None:
     assert url not in logged
     # Identifiers are expected — that is the point of `vwr`/`shr`.
     assert share_id in logged
+
+
+# ------------------------------------------------------------------
+# Shared content (recipient code view)
+# ------------------------------------------------------------------
+#
+# `GET /shared-artifacts/{id}/content` resolves the OWNER's S3 object
+# after the share ACL admits the viewer. ArtifactContentService performs
+# no access control of its own, so these tests are the boundary.
+
+
+import boto3 as _boto3  # noqa: E402  (grouped with the content tests below)
+
+BUCKET = "test-artifacts-content"
+BODY = "<html><body>shared artifact source</body></html>"
+
+
+def _put_content(
+    *, user_id: str = OWNER_ID, artifact="art-1", version=1, body: str = BODY
+) -> None:
+    """Write the S3 object the version row's content_key points at."""
+    s3 = _boto3.client("s3", region_name=REGION)
+    try:
+        # us-east-1 rejects an explicit LocationConstraint.
+        s3.create_bucket(Bucket=BUCKET)
+    except s3.exceptions.BucketAlreadyOwnedByYou:
+        pass
+    s3.put_object(
+        Bucket=BUCKET,
+        Key=f"{user_id}/{artifact}/v{version}/index.html",
+        Body=body.encode("utf-8"),
+        ContentType="text/html; charset=utf-8",
+    )
+
+
+def _content(make_client, user: User, share_id: str):
+    return make_client(user).get(f"/shared-artifacts/{share_id}/content")
+
+
+def test_recipient_reads_the_owners_content(env, monkeypatch) -> None:
+    """The whole point: a viewer who is not the owner gets the owner's
+    bytes, because the route resolves the owner from the share row after
+    the ACL admits them."""
+    make_client, ddb = env
+    monkeypatch.setenv("S3_ARTIFACTS_BUCKET_NAME", BUCKET)
+    _put_version(ddb)
+    _put_content()
+    share_id = _share(make_client)
+
+    resp = _content(make_client, VIEWER, share_id)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["content"] == BODY
+    assert body["version"] == 1
+
+
+def test_shared_content_denies_a_disallowed_viewer(env, monkeypatch) -> None:
+    make_client, ddb = env
+    monkeypatch.setenv("S3_ARTIFACTS_BUCKET_NAME", BUCKET)
+    _put_version(ddb)
+    _put_content()
+    share_id = _share(
+        make_client, access_level="specific", allowed=["friend@x.com"]
+    )
+
+    stranger = _user("stranger-1", "stranger@x.com")
+    resp = _content(make_client, stranger, share_id)
+    assert resp.status_code == 403
+    assert "content" not in resp.json()
+
+
+def test_shared_content_404s_after_revoke(env, monkeypatch) -> None:
+    make_client, ddb = env
+    monkeypatch.setenv("S3_ARTIFACTS_BUCKET_NAME", BUCKET)
+    _put_version(ddb)
+    _put_content()
+    share_id = _share(make_client)
+    assert _content(make_client, VIEWER, share_id).status_code == 200
+
+    make_client(OWNER).delete(f"/artifacts/shares/{share_id}")
+
+    resp = _content(make_client, VIEWER, share_id)
+    assert resp.status_code == 404
+    assert "content" not in resp.json()
+
+
+def test_shared_content_404s_for_an_unknown_share(env, monkeypatch) -> None:
+    make_client, ddb = env
+    monkeypatch.setenv("S3_ARTIFACTS_BUCKET_NAME", BUCKET)
+    _put_version(ddb)
+    _put_content()
+    assert _content(make_client, VIEWER, "nope").status_code == 404
+
+
+def test_shared_content_404s_when_the_version_row_is_gone(
+    env, monkeypatch
+) -> None:
+    make_client, ddb = env
+    monkeypatch.setenv("S3_ARTIFACTS_BUCKET_NAME", BUCKET)
+    _put_version(ddb)
+    _put_content()
+    share_id = _share(make_client)
+    ddb.Table(TABLE).delete_item(
+        Key={"PK": f"USER#{OWNER_ID}", "SK": "ARTIFACT#art-1#V#00001"}
+    )
+    assert _content(make_client, VIEWER, share_id).status_code == 404
+
+
+def test_shared_content_serves_the_pinned_version_only(
+    env, monkeypatch
+) -> None:
+    """A newer version must not leak through a share pinned to an older
+    one — the share row's version is what addresses the object."""
+    make_client, ddb = env
+    monkeypatch.setenv("S3_ARTIFACTS_BUCKET_NAME", BUCKET)
+    _put_version(ddb, version=1)
+    _put_content(version=1, body="V1 BODY")
+    share_id = _share(make_client, version=1)
+
+    _put_version(ddb, version=2)
+    _put_content(version=2, body="V2 BODY")
+
+    body = _content(make_client, VIEWER, share_id).json()
+    assert body["content"] == "V1 BODY"
+    assert body["version"] == 1
+
+
+def test_shared_content_413s_an_oversized_artifact(env, monkeypatch) -> None:
+    """Recipients get the same steer-to-download signal owners do."""
+    make_client, ddb = env
+    monkeypatch.setenv("S3_ARTIFACTS_BUCKET_NAME", BUCKET)
+    _put_version(ddb)
+    _put_content(body="x" * (2 * 1024 * 1024 + 10))
+    share_id = _share(make_client)
+
+    assert _content(make_client, VIEWER, share_id).status_code == 413
+
+
+def test_owner_content_route_is_unchanged_for_a_recipient(
+    env, monkeypatch
+) -> None:
+    """The owner route must stay self-scoped: it builds its key from the
+    session user, so a recipient asking it for the owner's artifact gets
+    a 404 no matter what share they hold. If this ever starts returning
+    200, the owner route has been made share-aware and the two access
+    models have been conflated."""
+    make_client, ddb = env
+    monkeypatch.setenv("S3_ARTIFACTS_BUCKET_NAME", BUCKET)
+    _put_version(ddb)
+    _put_content()
+    _share(make_client)
+
+    resp = make_client(VIEWER).get("/artifacts/art-1/content?version=1")
+    assert resp.status_code == 404
