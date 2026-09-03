@@ -46,6 +46,34 @@ The following are explicitly **not** in scope, each for a stated reason:
 - **Raising the 2,000-character context cap.** The §13.6 experiment measured no
   correctness change from 2,000 to 20,000 characters on either backend. Holding it
   constant is required to keep the swap attributable (§9, §13.5 requirement 3).
+
+  > ⚠️ **AMENDED BY MEASUREMENT, 2026-09-02. The §13.6 conclusion does not hold on
+  > a real corpus, and the cap is now known to cause wrong answers on the managed
+  > backend.** Bedrock's chunks are roughly 3× Docling's, so the cap admits a
+  > different NUMBER of chunks per backend even though the character limit is
+  > identical — measured on one query: legacy chunks of 388/130/1035/106 characters
+  > let **four** through, managed's 1111/1091/1151/1197 let **one** through. So
+  > `top_k = 5` is honoured at retrieval and silently becomes `top_k = 1` at the
+  > model, discarding four of reranking's five results.
+  >
+  > Observed consequence: asked about `CS434`, legacy answered correctly (Major
+  > Core, mandatory) while managed called it an elective — the opposite of the
+  > truth — because the one chunk that fit had lost its `SECTION 2: MAJOR CORE`
+  > header and the nearest header it retained was `TECHNICAL ELECTIVES`. Retrieval
+  > was *better* on managed: its top chunk was the only one containing the literal
+  > string, which legacy never found.
+  >
+  > §13.6 almost certainly measured a corpus where the answer sat inside the top
+  > chunk, so the cap never removed anything load-bearing. It says nothing about
+  > the case where the interpreting context lives in a NEIGHBOURING chunk. Same
+  > shape as Requirement 8.5, which was also validated under conditions that
+  > excluded the real failure.
+  >
+  > This exclusion stands for now, because the cap is a parity control and moving
+  > it forfeits attributability (§9, §13.5). It is no longer justified by "no
+  > correctness change", which is false. Resolving it requires either accepting a
+  > managed-only cap and declaring the asymmetry, or re-running §13.6 on a corpus
+  > where section context sits outside the top chunk. See HANDOFF.md §5.40.
 - **0..N agent-to-KB bindings (F4).** §10.6 requires that the engine swap and the
   binding-cardinality change not be coupled, because a joint failure is
   unattributable. This spec lands the `KnowledgeBase` entity record while
@@ -173,6 +201,13 @@ the upgrade.
 1. THE system SHALL request `top_k = 5` on both backends.
 2. THE system SHALL apply a context cap of **2,000 characters** on both backends,
    unchanged from today's `max_context_length` default.
+
+   > ⚠️ Identical characters is **not** identical behaviour. Bedrock's chunks are
+   > ~3× Docling's, so this same number admits ~4 legacy chunks and ~1 managed
+   > chunk, making `top_k = 5` above effectively `top_k = 1` on the managed path.
+   > This is parity on the constant, not on the effect. Measured, with a wrong
+   > answer to show for it — see the amendment in the out-of-scope list above and
+   > HANDOFF.md §5.40 before treating this requirement as satisfied.
 3. THE system SHALL retain the Doc_Status_Filter on **both** backends during
    parity, even though Managed_Backend makes it redundant.
 4. THE system SHALL build citations from the same `context_chunks` structure on

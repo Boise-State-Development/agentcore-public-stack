@@ -1,6 +1,6 @@
 # Managed KB Migration — Handoff
 
-**Last updated:** 2026-09-01 17:00 · **Shipped to production in 1.16.0, inert behind flags** ·
+**Last updated:** 2026-09-03 · **Shipped to production in 1.16.0, inert behind flags** ·
 **A migration has completed end to end in dev; adding a document to it needed one more IAM action**
 
 Working state for this feature so a fresh session can pick it up without
@@ -16,11 +16,13 @@ Four things invalidate earlier versions of this document:
    platform deploy succeeded on 2026-08-28, so `GSI7`, the Bedrock service role and
    the four Lambdas exist in **both** dev and prod. Earlier revisions of this file
    said "Nothing deployed"; that is no longer true.
-2. **Fourteen defects were found only by running it**, each reviewed clean and
-   deployed clean. They are §5 items 25–39 and they are the most useful part of
-   this document. Two clusters: 32–36 trace to the two engines never being made
-   exclusive (PR #900), and 37–39 to the ingestion consumer never actually knowing
-   when a document was ready (PRs #901, #908). Only §5.33 is still open.
+2. **Sixteen defects were found only by running it**, each reviewed clean and
+   deployed clean. They are §5 items 25–41 and they are the most useful part of
+   this document. Three clusters: 32–36 trace to the two engines never being made
+   exclusive (PR #900); 37–39 to the ingestion consumer never actually knowing when
+   a document was ready (PRs #901, #908); and **40–41 are about answer quality and
+   are both still OPEN** — the managed backend currently gives a *worse* answer than
+   legacy on a question it retrieves *better*. Start there. §5.33 is also open.
 3. **The `document_id` "known unknown" was a false alarm** and is now resolved with
    measurements — see §6. An earlier revision listed it as the top open risk. The
    probe was reading facade keys that have never existed. Two genuine findings came
@@ -871,6 +873,83 @@ and every mechanism it used to answer was measuring something else.
 
 ---
 
+### The fifteenth and sixteenth: retrieval got better and answers got worse
+
+These two are different in kind from everything above. Nothing is broken, no
+error is raised, every test passes — and the managed backend gives a **worse
+answer than legacy** on a question it retrieves *better*. Both are open.
+
+40. ⚠️ **OPEN, and the most consequential item in this document. The
+    2,000-character context cap silently reduces `top_k=5` to `top_k=1` on the
+    managed backend.** Bedrock's chunks are roughly 3× larger than Docling's, and
+    `MAX_CONTEXT_CHARS` was sized for Docling's. Measured on one query:
+
+    | | chunk sizes (chars) | how many fit in 2,000 |
+    |---|---|---|
+    | legacy | 388, 130, 1035, 106, 843 | **4** (1,659 chars) |
+    | managed | 1111, 1091, 1151, 1197, 877 | **1** (1,111 chars) |
+
+    So reranking does real work — §5 and the evaluation both show it separating
+    scores properly — and then four of its five results are discarded before the
+    model sees them.
+
+    **It produced a materially wrong answer.** Asked about `CS434`, legacy said it
+    is Major Core and mandatory (**correct** — the source PDF lists it under
+    `SECTION 2: MAJOR CORE (Complete ALL)`). Managed called it "part of a
+    specialized track/elective list" — the opposite of the advice a student needs —
+    and invented a course title. Not because retrieval failed: managed's top chunk
+    was the *only* one containing the literal string `CS434`, which legacy never
+    found at all. It failed because that single surviving chunk had lost its
+    `SECTION 2` header, and the nearest header it did contain was
+    `TECHNICAL ELECTIVES`. The model reasoned correctly over a truncated window.
+
+    ⚠️ **This contradicts a spec exclusion.** requirements.md's out-of-scope list
+    says raising the cap is excluded because "the §13.6 experiment measured no
+    correctness change from 2,000 to 20,000 characters on either backend". That
+    experiment presumably ran on the three-document benchmark, where the answer sat
+    in the top chunk anyway. It does not hold once chunks are large enough that only
+    one fits **and** the context needed to interpret it lives in a neighbour. Same
+    shape as Requirement 8.5: measured under conditions that excluded the real case.
+    The exclusion note now carries this amendment.
+
+    **Do not simply raise the number.** The cap is a parity control — §9 and §13.5
+    require it held constant so the engine swap stays attributable. Changing it
+    changes both backends and forfeits that. The honest options are to raise it for
+    the managed path only and accept the asymmetry, or to re-run §13.6 on a corpus
+    where section context lives outside the top chunk. Either needs measurement,
+    not a constant bump.
+
+    ⚠️ **My earlier `CS434` demo advice was wrong and the reason matters.** I
+    called it a "safe crowd-pleaser" on the strength of retrieval *score spread*
+    (0.0561 legacy versus 0.4988 managed). I measured the retriever and never
+    checked the answer. Score separation is not answer quality.
+
+41. ⚠️ **OPEN. Column-structured diagrams yield confidently wrong answers.** The
+    capability in §5.35 is real — an image-only flowchart that legacy cannot ingest
+    at all becomes retrievable, and Bedrock's vision model genuinely decodes it.
+    But asked "what should they take semester 4?" from a 3.5-year curriculum
+    flowchart, the answer reported **11 credits when the chart says 19**, invented
+    `ENGR 220` (which belongs to an earlier column), missed four courses, and
+    misdescribed `ME 215`.
+
+    The cause is structural, not a tuning problem: correctness depends on **which
+    column a box sits in**, and a retrieved chunk carries no coordinates. The
+    vision model's description flattens or partially covers the columns, and the
+    model then assembles a plausible table from courses that are genuinely adjacent
+    in the document but belong to different semesters.
+
+    Worth knowing how hard this is to spot: verifying it took three attempts with
+    the PDF open, because the first two column reconstructions mis-assigned
+    boundaries — the digit after "Semester" fell into the next bucket. If it takes
+    that to check, a chunk of prose was never going to carry it.
+
+    **Guidance until this is understood:** image extraction is worth demonstrating
+    as *retrievable where it was previously impossible*, not as a source of precise
+    tabular answers. Do not put a per-column question from a diagram in front of an
+    audience.
+
+---
+
 ## 6. Remaining work
 
 ### Do these first
@@ -885,7 +964,9 @@ and every mechanism it used to answer was measuring something else.
 
 | Group | Notes |
 |---|---|
-| **§5.33** the one fail-open line — THE ONLY OPEN FINDING | The only finding from 2026-08-31 still open. `if not doc_ids: return vectors` in `_filter_vectors_by_document_status`. Make it fail closed with `METRIC_STATUS_FILTER_FAIL_CLOSED` like every other unprovable path in that function, and pin it with a test that mutation-fails. Lower stakes now that §5.36 removes deleted content from the managed engine, but still the one silent-serving path left |
+| **§5.40** the 2,000-char cap — START HERE | Managed's chunks are ~3× Docling's, so only ONE reaches the model and reranking's other four results are discarded. It produced a materially wrong answer (a required course described as an elective). Needs measurement, not a constant bump: the cap is a parity control (§9, §13.5). Options are managed-only asymmetry, or re-running §13.6 on a corpus where section context sits outside the top chunk |
+| **§5.41** diagram answers | Column-structured diagrams give confident wrong answers because chunks carry no coordinates. Understand the shape before promising anything about tabular image content |
+| **§5.33** the one fail-open line | The only finding from 2026-08-31 still open. `if not doc_ids: return vectors` in `_filter_vectors_by_document_status`. Make it fail closed with `METRIC_STATUS_FILTER_FAIL_CLOSED` like every other unprovable path in that function, and pin it with a test that mutation-fails. Lower stakes now that §5.36 removes deleted content from the managed engine, but still the one silent-serving path left |
 | **engine visibility** | Nothing logs *which* engine served a query — the resolver only logs on failure — so "is the new one actually working?" can only be answered from the KB record. One INFO line in the facade, plus a `Managed`/`Classic` badge in the knowledge base section, both unbuilt. Wanted before a wide rollout, because this feature's whole risk profile is silent regressions |
 | **14.4** one-click document retry | Req 21.2. Ingestion is S3-event-triggered and there is no reprocess endpoint, so this needs new backend against a live pipeline. The card currently directs the user to re-upload, which works today. Close it by building the endpoint **or** by amending Req 21.2 to accept re-upload |
 | **14.5** admin surface | not started. Filter by engine, stored bytes, document counts, bulk migrate, per-KB retry |
