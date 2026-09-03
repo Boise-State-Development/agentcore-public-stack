@@ -1,3 +1,197 @@
+# Release Notes — v1.17.0
+
+**Release Date:** September 2, 2026
+**Previous Release:** v1.16.0 (August 28, 2026)
+
+---
+
+> 🏗️ **CDK deploy required, plus one manual step it cannot do for you.** After `platform.yml` runs, **subscribe your team to the new `{prefix}-alarms` SNS topic** — see [step-05-verify §6](.github/docs/deploy/step-05-verify.md#6-subscribe-to-platform-alarms-required--not-automated). Subscriptions are deliberately not infrastructure-as-code, so nothing else will do this.
+>
+> `infrastructure/gsi-inventory.json` is **unchanged** — no DynamoDB index operations in this release.
+>
+> **Several changes take effect on the next deploy with no flag to gate them:** log retention moves from 7 days to 30, X-Ray sampling drops from 100% to 1%, Bedrock's transient faults start being retried, skill-resource uploads reject scriptable file types, and a turn posted to a session owned by another user is refused. Read the Deployment notes before shipping.
+
+---
+
+## Highlights
+
+A release about knowing when things break, and behaving well when they do.
+
+**Every alarm in the stack now notifies somebody.** The stack had 13 CloudWatch alarms and not one of them was routed anywhere — three constructs carried a comment saying so. Two were worse than silent: they watched metric names that exist in no CloudWatch namespace, so they had sat in `INSUFFICIENT_DATA` since the day they were created, which an operator reads as healthy. There are now 77 alarms, zero unrouted, all publishing to one SNS topic, with a `{prefix}-platform-health` dashboard ordered by triage rather than service inventory.
+
+**A production outage drove four chat-path changes.** On 2026-08-31 a `ConverseStream` carrying two PDFs failed with `ServiceUnavailableException` after 95.6 seconds, was never retried, billed 56,440 uncached input tokens, and returned nothing — twice, because the attachments died with the first request and the re-upload failed the same way. Bedrock's transient faults are now retried; a retry and a long silence are both visible to the user instead of reading as a hang; and attachments a failed turn never delivered are re-sent on the next one.
+
+**Four security findings are closed**, two of them escalation chains. A High-severity OIDC login CSRF in the BFF auth flow could silently hand a victim's browser a live session for the attacker's account. A stored XSS in skill resources let a zero-privilege user run JavaScript on the SPA's own origin inside a `system_admin`'s session — closed at three independent layers, none load-bearing on its own.
+
+**The Managed Knowledge Base migration met real data.** Still off by default, but its first genuine runs in dev produced eleven defects, most of them one root cause wearing different costumes: **the two engines were never made exclusive.** Documents were indexed twice, a `status` field had two writers racing to decide "ready", and deletions never reached the managed engine at all.
+
+---
+
+## Production observability baseline
+
+The stack's alarms were mostly decorative. This makes them load-bearing, and makes it structurally hard to add an unrouted one.
+
+### Infrastructure
+
+- **`{prefix}-alarms` SNS topic**, encrypted with a customer-managed KMS key. The CMK is a requirement, not a preference: CloudWatch cannot publish to a topic encrypted with the AWS-managed `alias/aws/sns` key, and the failure is silent — the alarm fires, the console shows it, the notification is dropped. ARN published to SSM at `/{prefix}/observability/alarm-topic-arn` and as a CfnOutput.
+- **`AlarmFactory`** (`lib/constructs/observability/alarm-factory.ts`) attaches `AlarmActions` *and* `OKActions` as a consequence of being used at all, so an unrouted alarm now requires deliberately bypassing it. A source-level test fails the build if any file under `lib/` calls `new cloudwatch.Alarm()` directly. The previous gap was not carelessness — the broken form was the shorter one.
+- **77 alarms**: ALB (6), ECS service (3), DynamoDB (27), Lambda (21), AI path (9), AgentCore Runtime (4), plus the pre-existing prompt-cache alarms, all routed.
+- **`{prefix}-platform-health` dashboard** — traffic and errors, then saturation, then every alarm's current state. It *links* to the two existing dashboards rather than restating them, which keeps the stack at exactly 3 — CloudWatch's free ceiling.
+- **`LogRetentionAspect`** rewrites every log group in the tree, including the ones CDK creates for its own machinery and declares nowhere in this repo, which default to 731 days. That gap was found by diffing a real `cdk synth`; unit tests missed it because a bare `cdk.App` lacks the feature flags that materialise those groups.
+- The AgentCore Runtime's log group is created by the service rather than CloudFormation, so an `AwsCustomResource` calls `logs:PutRetentionPolicy` on it — idempotent, and it creates the group if the runtime has not yet been invoked.
+
+### What measurement changed
+
+Every threshold was set against the live account rather than documentation, and four of them came back wrong:
+
+- The AgentCore alarms used namespace `bedrock-agentcore` with `InvocationCount` / `InvocationErrors` / `InvocationLatency`. That namespace is real, but it holds only the OpenTelemetry/Strands *application* metrics — those three names exist nowhere. Corrected to `AWS/Bedrock-AgentCore`, with `SystemErrors` (AWS's fault) split from `UserErrors` (ours).
+- The 30-second latency threshold sat **below** the observed maximum. Over 14 days turns average 3.0–4.5s with daily peaks to 24.4s, because the chat path is SSE and the runtime does not finish a request until the stream closes. Floors default to 120s. AgentCore `Latency` is milliseconds where ALB `TargetResponseTime` is seconds — a 1000× trap in either direction, confirmed with `get-metric-statistics` in both.
+- DynamoDB has never throttled: `ReadThrottleEvents`, `WriteThrottleEvents` and `SystemErrors` have zero metric streams, since every table is on-demand. Account-level `UserErrors` had live data with nothing watching it. That traded 78 alarms on signals that have never fired for 27 including one firing today.
+- No Cognito or Browser alarms were added, and tests assert their absence: `AWS/Cognito` on the ESSENTIALS feature plan publishes only success metrics, and Browser has zero streams. Alarming on either would recreate the permanently-green alarm this work exists to remove.
+
+### Configuration
+
+18 single scalars under an `observability` config section with `CDK_OBSERVABILITY_*` overrides, validated against the retention values CloudWatch actually accepts and against sampling rates given as percentages. There is deliberately **no `config.production` branching**: this repo is forked by many institutions, and a fork with one environment should not have to reason about a `production` boolean while a fork with three should not be limited to two. Enforced by test.
+
+The clearest case for that is X-Ray sampling, which was `fixedRate: 1.0` for any fork that never set `production` — a recorded trace for every agent invocation, at $5 per million. It is now 1% by default.
+
+### Cost and capacity
+
+Log retention becomes one value across all 15 groups (default 30 days), replacing 14 hardcoded literals — 13 `ONE_WEEK` plus one `ONE_MONTH` that differed silently rather than deliberately. Stack resources rise to **382 of CloudFormation's 500 limit**, up from 308; this is a deliberate single-stack architecture with nowhere to spill, so the DynamoDB alarm allocation was decided by measurement rather than by covering every documented metric, and a guard test fails above 460.
+
+---
+
+## Transient failures, made visible and recoverable
+
+Three changes and one post-mortem. Prod session `5f34d2b0` lost a CIO's conversation twice in a row, and each of the three gaps below is one reason why.
+
+### The fault was never retried
+
+Strands' stock `ModelRetryStrategy` retries `ModelThrottledException` and nothing else, and `BedrockModel` maps exactly one error code to it. Every other Bedrock fault re-raised as a raw botocore `ClientError`, so the configured four-attempt backoff never ran for any of them. Meanwhile `ThrottlingException` — the one error that *was* covered — has not occurred once in prod in the last eight days.
+
+`BedrockTransientRetryStrategy` (`agents/main_agent/core/retry_strategy.py`) subclasses the SDK strategy and widens only `is_retryable`, so backoff policy and attempt budget are inherited unchanged; it never narrows stock behavior. Mid-stream failures are deliberately excluded — `EventStreamError` is raised while iterating the response, after chunks may already have reached the client, and restarting there would replay visible output. A plain `ClientError` from the `converse_stream` call itself means the request was rejected before the stream opened, so a retry is invisible. `RETRY_TRANSIENT_SERVICE_ERRORS=false` restores stock behavior without a deploy.
+
+### The retry, and the silence, looked like a hang
+
+Strands emits `EventLoopThrottleEvent` on every retried model call and nothing consumed it, so a retry was silence — and widening the retryable set makes that silence longer. The stream processor now emits a **`model_retry` SSE event** and the SPA swaps the loading indicator's cycling phrases for a fixed amber notice.
+
+That event covers the pauses *between* attempts. It cannot cover the failing call itself — 95 seconds in the incident, and indistinguishable from a slow healthy one — so the parser also stamps the arrival time of every event, and the indicator says **"Still working…"** after 30s of silence and **"Still working — this is taking longer than usual."** after 90s. Thresholds sit past a normal first token (~5–7s) and past most tool calls. A known retry outranks the stall notice: one is a fact, the other an inference from elapsed time.
+
+The liveness stamp is deliberately client-side. A server-sent heartbeat would have to race the agent stream against a timer, which means either running `__anext__` from a fresh task per element — breaking the anyio cancel scopes inside the MCP clients — or pumping the stream through a queue in a side task, a new task boundary through the cancellation path that owns lease release and interrupted-turn persistence, which three prior fixes have each already had to repair.
+
+### The attachments were gone
+
+Inline document bytes are one-shot: `_strip_document_bytes` removes them from restored history because Bedrock rejects two document blocks sharing a sanitized name. Correct when a turn succeeds; when a turn dies before the model reads them, they are gone with no way back — which is why the assistant asked the CIO to upload the PDFs again, and why the re-upload turn failed identically.
+
+A **write-ahead marker** on the session row records the turn's upload IDs before the model call. `StreamCoordinator` clears it the moment the turn produces assistant content, and the next turn pops it and re-sends. Written ahead rather than from an error handler so it survives every way a turn can die, including a dropped stream no error arm ever sees. Bounded: the pop clears as it reads, so recovery can only influence the single turn after a failure; a marker older than an hour is discarded; and the user's own attachments always win, since the resolver caps a turn at five files and merging could push out a file they just attached. A recovery note rides the existing `original_message` `displayText` split, so the model knows the files were re-sent and the user never sees it.
+
+### And the error copy was wrong
+
+Two classifiers both keyed on `"throttl"` and neither recognized service-unavailable, so a Bedrock outage read as "I ran into a problem with the AI model". A shared `is_service_unavailable_error` predicate — shared precisely because the two classifiers had disagreed by omission — now says the fault is on the provider's side and that we already retried. Kept narrow: matching `"unavailable"` alone would swallow unrelated copy like "the model or feature you're trying to use isn't available".
+
+---
+
+## Managed Knowledge Base migration hardening
+
+The feature shipped inert in 1.16.0 behind nine `CDK_MANAGED_KB_*` flags. It stays inert. What changed is that it was driven end-to-end against real documents in dev for the first time, and eleven defects came out of it.
+
+**One root cause dominates: the two engines were never made exclusive.** The managed ingestion consumer stood down for a legacy document; nothing made the legacy pipeline stand down for a managed one, and nothing propagated a deletion to the managed engine at all.
+
+- **Double indexing, and a `status` field with two owners.** The legacy pipeline had no engine gate while its `s3:ObjectCreated` notification stayed live alongside the consumer's EventBridge rule, so every document added to a promoted knowledge base was handled twice — and "ready" was decided by whichever writer finished last. Both outcomes were observed within an hour: a PDF marked `complete` 65 seconds before the managed KB could answer for it, and an image-only flowchart that Docling failed outright (`do_ocr=False`) marked `failed` while Bedrock's image extraction had indexed and was serving it. `handler.py` now resolves the engine before writing any status and returns early for `managed` — keyed on the **engine**, not on the presence of a KB record, because during `shadow` and `verify` the legacy path is still authoritative.
+- **Deletions never reached the managed engine.** `cleanup_service` removed the legacy copy and the `DOC#` row and left the managed copy indexed forever: paid for at $5.00/GB-month against ~$0.15, silently consuming `top_k` slots that the status filter then dropped, with that filter's single fail-open branch left load-bearing in a way it was never designed for. The new engine-gated third phase is conjoined into `all_succeeded`, and its fail-direction is **deliberately opposite** to the ingestion gate's: on ingest an unreadable record resolves to legacy (a duplicate index, and the consumer still finishes the document), but on delete it must fail, because reporting success would remove the `DOC#` row *and* leave the content — the one combination that turns a storage leak into a disclosure.
+- **Provisioning could strand a knowledge base unrecoverably.** `CreateKnowledgeBase` returns while still `CREATING` (measured 47–124s to `ACTIVE`) and `CreateDataSource` was called immediately; `awsKbId` was only written after both creates succeeded, so a failure between them left a record with no identifier while the unique name stayed taken — refusing every subsequent attempt, permanently. Now there is an explicit bounded `ACTIVE` wait, `awsKbId` is persisted the instant the create returns (guarded on `attribute_not_exists`), and a name-collision `ConflictException` is recovered by adopting the existing knowledge base — skipping terminal statuses, so adoption cannot take one that is mid-delete.
+- **Ingestion gave up before indexing finished, and restarted it.** The consumer polled a *retrieval* for 30 seconds, smaller than the documented lower bound for PDF ingestion, and because `IngestKnowledgeBaseDocuments` is fire-and-forget every EventBridge redelivery re-submitted the document. A 1.5MB PDF sat at `uploading` indefinitely with a fully retrievable copy in the knowledge base. `handle_object` now probes `GetKnowledgeBaseDocuments` first and branches on the real `DocumentStatus` enum, with a 600-second budget; a cross-language test parses the Lambda timeout out of the CDK construct and asserts the budget fits inside it, since the two live in different languages with no compiler between them.
+- **`indexedAt` was fabricated** — the local clock at ingest-call return, presented as when indexing finished, minutes apart for a large document. Now Bedrock's own `updatedAt`.
+- **The embedding pin and managed reranking are mutually exclusive.** AWS rejects `embeddingModelType: CUSTOM` with `rerankingModelType: MANAGED`, and measuring all four combinations settled which one to drop: the pin scored 1.00/0.982/0.952 — flat, and unusable when only ~2,000 characters reach the model — against managed reranking's 0.413/0.199. On managed retrieval Bedrock embeds both sides, so query/index consistency is its invariant, not ours.
+
+Three of these were IAM. `bedrock:StartIngestionJob` is the third grant on this feature to name exactly the API the code calls, review as complete, deploy clean, and fail on first real use — AWS authorizes `IngestKnowledgeBaseDocuments` under that adjacent action name. It also stayed invisible because every migration so far was driven by a local script under an SSO identity broader than any Lambda role, which is recorded in HANDOFF.md as a structural limit of that tool rather than an oversight.
+
+### Test coverage
+
+~1,150 lines across `test_kb_ingestion_consumer.py`, `test_managed_kb_backend.py`, the new `test_ingestion_engine_gate.py` and `test_managed_delete_propagation.py`, plus CDK grant-shape assertions on the **real** roles in `kb-sync.test.ts` and `platform-stack.test.ts` — the latter specifically because a grant proven on a fake role says nothing about the identity that runs the code, which is how two earlier defects on this feature shipped.
+
+Several of these bugs had passing tests over them. `FakeBedrockAgent.create_knowledge_base` returned `status: "ACTIVE"`, which the real API never does; it modelled `clientToken` dedup as permanent and did not model name uniqueness at all; `_FakeBackend` reported instant ingestion success, which is what let a 30-second window look adequate for work that takes minutes. Each fake was corrected alongside its fix, and each fix was mutation-verified.
+
+---
+
+## 🐛 Bug fixes
+
+- **A completed answer could tell the model it was cut short.** The client's Stop writes `lastTurnInterrupted` immediately, but the server only observes the armed cancel on a lease heartbeat that sleeps 10 seconds *before* its first check — so a turn finishing inside that window completed normally and left the marker behind. The next turn then prepended a note saying the user deliberately stopped the previous response and not to resume it. Every clause was false, and it demonstrably steered the following answer; a reload also showed the "response interrupted" affordance against a complete message. Verified in dev: Stop at 2.6s on a 10.4s turn, full answer persisted, follow-up turn logged the cleared marker. A turn that reaches the end of the success path now clears it, whatever the client signalled — genuine interruption arms sit in `except` blocks and re-set it after persisting their partial. Deliberately *not* fixed by retuning the heartbeat: a turn shorter than one tick is unstoppable however the ticks are spaced (#909)
+- **A session id could be forked across two users.** `_get_session_by_gsi` returned `None` both for "no such session" and "exists, but owned by someone else", so `ensure_session_metadata_exists` read the second as the first and created a second metadata row on the same session id under the requester — the `attribute_not_exists(PK)` guard cannot catch it, since the new row has a different PK. Session ids travel in shareable `/s/{sessionId}` URLs; opening someone else's 404s on the metadata read, but the SPA then treated the session as new and let the user send. Not a confidentiality bug — conversation content lives in AgentCore Memory keyed by actor id, so the second user only ever saw an empty thread — but it duplicated the row, mis-attached the spend, and left the original owner's session resolving non-deterministically, since both rows share `GSI_PK`/`GSI_SK`. The turn is now rejected with 404 (not 403, which would confirm the session exists), and both GSI lookups scan for the caller's own row rather than reading `items[0]`, because forked rows already exist in prod (#906)
+- **Admin "Discover from server" returned 403 for every IAM-authenticated MCP server**, in every environment, so admins had to type each tool name by hand. `POST /admin/tools/discover` signs with the app-api task role — not the gateway role the form's credential picker names, since the gateway only signs at runtime after the target is registered — and that role held `AddPermission`, `RemovePermission` and `GetFunctionUrlConfig` but never `lambda:InvokeFunctionUrl`. Separately, the runtime role's `ExternalMCPLambdaAccess` was scoped to `<prefix>-mcp-*` only, which never matches an MCP server deployed from its own repo as `mcp-<server>-<env>` — harmless while such a server is a Gateway target, a 403 the moment one is configured as a direct external MCP tool (#911)
+
+---
+
+## 🔒 Security
+
+Four findings, two of them chains that ended in cross-principal execution.
+
+**OIDC login CSRF / session fixation in the BFF auth flow — High (f-8c4f312a).** `GET /auth/login` minted a `state`, stored it server-side, and redirected to the Cognito Hosted UI issuing **no browser-side material at all** — no state cookie, no PKCE, no nonce. But `state` is a public value: it travels in a 302 `Location` and anyone can mint one anonymously. `GET /auth/callback` nonetheless treated "this state exists in the store" as proof the request continued a login *this* browser started, and so accepted any `(code, state)` pair from any browser. The exploit is three steps — mint a state anonymously, authenticate at the IdP yourself to get a real authorization code, then lure a victim to `/auth/callback?code=<theirs>&state=<captured>` — and the victim's browser is silently issued a live session for the attacker's account, reported against a `system_admin` identity. Everything the victim then does (conversations, uploads, memory entries, third-party connector consent) lands inside an account the attacker still holds credentials to.
+
+The fix is browser binding: login mints a 32-byte secret, returns it in a `__Host-bff_oauth_state` cookie (HttpOnly, Secure, Path=/, no Domain, SameSite=lax) and commits only its SHA-256 digest to the state row; callback recomputes the digest and refuses the exchange unless it matches under `secrets.compare_digest`. Three deliberate choices: the cookie is checked **before** the state-store lookup, so a probe from a crafted link cannot burn a user's in-flight state; `SameSite=lax` is required rather than a compromise, because the IdP returns the user via a top-level cross-site GET that `strict` would withhold; and a state row carrying no digest **fails closed**, because such rows exist only mid-deploy and honouring them would hold the hole open for exactly the rollout window an attacker with a pre-minted state would strike in. PKCE (S256) and OIDC nonce verification are added end-to-end as defense in depth — PKCE alone would *not* have closed this finding, since the attacker drives the BFF-minted authorize URL and the stored verifier matches their own code. No `Origin` / `Sec-Fetch-Site` check was added despite the report suggesting one: a legitimate arrival at the callback *is* a cross-site top-level GET with no `Origin`, so rejecting on those headers would break every login and stop nothing. A test pins that.
+
+**Privilege-escalating stored XSS in skill resources (f-317ac252).** An authenticated, zero-privilege user could plant JavaScript that later executed on the SPA's own origin inside a `system_admin`'s authenticated browser session. Two control failures chained: the upload routes persisted the client-supplied multipart Content-Type verbatim with no allowlist and permitted an `.html` filename, and the read routes reflected that stored type with `Content-Disposition: inline` while the CloudFront `/api/*` behavior carried no response-headers policy — so responses shipped with no `nosniff` and no CSP, where `GET /` had both. Because app-api is served from the same origin as the SPA, the file parsed as a top-level HTML document and its inline `<script>` ran with the viewer's session, reading the non-httpOnly CSRF cookie and driving arbitrary state-changing admin calls.
+
+Closed at three independent layers so none is load-bearing: an extension-derived upload allowlist (`apis/shared/skills/resource_types.py`) whose every value is inert and which ignores the client-supplied Content-Type entirely, matching the posture the agent-icon route already took; serve-time re-derivation of the media type from the filename plus `attachment` + `X-Content-Type-Options: nosniff` + `default-src 'none'; frame-ancestors 'none'; sandbox`, which is what neutralizes rows written before the allowlist existed and removes any need for a data migration; and a new `ResponseHeadersPolicy` on the CloudFront `/api/*` behavior so a future route cannot regress the whole origin. `sandbox` is deliberately omitted at the edge — `default-src 'none'` already blocks all script in a document, and an opaque-origin directive across every API response would risk breaking attachment downloads and OAuth navigations for no added protection. The allowlist is mirrored client-side for UX only; the server is the control.
+
+**Cross-owner write on the admin per-object skill routes.** `GET /admin/skills/` narrows to `owner_id == "system"`, but every per-object route read the row by id with no predicate — so an actor holding only `admin.skills` could read and rewrite a private, user-owned skill's instructions, which is instruction-trusted content that steers its owner's agent, while the owner was 403 on the same route. `SkillCatalogService` now exposes `get_catalog_skill()` / `require_catalog_skill()`, applied in the service for update, delete, resource listing and role grants, and at the route layer for GET and the reference-file routes. Non-catalog rows return 404 with the same message template as a nonexistent id, so the surface no longer confirms that another user's private skill exists — the old "is user-authored" role-grant error was itself an existence oracle.
+
+**AST allowlist bypass in the code-execution sandbox.** `visit_Attribute` checked only for dunders, so an allowlisted module that itself imports a host module re-exported it: `pd.io.common.os.popen(...)` reached the full `os` module with no import statement anywhere in the submitted source. Attribute nodes are now checked against the same denylist as bare names, `ImportFrom` members are checked too (`from pandas.io.common import os as o` bound the real module under an innocuous name), ten missing host modules are covered, and the adjacent deserialization sinks are closed — a pickle payload can arrive as a bytes literal through `io.BytesIO`, so `read_pickle`/`to_pickle`/`read_hdf`/`to_hdf`/`load` are refused, with process-spawn entry points as a second net. The disclosed payload was run through both policy versions: pre-fix **accepted**, post-fix **rejected**. Documented consequence: a DataFrame column colliding with a denied name must use `df['open']`, and a lazily-loaded submodule must be imported directly (`from scipy.signal import butter`) — both already true for the bare-name form. Not addressed here, and stated plainly: the policy remains a denylist over a large library surface, and capability reduction inside the execution environment is the durable control.
+
+Together with the first two, these chained — the cross-owner skill write plus the AST bypass ended in attacker-authored OS command execution inside another principal's chat session.
+
+---
+
+## 🏗️ Infrastructure
+
+- New `grantManagedKbDocumentDeletion` for the app-api task role and the kb-sync worker, deliberately **not** `grantDirectIngestion`: these callers only ever remove documents, so a bug in the delete path cannot add content and a bug in the ingest path cannot remove it
+- `bedrock:StartIngestionJob` added to the managed-KB worker and ingestion-consumer roles. It looks like a mistake — Requirement 9.2 forbids *calling* `StartIngestionJob` (0.1 RPS account-wide) and nothing does — so a docblock and a separately-named test carry the reason that holding it is authorization, not invocation, and the obvious cleanup fails a test that explains itself
+- `lambda:InvokeFunctionUrl` added to the app-api task role; both it and the runtime role's `ExternalMCPLambdaAccess` now cover the `mcp-<server>-<env>` convention alongside `<prefix>-mcp-*`
+- `apis/shared/kb_backend/` added to `Dockerfile.rag-ingestion` and `Dockerfile.kb-sync`, and to `build-one.sh`'s `SOURCE_DIRS` for both, so the content hash moves with the engine gate. Cheap: the package's module-level imports are stdlib only, enforced by `test_kb_backend_boundary.py`
+- CloudFront `/api/*` gains its own `ResponseHeadersPolicy` (nosniff, `default-src 'none'; frame-ancestors 'none'`, `X-Frame-Options: DENY`, HSTS, no-referrer)
+- Stack resource count: **382 of 500**, up from 308. Guard test fails above 460
+- Alarm-topic subscriptions are deliberately not IaC — several teams need to hear about failures and their membership changes far more often than the infrastructure does, and requiring a PR and a deploy to add one address is how a notification list goes stale and stops being trusted. A test asserts zero subscription resources exist, so the decision cannot be quietly reversed
+
+---
+
+## 🧪 Test coverage
+
+~5,900 lines of new tests:
+
+| Area | Lines | Scope |
+|---|---|---|
+| Observability | ~1,470 | Alarm routing (zero unrouted), topic + CMK policy, per-service alarm shapes, log retention across all groups, dashboard composition, the three source-level guards |
+| Security | ~1,590 | The reported CSRF chain replayed against the real `/auth/login` with no hand-seeded state, PKCE/nonce enforcement, 36 MIME/upload tests using the report's verbatim payload, AST policy bypasses, CloudFront header policy |
+| Managed KB | ~1,145 | Provisioning waits and adoption, ingestion status branching, both engine gates, delete propagation, real-role grant wiring |
+| Chat reliability | ~900 | Retry-strategy classification, `model_retry` + service-unavailable copy, client liveness thresholds, attachment write-ahead/pop, cross-user fork, completed-turn reconciliation |
+
+Each fix in the managed-KB and security groups was mutation-verified: the change was neutered and the named tests confirmed to fail. Three observability guards were proven non-vacuous by planting a file violating all three.
+
+---
+
+## 🚀 Deployment notes
+
+**Order:** `platform.yml` → `backend.yml` → `frontend-deploy.yml`. All three are required.
+
+1. **`platform.yml` (CDK) — required.** Adds the SNS topic and KMS CMK, 77 alarms, the platform-health dashboard, the log-retention aspect and custom resource, the CloudFront `/api/*` response-headers policy, and the IAM grants above.
+2. **Subscribe to the alarm topic — required, manual, not automated.** See [step-05-verify §6](.github/docs/deploy/step-05-verify.md#6-subscribe-to-platform-alarms-required--not-automated). Until you do, the alarms are still unrouted.
+3. **`backend.yml` — required.** `rag-ingestion` and `kb-sync` images both change (they now carry `apis/shared/kb_backend/`), alongside app-api and inference-api.
+4. **`frontend-deploy.yml` — required.** Loading-indicator states, the skill-form file filters.
+5. **No DynamoDB index operations.** `gsi-inventory.json` is unchanged, so the one-GSI-per-`UpdateTable` limit is not in play for this release.
+
+**Takes effect with no flag:**
+
+- **Log retention moves 7 days → 30** across all 15 log groups (`CDK_OBSERVABILITY_LOG_RETENTION_DAYS` to change it). This raises CloudWatch storage cost; the X-Ray change below more than offsets it in any environment that never set `production`.
+- **X-Ray sampling drops 100% → 1%** with a 1/sec reservoir (`CDK_OBSERVABILITY_XRAY_SAMPLING_RATE`).
+- **Bedrock's transient service faults are now retried.** Set `RETRY_TRANSIENT_SERVICE_ERRORS=false` for stock throttling-only behavior; no deploy needed.
+- **Skill-resource uploads reject `.html`, `.htm`, `.xhtml`, `.xml` and `.svg`**, and source-code extensions collapse to `text/plain`. Existing rows are unaffected on disk but are re-derived at serve time, so no migration is needed — and both read routes now respond `attachment` rather than `inline`. Both SPA callers fetch these over XHR, so nothing user-facing changes; a direct link to a resource URL will now download rather than render.
+- **Logins in flight across the deploy fail closed once.** A state row minted by the old `/auth/login` carries no binding digest and will be refused; the cost is a single retry.
+- **A turn posted to a session owned by another user is refused with 404.** Previously it created a duplicate metadata row. Rows forked before this deploy are read deterministically but are not cleaned up automatically.
+
+**Unchanged:** every `CDK_MANAGED_KB_*` flag still defaults OFF, and the managed-KB fixes in this release are inert in any environment that has not armed them. `CDK_OBSERVABILITY_*` overrides are all optional — the defaults are cost-conscious and intended to be deployed as-is.
+
+---
+
 # Release Notes — v1.16.0
 
 **Release Date:** August 28, 2026

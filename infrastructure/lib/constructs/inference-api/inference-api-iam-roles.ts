@@ -120,11 +120,19 @@ export function createRuntimeExecutionRole(
   }));
 
   // ── External MCP Lambda Function URL invocation ──
+  // Both naming conventions: MCP servers deployed from their own repos are
+  // named `mcp-<server>-<env>` (no project prefix), so a prefix-only scope
+  // silently 403s every one of them the moment a tool is configured as a
+  // direct external MCP server rather than a Gateway target. Mirrors the
+  // resource scope app-api uses for the same fleet.
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'ExternalMCPLambdaAccess',
     effect: iam.Effect.ALLOW,
     actions: ['lambda:InvokeFunctionUrl', 'lambda:InvokeFunction'],
-    resources: [`arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:${config.projectPrefix}-mcp-*`],
+    resources: [
+      `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:mcp-*`,
+      `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:${config.projectPrefix}-mcp-*`,
+    ],
   }));
 
   // ── AgentCore Gateway ──

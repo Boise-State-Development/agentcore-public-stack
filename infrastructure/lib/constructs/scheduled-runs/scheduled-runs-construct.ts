@@ -8,11 +8,14 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
 import { AppConfig } from '../../config';
+import { AlarmFactory } from '../observability/alarm-factory';
+import { logRetentionFor } from '../observability/log-retention';
 
 export interface ScheduledRunsConstructProps {
   config: AppConfig;
@@ -38,6 +41,7 @@ export interface ScheduledRunsConstructProps {
    * only HTTP dependency (via run_agent_headless). */
   inferenceApiRuntimeEndpointUrl: string;
   cognitoRegion: string;
+  alarmTopic?: sns.ITopic;
 }
 
 /**
@@ -121,7 +125,7 @@ export class ScheduledRunsConstruct extends Construct {
     };
 
     const workerLogGroup = new logs.LogGroup(this, 'ScheduledRunsWorkerLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -148,7 +152,7 @@ export class ScheduledRunsConstruct extends Construct {
     });
 
     const dispatcherLogGroup = new logs.LogGroup(this, 'ScheduledRunsDispatcherLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -282,17 +286,16 @@ export class ScheduledRunsConstruct extends Construct {
     });
     this.scheduleRule.addTarget(new targets.LambdaFunction(this.dispatcherLambda));
 
-    // Error visibility (no SNS wiring in this stack yet; alarms are
-    // dashboard/console signals).
-    new cloudwatch.Alarm(this, 'ScheduledRunsDispatcherErrorAlarm', {
-      alarmName: `${config.projectPrefix}-scheduled-runs-dispatcher-errors`,
+    const alarms = new AlarmFactory(this, config, props.alarmTopic);
+    alarms.alarm('ScheduledRunsDispatcherErrorAlarm', {
+      name: 'scheduled-runs-dispatcher-errors',
       metric: this.dispatcherLambda.metricErrors({ period: cdk.Duration.minutes(5) }),
       threshold: 1,
       evaluationPeriods: 2,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-    new cloudwatch.Alarm(this, 'ScheduledRunsWorkerErrorAlarm', {
-      alarmName: `${config.projectPrefix}-scheduled-runs-worker-errors`,
+    alarms.alarm('ScheduledRunsWorkerErrorAlarm', {
+      name: 'scheduled-runs-worker-errors',
       metric: this.workerLambda.metricErrors({ period: cdk.Duration.minutes(5) }),
       threshold: 3,
       evaluationPeriods: 2,

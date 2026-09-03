@@ -7,13 +7,16 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
+import { AlarmFactory } from '../observability/alarm-factory';
 import { ManagedKbRoleConstruct, managedKbMetricNamespace } from './managed-kb-role-construct';
+import { logRetentionFor } from '../observability/log-retention';
 
 /**
  * Tag keys every runtime-created Managed_KB carries (Requirement 20.11).
@@ -115,6 +118,7 @@ export interface KbMigrationConstructProps {
    * left unattached there, waiting for these Lambda roles.
    */
   managedKbRole: ManagedKbRoleConstruct;
+  alarmTopic?: sns.ITopic;
 }
 
 /**
@@ -245,7 +249,7 @@ export class KbMigrationConstruct extends Construct {
 
     // ── Worker ──
     const workerLogGroup = new logs.LogGroup(this, 'KbMigrationWorkerLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -272,7 +276,7 @@ export class KbMigrationConstruct extends Construct {
 
     // ── Dispatcher ──
     const dispatcherLogGroup = new logs.LogGroup(this, 'KbMigrationDispatcherLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -301,7 +305,7 @@ export class KbMigrationConstruct extends Construct {
 
     // ── Reconciler ──
     const reconcilerLogGroup = new logs.LogGroup(this, 'KbMigrationReconcilerLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -340,7 +344,7 @@ export class KbMigrationConstruct extends Construct {
     });
 
     const ingestionConsumerLogGroup = new logs.LogGroup(this, 'KbIngestionConsumerLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -568,8 +572,10 @@ export class KbMigrationConstruct extends Construct {
     // then be worth nothing when it finally had something to say.
     const namespace = managedKbMetricNamespace(config);
 
-    new cloudwatch.Alarm(this, 'ManagedKbTotalStorageAlarm', {
-      alarmName: getResourceName(config, 'managed-kb-total-storage'),
+    const alarms = new AlarmFactory(this, config, props.alarmTopic);
+
+    alarms.alarm('ManagedKbTotalStorageAlarm', {
+      name: 'managed-kb-total-storage',
       alarmDescription:
         'Fleet-wide managed knowledge base storage exceeded the configured GB threshold',
       metric: new cloudwatch.Metric({
@@ -584,8 +590,8 @@ export class KbMigrationConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    new cloudwatch.Alarm(this, 'ManagedKbCountAlarm', {
-      alarmName: getResourceName(config, 'managed-kb-count'),
+    alarms.alarm('ManagedKbCountAlarm', {
+      name: 'managed-kb-count',
       alarmDescription:
         'Managed knowledge base count reached 80% of the 10,000 per-account quota — a quota increase takes lead time',
       metric: new cloudwatch.Metric({
@@ -611,8 +617,8 @@ export class KbMigrationConstruct extends Construct {
     // `AmazonBedrockAgentCore`, so keying on `AmazonBedrock` misses it
     // entirely and keying on the service code alone blends it into the
     // AgentCore Runtime memory line (Requirement 22.7).
-    new cloudwatch.Alarm(this, 'ManagedKbDailyCostAlarm', {
-      alarmName: getResourceName(config, 'managed-kb-daily-cost'),
+    alarms.alarm('ManagedKbDailyCostAlarm', {
+      name: 'managed-kb-daily-cost',
       alarmDescription:
         'Daily Knowledge-Base usagetype cost exceeded the configured USD threshold',
       metric: new cloudwatch.Metric({
@@ -633,8 +639,8 @@ export class KbMigrationConstruct extends Construct {
     // that crashed and will be cleaned up, whereas the same finding three
     // days running means the delete saga is leaking and every leaked
     // knowledge base is still billing.
-    new cloudwatch.Alarm(this, 'ManagedKbOrphansAlarm', {
-      alarmName: getResourceName(config, 'managed-kb-orphans'),
+    alarms.alarm('ManagedKbOrphansAlarm', {
+      name: 'managed-kb-orphans',
       alarmDescription:
         'Reconciler reported orphaned managed knowledge bases on three consecutive runs — the delete saga is leaking',
       metric: new cloudwatch.Metric({

@@ -6,6 +6,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
+import { logRetentionFor } from '../observability/log-retention';
 
 export interface AgentCoreMemoryConstructProps {
   config: AppConfig;
@@ -108,7 +109,7 @@ export class AgentCoreMemoryConstruct extends Construct {
     // that prefix. This is a service constraint, not a naming choice.
     const memoryLogsLogGroup = new logs.LogGroup(this, 'MemoryLogsLogGroup', {
       logGroupName: `/aws/vendedlogs/bedrock-agentcore/memory/${config.projectPrefix}`,
-      retention: logs.RetentionDays.ONE_MONTH,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
     const memoryLogsSource = new logs.CfnDeliverySource(this, 'MemoryLogsSource', {

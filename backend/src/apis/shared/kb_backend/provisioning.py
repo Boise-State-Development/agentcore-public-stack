@@ -466,9 +466,6 @@ async def _call(
 
 
 # ── The saga ─────────────────────────────────────────────────────────────────
-#: Statuses a knowledge base can hold while still on its way to usable.
-KB_PENDING_STATUSES = ("CREATING", "UPDATING")
-
 #: The status the data-source create requires.
 KB_ACTIVE_STATUS = "ACTIVE"
 
@@ -579,7 +576,6 @@ async def _wait_for_knowledge_base_active(
     interval = KB_ACTIVE_POLL_SECONDS if interval_seconds is None else interval_seconds
 
     waited = 0.0
-    last_status = "UNKNOWN"
     while True:
         described = await asyncio.to_thread(
             lambda: client.get_knowledge_base(knowledgeBaseId=aws_kb_id)

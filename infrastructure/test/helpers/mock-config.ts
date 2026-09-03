@@ -11,6 +11,20 @@ import { AppConfig,
   MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
   MANAGED_KB_PER_KB_CEILING_BYTES,
   MANAGED_KB_RETENTION_WINDOW_DAYS,
+  OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+  OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
+  OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
+  OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
+  OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+  OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+  OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
+  OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
+  OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
 } from '../../lib/config';
 
 /** Default mock account and region used across all tests. */
@@ -43,6 +57,35 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       maxCapacity: 2,
     },
     inferenceApi: {},
+    // Observability mirrors the shipped OSS defaults rather than hardcoded
+    // literals, so a change to a default is exercised by every existing test
+    // instead of silently diverging from what a fork actually deploys.
+    // alarmTopicEnabled is ON here because routing is the point of the feature:
+    // the "every alarm has an action" guard must run against the default shape.
+    observability: {
+      alarmTopicEnabled: true,
+      logRetentionDays: OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+      albTarget5xxThreshold: OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+      albP99LatencyMs: OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+      agentCoreLatencyMs: OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+      agentCoreErrorThreshold: OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+      lambdaErrorThreshold: OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
+      lambdaDurationPercentOfTimeout:
+        OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+      dynamoThrottleThreshold: OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
+      ecsCpuPercent: OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
+      ecsMemoryPercent: OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
+      promptCacheAvoidableMissThreshold:
+        OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
+      promptCacheWastedUsdThreshold:
+        OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
+      promptCacheSessionWastedUsdThreshold:
+        OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+      xraySamplingRate: OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
+      xraySamplingReservoir: OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+      xrayInsightsNotifications: false,
+      agentCoreApplicationLogsEnabled: false,
+    },
     ragIngestion: {
       lambdaMemorySize: 3008,
       lambdaTimeout: 900,
