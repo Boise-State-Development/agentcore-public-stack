@@ -120,6 +120,17 @@ export interface Message {
   metadata?: Record<string, unknown> | null;
   /** RAG citations from knowledge base retrieval (assistant messages only) */
   citations?: Citation[];
+  /**
+   * True for a follow-up the user sent **while this turn was still running**,
+   * which the backend injected at a tool boundary (see
+   * docs/specs/mid-turn-steering.md).
+   *
+   * It is a real user message and renders as one, but it is not the start of a
+   * turn — the turn it interrupted is still the turn in progress. Turn grouping
+   * in the message list keys off this so a steer does not split one response
+   * into two groups (and does not move the scroll reserve mid-stream).
+   */
+  steering?: boolean;
 }
 
 // ============================================================================

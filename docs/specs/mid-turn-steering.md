@@ -1,6 +1,6 @@
 # Mid-turn steering
 
-**Status:** in progress — PRs 1–4 built (backend + SSE contract); PRs 5–6 open
+**Status:** in progress — PRs 1–5 built (end to end); PR-6 open, pending a dev evaluation
 **Follow-up to:** PR #916 (`feature/queue-followup-instead-of-interrupt`)
 **Refs:** `docs/kaizen/reviews/2026-08-28.md` proposal #5
 
@@ -313,14 +313,10 @@ is still streaming — this is the one piece of visual design work in the change
 | 2 | `SteeringHook` + registration + commit-on-append clearing + the SDK contract test. Behind the flag, no client path yet. | **built** |
 | 3 | app-api `POST /sessions/{id}/steer` + `DELETE .../steer/{entryId}`, `get_current_user_from_session` auth per the house rule. | **built** |
 | 4 | `steering_applied` SSE event: coordinator emit, parser case, CLAUDE.md table row. | **built** |
-| 5 | SPA: pending-ack queue state, POST/DELETE wiring, conditional placeholder, mid-turn user bubble rendering. | open |
+| 5 | SPA: pending-ack queue state, POST/DELETE wiring, conditional placeholder, mid-turn user bubble rendering. | **built** |
 | 6 | Paused-turn carry-through on the resume path (D "Paused turns"). Optional, ships after the rest is live in dev. | open |
 
-Nothing is user-visible until PR-5: the flag defaults on, but the SPA never
-POSTs, so no inbox is ever armed. That gap is the natural window for the dev
-evaluation Risk 2 asks for.
-
-Two implementation notes worth carrying forward:
+Three implementation notes worth carrying forward:
 
 * **The ack drain runs before each SSE event is yielded, not after.** An
   injection confirmed on the turn's *final* tool batch would otherwise be
@@ -330,6 +326,12 @@ Two implementation notes worth carrying forward:
   every non-toolResult block — the injection included. It now carries the
   residual across exactly once. The concern the spec raised as "confirm this is
   fine" was real.
+* **"Reload survival is free" was half true.** The text does come back with no
+  separate hydration path, but it comes back *raw*: a user message of
+  `[toolResult…, text]` whose text is still wrapped in the tags written for the
+  model, and which turn grouping would treat as the start of a new turn. The
+  SPA normalizes both on load (`normalizeSteeringMessages`) so a reloaded
+  steered turn reads exactly as it did live.
 
 ## Testing
 

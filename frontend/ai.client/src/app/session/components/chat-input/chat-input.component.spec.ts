@@ -8,6 +8,7 @@ import { SystemPromptsService } from '../../../services/system-prompts/system-pr
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { VoiceChatService } from '../../services/voice';
+import { SteeringService } from '../../services/chat/steering.service';
 import { ChatInputComponent } from './chat-input.component';
 
 const AGENTS: MentionableAgent[] = [
@@ -15,6 +16,40 @@ const AGENTS: MentionableAgent[] = [
   { agentId: 'a2', name: 'Bravo', group: 'own' },
   { agentId: 'a3', name: 'Charlie', group: 'pinned' },
 ];
+
+/**
+ * Stand-in for SteeringService: same surface, no HTTP.
+ *
+ * A DI token rather than a `vi.mock`, per the house rule — module mocking
+ * leaks across spec files, and the real service reaches SessionService →
+ * HttpClient, which these specs have no business standing up.
+ */
+class SteeringServiceStub {
+  readonly applied = signal<string[]>([]);
+  /** Set by a test to decide whether the backend "armed" the entry. */
+  armResult = true;
+  toolsInUse = false;
+  readonly armCalls: { sessionId: string; entryId: string; text: string }[] = [];
+  readonly withdrawCalls: { sessionId: string; entryId: string }[] = [];
+
+  canSteer(sessionId: string | null): boolean {
+    return !!sessionId && this.toolsInUse;
+  }
+  markToolUsed(): void {}
+  startTurn(): void {}
+  async arm(sessionId: string, entryId: string, text: string): Promise<boolean> {
+    this.armCalls.push({ sessionId, entryId, text });
+    return this.armResult;
+  }
+  async withdraw(sessionId: string, entryId: string): Promise<void> {
+    this.withdrawCalls.push({ sessionId, entryId });
+  }
+  recordApplied(): void {}
+  consumeApplied(entryId: string): void {
+    this.applied.update((ids) => ids.filter((id) => id !== entryId));
+  }
+  reset(): void {}
+}
 
 class MentionServiceStub {
   readonly mentionable = signal<MentionableAgent[]>(AGENTS);
@@ -58,6 +93,7 @@ describe('ChatInputComponent — the `@` menu keyboard path (D11)', () => {
         },
         { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
         { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
       ],
     })
       // The composer's child components (model dropdown, quota banners, file cards) drag in
@@ -183,6 +219,7 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
         },
         { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
         { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
       ],
     })
       .overrideComponent(ChatInputComponent, {
@@ -354,5 +391,239 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
     setStreaming(false);
 
     expect(submitted[0].mentionAgentId).toBe('a1');
+  });
+});
+
+
+describe('ChatInputComponent — mid-turn steering (PR-5)', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  let textarea: HTMLTextAreaElement;
+  let steering: SteeringServiceStub;
+  let readyUploadIds: ReturnType<typeof signal<string[]>>;
+  let submitted: { content: string }[];
+
+  beforeEach(async () => {
+    readyUploadIds = signal<string[]>([]);
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds,
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+          },
+        },
+        { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
+        { provide: ToolService, useValue: {} },
+        {
+          provide: VoiceChatService,
+          useValue: {
+            status: signal('idle'),
+            isVoiceActive: signal(false),
+            agentTranscript: signal(''),
+          },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, {
+        set: { imports: [], schemas: [NO_ERRORS_SCHEMA] },
+      })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    steering = TestBed.inject(SteeringService) as unknown as SteeringServiceStub;
+    fixture.componentRef.setInput('showFileControls', false);
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('showSettingsControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.componentRef.setInput('sessionId', 'sess-1');
+
+    submitted = [];
+    component.messageSubmitted.subscribe((m) => submitted.push(m));
+
+    fixture.detectChanges();
+    textarea = fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement;
+  });
+
+  function type(value: string): void {
+    textarea.value = value;
+    textarea.setSelectionRange(value.length, value.length);
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
+  function pressEnter(): void {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true }),
+    );
+    fixture.detectChanges();
+  }
+
+  function setStreaming(streaming: boolean): void {
+    fixture.componentRef.setInput('isChatLoading', streaming);
+    fixture.detectChanges();
+  }
+
+  /** Let the fire-and-forget arm request settle. */
+  const settle = () => Promise.resolve().then(() => undefined);
+
+  it('arms a queued follow-up against the running turn', async () => {
+    setStreaming(true);
+    type('use the other file');
+    pressEnter();
+    await settle();
+
+    expect(steering.armCalls).toHaveLength(1);
+    expect(steering.armCalls[0].sessionId).toBe('sess-1');
+    expect(steering.armCalls[0].text).toBe('use the other file');
+    // The id armed on the backend is the id on the queued entry — that shared
+    // id is what makes the ack able to name exactly one composer entry.
+    expect(steering.armCalls[0].entryId).toBe(component.queuedMessages()[0].id);
+  });
+
+  it('marks the entry armed once the backend confirms', async () => {
+    setStreaming(true);
+    type('hi');
+    pressEnter();
+    await settle();
+    fixture.detectChanges();
+
+    expect(component.queuedMessages()[0].armed).toBe(true);
+  });
+
+  it('leaves the entry unarmed when there was no live turn to steer', async () => {
+    steering.armResult = false;
+    setStreaming(true);
+    type('too late');
+    pressEnter();
+    await settle();
+
+    // Not an error: it stays queued and the falling edge sends it normally.
+    expect(component.queuedMessages()[0].armed).toBeUndefined();
+    setStreaming(false);
+    expect(submitted.map((m) => m.content)).toEqual(['too late']);
+  });
+
+  it('does not arm a follow-up carrying file attachments', async () => {
+    readyUploadIds.set(['upload-1']);
+    setStreaming(true);
+    type('look at this');
+    pressEnter();
+    await settle();
+
+    // An injection is a text block on the tool-result message; it cannot carry
+    // files. Skipping the round trip is what makes that automatic instead of a
+    // backend rejection.
+    expect(steering.armCalls).toEqual([]);
+  });
+
+  it('does not arm a follow-up carrying an @-mention', async () => {
+    setStreaming(true);
+    type('@Alpha');
+    fixture.detectChanges();
+    pressEnter();
+    type('@Alpha check this');
+    pressEnter();
+    await settle();
+
+    // A mention picks the Agent that runs a *turn*; a mid-turn injection
+    // cannot change which agent is already running.
+    expect(steering.armCalls).toEqual([]);
+  });
+
+  it('drops the entry when the backend acks the injection', async () => {
+    setStreaming(true);
+    type('use the other file');
+    pressEnter();
+    await settle();
+    const entryId = component.queuedMessages()[0].id;
+
+    steering.applied.set([entryId]);
+    fixture.detectChanges();
+
+    expect(component.queuedMessages()).toEqual([]);
+  });
+
+  it('does not also send an acked follow-up at the end of the turn', async () => {
+    setStreaming(true);
+    type('use the other file');
+    pressEnter();
+    await settle();
+
+    steering.applied.set([component.queuedMessages()[0].id]);
+    fixture.detectChanges();
+    setStreaming(false);
+
+    // The whole point: injected once, not injected and then sent again.
+    expect(submitted).toEqual([]);
+  });
+
+  it('ignores an ack for an entry it does not hold', async () => {
+    setStreaming(true);
+    type('mine');
+    pressEnter();
+    await settle();
+
+    steering.applied.set(['some-other-composers-entry']);
+    fixture.detectChanges();
+
+    expect(component.queuedMessages().map((q) => q.content)).toEqual(['mine']);
+  });
+
+  it('withdraws an entry the user removes from the composer', async () => {
+    setStreaming(true);
+    type('never mind');
+    pressEnter();
+    await settle();
+    const entryId = component.queuedMessages()[0].id;
+
+    component.removeQueuedMessage(0);
+
+    expect(steering.withdrawCalls).toEqual([{ sessionId: 'sess-1', entryId }]);
+    expect(component.queuedMessages()).toEqual([]);
+  });
+
+  it('keeps a removed entry removed even if its arm lands afterwards', async () => {
+    setStreaming(true);
+    type('never mind');
+    pressEnter();
+    component.removeQueuedMessage(0);
+    await settle();
+    fixture.detectChanges();
+
+    // The arm resolving must not resurrect an entry the user already took
+    // back — it re-reads the queue rather than closing over the entry.
+    expect(component.queuedMessages()).toEqual([]);
+  });
+
+  it('promises end-of-turn delivery until the turn has used a tool', () => {
+    setStreaming(true);
+    fixture.detectChanges();
+    expect(textarea.getAttribute('placeholder')).toContain('when this response finishes');
+  });
+
+  it('promises next-step delivery once the turn has tool boundaries', () => {
+    steering.toolsInUse = true;
+    setStreaming(true);
+    fixture.detectChanges();
+    // A turn that calls no tools has nowhere to put an injection, so
+    // over-promising here is the failure that teaches users not to trust it.
+    expect(textarea.getAttribute('placeholder')).toContain('at the next step');
+  });
+
+  it('goes back to the idle placeholder when nothing is streaming', () => {
+    steering.toolsInUse = true;
+    setStreaming(false);
+    expect(textarea.getAttribute('placeholder')).toBe('How can I help you today?');
   });
 });

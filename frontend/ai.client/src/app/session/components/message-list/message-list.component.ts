@@ -357,7 +357,13 @@ export class MessageListComponent {
   protected readonly turns = computed<{ key: string; messages: Message[] }[]>(() => {
     const groups: { key: string; messages: Message[] }[] = [];
     for (const m of this.messages()) {
-      if (m.role === 'user' || groups.length === 0) {
+      // A mid-turn steer is a user message that does NOT start a turn: the
+      // user sent it *into* the response already streaming, so it belongs to
+      // that turn's group. Breaking here instead would split one response into
+      // two groups and move the last group's scroll reserve out from under a
+      // response still streaming into it. See docs/specs/mid-turn-steering.md.
+      const startsTurn = m.role === 'user' && !m.steering;
+      if (startsTurn || groups.length === 0) {
         groups.push({ key: m.id, messages: [m] });
       } else {
         groups[groups.length - 1].messages.push(m);
