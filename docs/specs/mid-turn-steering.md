@@ -1,6 +1,6 @@
 # Mid-turn steering
 
-**Status:** proposed
+**Status:** in progress — PRs 1–4 built (backend + SSE contract); PRs 5–6 open
 **Follow-up to:** PR #916 (`feature/queue-followup-instead-of-interrupt`)
 **Refs:** `docs/kaizen/reviews/2026-08-28.md` proposal #5
 
@@ -307,14 +307,29 @@ is still streaming — this is the one piece of visual design work in the change
 
 ## PR breakdown
 
-| PR | Scope |
-|----|-------|
-| 1 | `session_lease` inbox helpers (`request_session_steer`, `peek_steer_queue`, `clear_steer_entry`) + unit tests. No callers. |
-| 2 | `SteeringHook` + registration + commit-on-append clearing + the SDK contract test. Behind the flag, no client path yet. |
-| 3 | app-api `POST /sessions/{id}/steer` + `DELETE .../steer/{entryId}`, `get_current_user_from_session` auth per the house rule. |
-| 4 | `steering_applied` SSE event: coordinator emit, parser case, CLAUDE.md table row. |
-| 5 | SPA: pending-ack queue state, POST/DELETE wiring, conditional placeholder, mid-turn user bubble rendering. |
-| 6 | Paused-turn carry-through on the resume path (D "Paused turns"). Optional, ships after the rest is live in dev. |
+| PR | Scope | Status |
+|----|-------|--------|
+| 1 | `session_lease` inbox helpers (`request_session_steer`, `peek_steer_queue`, `clear_steer_entry`, `remove_steer_entry`) + unit tests. No callers. | **built** |
+| 2 | `SteeringHook` + registration + commit-on-append clearing + the SDK contract test. Behind the flag, no client path yet. | **built** |
+| 3 | app-api `POST /sessions/{id}/steer` + `DELETE .../steer/{entryId}`, `get_current_user_from_session` auth per the house rule. | **built** |
+| 4 | `steering_applied` SSE event: coordinator emit, parser case, CLAUDE.md table row. | **built** |
+| 5 | SPA: pending-ack queue state, POST/DELETE wiring, conditional placeholder, mid-turn user bubble rendering. | open |
+| 6 | Paused-turn carry-through on the resume path (D "Paused turns"). Optional, ships after the rest is live in dev. | open |
+
+Nothing is user-visible until PR-5: the flag defaults on, but the SPA never
+POSTs, so no inbox is ever armed. That gap is the natural window for the dev
+evaluation Risk 2 asks for.
+
+Two implementation notes worth carrying forward:
+
+* **The ack drain runs before each SSE event is yielded, not after.** An
+  injection confirmed on the turn's *final* tool batch would otherwise be
+  stranded behind `done`, which the SPA's stream-state gate drops.
+* **`_repair_tool_pairing` needed a fix, not just coverage.** It rebuilds
+  result turns from the toolUseId map rather than copying them, so it dropped
+  every non-toolResult block — the injection included. It now carries the
+  residual across exactly once. The concern the spec raised as "confirm this is
+  fine" was real.
 
 ## Testing
 
