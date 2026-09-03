@@ -14,13 +14,20 @@ import pytest
 
 from apis.shared.sessions.session_lease import (
     LEASE_WINDOW_SECONDS,
+    STEER_QUEUE_MAX_CHARS,
+    STEER_QUEUE_MAX_ENTRIES,
     SessionBusyError,
     SessionLease,
+    SteerQueueFullError,
     acquire_session_lease,
+    clear_steer_entry,
     is_session_lease_held,
+    peek_steer_queue,
     release_session_lease,
+    remove_steer_entry,
     renew_session_lease,
     request_session_cancel,
+    request_session_steer,
 )
 
 
@@ -280,3 +287,147 @@ class TestLifecycle:
             with pytest.raises(SessionBusyError):
                 await acquire_session_lease("s1", "u1")
             await release_session_lease(lease)
+
+
+class TestSteerInbox:
+    """The lease row's mid-turn steering inbox (docs/specs/mid-turn-steering.md).
+
+    Same item, same owner-scoping, same fail-soft posture as the cancel marker.
+    The property that matters throughout: the user's words are either injected
+    exactly once or left for the end-of-turn flush — never both, never neither.
+    """
+
+    @pytest.mark.asyncio
+    async def test_steer_is_queued_and_peekable_by_owner(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        assert await request_session_steer("s1", "u1", text="use the other file", entry_id="e1") is True
+
+        entries = await peek_steer_queue(lease)
+        assert [e["id"] for e in entries] == ["e1"]
+        assert entries[0]["text"] == "use the other file"
+        assert entries[0]["at"]
+
+    @pytest.mark.asyncio
+    async def test_steer_with_no_active_lease_is_noop(self, sessions_metadata_table):
+        # No turn streaming → nothing to steer. The SPA sends a normal turn.
+        assert await request_session_steer("s1", "u1", text="hi", entry_id="e1") is False
+        assert _lease_item(sessions_metadata_table) is None
+
+    @pytest.mark.asyncio
+    async def test_steer_after_turn_ended_is_rejected(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        await release_session_lease(lease)
+        # The turn ended between the user typing and the POST landing. This
+        # race resolving to "not queued" is the correct outcome.
+        assert await request_session_steer("s1", "u1", text="hi", entry_id="e1") is False
+
+    @pytest.mark.asyncio
+    async def test_peek_does_not_consume(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        await request_session_steer("s1", "u1", text="hi", entry_id="e1")
+        # Commit-on-append: AfterToolsEvent also fires on the interrupt path,
+        # where the mutated message is discarded. A peek that consumed would
+        # destroy the user's words on exactly that path.
+        assert len(await peek_steer_queue(lease)) == 1
+        assert len(await peek_steer_queue(lease)) == 1
+
+    @pytest.mark.asyncio
+    async def test_entries_are_peeked_in_arrival_order(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        for i in range(3):
+            await request_session_steer("s1", "u1", text=f"t{i}", entry_id=f"e{i}")
+        assert [e["id"] for e in await peek_steer_queue(lease)] == ["e0", "e1", "e2"]
+
+    @pytest.mark.asyncio
+    async def test_peek_is_owner_scoped(self, sessions_metadata_table):
+        first = await acquire_session_lease("s1", "u1")
+        await request_session_steer("s1", "u1", text="for the first turn", entry_id="e1")
+        # The turn ends and a resume force-acquires. The new owner must not
+        # inherit the previous turn's inbox.
+        resumed = await acquire_session_lease("s1", "u1", force=True)
+        assert resumed.owner != first.owner
+        assert await peek_steer_queue(resumed) == []
+
+    @pytest.mark.asyncio
+    async def test_peek_with_no_lease_row_is_empty(self, sessions_metadata_table):
+        lease = SessionLease(session_id="s1", user_id="u1", owner="ghost")
+        assert await peek_steer_queue(lease) == []
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_only_the_named_entry(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        for i in range(3):
+            await request_session_steer("s1", "u1", text=f"t{i}", entry_id=f"e{i}")
+
+        assert await clear_steer_entry(lease, "e1") is True
+        assert [e["id"] for e in await peek_steer_queue(lease)] == ["e0", "e2"]
+
+    @pytest.mark.asyncio
+    async def test_clear_is_idempotent(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        await request_session_steer("s1", "u1", text="hi", entry_id="e1")
+
+        assert await clear_steer_entry(lease, "e1") is True
+        # A re-delivery after a lost ack must not remove a later entry that
+        # slid into the vacated index.
+        await request_session_steer("s1", "u1", text="second", entry_id="e2")
+        assert await clear_steer_entry(lease, "e1") is False
+        assert [e["id"] for e in await peek_steer_queue(lease)] == ["e2"]
+
+    @pytest.mark.asyncio
+    async def test_clear_is_owner_scoped(self, sessions_metadata_table):
+        first = await acquire_session_lease("s1", "u1")
+        await request_session_steer("s1", "u1", text="hi", entry_id="e1")
+        resumed = await acquire_session_lease("s1", "u1", force=True)
+        # A superseded turn cannot consume the current owner's inbox.
+        assert await clear_steer_entry(first, "e1") is False
+
+    @pytest.mark.asyncio
+    async def test_remove_withdraws_a_queued_entry_for_the_user(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        await request_session_steer("s1", "u1", text="hi", entry_id="e1")
+        # The user deleted the pending-ack chip from the composer.
+        assert await remove_steer_entry("s1", "u1", "e1") is True
+        assert await peek_steer_queue(lease) == []
+
+    @pytest.mark.asyncio
+    async def test_remove_unknown_entry_is_noop(self, sessions_metadata_table):
+        await acquire_session_lease("s1", "u1")
+        assert await remove_steer_entry("s1", "u1", "nope") is False
+
+    @pytest.mark.asyncio
+    async def test_queue_entry_cap_is_enforced(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        for i in range(STEER_QUEUE_MAX_ENTRIES):
+            await request_session_steer("s1", "u1", text="x", entry_id=f"e{i}")
+        with pytest.raises(SteerQueueFullError):
+            await request_session_steer("s1", "u1", text="x", entry_id="over")
+        assert len(await peek_steer_queue(lease)) == STEER_QUEUE_MAX_ENTRIES
+
+    @pytest.mark.asyncio
+    async def test_queue_size_cap_is_enforced(self, sessions_metadata_table):
+        await acquire_session_lease("s1", "u1")
+        await request_session_steer("s1", "u1", text="x" * (STEER_QUEUE_MAX_CHARS - 10), entry_id="e1")
+        with pytest.raises(SteerQueueFullError):
+            await request_session_steer("s1", "u1", text="y" * 100, entry_id="e2")
+
+    @pytest.mark.asyncio
+    async def test_release_deletes_the_inbox_with_the_lease(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        await request_session_steer("s1", "u1", text="hi", entry_id="e1")
+        await release_session_lease(lease)
+        # No separate GC path: an unconsumed inbox cannot outlive its turn.
+        assert _lease_item(sessions_metadata_table) is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_and_steer_coexist_on_the_row(self, sessions_metadata_table):
+        """Cancel beats steering: the stop is observed, the inbox is left alone.
+
+        The SPA's queue entry survives the stop and the user can resend it.
+        """
+        lease = await acquire_session_lease("s1", "u1")
+        await request_session_steer("s1", "u1", text="hi", entry_id="e1")
+        await request_session_cancel("s1", "u1")
+
+        assert await renew_session_lease(lease) is True
+        assert [e["id"] for e in await peek_steer_queue(lease)] == ["e1"]
