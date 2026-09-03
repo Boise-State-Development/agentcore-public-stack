@@ -11,19 +11,24 @@ import {
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { HttpErrorResponse } from '@angular/common/http';
 import { NgTemplateOutlet } from '@angular/common';
+import { Dialog } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroXMark,
   heroArrowPath,
   heroExclamationTriangle,
   heroArrowDownTray,
+  heroArrowUpOnSquare,
   heroEye,
   heroCodeBracket,
   heroClipboard,
   heroCheck,
   heroChevronUpDown,
 } from '@ng-icons/heroicons/outline';
-import type { Artifact } from '../../../../services/artifacts/artifact.model';
+import type {
+  Artifact,
+  OpenArtifactRef,
+} from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 import {
   ArtifactHttpService,
@@ -32,6 +37,12 @@ import {
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
 import { SessionService } from '../../../../services/session/session.service';
 import { ArtifactSourceComponent } from './artifact-source.component';
+import {
+  ArtifactShareModalComponent,
+  type ArtifactShareModalData,
+} from './artifact-share-modal.component';
+import { UserService } from '../../../../../auth/user.service';
+import { TooltipDirective } from '../../../../../components/tooltip/tooltip.directive';
 
 /**
  * Right-docked pane that renders one artifact version in a sandboxed
@@ -53,13 +64,14 @@ import { ArtifactSourceComponent } from './artifact-source.component';
 @Component({
   selector: 'app-artifact-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, NgTemplateOutlet, ArtifactSourceComponent],
+  imports: [NgIcon, NgTemplateOutlet, ArtifactSourceComponent, TooltipDirective],
   providers: [
     provideIcons({
       heroXMark,
       heroArrowPath,
       heroExclamationTriangle,
       heroArrowDownTray,
+      heroArrowUpOnSquare,
       heroEye,
       heroCodeBracket,
       heroClipboard,
@@ -242,6 +254,20 @@ import { ArtifactSourceComponent } from './artifact-source.component';
               />
             </button>
           }
+          <button
+            type="button"
+            class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            [attr.aria-label]="'Share artifact, version ' + ref.version"
+            [appTooltip]="'Share version ' + ref.version"
+            appTooltipPosition="bottom"
+            (click)="share(ref)"
+          >
+            <ng-icon
+              name="heroArrowUpOnSquare"
+              class="text-lg"
+              aria-hidden="true"
+            />
+          </button>
           <button
             type="button"
             class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
@@ -430,6 +456,8 @@ export class ArtifactPanelComponent {
   private sessionService = inject(SessionService);
   private sanitizer = inject(DomSanitizer);
   private artifactDownload = inject(ArtifactDownloadService);
+  private dialog = inject(Dialog);
+  private userService = inject(UserService);
 
   protected readonly open = this.artifactState.openArtifact;
 
@@ -770,6 +798,22 @@ export class ArtifactPanelComponent {
     this.sourceLoading.set(false);
     this.copied.set(false);
     this.loadedSourceKey = null;
+  }
+
+  /** Open the share dialog for the version currently on screen.
+   *
+   *  `ref` is the panel's open-artifact ref, so switching versions in
+   *  the header menu switches what gets shared — a share pins one
+   *  immutable version and never follows HEAD. */
+  protected share(ref: OpenArtifactRef): void {
+    this.dialog.open(ArtifactShareModalComponent, {
+      data: {
+        artifactId: ref.artifactId,
+        version: ref.version,
+        title: ref.title,
+        ownerEmail: this.userService.currentUser()?.email ?? '',
+      } as ArtifactShareModalData,
+    });
   }
 
   protected async download(): Promise<void> {
