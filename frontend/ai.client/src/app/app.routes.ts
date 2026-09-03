@@ -25,6 +25,18 @@ export const routes: Routes = [
         loadComponent: () => import('./shared/shared-view.page').then(m => m.SharedViewPage),
         canActivate: [authGuard],
     },
+    // Recipient view for a shared artifact. Behind authGuard like every
+    // other share surface: "public" means any authenticated tenant user,
+    // never anonymous. The share's own ACL is enforced server-side on
+    // top of this.
+    {
+        path: 'shared-artifact/:shareId',
+        loadComponent: () =>
+            import('./shared/artifact/shared-artifact-view.page').then(
+                m => m.SharedArtifactViewPage,
+            ),
+        canActivate: [authGuard],
+    },
     {
         path: 'auth/login',
         loadComponent: () => import('./auth/login/login.page').then(m => m.LoginPage),

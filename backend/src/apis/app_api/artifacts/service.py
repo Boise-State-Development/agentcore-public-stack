@@ -463,17 +463,28 @@ def _s3():
 
 
 def _get_version_item(
-    user_id: str, artifact_id: str, version: int
+    owner_id: str, artifact_id: str, version: int
 ) -> dict:
-    """Fetch the exact version row, scoped to the authenticated user.
+    """Fetch the exact version row from `owner_id`'s partition.
 
-    Building the PK from the session user's id is what prevents reading
-    another user's artifact. SK zero-pad matches the writer/verifier
-    `V#{version:05d}` contract."""
+    `owner_id` is an ADDRESS — the partition this read targets — not an
+    identity assertion, exactly like the render token's `sub` claim.
+    Two callers pass two different things, and the difference is the
+    whole access-control model:
+
+      - Owner routes pass the *authenticated session user*. Building the
+        PK from the session is what prevents reading someone else's
+        artifact; there is no other check.
+      - Share routes pass the share's *owner*, and may only do so AFTER
+        `_check_share_access` has admitted the viewer. Reaching this
+        function with an owner id the caller has not ACL-checked is a
+        read-any-artifact-by-id bug.
+
+    SK zero-pad matches the writer/verifier `V#{version:05d}` contract."""
     sk = f"ARTIFACT#{artifact_id}#V#{version:05d}"
     try:
         result = _table().get_item(
-            Key={"PK": f"USER#{user_id}", "SK": sk}
+            Key={"PK": f"USER#{owner_id}", "SK": sk}
         )
     except ClientError as exc:
         raise ArtifactQueryError(
@@ -508,20 +519,26 @@ def _unwrap_markdown(html_body: str) -> Optional[str]:
 
 
 class ArtifactContentService:
-    """Return one artifact version's raw source for the panel code view.
+    """Return one artifact version's raw source for the code view.
 
-    Ownership is enforced by the PK lookup. For Markdown the stored S3
-    object is a rendered HTML wrapper; we unwrap it back to the authored
-    Markdown so code view shows what the model actually wrote, and
-    normalize `content_type` to `text/markdown` to match. Anything that
-    can't be unwrapped falls back to the raw stored bytes + real type so
-    the view still shows something truthful instead of erroring."""
+    For Markdown the stored S3 object is a rendered HTML wrapper; we
+    unwrap it back to the authored Markdown so code view shows what the
+    model actually wrote, and normalize `content_type` to
+    `text/markdown` to match. Anything that can't be unwrapped falls
+    back to the raw stored bytes + real type so the view still shows
+    something truthful instead of erroring.
+
+    ACCESS CONTROL: this service performs none of its own. It reads
+    whichever partition `owner_id` names — see `_get_version_item`. The
+    owner route passes the authenticated session user (self-scoping);
+    the shared route passes the share's owner and is responsible for
+    having run the share ACL first."""
 
     def get(
-        self, *, user_id: str, artifact_id: str, version: int
+        self, *, owner_id: str, artifact_id: str, version: int
     ) -> tuple[str, str]:
         bucket = _bucket_name()
-        item = _get_version_item(user_id, artifact_id, version)
+        item = _get_version_item(owner_id, artifact_id, version)
         content_key = item.get("content_key")
         stored_type = item.get(
             "content_type", "text/html; charset=utf-8"
