@@ -32,4 +32,8 @@ jobs:
       run_backend: true
       run_frontend: true
       run_infra: true
+      # Pure-logic tests for tests/load. Deliberately only on the PR gate: the
+      # deploy workflows run test suites to protect a deploy, and the load
+      # suite has no bearing on one.
+      run_load_unit: true
 

@@ -26,6 +26,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_load_unit:
+        description: 'Run load-test unit suite (pure logic; no AWS, no load generated)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -99,3 +104,44 @@ jobs:
       - name: Run tests
         working-directory: infrastructure
         run: npx jest --maxWorkers=2
+
+  # Unit tests for tests/load — the SSE parser, the Cognito login-form parser,
+  # and the config guards. Pure logic: no AWS credentials, no network, and no
+  # load is generated, so this is safe on every PR.
+  #
+  # Why it is a gate at all: the locustfiles encode the chat path's request
+  # payload and SSE event names. Renaming an event in
+  # agents/main_agent/streaming/ or changing the /chat/stream contract should
+  # fail here rather than silently produce a load test that reports every turn
+  # as never finishing. Running the actual load test needs provisioned Cognito
+  # users and spends real Bedrock tokens — that is never done in CI.
+  test-load-unit:
+    if: ${{ inputs.run_load_unit }}
+    name: Test load suite (pytest)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.7.12'
+          enable-cache: true
+          cache-dependency-glob: 'tests/load/uv.lock'
+      - name: Sync deps
+        working-directory: tests/load
+        run: uv sync
+      - name: Run pytest
+        working-directory: tests/load
+        run: uv run pytest tests/ -v
+      - name: Verify locustfiles import
+        working-directory: tests/load
+        # `--list` loads each locustfile and prints its user classes without
+        # starting a run. Catches an import error or a scenario accidentally
+        # made abstract, which the unit tests would not.
+        run: |
+          uv run locust -f locustfile.py --list
+          uv run locust -f locustfile_readonly.py --list
