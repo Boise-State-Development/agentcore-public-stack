@@ -250,18 +250,18 @@ describe('ToolRailComponent', () => {
   describe('status dots', () => {
     it('should return green dot class for complete status', () => {
       const call = makeCall({ status: 'complete' });
-      expect(component.statusDotClass(call)).toContain('bg-green-500');
+      expect(component.statusDotClass(call)).toContain('bg-state-success-500');
     });
 
     it('should return amber shimmer dot class for pending status', () => {
       const call = makeCall({ status: 'pending' });
-      expect(component.statusDotClass(call)).toContain('bg-amber-400');
+      expect(component.statusDotClass(call)).toContain('bg-state-warning-400');
       expect(component.statusDotClass(call)).toContain('shimmer');
     });
 
     it('should return red dot class for error status', () => {
       const call = makeCall({ status: 'error' });
-      expect(component.statusDotClass(call)).toContain('bg-red-500');
+      expect(component.statusDotClass(call)).toContain('bg-state-danger-500');
     });
   });
 
@@ -441,7 +441,7 @@ describe('ToolRailComponent', () => {
       component.toggleExpanded();
       fixture.detectChanges();
 
-      const dot = fixture.nativeElement.querySelector('.bg-red-500');
+      const dot = fixture.nativeElement.querySelector('.bg-state-danger-500');
       expect(dot).toBeTruthy();
     });
   });

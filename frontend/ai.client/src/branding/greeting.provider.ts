@@ -43,7 +43,12 @@ export class GreetingProvider {
 
     if (hasNonWhitespaceChar(firstName) && templates.length > 0) {
       const template = templates[this.selectedIndex % templates.length];
-      return template.replaceAll('{name}', firstName as string);
+      // Use a replacement function so `$` sequences in the name (e.g. `$&`,
+      // `$'`, `$$`) are inserted literally rather than interpreted as
+      // `replaceAll` special patterns, which would otherwise leave `{name}`
+      // in the output.
+      const name = firstName as string;
+      return template.replaceAll('{name}', () => name);
     }
 
     if (fallbacks.length > 0) {

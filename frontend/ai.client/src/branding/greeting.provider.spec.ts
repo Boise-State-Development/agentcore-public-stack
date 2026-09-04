@@ -106,8 +106,11 @@ describe('GreetingProvider', () => {
 
           // The result equals some configured template with every `{name}`
           // occurrence replaced by the first name.
+          // Use a replacement function so `$` sequences in the name are
+          // inserted literally (mirrors GreetingProvider) rather than being
+          // interpreted as `replaceAll` special patterns.
           const matchesSomeTemplate = templates.some(
-            (template) => template.replaceAll('{name}', firstName) === result,
+            (template) => template.replaceAll('{name}', () => firstName) === result,
           );
           expect(matchesSomeTemplate).toBe(true);
         }),
