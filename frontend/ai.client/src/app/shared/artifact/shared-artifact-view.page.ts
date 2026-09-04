@@ -6,7 +6,7 @@ import {
   inject,
   signal,
 } from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
@@ -50,7 +50,13 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 @Component({
   selector: 'app-shared-artifact-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, DatePipe, ArtifactViewerComponent, TooltipDirective],
+  imports: [
+    NgIcon,
+    DatePipe,
+    RouterLink,
+    ArtifactViewerComponent,
+    TooltipDirective,
+  ],
   providers: [
     provideIcons({
       heroLockClosed,
@@ -64,14 +70,23 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
     }),
   ],
   template: `
-    <div class="flex h-dvh flex-col bg-white dark:bg-gray-900">
+    <div class="flex h-full min-h-0 flex-col bg-white dark:bg-gray-900">
       <!-- Read-only banner: the same promise the shared-conversation
            page makes, so the two recipient surfaces read alike. -->
       <div
         class="border-b border-gray-200 bg-white/95 backdrop-blur dark:border-gray-700 dark:bg-gray-900/95"
       >
-        <div class="mx-auto flex max-w-4xl items-center justify-center px-4 py-3">
-          <div class="flex items-center gap-2">
+        <div class="flex items-center gap-3 px-4 py-3">
+          <!-- With the shell chrome stripped there is no sidenav to
+               navigate from, so this is the recipient's only way into
+               the app. Deliberately understated — one link, not a nav. -->
+          <a
+            routerLink="/"
+            class="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+          >
+            boisestate.ai
+          </a>
+          <div class="flex flex-1 items-center justify-center gap-2">
             <ng-icon
               name="heroLockClosed"
               class="size-4 text-gray-400"
@@ -87,6 +102,9 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
               </span>
             }
           </div>
+          <!-- Balances the link so the banner text stays optically
+               centred; width tracks the link via the same font metrics. -->
+          <span class="w-[6.5rem] shrink-0" aria-hidden="true"></span>
         </div>
       </div>
 

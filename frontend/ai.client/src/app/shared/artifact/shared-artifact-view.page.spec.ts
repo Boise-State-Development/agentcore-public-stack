@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, provideRouter } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
 import { SharedArtifactViewPage } from './shared-artifact-view.page';
 import {
@@ -41,6 +41,9 @@ describe('SharedArtifactViewPage', () => {
     TestBed.configureTestingModule({
       imports: [SharedArtifactViewPage],
       providers: [
+        // The banner's home link is a real routerLink, so the template
+        // needs a router — a bare Router mock breaks rendering.
+        provideRouter([]),
         // DI token overrides, not vi.mock — module mocks leak across specs.
         { provide: ArtifactShareService, useValue: shares },
         { provide: ArtifactDownloadService, useValue: download },
@@ -294,5 +297,14 @@ describe('SharedArtifactViewPage', () => {
       (fixture.nativeElement as HTMLElement).querySelectorAll('button'),
     ).map((b) => b.getAttribute('aria-label') ?? '');
     expect(labels.some((l) => /download/i.test(l))).toBe(false);
+  });
+
+  it('offers a way back into the app', async () => {
+    await init();
+    // The route strips the shell chrome, so there is no sidenav to
+    // navigate from — without this a recipient is stranded on the page.
+    const home = (fixture.nativeElement as HTMLElement).querySelector('a[href="/"]');
+    expect(home).not.toBeNull();
+    expect(home!.textContent).toContain('boisestate.ai');
   });
 });
