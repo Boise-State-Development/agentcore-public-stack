@@ -5,7 +5,7 @@ import os
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -17,16 +17,17 @@ from .repository import (
     FineTuningAccessRepository,
     get_fine_tuning_access_repository,
 )
+from . import pricing, task_types
 from .job_models import (
     AVAILABLE_MODELS,
-    INSTANCE_COST_PER_HOUR,
     MODEL_CATALOG,
-    SUPPORTED_DATASET_EXTENSIONS,
     PresignRequest,
     PresignResponse,
     CreateJobRequest,
     JobResponse,
     JobListResponse,
+    TaskTypeResponse,
+    models_for_task,
 )
 from .job_repository import FineTuningJobsRepository, get_fine_tuning_jobs_repository
 from .s3_service import FineTuningS3Service, get_fine_tuning_s3_service
@@ -60,24 +61,24 @@ async def check_access(
     This endpoint does NOT require fine-tuning access — it is used by
     the frontend to decide whether to show the fine-tuning UI.
     """
-    from .dependencies import DEFAULT_MONTHLY_QUOTA_HOURS
+    from .dependencies import DEFAULT_MONTHLY_QUOTA_USD
 
     grant = repo.check_and_reset_quota(user.email)
 
     if grant is not None:
         return FineTuningAccessResponse(
             has_access=True,
-            monthly_quota_hours=grant["monthly_quota_hours"],
-            current_month_usage_hours=grant["current_month_usage_hours"],
+            monthly_quota_usd=grant["monthly_quota_usd"],
+            current_month_usage_usd=grant["current_month_usage_usd"],
             quota_period=grant["quota_period"],
         )
 
     # No explicit grant — check if open-access mode is enabled.
-    if DEFAULT_MONTHLY_QUOTA_HOURS > 0:
+    if DEFAULT_MONTHLY_QUOTA_USD > 0:
         return FineTuningAccessResponse(
             has_access=True,
-            monthly_quota_hours=DEFAULT_MONTHLY_QUOTA_HOURS,
-            current_month_usage_hours=0.0,
+            monthly_quota_usd=DEFAULT_MONTHLY_QUOTA_USD,
+            current_month_usage_usd=0.0,
             quota_period=None,
         )
 
@@ -90,37 +91,77 @@ async def check_access(
 
 @router.get("/models")
 async def list_models(
+    task_type: Optional[str] = Query(None),
     grant: dict = Depends(require_fine_tuning_access),
 ):
-    """List available base models for fine-tuning."""
-    return [m.model_dump() for m in AVAILABLE_MODELS]
+    """List available base models, optionally narrowed to one task type."""
+    if task_type is None:
+        return [m.model_dump() for m in AVAILABLE_MODELS]
+
+    try:
+        return [m.model_dump() for m in models_for_task(task_type)]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/task-types", response_model=List[TaskTypeResponse])
+async def list_task_types(
+    grant: dict = Depends(require_fine_tuning_access),
+):
+    """List the fine-tuning task types the platform supports.
+
+    Drives the create-job UI: the dataset contract, the accepted upload
+    formats and the model list all follow from the chosen task.
+    """
+    return [
+        TaskTypeResponse(
+            task_type=spec.task_type,
+            display_name=spec.display_name,
+            description=spec.description,
+            required_columns=list(spec.required_columns),
+            upload_extensions=list(spec.upload_extensions),
+            requires_archive=spec.requires_archive,
+            inference_upload_extensions=list(spec.inference_upload_extensions),
+            default_instance_type=spec.default_instance_type,
+        )
+        for spec in (
+            task_types.get_task_spec(t) for t in task_types.TASK_TYPES
+        )
+    ]
 
 
 # =========================================================================
 # HuggingFace Model Search (proxy)
 # =========================================================================
 
-# Pipeline tags compatible with AutoModelForSequenceClassification
-COMPATIBLE_PIPELINE_TAGS = [
-    "fill-mask",
-    "text-classification",
-    "feature-extraction",
-    "token-classification",
-    "text-generation",
-]
+#: Weight files a task can actually be fine-tuned from.  A repo carrying only
+#: GGUF (llama.cpp) or other quantised artifacts cannot be loaded by
+#: ``from_pretrained`` for training — it will provision a GPU and fail minutes
+#: in, which is exactly the failure this check exists to prevent.
+TRAINABLE_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".msgpack", ".h5")
 
 
 @router.get("/huggingface-models")
 async def search_huggingface_models(
     search: str = Query(..., min_length=2, max_length=200),
     compatible_only: bool = Query(True),
+    task_type: str = Query(task_types.DEFAULT_TASK_TYPE),
     grant: dict = Depends(require_fine_tuning_access),
 ):
     """Search HuggingFace Hub models. Proxied to avoid CORS issues.
 
     When compatible_only=True (default), makes parallel requests for each
-    compatible pipeline_tag and merges results sorted by downloads.
+    pipeline_tag the *task* can use and merges results sorted by downloads.
+    Searching image models with the text task's tags returns a list of models
+    that all fail on submission, so the tags follow the task.
     """
+    try:
+        spec = task_types.get_task_spec(task_type)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    pipeline_tags = list(spec.hf_pipeline_tags)
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             if compatible_only:
@@ -143,7 +184,7 @@ async def search_huggingface_models(
                     return resp.json()
 
                 results = await asyncio.gather(
-                    *[_fetch_tag(tag) for tag in COMPATIBLE_PIPELINE_TAGS],
+                    *[_fetch_tag(tag) for tag in pipeline_tags],
                     return_exceptions=True,
                 )
 
@@ -191,48 +232,201 @@ async def search_huggingface_models(
         raise HTTPException(status_code=502, detail="Failed to search HuggingFace models")
 
 
+async def preflight_huggingface_model(hf_id: str, spec) -> None:
+    """Reject a custom HuggingFace model that cannot serve ``spec``.
+
+    Three failure modes, all of which otherwise provision a GPU and die
+    minutes into a billed run with an opaque traceback:
+
+    1. the repo does not exist (typo, or a gated/private model);
+    2. it carries no loadable weights — a GGUF-only repo is the common case,
+       since llama.cpp quantisations cannot be fine-tuned by transformers;
+    3. its pipeline tag belongs to a different modality than the chosen task.
+
+    Network problems are *not* treated as failures: the Hub being unreachable
+    should not block a submission, so an unavailable check falls through and
+    lets the training job be the judge.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"https://huggingface.co/api/models/{hf_id}")
+    except httpx.HTTPError as e:
+        logger.warning(f"HuggingFace pre-flight unavailable for {hf_id}: {e}")
+        return
+
+    if response.status_code == 404:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"HuggingFace model '{hf_id}' was not found. Check the id, and "
+                f"note that gated or private models cannot be used."
+            ),
+        )
+    if response.status_code >= 400:
+        logger.warning(
+            f"HuggingFace pre-flight returned {response.status_code} for {hf_id}"
+        )
+        return
+
+    payload = response.json()
+
+    filenames = [s.get("rfilename", "") for s in payload.get("siblings", [])]
+    if filenames and not any(
+        name.endswith(TRAINABLE_WEIGHT_SUFFIXES) for name in filenames
+    ):
+        gguf = any(name.lower().endswith(".gguf") for name in filenames)
+        reason = (
+            "it only publishes GGUF (llama.cpp) quantisations, which cannot be "
+            "fine-tuned"
+            if gguf
+            else "it publishes no loadable model weights"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"HuggingFace model '{hf_id}' cannot be fine-tuned because "
+                f"{reason}. Look for the original (unquantised) repository."
+            ),
+        )
+
+    pipeline_tag = payload.get("pipeline_tag")
+    if pipeline_tag and pipeline_tag not in spec.hf_pipeline_tags:
+        supported = ", ".join(spec.hf_pipeline_tags)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"HuggingFace model '{hf_id}' is tagged '{pipeline_tag}', which "
+                f"is not compatible with {spec.display_name.lower()}. "
+                f"Compatible tags: {supported}."
+            ),
+        )
+
+
 # =========================================================================
 # Presigned URL
 # =========================================================================
 
-def _validate_dataset_format(name: str) -> None:
+def _validate_dataset_format(name: str, spec) -> None:
     """Reject a dataset filename the training script could not read.
 
     Checked before upload and again before the job is submitted, so an
     unreadable dataset never reaches a billed GPU instance.
     """
-    if not name.lower().endswith(SUPPORTED_DATASET_EXTENSIONS):
-        supported = ", ".join(SUPPORTED_DATASET_EXTENSIONS)
+    if not spec.supports_extension(name):
+        supported = ", ".join(spec.upload_extensions)
+        required = ", ".join(f'"{c}"' for c in spec.required_columns)
+        detail = (
+            f"Unsupported dataset format for {spec.display_name.lower()}. "
+            f"Supported formats: {supported}. "
+        )
+        if spec.requires_archive:
+            detail += (
+                f"Upload a .zip containing a manifest (CSV/JSONL/JSON) with "
+                f"{required} fields, plus the image files it references."
+            )
+        else:
+            detail += f"Each record needs {required} fields."
+        raise HTTPException(status_code=400, detail=detail)
+
+
+def _resolve_task_spec(task_type: Optional[str]):
+    """Resolve a task type from a request, as a 400 rather than a 500."""
+    try:
+        return task_types.get_task_spec(task_type)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+#: Shortest run worth starting.  Below this a GPU job cannot even pull its
+#: container image and download the base model, so admitting one would spend
+#: the user's remaining budget on producing nothing.
+MIN_BUDGETED_RUNTIME_SECONDS = 1800
+
+
+def _budgeted_runtime(
+    requested_seconds: int,
+    instance_type: str,
+    remaining_usd: float,
+    *,
+    transform: bool = False,
+) -> int:
+    """Clamp a job's stopping condition to what the remaining budget affords.
+
+    Admitting on worst-case cost alone would reject almost everything: the
+    default stopping condition is 24 hours, which is ~$34 on the cheapest
+    instance, so no ordinary monthly quota could ever admit a job — even
+    though the same job typically finishes in minutes and costs cents.
+
+    Instead the budget *becomes* the stopping condition. SageMaker kills the
+    job when MaxRuntimeInSeconds elapses, so clamping that value to the hours
+    the user can actually afford bounds the spend exactly, with no reservation
+    bookkeeping and no false rejections.
+
+    Raises HTTPException when the affordable runtime is too short to be worth
+    starting.
+    """
+    rate = (
+        pricing.transform_rate(instance_type)
+        if transform
+        else pricing.training_rate(instance_type)
+    )
+    if not rate:  # pragma: no cover - _validate_instance_type runs first
+        raise HTTPException(status_code=400, detail=f"Unpriced instance type '{instance_type}'.")
+
+    affordable_seconds = int((remaining_usd / rate) * 3600)
+
+    if affordable_seconds < MIN_BUDGETED_RUNTIME_SECONDS:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Unsupported dataset format. Supported formats: {supported}. "
-                'Each record needs a "text" and a "label" field.'
+                f"Insufficient quota. ${remaining_usd:.2f} remaining buys "
+                f"{affordable_seconds // 60} minutes on {instance_type}, below "
+                f"the {MIN_BUDGETED_RUNTIME_SECONDS // 60}-minute minimum. "
+                f"Choose a cheaper instance type, or ask an administrator to "
+                f"raise your quota."
             ),
         )
 
+    effective = min(requested_seconds, affordable_seconds)
+    if effective < requested_seconds:
+        logger.info(
+            f"Clamped max runtime from {requested_seconds}s to {effective}s "
+            f"to fit ${remaining_usd:.2f} remaining on {instance_type}"
+        )
+    return effective
 
-def _validate_instance_type(instance_type: str) -> None:
+
+def _validate_instance_type(instance_type: str, *, transform: bool = False) -> None:
     """Reject an instance type we have no price for.
 
-    ``calculate_cost`` falls back to $0.00/hour for anything absent from
-    INSTANCE_COST_PER_HOUR, so an unlisted type runs real GPUs and records no
-    spend — invisible to the admin cost dashboard, the same blind spot the
-    StatusIndex casing bug produced by a different route.
-
-    The quota does not bound the damage either: it meters GPU-*hours*, not
-    dollars, so the same ten hours buys ~$14 on an ml.g5.xlarge or several
-    hundred on a larger instance. `instance_type` arrives straight off the
+    ``calculate_cost`` falls back to $0.00/hour for anything unpriced, so an
+    unlisted type would run real GPUs and record no spend — invisible to the
+    admin cost dashboard, and now also invisible to the dollar quota, which
+    would let it run unbounded. ``instance_type`` arrives straight off the
     request body, so this is the only thing standing between a caller and an
     unpriced instance.
+
+    Training and Batch Transform have separate rate tables because some
+    instances are offered for one and not the other; ``transform`` says which
+    table to check.
     """
-    if instance_type not in INSTANCE_COST_PER_HOUR:
-        supported = ", ".join(sorted(INSTANCE_COST_PER_HOUR))
+    rate = (
+        pricing.transform_rate(instance_type)
+        if transform
+        else pricing.training_rate(instance_type)
+    )
+    if rate is None:
+        supported = ", ".join(
+            pricing.supported_transform_instances()
+            if transform
+            else pricing.supported_training_instances()
+        )
+        operation = "Batch Transform" if transform else "training"
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Unsupported instance type '{instance_type}'. "
-                f"Supported types: {supported}"
+                f"Instance type '{instance_type}' is not available for "
+                f"{operation}. Supported types: {supported}"
             ),
         )
 
@@ -245,7 +439,8 @@ async def presign_upload(
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
 ):
     """Generate a presigned PUT URL for dataset upload."""
-    _validate_dataset_format(request.filename)
+    spec = _resolve_task_spec(request.task_type)
+    _validate_dataset_format(request.filename, spec)
 
     try:
         presigned_url, s3_key = s3_service.generate_upload_url(
@@ -283,30 +478,38 @@ async def create_job(
     script_service: ScriptPackagingService = Depends(get_script_packaging_service),
 ):
     """Create a new fine-tuning training job."""
+    spec = _resolve_task_spec(request.task_type)
+
     # Validate model — either from catalog or custom HuggingFace model
     model = MODEL_CATALOG.get(request.model_id)
     if not model and not request.custom_huggingface_model_id:
         raise HTTPException(status_code=400, detail=f"Unknown model_id: {request.model_id}")
+
+    if model and model.task_type != spec.task_type:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Model '{model.model_name}' is a "
+                f"{task_types.get_task_spec(model.task_type).display_name.lower()} "
+                f"model and cannot be fine-tuned for "
+                f"{spec.display_name.lower()}."
+            ),
+        )
 
     if request.custom_huggingface_model_id:
         # Validate the custom HuggingFace model ID format (org/model or just model)
         hf_id = request.custom_huggingface_model_id.strip()
         if not hf_id or len(hf_id) > 200:
             raise HTTPException(status_code=400, detail="Invalid HuggingFace model ID.")
+        # Ask the Hub whether this model can actually serve the task before a
+        # GPU is provisioned for it.
+        await preflight_huggingface_model(hf_id, spec)
 
     # Verify the dataset is readable by the training script and exists in S3
-    _validate_dataset_format(request.dataset_s3_key)
+    _validate_dataset_format(request.dataset_s3_key, spec)
 
     if not s3_service.check_object_exists(request.dataset_s3_key):
         raise HTTPException(status_code=400, detail="Dataset not found in S3. Upload your dataset first.")
-
-    # Check quota (need at least 1 hour remaining)
-    remaining = grant["monthly_quota_hours"] - grant["current_month_usage_hours"]
-    if remaining < 1.0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Insufficient quota. You have {remaining:.1f} hours remaining, minimum 1.0 required.",
-        )
 
     # Resolve instance type and hyperparameters
     if model:
@@ -315,25 +518,26 @@ async def create_job(
         model_name = model.model_name
         huggingface_id = model.huggingface_model_id
     else:
-        # Custom HuggingFace model — use sensible defaults
-        instance_type = request.instance_type or "ml.g5.xlarge"
-        hyperparameters = {
-            "epochs": "3",
-            "per_device_train_batch_size": "8",
-            "learning_rate": "2e-5",
-            "weight_decay": "0.01",
-            "split_ratio": "0.8",
-            "seed": "42",
-            "context_length": "512",
-        }
+        # Custom HuggingFace model — fall back to the task's own defaults.
+        instance_type = request.instance_type or spec.default_instance_type
+        hyperparameters = {**spec.default_hyperparameters}
         huggingface_id = request.custom_huggingface_model_id.strip()
         model_name = huggingface_id
 
     _validate_instance_type(instance_type)
 
+    # Bound the job's spend by clamping its stopping condition to what the
+    # remaining budget affords.  The real bill is unknown until the job stops,
+    # so this is what keeps a single long run from overshooting the quota.
+    remaining = grant["monthly_quota_usd"] - grant["current_month_usage_usd"]
+    max_runtime_seconds = _budgeted_runtime(
+        request.max_runtime_seconds, instance_type, remaining
+    )
+
     if request.hyperparameters:
         hyperparameters.update(request.hyperparameters)
     hyperparameters["model_name_or_path"] = huggingface_id
+    hyperparameters["task_type"] = spec.task_type
 
     # Generate identifiers
     job_id = uuid.uuid4().hex
@@ -363,12 +567,13 @@ async def create_job(
         job_id=job_id,
         model_id=request.model_id,
         model_name=model_name,
+        task_type=spec.task_type,
         dataset_s3_key=request.dataset_s3_key,
         instance_type=instance_type,
         hyperparameters=hyperparameters,
         sagemaker_job_name=sagemaker_job_name,
         output_s3_prefix=output_s3_prefix,
-        max_runtime_seconds=request.max_runtime_seconds,
+        max_runtime_seconds=max_runtime_seconds,
     )
 
     # Start SageMaker training job
@@ -379,8 +584,9 @@ async def create_job(
             input_s3_uri=input_s3_uri,
             output_s3_uri=output_s3_uri,
             instance_type=instance_type,
-            max_runtime=request.max_runtime_seconds,
+            max_runtime=max_runtime_seconds,
             source_dir_s3_uri=scripts_s3_uri,
+            task_type=spec.task_type,
         )
         job = jobs_repo.update_job_status(user.user_id, job_id, "TRAINING")
     except Exception as e:
@@ -607,11 +813,14 @@ def _sync_job_status(
         job["user_id"], job["job_id"], new_status, **update_kwargs
     )
 
-    # Increment usage quota on completion/failure/stop (if billable time exists)
+    # Charge the quota on completion/failure/stop (if billable time exists).
+    # Failed and stopped runs are billed by AWS too, so they are charged here.
     if new_status in ("COMPLETED", "FAILED", "STOPPED") and sm_status.get("billable_seconds"):
-        billable_hours = sm_status["billable_seconds"] / 3600
-        access_repo.increment_usage(job["email"], billable_hours)
-        logger.info(f"Incremented usage for {job['email']} by {billable_hours:.2f} hours")
+        spend = sagemaker.calculate_cost(
+            job["instance_type"], sm_status["billable_seconds"]
+        )
+        access_repo.increment_usage(job["email"], spend)
+        logger.info(f"Charged {job['email']} ${spend:.4f} for training {job['job_id']}")
 
     return updated
 
@@ -647,7 +856,9 @@ def _sync_inference_status(
         update_kwargs["transform_end_time"] = sm_status["transform_end_time"]
     if sm_status.get("billable_seconds"):
         update_kwargs["billable_seconds"] = sm_status["billable_seconds"]
-        cost = sagemaker.calculate_cost(job["instance_type"], sm_status["billable_seconds"])
+        cost = sagemaker.calculate_cost(
+            job["instance_type"], sm_status["billable_seconds"], transform=True
+        )
         update_kwargs["estimated_cost_usd"] = cost
     if sm_status.get("failure_reason"):
         update_kwargs["error_message"] = sm_status["failure_reason"]
@@ -656,11 +867,13 @@ def _sync_inference_status(
         job["user_id"], job["job_id"], new_status, **update_kwargs
     )
 
-    # Increment usage quota on terminal status (if billable time exists)
+    # Charge the quota on terminal status (if billable time exists).
     if new_status in ("COMPLETED", "FAILED", "STOPPED") and sm_status.get("billable_seconds"):
-        billable_hours = sm_status["billable_seconds"] / 3600
-        access_repo.increment_usage(job["email"], billable_hours)
-        logger.info(f"Incremented inference usage for {job['email']} by {billable_hours:.2f} hours")
+        spend = sagemaker.calculate_cost(
+            job["instance_type"], sm_status["billable_seconds"], transform=True
+        )
+        access_repo.increment_usage(job["email"], spend)
+        logger.info(f"Charged {job['email']} ${spend:.4f} for inference {job['job_id']}")
 
     return updated
 
@@ -711,6 +924,17 @@ async def inference_presign_upload(
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
 ):
     """Generate a presigned PUT URL for inference input file upload."""
+    spec = _resolve_task_spec(request.task_type)
+    if not spec.supports_inference_extension(request.filename):
+        supported = ", ".join(spec.inference_upload_extensions)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported input format for {spec.display_name.lower()} "
+                f"inference. Supported formats: {supported}."
+            ),
+        )
+
     try:
         presigned_url, s3_key = s3_service.generate_inference_upload_url(
             user_id=user.user_id,
@@ -750,24 +974,38 @@ async def create_inference_job(
     if training_job["status"] != "COMPLETED":
         raise HTTPException(status_code=400, detail="Training job has not completed successfully")
 
+    # The inference task is whatever the model was trained for — never what
+    # the caller claims, since the artifact can only serve its own task.
+    spec = _resolve_task_spec(training_job.get("task_type"))
+
     # Verify input file exists in S3
     if not s3_service.check_object_exists(request.input_s3_key):
         raise HTTPException(status_code=400, detail="Input file not found in S3. Upload your input file first.")
 
-    # Check quota (need at least 0.5 hours remaining for inference)
-    remaining = grant["monthly_quota_hours"] - grant["current_month_usage_hours"]
-    if remaining < 0.5:
+    if not spec.supports_inference_extension(request.input_s3_key):
+        supported = ", ".join(spec.inference_upload_extensions)
         raise HTTPException(
             status_code=400,
-            detail=f"Insufficient quota. You have {remaining:.1f} hours remaining, minimum 0.5 required.",
+            detail=(
+                f"This model was fine-tuned for {spec.display_name.lower()}, "
+                f"so its inference input must be one of: {supported}."
+            ),
         )
 
     # Build model artifact S3 path from training job's output
     model_s3_path = f"s3://{s3_service.bucket_name}/{training_job['output_s3_prefix']}/{training_job['sagemaker_job_name']}/output/model.tar.gz"
 
-    # Resolve instance type (default to training job's instance type)
+    # Resolve instance type (default to training job's instance type).  Not
+    # every training instance can run Batch Transform, so this is checked
+    # against the transform rate table.
     instance_type = request.instance_type or training_job["instance_type"]
-    _validate_instance_type(instance_type)
+    _validate_instance_type(instance_type, transform=True)
+
+    # Bound spend the same way training does.
+    remaining = grant["monthly_quota_usd"] - grant["current_month_usage_usd"]
+    max_runtime_seconds = _budgeted_runtime(
+        request.max_runtime_seconds, instance_type, remaining, transform=True
+    )
 
     # Generate identifiers
     job_id = uuid.uuid4().hex
@@ -792,7 +1030,7 @@ async def create_inference_job(
         instance_type=instance_type,
         transform_job_name=transform_job_name,
         output_s3_prefix=output_s3_prefix,
-        max_runtime_seconds=request.max_runtime_seconds,
+        max_runtime_seconds=max_runtime_seconds,
     )
 
     # Start SageMaker Batch Transform job
@@ -803,7 +1041,8 @@ async def create_inference_job(
             input_s3_uri=input_s3_uri,
             output_s3_uri=output_s3_uri,
             instance_type=instance_type,
-            max_runtime=request.max_runtime_seconds,
+            max_runtime=max_runtime_seconds,
+            task_type=spec.task_type,
         )
         job = inf_repo.update_inference_status(user.user_id, job_id, "TRANSFORMING")
     except Exception as e:

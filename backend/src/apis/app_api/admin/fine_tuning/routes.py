@@ -91,7 +91,7 @@ async def grant_access(
         grant = repo.grant_access(
             email=request.email,
             granted_by=admin_user.email,
-            monthly_quota_hours=request.monthly_quota_hours,
+            monthly_quota_usd=request.monthly_quota_usd,
         )
         return FineTuningAccessGrant(**grant)
     except ValueError as e:
@@ -126,11 +126,11 @@ async def update_quota(
     admin_user: User = Depends(require_fine_tuning_admin),
     repo: FineTuningAccessRepository = Depends(get_repository),
 ):
-    """Update GPU-hour quota for a user (admin only)."""
+    """Update the monthly dollar quota for a user (admin only)."""
     logger.info("Admin updating fine-tuning quota")
 
     try:
-        result = repo.update_quota(email, request.monthly_quota_hours)
+        result = repo.update_quota(email, request.monthly_quota_usd)
         if result is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

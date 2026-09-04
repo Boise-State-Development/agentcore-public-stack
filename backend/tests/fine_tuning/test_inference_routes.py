@@ -45,8 +45,8 @@ SAMPLE_GRANT = {
     "email": "user@example.com",
     "granted_by": "admin@example.com",
     "granted_at": "2026-01-01T00:00:00Z",
-    "monthly_quota_hours": 10.0,
-    "current_month_usage_hours": 2.0,
+    "monthly_quota_usd": 10.0,
+    "current_month_usage_usd": 2.0,
     "quota_period": "2026-03",
 }
 
@@ -239,7 +239,7 @@ class TestCreateInferenceJob:
         )
 
         assert resp.status_code == 400
-        assert "Unsupported instance type" in resp.json()["detail"]
+        assert "is not available for" in resp.json()["detail"]
         mock_sm.create_transform_job.assert_not_called()
 
     @patch.dict("os.environ", {"PROJECT_PREFIX": "test-prefix"})
@@ -353,7 +353,7 @@ class TestCreateInferenceJob:
         app = _create_app()
         user = make_user(email="user@example.com")
 
-        low_quota = {**SAMPLE_GRANT, "monthly_quota_hours": 10.0, "current_month_usage_hours": 9.8}
+        low_quota = {**SAMPLE_GRANT, "monthly_quota_usd": 10.0, "current_month_usage_usd": 9.8}
 
         mock_jobs = MagicMock()
         mock_jobs.get_job.return_value = SAMPLE_COMPLETED_TRAINING_JOB

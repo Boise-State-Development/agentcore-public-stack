@@ -9,6 +9,8 @@ from typing import Optional, List, Dict, Any
 import boto3
 from botocore.exceptions import ClientError
 
+from . import task_types
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +49,9 @@ class FineTuningJobsRepository:
             "email": item["email"],
             "model_id": item["model_id"],
             "model_name": item["model_name"],
+            # Jobs written before task types existed carry no attribute; they
+            # are all text classifiers.
+            "task_type": item.get("task_type", task_types.DEFAULT_TASK_TYPE),
             "status": item["status"],
             "dataset_s3_key": item["dataset_s3_key"],
             "output_s3_prefix": item.get("output_s3_prefix"),
@@ -79,6 +84,7 @@ class FineTuningJobsRepository:
         sagemaker_job_name: str,
         output_s3_prefix: str,
         max_runtime_seconds: int = 86400,
+        task_type: str = task_types.DEFAULT_TASK_TYPE,
     ) -> dict:
         """Create a new training job record."""
         now = datetime.now(timezone.utc).isoformat()
@@ -91,6 +97,7 @@ class FineTuningJobsRepository:
             "email": email,
             "model_id": model_id,
             "model_name": model_name,
+            "task_type": task_type,
             "status": "PENDING",
             "dataset_s3_key": dataset_s3_key,
             "output_s3_prefix": output_s3_prefix,
