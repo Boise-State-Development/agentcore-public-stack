@@ -44,6 +44,8 @@ import type {
   UiResourceEvent,
   ToolInputPartialEvent,
   SessionTitleEvent,
+  SteeringAppliedEvent,
+  ModelRetryEvent,
   ToolProgress,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
@@ -111,6 +113,16 @@ export interface StreamParserCallbacks {
   // Server-generated conversation title, pushed mid-stream on a session's
   // first turn once concurrent generation finishes (see SessionTitleEvent)
   onSessionTitle?: (data: SessionTitleEvent) => void;
+
+  // A follow-up queued mid-stream was injected into the running turn at a
+  // tool boundary and is now in history (see SteeringAppliedEvent). The SPA
+  // drops the matching composer-queue entry and renders it in the thread.
+  onSteeringApplied?: (data: SteeringAppliedEvent) => void;
+
+  // A failed model call is being retried rather than surfaced as an error.
+  // Advisory only — the turn continues; this exists so the resulting silence
+  // reads as "working" instead of "hung".
+  onModelRetry?: (data: ModelRetryEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -392,8 +404,11 @@ export function validateOAuthRequiredEvent(data: unknown): data is OAuthRequired
     event.providerId.length > 0 &&
     typeof event.authorizationUrl === 'string' &&
     event.authorizationUrl.length > 0 &&
-    typeof event.interruptId === 'string' &&
-    event.interruptId.length > 0
+    // Optional: the pre-flight flavor omits it because no turn is paused.
+    // Still reject an explicitly empty string — that means the backend
+    // meant to send a resumable id and produced a broken one.
+    (event.interruptId === undefined ||
+      (typeof event.interruptId === 'string' && event.interruptId.length > 0))
   );
 }
 
@@ -535,6 +550,54 @@ export function validateSessionTitleEvent(data: unknown): data is SessionTitleEv
     event.sessionId.length > 0 &&
     typeof event.title === 'string' &&
     event.title.length > 0
+  );
+}
+
+/**
+ * Validate SteeringAppliedEvent structure.
+ *
+ * `entryId` is the client-minted id of the queued composer entry and is what
+ * the SPA matches on, so an empty one is rejected: acking the wrong entry (or
+ * none) would either leave a duplicate queued or drop text that was never
+ * injected.
+ */
+export function validateSteeringAppliedEvent(
+  data: unknown,
+): data is SteeringAppliedEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<SteeringAppliedEvent>;
+
+  return (
+    event.type === 'steering_applied' &&
+    typeof event.sessionId === 'string' &&
+    event.sessionId.length > 0 &&
+    typeof event.entryId === 'string' &&
+    event.entryId.length > 0 &&
+    typeof event.text === 'string'
+  );
+}
+
+/**
+ * Validate ModelRetryEvent structure. `attempt` is 1-based; `delaySeconds`
+ * may legitimately be 0 (an unparseable delay is reported as 0 rather than
+ * dropped, so the retry still reaches the user).
+ */
+export function validateModelRetryEvent(data: unknown): data is ModelRetryEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<ModelRetryEvent>;
+
+  return (
+    event.type === 'model_retry' &&
+    typeof event.attempt === 'number' &&
+    event.attempt > 0 &&
+    typeof event.delaySeconds === 'number' &&
+    event.delaySeconds >= 0
   );
 }
 
@@ -764,6 +827,22 @@ export function processStreamEvent(
           callbacks.onSessionTitle?.(data);
         } else {
           callbacks.onParseError?.('session_title: invalid data structure');
+        }
+        break;
+
+      case 'steering_applied':
+        if (validateSteeringAppliedEvent(data)) {
+          callbacks.onSteeringApplied?.(data);
+        } else {
+          callbacks.onParseError?.('steering_applied: invalid data structure');
+        }
+        break;
+
+      case 'model_retry':
+        if (validateModelRetryEvent(data)) {
+          callbacks.onModelRetry?.(data);
+        } else {
+          callbacks.onParseError?.('model_retry: invalid data structure');
         }
         break;
 

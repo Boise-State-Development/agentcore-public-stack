@@ -6,7 +6,9 @@ Contains Pydantic models for chat API requests and responses.
 import json
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
+
+from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
 # Hard upper bound on a user-supplied custom system prompt. Mirrors the
 # limit applied inside SystemPromptBuilder.from_user_prompt — surfacing
@@ -78,6 +80,27 @@ class AppContextUpdateEntry(BaseModel):
     structured_content: Optional[Dict[str, Any]] = None
 
 
+class CarriedSteerEntry(BaseModel):
+    """A queued follow-up carried into the turn this request starts.
+
+    Mid-turn steering's paused-turn path (docs/specs/mid-turn-steering.md).
+    A turn paused for OAuth consent or tool approval has no running loop to
+    steer, and the pause releases its lease — inbox and all — when the stream
+    closes. The follow-ups the user typed meanwhile are still in their
+    composer, so the resume request carries them here and the route seeds them
+    onto the resumed turn's lease, where the ordinary ``SteeringHook`` picks
+    them up at its first tool boundary.
+
+    ``id`` is the client-minted queue-entry id, unchanged from the one the
+    normal ``/sessions/{id}/steer`` path uses: it is what ``steering_applied``
+    names back, and what makes carrying an entry idempotent against the
+    composer's own end-of-turn flush.
+    """
+
+    id: str = Field(min_length=1, max_length=128)
+    text: str = Field(min_length=1, max_length=STEER_QUEUE_MAX_CHARS)
+
+
 class InvocationRequest(BaseModel):
     """Input for /invocations endpoint with multi-provider support"""
 
@@ -117,10 +140,33 @@ class InvocationRequest(BaseModel):
     # `get_assistant_with_access_check` still gates the Agent itself, so the
     # worst a forged flag can do is decline to persist a binding.
     agent_mention: Optional[bool] = None
+    # Marketplace D2: this turn is a marketplace **reviewer** test-driving a submission
+    # before deciding on it. Two things change, and nothing else does.
+    #
+    # 1. The Agent resolves to the snapshot under review (`submittedVersion` while one is
+    #    pending, `publishedVersion` otherwise) rather than to the published-or-draft rule
+    #    every other caller gets. A reviewer who test-drove the author's live draft would
+    #    be testing something approval is not going to publish.
+    # 2. The PRIVATE access check is bypassed, because a PRIVATE Agent can be — and often
+    #    is — sitting in the review queue, and `get_assistant_with_access_check` refuses a
+    #    non-owner outright on one.
+    #
+    # ⚠️ Unlike `agent_mention`, this is NOT merely a claim about intent, so it cannot be
+    # treated like one: it widens access. The route re-checks `admin.marketplace` against
+    # the caller's own roles before honoring it, and a caller without the scope gets a 403
+    # rather than a quietly-ignored flag — a silently downgraded preview would run the
+    # wrong configuration and report it as the reviewed one.
+    review_preview: Optional[bool] = None
     # When set, the route resumes a paused agent turn instead of starting a
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.
     interrupt_responses: Optional[List[InterruptResponseEntry]] = None
+    # Follow-ups the user queued while this session's turn was paused awaiting
+    # consent or approval. Seeded onto this turn's steering inbox after the
+    # lease is acquired, so the agent reads them at its next tool boundary
+    # instead of the user having to send them as a separate turn that abandons
+    # the pause. Ignored when mid-turn steering is disabled.
+    steering: Optional[List[CarriedSteerEntry]] = None
     # When true, this is a "Continue" after a max_tokens truncation. Like a
     # resume, `message` is ignored: instead of synthesizing a new user turn,
     # the agent re-enters the loop with an empty prompt so the model

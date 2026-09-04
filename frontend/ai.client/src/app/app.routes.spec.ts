@@ -4,6 +4,7 @@ import { Component } from '@angular/core';
 import { provideRouter, Router, Routes } from '@angular/router';
 import { provideLocationMocks } from '@angular/common/testing';
 import { routes } from './app.routes';
+import { MINIMAL_CHROME } from './shared/utils/route-chrome';
 
 /**
  * Assistant deprecation (Designer Phase 5, #746).
@@ -81,5 +82,24 @@ describe('app routes — assistant deprecation redirects', () => {
 
     await router.navigateByUrl('/agents/ast-001');
     expect(router.url).toBe('/agents/ast-001');
+  });
+});
+
+describe('app routes — shell chrome', () => {
+  it('asks for a minimal shell on the shared-artifact route', () => {
+    const route = routes.find(r => r.path === 'shared-artifact/:shareId');
+    expect(route).toBeDefined();
+    // A recipient followed a link to view one thing; the shell reads
+    // this to drop the sidenav and the centred content box.
+    expect(route!.data?.['chrome']).toBe(MINIMAL_CHROME);
+  });
+
+  it('leaves every other route on the full shell', () => {
+    // Opt-in by design: the flag strips app navigation, so it should
+    // never spread by accident.
+    const minimal = routes
+      .filter(r => r.data?.['chrome'] === MINIMAL_CHROME)
+      .map(r => r.path);
+    expect(minimal).toEqual(['shared-artifact/:shareId']);
   });
 });

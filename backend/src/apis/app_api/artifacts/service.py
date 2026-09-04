@@ -17,6 +17,8 @@ import os
 import re
 import threading
 import time
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 import boto3
@@ -24,6 +26,7 @@ import jwt
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from apis.shared.auth import User
 from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
@@ -230,6 +233,84 @@ class RenderTokenService:
         )
         return f"{origin}/?t={token}", exp
 
+    def mint_for_share(
+        self, *, share_id: str, viewer: User
+    ) -> tuple[str, int]:
+        """Mint a render token for a *shared* artifact version.
+
+        Returns (render_url, exp_unix). Raises ShareNotFoundError,
+        ShareAccessDeniedError, ArtifactNotFoundError, or
+        RenderTokenConfigError. Origin resolves first so a misconfigured
+        deploy fails closed before any DDB call.
+
+        ############################################################
+        # SECURITY — READ BEFORE CHANGING `sub` BELOW.
+        #
+        # `sub` is the OWNER's user id, not the viewer's. That is
+        # deliberate and load-bearing: the render Lambda uses `sub`
+        # purely as the DynamoDB partition key it builds the lookup
+        # from (PK = USER#{sub}), and performs no ownership comparison
+        # of its own — it never sees the viewer. `sub` here is an
+        # ADDRESS, not an identity assertion.
+        #
+        # Setting `sub` to the viewer would not "fix" anything; it
+        # would point the Lambda at the viewer's own partition and the
+        # shared artifact would simply 404.
+        #
+        # The consequence is that `_check_share_access` immediately
+        # below is the ONLY thing standing between "sharing" and "read
+        # any artifact by id". Do not reorder it, do not make it
+        # conditional, and do not move minting ahead of it.
+        #
+        # The real viewer identity travels in `vwr`, and the grant it
+        # was issued under in `shr`, so the render log can attribute
+        # the view correctly rather than crediting it to the owner.
+        # The deployed verifier validates a fixed claim list and has no
+        # extras rejection, so these are forward-compatible additions
+        # requiring no Lambda change or deploy sequencing.
+        ############################################################
+        """
+        origin = _origin()
+        share = _get_share_lookup(share_id)
+        if not share:
+            raise ShareNotFoundError("share not found")
+        _check_share_access(share, viewer)
+
+        owner_id = str(share.get("owner_id", ""))
+        artifact_id = str(share.get("artifact_id", ""))
+        version = int(share.get("version", 0))
+        # The share row is denormalized metadata; the version row is the
+        # truth. Re-assert it so a share whose artifact version has gone
+        # away 404s here rather than minting a token that renders the
+        # Lambda's error page inside the recipient's iframe.
+        _assert_version_exists(owner_id, artifact_id, version)
+
+        now = int(time.time())
+        exp = now + _TTL_SECONDS
+        claims = {
+            "iss": _ISS,
+            "aud": _AUD,
+            "sub": owner_id,  # DynamoDB partition — NOT an identity claim.
+            "aid": artifact_id,
+            "ver": version,
+            "sid": "",
+            "vwr": viewer.user_id,  # who actually looked (audit)
+            "shr": share_id,  # under which grant (audit)
+            "iat": now,
+            "exp": exp,
+        }
+        token = jwt.encode(claims, _signing_key(), algorithm="HS256")
+        logger.info(
+            "minted shared render token share=%s owner=%s viewer=%s "
+            "artifact=%s v=%s",
+            scrub_log(share_id),
+            scrub_log(owner_id),
+            scrub_log(viewer.user_id),
+            scrub_log(artifact_id),
+            scrub_log(version),
+        )
+        return f"{origin}/?t={token}", exp
+
 
 def get_render_token_service() -> RenderTokenService:
     return RenderTokenService()
@@ -382,17 +463,28 @@ def _s3():
 
 
 def _get_version_item(
-    user_id: str, artifact_id: str, version: int
+    owner_id: str, artifact_id: str, version: int
 ) -> dict:
-    """Fetch the exact version row, scoped to the authenticated user.
+    """Fetch the exact version row from `owner_id`'s partition.
 
-    Building the PK from the session user's id is what prevents reading
-    another user's artifact. SK zero-pad matches the writer/verifier
-    `V#{version:05d}` contract."""
+    `owner_id` is an ADDRESS — the partition this read targets — not an
+    identity assertion, exactly like the render token's `sub` claim.
+    Two callers pass two different things, and the difference is the
+    whole access-control model:
+
+      - Owner routes pass the *authenticated session user*. Building the
+        PK from the session is what prevents reading someone else's
+        artifact; there is no other check.
+      - Share routes pass the share's *owner*, and may only do so AFTER
+        `_check_share_access` has admitted the viewer. Reaching this
+        function with an owner id the caller has not ACL-checked is a
+        read-any-artifact-by-id bug.
+
+    SK zero-pad matches the writer/verifier `V#{version:05d}` contract."""
     sk = f"ARTIFACT#{artifact_id}#V#{version:05d}"
     try:
         result = _table().get_item(
-            Key={"PK": f"USER#{user_id}", "SK": sk}
+            Key={"PK": f"USER#{owner_id}", "SK": sk}
         )
     except ClientError as exc:
         raise ArtifactQueryError(
@@ -427,20 +519,26 @@ def _unwrap_markdown(html_body: str) -> Optional[str]:
 
 
 class ArtifactContentService:
-    """Return one artifact version's raw source for the panel code view.
+    """Return one artifact version's raw source for the code view.
 
-    Ownership is enforced by the PK lookup. For Markdown the stored S3
-    object is a rendered HTML wrapper; we unwrap it back to the authored
-    Markdown so code view shows what the model actually wrote, and
-    normalize `content_type` to `text/markdown` to match. Anything that
-    can't be unwrapped falls back to the raw stored bytes + real type so
-    the view still shows something truthful instead of erroring."""
+    For Markdown the stored S3 object is a rendered HTML wrapper; we
+    unwrap it back to the authored Markdown so code view shows what the
+    model actually wrote, and normalize `content_type` to
+    `text/markdown` to match. Anything that can't be unwrapped falls
+    back to the raw stored bytes + real type so the view still shows
+    something truthful instead of erroring.
+
+    ACCESS CONTROL: this service performs none of its own. It reads
+    whichever partition `owner_id` names — see `_get_version_item`. The
+    owner route passes the authenticated session user (self-scoping);
+    the shared route passes the share's owner and is responsible for
+    having run the share ACL first."""
 
     def get(
-        self, *, user_id: str, artifact_id: str, version: int
+        self, *, owner_id: str, artifact_id: str, version: int
     ) -> tuple[str, str]:
         bucket = _bucket_name()
-        item = _get_version_item(user_id, artifact_id, version)
+        item = _get_version_item(owner_id, artifact_id, version)
         content_key = item.get("content_key")
         stored_type = item.get(
             "content_type", "text/html; charset=utf-8"
@@ -477,3 +575,476 @@ class ArtifactContentService:
 
 def get_artifact_content_service() -> ArtifactContentService:
     return ArtifactContentService()
+
+
+# ---------------------------------------------------------------------
+# Artifact sharing
+#
+# Two rows per share, on this same table, written in one transaction:
+#
+#   owner row   PK = USER#{owner_id}
+#               SK = SHARE#{artifact_id}#V#{version:05d}#{share_id}
+#   lookup row  PK = SHARE#{share_id}
+#               SK = META
+#
+# The owner row makes "list my shares for this artifact" a begins_with
+# query on the owner's existing partition; the lookup row makes the
+# recipient path — which knows only a share id — a single GetItem. Two
+# items in a transaction is deliberately chosen over a GSI: an index
+# would mean an infra deploy that has to land before the code that
+# queries it, one UpdateTable at a time.
+#
+# Both rows carry the identical attribute set. The duplication is
+# bounded (access_level / allowed_emails are the only mutable fields)
+# and every write below rewrites both rows together, so they cannot
+# drift.
+# ---------------------------------------------------------------------
+
+_SHARE_LOOKUP_SK = "META"
+
+
+class ArtifactShareError(Exception):
+    """Base class for artifact-share failures."""
+
+
+class ShareNotFoundError(ArtifactShareError):
+    """No share row for the requested share id (never created, or revoked)."""
+
+
+class ShareAccessDeniedError(ArtifactShareError):
+    """The viewer is not permitted to open this share."""
+
+
+class NotShareOwnerError(ArtifactShareError):
+    """A non-owner attempted to mutate or revoke a share."""
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _owner_share_sk(artifact_id: str, version: int, share_id: str) -> str:
+    """Owner-row sort key. The `V#{version:05d}` zero-pad matches the
+    artifact version rows so the two key spaces read consistently."""
+    return f"SHARE#{artifact_id}#V#{version:05d}#{share_id}"
+
+
+def _owner_share_prefix(artifact_id: str) -> str:
+    return f"SHARE#{artifact_id}#V#"
+
+
+def _share_lookup_key(share_id: str) -> dict:
+    return {"PK": f"SHARE#{share_id}", "SK": _SHARE_LOOKUP_SK}
+
+
+def _get_share_lookup(share_id: str) -> Optional[dict]:
+    """Resolve a share id to its record without knowing the owner.
+
+    Returns None when the share does not exist — a revoked share is a
+    deleted row, which is what makes revocation effective within one
+    token TTL."""
+    try:
+        result = _table().get_item(Key=_share_lookup_key(share_id))
+    except ClientError as exc:
+        raise ArtifactQueryError("share lookup failed") from exc
+    return result.get("Item")
+
+
+def _check_share_access(share: dict, viewer: User) -> None:
+    """Decide whether `viewer` may open `share`.
+
+    Direct port of ShareService._check_access (conversation sharing).
+    `public` means "any authenticated tenant user", never anonymous —
+    every route reaching here is already behind the session dependency.
+
+    This is the security boundary for the whole feature: the share-scoped
+    mint hands the viewer a credential addressed to the *owner's*
+    DynamoDB partition, so this check is the only thing between
+    "sharing" and "read any artifact by id". Fail closed — an unknown or
+    missing access level is treated as `specific` with no allowlist.
+    """
+    if viewer.user_id and viewer.user_id == share.get("owner_id"):
+        return
+
+    access_level = share.get("access_level", "specific")
+    if access_level == "public":
+        return
+
+    if access_level == "specific":
+        allowed = [
+            str(e).lower() for e in (share.get("allowed_emails") or [])
+        ]
+        viewer_email = (viewer.email or "").lower()
+        if viewer_email and viewer_email in allowed:
+            return
+
+    raise ShareAccessDeniedError("access denied")
+
+
+def _resolve_allowed_emails(
+    access_level: str,
+    allowed_emails: Optional[list[str]],
+    owner_email: str,
+) -> Optional[list[str]]:
+    """Normalize the allowlist, keeping the owner on it.
+
+    Port of ShareService._resolve_allowed_emails: `public` carries no
+    list at all, and the owner is always implicitly allowed (they also
+    pass the owner branch of _check_share_access, but keeping them on
+    the list makes the row self-describing in the share UI)."""
+    if access_level != "specific":
+        return None
+    emails = list(allowed_emails or [])
+    if owner_email and owner_email.lower() not in [
+        e.lower() for e in emails
+    ]:
+        emails.insert(0, owner_email)
+    return emails
+
+
+class ArtifactShareService:
+    """Owner-side CRUD for artifact shares.
+
+    A share pins one immutable `(artifact_id, version)` pair — never
+    `#HEAD`. Version rows are append-only, so the recipient's view can
+    never change under them and no snapshot copy is needed.
+    """
+
+    def create(
+        self,
+        *,
+        owner: User,
+        artifact_id: str,
+        version: int,
+        access_level: str,
+        allowed_emails: Optional[list[str]],
+    ) -> dict:
+        """Create a share for one artifact version.
+
+        The version row is fetched with a PK built from the *owner's*
+        session id, so a caller can only ever share their own artifact —
+        an unknown or someone else's version is an indistinguishable
+        404. Title and content type are denormalized off that row so the
+        recipient header needs no second read.
+        """
+        item = _get_version_item(owner.user_id, artifact_id, version)
+
+        share_id = str(uuid.uuid4())
+        now = _now_iso()
+        attrs = {
+            "share_id": share_id,
+            "artifact_id": artifact_id,
+            "version": version,
+            "owner_id": owner.user_id,
+            "owner_email": owner.email,
+            "access_level": access_level,
+            "title": item.get("title", ""),
+            "content_type": item.get(
+                "content_type", "text/html; charset=utf-8"
+            ),
+            "session_id": item.get("session_id", ""),
+            "created_at": now,
+            "updated_at": now,
+        }
+        resolved = _resolve_allowed_emails(
+            access_level, allowed_emails, owner.email
+        )
+        if resolved is not None:
+            attrs["allowed_emails"] = resolved
+
+        self._write_share_rows(attrs)
+        logger.info(
+            "created artifact share share=%s artifact=%s v=%s access=%s",
+            scrub_log(share_id),
+            scrub_log(artifact_id),
+            scrub_log(version),
+            scrub_log(access_level),
+        )
+        return attrs
+
+    def list_for_artifact(
+        self, *, owner_id: str, artifact_id: str
+    ) -> list[dict]:
+        """Every share the caller owns for one artifact.
+
+        Partition-scoped by construction: PK is the authenticated user,
+        so this can never surface another owner's shares."""
+        table = _table()
+        items: list[dict] = []
+        kwargs: dict = {
+            "KeyConditionExpression": Key("PK").eq(f"USER#{owner_id}")
+            & Key("SK").begins_with(_owner_share_prefix(artifact_id)),
+        }
+        try:
+            while True:
+                resp = table.query(**kwargs)
+                items.extend(resp.get("Items", []))
+                last = resp.get("LastEvaluatedKey")
+                if not last:
+                    break
+                kwargs["ExclusiveStartKey"] = last
+        except ClientError as exc:
+            raise ArtifactQueryError("share list query failed") from exc
+        return [self._strip_keys(item) for item in items]
+
+    def get_for_viewer(self, *, share_id: str, viewer: User) -> dict:
+        """Access-checked read of a share record. Never returns content."""
+        share = _get_share_lookup(share_id)
+        if not share:
+            raise ShareNotFoundError("share not found")
+        _check_share_access(share, viewer)
+        return self._strip_keys(share)
+
+    def update(
+        self,
+        *,
+        share_id: str,
+        owner: User,
+        access_level: Optional[str],
+        allowed_emails: Optional[list[str]],
+    ) -> dict:
+        """Change access level / allowlist on an existing share.
+
+        Rewrites both rows so the owner row and the lookup row the
+        recipient path reads can never disagree about who may view."""
+        share = _get_share_lookup(share_id)
+        if not share:
+            raise ShareNotFoundError("share not found")
+        if share.get("owner_id") != owner.user_id:
+            raise NotShareOwnerError("not the share owner")
+
+        updated = self._strip_keys(share)
+        new_access = access_level or updated.get("access_level", "specific")
+        updated["access_level"] = new_access
+
+        if new_access == "specific":
+            emails = allowed_emails or updated.get("allowed_emails") or []
+            updated["allowed_emails"] = _resolve_allowed_emails(
+                new_access, emails, str(updated.get("owner_email", ""))
+            )
+        else:
+            # Switching to public — drop the stale allowlist rather than
+            # leaving a list that no longer gates anything.
+            updated.pop("allowed_emails", None)
+
+        updated["version"] = int(updated.get("version", 0))
+        updated["updated_at"] = _now_iso()
+
+        self._write_share_rows(updated)
+        logger.info(
+            "updated artifact share share=%s access=%s",
+            scrub_log(share_id),
+            scrub_log(new_access),
+        )
+        return updated
+
+    def revoke(self, *, share_id: str, owner: User) -> None:
+        """Delete both rows. Effective within one render-token TTL."""
+        share = _get_share_lookup(share_id)
+        if not share:
+            raise ShareNotFoundError("share not found")
+        if share.get("owner_id") != owner.user_id:
+            raise NotShareOwnerError("not the share owner")
+
+        table = _table()
+        owner_sk = _owner_share_sk(
+            str(share.get("artifact_id", "")),
+            int(share.get("version", 0)),
+            share_id,
+        )
+        try:
+            table.meta.client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Delete": {
+                            "TableName": table.name,
+                            "Key": {
+                                "PK": f"USER#{share.get('owner_id', '')}",
+                                "SK": owner_sk,
+                            },
+                        }
+                    },
+                    {
+                        "Delete": {
+                            "TableName": table.name,
+                            "Key": _share_lookup_key(share_id),
+                        }
+                    },
+                ]
+            )
+        except ClientError as exc:
+            raise ArtifactQueryError("share revoke failed") from exc
+        logger.info("revoked artifact share share=%s", scrub_log(share_id))
+
+    @staticmethod
+    def _write_share_rows(attrs: dict) -> None:
+        """Put the owner row and the lookup row in one transaction.
+
+        Both carry the same attributes; only the keys differ. A partial
+        write would either strand an unreachable share (owner row with
+        no lookup) or an unlistable one, so this is atomic. Plain Puts
+        only — a ConditionCheck item would need `dynamodb:ConditionCheckItem`
+        added to the task role, which plain writes do not.
+        """
+        table = _table()
+        owner_sk = _owner_share_sk(
+            str(attrs["artifact_id"]),
+            int(attrs["version"]),
+            str(attrs["share_id"]),
+        )
+        owner_row = {
+            **attrs,
+            "PK": f"USER#{attrs['owner_id']}",
+            "SK": owner_sk,
+        }
+        lookup_row = {**attrs, **_share_lookup_key(str(attrs["share_id"]))}
+        try:
+            table.meta.client.transact_write_items(
+                TransactItems=[
+                    {"Put": {"TableName": table.name, "Item": owner_row}},
+                    {"Put": {"TableName": table.name, "Item": lookup_row}},
+                ]
+            )
+        except ClientError as exc:
+            raise ArtifactQueryError("share write failed") from exc
+
+    @staticmethod
+    def _strip_keys(item: dict) -> dict:
+        """Drop the DynamoDB key attributes and normalize `version`.
+
+        `version` comes back off DynamoDB as a Decimal; the SK builder
+        and the response models both want a real int."""
+        stripped = {k: v for k, v in item.items() if k not in ("PK", "SK")}
+        if "version" in stripped:
+            stripped["version"] = int(stripped["version"])
+        return stripped
+
+
+    def delete_for_session(self, session_id: str, owner_id: str) -> int:
+        """Revoke every artifact share produced by one chat session.
+
+        Called as a background task when the session owner deletes a
+        conversation, mirroring `ShareService.delete_shares_for_session`
+        for conversation shares. Artifacts outlive the chat that made
+        them, so without this a deleted conversation would leave live
+        share links pointing at its artifacts.
+
+        Best-effort and **never raises**: a delete that partially fails
+        leaves an orphan row, and the caller has already returned 204.
+        Returns the number of shares revoked (0 on any failure, and 0
+        when the artifacts feature isn't configured for this deploy).
+
+        Scoped by `owner_id` deliberately. `SessionIndex` is not
+        user-partitioned — the same reason `ArtifactListService`
+        re-checks every HEAD row — so filtering here is what stops a
+        borrowed or colliding session id reaching another user's shares.
+
+        Deliberately NOT in scope: deleting the artifact content itself.
+        That is a retention decision about the artifacts feature as a
+        whole, not about sharing.
+        """
+        try:
+            table = _table()
+        except RenderTokenConfigError:
+            # Artifacts aren't enabled for this environment. The session
+            # routes are always mounted, so this is a normal no-op, not
+            # a failure.
+            logger.debug("artifacts not configured — skipping share cascade")
+            return 0
+
+        try:
+            shares = self._shares_for_session(table, session_id, owner_id)
+            if not shares:
+                return 0
+
+            # Lookup rows first, owner rows second — and never the other
+            # way round. The lookup row (PK=SHARE#{id}) is what the
+            # recipient path resolves, so dropping it is what actually
+            # kills the link. If the second pass fails we are left with
+            # an unreachable owner row, which is inert; the reverse
+            # order would leave a *live* share whose owner can no longer
+            # see it to revoke.
+            with table.batch_writer() as batch:
+                for share in shares:
+                    batch.delete_item(
+                        Key=_share_lookup_key(str(share["share_id"]))
+                    )
+            with table.batch_writer() as batch:
+                for share in shares:
+                    batch.delete_item(
+                        Key={
+                            "PK": f"USER#{owner_id}",
+                            "SK": _owner_share_sk(
+                                str(share["artifact_id"]),
+                                int(share["version"]),
+                                str(share["share_id"]),
+                            ),
+                        }
+                    )
+
+            logger.info(
+                "revoked %s artifact share(s) for deleted session %s",
+                len(shares),
+                scrub_log(session_id),
+            )
+            return len(shares)
+        except Exception:
+            logger.error(
+                "failed to revoke artifact shares for session %s",
+                scrub_log(session_id),
+                exc_info=True,
+            )
+            return 0
+
+    @staticmethod
+    def _shares_for_session(
+        table, session_id: str, owner_id: str
+    ) -> list[dict]:
+        """Every share row for the artifacts produced by one session.
+
+        Two steps, because there is no index from session to share:
+        `SessionIndex` projects only artifact HEAD rows, so it yields the
+        artifact ids, and the shares are then read off the owner's own
+        partition by SK prefix.
+        """
+        head_kwargs: dict = {
+            "IndexName": _SESSION_INDEX,
+            "KeyConditionExpression": Key("GSI1PK").eq(
+                f"SESSION#{session_id}"
+            ),
+        }
+        heads: list[dict] = []
+        while True:
+            resp = table.query(**head_kwargs)
+            heads.extend(resp.get("Items", []))
+            last = resp.get("LastEvaluatedKey")
+            if not last:
+                break
+            head_kwargs["ExclusiveStartKey"] = last
+
+        artifact_ids = list(
+            dict.fromkeys(
+                item.get("artifact_id", "")
+                for item in heads
+                if item.get("user_id") == owner_id and item.get("artifact_id")
+            )
+        )
+
+        shares: list[dict] = []
+        for artifact_id in artifact_ids:
+            kwargs: dict = {
+                "KeyConditionExpression": Key("PK").eq(f"USER#{owner_id}")
+                & Key("SK").begins_with(_owner_share_prefix(artifact_id)),
+            }
+            while True:
+                resp = table.query(**kwargs)
+                shares.extend(resp.get("Items", []))
+                last = resp.get("LastEvaluatedKey")
+                if not last:
+                    break
+                kwargs["ExclusiveStartKey"] = last
+        return shares
+
+
+def get_artifact_share_service() -> ArtifactShareService:
+    return ArtifactShareService()

@@ -207,11 +207,17 @@ interface RoleFormGroup {
                   type="text"
                   id="jwtRoleMappings"
                   formControlName="jwtRoleMappings"
-                  placeholder="e.g., User, Admin, DotNetDevelopers"
+                  placeholder="e.g., User, Admin, PSEmeriti Entra Sync"
                   class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                 />
                 <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                  Enter JWT role names separated by commas. These are the roles from your identity provider.
+                  Enter the group names exactly as your identity provider sends them,
+                  separated by commas. Group names may contain spaces
+                  (<span class="font-medium">PSEmeriti Entra Sync</span>) &mdash; only the
+                  comma separates one name from the next, so a name cannot itself contain
+                  one. Surrounding spaces are trimmed; a name that still fails to save is
+                  usually carrying an invisible character from a copy&#8209;paste, and the
+                  error will point at it.
                 </p>
               </div>
             </div>

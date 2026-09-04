@@ -19,6 +19,8 @@ import {
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 import { CompactionSummaryService } from './compaction-summary.service';
+import { SteeringService } from './steering.service';
+import { buildSteeringMessage } from './steering';
 import { ArtifactStateService } from '../artifacts/artifact-state.service';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { SessionService } from '../session/session.service';
@@ -30,6 +32,7 @@ import type {
   UiResourceEvent,
   ToolInputPartialEvent,
   SessionTitleEvent,
+  ModelRetryEvent,
 } from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
@@ -40,6 +43,7 @@ import {
   type StreamParserCallbacks,
   type ContentBlockBuilder,
   type MessageBuilder,
+  type SteeringAppliedEvent,
   type ToolProgress,
   type ContentBlockDeltaEvent,
   type ContentBlockStartEvent,
@@ -93,8 +97,39 @@ interface ParserSessionState {
   /** Completed messages in the current turn (for multi-turn tool use) */
   completedMessages: WritableSignal<Message[]>;
 
+  /**
+   * Mid-turn steering messages that must render AFTER the message currently
+   * being built (docs/specs/mid-turn-steering.md).
+   *
+   * A steer lands at a tool boundary, and on a `tool_use` stop reason the
+   * tool-calling assistant message is deliberately kept active so its results
+   * can attach — so at the moment the ack arrives, that message is still the
+   * *current* one. Appending the user's words straight to `completedMessages`
+   * would sort them ahead of the assistant turn they interrupted. They wait
+   * here instead and are folded in, in order, when that message finalizes.
+   */
+  steeringMessages: WritableSignal<Message[]>;
+
   /** Tool progress indicator state */
   toolProgress: WritableSignal<ToolProgress>;
+
+  /**
+   * Epoch ms of the last event received on this stream. Stamped on EVERY
+   * event, including ones the state gate then drops — the point is liveness
+   * of the connection, not whether the payload was useful. Lets the UI tell a
+   * long stall apart from a hang, which is otherwise impossible from the
+   * client side (prod 5f34d2b0: two turns went ~95s with no output and the
+   * user abandoned both).
+   */
+  lastEventAt: WritableSignal<number>;
+
+  /**
+   * The most recent model-call retry this turn, or null. Set by the
+   * `model_retry` SSE event and cleared as soon as content arrives, so the
+   * loading indicator can explain the silence instead of leaving the user to
+   * read it as a hang.
+   */
+  modelRetry: WritableSignal<ModelRetryEvent | null>;
 
   /** Error state */
   error: WritableSignal<string | null>;
@@ -134,6 +169,7 @@ export class StreamParserService {
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
   private compactionSummary = inject(CompactionSummaryService);
+  private steering = inject(SteeringService);
   private artifactState = inject(ArtifactStateService);
   private mcpAppState = inject(McpAppStateService);
   private sessionService = inject(SessionService);
@@ -152,6 +188,8 @@ export class StreamParserService {
   private readonly allMessagesCache = new Map<string, Signal<Message[]>>();
   private readonly streamingMessageIdCache = new Map<string, Signal<string | null>>();
   private readonly toolProgressCache = new Map<string, Signal<ToolProgress>>();
+  private readonly modelRetryCache = new Map<string, Signal<ModelRetryEvent | null>>();
+  private readonly lastEventAtCache = new Map<string, Signal<number>>();
   private readonly citationsCache = new Map<string, Signal<Citation[]>>();
   private readonly errorCache = new Map<string, Signal<string | null>>();
   private readonly isStreamCompleteCache = new Map<string, Signal<boolean>>();
@@ -182,6 +220,23 @@ export class StreamParserService {
     return this.cachedAccessor(this.toolProgressCache, sessionId, (state) => state.toolProgress(), { visible: false });
   }
 
+  /**
+   * The current model-call retry notice for a session, or null when the model
+   * is responding normally. Drives the "still working" copy on the loader.
+   */
+  modelRetryFor(sessionId: string): Signal<ModelRetryEvent | null> {
+    return this.cachedAccessor(this.modelRetryCache, sessionId, (state) => state.modelRetry(), null);
+  }
+
+  /**
+   * Epoch ms of the last event seen on a session's stream, or 0 before one
+   * starts. The UI compares it against the clock to decide when silence has
+   * gone on long enough to be worth explaining.
+   */
+  lastEventAtFor(sessionId: string): Signal<number> {
+    return this.cachedAccessor(this.lastEventAtCache, sessionId, (state) => state.lastEventAt(), 0);
+  }
+
   /** Pending citations for a session's next assistant message. */
   citationsFor(sessionId: string): Signal<Citation[]> {
     return this.cachedAccessor(this.citationsCache, sessionId, (state) => state.pendingCitations(), []);
@@ -203,7 +258,15 @@ export class StreamParserService {
    */
   parseSSELine(sessionId: string, line: string): void {
     const state = this.states().get(sessionId);
-    if (!state || !this.shouldProcessEvent(state)) {
+    if (!state) {
+      return;
+    }
+
+    // Liveness first — see parseEventSourceMessage. A line the state gate
+    // below drops still proves the connection is alive.
+    state.lastEventAt.set(Date.now());
+
+    if (!this.shouldProcessEvent(state)) {
       return;
     }
 
@@ -234,6 +297,12 @@ export class StreamParserService {
     if (expectedStreamId && state.currentStreamId !== expectedStreamId) {
       return; // Stale event from a superseded stream for this session.
     }
+
+    // Stamp liveness before the validation and state gates below: a `ping` or
+    // an event this stream state drops is still proof the server is talking.
+    // Placed after the stale-stream guard so a superseded stream can't keep
+    // its replacement looking alive.
+    state.lastEventAt.set(Date.now());
 
     // Validate inputs
     if (!event || typeof event !== 'string') {
@@ -287,6 +356,11 @@ export class StreamParserService {
    * @param startingMessageCount - Current message count in the session (for ID computation)
    */
   reset(sessionId: string, startingMessageCount?: number): void {
+    // A fresh turn has called nothing yet, so a follow-up typed right now has
+    // no boundary to land on until it does. The composer's placeholder reads
+    // this; leaving the previous turn's flag set would promise mid-turn
+    // delivery on a turn that may be pure text.
+    this.steering.startTurn(sessionId);
     const state = this.createState(sessionId, startingMessageCount || 0);
     this.states.update((map) => {
       const next = new Map(map);
@@ -336,6 +410,7 @@ export class StreamParserService {
   private createState(sessionId: string, startingMessageCount: number): ParserSessionState {
     const currentMessageBuilder = signal<MessageBuilder | null>(null);
     const completedMessages = signal<Message[]>([]);
+    const steeringMessages = signal<Message[]>([]);
     const isStreamComplete = signal<boolean>(false);
 
     const state: ParserSessionState = {
@@ -345,7 +420,10 @@ export class StreamParserService {
       streamState: StreamState.Idle,
       currentMessageBuilder,
       completedMessages,
+      steeringMessages,
       toolProgress: signal<ToolProgress>({ visible: false }),
+      modelRetry: signal<ModelRetryEvent | null>(null),
+      lastEventAt: signal<number>(Date.now()),
       error: signal<string | null>(null),
       isStreamComplete,
       metadata: signal<MetadataEvent | null>(null),
@@ -357,7 +435,11 @@ export class StreamParserService {
       allMessages: computed<Message[]>(() => {
         const completed = completedMessages();
         const current = state.currentMessage();
-        return current ? [...completed, current] : completed;
+        const steering = steeringMessages();
+        if (!current) {
+          return steering.length > 0 ? [...completed, ...steering] : completed;
+        }
+        return [...completed, current, ...steering];
       }),
       streamingMessageId: computed<string | null>(() => {
         const builder = currentMessageBuilder();
@@ -429,9 +511,21 @@ export class StreamParserService {
       onContentBlockDelta: (data) => this.handleContentBlockDelta(state, data),
       onContentBlockStop: (data) => this.handleContentBlockStop(state, data),
 
-      onToolUse: (data) => this.handleToolUseProgress(state, data),
+      onToolUse: (data) => {
+        // This turn has tool boundaries, so a follow-up typed from here can
+        // land mid-turn. Drives the composer's placeholder wording.
+        this.steering.markToolUsed(state.sessionId);
+        this.handleToolUseProgress(state, data);
+      },
       onToolResult: (data) => this.handleToolResult(state, data),
       onToolProgress: (progress) => state.toolProgress.set(progress),
+
+      onModelRetry: (data: ModelRetryEvent) => {
+        // Not viewed-session-scoped on purpose: this signal is read per
+        // session id, so a background conversation's retry stays with that
+        // conversation instead of leaking into the one on screen.
+        state.modelRetry.set(data);
+      },
 
       onMetadata: (data) => this.handleMetadata(state, data),
       onReasoning: (data) => this.handleReasoning(state, data),
@@ -455,6 +549,20 @@ export class StreamParserService {
           lastAssistantId,
           state.sessionId,
         );
+      },
+
+      onSteeringApplied: (data: SteeringAppliedEvent) => {
+        // A follow-up the user typed mid-stream is now in conversation
+        // history. Two things follow, and they are independent:
+        //
+        //  1. The composer drops its queued copy (via SteeringService), so
+        //     the end-of-turn flush does not send it a second time. NOT
+        //     viewed-session-scoped — the entry belongs to the conversation
+        //     that armed it, and a background stream's ack must still clear
+        //     it or the user gets a duplicate when they come back.
+        //  2. It renders as a user message inside the still-streaming turn.
+        this.steering.recordApplied(data);
+        this.appendSteeringMessage(state, data);
       },
 
       onCompaction: (data: CompactionEvent) => {
@@ -571,6 +679,9 @@ export class StreamParserService {
 
     // Clear any previous errors
     state.error.set(null);
+
+    // Content is arriving, so whatever retry we were explaining is over.
+    state.modelRetry.set(null);
 
     // If there's an existing message, finalize it before starting a new one
     const currentBuilder = state.currentMessageBuilder();
@@ -826,6 +937,7 @@ export class StreamParserService {
     this.finalizeCurrentMessage(state);
     state.isStreamComplete.set(true);
     state.toolProgress.set({ visible: false });
+    state.modelRetry.set(null);
     state.streamState = StreamState.Completed;
 
     // Automatic cleanup after delay. Guarded on the stream ID so a session
@@ -1206,14 +1318,58 @@ export class StreamParserService {
     } as ContentBlock;
   }
 
+  /**
+   * Render a confirmed mid-turn steer as a user message in the live thread.
+   *
+   * Ordering is the whole job here. On a `tool_use` stop reason the
+   * tool-calling assistant message stays *current* so its results can attach,
+   * so at ack time appending to `completedMessages` would place the user's
+   * words before the assistant turn they interrupted. They go to
+   * `steeringMessages`, which `allMessages` renders after the current message
+   * and `finalizeCurrentMessage` folds in behind it.
+   *
+   * Idempotent by message id: a replayed ack (reconnect, duplicated frame)
+   * updates nothing rather than adding a second bubble.
+   */
+  private appendSteeringMessage(
+    state: ParserSessionState,
+    data: SteeringAppliedEvent,
+  ): void {
+    const message = buildSteeringMessage(state.sessionId, data.entryId, data.text);
+    const alreadyRendered =
+      state.steeringMessages().some((m) => m.id === message.id) ||
+      state.completedMessages().some((m) => m.id === message.id);
+    if (alreadyRendered) return;
+    state.steeringMessages.update((messages) => [...messages, message]);
+  }
+
   private finalizeCurrentMessage(state: ParserSessionState): void {
     const builder = state.currentMessageBuilder();
-    if (!builder) return;
+    if (!builder) {
+      // No message in flight, but a steer may still be waiting (it landed on a
+      // boundary after the last assistant message finalized). Commit it so the
+      // turn's final message list is the one that gets persisted to the map.
+      const orphaned = state.steeringMessages();
+      if (orphaned.length > 0) {
+        state.steeringMessages.set([]);
+        state.completedMessages.update((messages) => [...messages, ...orphaned]);
+      }
+      return;
+    }
 
     const message = this.buildMessage(state, builder);
 
-    if (message.content.length > 0) {
-      state.completedMessages.update((messages) => [...messages, message]);
+    // Fold any mid-turn steering that arrived while this message was the
+    // current one in behind it, in arrival order — the same order
+    // `allMessages` was already rendering them in, so the list does not jump
+    // when a finished message moves from `current` into `completed`.
+    const steering = state.steeringMessages();
+    if (message.content.length > 0 || steering.length > 0) {
+      const appended = message.content.length > 0 ? [message, ...steering] : steering;
+      state.completedMessages.update((messages) => [...messages, ...appended]);
+    }
+    if (steering.length > 0) {
+      state.steeringMessages.set([]);
     }
 
     if (builder.role === 'assistant') {

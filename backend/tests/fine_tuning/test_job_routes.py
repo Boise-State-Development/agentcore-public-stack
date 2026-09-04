@@ -119,6 +119,25 @@ class TestPresign:
         assert "s3_key" in body
         assert "expires_at" in body
 
+    @pytest.mark.parametrize("filename", ["notes.txt", "data.parquet"])
+    def test_rejects_format_the_trainer_cannot_read(self, make_user, filename):
+        """Reject before upload, not several billed GPU-minutes into training."""
+        app = _create_app()
+        user = make_user(email="user@example.com")
+
+        mock_s3 = MagicMock()
+        _setup_deps(app, user, SAMPLE_GRANT, s3_service=mock_s3)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/fine-tuning/presign",
+            json={"filename": filename, "content_type": "text/plain"},
+        )
+
+        assert resp.status_code == 400
+        assert "Unsupported dataset format" in resp.json()["detail"]
+        mock_s3.generate_upload_url.assert_not_called()
+
 
 class TestCreateJob:
 
@@ -158,6 +177,99 @@ class TestCreateJob:
         assert resp.status_code == 201
         body = resp.json()
         assert body["model_id"] == "distilgpt2"
+
+    def test_rejects_dataset_the_trainer_cannot_read(self, make_user):
+        """Last gate before SageMaker: no GPU is provisioned for a doomed job."""
+        app = _create_app()
+        user = make_user(email="user@example.com")
+
+        mock_s3 = MagicMock()
+        mock_s3.check_object_exists.return_value = True
+
+        mock_sm = MagicMock()
+
+        _setup_deps(app, user, SAMPLE_GRANT, s3_service=mock_s3, sagemaker=mock_sm)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/fine-tuning/jobs",
+            json={
+                "model_id": "distilgpt2",
+                "dataset_s3_key": "datasets/user-001/abc/notes.txt",
+            },
+        )
+
+        assert resp.status_code == 400
+        assert "Unsupported dataset format" in resp.json()["detail"]
+        mock_sm.create_training_job.assert_not_called()
+
+    def test_rejects_instance_type_with_no_known_price(self, make_user):
+        """An unpriced instance runs real GPUs and records $0.00 spend.
+
+        calculate_cost falls back to 0.0/hour for anything absent from
+        INSTANCE_COST_PER_HOUR, and quota meters GPU-hours rather than
+        dollars, so nothing downstream bounds the cost.
+        """
+        app = _create_app()
+        user = make_user(email="user@example.com")
+
+        mock_s3 = MagicMock()
+        mock_s3.check_object_exists.return_value = True
+
+        mock_sm = MagicMock()
+
+        _setup_deps(app, user, SAMPLE_GRANT, s3_service=mock_s3, sagemaker=mock_sm)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/fine-tuning/jobs",
+            json={
+                "model_id": "distilgpt2",
+                "dataset_s3_key": "datasets/user-001/abc/train.csv",
+                "instance_type": "ml.p4d.24xlarge",
+            },
+        )
+
+        assert resp.status_code == 400
+        assert "Unsupported instance type" in resp.json()["detail"]
+        mock_sm.create_training_job.assert_not_called()
+
+    def test_accepts_a_priced_instance_type(self, make_user):
+        app = _create_app()
+        user = make_user(email="user@example.com")
+
+        mock_s3 = MagicMock()
+        mock_s3.check_object_exists.return_value = True
+        mock_s3.get_output_s3_prefix.return_value = "output/user-001/job-abc"
+        mock_s3.get_output_s3_uri.return_value = "s3://bucket/output/user-001/job-abc"
+        mock_s3.bucket_name = "test-bucket"
+
+        mock_jobs = MagicMock()
+        mock_jobs.create_job.return_value = SAMPLE_JOB
+        mock_jobs.update_job_status.return_value = {**SAMPLE_JOB, "status": "TRAINING"}
+
+        mock_sm = MagicMock()
+        mock_sm.create_training_job.return_value = {}
+
+        mock_script = MagicMock()
+        mock_script.ensure_scripts_uploaded.return_value = "s3://test-bucket/scripts/sourcedir.tar.gz"
+
+        _setup_deps(
+            app, user, SAMPLE_GRANT, mock_jobs, mock_s3, mock_sm,
+            MagicMock(), mock_script,
+        )
+
+        client = TestClient(app)
+        resp = client.post(
+            "/fine-tuning/jobs",
+            json={
+                "model_id": "distilgpt2",
+                "dataset_s3_key": "datasets/user-001/abc/train.csv",
+                "instance_type": "ml.g5.2xlarge",
+            },
+        )
+
+        assert resp.status_code == 201
 
     @patch.dict("os.environ", {"PROJECT_PREFIX": "test-prefix"})
     def test_sagemaker_job_name_includes_project_prefix(self, make_user):

@@ -60,6 +60,19 @@ IMAGES: Dict[str, Tuple[str, List[str], List[str]]] = {
         ],
         [],
     ),
+    # Four functions, one image, handler selected per function by
+    # ImageConfig.Command — so all four entrypoints must be walked, not just
+    # the Dockerfile's default CMD.
+    "kb-migration": (
+        "backend/Dockerfile.kb-migration",
+        [
+            "apis/app_api/kb_migration/dispatcher.py",
+            "apis/app_api/kb_migration/worker.py",
+            "apis/app_api/kb_migration/reconciler.py",
+            "apis/app_api/kb_migration/ingestion_consumer.py",
+        ],
+        [],
+    ),
     "scheduled-runs": (
         "backend/Dockerfile.scheduled-runs",
         [

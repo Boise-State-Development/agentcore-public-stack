@@ -40,7 +40,7 @@ class _SignatureFaithfulCoordinator:
 
 
 class _PassthroughMultimodalBuilder:
-    def build_prompt(self, message, files):
+    def build_prompt(self, message, files, attachment_names=None):
         return message
 
 
@@ -109,6 +109,7 @@ async def test_every_kwarg_chat_agent_forwards_is_accepted():
         citations=[{"source": "doc-1"}],
         original_message="a message",
         turn_agent_id="ast-canvas",
+        turn_lease=object(),
     ):
         pass
 

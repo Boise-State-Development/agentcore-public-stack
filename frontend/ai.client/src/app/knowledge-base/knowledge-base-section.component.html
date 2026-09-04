@@ -12,6 +12,227 @@
     }
   </div>
 
+  <!-- ── Knowledge base upgrade (managed-kb-migration, Reqs 21 & 23) ──────
+       Renders nothing at all unless the server says there is something to
+       say. A knowledge base that works needs no UI, so `phase: 'none'` — the
+       default, and what an unreadable status degrades to — produces no badge,
+       banner or prompt (Req 23.1). -->
+
+  @if (showUpgradeOffer()) {
+    <!-- Opt-in offer (Req 23.2). Inline, never modal: it must not interrupt
+         what the user came here to do. -->
+    <div
+      class="rounded-xl border border-primary-200/80 bg-primary-50/60 p-4 dark:border-primary-400/30 dark:bg-primary-950/30"
+    >
+      <div class="flex items-start gap-3">
+        <ng-icon
+          name="heroSparkles"
+          class="mt-0.5 size-5 shrink-0 text-primary-600 dark:text-primary-400"
+          aria-hidden="true"
+        />
+        <div class="min-w-0 flex-1">
+          <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
+            A faster knowledge base is available
+          </h3>
+          <!-- Only benefits the §13 benchmark actually measured. No speculative
+               claims, and the continuity promise stated plainly because it is
+               the thing users hesitate over. -->
+          <p class="mt-1 text-sm/6 text-gray-700 dark:text-gray-300">
+            Upgrading moves your documents to newer storage that returns more accurate
+            answers and handles large files better. Your knowledge base keeps working
+            normally while the upgrade runs, and you can leave this page at any time.
+          </p>
+          <button
+            type="button"
+            class="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-primary-accessible px-3 py-1.5 text-sm/5 font-medium text-white shadow-xs transition-[filter] hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60"
+            [disabled]="upgradeBusy()"
+            (click)="startUpgrade()"
+          >
+            @if (upgradeBusy()) {
+              <ng-icon name="heroArrowPath" class="size-4 animate-spin" aria-hidden="true" />
+              Starting…
+            } @else {
+              Upgrade knowledge base
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (showUpgradeProgress()) {
+    <!-- Non-blocking progress (Req 23.3). `aria-live="polite"` so a screen
+         reader is told of progress without having focus yanked mid-task. -->
+    <div
+      class="rounded-xl border border-state-info-200/80 bg-state-info-50/60 p-4 dark:border-state-info-400/30 dark:bg-state-info-950/30"
+      role="status"
+      aria-live="polite"
+    >
+      <div class="flex items-start gap-3">
+        <ng-icon
+          name="heroArrowPath"
+          class="mt-0.5 size-5 shrink-0 animate-spin text-state-info-600 dark:text-state-info-400"
+          aria-hidden="true"
+        />
+        <div class="min-w-0 flex-1">
+          <p class="text-sm/6 font-medium text-gray-900 dark:text-white">
+            {{ upgradeProgressLabel() }}
+          </p>
+          <p class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
+            Your knowledge base is still answering questions. You can safely leave this
+            page — the upgrade continues on its own.
+          </p>
+          <!-- Bar is decorative; the text above carries the same information,
+               so it is hidden from assistive tech rather than duplicated. -->
+          <div
+            class="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-state-info-200/70 dark:bg-state-info-900/60"
+            aria-hidden="true"
+          >
+            <div
+              class="h-full rounded-full bg-state-info-600 transition-[width] duration-500 dark:bg-state-info-400"
+              [style.width.%]="upgradeProgressPercent()"
+            ></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (showUpgradeNotice()) {
+    <!-- One-time dismissible notice (Req 23.4). Explicitly NOT a permanent
+         badge: once dismissed it never returns. -->
+    <div
+      class="flex items-start gap-3 rounded-xl border border-state-success-200/80 bg-state-success-50/60 p-4 dark:border-state-success-400/30 dark:bg-state-success-950/30"
+      role="status"
+    >
+      <ng-icon
+        name="heroCheckCircle"
+        class="mt-0.5 size-5 shrink-0 text-state-success-600 dark:text-state-success-400"
+        aria-hidden="true"
+      />
+      <p class="min-w-0 flex-1 text-sm/6 text-gray-800 dark:text-gray-200">
+        <span class="font-semibold text-gray-900 dark:text-white">Upgrade complete.</span>
+        Your knowledge base is now on the faster storage. Nothing else changes — your
+        documents and answers are where you left them.
+      </p>
+      <button
+        type="button"
+        class="-m-1 shrink-0 rounded-md p-1 text-gray-500 hover:bg-state-success-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-success-600 dark:text-gray-400 dark:hover:bg-state-success-900/40 dark:hover:text-gray-200"
+        (click)="dismissUpgradeNotice()"
+        aria-label="Dismiss upgrade confirmation"
+      >
+        <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+      </button>
+    </div>
+  }
+
+  @if (showUpgradeFailure()) {
+    <!-- Failure (Req 23.5): plain-language reason, a retry, and an explicit
+         statement that the knowledge base still works. Never a dead end. -->
+    <div
+      class="rounded-xl border border-state-warning-200/80 bg-state-warning-50/60 p-4 dark:border-state-warning-400/30 dark:bg-state-warning-950/30"
+      role="alert"
+    >
+      <div class="flex items-start gap-3">
+        <ng-icon
+          name="heroExclamationTriangle"
+          class="mt-0.5 size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400"
+          aria-hidden="true"
+        />
+        <div class="min-w-0 flex-1">
+          <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
+            The upgrade did not finish
+          </h3>
+          <p class="mt-1 text-sm/6 text-gray-700 dark:text-gray-300">
+            {{ upgradeStatus()?.reason }}
+          </p>
+          <p class="mt-1 text-sm/6 text-gray-700 dark:text-gray-300">
+            Your knowledge base was not changed and is working normally.
+          </p>
+          @if (upgradeStatus()?.canUpgrade) {
+            <button
+              type="button"
+              class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm/5 font-medium text-gray-800 shadow-xs hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-warning-600 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+              [disabled]="upgradeBusy()"
+              (click)="retryUpgrade()"
+            >
+              @if (upgradeBusy()) {
+                <ng-icon name="heroArrowPath" class="size-4 animate-spin" aria-hidden="true" />
+                Restarting…
+              } @else {
+                <ng-icon name="heroArrowPath" class="size-4" aria-hidden="true" />
+                Try the upgrade again
+              }
+            </button>
+          }
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (showStrandedDocuments()) {
+    <!-- Documents that will not be carried across (Req 21.1–21.4).
+         Shown BEFORE the user commits, because the choice to fix them or
+         accept the loss is theirs. 95 of these in production are failures
+         whose owners believe the upload worked. -->
+    <div
+      class="rounded-xl border border-gray-200/80 bg-gray-50/80 p-4 dark:border-gray-700/60 dark:bg-gray-900/40"
+    >
+      <button
+        type="button"
+        class="flex w-full items-start gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+        (click)="toggleStrandedDocuments()"
+        [attr.aria-expanded]="strandedExpanded()"
+        aria-controls="stranded-documents"
+      >
+        <ng-icon
+          name="heroExclamationTriangle"
+          class="mt-0.5 size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400"
+          aria-hidden="true"
+        />
+        <span class="min-w-0 flex-1">
+          <span class="block text-sm/6 font-semibold text-gray-900 dark:text-white">
+            {{ strandedDocuments().length }}
+            {{ strandedDocuments().length === 1 ? 'document' : 'documents' }} will not be
+            carried across
+          </span>
+          <span class="mt-0.5 block text-sm/6 text-gray-600 dark:text-gray-400">
+            These never finished processing, so they are not currently searchable either.
+            {{ strandedExpanded() ? 'Hide details' : 'Show details' }}
+          </span>
+        </span>
+      </button>
+
+      @if (strandedExpanded()) {
+        <ul id="stranded-documents" class="mt-3 space-y-2.5 border-t border-gray-200 pt-3 dark:border-gray-700">
+          @for (doc of strandedDocuments(); track doc.documentId) {
+            <li class="text-sm/6">
+              <p class="flex flex-wrap items-baseline gap-x-2">
+                <span class="font-medium break-all text-gray-900 dark:text-white">
+                  {{ doc.filename }}
+                </span>
+                <span class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  {{ strandedHeading(doc.kind) }}
+                </span>
+              </p>
+              <!-- Server-authored copy: the unsupported-format vs
+                   processing-failure distinction (Req 21.4) is decided
+                   server-side against the ingestion pipeline's own format
+                   list, so the two can never disagree. -->
+              <p class="mt-0.5 text-gray-600 dark:text-gray-400">{{ doc.message }}</p>
+              @if (doc.retryable) {
+                <p class="mt-0.5 text-gray-600 dark:text-gray-400">
+                  To fix it, upload the file again using
+                  <span class="font-medium">Add files</span> above.
+                </p>
+              }
+            </li>
+          }
+        </ul>
+      }
+    </div>
+  }
+
   <!-- Single hidden file input shared by both the inline "Add files"
        button and the empty-state drop zone label. Two labels can
        point at one input; duplicating the input would emit two

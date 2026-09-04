@@ -686,6 +686,11 @@ export class ShareAgentDialogComponent {
    * shelve it — and therefore no way to delete it, since delete accepts only `private`. The
    * refusal even told them to "take it back to private first", naming a button this component
    * did not render.
+   *
+   * ⚠️ `rejected` is here for exactly that reason and must stay. A declined listing has the
+   * same `→ private` edge and the same consequence if this forgets it: the author is left
+   * holding an agent they cannot shelve and therefore cannot delete, over a listing an admin
+   * already said no to.
    */
   protected readonly canWithdraw = computed(() => {
     const state = this.listingState();
@@ -693,11 +698,24 @@ export class ShareAgentDialogComponent {
       state === 'in_review' ||
       state === 'changes_requested' ||
       state === 'published' ||
-      state === 'taken_down'
+      state === 'taken_down' ||
+      state === 'rejected'
     );
   });
 
   protected readonly isTakenDown = computed(() => this.listingState() === 'taken_down');
+
+  protected readonly isDeclined = computed(() => this.listingState() === 'rejected');
+
+  /**
+   * States where withdrawing *clears a listing* rather than pulling something down.
+   *
+   * `taken_down` and `rejected` differ in how they got here — an admin pulled a live
+   * listing, versus declined one that never went live — but the author's act is identical:
+   * nothing users can see changes, and clearing the listing is what unblocks deleting the
+   * agent. They differ only in the copy, which is why `withdrawCopy` still tells them apart.
+   */
+  protected readonly clearsListing = computed(() => this.isTakenDown() || this.isDeclined());
 
   protected readonly isPublished = computed(() => this.listingState() === 'published');
 
@@ -726,9 +744,10 @@ export class ShareAgentDialogComponent {
         return 'Request withdrawal';
       case 'in_review':
         return 'Withdraw submission';
-      // Not "Withdraw" — an admin already took it down, so there is nothing to withdraw
-      // from. This shelves the listing, which is also what makes the agent deletable.
+      // Not "Withdraw" — an admin already decided, so there is nothing to withdraw from.
+      // This shelves the listing, which is also what makes the agent deletable.
       case 'taken_down':
+      case 'rejected':
         return 'Remove listing';
       default:
         return 'Withdraw';
@@ -875,9 +894,9 @@ export class ShareAgentDialogComponent {
     const listing = await firstValueFrom(dialogRef.closed);
     if (listing) {
       this.listing.set(listing);
-      // Publishing widened visibility in the same write (the dialog's `makePublic`
-      // consent). Record it here or the save below derives over a stale PRIVATE and
-      // narrows the agent out from under its own live listing.
+      // Submitting widened visibility in the same write (the dialog's `makePublic`).
+      // Record it here or the save below derives over a stale PRIVATE and narrows the
+      // agent out from under its own live listing.
       this.visibility.set('PUBLIC');
     }
   }
@@ -913,35 +932,8 @@ export class ShareAgentDialogComponent {
     }
 
     const published = this.isPublished();
-    const takenDown = this.isTakenDown();
     const confirmRef = this.dialog.open<boolean>(ConfirmationDialogComponent, {
-      data: {
-        title: published
-          ? 'Request withdrawal?'
-          : takenDown
-            ? 'Remove this listing?'
-            : 'Withdraw this submission?',
-        // Two things this has to get right. (1) §5.1 — this is a *request*: the listing
-        // stays in the store until an admin grants it. (2) D7.3 — say plainly that it
-        // recalls nothing, because an author who thinks withdrawal revokes access decides
-        // worse than one who knows it does not.
-        message: published
-          ? `An admin reviews this before "${name}" comes down from Discover, so it stays ` +
-            'published until they decide. Even once it does come down, nothing is ' +
-            'recalled: anyone who already added it keeps it, conversations underway keep ' +
-            'running, and it stays reachable by direct link.'
-          : takenDown
-            ? // Already off the shelf, so this changes nothing users can see. Name the two
-              // things the author is actually deciding: they keep the agent either way, and
-              // this is what unblocks deleting it if that is where they were heading.
-              `"${name}" is already down from Discover, so this only clears its listing. ` +
-              'The agent itself is unaffected and stays yours — and once its listing is ' +
-              'cleared you can delete it, which a taken-down listing blocks.'
-            : `"${name}" is pulled from the review queue. You can submit it again at any time.`,
-        confirmText: published ? 'Request withdrawal' : takenDown ? 'Remove listing' : 'Withdraw',
-        cancelText: 'Cancel',
-        destructive: published,
-      } as ConfirmationDialogData,
+      data: this.withdrawCopy(name),
     });
 
     if (!(await firstValueFrom(confirmRef.closed))) return;
@@ -949,6 +941,70 @@ export class ShareAgentDialogComponent {
     await this.runWithdraw(
       published ? `Could not request withdrawal of "${name}".` : `Could not withdraw "${name}".`,
     );
+  }
+
+  /**
+   * The confirmation copy for withdrawing, by what withdrawing actually *does* here.
+   *
+   * Built as one object rather than four parallel ternaries. It was three cases and read
+   * badly at three; `rejected` made it four, and a declined listing needs its own sentence
+   * — "already down from Discover" is false for something that was never up there, and
+   * telling an author their agent came down when it never went live is the kind of small
+   * lie that makes them distrust the rest of the card.
+   *
+   * Two things every branch has to get right. (1) §5.1 — withdrawing a live listing is a
+   * *request*: it stays in the store until an admin grants it. (2) D7.3 — say plainly that
+   * it recalls nothing, because an author who thinks withdrawal revokes access decides
+   * worse than one who knows it does not.
+   */
+  private withdrawCopy(name: string): ConfirmationDialogData {
+    if (this.isPublished()) {
+      return {
+        title: 'Request withdrawal?',
+        message:
+          `An admin reviews this before "${name}" comes down from Discover, so it stays ` +
+          'published until they decide. Even once it does come down, nothing is ' +
+          'recalled: anyone who already added it keeps it, conversations underway keep ' +
+          'running, and it stays reachable by direct link.',
+        confirmText: 'Request withdrawal',
+        cancelText: 'Cancel',
+        destructive: true,
+      } as ConfirmationDialogData;
+    }
+
+    if (this.isDeclined()) {
+      // Never on the shelf, so there is nothing to take down and nothing for users to
+      // notice. The two things the author is actually deciding: they keep the agent either
+      // way, and clearing the listing is what unblocks deleting it.
+      return {
+        title: 'Remove this listing?',
+        message:
+          `"${name}" was not published, so this only clears its listing — nothing changes ` +
+          'for anyone else. The agent itself stays yours, and you can submit it again ' +
+          'later or delete it once the listing is cleared.',
+        confirmText: 'Remove listing',
+        cancelText: 'Cancel',
+      } as ConfirmationDialogData;
+    }
+
+    if (this.isTakenDown()) {
+      return {
+        title: 'Remove this listing?',
+        message:
+          `"${name}" is already down from Discover, so this only clears its listing. ` +
+          'The agent itself is unaffected and stays yours — and once its listing is ' +
+          'cleared you can delete it, which a taken-down listing blocks.',
+        confirmText: 'Remove listing',
+        cancelText: 'Cancel',
+      } as ConfirmationDialogData;
+    }
+
+    return {
+      title: 'Withdraw this submission?',
+      message: `"${name}" is pulled from the review queue. You can submit it again at any time.`,
+      confirmText: 'Withdraw',
+      cancelText: 'Cancel',
+    } as ConfirmationDialogData;
   }
 
   /**

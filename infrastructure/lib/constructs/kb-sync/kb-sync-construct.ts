@@ -7,11 +7,15 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
 import { AppConfig } from '../../config';
+import { AlarmFactory } from '../observability/alarm-factory';
+import { grantManagedKbDocumentDeletion } from '../managed-kb/managed-kb-role-construct';
+import { logRetentionFor } from '../observability/log-retention';
 
 export interface KbSyncConstructProps {
   config: AppConfig;
@@ -27,6 +31,7 @@ export interface KbSyncConstructProps {
    * MUST be the same identity app-api/inference-api use.
    */
   workloadIdentityName: string;
+  alarmTopic?: sns.ITopic;
 }
 
 /**
@@ -83,7 +88,7 @@ export class KbSyncConstruct extends Construct {
     );
 
     const workerLogGroup = new logs.LogGroup(this, 'KbSyncWorkerLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -113,7 +118,7 @@ export class KbSyncConstruct extends Construct {
     });
 
     const dispatcherLogGroup = new logs.LogGroup(this, 'KbSyncDispatcherLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -143,6 +148,15 @@ export class KbSyncConstruct extends Construct {
     // Worker: read connector config, stage changed bytes for re-ingestion.
     oauthProvidersTable.grantReadData(this.workerLambda);
     documentsBucket.grantPut(this.workerLambda);
+
+    // Worker: remove a vanished document from a promoted knowledge base.
+    // `kb_sync/worker.py` soft-deletes a document whose upstream source is
+    // gone and then calls `cleanup_service.cleanup_document_resources`, which
+    // deletes from the managed knowledge base when the assistant has been
+    // promoted. Same grant and same reasoning as the app-api task role: the
+    // sync worker removes documents, it never writes a corpus, so this is the
+    // deletion grant and not `grantDirectIngestion`.
+    grantManagedKbDocumentDeletion(config, this.workerLambda.role!);
 
     // Worker: retrieve the policy creator's stored 3LO token from the
     // AgentCore Identity vault with no live user session. Mirrors app-api's
@@ -222,17 +236,16 @@ export class KbSyncConstruct extends Construct {
     });
     this.scheduleRule.addTarget(new targets.LambdaFunction(this.dispatcherLambda));
 
-    // Error visibility (no SNS wiring in this stack yet; alarms are
-    // dashboard/console signals).
-    new cloudwatch.Alarm(this, 'KbSyncDispatcherErrorAlarm', {
-      alarmName: `${config.projectPrefix}-kb-sync-dispatcher-errors`,
+    const alarms = new AlarmFactory(this, config, props.alarmTopic);
+    alarms.alarm('KbSyncDispatcherErrorAlarm', {
+      name: 'kb-sync-dispatcher-errors',
       metric: this.dispatcherLambda.metricErrors({ period: cdk.Duration.minutes(15) }),
       threshold: 1,
       evaluationPeriods: 2,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-    new cloudwatch.Alarm(this, 'KbSyncWorkerErrorAlarm', {
-      alarmName: `${config.projectPrefix}-kb-sync-worker-errors`,
+    alarms.alarm('KbSyncWorkerErrorAlarm', {
+      name: 'kb-sync-worker-errors',
       metric: this.workerLambda.metricErrors({ period: cdk.Duration.minutes(15) }),
       threshold: 3,
       evaluationPeriods: 2,

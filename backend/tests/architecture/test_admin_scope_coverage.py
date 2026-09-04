@@ -203,8 +203,17 @@ def test_every_mounted_admin_route_has_a_scope_dependency() -> None:
         blob = "\n".join(sources)
         # `checker` is the closure returned by require_app_roles /
         # require_admin_scope; require_marketplace_admin wraps one of them.
+        #
+        # Two markers, because the two checkers now resolve permissions differently:
+        # `require_app_roles` calls `resolve_user_permissions` inline, while
+        # `require_admin_scope` delegates to the shared `has_admin_scope` predicate (which
+        # the invocation path's reviewer preview also needs, and which cannot be a FastAPI
+        # dependency there). This is a source grep one level deep, so a checker that moves
+        # its resolution behind another name must add that name here — the guarantee is
+        # unchanged, the string that evidences it is not.
         governed = (
             "resolve_user_permissions" in blob
+            or "has_admin_scope" in blob
             or "require_marketplace_admin" in blob
             or "agent_marketplace_enabled" in blob
         )

@@ -48,6 +48,10 @@ class EnvVars:
     RETRY_SDK_MAX_ATTEMPTS = "RETRY_SDK_MAX_ATTEMPTS"
     RETRY_SDK_INITIAL_DELAY = "RETRY_SDK_INITIAL_DELAY"
     RETRY_SDK_MAX_DELAY = "RETRY_SDK_MAX_DELAY"
+    # Kill switch for retrying Bedrock's transient pre-stream faults
+    # (ServiceUnavailableException et al). Default on; set "false" to fall
+    # back to Strands' stock throttling-only retry.
+    RETRY_TRANSIENT_SERVICE_ERRORS = "RETRY_TRANSIENT_SERVICE_ERRORS"
 
     # --- API Keys ---
     OPENAI_API_KEY = "OPENAI_API_KEY"
@@ -121,6 +125,7 @@ class Defaults:
     RETRY_SDK_MAX_ATTEMPTS = 4
     RETRY_SDK_INITIAL_DELAY = 2.0
     RETRY_SDK_MAX_DELAY = 16.0
+    RETRY_TRANSIENT_SERVICE_ERRORS = True
 
     # --- Frontend ---
     FRONTEND_URL = "http://localhost:4200"

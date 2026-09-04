@@ -11,9 +11,11 @@ should run:
 | Anyone, when nothing is published              | The live record          |
 
 ``resolve_display_agent`` answers the same question for the marketplace **detail read**,
-and differs on exactly one row: editors see the draft too. The two are kept side by side
-here rather than merged, because the reason they differ is easy to lose and expensive to
-get wrong in either direction — see that function's docstring.
+and differs on exactly one row: editors see the draft too. ``resolve_review_agent`` answers
+it for a marketplace **reviewer**, and differs on every row — the artifact a decision is
+about is the *submitted* snapshot, which neither of the others ever serves. The three are
+kept side by side here rather than merged, because the reasons they differ are easy to lose
+and expensive to get wrong in any direction — see each function's docstring.
 
 This is deliberately *not* in ``versions.py`` (pure, no I/O) or in
 ``version_repository.py`` (persistence). Deciding which version a person runs is policy,
@@ -113,6 +115,63 @@ async def resolve_invocation_agent(
 
     logger.info(f"📌 Agent {assistant.assistant_id} running published version {published}")
     return apply_version(assistant, version), published
+
+
+async def resolve_review_agent(assistant: Assistant) -> Tuple[Assistant, Optional[int]]:
+    """Return ``(assistant_under_review, version_number)`` for a **marketplace reviewer**.
+
+    The third caller of the same question, and the one whose answer differs most: a
+    reviewer reads and test-drives the artifact a decision is *about*, which is neither the
+    published snapshot nor the author's draft.
+
+    | Listing state        | Reviews            |
+    |----------------------|--------------------|
+    | ``in_review``        | ``submittedVersion`` |
+    | anything else        | ``publishedVersion`` |
+
+    ⚠️ **``in_review`` reads ``submittedVersion`` because that is what approval promotes**
+    (``listing_service.review_listing``). The live record is the author's draft and they can
+    keep editing it while the row sits in the queue — the window ``AgentVersion`` exists to
+    close, since a version is cut at submission rather than at approval. Reading anything
+    else would show a reviewer one configuration and publish another.
+
+    ⚠️ **Every other state reads ``publishedVersion``, and that is not a fallback.**
+    ``submittedVersion`` is a high-water mark that deliberately survives a decision, so on a
+    ``withdrawal_requested`` listing — where nothing is pending, and the question is whether
+    to pull what is *live* — it names a snapshot the store never served.
+
+    Returns ``(assistant, None)`` when neither pointer resolves: a submission that predates
+    version snapshots, or a pointer to a version that is gone. Unlike ``resolve_invocation_agent``
+    this **does not raise** on a missing snapshot, because there is nothing unsafe about a
+    reviewer reading the live record as long as they are told that is what they are reading —
+    the ``None`` is that signal, and both callers surface it (``snapshotUnavailable`` on the
+    review read; the preview banner on the test drive). Raising would leave a reviewer with a
+    row in their queue and no way to look at it.
+
+    Like the other two, **this is not an access check.** Whether the caller may review at all
+    is the ``admin.marketplace`` scope, decided by the caller.
+    """
+    listing = assistant.listing
+    if listing is None:
+        return assistant, None
+
+    number = (
+        listing.submitted_version if listing.state == "in_review" else listing.published_version
+    )
+    if number is None:
+        return assistant, None
+
+    # Read the version back rather than trusting the pointer: a snapshot that is gone must
+    # read as "not frozen", not as a version number whose content nobody has.
+    version = await get_version(assistant.assistant_id, number)
+    if version is None:
+        logger.warning(
+            f"Agent {assistant.assistant_id} names version {number} for review, "
+            "but it could not be loaded; falling back to the live record."
+        )
+        return assistant, None
+
+    return apply_version(assistant, version), version.version
 
 
 async def resolve_display_agent(

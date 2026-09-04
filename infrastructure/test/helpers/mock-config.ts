@@ -6,7 +6,26 @@
  * without hitting AWS.
  */
 import * as cdk from 'aws-cdk-lib';
-import { AppConfig } from '../../lib/config';
+import { AppConfig,
+  MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
+  MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
+  MANAGED_KB_PER_KB_CEILING_BYTES,
+  MANAGED_KB_RETENTION_WINDOW_DAYS,
+  OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+  OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
+  OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
+  OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
+  OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+  OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+  OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
+  OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
+  OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+} from '../../lib/config';
 
 /** Default mock account and region used across all tests. */
 export const MOCK_ACCOUNT = '123456789012';
@@ -38,6 +57,35 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       maxCapacity: 2,
     },
     inferenceApi: {},
+    // Observability mirrors the shipped OSS defaults rather than hardcoded
+    // literals, so a change to a default is exercised by every existing test
+    // instead of silently diverging from what a fork actually deploys.
+    // alarmTopicEnabled is ON here because routing is the point of the feature:
+    // the "every alarm has an action" guard must run against the default shape.
+    observability: {
+      alarmTopicEnabled: true,
+      logRetentionDays: OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+      albTarget5xxThreshold: OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+      albP99LatencyMs: OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+      agentCoreLatencyMs: OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+      agentCoreErrorThreshold: OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+      lambdaErrorThreshold: OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
+      lambdaDurationPercentOfTimeout:
+        OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+      dynamoThrottleThreshold: OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
+      ecsCpuPercent: OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
+      ecsMemoryPercent: OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
+      promptCacheAvoidableMissThreshold:
+        OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
+      promptCacheWastedUsdThreshold:
+        OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
+      promptCacheSessionWastedUsdThreshold:
+        OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+      xraySamplingRate: OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
+      xraySamplingReservoir: OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+      xrayInsightsNotifications: false,
+      agentCoreApplicationLogsEnabled: false,
+    },
     ragIngestion: {
       lambdaMemorySize: 3008,
       lambdaTimeout: 900,
@@ -47,6 +95,23 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     kbSync: {
       enabled: false,
+    },
+    // Managed_KB ships with all three flags OFF and the byte caps /
+    // alarm thresholds at their production defaults. Tests that need a
+    // flag on opt in explicitly via
+    // createMockConfig({ managedKb: { ...base.managedKb, migrationEnabled: true } }),
+    // which keeps "off" the thing a test has to work to escape rather
+    // than the thing it has to remember to assert.
+    managedKb: {
+      newDefault: false,
+      migrationEnabled: false,
+      reconcilerArmed: false,
+      perOwnerDefaultBytes: MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
+      perOwnerElevatedBytes: MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
+      perKnowledgeBaseCeilingBytes: MANAGED_KB_PER_KB_CEILING_BYTES,
+      retentionWindowDays: MANAGED_KB_RETENTION_WINDOW_DAYS,
+      storageAlarmGb: 500,
+      dailyCostAlarmUsd: 100,
     },
     scheduledRuns: {
       enabled: false,
@@ -63,7 +128,10 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     agentMarketplace: {
       enabled: false,
     },
-    fineTuning: {},
+    fineTuning: {
+      enabled: true,
+      defaultQuotaHours: 0,
+    },
     artifacts: {
       retentionDays: 90,
       extraFrameAncestors: [],

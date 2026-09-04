@@ -25,7 +25,7 @@ class _RecordingCoordinator:
 class _ExplodingMultimodalBuilder:
     """build_prompt must never be called on the continuation path."""
 
-    def build_prompt(self, message, files):  # noqa: D401
+    def build_prompt(self, message, files, attachment_names=None):  # noqa: D401
         raise AssertionError("multimodal build_prompt called on continuation path")
 
 
@@ -59,7 +59,7 @@ async def test_normal_turn_still_uses_multimodal_builder():
     coordinator = _RecordingCoordinator()
 
     class _Builder:
-        def build_prompt(self, message, files):
+        def build_prompt(self, message, files, attachment_names=None):
             return f"built:{message}"
 
     agent = _bare_chat_agent(coordinator, _Builder())

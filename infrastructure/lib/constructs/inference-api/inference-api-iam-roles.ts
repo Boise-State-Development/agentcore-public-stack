@@ -11,6 +11,7 @@ import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
 import { PlatformComputeRefs } from '../platform-compute-refs';
+import { grantManagedKbRetrieval } from '../managed-kb/managed-kb-role-construct';
 
 /**
  * Create the AgentCore Runtime execution role with all required
@@ -119,11 +120,19 @@ export function createRuntimeExecutionRole(
   }));
 
   // ── External MCP Lambda Function URL invocation ──
+  // Both naming conventions: MCP servers deployed from their own repos are
+  // named `mcp-<server>-<env>` (no project prefix), so a prefix-only scope
+  // silently 403s every one of them the moment a tool is configured as a
+  // direct external MCP server rather than a Gateway target. Mirrors the
+  // resource scope app-api uses for the same fleet.
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'ExternalMCPLambdaAccess',
     effect: iam.Effect.ALLOW,
     actions: ['lambda:InvokeFunctionUrl', 'lambda:InvokeFunction'],
-    resources: [`arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:${config.projectPrefix}-mcp-*`],
+    resources: [
+      `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:mcp-*`,
+      `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:${config.projectPrefix}-mcp-*`,
+    ],
   }));
 
   // ── AgentCore Gateway ──
@@ -196,6 +205,25 @@ export function createRuntimeExecutionRole(
       'dynamodb:BatchGetItem', 'dynamodb:BatchWriteItem',
     ],
     resources: tableResources,
+  }));
+
+  // ── User settings table (read-only) ──
+  // inference_api/chat/routes.py resolves the user's saved defaultModelId via
+  // UserSettingsRepository.get_settings — a GetItem on PK=USER#<id>, SK=SETTINGS.
+  // The runtime never writes settings (app-api owns that), and the table has no
+  // GSIs, so this stays a bare-ARN GetItem rather than joining the read/write
+  // bulk grant above.
+  //
+  // inference-agentcore-construct.ts injects DYNAMODB_USER_SETTINGS_TABLE_NAME,
+  // which makes the repository report itself enabled — so without this grant the
+  // GetItem AccessDenied'd and get_settings swallowed it into DEFAULT_SETTINGS.
+  // The user's chosen default model was silently ignored with no user-visible
+  // error; only a stray ERROR line in the runtime log revealed it.
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'UserSettingsTableReadAccess',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:GetItem'],
+    resources: [refs.userSettingsTable.tableArn],
   }));
 
   // ── System prompts table (read-only) ──
@@ -298,6 +326,11 @@ export function createRuntimeExecutionRole(
       `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${vectorBucketName}/index/${vectorIndexName}`,
     ],
   }));
+
+  // ── Managed knowledge bases (Bedrock Retrieve) ──
+  // Query-only: the agent loop may retrieve from a Managed_KB but never
+  // create or delete one (Requirement 20.6).
+  grantManagedKbRetrieval(config, role);
 
   // ── AgentCore WorkloadIdentity + OAuth token minting ──
   // The agent loop's tool gating in shared/oauth/agentcore_identity.py

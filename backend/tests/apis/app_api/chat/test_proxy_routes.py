@@ -374,3 +374,112 @@ def test_returns_502_on_unexpected_upstream_error(
 
     response = TestClient(app).post(chat_path, json={"message": "hi"})
     assert response.status_code == 502
+
+
+# ── AgentCore's 424 rewrite of the single-flight 409 ──────────────────────
+#
+# The Runtime data plane maps every non-2xx from the container to `424 Failed
+# Dependency`, so the container's deliberate 409 arrives indistinguishable
+# from a crash. The lease is the tiebreaker.
+
+
+def _patch_lease_held(monkeypatch: pytest.MonkeyPatch, held: bool) -> None:
+    import apis.shared.sessions.session_lease as session_lease
+
+    async def _is_held(session_id: str, user_id: str) -> bool:
+        assert session_id == "conv-1"
+        assert user_id == "user-sub"
+        return held
+
+    monkeypatch.setattr(session_lease, "is_session_lease_held", _is_held)
+
+
+def _upstream_424(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(424, content=b'{"message": "Failed Dependency"}')
+
+    _patch_upstream(monkeypatch, handler)
+
+
+def test_424_with_live_lease_relays_as_409(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
+    _upstream_424(monkeypatch)
+    _patch_lease_held(monkeypatch, True)
+    app = _build_app(record=_record(), user_override=_user())
+
+    response = TestClient(app).post(
+        chat_path, json={"message": "hi", "session_id": "conv-1"}
+    )
+
+    # 409 is the status the SPA renders as a soft "Already responding" notice;
+    # a relayed 424 surfaces as a fatal "Chat Request Failed" toast instead.
+    assert response.status_code == 409
+    # The Runtime's opaque body is replaced — it explains nothing to the user.
+    assert "already streaming" in response.json()["detail"]
+
+
+def test_424_without_a_lease_stays_424(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
+    _upstream_424(monkeypatch)
+    _patch_lease_held(monkeypatch, False)
+    app = _build_app(record=_record(), user_override=_user())
+
+    response = TestClient(app).post(
+        chat_path, json={"message": "hi", "session_id": "conv-1"}
+    )
+
+    # No lease means no turn is streaming, so the 424 is a real upstream
+    # failure and must not be disguised as a benign conflict.
+    assert response.status_code == 424
+    assert "Failed Dependency" in response.text
+
+
+def test_424_without_a_session_id_stays_424(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
+    _upstream_424(monkeypatch)
+    app = _build_app(record=_record(), user_override=_user())
+
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
+    assert response.status_code == 424
+
+
+def test_424_keeps_its_status_when_the_lease_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
+    import apis.shared.sessions.session_lease as session_lease
+
+    async def _boom(session_id: str, user_id: str) -> bool:
+        raise RuntimeError("DynamoDB unavailable")
+
+    _upstream_424(monkeypatch)
+    monkeypatch.setattr(session_lease, "is_session_lease_held", _boom)
+    app = _build_app(record=_record(), user_override=_user())
+
+    response = TestClient(app).post(
+        chat_path, json={"message": "hi", "session_id": "conv-1"}
+    )
+    assert response.status_code == 424
+
+
+def test_non_424_errors_skip_the_lease_lookup(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
+    import apis.shared.sessions.session_lease as session_lease
+
+    async def _must_not_run(session_id: str, user_id: str) -> bool:
+        raise AssertionError("lease lookup is 424-only")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=b"boom")
+
+    _patch_upstream(monkeypatch, handler)
+    monkeypatch.setattr(session_lease, "is_session_lease_held", _must_not_run)
+    app = _build_app(record=_record(), user_override=_user())
+
+    response = TestClient(app).post(
+        chat_path, json={"message": "hi", "session_id": "conv-1"}
+    )
+    assert response.status_code == 500

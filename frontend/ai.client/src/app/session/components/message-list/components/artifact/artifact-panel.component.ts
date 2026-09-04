@@ -10,20 +10,23 @@ import {
 } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { HttpErrorResponse } from '@angular/common/http';
-import { NgTemplateOutlet } from '@angular/common';
+import { Dialog } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroXMark,
   heroArrowPath,
-  heroExclamationTriangle,
   heroArrowDownTray,
+  heroArrowUpOnSquare,
   heroEye,
   heroCodeBracket,
   heroClipboard,
   heroCheck,
   heroChevronUpDown,
 } from '@ng-icons/heroicons/outline';
-import type { Artifact } from '../../../../services/artifacts/artifact.model';
+import type {
+  Artifact,
+  OpenArtifactRef,
+} from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 import {
   ArtifactHttpService,
@@ -31,7 +34,13 @@ import {
 } from '../../../../services/artifacts/artifact-http.service';
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
 import { SessionService } from '../../../../services/session/session.service';
-import { ArtifactSourceComponent } from './artifact-source.component';
+import { ArtifactViewerComponent } from './artifact-viewer.component';
+import {
+  ArtifactShareModalComponent,
+  type ArtifactShareModalData,
+} from './artifact-share-modal.component';
+import { UserService } from '../../../../../auth/user.service';
+import { TooltipDirective } from '../../../../../components/tooltip/tooltip.directive';
 
 /**
  * Right-docked pane that renders one artifact version in a sandboxed
@@ -53,13 +62,13 @@ import { ArtifactSourceComponent } from './artifact-source.component';
 @Component({
   selector: 'app-artifact-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, NgTemplateOutlet, ArtifactSourceComponent],
+  imports: [NgIcon, ArtifactViewerComponent, TooltipDirective],
   providers: [
     provideIcons({
       heroXMark,
       heroArrowPath,
-      heroExclamationTriangle,
       heroArrowDownTray,
+      heroArrowUpOnSquare,
       heroEye,
       heroCodeBracket,
       heroClipboard,
@@ -244,7 +253,21 @@ import { ArtifactSourceComponent } from './artifact-source.component';
           }
           <button
             type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            [attr.aria-label]="'Share artifact, version ' + ref.version"
+            [appTooltip]="'Share version ' + ref.version"
+            appTooltipPosition="bottom"
+            (click)="share(ref)"
+          >
+            <ng-icon
+              name="heroArrowUpOnSquare"
+              class="text-lg"
+              aria-hidden="true"
+            />
+          </button>
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
             [attr.aria-label]="
               downloading() ? 'Downloading artifact…' : 'Download artifact'
             "
@@ -269,158 +292,25 @@ import { ArtifactSourceComponent } from './artifact-source.component';
           </button>
         </header>
 
-        <div class="relative min-h-0 flex-1">
-          @if (view() === 'code') {
-            @if (sourceError()) {
-              <div
-                class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
-                role="alert"
-              >
-                <ng-icon
-                  name="heroExclamationTriangle"
-                  class="text-3xl text-state-warning-500"
-                  aria-hidden="true"
-                />
-                <p class="text-sm text-gray-700 dark:text-gray-300">
-                  {{ sourceError() }}
-                </p>
-                <button
-                  type="button"
-                  class="rounded-md bg-primary-accessible px-3 py-1.5 text-sm font-medium text-white transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
-                  (click)="retrySource()"
-                >
-                  Try again
-                </button>
-              </div>
-            } @else if (source(); as src) {
-              <app-artifact-source
-                [content]="src.content"
-                [contentType]="src.contentType"
-              />
-            } @else {
-              <ng-container
-                [ngTemplateOutlet]="skeleton"
-                [ngTemplateOutletContext]="{ label: 'Building source view…' }"
-              />
-            }
-          } @else {
-            @if (error()) {
-              <div
-                class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
-                role="alert"
-              >
-                <ng-icon
-                  name="heroExclamationTriangle"
-                  class="text-3xl text-state-warning-500"
-                  aria-hidden="true"
-                />
-                <p class="text-sm text-gray-700 dark:text-gray-300">
-                  {{ error() }}
-                </p>
-                <button
-                  type="button"
-                  class="rounded-md bg-primary-accessible px-3 py-1.5 text-sm font-medium text-white transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
-                  (click)="retry()"
-                >
-                  Try again
-                </button>
-              </div>
-            } @else {
-              @if (safeUrl(); as url) {
-                <iframe
-                  [src]="url"
-                  class="h-full w-full border-0 bg-white"
-                  [class.pointer-events-none]="dragging()"
-                  [title]="ref.title || 'Artifact'"
-                  sandbox="allow-scripts"
-                  referrerpolicy="no-referrer"
-                  loading="lazy"
-                  (load)="onIframeLoad()"
-                ></iframe>
-              }
-              @if (!previewReady()) {
-                <ng-container
-                  [ngTemplateOutlet]="skeleton"
-                  [ngTemplateOutletContext]="{ label: 'Rendering artifact…' }"
-                />
-              }
-            }
-          }
-        </div>
+        <app-artifact-viewer
+          [safeUrl]="safeUrl()"
+          [title]="ref.title"
+          [view]="view()"
+          [source]="source()"
+          [error]="error()"
+          [sourceError]="sourceError()"
+          [previewReady]="previewReady()"
+          [inert]="dragging()"
+          (retry)="retry()"
+          (retrySource)="retrySource()"
+          (iframeLoad)="onIframeLoad()"
+        />
       </aside>
-      <ng-template #skeleton let-label="label">
-        <div
-          class="absolute inset-0 overflow-hidden bg-white p-8 dark:bg-gray-900"
-          role="status"
-          [attr.aria-label]="label"
-        >
-          <div aria-hidden="true" class="mx-auto flex max-w-2xl flex-col gap-6">
-            <div class="flex flex-col gap-3">
-              <div
-                class="skeleton-shimmer h-8 w-1/2 rounded-lg bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-4 w-1/4 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-            </div>
-            <div class="flex flex-col gap-3">
-              <div
-                class="skeleton-shimmer h-3.5 w-full rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-11/12 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-4/5 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-            </div>
-            <div
-              class="skeleton-shimmer h-48 w-full rounded-xl bg-gray-200 dark:bg-gray-700"
-            ></div>
-            <div class="flex flex-col gap-3">
-              <div
-                class="skeleton-shimmer h-3.5 w-full rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-10/12 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-2/3 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-            </div>
-          </div>
-          <span class="sr-only">{{ label }}</span>
-        </div>
-      </ng-template>
     }
   `,
   styles: `
     :host {
       display: contents;
-    }
-    .skeleton-shimmer {
-      background-image: linear-gradient(
-        90deg,
-        transparent 0%,
-        rgba(255, 255, 255, 0.45) 50%,
-        transparent 100%
-      );
-      background-size: 220% 100%;
-      background-repeat: no-repeat;
-      animation: artifact-skeleton-shimmer 1.5s ease-in-out infinite;
-    }
-    @keyframes artifact-skeleton-shimmer {
-      0% {
-        background-position: 130% 0;
-      }
-      100% {
-        background-position: -130% 0;
-      }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .skeleton-shimmer {
-        animation: none;
-      }
     }
   `,
 })
@@ -430,6 +320,8 @@ export class ArtifactPanelComponent {
   private sessionService = inject(SessionService);
   private sanitizer = inject(DomSanitizer);
   private artifactDownload = inject(ArtifactDownloadService);
+  private dialog = inject(Dialog);
+  private userService = inject(UserService);
 
   protected readonly open = this.artifactState.openArtifact;
 
@@ -770,6 +662,22 @@ export class ArtifactPanelComponent {
     this.sourceLoading.set(false);
     this.copied.set(false);
     this.loadedSourceKey = null;
+  }
+
+  /** Open the share dialog for the version currently on screen.
+   *
+   *  `ref` is the panel's open-artifact ref, so switching versions in
+   *  the header menu switches what gets shared — a share pins one
+   *  immutable version and never follows HEAD. */
+  protected share(ref: OpenArtifactRef): void {
+    this.dialog.open(ArtifactShareModalComponent, {
+      data: {
+        artifactId: ref.artifactId,
+        version: ref.version,
+        title: ref.title,
+        ownerEmail: this.userService.currentUser()?.email ?? '',
+      } as ArtifactShareModalData,
+    });
   }
 
   protected async download(): Promise<void> {

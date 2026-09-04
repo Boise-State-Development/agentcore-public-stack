@@ -151,3 +151,23 @@ def agent_marketplace_enabled() -> bool:
     is now this flag alone.
     """
     return os.environ.get("AGENT_MARKETPLACE_ENABLED", "").strip().lower() != "false"
+
+
+def mid_turn_steering_enabled() -> bool:
+    """Whether a follow-up may be injected into a turn that is still running.
+
+    Covers the lease-row steering inbox, the runtime ``SteeringHook`` that
+    injects at each tool boundary, the app-api ``/sessions/{id}/steer``
+    endpoint, and the ``steering_applied`` SSE event (see
+    ``docs/specs/mid-turn-steering.md``). **Default ON with a kill switch**
+    (house style, mirroring ``scheduled_runs_enabled``): unset or empty
+    resolves to enabled; only the literal ``"false"`` (case-insensitive)
+    disables.
+
+    While off, the hook is still registered but returns immediately, the steer
+    endpoint 404s, and the SPA never POSTs — leaving exactly PR #916's
+    behaviour, where a follow-up typed mid-stream is queued in the composer
+    and flushed on the turn's falling edge. That fallback is permanent, not
+    transitional: a turn that calls no tools has no boundary to inject at.
+    """
+    return os.environ.get("MID_TURN_STEERING_ENABLED", "").strip().lower() != "false"

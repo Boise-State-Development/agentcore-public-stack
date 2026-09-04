@@ -29,6 +29,15 @@ export type ListingState =
   | 'changes_requested'
   | 'taken_down'
   /**
+   * An admin declined the submission for the store, with a reason (D2).
+   *
+   * ⚠️ Not a harsher `changes_requested`, and not a permanent block. The difference is what
+   * the author is told — "this isn't a fit, here's why" rather than "fix X and I'll approve"
+   * — and what the admin is committing to. The author may still revise and submit again;
+   * approval remains the only edge that publishes.
+   */
+  | 'rejected'
+  /**
    * The author has asked to pull a live listing and an admin has not yet decided (§5.1).
    *
    * ⚠️ Still **live in the store**. Dropping it off the shelf the moment the author asked
@@ -53,6 +62,7 @@ export const LISTING_STATE_LABELS: Record<ListingState, string> = {
   changes_requested: 'Changes requested',
   taken_down: 'Taken down',
   withdrawal_requested: 'Withdrawal requested',
+  rejected: 'Declined',
 };
 
 /**
@@ -68,6 +78,9 @@ export const LISTING_STATE_CLASSES: Record<ListingState, string> = {
   // Warning like in_review, not danger: this is work waiting on an admin, not a problem
   // with the listing — and it is still published while it waits.
   withdrawal_requested: 'bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/40 dark:text-state-warning-300',
+  // Danger like changes_requested: from the author's side both are "an admin said no for
+  // now, and left a reason". The reason text is what distinguishes them, not the colour.
+  rejected: 'bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/40 dark:text-state-danger-300',
 };
 
 /**
@@ -113,10 +126,14 @@ export interface SubmitListingRequest {
   publisherId?: string;
   note?: string;
   /**
-   * The author's explicit consent to make this agent PUBLIC as part of publishing it.
-   * The marketplace is public-only and every agent starts PRIVATE, so this is the normal
-   * path, not an edge case. Omitting it is refused by the backend — the widening is
-   * consent, never a side effect of submitting.
+   * Widen this agent to PUBLIC as part of submitting it. The marketplace is public-only
+   * and every agent starts PRIVATE, so this is the normal path, not an edge case.
+   *
+   * ⚠️ Still **required** by the backend whenever widening is needed — an omitted flag is
+   * refused, so no caller widens an agent by accident. What changed is who decides: the
+   * submit dialog sets it unconditionally, because it shows the author a notice saying
+   * submitting publishes the agent and pressing Submit under that notice is the consent.
+   * A caller that shows no such notice must not send it blindly.
    */
   makePublic?: boolean;
   /**

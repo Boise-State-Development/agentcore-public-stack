@@ -23,7 +23,7 @@
   <section class="mb-8">
     <h2 class="mb-1 text-base/7 font-semibold text-gray-900 dark:text-white">1. Upload Dataset</h2>
     <p class="mb-4 text-sm/6 text-gray-500 dark:text-gray-400">
-      Upload your training data as a JSONL, CSV, or TXT file. Each record should include "text" and "label" fields.
+      Upload your training data as a CSV, JSONL, or JSON file. Each record should include "text" and "label" fields.
     </p>
 
     @if (uploadState(); as upload) {
@@ -95,13 +95,13 @@
           <p class="mt-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">
             Click or drag &amp; drop your dataset
           </p>
-          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">JSONL, CSV, or TXT file</p>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">CSV, JSONL, or JSON file</p>
         </label>
         <input
           id="dataset-upload"
           type="file"
           class="sr-only"
-          accept=".jsonl,.csv,.txt,.json"
+          accept=".csv,.jsonl,.json"
           (change)="onFileSelected($event)"
         />
       </div>

@@ -8,6 +8,8 @@ those here so individual route handlers can't drift.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from starlette.responses import Response
 
 from apis.shared.sessions_bff.config import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
@@ -16,7 +18,27 @@ from apis.shared.sessions_bff.config import CSRF_COOKIE_NAME, SESSION_COOKIE_NAM
 # /auth/callback as a GET, which is in-scope for `lax`) while blocking the
 # CSRF-relevant cross-site POSTs. `strict` would break the callback redirect
 # coming from cognito's domain.
-_SAMESITE = "lax"
+#
+# Annotated as a `Literal` rather than a bare `str` so it satisfies Starlette's
+# `samesite` parameter type — a plain `str` is rejected there.
+_SAMESITE: Literal["lax"] = "lax"
+
+# Carries the browser-binding secret for one in-flight OAuth authorization
+# request. Its whole job is to make a `state` value worthless to any browser
+# other than the one that asked for it: the callback hashes this cookie and
+# compares against the digest stored alongside the state.
+#
+# Attribute notes:
+#   - `__Host-` so the browser refuses it from any other host and pins
+#     Path=/ + Secure with no Domain — an attacker on a sibling subdomain
+#     can't plant one.
+#   - `HttpOnly` — the SPA never needs to read it, and script access would
+#     hand an XSS the ability to forge a binding.
+#   - `SameSite=lax` is *required*, not a compromise: the IdP redirects the
+#     user back with a top-level cross-site GET, which is exactly the case
+#     `lax` still sends cookies for. `strict` would withhold the cookie and
+#     break every login.
+OAUTH_STATE_COOKIE_NAME = "__Host-bff_oauth_state"
 
 
 def set_session_cookies(
@@ -69,5 +91,42 @@ def clear_session_cookies(response: Response) -> None:
         path="/",
         secure=True,
         httponly=False,
+        samesite=_SAMESITE,
+    )
+
+
+def set_oauth_state_cookie(
+    response: Response,
+    *,
+    binding_secret: str,
+    max_age_seconds: int,
+) -> None:
+    """Hand the browser the binding secret for one in-flight authorize request.
+
+    `binding_secret` must be a fresh high-entropy value from
+    `secrets.token_urlsafe(...)`; only its SHA-256 digest is persisted with
+    the OAuth state, so this cookie is the sole copy of the plaintext and
+    lives only in the browser that initiated the flow.
+    """
+    response.set_cookie(
+        key=OAUTH_STATE_COOKIE_NAME,
+        value=binding_secret,
+        max_age=max_age_seconds,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite=_SAMESITE,
+    )
+
+
+def clear_oauth_state_cookie(response: Response) -> None:
+    """Drop the OAuth binding cookie once the flow terminates, successfully or
+    otherwise. Cleared on *every* callback exit so a stale binding can't be
+    paired with a freshly minted state on a later attempt."""
+    response.delete_cookie(
+        OAUTH_STATE_COOKIE_NAME,
+        path="/",
+        secure=True,
+        httponly=True,
         samesite=_SAMESITE,
     )

@@ -237,6 +237,89 @@ jobs:
       - name: Deploy kb-sync worker image
         run: bash scripts/build/deploy-image-lambda-one.sh kb-sync-worker
 
+  build-kb-migration:
+    name: Build kb-migration image
+    needs: test-backend
+    # Native ARM64 runner — all four kb-migration Lambdas are arm64 (see the
+    # managed-kb CDK construct), matching the kb-sync pattern.
+    runs-on: ubuntu-24.04-arm
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/build-and-push-image
+        id: build
+        with:
+          image-name: kb-migration
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+  deploy-kb-migration-code:
+    name: Deploy kb-migration Lambda images
+    # ONE image, FOUR functions: dispatcher, worker, reconciler and ingestion
+    # consumer share the kb-migration image and differ only in
+    # ImageConfig.Command (CDK-owned), so a single job points all four at the
+    # freshly-built tag.
+    #
+    # This is the job that replaces the bootstrap stub
+    # (infrastructure/bootstrap-assets/kb-migration/) with the real handlers.
+    # Until it has run once, an enrolled knowledge base sits in `shadow` while
+    # the dispatcher ticks into a no-op — safe, because the work keys are sparse
+    # and the first real tick picks up everything that accumulated.
+    needs: [build-kb-migration, test-backend]
+    runs-on: ubuntu-24.04
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Deploy kb-migration dispatcher image
+        run: bash scripts/build/deploy-image-lambda-one.sh kb-migration-dispatcher
+      - name: Deploy kb-migration worker image
+        run: bash scripts/build/deploy-image-lambda-one.sh kb-migration-worker
+      - name: Deploy kb-migration reconciler image
+        run: bash scripts/build/deploy-image-lambda-one.sh kb-migration-reconciler
+      - name: Deploy kb-migration ingestion consumer image
+        run: bash scripts/build/deploy-image-lambda-one.sh kb-migration-ingestion-consumer
+
   build-scheduled-runs:
     name: Build scheduled-runs image
     needs: test-backend

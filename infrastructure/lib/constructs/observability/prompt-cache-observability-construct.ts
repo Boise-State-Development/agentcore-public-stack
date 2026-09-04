@@ -1,11 +1,14 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
+import { AlarmFactory } from './alarm-factory';
 
 export interface PromptCacheObservabilityConstructProps {
   config: AppConfig;
+  alarmTopic?: sns.ITopic;
   /**
    * The log group the AgentCore Runtime actually writes to, from
    * `InferenceAgentCoreConstruct.runtimeLogGroupName`.
@@ -40,11 +43,8 @@ export interface PromptCacheObservabilityConstructProps {
  * per-session drill-down counterpart is the cost-anatomy admin endpoint
  * (`GET /admin/costs/sessions/{id}/calls`).
  *
- * Alarms are console-only — no SNS topics exist in the stack yet (same
- * posture as kb-sync and scheduled-runs). They use NOT_BREACHING for
- * missing data because the `PROMPT_CACHE_OBSERVABILITY_ENABLED=false`
- * kill switch (or simply zero traffic) makes the metrics absent
- * entirely.
+ * NOT_BREACHING on missing data: the PROMPT_CACHE_OBSERVABILITY_ENABLED=false
+ * kill switch, or simply no traffic, makes the metrics absent entirely.
  */
 export class PromptCacheObservabilityConstruct extends Construct {
   constructor(
@@ -225,46 +225,44 @@ export class PromptCacheObservabilityConstruct extends Construct {
     );
 
     // ============================================================
-    // Alarms (console-only; no SNS wiring yet)
+    // Alarms
     // ============================================================
+
+    const alarms = new AlarmFactory(this, config, props.alarmTopic);
 
     // AvoidableMiss is the nominated alarm target (see emf.py): a
     // prefix-stability regression flips a large share of calls to
     // `miss_avoidable`, showing up as a step change in this sum.
-    new cloudwatch.Alarm(this, 'PromptCacheAvoidableMissAlarm', {
-      alarmName: getResourceName(config, 'prompt-cache-avoidable-miss'),
+    alarms.alarm('PromptCacheAvoidableMissAlarm', {
+      name: 'prompt-cache-avoidable-miss',
       alarmDescription:
         'Avoidable prompt-cache misses exceeded threshold — likely a prompt-prefix stability regression',
       metric: avoidableMissMetric,
-      threshold: config.production ? 10 : 50,
+      threshold: config.observability.promptCacheAvoidableMissThreshold,
       evaluationPeriods: 3,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // Session-level accumulation (#833 PR-1). A fleet sum never notices one
-    // conversation spending $0.43 a turn for five days — the incident this
-    // alarm exists for would have tripped it on day 2, at ~10 turns. The
-    // metric is the session's cumulative partial-miss waste and the statistic
-    // is Maximum, so this reads as "a session at or over $5 of partial-miss
-    // waste was active in the last 24h"; it clears once that session stops.
-    new cloudwatch.Alarm(this, 'PromptCacheSessionPartialMissAlarm', {
-      alarmName: getResourceName(config, 'prompt-cache-session-partial-miss'),
+    // Maximum, not Sum: reads as "a session over the threshold was active in
+    // the last 24h". A fleet sum cannot see one conversation doing this (#833).
+    alarms.alarm('PromptCacheSessionPartialMissAlarm', {
+      name: 'prompt-cache-session-partial-miss',
       alarmDescription:
-        'A single session accumulated more than $5 of partial-miss cache waste — one conversation is re-writing its prefix every turn (see the "Sessions by partial-miss waste" dashboard widget for which)',
+        'A single session accumulated more than the configured partial-miss cache waste — one conversation is re-writing its prefix every turn (see the "Sessions by partial-miss waste" dashboard widget for which)',
       metric: sessionPartialMissUsdMetric,
-      threshold: 5,
+      threshold: config.observability.promptCacheSessionWastedUsdThreshold,
       evaluationPeriods: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    new cloudwatch.Alarm(this, 'PromptCacheWastedUsdAlarm', {
-      alarmName: getResourceName(config, 'prompt-cache-wasted-usd'),
+    alarms.alarm('PromptCacheWastedUsdAlarm', {
+      name: 'prompt-cache-wasted-usd',
       alarmDescription:
         'Dollars wasted on prompt-cache re-writes of already-cached prefix bytes (avoidable + partial misses) exceeded threshold',
       metric: wastedUsdMetric,
-      threshold: config.production ? 1 : 5,
+      threshold: config.observability.promptCacheWastedUsdThreshold,
       evaluationPeriods: 3,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,

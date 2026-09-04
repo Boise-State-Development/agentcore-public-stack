@@ -6,16 +6,24 @@ import {
   input,
   signal,
 } from '@angular/core';
+import { Dialog } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroCodeBracket,
   heroDocumentText,
   heroArrowDownTray,
   heroArrowPath,
+  heroArrowUpOnSquare,
 } from '@ng-icons/heroicons/outline';
 import type { Artifact } from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
+import {
+  ArtifactShareModalComponent,
+  type ArtifactShareModalData,
+} from './artifact-share-modal.component';
+import { UserService } from '../../../../../auth/user.service';
+import { TooltipDirective } from '../../../../../components/tooltip/tooltip.directive';
 import { parseIso } from '../../../../../utils/date';
 
 /** Visual treatment derived from an artifact's content type. */
@@ -51,13 +59,14 @@ interface ArtifactKind {
 @Component({
   selector: 'app-artifact-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, TooltipDirective],
   providers: [
     provideIcons({
       heroCodeBracket,
       heroDocumentText,
       heroArrowDownTray,
       heroArrowPath,
+      heroArrowUpOnSquare,
     }),
   ],
   template: `
@@ -99,21 +108,35 @@ interface ArtifactKind {
           </span>
         </span>
 
-        <button
-          type="button"
-          class="artifact-card__download"
-          [class.is-busy]="downloading()"
-          [attr.aria-label]="downloadAriaLabel()"
-          [attr.aria-busy]="downloading()"
-          [disabled]="downloading()"
-          (click)="download()"
-        >
-          <ng-icon
-            [name]="downloading() ? 'heroArrowPath' : 'heroArrowDownTray'"
-            aria-hidden="true"
-          />
-          <span class="artifact-card__download-label">Download</span>
-        </button>
+        <span class="artifact-card__actions">
+          <button
+            type="button"
+            class="artifact-card__action"
+            [attr.aria-label]="shareAriaLabel()"
+            [appTooltip]="'Share version ' + artifact().version"
+            (click)="share()"
+          >
+            <ng-icon name="heroArrowUpOnSquare" aria-hidden="true" />
+            <span class="artifact-card__action-label">Share</span>
+          </button>
+
+          <button
+            type="button"
+            class="artifact-card__action"
+            [class.is-busy]="downloading()"
+            [attr.aria-label]="downloadAriaLabel()"
+            [attr.aria-busy]="downloading()"
+            [appTooltip]="'Download version ' + artifact().version"
+            [disabled]="downloading()"
+            (click)="download()"
+          >
+            <ng-icon
+              [name]="downloading() ? 'heroArrowPath' : 'heroArrowDownTray'"
+              aria-hidden="true"
+            />
+            <span class="artifact-card__action-label">Download</span>
+          </button>
+        </span>
       </span>
     </div>
   `,
@@ -132,6 +155,11 @@ interface ArtifactKind {
       isolation: isolate;
       display: block;
       width: 100%;
+      /* Establishes the query container for the narrow-card rules at the
+         bottom of this block. The card is sized by the chat column, not
+         the viewport — the artifact panel docking open halves it — so a
+         container query is correct here and a media query is not. */
+      container-type: inline-size;
       /* matches the chat input's rounded-2xl so the focus ring and the
          surface share the app's corner radius */
       border-radius: 1rem;
@@ -236,8 +264,13 @@ interface ArtifactKind {
       line-height: 1;
     }
 
+    /* min-width:0 lets the 1fr column actually shrink; overflow:hidden
+       is what stops its contents painting outside it. Without the
+       latter the metadata line spills under the action buttons once the
+       chat column narrows (e.g. with the artifact panel docked open). */
     .artifact-card__body {
       min-width: 0;
+      overflow: hidden;
     }
 
     .artifact-card__title {
@@ -256,6 +289,9 @@ interface ArtifactKind {
     }
 
     /* Metadata line — the app's sans, small and quiet. */
+    /* Truncates as one line rather than wrapping or overflowing: the
+       type/version/time chunks are progressively less important, so
+       clipping from the right degrades in the right order. */
     .artifact-card__meta {
       display: flex;
       align-items: center;
@@ -263,6 +299,12 @@ interface ArtifactKind {
       margin-top: 0.2rem;
       font-size: 0.75rem;
       color: #4b5563;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .artifact-card__meta > * {
+      flex: 0 0 auto;
     }
 
     :host-context(html.dark) .artifact-card__meta {
@@ -284,13 +326,26 @@ interface ArtifactKind {
       opacity: 0.4;
     }
 
-    /* Secondary action: a bordered, labelled download button in the
-       grid's last column. It lives inside the pointer-events:none
-       surface but re-enables them for itself, so it captures its own
-       clicks while the rest of the card falls through to the open
-       button. Resting colour clears the 3:1 non-text contrast bar. */
-    .artifact-card__download {
+    /* Secondary actions (Share, Download) sit in the grid's last column.
+       The row re-enables pointer events for itself so the buttons
+       capture their own clicks while the rest of the card falls through
+       to the stretched open button beneath. */
+    .artifact-card__actions {
       pointer-events: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      /* The grid's last column is sized auto, so the actions always get
+         the width they ask for; this just stops them being the thing
+         that wraps. */
+      flex: 0 0 auto;
+    }
+
+    /* A bordered, labelled action button. Both actions keep a visible
+       text label, so no tooltip is needed for the accessible name
+       (WCAG 2.5.3) — the icon-only variant would. Resting colour clears
+       the 3:1 non-text contrast bar. */
+    .artifact-card__action {
       display: inline-flex;
       align-items: center;
       gap: 0.4rem;
@@ -312,47 +367,47 @@ interface ArtifactKind {
         background-color 0.18s ease;
     }
 
-    .artifact-card__download ng-icon {
+    .artifact-card__action ng-icon {
       font-size: 0.95rem;
       line-height: 1;
     }
 
-    .artifact-card:hover .artifact-card__download,
-    .artifact-card__download:hover {
+    .artifact-card:hover .artifact-card__action,
+    .artifact-card__action:hover {
       color: #374151;
     }
 
-    .artifact-card__download:hover {
+    .artifact-card__action:hover {
       background: rgba(0, 0, 0, 0.05);
     }
 
-    .artifact-card__download:focus-visible {
+    .artifact-card__action:focus-visible {
       outline: 2px solid #2563eb;
       outline-offset: 2px;
     }
 
-    .artifact-card__download:disabled {
+    .artifact-card__action:disabled {
       cursor: default;
     }
 
-    .artifact-card__download.is-busy ng-icon {
+    .artifact-card__action.is-busy ng-icon {
       animation: artifact-card-spin 0.8s linear infinite;
     }
 
-    :host-context(html.dark) .artifact-card__download {
+    :host-context(html.dark) .artifact-card__action {
       color: #9aa3b2;
     }
 
-    :host-context(html.dark) .artifact-card:hover .artifact-card__download,
-    :host-context(html.dark) .artifact-card__download:hover {
+    :host-context(html.dark) .artifact-card:hover .artifact-card__action,
+    :host-context(html.dark) .artifact-card__action:hover {
       color: #cbd2dd;
     }
 
-    :host-context(html.dark) .artifact-card__download:hover {
+    :host-context(html.dark) .artifact-card__action:hover {
       background: rgba(255, 255, 255, 0.08);
     }
 
-    :host-context(html.dark) .artifact-card__download:focus-visible {
+    :host-context(html.dark) .artifact-card__action:focus-visible {
       outline-color: #60a5fa;
     }
 
@@ -362,13 +417,39 @@ interface ArtifactKind {
       }
     }
 
+    /* Narrow card (docked artifact panel, split view, mobile): the two
+       labelled buttons would otherwise consume the whole row and the
+       title would clip to nothing. Drop the labels to icons and let the
+       title win the space back.
+
+       The label is visually hidden rather than removed, so it stays in
+       the accessible name (WCAG 2.5.3) — and the buttons carry
+       [appTooltip], which is what a sighted user gets in place of the
+       text they can no longer see. */
+    @container (max-width: 26rem) {
+      .artifact-card__action-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+      .artifact-card__action {
+        padding-left: 0.45rem;
+        padding-right: 0.45rem;
+      }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       .artifact-card__surface,
       .artifact-card__rule,
-      .artifact-card__download {
+      .artifact-card__action {
         transition: none;
       }
-      .artifact-card__download.is-busy ng-icon {
+      .artifact-card__action.is-busy ng-icon {
         animation: none;
       }
     }
@@ -379,6 +460,8 @@ export class ArtifactCardComponent {
 
   private artifactState = inject(ArtifactStateService);
   private artifactDownload = inject(ArtifactDownloadService);
+  private dialog = inject(Dialog);
+  private userService = inject(UserService);
 
   protected readonly downloading = signal(false);
 
@@ -404,12 +487,34 @@ export class ArtifactCardComponent {
       `Download ${this.kind().label} artifact ${this.artifact().title || 'Untitled'}, version ${this.artifact().version}`,
   );
 
+  protected readonly shareAriaLabel = computed(
+    () =>
+      `Share ${this.kind().label} artifact ${this.artifact().title || 'Untitled'}, version ${this.artifact().version}`,
+  );
+
   protected open(): void {
     const a = this.artifact();
     this.artifactState.openArtifactPanel({
       artifactId: a.artifactId,
       version: a.version,
       title: a.title,
+    });
+  }
+
+  /** Open the share dialog for *this* version.
+   *
+   *  The card shows one row per version, so the version it shares is the
+   *  one the user is looking at — a share pins an immutable version and
+   *  never follows HEAD. */
+  protected share(): void {
+    const a = this.artifact();
+    this.dialog.open(ArtifactShareModalComponent, {
+      data: {
+        artifactId: a.artifactId,
+        version: a.version,
+        title: a.title,
+        ownerEmail: this.userService.currentUser()?.email ?? '',
+      } as ArtifactShareModalData,
     });
   }
 

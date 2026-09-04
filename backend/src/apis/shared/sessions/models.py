@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
+
 
 class VisualDisplayState(BaseModel):
     """Display state for a single promoted visual (inline tool result)"""
@@ -241,15 +243,37 @@ class SessionMetadata(BaseModel):
         alias="lastTurnInterrupted",
         description="True when the last turn was interrupted before completion (user Stop, refresh, or dropped connection). Lets a reload show the 'response interrupted' state. Cleared at the start of any new (non-interrupt-resume) turn",
     )
-    last_turn_interrupt_reason: Optional[Literal["user_stopped", "connection_lost", "unknown"]] = Field(
+    last_turn_interrupt_reason: Optional[
+        Literal["user_stopped", "navigated_away", "connection_lost", "unknown"]
+    ] = Field(
         default=None,
         alias="lastTurnInterruptReason",
-        description="Why the last turn was interrupted. 'user_stopped' (deliberate Stop, from the client beacon) wins over the 'connection_lost' cancellation fallback",
+        description=(
+            "Why the last turn was interrupted, strongest client-attested reason first: "
+            "'user_stopped' (deliberate Stop) > 'navigated_away' (page hidden/unloaded) > "
+            "'connection_lost' (the server-side cancellation fallback) > 'unknown'. "
+            "A weaker reason can never overwrite a stronger one — see set_interrupted_turn"
+        ),
     )
     last_turn_interrupted_at: Optional[str] = Field(
         default=None,
         alias="lastTurnInterruptedAt",
         description="ISO 8601 timestamp when the interruption was detected",
+    )
+    pending_attachment_upload_ids: Optional[List[str]] = Field(
+        default=None,
+        alias="pendingAttachmentUploadIds",
+        description=(
+            "Upload IDs sent inline on the turn currently in flight, recorded before the "
+            "model call. Inline document bytes are stripped from restored history, so a turn "
+            "that dies before the model reads them consumes them for good — these let the "
+            "next turn re-send them. Cleared as soon as a turn produces assistant content"
+        ),
+    )
+    pending_attachments_at: Optional[str] = Field(
+        default=None,
+        alias="pendingAttachmentsAt",
+        description="ISO 8601 timestamp the pending-attachment marker was written; recovery is TTL-bounded against it",
     )
 
     # Denormalized cost + context aggregates for the session-cost badge.
@@ -321,15 +345,74 @@ class UpdateSessionMetadataRequest(BaseModel):
 class SessionInterruptRequest(BaseModel):
     """Request body for the client stop signal (POST /sessions/{id}/interrupt).
 
-    Only `user_stopped` is accepted from the client — it is the one reason
-    that requires user attestation. `connection_lost` is never client-sent;
-    it is inferred server-side by the stream-cancellation backstop and would
-    otherwise let a client downgrade a deliberate stop.
+    Only client-*attested* reasons are accepted here — the ones the browser
+    is the sole witness to:
+
+      * `user_stopped`    — the Stop button. Deliberate rejection of the
+                            in-flight response.
+      * `navigated_away`  — the page was hidden or unloaded (refresh, tab
+                            close, navigation) while a turn was streaming.
+                            NOT a rejection: the user left, they didn't say
+                            "stop". Sent from a `pagehide` handler.
+
+    `connection_lost` is never client-sent. It is the server-side
+    cancellation backstop's fallback — literally "the stream died and nothing
+    told us why" — and accepting it from a client would let a caller
+    downgrade an attested reason.
+
+    The distinction exists because `connection_lost` is otherwise
+    unattributable: a refresh, a dropped socket, and a platform-side idle
+    timeout all reach the container as an identical cancellation. Labelling
+    departures at the source is what makes the remainder diagnosable.
     """
 
-    reason: Literal["user_stopped"] = Field(
-        description="Interruption reason. Only the deliberate Stop is client-attested",
+    reason: Literal["user_stopped", "navigated_away"] = Field(
+        description="Interruption reason. Only client-attested reasons are accepted",
     )
+
+
+class SessionSteerRequest(BaseModel):
+    """Request body for a mid-turn steer (POST /sessions/{id}/steer).
+
+    A follow-up the user typed while a response was still streaming. The
+    client mints `entry_id` so the whole round trip is idempotent: it is the
+    id the SPA holds on the queued composer entry, the id the runtime clears
+    once the injection is committed to history, and the id the
+    `steering_applied` SSE event names back. See docs/specs/mid-turn-steering.md.
+
+    `text` is the user's words verbatim — the same string that would have been
+    sent as a normal turn had the queue flushed at end of turn instead.
+    """
+
+    text: str = Field(
+        min_length=1,
+        max_length=STEER_QUEUE_MAX_CHARS,
+        description="The follow-up to inject at the running turn's next tool boundary",
+    )
+    entry_id: str = Field(
+        min_length=1,
+        max_length=128,
+        alias="entryId",
+        description="Client-minted id for this queue entry; echoed back on steering_applied",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SessionSteerResponse(BaseModel):
+    """Result of arming a mid-turn steer.
+
+    `queued=False` is not an error: it means the turn ended between the user
+    typing and this request landing, and the SPA should send the text as a
+    normal turn instead (which is exactly what its end-of-turn flush already
+    does). The endpoint answers 200 either way so the SPA never has to
+    distinguish a lost race from a failure.
+    """
+
+    queued: bool = Field(description="Whether the entry was armed against a live turn")
+    entry_id: str = Field(alias="entryId", description="The client-minted entry id")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class SessionMetadataResponse(BaseModel):
@@ -380,7 +463,7 @@ class SessionMetadataResponse(BaseModel):
     last_turn_interrupt_reason: Optional[str] = Field(
         default=None,
         alias="lastTurnInterruptReason",
-        description="Why the last turn was interrupted: 'user_stopped' (deliberate Stop) or 'connection_lost' (refresh / dropped connection). Drives whether a 'Continue' affordance is offered on reload",
+        description="Why the last turn was interrupted: 'user_stopped' (deliberate Stop), 'navigated_away' (page hidden/unloaded mid-turn), or 'connection_lost' (the unattributable server-side fallback). Only 'user_stopped' suppresses the 'Continue' affordance on reload",
     )
     last_turn_interrupted_at: Optional[str] = Field(
         default=None,

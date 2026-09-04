@@ -129,6 +129,10 @@ export class ListingStatusComponent {
         return 'The reviewer asked for changes';
       case 'taken_down':
         return 'Why this was taken down';
+      // Its own heading, not "changes requested": the reviewer is not asking for a fix,
+      // and a note headed as a change request would be read as a to-do list.
+      case 'rejected':
+        return 'Why this was declined';
       case 'published':
         return 'Note from the reviewer';
       default:
@@ -138,7 +142,7 @@ export class ListingStatusComponent {
 
   readonly noteClass = computed(() => {
     const state = this.listing()?.state;
-    return state === 'changes_requested' || state === 'taken_down'
+    return state === 'changes_requested' || state === 'taken_down' || state === 'rejected'
       ? 'border-state-danger-200 bg-state-danger-50 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-200'
       : 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300';
   });

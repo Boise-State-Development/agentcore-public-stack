@@ -84,11 +84,13 @@ class ChatAgent(BaseAgent):
         message: str,
         session_id: Optional[str] = None,
         files: Optional[List] = None,
+        attachment_names: Optional[List[str]] = None,
         citations: Optional[List] = None,
         original_message: Optional[str] = None,
         interrupt_responses: Optional[List[Dict[str, Any]]] = None,
         continue_truncated: bool = False,
         turn_agent_id: Optional[str] = None,
+        turn_lease: Any = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -98,7 +100,12 @@ class ChatAgent(BaseAgent):
                 `interrupt_responses` — the paused turn already has the
                 original prompt in `_interrupt_state`.
             session_id: Session identifier (defaults to instance session_id)
-            files: Optional list of FileContent objects (with base64 bytes)
+            files: Optional list of FileContent objects (with base64 bytes).
+                Inline attachments only — diverted ones (spreadsheets, decks)
+                must not be here or they become invalid document blocks.
+            attachment_names: Every filename the user attached this turn,
+                including diverted ones, for the `[Attached files: …]` marker
+                the SPA replays to rebuild attachment cards on reload.
             citations: Optional list of citation dicts from RAG retrieval
             original_message: Original user message before RAG augmentation
             interrupt_responses: When set, resume a paused agent turn by
@@ -110,6 +117,11 @@ class ChatAgent(BaseAgent):
                 event loop re-runs against restored history whose tail is the
                 truncated assistant message — the model continues it
                 (assistant-prefill) instead of answering a new instruction.
+            turn_lease: This turn's single-flight `SessionLease`, which doubles
+                as the mid-turn steering inbox. Passed per turn rather than read
+                off the agent for the same reason as `turn_agent_id`: the agent
+                instance is cached across turns, so per-turn state must never
+                live on it (#741/#751).
 
         Yields:
             str: SSE formatted events
@@ -129,7 +141,9 @@ class ChatAgent(BaseAgent):
             # user turn, no multimodal/files.
             prompt = []
         else:
-            prompt = self.multimodal_builder.build_prompt(message, files)
+            prompt = self.multimodal_builder.build_prompt(
+                message, files, attachment_names=attachment_names
+            )
 
         async for event in self.stream_coordinator.stream_response(
             agent=self.agent,
@@ -141,5 +155,6 @@ class ChatAgent(BaseAgent):
             citations=citations,
             original_message=original_message,
             turn_agent_id=turn_agent_id,
+            turn_lease=turn_lease,
         ):
             yield event

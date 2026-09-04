@@ -7,6 +7,6 @@ session-authenticated phase unlocks.
 
 from __future__ import annotations
 
-__version__ = "1.14.0"
+__version__ = "1.17.0"
 
 __all__ = ["__version__"]

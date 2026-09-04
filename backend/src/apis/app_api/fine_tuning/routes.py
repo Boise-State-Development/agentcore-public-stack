@@ -19,7 +19,9 @@ from .repository import (
 )
 from .job_models import (
     AVAILABLE_MODELS,
+    INSTANCE_COST_PER_HOUR,
     MODEL_CATALOG,
+    SUPPORTED_DATASET_EXTENSIONS,
     PresignRequest,
     PresignResponse,
     CreateJobRequest,
@@ -193,6 +195,48 @@ async def search_huggingface_models(
 # Presigned URL
 # =========================================================================
 
+def _validate_dataset_format(name: str) -> None:
+    """Reject a dataset filename the training script could not read.
+
+    Checked before upload and again before the job is submitted, so an
+    unreadable dataset never reaches a billed GPU instance.
+    """
+    if not name.lower().endswith(SUPPORTED_DATASET_EXTENSIONS):
+        supported = ", ".join(SUPPORTED_DATASET_EXTENSIONS)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported dataset format. Supported formats: {supported}. "
+                'Each record needs a "text" and a "label" field.'
+            ),
+        )
+
+
+def _validate_instance_type(instance_type: str) -> None:
+    """Reject an instance type we have no price for.
+
+    ``calculate_cost`` falls back to $0.00/hour for anything absent from
+    INSTANCE_COST_PER_HOUR, so an unlisted type runs real GPUs and records no
+    spend — invisible to the admin cost dashboard, the same blind spot the
+    StatusIndex casing bug produced by a different route.
+
+    The quota does not bound the damage either: it meters GPU-*hours*, not
+    dollars, so the same ten hours buys ~$14 on an ml.g5.xlarge or several
+    hundred on a larger instance. `instance_type` arrives straight off the
+    request body, so this is the only thing standing between a caller and an
+    unpriced instance.
+    """
+    if instance_type not in INSTANCE_COST_PER_HOUR:
+        supported = ", ".join(sorted(INSTANCE_COST_PER_HOUR))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported instance type '{instance_type}'. "
+                f"Supported types: {supported}"
+            ),
+        )
+
+
 @router.post("/presign", response_model=PresignResponse)
 async def presign_upload(
     request: PresignRequest,
@@ -201,6 +245,8 @@ async def presign_upload(
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
 ):
     """Generate a presigned PUT URL for dataset upload."""
+    _validate_dataset_format(request.filename)
+
     try:
         presigned_url, s3_key = s3_service.generate_upload_url(
             user_id=user.user_id,
@@ -248,7 +294,9 @@ async def create_job(
         if not hf_id or len(hf_id) > 200:
             raise HTTPException(status_code=400, detail="Invalid HuggingFace model ID.")
 
-    # Verify dataset exists in S3
+    # Verify the dataset is readable by the training script and exists in S3
+    _validate_dataset_format(request.dataset_s3_key)
+
     if not s3_service.check_object_exists(request.dataset_s3_key):
         raise HTTPException(status_code=400, detail="Dataset not found in S3. Upload your dataset first.")
 
@@ -280,6 +328,8 @@ async def create_job(
         }
         huggingface_id = request.custom_huggingface_model_id.strip()
         model_name = huggingface_id
+
+    _validate_instance_type(instance_type)
 
     if request.hyperparameters:
         hyperparameters.update(request.hyperparameters)
@@ -717,6 +767,7 @@ async def create_inference_job(
 
     # Resolve instance type (default to training job's instance type)
     instance_type = request.instance_type or training_job["instance_type"]
+    _validate_instance_type(instance_type)
 
     # Generate identifiers
     job_id = uuid.uuid4().hex

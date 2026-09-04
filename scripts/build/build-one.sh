@@ -91,6 +91,11 @@ case "$SERVICE" in
         SOURCE_DIRS=(
             "backend/src/apis/app_api/documents/ingestion"
             "backend/src/apis/shared/embeddings"
+            # handler.py reads records.resolve_engine to skip documents whose
+            # knowledge base is promoted to the managed engine. Without this
+            # entry a change to that gate would not move the content hash, and
+            # the Lambda would keep running the previous image.
+            "backend/src/apis/shared/kb_backend"
         )
         # shared/__init__.py and shared/timestamps.py are single files,
         # hashed as manifests. The requirements.lock lives inside the
@@ -116,6 +121,9 @@ case "$SERVICE" in
         # would ship stale code under an unchanged content-hash tag.
         SOURCE_DIRS=(
             "backend/src/apis/app_api/kb_sync"
+            # cleanup_service.py reads records.resolve_engine and calls
+            # ManagedKbBackend to delete from a promoted knowledge base.
+            "backend/src/apis/shared/kb_backend"
             "backend/src/apis/app_api/file_sources"
             "backend/src/apis/app_api/documents"
             "backend/src/apis/app_api/web_sources"
@@ -135,9 +143,38 @@ case "$SERVICE" in
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/kb-sync/image-tag"
         ;;
+    kb-migration)
+        DOCKERFILE="backend/Dockerfile.kb-migration"
+        # ONE image, FOUR Lambdas (dispatcher + worker + reconciler +
+        # ingestion consumer, selected per function by ImageConfig
+        # command overrides). Keep SOURCE_DIRS in lockstep with the
+        # Dockerfile's COPY list — a path copied but not hashed here
+        # would ship stale code under an unchanged content-hash tag,
+        # making the deploy a silent no-op.
+        #
+        # Deliberately short: the handlers' whole import closure is 16
+        # first-party modules, because kb_backend is its own package with
+        # stdlib-only module scope. If this list ever needs
+        # apis/shared/assistants, something has broken the boundary that
+        # test_kb_backend_boundary.py guards.
+        SOURCE_DIRS=(
+            "backend/src/apis/app_api/kb_migration"
+            "backend/src/apis/shared/kb_backend"
+            "backend/src/apis/shared/observability"
+        )
+        # Single-file COPYs hashed as manifests (same as kb-sync);
+        # kb_migration/requirements.txt lives inside the first source dir.
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/timestamps.py"
+        )
+        # All four kb-migration Lambdas are arm64 (see the managed-kb
+        # CDK construct).
+        PLATFORM="linux/arm64"
+        SSM_KEY="/${CDK_PROJECT_PREFIX}/kb-migration/image-tag"
+        ;;
     scheduled-runs)
-        DOCKERFILE="backend/Dockerfile.scheduled-runs"
-        # One image, two Lambdas (dispatcher + worker via ImageConfig
+        DOCKERFILE="backend/Dockerfile.scheduled-runs"        # One image, two Lambdas (dispatcher + worker via ImageConfig
         # command overrides). Keep SOURCE_DIRS in lockstep with the
         # Dockerfile's COPY list — a path copied but not hashed here
         # would ship stale code under an unchanged content-hash tag.

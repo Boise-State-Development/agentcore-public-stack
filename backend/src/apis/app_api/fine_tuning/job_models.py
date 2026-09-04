@@ -223,6 +223,13 @@ INSTANCE_COST_PER_HOUR: Dict[str, float] = {
 # Request / Response Models
 # =========================================================================
 
+# Dataset formats the SageMaker training script can read — keep in sync with
+# SUPPORTED_DATASET_EXTENSIONS in fine_tuning/sagemaker_scripts/train.py.
+# Enforced here so an unreadable dataset is rejected before a GPU instance is
+# ever provisioned; otherwise the job fails several billed minutes in.
+SUPPORTED_DATASET_EXTENSIONS = (".csv", ".jsonl", ".json")
+
+
 class PresignRequest(BaseModel):
     """Request for a presigned upload URL for a training dataset."""
     filename: str

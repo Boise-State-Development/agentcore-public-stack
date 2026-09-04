@@ -69,6 +69,135 @@ def reset_cancellation_state(agent: Any, session_manager: Any) -> None:
         cancel_signal.clear()
 
 
+def _is_interrupt_resume_prompt(prompt: Any) -> bool:
+    """True when `prompt` is Strands' resume payload for a paused turn.
+
+    Mirrors ``strands.interrupt.InterruptState.resume``'s own acceptance test
+    — a list whose every content block carries nothing but ``interruptResponse``
+    — so we can never disagree with it about what counts as a resume.
+
+    One deliberate difference: an EMPTY list is not a resume here. Strands
+    tolerates it (``all()`` over nothing is True), but in this codebase ``[]``
+    is the max_tokens "Continue" prompt (``chat_agent.py``), and ``if
+    interrupt_responses:`` means a real resume always carries at least one
+    entry. Treating ``[]`` as a resume would leave a stale pause armed on a
+    continuation.
+    """
+    if not isinstance(prompt, list) or not prompt:
+        return False
+    return all(
+        isinstance(content, dict)
+        and content
+        and all(key == "interruptResponse" for key in content)
+        for content in prompt
+    )
+
+
+def _message_has_tool_use(message: Any) -> bool:
+    if not isinstance(message, dict):
+        return False
+    return any(
+        isinstance(block, dict) and "toolUse" in block
+        for block in (message.get("content") or [])
+    )
+
+
+def _drop_abandoned_turn_tail(messages: List[Dict[str, Any]]) -> int:
+    """Pop trailing messages until history ends on a completed assistant turn.
+
+    Mutates in place and returns the number dropped. In-place is mandatory:
+    the message list is **aliased** across the cached agents serving one
+    session (#741/#750, see ``_adopt_session_conversation``), and rebinding
+    mid-life silently breaks that alias.
+    """
+    dropped = 0
+    while messages:
+        last = messages[-1]
+        if (
+            isinstance(last, dict)
+            and last.get("role") == "assistant"
+            and not _message_has_tool_use(last)
+        ):
+            break
+        messages.pop()
+        dropped += 1
+    return dropped
+
+
+def reset_stale_interrupt_state(agent: Any, prompt: Any) -> None:
+    """Abandon a pause left by a PREVIOUS turn when this turn isn't a resume.
+
+    When ``OAuthConsentHook`` (or the tool-approval hook) calls
+    ``event.interrupt(...)``, Strands sets ``_interrupt_state.activated`` and
+    stops. If the user never completes consent and instead just types a new
+    message, that flag is still set on the cached agent — and
+    ``InterruptState.resume`` rejects a plain string prompt with
+    ``TypeError: prompt_type=<class 'str'> | must resume from interrupt with
+    list of interruptResponse's``. It reached the user as a non-recoverable
+    ``stream_error``: the session was stuck, because every subsequent fresh
+    turn hit the same flag.
+
+    The "a fresh turn supersedes a paused turn" policy already exists — see
+    ``clear_paused_turn`` / ``clear_interrupted_turn`` in
+    ``inference_api/chat/routes.py``. Those only clear the DynamoDB side; the
+    live object on the cached agent was missed. Same sticky-state-on-a-cached-
+    agent family as the cancel flags above.
+
+    Deactivating is not enough on its own. Strands appends the assistant
+    ``toolUse`` message to ``agent.messages`` *before* running tools
+    (``event_loop.py``), and on interrupt it returns without ever appending
+    the matching ``toolResult`` — so history ends on an unanswered tool call.
+    ``_repair_tool_pairing`` can't help here: it deliberately leaves a
+    *trailing* toolUse alone ("left for prompt-arrival handling") and doesn't
+    even count it as a violation, so at this point in the turn it no-ops. Left
+    as-is, Strands appends the new user message behind the dangling toolUse
+    and Bedrock rejects the request.
+
+    So we drop the abandoned turn back to the last completed assistant turn.
+    That clears the unanswered toolUse *and* leaves the history ending on an
+    assistant message, so the incoming user prompt keeps roles alternating.
+    Synthesizing an error ``toolResult`` instead would satisfy the pairing
+    rule but leave two consecutive user turns (the synthetic result, then the
+    real prompt), which Bedrock rejects just the same.
+
+    Dropping messages rewrites the prompt-cache prefix, so this costs a cache
+    write — on a turn the user has already abandoned, which is the right place
+    to spend it. Nothing is lost from the *conversation*: the abandoned turn
+    produced no assistant answer, and the transcript the user sees is
+    persisted separately.
+    """
+    interrupt_state = getattr(agent, "_interrupt_state", None)
+    if interrupt_state is None or not getattr(interrupt_state, "activated", False):
+        return
+
+    if _is_interrupt_resume_prompt(prompt):
+        return
+
+    logger.info(
+        "Abandoning a paused turn: this turn is not an interrupt resume "
+        "(%d pending interrupt(s))",
+        len(getattr(interrupt_state, "interrupts", None) or {}),
+    )
+
+    try:
+        interrupt_state.deactivate()
+    except Exception:
+        logger.exception("Failed to deactivate stale interrupt state")
+        return
+
+    messages = getattr(agent, "messages", None)
+    if not isinstance(messages, list) or not messages:
+        return
+
+    dropped = _drop_abandoned_turn_tail(messages)
+    if dropped:
+        logger.info(
+            "Dropped %d message(s) from the abandoned turn so the incoming "
+            "prompt lands on a valid history",
+            dropped,
+        )
+
+
 class StreamCoordinator:
     """Coordinates streaming lifecycle for agent responses"""
 
@@ -92,6 +221,7 @@ class StreamCoordinator:
         citations: Optional[List] = None,
         original_message: Optional[str] = None,
         turn_agent_id: Optional[str] = None,
+        turn_lease: Any = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -113,6 +243,12 @@ class StreamCoordinator:
                 nondeterministic-ordering regression the fingerprints exist to catch.
                 Passed per turn rather than read off the agent: the agent instance is cached
                 and shared across turns, so per-turn state must never live on it (#741/#751).
+            turn_lease: This turn's single-flight ``SessionLease``, which doubles as the
+                mid-turn steering inbox. Stamped onto the session manager for the life of
+                the turn so ``SteeringHook`` can read it at each tool boundary — and
+                stamped *unconditionally*, including to None, for the same reason
+                ``reset_cancellation_state`` exists: a lease left behind by a previous
+                turn on a cached agent would be read against a row that no longer names us.
 
         Yields:
             str: SSE formatted events
@@ -129,6 +265,18 @@ class StreamCoordinator:
         # Same per-turn discipline: a cancel armed by a previous turn must not
         # brick this one. See ``reset_cancellation_state``.
         reset_cancellation_state(agent, session_manager)
+
+        # This turn's steering inbox handle. Set unconditionally (None included)
+        # so a lease from a previous turn on the cached agent can never be read
+        # against a row a later turn now owns.
+        if session_manager is not None:
+            session_manager.turn_lease = turn_lease
+
+        # Likewise a pause armed by a previous turn: if the user abandoned an
+        # OAuth/tool-approval consent and just typed again, the still-armed
+        # interrupt state makes Strands reject this turn's prompt outright.
+        # See ``reset_stale_interrupt_state``.
+        reset_stale_interrupt_state(agent, prompt)
 
         # Track timing for latency metrics
         stream_start_time = time.time()
@@ -440,6 +588,8 @@ class StreamCoordinator:
                         user_id=user_id,
                     ):
                         yield sse
+                    for sse in self._extract_preflight_consent_events(user_id):
+                        yield sse
 
                 # Check if this is the "done" event - send final metadata before it
                 if event.get("type") == "done":
@@ -703,6 +853,21 @@ class StreamCoordinator:
                                 "max_tokens: failed to persist truncated_turn marker for session %s: %s",
                                 session_id, marker_err, exc_info=True,
                             )
+                        # A truncated turn is a SUCCESSFUL read of this turn's
+                        # attachments — the model consumed the documents and
+                        # then ran out of output budget. Clear the write-ahead
+                        # marker here too, or the "Continue" turn would re-send
+                        # documents that are already in the model's context.
+                        # (This branch `return`s below, so the clear on the
+                        # normal success path is never reached.)
+                        try:
+                            from apis.shared.sessions.metadata import clear_pending_attachments
+                            await clear_pending_attachments(session_id, user_id)
+                        except Exception as marker_err:
+                            logger.error(
+                                "max_tokens: failed to clear pending attachments for session %s: %s",
+                                session_id, marker_err, exc_info=True,
+                            )
                         yield "event: done\ndata: {}\n\n"
                     else:
                         # Other errors still surface as a conversational
@@ -776,6 +941,20 @@ class StreamCoordinator:
 
                     # Skip the original error event and exit the loop - we've handled the error
                     return
+
+                # Mid-turn steering: ack any follow-up the SteeringHook
+                # injected at a tool boundary and has since confirmed in
+                # history. Drained *before* this event is yielded rather than
+                # after, so an injection confirmed on the turn's final tool
+                # batch still lands ahead of `done` — the SPA gates events on
+                # the stream state and drops anything past it. Ordering is
+                # unaffected for every other case: the frame still follows the
+                # `tool_result` events of the batch it rode.
+                # See docs/specs/mid-turn-steering.md.
+                for steering_sse in self._drain_steering_events(
+                    main_agent_wrapper, session_id
+                ):
+                    yield steering_sse
 
                 # Format as SSE event and yield (including done event after metadata)
                 sse_event = self._format_sse_event(event)
@@ -1016,6 +1195,54 @@ class StreamCoordinator:
                     logger.info(f"💾 Stored displayText for user message {user_message_index}")
                 except Exception as e:
                     logger.error(f"Failed to store user displayText: {e}", exc_info=True)
+
+            # The turn produced an answer, so Bedrock read whatever this turn
+            # attached — drop the write-ahead marker the invocations route set
+            # before the model call. Reaching here IS the success condition:
+            # every failure arm (in-loop stream_error, cooperative stop,
+            # disconnect, coordinator exception) either `return`s above or
+            # jumps to an `except` below, leaving the marker in place so the
+            # next turn can re-send the attachments the model never saw. See
+            # `set_pending_attachments` for the full lifecycle.
+            try:
+                from apis.shared.sessions.metadata import clear_pending_attachments
+                await clear_pending_attachments(session_id, user_id)
+            except Exception as e:
+                logger.error(f"Failed to clear pending attachments: {e}", exc_info=True)
+
+            # Same reasoning, applied to the interrupted-turn marker: a turn
+            # that reached here produced a COMPLETE answer, so it was not
+            # interrupted — whatever the client signalled.
+            #
+            # WHY THE MARKER CAN BE HERE AT ALL. The client's Stop writes
+            # `lastTurnInterrupted` immediately (app-api, `source=client_signal`),
+            # but the server only observes the armed cancel on the lease
+            # heartbeat, which sleeps LEASE_HEARTBEAT_SECONDS (10s) BEFORE its
+            # first check. A turn that finishes inside that window races the
+            # first tick and wins: the stream completes normally and the
+            # cooperative-stop arm never runs, leaving a marker that describes
+            # a turn which was never actually cut short.
+            #
+            # Left in place, the NEXT turn pops it and prepends
+            # `_build_interruption_note("user_stopped")`, telling the model
+            # that its own complete reply "was the partial that was delivered"
+            # and to treat it as rejected feedback. Every clause of that is
+            # false, and it measurably steers the next answer. Observed in dev
+            # on 2026-09-02: Stop at 2.6s on a 10.4s turn, full answer
+            # persisted, and the follow-up turn logged
+            # "Cleared interrupted_turn ... (reason=user_stopped)".
+            #
+            # Narrowing the heartbeat interval does NOT fix this — any turn
+            # shorter than one tick is unstoppable no matter how the ticks are
+            # spaced, so the marker has to be reconciled against what actually
+            # happened. That is what this does. The real interruption arms
+            # below re-set it after persisting their partial, so a genuine
+            # interruption is unaffected.
+            try:
+                from apis.shared.sessions.metadata import clear_interrupted_turn
+                await clear_interrupted_turn(session_id, user_id)
+            except Exception as e:
+                logger.error(f"Failed to clear stale interrupted_turn: {e}", exc_info=True)
 
         except _CooperativeStopSignal:
             # Deliberate user Stop observed mid-stream (see the in-loop check).
@@ -1425,6 +1652,53 @@ class StreamCoordinator:
                 "Failed to persist paused_turn snapshot for session %s: %s",
                 session_id, e, exc_info=True,
             )
+
+    def _extract_preflight_consent_events(
+        self,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield an `oauth_required` event per OAuth-gated MCP tool that was
+        dropped at agent-build time because the user hasn't consented.
+
+        These are NOT Strands interrupts — the turn ran to completion, just
+        without the tool, because an unauthorized `tools/list` meant we never
+        learned what the server exposes and so could never advertise it to
+        the model. The events therefore carry no `interruptId` and the
+        frontend must not try to resume anything; it shows the Connect
+        affordance, and the tool registers by itself on the next turn once
+        `_recover_oauth_preflight` can warm a real token from the vault.
+
+        Deliberately not persisted as a `pending_interrupt` breadcrumb: those
+        are keyed by interrupt id for the resume path, and a refresh doesn't
+        need one here — while consent is still outstanding, the next turn
+        fails pre-flight again and re-emits this event.
+        """
+        if not user_id:
+            return []
+
+        from agents.main_agent.integrations.external_mcp_client import (
+            get_external_mcp_integration,
+        )
+        from apis.shared.oauth.models import OAuthRequiredEvent
+
+        try:
+            pending = get_external_mcp_integration().take_pending_consents(user_id)
+        except Exception:
+            logger.exception("Failed to read pre-flight OAuth consents")
+            return []
+
+        events: List[str] = []
+        for provider_id, authorization_url in sorted(pending.items()):
+            logger.info(
+                "Emitting pre-flight oauth_required for provider=%s", provider_id
+            )
+            events.append(
+                OAuthRequiredEvent(
+                    provider_id=provider_id,
+                    authorization_url=authorization_url,
+                ).to_sse_format()
+            )
+        return events
 
     async def _extract_oauth_required_events(
         self,
@@ -1856,6 +2130,44 @@ class StreamCoordinator:
         except Exception as e:  # noqa: BLE001 - best-effort side channel
             logger.warning("Failed to emit ui_tool_input_partial event: %s", e)
             return []
+
+    def _drain_steering_events(
+        self, main_agent_wrapper: Any, session_id: str
+    ) -> List[str]:
+        """Emit one `steering_applied` SSE per confirmed mid-turn injection.
+
+        Drained rather than pushed because the hook runs inside Strands' event
+        loop, which has no route to the SSE stream. An entry appears here only
+        once its carrying message is in history *and* its inbox entry is
+        cleared — so the event is the client's signal that the follow-up is
+        genuinely in the conversation and its queued composer entry can be
+        dropped without risk of the text being sent twice.
+
+        Best-effort: a wrapper without a steering hook (voice, tests) and any
+        failure both yield nothing, leaving the entry queued for PR #916's
+        end-of-turn flush.
+        """
+        hook = getattr(main_agent_wrapper, "steering_hook", None)
+        if hook is None:
+            return []
+        try:
+            applied = hook.drain_applied()
+        except Exception:  # noqa: BLE001 - never break the stream on an ack
+            logger.warning("Steering ack drain failed", exc_info=True)
+            return []
+
+        events = []
+        for entry in applied:
+            payload = {
+                "type": "steering_applied",
+                "sessionId": session_id,
+                "entryId": entry.get("id"),
+                "text": entry.get("text", ""),
+            }
+            events.append(
+                f"event: steering_applied\ndata: {json.dumps(payload)}\n\n"
+            )
+        return events
 
     def _format_sse_event(self, event: Dict[str, Any]) -> str:
         """

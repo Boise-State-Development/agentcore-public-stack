@@ -13,6 +13,7 @@ import { AppConfig, getResourceName } from '../../config';
 import { resolveAppApiParams, buildAppApiEnvironment } from './app-api-environment';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import { grantAppApiPermissions } from './app-api-iam-grants';
+import { logRetentionFor } from '../observability/log-retention';
 
 export interface AppApiServiceConstructProps {
   config: AppConfig;
@@ -82,6 +83,8 @@ export interface AppApiServiceConstructProps {
  */
 export class AppApiServiceConstruct extends Construct {
   public readonly ecsService: ecs.FargateService;
+  /** Exposed so alarms bind to the real target-group dimensions. */
+  public readonly targetGroup: elbv2.ApplicationTargetGroup;
 
   constructor(scope: Construct, id: string, props: AppApiServiceConstructProps) {
     super(scope, id);
@@ -122,7 +125,7 @@ export class AppApiServiceConstruct extends Construct {
     // Auto-generated log group name (no `logGroupName` set) so a
     // failed-deploy orphan can't collide with a redeploy.
     const logGroup = new logs.LogGroup(this, 'AppApiLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -188,9 +191,16 @@ export class AppApiServiceConstruct extends Construct {
     environment['S3_MEMORY_SPACES_BUCKET_NAME'] = props.refs.memorySpacesBucket.bucketName;
     environment['DYNAMODB_MEMORY_SPACES_TABLE_NAME'] = props.refs.memorySpacesTable.tableName;
 
-    // Fine-tuning env vars (always-on). Names verified against
+    // Fine-tuning env vars. Names verified against
     // backend/src/apis/app_api/fine_tuning/* to match the exact env
     // var names Python reads via os.environ.get(...).
+    //
+    // FINE_TUNING_ENABLED is what mounts the routers in app_api/main.py and
+    // admin/routes.py, and it defaults to "false" in Python. Storage and IAM
+    // below are provisioned unconditionally, so omitting this flag left every
+    // deployed environment serving 404s from a fully-built feature.
+    environment['FINE_TUNING_ENABLED'] = String(config.fineTuning.enabled);
+    environment['FINE_TUNING_DEFAULT_QUOTA_HOURS'] = String(config.fineTuning.defaultQuotaHours);
     environment['DYNAMODB_FINE_TUNING_JOBS_TABLE_NAME'] = props.refs.fineTuningJobsTable.tableName;
     environment['DYNAMODB_FINE_TUNING_ACCESS_TABLE_NAME'] = props.refs.fineTuningAccessTable.tableName;
     environment['S3_FINE_TUNING_BUCKET_NAME'] = props.refs.fineTuningDataBucket.bucketName;
@@ -235,7 +245,7 @@ export class AppApiServiceConstruct extends Construct {
     });
 
     // ── Target group ──
-    const targetGroup = new elbv2.ApplicationTargetGroup(this, 'AppApiTargetGroup', {
+    const targetGroup = this.targetGroup = new elbv2.ApplicationTargetGroup(this, 'AppApiTargetGroup', {
       vpc,
       targetGroupName: getResourceName(config, 'app-api-tg'),
       port: 8000,

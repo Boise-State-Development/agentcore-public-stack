@@ -3,6 +3,7 @@ import {
   ChangeDetectionStrategy,
   signal,
   computed,
+  input,
   OnInit,
   OnDestroy,
 } from '@angular/core';
@@ -41,9 +42,15 @@ const LOADING_PHRASES = [
  * loading phrases, typing in character by character, pausing, then deleting
  * before showing the next phrase.
  *
+ * When `notice` is set, the playful cycling stops and the loader states a
+ * specific fact instead — used when the backend is retrying a failed model
+ * call. A retry is otherwise indistinguishable from a hang, and cheerful
+ * phrases like "Pondering..." during a provider outage actively mislead.
+ *
  * @example
  * ```html
  * <app-pulsating-loader />
+ * <app-pulsating-loader [notice]="'The model is busy. Retrying…'" />
  * ```
  */
 @Component({
@@ -54,20 +61,30 @@ const LOADING_PHRASES = [
       class="flex items-center gap-4"
       role="status"
       [attr.aria-busy]="true"
+      [attr.aria-live]="notice() ? 'polite' : null"
       [attr.aria-label]="'Loading: ' + displayText()"
     >
       <!-- Pulsing circle with ring effect -->
-      <div class="pulsing-circle" aria-hidden="true"></div>
+      <div class="pulsing-circle" [class.is-notice]="!!notice()" aria-hidden="true"></div>
 
-      <!-- Typewriter text with cursor -->
+      <!-- Typewriter text with cursor. A notice replaces the cycling phrases
+           outright — and drops the cursor, which would read as "still typing"
+           on text that is finished. -->
       <div class="flex items-center">
-        <span class="text-base/6 font-medium text-secondary-600 dark:text-secondary-400">
+        <span
+          class="text-base/6 font-medium"
+          [class]="notice()
+            ? 'text-state-warning-700 dark:text-state-warning-400'
+            : 'text-secondary-600 dark:text-secondary-400'"
+        >
           {{ displayText() }}
         </span>
-        <span
-          class="typing-cursor ml-0.5 text-secondary-600 dark:text-secondary-400"
-          aria-hidden="true"
-        >|</span>
+        @if (!notice()) {
+          <span
+            class="typing-cursor ml-0.5 text-secondary-600 dark:text-secondary-400"
+            aria-hidden="true"
+          >|</span>
+        }
       </div>
     </div>
 
@@ -109,6 +126,18 @@ const LOADING_PHRASES = [
         border-radius: 50%;
         box-shadow: 0 0 8px var(--color-secondary-500 / 0.4);
         animation: pulse-dot 1.25s cubic-bezier(0.455, 0.03, 0.515, 0.955) -0.4s infinite;
+      }
+
+      /* Notice state: same pulse, different signal colour. The dot is the
+         only thing a user tracks peripherally, so it has to change too —
+         swapping just the text leaves the indicator looking routine. */
+      .pulsing-circle.is-notice::before,
+      .pulsing-circle.is-notice::after {
+        background-color: var(--color-state-warning-500);
+      }
+
+      .pulsing-circle.is-notice::after {
+        box-shadow: 0 0 8px var(--color-state-warning-500);
       }
 
       @keyframes pulse-ring {
@@ -159,6 +188,12 @@ const LOADING_PHRASES = [
   `,
 })
 export class PulsatingLoaderComponent implements OnInit, OnDestroy {
+  /**
+   * Fixed message that replaces the cycling phrases, e.g. a retry in
+   * progress. Null (the default) keeps the normal typewriter behaviour.
+   */
+  notice = input<string | null>(null);
+
   // Base timing constants (in milliseconds)
   private readonly TYPE_SPEED_BASE = 45;
   private readonly TYPE_SPEED_VARIANCE = 35;
@@ -181,8 +216,14 @@ export class PulsatingLoaderComponent implements OnInit, OnDestroy {
   // Timer reference for cleanup
   private animationTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Computed display text with ellipsis
+  // Computed display text with ellipsis. A notice wins outright; the
+  // typewriter keeps ticking underneath so it resumes cleanly when the
+  // notice clears mid-turn.
   displayText = computed(() => {
+    const notice = this.notice();
+    if (notice) {
+      return notice;
+    }
     const phrase = LOADING_PHRASES[this.currentPhraseIndex()] + '...';
     return phrase.substring(0, this.currentCharIndex());
   });

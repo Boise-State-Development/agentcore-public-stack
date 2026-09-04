@@ -247,6 +247,15 @@ future compaction change ("does this mutation own its inputs?").
 
 ## 8. Evaluation
 
+> **Amended 2026-08-12.** The quality-veto harness referenced here is now
+> partly off-the-shelf: `agentcore-evaluations-spike-findings.md` verified that
+> the managed `bedrock-agentcore` evaluation service supplies the judges,
+> tool-trajectory scoring and result plumbing on our existing pin, with no
+> infrastructure. The paired arms, corpus and statistics remain ours, and the
+> **blinded** holistic judge cannot run through the managed path at all (spike
+> §2). This does not change what v2 must prove — only how much of the
+> instrument has to be written.
+
 Reuses the spiral spec's §4 machinery wholesale: arm-separated cost
 attribution (v1-triaged vs. v2 as a new arm B4 on the same `partial_miss`
 instrument and replay harness) and the **quality-veto** long-session eval

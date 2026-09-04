@@ -7,6 +7,7 @@ import { FileUploadService, FileMetadata } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
+import { normalizeSteeringMessages } from '../chat/steering';
 
 /** Regex to match file attachment marker in message text: [Attached files: file1.pdf, file2.png] */
 const ATTACHED_FILES_PATTERN = /\n\n\[Attached files: ([^\]]+)\]$/;
@@ -297,10 +298,20 @@ export class MessageMapService {
         return [...continuationPrefix, ...streamMessages];
       }
 
-      // Find the index of the last user message
+      // Find the index of the last TURN-STARTING user message.
+      //
+      // A mid-turn steer is a user message that does not start a turn — it is
+      // part of the response already streaming, and the parser is still
+      // emitting it in `streamMessages` every tick. Treating it as the
+      // truncation point moves that point forward past itself, so the stream's
+      // copy is appended again on the next tick, and the next, and the next:
+      // one bubble per sync tick (observed live in dev as ~36 copies of one
+      // follow-up). Skipping it keeps the truncation anchored on the user
+      // message that actually opened the turn, which is what makes repeated
+      // syncs idempotent. Same predicate turn grouping uses.
       let lastUserMessageIndex = -1;
       for (let i = existingMessages.length - 1; i >= 0; i--) {
-        if (existingMessages[i].role === 'user') {
+        if (existingMessages[i].role === 'user' && !existingMessages[i].steering) {
           lastUserMessageIndex = i;
           break;
         }
@@ -391,6 +402,14 @@ export class MessageMapService {
 
       // Process messages to match tool results and restore file attachments
       let processedMessages = this.matchToolResultsToToolUses(messagesResponse.messages);
+      // Mid-turn steering rides inside the tool-result message, so a reload
+      // hands back a user message of `[toolResult…, text]` whose text is still
+      // wrapped in the tags the model reads. Unwrap it, drop the results
+      // (already folded into their toolUse above) and mark it as steering so
+      // turn grouping doesn't split the response it interrupted. Runs after
+      // the fold and before file restoration, both of which key on shapes it
+      // leaves intact. See docs/specs/mid-turn-steering.md.
+      processedMessages = normalizeSteeringMessages(processedMessages);
       processedMessages = this.restoreFileAttachments(processedMessages, filesByName);
 
       // Update the message map with loaded messages

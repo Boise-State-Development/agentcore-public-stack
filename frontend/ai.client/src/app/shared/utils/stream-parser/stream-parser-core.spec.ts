@@ -16,6 +16,8 @@ import {
   validateUiResourceEvent,
   validateToolInputPartialEvent,
   validateSessionTitleEvent,
+  validateSteeringAppliedEvent,
+  validateOAuthRequiredEvent,
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
@@ -533,6 +535,41 @@ describe('stream-parser-core', () => {
     });
   });
 
+  describe('validateSteeringAppliedEvent', () => {
+    const valid = {
+      type: 'steering_applied',
+      sessionId: 'sess-1',
+      entryId: 'entry-1',
+      text: 'actually, check the other file',
+    };
+
+    it('should return true for a valid event', () => {
+      expect(validateSteeringAppliedEvent(valid)).toBe(true);
+    });
+
+    it('should return false for null/undefined or wrong type', () => {
+      expect(validateSteeringAppliedEvent(null)).toBe(false);
+      expect(validateSteeringAppliedEvent(undefined)).toBe(false);
+      expect(validateSteeringAppliedEvent({ ...valid, type: 'session_title' })).toBe(false);
+    });
+
+    it('should return false for an empty entryId', () => {
+      // entryId is what the SPA matches the queued composer entry on. Acking
+      // the wrong entry would either strand a duplicate or drop text that was
+      // never injected.
+      expect(validateSteeringAppliedEvent({ ...valid, entryId: '' })).toBe(false);
+    });
+
+    it('should return false for an empty sessionId', () => {
+      expect(validateSteeringAppliedEvent({ ...valid, sessionId: '' })).toBe(false);
+    });
+
+    it('should accept empty text but reject a missing one', () => {
+      expect(validateSteeringAppliedEvent({ ...valid, text: '' })).toBe(true);
+      expect(validateSteeringAppliedEvent({ ...valid, text: undefined })).toBe(false);
+    });
+  });
+
   describe('validateSessionTitleEvent', () => {
     const valid = {
       type: 'session_title',
@@ -581,6 +618,7 @@ describe('stream-parser-core', () => {
         onUiResource: vi.fn(),
         onToolInputPartial: vi.fn(),
         onSessionTitle: vi.fn(),
+        onSteeringApplied: vi.fn(),
         onParseError: vi.fn(),
         onDone: vi.fn(),
         onError: vi.fn(),
@@ -649,6 +687,28 @@ describe('stream-parser-core', () => {
       processStreamEvent('session_title', { type: 'session_title', title: '' }, callbacks);
       expect(callbacks.onSessionTitle).not.toHaveBeenCalled();
       expect(callbacks.onParseError).toHaveBeenCalledWith('session_title: invalid data structure');
+    });
+
+    it('should call onSteeringApplied for a valid steering_applied event', () => {
+      const data = {
+        type: 'steering_applied',
+        sessionId: 'sess-1',
+        entryId: 'entry-1',
+        text: 'use the other file',
+      };
+      processStreamEvent('steering_applied', data, callbacks);
+      expect(callbacks.onSteeringApplied).toHaveBeenCalledWith(data);
+      expect(callbacks.onParseError).not.toHaveBeenCalled();
+    });
+
+    it('should call onParseError for an invalid steering_applied event', () => {
+      processStreamEvent(
+        'steering_applied',
+        { type: 'steering_applied', sessionId: 'sess-1', entryId: '' },
+        callbacks,
+      );
+      expect(callbacks.onSteeringApplied).not.toHaveBeenCalled();
+      expect(callbacks.onParseError).toHaveBeenCalledWith('steering_applied: invalid data structure');
     });
 
     it('should call onArtifact for a valid artifact event', () => {
@@ -894,6 +954,39 @@ describe('stream-parser-core', () => {
       expect(result).toEqual([{
         image: { format: 'png', data: 'base64data' }
       }]);
+    });
+  });
+
+  describe('validateOAuthRequiredEvent', () => {
+    const base = {
+      type: 'oauth_required',
+      providerId: 'github-oauth',
+      authorizationUrl: 'https://consent.example/authorize',
+    };
+
+    it('accepts the interrupt-driven flavor carrying a resumable id', () => {
+      expect(validateOAuthRequiredEvent({ ...base, interruptId: 'i-1' })).toBe(true);
+    });
+
+    it('accepts the pre-flight flavor with interruptId omitted', () => {
+      // No turn is paused — an OAuth-gated MCP server refused `tools/list`
+      // so the tool never registered. There is nothing to resume.
+      expect(validateOAuthRequiredEvent(base)).toBe(true);
+    });
+
+    it('rejects an explicitly empty interruptId', () => {
+      // Distinct from "absent": the backend meant to send a resumable id
+      // and produced a broken one, which would 400 on resume.
+      expect(validateOAuthRequiredEvent({ ...base, interruptId: '' })).toBe(false);
+    });
+
+    it('rejects a non-string interruptId', () => {
+      expect(validateOAuthRequiredEvent({ ...base, interruptId: 7 })).toBe(false);
+    });
+
+    it('still requires providerId and authorizationUrl', () => {
+      expect(validateOAuthRequiredEvent({ ...base, providerId: '' })).toBe(false);
+      expect(validateOAuthRequiredEvent({ ...base, authorizationUrl: '' })).toBe(false);
     });
   });
 });

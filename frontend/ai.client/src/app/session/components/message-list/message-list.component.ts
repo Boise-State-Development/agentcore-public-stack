@@ -1,4 +1,4 @@
-import { Component, computed, input, output, inject, PLATFORM_ID } from '@angular/core';
+import { Component, computed, effect, input, output, inject, signal, PLATFORM_ID } from '@angular/core';
 import { isPlatformBrowser, NgTemplateOutlet } from '@angular/common';
 import { Message } from '../../services/models/message.model';
 import type { Artifact } from '../../services/artifacts/artifact.model';
@@ -27,6 +27,7 @@ import {
 } from '../../../services/tool-approval/tool-approval.service';
 import { CompactionSummaryService } from '../../services/chat/compaction-summary.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
+import { StreamParserService } from '../../services/chat/stream-parser.service';
 
 @Component({
   selector: 'app-message-list',
@@ -57,6 +58,27 @@ export class MessageListComponent {
   private readonly HEADER_HEIGHT = 64;
   private readonly SCROLL_PADDING = 16;
 
+  /**
+   * Silence thresholds for the "still working" notice.
+   *
+   * A model call that produces nothing looks exactly like a hung one. In prod
+   * session 5f34d2b0 two turns went ~95 seconds with no output and the user
+   * abandoned both — the second one while the request was, as far as the
+   * telemetry shows, still in flight.
+   *
+   * 30s is comfortably past a normal first token (~5-7s) and past most tool
+   * calls, so a healthy turn rarely trips it. 90s is past anything routine and
+   * is where the phrasing stops reassuring and starts admitting something is
+   * wrong. The tick is coarse because the thresholds are: the notice appears
+   * within one tick of crossing them.
+   */
+  private readonly STALL_NOTICE_MS = 30_000;
+  private readonly LONG_STALL_NOTICE_MS = 90_000;
+  private readonly STALL_TICK_MS = 5_000;
+
+  /** Clock for the stall thresholds; only ticks while a response is pending. */
+  private readonly nowMs = signal(Date.now());
+
   messages = input.required<Message[]>();
   isChatLoading = input<boolean>(false);
   streamingMessageId = input<string | null>(null);
@@ -83,6 +105,84 @@ export class MessageListComponent {
   private artifactState = inject(ArtifactStateService);
   private mcpAppCardState = inject(McpAppCardStateService);
   private chatStateService = inject(ChatStateService);
+  private streamParser = inject(StreamParserService);
+
+  /**
+   * Copy for the loading indicator while the backend retries a failed model
+   * call. Null during a normal response, which leaves the usual cycling
+   * phrases in place. Read straight off the parser by session id rather than
+   * threaded through every `[isChatLoading]` binding — preview and test-drive
+   * hosts have no session id and correctly get nothing.
+   */
+  constructor() {
+    // Tick only while a response is pending: an always-on interval would wake
+    // every open conversation forever to answer a question nobody is asking.
+    // The write happens in the callback, not the effect body, so this never
+    // re-triggers itself.
+    if (this.isBrowser) {
+      effect((onCleanup) => {
+        if (!this.isChatLoading()) {
+          return;
+        }
+        const timer = setInterval(() => this.nowMs.set(Date.now()), this.STALL_TICK_MS);
+        onCleanup(() => clearInterval(timer));
+      });
+    }
+  }
+
+  /**
+   * Copy for a response that has gone quiet for long enough to look broken.
+   *
+   * Deliberately client-side. The server cannot say anything during a stalled
+   * model call without racing the agent stream against a timer, and that
+   * machinery — cancellation, lease release, interrupted-turn persistence —
+   * has already been the source of several production bugs. The SPA has the
+   * one fact that matters: when the last byte arrived. If the connection had
+   * dropped, fetch-event-source would have surfaced an error instead of
+   * silence, so silence on an open stream really is "the server has not sent
+   * anything yet".
+   */
+  protected readonly stallNotice = computed<string | null>(() => {
+    const sessionId = this.sessionId();
+    if (!sessionId || !this.isChatLoading()) {
+      return null;
+    }
+    const lastEventAt = this.streamParser.lastEventAtFor(sessionId)();
+    if (!lastEventAt) {
+      return null;
+    }
+    const silentFor = this.nowMs() - lastEventAt;
+    if (silentFor >= this.LONG_STALL_NOTICE_MS) {
+      return 'Still working \u2014 this is taking longer than usual.';
+    }
+    if (silentFor >= this.STALL_NOTICE_MS) {
+      return 'Still working\u2026';
+    }
+    return null;
+  });
+
+  protected readonly retryNotice = computed<string | null>(() => {
+    const sessionId = this.sessionId();
+    if (!sessionId) {
+      return null;
+    }
+    const retry = this.streamParser.modelRetryFor(sessionId)();
+    if (!retry) {
+      return null;
+    }
+    return retry.attempt === 1
+      ? 'The model is busy. Retrying\u2026'
+      : `The model is busy. Retrying \u2014 attempt ${retry.attempt}.`;
+  });
+
+  /**
+   * What the loading indicator says. A retry is a specific, known fact and
+   * outranks the generic stall notice, which is only ever an inference from
+   * elapsed silence.
+   */
+  protected readonly loaderNotice = computed<string | null>(
+    () => this.retryNotice() ?? this.stallNotice(),
+  );
 
   /** Persisted app-initiated tool cards, hydrated on reload (PR #6). */
   protected mcpAppCards = this.mcpAppCardState.cards;
@@ -127,6 +227,12 @@ export class MessageListComponent {
     ) {
       return null;
     }
+    // Two UI outcomes, not one per reason: only a deliberate Stop withholds
+    // the Continue affordance. Every other reason — `navigated_away`,
+    // `connection_lost`, `unknown` — means the user never rejected the
+    // answer, so Continue is offered. New reasons bucket here by default,
+    // which is the safe direction: offering Continue on a turn the user
+    // abandoned is recoverable; withholding it on one they still want is not.
     return this.chatStateService.lastTurnInterruptReason() === 'user_stopped'
       ? 'user_stopped'
       : 'connection_lost';
@@ -251,7 +357,13 @@ export class MessageListComponent {
   protected readonly turns = computed<{ key: string; messages: Message[] }[]>(() => {
     const groups: { key: string; messages: Message[] }[] = [];
     for (const m of this.messages()) {
-      if (m.role === 'user' || groups.length === 0) {
+      // A mid-turn steer is a user message that does NOT start a turn: the
+      // user sent it *into* the response already streaming, so it belongs to
+      // that turn's group. Breaking here instead would split one response into
+      // two groups and move the last group's scroll reserve out from under a
+      // response still streaming into it. See docs/specs/mid-turn-steering.md.
+      const startsTurn = m.role === 'user' && !m.steering;
+      if (startsTurn || groups.length === 0) {
         groups.push({ key: m.id, messages: [m] });
       } else {
         groups[groups.length - 1].messages.push(m);

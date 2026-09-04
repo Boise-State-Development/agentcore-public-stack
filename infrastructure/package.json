@@ -1,6 +1,6 @@
 {
   "name": "infrastructure",
-  "version": "1.14.0",
+  "version": "1.17.0",
   "bin": {
     "infrastructure": "bin/infrastructure.js"
   },
@@ -21,7 +21,7 @@
     "yaml": "2.9.0"
   },
   "dependencies": {
-    "aws-cdk-lib": "2.262.0",
+    "aws-cdk-lib": "2.265.0",
     "constructs": "10.6.0"
   },
   "overrides": {

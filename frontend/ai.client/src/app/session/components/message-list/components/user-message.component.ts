@@ -9,8 +9,11 @@ import {
   AfterViewInit,
   inject,
 } from '@angular/core';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import { heroArrowTurnDownRight } from '@ng-icons/heroicons/outline';
 import { ContentBlock, Message, FileAttachmentData } from '../../../services/models/message.model';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
+import { MentionTextComponent } from './mention-text.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 import { parseIso } from '../../../../utils/date';
 
@@ -23,7 +26,8 @@ const MAX_HEIGHT_PX = 200;
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent],
+  imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon],
+  viewProviders: [provideIcons({ heroArrowTurnDownRight })],
   template: `
     @if (hasTextContent() || hasFileAttachments()) {
       <div class="group relative flex w-full flex-col items-end gap-2">
@@ -37,10 +41,25 @@ const MAX_HEIGHT_PX = 200;
           </span>
         }
 
+        <!--
+          Mid-turn steer: the user sent this INTO a response that was still
+          streaming, and the agent picked it up at its next step. Labelled
+          because the bubble alone reads as the start of a new turn, which is
+          exactly what it isn't — the reply above and below it is one response.
+        -->
+        @if (message().steering) {
+          <span class="flex items-center gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
+            <ng-icon name="heroArrowTurnDownRight" class="size-3.5" aria-hidden="true" />
+            Sent while responding
+          </span>
+        }
+
         <!-- Text content (message bubble) -->
         @if (hasTextContent()) {
           <div
-            class="max-w-[80%] rounded-2xl bg-primary-500 px-4 py-3 text-base/6 text-white/90"
+            [class]="message().steering
+              ? 'max-w-[80%] rounded-2xl border border-primary-500/40 bg-primary-50 px-4 py-3 text-base/6 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
+              : 'max-w-[80%] rounded-2xl bg-primary-500 px-4 py-3 text-base/6 text-white/90'"
           >
             <div class="relative">
               <div
@@ -48,19 +67,21 @@ const MAX_HEIGHT_PX = 200;
                 class="overflow-hidden transition-[max-height] duration-300 ease-in-out"
                 [style.max-height]="expanded() ? 'none' : maxHeightPx + 'px'"
               >
-                @if (displayText()) {
-                  <p class="whitespace-pre-wrap">{{ displayText() }}</p>
+                @if (displayText(); as text) {
+                  <p class="whitespace-pre-wrap"><app-mention-text [text]="text" /></p>
                 } @else {
                   @for (block of message().content; track $index) {
                     @if (block.type === 'text' && block.text) {
-                      <p class="whitespace-pre-wrap">{{ block.text }}</p>
+                      <p class="whitespace-pre-wrap"><app-mention-text [text]="block.text" /></p>
                     }
                   }
                 }
               </div>
               @if (isOverflowing() && !expanded()) {
                 <div
-                  class="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-primary-500 to-transparent"
+                  [class]="message().steering
+                    ? 'pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-primary-50 to-transparent dark:from-gray-800'
+                    : 'pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-primary-500 to-transparent'"
                 ></div>
               }
             </div>
@@ -68,7 +89,9 @@ const MAX_HEIGHT_PX = 200;
               <button
                 type="button"
                 (click)="toggleExpanded()"
-                class="mt-2 text-sm font-medium text-white/80 underline underline-offset-2 hover:text-white"
+                [class]="message().steering
+                  ? 'mt-2 text-sm font-medium text-primary-700 underline underline-offset-2 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200'
+                  : 'mt-2 text-sm font-medium text-white/80 underline underline-offset-2 hover:text-white'"
               >
                 {{ expanded() ? 'Show less' : 'Show more' }}
               </button>

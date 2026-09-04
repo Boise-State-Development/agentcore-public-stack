@@ -12,6 +12,7 @@ import { SkillService } from '../../../services/skill/skill.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { FileAttachmentData } from '../models/message.model';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { SteeringService } from './steering.service';
 import {
   ToolApprovalDecision,
   ToolApprovalService,
@@ -43,6 +44,7 @@ export class ChatRequestService implements OnDestroy {
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
+  private steering = inject(SteeringService);
   private errorService = inject(ErrorService);
   private systemPromptsService = inject(SystemPromptsService);
   private router = inject(Router);
@@ -337,6 +339,8 @@ export class ChatRequestService implements OnDestroy {
       })),
     };
 
+    this.attachCarriedSteering(resumeRequest, sessionId);
+
     try {
       await this.chatHttpService.sendChatRequest(resumeRequest);
       // The live parser could not attach the resumed `tool_result` to the
@@ -396,6 +400,8 @@ export class ChatRequestService implements OnDestroy {
       ],
     };
 
+    this.attachCarriedSteering(resumeRequest, sessionId);
+
     try {
       await this.chatHttpService.sendChatRequest(resumeRequest);
       // Reconcile from persisted memory so the approved/declined tool card
@@ -413,6 +419,27 @@ export class ChatRequestService implements OnDestroy {
         return;
       }
       throw error;
+    }
+  }
+
+  /**
+   * Carry the composer's queued follow-ups into the turn this resume restarts.
+   *
+   * A paused turn had no running loop to steer, and the pause released its
+   * lease — inbox and all — when the stream closed. The backend seeds these
+   * onto the resumed turn's lease, where the ordinary steering hook injects
+   * them at its first tool boundary and acks them like any other steer. The
+   * composer keeps its copies until that ack lands, so a resume that never
+   * reaches a boundary degrades to the end-of-turn flush rather than losing
+   * them. See docs/specs/mid-turn-steering.md ("Paused turns").
+   */
+  private attachCarriedSteering(
+    request: Record<string, unknown>,
+    sessionId: string,
+  ): void {
+    const carried = this.steering.carriedFor(sessionId);
+    if (carried.length > 0) {
+      request['steering'] = carried;
     }
   }
 

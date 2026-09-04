@@ -31,6 +31,11 @@ import {
   parseSkillMarkdown,
   slugifySkillId,
 } from '../models/skill-import.util';
+import {
+  DISALLOWED_RESOURCE_MESSAGE,
+  RESOURCE_ACCEPT_ATTR,
+  isAllowedResourceFilename,
+} from '../../../shared/skills/skill-resource-types';
 
 @Component({
   selector: 'app-skill-form',
@@ -234,7 +239,7 @@ import {
                   id="refUpload"
                   type="file"
                   multiple
-                  accept=".md,.markdown,.txt,text/markdown,text/plain"
+                  [attr.accept]="acceptedFileTypes"
                   class="sr-only"
                   [disabled]="resourceBusy()"
                   (change)="onRefFilesSelected($event)"
@@ -408,6 +413,8 @@ export class SkillFormPage implements OnInit {
   readonly resources = signal<SkillResourceRef[]>([]);
   readonly pendingFiles = signal<File[]>([]);
   readonly resourceBusy = signal(false);
+  /** `accept` filter for the file picker — mirrors the server allowlist. */
+  readonly acceptedFileTypes = RESOURCE_ACCEPT_ATTR;
   readonly viewing = signal<{ filename: string; content: string } | null>(null);
 
   // Inline new-file authoring.
@@ -531,6 +538,16 @@ export class SkillFormPage implements OnInit {
    * after the skill is created, since uploads need a skill_id).
    */
   private async acceptFiles(files: File[]): Promise<void> {
+    // Mirror of the backend type allowlist (see `resource_types.py`). The
+    // server rejects these with a 400 regardless; refusing here gives the
+    // admin a specific message instead of a failed round-trip.
+    const disallowed = files.filter((f) => !isAllowedResourceFilename(f.name));
+    if (disallowed.length > 0) {
+      this.error.set(
+        `${disallowed.map((f) => f.name).join(', ')} ${DISALLOWED_RESOURCE_MESSAGE}`,
+      );
+      return;
+    }
     if (this.isEditMode()) {
       const id = this.skillId()!;
       this.resourceBusy.set(true);

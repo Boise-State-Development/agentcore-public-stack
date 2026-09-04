@@ -1122,6 +1122,18 @@ async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
         if existing is not None:
             return False
 
+        # A row exists but belongs to someone else — do NOT create a second one.
+        # The put below would succeed (different PK, so attribute_not_exists
+        # can't see the other row) and fork the session id across two users.
+        # The invocations route rejects these turns outright; this is the
+        # backstop for every other path that pre-creates metadata.
+        if await session_owned_by_other_user(session_id, user_id):
+            logger.warning(
+                "Refusing to create metadata for session %s — already owned by another user",
+                session_id,
+            )
+            return False
+
         now = datetime.now(timezone.utc).isoformat()
         item = {
             "PK": f"USER#{user_id}",
@@ -1492,6 +1504,60 @@ async def set_selected_prompt_id(
         return False
 
 
+async def session_owned_by_other_user(session_id: str, user_id: str) -> bool:
+    """Whether this session id already has a metadata row owned by someone else.
+
+    WHY THIS EXISTS:
+    `_get_session_by_gsi` returns None both for "no such session" and for
+    "exists, but belongs to another user". Callers could not tell those apart,
+    so `ensure_session_metadata_exists` read the second case as the first and
+    created a SECOND metadata row on the same session id under the requester.
+    Its `attribute_not_exists(PK)` guard cannot catch this: the new row has a
+    different PK (`USER#{requester}`), so the conditional put succeeds.
+
+    That is exactly what happened in prod on 2026-08-31 — someone opened the
+    CIO's `/s/{sessionId}` link, the platform silently forked the session, and
+    the resulting duplicate META row made the original owner's session resolve
+    non-deterministically afterwards (see the item-scan in `_get_session_by_gsi`).
+
+    NOT a data-disclosure fix: conversation content lives in AgentCore Memory
+    keyed by actor id, so the second user always saw an empty conversation,
+    never the owner's messages. What leaked was the id, and what broke was the
+    owner's session record.
+
+    Returns True only when at least one META row exists AND none of them belong
+    to `user_id` — so a session the caller legitimately owns is never blocked,
+    including one that already has a fork attached to it.
+
+    Best-effort: any failure returns False (fail open), because this guards a
+    rare misuse and must never take the chat path down.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table or is_preview_session(session_id):
+        return False
+
+    try:
+        import boto3
+        from boto3.dynamodb.conditions import Key
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        response = table.query(
+            IndexName="SessionLookupIndex",
+            KeyConditionExpression=Key("GSI_PK").eq(f"SESSION#{session_id}")
+            & Key("GSI_SK").eq("META"),
+        )
+        items = response.get("Items", [])
+        if not items:
+            return False
+
+        return all(item.get("userId") != user_id for item in items)
+    except Exception as e:
+        logger.debug(f"Session ownership probe failed, allowing: {e}")
+        return False
+
+
 async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[dict]:
     """
     Get session record using GSI (SessionLookupIndex)
@@ -1518,14 +1584,23 @@ async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[
         if not items:
             return None
 
-        item = items[0]
+        # Scan ALL matching rows for this user's, rather than trusting items[0].
+        #
+        # A session id is supposed to have exactly one META row, but a
+        # cross-user fork could create a second one (see
+        # `session_owned_by_other_user`, and prod session 5f34d2b0 where it
+        # actually happened). Both rows share GSI_PK/GSI_SK, so DynamoDB
+        # returns them in an unspecified order — reading items[0] meant the
+        # rightful owner's own session could resolve to the other row, fail
+        # the ownership check, and look "not found" to every marker helper
+        # that routes through here. Matching by userId makes the lookup
+        # deterministic even where a fork already exists in the table.
+        for item in items:
+            if item.get('userId') == user_id:
+                return _convert_decimal_to_float(item)
 
-        # Verify user ownership
-        if item.get('userId') != user_id:
-            logger.warning(f"Session {session_id} belongs to different user")
-            return None
-
-        return _convert_decimal_to_float(item)
+        logger.warning(f"Session {session_id} belongs to different user")
+        return None
 
     except Exception as e:
         # JUSTIFICATION: GSI lookup is a fallback mechanism for finding sessions.
@@ -2017,10 +2092,12 @@ async def _get_session_metadata_cloud(
             logger.info(f"Session metadata not found in DynamoDB: {session_id}")
             return None
 
-        item = items[0]
-
-        # Verify user ownership
-        if item.get('userId') != user_id:
+        # Match on userId across every row rather than trusting items[0] — see
+        # the same scan in `_get_session_by_gsi` for why a session id can have
+        # more than one META row, and why picking the wrong one costs the
+        # rightful owner their own session.
+        item = next((i for i in items if i.get('userId') == user_id), None)
+        if item is None:
             logger.warning(f"Session {session_id} belongs to different user")
             return None
 
@@ -2843,6 +2920,20 @@ async def clear_truncated_turn(session_id: str, user_id: str) -> None:
         logger.error("Failed to clear truncated_turn: %s", e, exc_info=True)
 
 
+# Interrupt-reason precedence, strongest first. Rank = how much the reason
+# actually tells us, which is why the client-attested ones outrank the
+# server's fallback: `connection_lost` is stamped whenever a stream is torn
+# down and nothing said why, so a refresh, a dead socket and a platform-side
+# idle timeout are indistinguishable under it. A reason may only overwrite a
+# same-or-weaker one (see `set_interrupted_turn`).
+_REASON_RANK = {
+    "unknown": 0,
+    "connection_lost": 1,
+    "navigated_away": 2,
+    "user_stopped": 3,
+}
+
+
 async def set_interrupted_turn(
     session_id: str,
     user_id: str,
@@ -2852,22 +2943,34 @@ async def set_interrupted_turn(
     """Mark that the last turn was interrupted before completion.
 
     Interruptions come from two racing sources that write the same session
-    record: the client stop signal (app-api ``POST /sessions/{id}/interrupt``,
-    ``reason="user_stopped"``) and the stream cancellation backstop
-    (inference-api, ``reason="connection_lost"`` fallback). ``user_stopped``
-    is the stronger signal, so a ``user_stopped`` write is unconditional
-    while a fallback write is guarded by a condition so it can never
-    downgrade an already-recorded ``user_stopped`` — whichever source lands
-    first, the final reason is correct. Idempotent. Best-effort: a write
-    failure logs but never breaks the live flow. No-op when the session
-    record is missing or the table env var is unset.
+    record: the client signal (app-api ``POST /sessions/{id}/interrupt`` —
+    ``user_stopped`` from the Stop button, ``navigated_away`` from the
+    page-lifecycle handler) and the stream cancellation backstop
+    (inference-api, ``connection_lost`` fallback).
+
+    Precedence is by ``_REASON_RANK``: a write only lands if no *stronger*
+    reason is already recorded, enforced as a DynamoDB condition against the
+    pre-update item, so the outcome is correct regardless of which source
+    wins the race. The ranking is by how much the reason actually tells us —
+    a client-attested reason outranks the server's fallback, which is
+    literally "the stream died and nothing told us why".
+
+    Note this used to protect only ``user_stopped``, which meant the
+    ``connection_lost`` backstop could overwrite any other reason it raced.
+    That was harmless while ``user_stopped`` was the only client reason;
+    with ``navigated_away`` it would silently erase the attribution this
+    exists to capture.
+
+    Idempotent. Best-effort: a write failure logs but never breaks the live
+    flow. No-op when the session record is missing or the table env var is
+    unset.
     """
     sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
     if not sessions_metadata_table:
         logger.warning("DYNAMODB_SESSIONS_METADATA_TABLE_NAME not set; skipping interrupted_turn persistence")
         return
 
-    if reason not in ("user_stopped", "connection_lost", "unknown"):
+    if reason not in _REASON_RANK:
         reason = "unknown"
 
     try:
@@ -2904,13 +3007,21 @@ async def set_interrupted_turn(
             },
         }
 
-        # A fallback (non-user_stopped) write must not clobber a stronger
-        # user_stopped reason the beacon may have already landed. The
-        # condition is evaluated against the pre-update item, so this is
-        # race-safe regardless of which source writes first.
-        if reason != "user_stopped":
-            update_kwargs["ConditionExpression"] = "attribute_not_exists(#ltr) OR #ltr <> :user_stopped"
-            update_kwargs["ExpressionAttributeValues"][":user_stopped"] = "user_stopped"
+        # A write must not clobber a reason that says more than this one
+        # does. Guard against every strictly-stronger reason; evaluated
+        # against the pre-update item, so it is race-safe regardless of
+        # which source writes first. The strongest reason has no stronger
+        # peers, so it writes unconditionally.
+        stronger = [r for r, rank in _REASON_RANK.items() if rank > _REASON_RANK[reason]]
+        if stronger:
+            clauses = []
+            for i, r in enumerate(stronger):
+                placeholder = f":stronger{i}"
+                clauses.append(f"#ltr <> {placeholder}")
+                update_kwargs["ExpressionAttributeValues"][placeholder] = r
+            update_kwargs["ConditionExpression"] = (
+                "attribute_not_exists(#ltr) OR (" + " AND ".join(clauses) + ")"
+            )
 
         try:
             table.update_item(**update_kwargs)
@@ -2985,3 +3096,208 @@ async def clear_interrupted_turn(session_id: str, user_id: str) -> Optional[str]
     except Exception as e:
         logger.error("Failed to clear interrupted_turn: %s", e, exc_info=True)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Unconsumed-attachment recovery
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS
+# Inline document bytes are deliberately stripped from restored history
+# (`TurnBasedSessionManager._strip_document_bytes`) — Bedrock rejects any
+# request where two document blocks share a sanitized name, so an attachment
+# is a one-shot: it reaches the model on the turn it was sent, and every later
+# turn sees only a `[Document placeholder: ...]`.
+#
+# That is correct when the turn succeeds. When the turn DIES before the model
+# ever read the documents — prod session `5f34d2b0`, 2026-08-31, where a
+# ConverseStream carrying two PDFs failed with ServiceUnavailableException —
+# the attachments are consumed by a turn that produced nothing, and the only
+# recovery is for the user to notice and re-upload them by hand. In that
+# incident the model had to ask for a re-upload, and the re-upload turn failed
+# the same way.
+#
+# The marker is a write-ahead record of "these upload IDs were sent to the
+# model this turn and have not been answered yet". It is written before the
+# stream starts, cleared as soon as a turn produces an answer, and popped at
+# the start of the next turn — so it can only ever influence the single turn
+# that immediately follows a failure.
+#
+# The upload IDs are stable S3-backed references (see `get_file_resolver`), so
+# storing them costs a handful of bytes and re-resolving them on the next turn
+# reproduces exactly the bytes the user already uploaded. Nothing is copied
+# into the session row.
+
+# How long a pending-attachment marker stays eligible for recovery. Bounds the
+# surprise case: a user who abandons a failed turn and returns to the same
+# session days later, types something unrelated, and would otherwise silently
+# pay to re-send documents they have forgotten about.
+PENDING_ATTACHMENT_RECOVERY_TTL_SECONDS = 3600
+
+
+async def set_pending_attachments(
+    session_id: str, user_id: str, upload_ids: List[str]
+) -> None:
+    """Record the upload IDs this turn is sending inline, before the model call.
+
+    Idempotent overwrite. Best-effort: a write failure logs and never breaks
+    the turn — the only consequence is that a failed turn's attachments are
+    not recoverable, i.e. the behavior before this existed.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table or not upload_ids:
+        return
+
+    try:
+        import boto3
+        from datetime import datetime, timezone
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            logger.info(
+                "Skipping pending_attachments write — session %s not found", session_id
+            )
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            logger.warning(
+                "Session %s has no SK; cannot update pending_attachments", session_id
+            )
+            return
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET #pau = :pau, #paa = :paa",
+            ExpressionAttributeNames={
+                "#pau": "pendingAttachmentUploadIds",
+                "#paa": "pendingAttachmentsAt",
+            },
+            ExpressionAttributeValues={
+                ":pau": list(upload_ids),
+                ":paa": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        logger.info(
+            "Recorded %d pending attachment(s) for session %s",
+            len(upload_ids), session_id,
+        )
+    except Exception as e:
+        logger.error("Failed to persist pending_attachments: %s", e, exc_info=True)
+
+
+async def clear_pending_attachments(session_id: str, user_id: str) -> None:
+    """Drop the pending-attachment marker — the model answered this turn.
+
+    Called once a turn produces assistant content: whatever happens after
+    that, Bedrock accepted and read the documents, so re-sending them on the
+    next turn would only duplicate context the model already has.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        return
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            return
+
+        if "pendingAttachmentUploadIds" not in existing:
+            return  # Already clear
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="REMOVE #pau, #paa",
+            ExpressionAttributeNames={
+                "#pau": "pendingAttachmentUploadIds",
+                "#paa": "pendingAttachmentsAt",
+            },
+        )
+        logger.info("Cleared pending_attachments for session %s", session_id)
+    except Exception as e:
+        logger.error("Failed to clear pending_attachments: %s", e, exc_info=True)
+
+
+async def pop_pending_attachments(session_id: str, user_id: str) -> List[str]:
+    """Atomically take the pending-attachment upload IDs, clearing the marker.
+
+    Returns the IDs only when the marker is younger than
+    ``PENDING_ATTACHMENT_RECOVERY_TTL_SECONDS``; an older marker is still
+    cleared but returns ``[]``, so a long-abandoned session never silently
+    re-sends documents on an unrelated question.
+
+    The REMOVE uses ``ReturnValues=UPDATED_OLD`` so the read and the clear are
+    one write — a concurrent turn cannot recover the same attachments twice.
+    Best-effort like its siblings: any failure returns ``[]``.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        return []
+
+    try:
+        import boto3
+        from datetime import datetime, timezone
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            return []
+
+        sk = existing.get("SK")
+        if not sk:
+            return []
+
+        if "pendingAttachmentUploadIds" not in existing:
+            return []
+
+        response = table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="REMOVE #pau, #paa",
+            ExpressionAttributeNames={
+                "#pau": "pendingAttachmentUploadIds",
+                "#paa": "pendingAttachmentsAt",
+            },
+            ReturnValues="UPDATED_OLD",
+        )
+        old = response.get("Attributes") or {}
+        upload_ids = [u for u in (old.get("pendingAttachmentUploadIds") or []) if isinstance(u, str)]
+        if not upload_ids:
+            return []
+
+        recorded_at = old.get("pendingAttachmentsAt")
+        if isinstance(recorded_at, str):
+            try:
+                age = (
+                    datetime.now(timezone.utc) - datetime.fromisoformat(recorded_at)
+                ).total_seconds()
+            except ValueError:
+                age = 0.0
+            if age > PENDING_ATTACHMENT_RECOVERY_TTL_SECONDS:
+                logger.info(
+                    "Discarding %d pending attachment(s) for session %s — marker is %.0fs old",
+                    len(upload_ids), session_id, age,
+                )
+                return []
+
+        logger.info(
+            "Recovered %d unconsumed attachment(s) for session %s",
+            len(upload_ids), session_id,
+        )
+        return upload_ids
+    except Exception as e:
+        logger.error("Failed to pop pending_attachments: %s", e, exc_info=True)
+        return []

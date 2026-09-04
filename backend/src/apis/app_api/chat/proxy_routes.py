@@ -15,13 +15,14 @@ access token — to inference-api, which accepts Cognito Bearer tokens via
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
@@ -41,12 +42,79 @@ def _inference_api_url() -> str:
 # wedged upstream eventually surfaces.
 _PROXY_TIMEOUT_SECONDS = 300.0
 
+# SSE keepalive cadence. Two hops in front of this response cut an idle
+# connection at 60s — CloudFront's `OriginReadTimeout` and the ALB's
+# `idle_timeout` — while an agent turn can legitimately go quiet for longer
+# than that whenever a slow tool runs (code interpreter, a burst of MCP calls)
+# with nothing to stream. The browser then reports a network error, the
+# half-finished turn is marked `connection_lost`, and the user's resend races
+# the session lease. A comment line is the SSE no-op: a line beginning with
+# ':' carries no field, so it puts bytes on the wire — resetting both idle
+# timers — without reaching the SPA's event parser.
+#
+# Exactly ONE trailing newline, deliberately. A blank line is what *dispatches*
+# an event, and `@microsoft/fetch-event-source` dispatches on it unconditionally
+# rather than suppressing empty messages the way the SSE spec allows — so
+# `":…\n\n"` would deliver a phantom event with no name to `parseEventSourceMessage`.
+#
+# Emitted here rather than on inference-api for two reasons: both timeouts sit
+# downstream of app-api, and interposing a task on the agent stream would
+# change how client cancellation reaches that turn's interruption handling.
+# 20s leaves room for two lost frames inside a 60s window.
+_SSE_KEEPALIVE_SECONDS = 20.0
+_SSE_KEEPALIVE_FRAME = b": keepalive\n"
+
 # Canonical `/invocations` URL resolution lives in the shared harness
 # (`apis.shared.harness.runner.build_invocations_url`) — the headless
 # runner, this proxy, and the MCP Apps proxy all share one copy. Kept
 # under the historical private name so existing call sites and docstring
 # references stay valid.
 _build_invocations_url = build_invocations_url
+
+
+# Copy the SPA renders under its "Already responding" notice. Sent in place of
+# the Runtime's opaque 424 body, which carries no usable explanation once the
+# container's own 409 detail has been swallowed by the rewrite.
+_SESSION_BUSY_DETAIL = (
+    "A response is already streaming for this conversation. "
+    "Wait for it to finish before sending another message."
+)
+
+
+async def _resolve_upstream_error_status(
+    status_code: int, session_id: Optional[str], user_id: str
+) -> tuple[int, Optional[str]]:
+    """Undo the AgentCore Runtime's 424 rewrite of the single-flight 409.
+
+    The Runtime data plane maps *any* non-2xx from the inference-api container
+    to `424 Failed Dependency`, so the container's deliberate 409 — "a response
+    is already streaming for this conversation" — reaches the SPA as a fatal
+    424 and surfaces as a "Chat Request Failed" toast, instead of the soft
+    "Already responding" notice the SPA already implements for 409.
+
+    A 424 is ambiguous on its own: a genuine container 500 looks identical. So
+    the lease itself is the tiebreaker — re-map only when an unexpired turn
+    lease is actually held for this session, which is the exact fact the
+    container's 409 asserted a moment earlier. Best-effort: anything unproven
+    keeps the 424, so a real upstream failure is never disguised as a conflict.
+
+    Returns the status to relay and, when re-mapped, the detail to relay with
+    it (the Runtime's 424 body no longer explains anything useful).
+    """
+    if status_code != status.HTTP_424_FAILED_DEPENDENCY or not session_id:
+        return status_code, None
+    try:
+        from apis.shared.sessions.session_lease import is_session_lease_held
+
+        if await is_session_lease_held(session_id, user_id):
+            logger.info(
+                "Upstream 424 for a session with a live turn lease — "
+                "relaying as 409 (single-flight conflict)"
+            )
+            return status.HTTP_409_CONFLICT, _SESSION_BUSY_DETAIL
+    except Exception:  # noqa: BLE001 - explanatory lookup only, never fatal
+        logger.debug("Could not check session lease for 424 mapping", exc_info=True)
+    return status_code, None
 
 
 def _build_upstream_client() -> httpx.AsyncClient:
@@ -157,18 +225,59 @@ async def chat_stream(
         finally:
             await response.aclose()
             await client.aclose()
+        relay_status, relay_detail = await _resolve_upstream_error_status(
+            response.status_code, session_id, current_user.user_id
+        )
         raise HTTPException(
-            status_code=response.status_code,
-            detail=error_body.decode("utf-8", errors="replace"),
+            status_code=relay_status,
+            detail=(
+                relay_detail
+                if relay_detail is not None
+                else error_body.decode("utf-8", errors="replace")
+            ),
         )
 
     content_type = response.headers.get("content-type", "")
     if "text/event-stream" in content_type:
         async def stream_relay():
+            # Upstream reads run on their own task so a silent turn can be
+            # distinguished from a finished one: on timeout the read stays
+            # pending (shielded from `wait_for`'s cancellation) and is awaited
+            # again next pass, while we slip a keepalive onto the wire.
+            chunks = response.aiter_bytes()
+            pending: Optional[asyncio.Future] = None
+            # These are raw transport chunks, not parsed frames, so a chunk can
+            # end mid-frame; injecting there would corrupt it (`data: {"text":`
+            # + `: keepalive` reads as one field). Only inject once the bytes
+            # already forwarded end a frame. A stall *inside* a frame therefore
+            # goes uncovered — acceptable, since a frame is written upstream in
+            # one go, and this is never worse than sending nothing at all.
+            at_frame_boundary = True
             try:
-                async for chunk in response.aiter_bytes():
+                while True:
+                    if pending is None:
+                        pending = asyncio.ensure_future(chunks.__anext__())
+                    try:
+                        chunk = await asyncio.wait_for(
+                            asyncio.shield(pending), timeout=_SSE_KEEPALIVE_SECONDS
+                        )
+                    except asyncio.TimeoutError:
+                        if at_frame_boundary:
+                            yield _SSE_KEEPALIVE_FRAME
+                        # Deliberately keep `pending`. A chunk that lands in
+                        # the same tick as the timeout is already sitting in
+                        # that future; dropping it here to start a fresh read
+                        # would silently swallow an SSE frame.
+                        continue
+                    except StopAsyncIteration:
+                        pending = None
+                        return
+                    pending = None  # consumed — safe to read the next one
                     yield chunk
+                    at_frame_boundary = chunk.endswith(b"\n\n")
             finally:
+                if pending is not None:
+                    pending.cancel()
                 await response.aclose()
                 await client.aclose()
 

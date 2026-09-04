@@ -192,6 +192,7 @@ from apis.app_api.files.routes import router as files_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.agent_designer.routes import router as agents_router
 from apis.app_api.documents.routes import router as documents_router
+from apis.app_api.kb_upgrade.routes import router as kb_upgrade_router
 from apis.app_api.users.routes import router as users_router
 from apis.app_api.user_settings.routes import router as user_settings_router
 from apis.app_api.connectors.routes import router as connectors_router
@@ -217,6 +218,7 @@ app.include_router(admin_router)
 app.include_router(assistants_router)
 app.include_router(agents_router)  # Agent Designer /agents surface; 404s while AGENTS_API_ENABLED off
 app.include_router(documents_router)
+app.include_router(kb_upgrade_router)  # Owner-facing KB upgrade card; phase "none" (renders nothing) while MANAGED_KB_MIGRATION_ENABLED is off
 app.include_router(users_router)
 app.include_router(user_settings_router)
 app.include_router(models_router)
@@ -262,8 +264,17 @@ if skills_enabled():
 # environment, so its presence is the enablement signal.
 if os.environ.get("ARTIFACTS_RENDER_TOKEN_SECRET_ARN"):
     from apis.app_api.artifacts.routes import router as artifacts_router
+    from apis.app_api.artifacts.shares import (
+        artifact_shares_router,
+        shared_artifacts_router,
+    )
     app.include_router(artifacts_router)
-    logger.info("Artifact render-token routes enabled")
+    # Artifact sharing rides the same enablement signal: a share is only
+    # ever consumed by minting a render token, so it cannot be useful
+    # without the artifacts feature being on.
+    app.include_router(artifact_shares_router)
+    app.include_router(shared_artifacts_router)
+    logger.info("Artifact render-token and sharing routes enabled")
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)

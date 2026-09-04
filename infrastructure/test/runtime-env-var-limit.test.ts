@@ -50,7 +50,10 @@ describe('AgentCore Runtime environment variable ceiling', () => {
       frontend: { cloudFrontPriceClass: 'PriceClass_100', certificateArn: cert },
       artifacts: { retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
       mcpSandbox: { extraFrameAncestors: [], certificateArn: cert },
-      fineTuning: {},
+      fineTuning: {
+        enabled: true,
+        defaultQuotaHours: 0,
+      },
       tokenExchange: {
         url: 'https://tokens.example.com/v2/oauth/token',
         clientId: 'test-client',

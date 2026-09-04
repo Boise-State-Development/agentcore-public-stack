@@ -6,6 +6,7 @@ import {
   heroTableCells,
   heroCodeBracket,
   heroPhoto,
+  heroPresentationChartBar,
   heroArrowTopRightOnSquare,
 } from '@ng-icons/heroicons/outline';
 import { MarkdownComponent } from 'ngx-markdown';
@@ -22,14 +23,14 @@ interface FileTypeStyle {
   header_bg: string;
 }
 
-const DEFAULT_STYLE: FileTypeStyle = {
+export const DEFAULT_STYLE: FileTypeStyle = {
   icon: 'heroDocument',
   label: 'FILE',
   accent_text: 'text-gray-600 dark:text-gray-300',
   header_bg: 'bg-gray-50 dark:bg-gray-700/50',
 };
 
-const FILE_TYPE_STYLES: Record<string, FileTypeStyle> = {
+export const FILE_TYPE_STYLES: Record<string, FileTypeStyle> = {
   'application/pdf': {
     icon: 'heroDocument',
     label: 'PDF',
@@ -72,6 +73,16 @@ const FILE_TYPE_STYLES: Record<string, FileTypeStyle> = {
     accent_text: 'text-filetype-sheet-600 dark:text-filetype-sheet-300',
     header_bg: 'bg-filetype-sheet-50 dark:bg-filetype-sheet-950/40',
   },
+  // filetype-presentation is PowerPoint's orange brand association, which makes
+  // the chip readable at a glance. It shares its hue with filetype-code (HTML)
+  // under a separate token name, but the label text disambiguates and the two
+  // rarely appear in the same conversation.
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': {
+    icon: 'heroPresentationChartBar',
+    label: 'PPTX',
+    accent_text: 'text-filetype-presentation-600 dark:text-filetype-presentation-300',
+    header_bg: 'bg-filetype-presentation-50 dark:bg-filetype-presentation-950/40',
+  },
   'text/markdown': {
     icon: 'heroDocumentText',
     label: 'MD',
@@ -112,6 +123,12 @@ const THUMBNAIL_PREVIEW_MIMES = new Set(['application/pdf']);
 /** Skeleton "lines of text" widths (percent), tuned to look like a paragraph. */
 const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
 
+const PRESENTATION_MIME =
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+/** Bullet-row widths (percent) inside the mock slide. */
+const SLIDE_BULLET_WIDTHS = [78, 92, 60];
+
 /**
  * Document-style preview card for a non-image file attachment.
  *
@@ -133,6 +150,7 @@ const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
       heroTableCells,
       heroCodeBracket,
       heroPhoto,
+      heroPresentationChartBar,
       heroArrowTopRightOnSquare,
     }),
   ],
@@ -247,19 +265,57 @@ const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
 
       <!-- Paper page area -->
       <div class="relative h-32 overflow-hidden bg-white dark:bg-gray-900/40">
-        <!-- Folded corner -->
-        <div
-          class="corner-fold absolute right-0 top-0"
-          aria-hidden="true"
-        ></div>
+        <!-- Folded corner. Suppressed for decks: the fold reads as a sheet of
+             paper, which fights the stacked-slides metaphor below. -->
+        @if (!isPresentation()) {
+          <div
+            class="corner-fold absolute right-0 top-0"
+            aria-hidden="true"
+          ></div>
+        }
 
-        @if (thumbnailUrl(); as url) {
+        @if (isPresentation()) {
+          <!-- Mock slide deck: two offset slides behind a 16:9 front slide
+               carrying a title bar and bullet rows. Signals "presentation"
+               at a glance, where the generic paragraph skeleton read as prose.
+               Purely decorative — the real slide text needs a server-side
+               unzip of ppt/slides/slide1.xml, which is not wired up. -->
+          <div class="flex h-full items-center justify-center" aria-hidden="true">
+            <div class="relative aspect-video h-[86px]">
+              <div
+                class="absolute -right-2 -top-2 size-full rounded-md border border-gray-200 bg-gray-100 dark:border-gray-700 dark:bg-gray-800"
+              ></div>
+              <div
+                class="absolute -right-1 -top-1 size-full rounded-md border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/80"
+              ></div>
+              <div
+                class="relative flex size-full flex-col rounded-md border border-gray-200 bg-white p-2.5 shadow-sm dark:border-gray-600 dark:bg-gray-800"
+              >
+                <div class="h-1.5 w-3/5 rounded-full bg-filetype-presentation-600/80"></div>
+                <div class="mt-1.5 h-px w-2/5 bg-filetype-presentation-300 dark:bg-filetype-presentation-900"></div>
+                <div class="mt-2 space-y-1.5">
+                  @for (width of slideBulletWidths; track $index) {
+                    <div class="flex items-center gap-1.5">
+                      <div class="size-1 shrink-0 rounded-full bg-filetype-presentation-400/70"></div>
+                      <div
+                        class="h-1 rounded-full bg-gray-200 dark:bg-gray-600"
+                        [style.width.%]="width"
+                      ></div>
+                    </div>
+                  }
+                </div>
+              </div>
+            </div>
+          </div>
+        } @else if (thumbnailUrl(); as url) {
           <img
             [src]="url"
             [alt]="'First page of ' + attachment().filename"
             class="size-full object-cover object-top"
             loading="lazy"
             decoding="async"
+            (load)="onThumbnailLoaded()"
+            (error)="onThumbnailError()"
           />
         } @else if (snippetState() === 'ready' && hasSnippet()) {
           @if (isMarkdown()) {
@@ -283,8 +339,9 @@ const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
         }
 
         <!-- Bottom fade for long text. Suppressed when a thumbnail is shown
-             so the rendered page edge stays crisp. -->
-        @if (!thumbnailUrl()) {
+             so the rendered page edge stays crisp, and for decks, where the
+             slide is fully visible and a fade would just dim its lower edge. -->
+        @if (!thumbnailUrl() && !isPresentation()) {
           <div
             class="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-white to-transparent dark:from-gray-900/40"
             aria-hidden="true"
@@ -318,6 +375,7 @@ export class FileAttachmentBadgeComponent {
   private readonly fileUploadService = inject(FileUploadService);
 
   protected readonly skeletonWidths = SKELETON_LINE_WIDTHS;
+  protected readonly slideBulletWidths = SLIDE_BULLET_WIDTHS;
 
   protected readonly snippetState = signal<'idle' | 'loading' | 'ready' | 'error'>('idle');
   private readonly snippet = signal<string>('');
@@ -326,6 +384,9 @@ export class FileAttachmentBadgeComponent {
   /** Presigned URL for a real first-page thumbnail (PDFs today). null on
       unsupported types or render failure — caller falls back to skeleton. */
   protected readonly thumbnailUrl = signal<string | null>(null);
+
+  /** True while a re-minted thumbnail URL is unproven; see `onThumbnailError`. */
+  private readonly thumbnailReminted = signal(false);
 
   protected readonly formattedSize = computed(() => formatBytes(this.attachment().sizeBytes));
 
@@ -336,6 +397,10 @@ export class FileAttachmentBadgeComponent {
   protected readonly hasSnippet = computed(() => this.snippet().trim().length > 0);
 
   protected readonly isMarkdown = computed(() => this.attachment().mimeType === 'text/markdown');
+
+  protected readonly isPresentation = computed(
+    () => this.attachment().mimeType === PRESENTATION_MIME,
+  );
 
   /** Cap chars so very long unbroken lines don't blow out the card. */
   protected readonly truncatedSnippet = computed(() => {
@@ -369,6 +434,27 @@ export class FileAttachmentBadgeComponent {
   private async loadThumbnail(uploadId: string): Promise<void> {
     const result = await this.fileUploadService.getThumbnail(uploadId);
     this.thumbnailUrl.set(result.status === 'ready' ? result.response.url : null);
+  }
+
+  /**
+   * The thumbnail failed to load. Its presigned URL only lives ~10 minutes and
+   * the `<img>` is lazy, so a card scrolled back into view later in a long
+   * conversation asks S3 with a dead signature. Re-mint once, then fall back
+   * to the skeleton rather than leaving a broken image in the card.
+   */
+  protected onThumbnailError(): void {
+    if (this.thumbnailReminted()) {
+      this.thumbnailUrl.set(null);
+      return;
+    }
+    this.thumbnailReminted.set(true);
+    this.thumbnailUrl.set(null);
+    void this.loadThumbnail(this.attachment().uploadId);
+  }
+
+  /** A URL that rendered is proven good, so it earns a fresh retry budget. */
+  protected onThumbnailLoaded(): void {
+    this.thumbnailReminted.set(false);
   }
 
   protected async openFile(): Promise<void> {

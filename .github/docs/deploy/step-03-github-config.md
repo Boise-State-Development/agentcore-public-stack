@@ -109,6 +109,28 @@ The per-origin cert vars below are **optional overrides** — set one only if yo
 | `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS` | — | Comma-separated extra origins (beyond `https://{CDK_DOMAIN_NAME}`) allowed to embed artifact iframes via CSP `frame-ancestors` — applied to both the CloudFront response-headers policy and the render Lambda. Set to `http://localhost:4200` to point a local SPA at this deployment. **Leave unset in production**: every listed origin can frame your users' artifacts (still render-token gated, but a real loosening on a shared environment). |
 | `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` | — | Comma-separated extra origins (beyond `https://{CDK_DOMAIN_NAME}`) allowed to embed the MCP Apps sandbox proxy via CSP `frame-ancestors`. Set to `http://localhost:4200` to point a local SPA at this deployment. **Leave unset in production.** |
 | `CDK_FINE_TUNING_CORS_ORIGINS` | — | Comma-separated extra CORS origins for the SageMaker fine-tuning data bucket, beyond `https://{CDK_DOMAIN_NAME}`. Optional — fine-tuning itself is always provisioned. |
+| `CDK_FINE_TUNING_ENABLED` | `true` | Mounts the fine-tuning routers. Default ON — leave unset unless you want the kill switch. Note this is a *runtime* flag on the app-api container; the identically-named CDK stack gate was removed in the single-stack migration. |
+| `CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS` | `0` | Monthly GPU-hour quota auto-granted to any authenticated user. `0` = whitelist-only (an admin grants each user). A positive value (e.g. `10`) = open access with that budget. |
+
+### Managed Knowledge Bases
+
+Every variable below is **optional**. Leave them all unset for the shipped state: the managed knowledge-base backend is deployed but **dormant** — no knowledge base is created managed, no migration runs, and the daily reconciler reports what it *would* delete without deleting anything.
+
+The three flags are independent opt-ins that each default to **off**. An unset GitHub Variable arrives at the deploy as an empty string, which is read as off — so forgetting one never silently arms it.
+
+| Variable Name | Default | Description |
+|---------------|---------|-------------|
+| `CDK_MANAGED_KB_NEW_DEFAULT` | `false` | Set to `true` so newly created knowledge bases are provisioned on the managed backend instead of the legacy one. Existing knowledge bases are untouched. |
+| `CDK_MANAGED_KB_MIGRATION_ENABLED` | `false` | Set to `true` to let the background migration worker run at all. While unset, the worker performs no work and its schedule stays disabled. |
+| `CDK_MANAGED_KB_RECONCILER_ARMED` | `false` | Set to `true` to let the daily reconciler **delete** orphaned knowledge bases. While unset the reconciler still runs and still logs every deletion it intends to make — review those logs before arming it. |
+| `CDK_MANAGED_KB_PER_OWNER_BYTES` | `104857600` (100 MB) | Per-owner stored-bytes cap for the standard role tier, **in bytes**. Deliberately below the 1 GB user-files precedent: at 30,000 users a 1 GB cap permits 30 TB. |
+| `CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES` | `1073741824` (1 GB) | Per-owner cap for the elevated, admin-granted tier, **in bytes**. |
+| `CDK_MANAGED_KB_PER_KB_CEILING_BYTES` | `524288000` (500 MB) | Ceiling for any single knowledge base, **in bytes**, bounding one runaway corpus inside an owner's allowance. |
+| `CDK_MANAGED_KB_RETENTION_WINDOW_DAYS` | `30` | How long legacy vector data is kept after a knowledge base is promoted to the managed backend, **in days**, so a rollback stays possible. Do not set below `30`. |
+| `CDK_MANAGED_KB_STORAGE_ALARM_GB` | `500` | CloudWatch alarm threshold for **fleet-wide** managed knowledge base storage, **in GB**. The per-owner caps above bound one user; this is the only thing that bounds the whole account. |
+| `CDK_MANAGED_KB_DAILY_COST_ALARM_USD` | `100` | CloudWatch alarm threshold for the rolled-up daily Knowledge-Base cost, **in USD**. Set alongside the storage alarm — per-owner caps alone permit roughly two orders of magnitude more spend than expected usage. |
+
+> Accepted values for the three flags are `true`, `false`, `1`, `0`, or empty (empty means off). Anything else fails fast at deploy time with a message naming the variable.
 
 ---
 

@@ -15,7 +15,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowLeft, heroChevronDown } from '@ng-icons/heroicons/outline';
 import { AdminCostHttpService } from '../services/admin-cost-http.service';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
-import { CacheStatus, SessionCallRow } from '../models';
+import { CacheStatus } from '../models';
 import {
   AnatomyRow,
   FINGERPRINT_KEYS,

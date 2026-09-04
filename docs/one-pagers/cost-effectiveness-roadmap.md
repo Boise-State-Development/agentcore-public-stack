@@ -10,7 +10,9 @@ a spec, the spec wins and this page gets fixed.
 `agent-cache-extra-tools-bypass.md` (#834) · `compaction-v2-versioned-prefix.md`
 (#835) · `document-context-offload.md` + validation + evaluation (#836) ·
 `quota-cooldown-windows.md` · `tool-search-token-bloat-strategy.md` ·
-`session-workspace-tools.md` · `share-large-conversations-s3-offload.md`
+`session-workspace-tools.md` · `share-large-conversations-s3-offload.md` ·
+`agentcore-evaluations-spike-findings.md` (2026-08-12 — what the managed
+evaluation service does and does not do for the shared harness)
 
 *Fleet measurement:* `fleet-prefix-spend-anatomy.md` (2026-08-05) — the flat,
 all-conversations spend decomposition this page now ranks work against.
@@ -168,9 +170,25 @@ Gate summary — each is a *measurement with a decision attached*, not a date:
   rate: *of conversations that get long enough to compact at all, 32% already
   exceed PR-2's proposed budget.* That rate does not shrink with growth; the
   population it applies to grows.
-- **G3** — no citations config is sent in prod today, so we don't know what
-  the current document path can even see. Every offload quality comparison
-  inherits its baseline from this probe.
+- **G3 — CLEARED 2026-08-12, by falsifying its own premise**
+  (`document-citations-probe-findings.md`). The gate existed because no
+  citations config is sent in prod and the #836 validation reasoned Bedrock's
+  visual PDF path was *tied to* citations-enabled handling — which would have
+  made prod blind to figures. It is not. Probed with 14 questions over 5
+  documents on two models: **14/14 correct in both arms, both models**,
+  including bar values read off an unlabeled axis, cells in a table that exists
+  only as pixels, and a rotated scan. **Citations turn out to be a text-layer
+  feature**: with citations explicitly enabled, every image-only document
+  returned none at all, while text-layer and mixed-document page-1 prose
+  questions returned them with a usable `documentPage` location.
+  Consequences: the offload baseline is **full visual fidelity, uncited**; the
+  spec's "native blocks, never flattened text" rule is now measured rather than
+  precautionary; and offloading an image-only document costs no citations,
+  because there were never any. ⚠️ One migration cost surfaced — with citations
+  on, the answer text moves *inside* `citationsContent` and top-level `text`
+  blocks go empty, so every consumer must handle both shapes first. "Should we
+  enable citations?" is now a standalone product question about attribution,
+  **not a prerequisite for the offload arc**.
 
 Independent of all gates: #833 PR-5 (quota runway — **built 2026-08-05**) and
 the W5 follow-ups — cheap, and they don't wait on measurement. PR-5 also
@@ -202,8 +220,9 @@ between sessions. **Update a row here in the PR that changes it.**
 | #834 spreadsheets | unbuilt | `assistant_id` into cache key + `PausedTurnSnapshot` |
 | #834 Memory-Space tools | unbuilt | binding descriptor into cache key |
 | #835 compaction v2 | unbuilt | G2 |
-| #836 offload PRs 1–3 | unbuilt | G3 citations probe |
-| eval harness (quality veto) | **unowned** | an owner |
+| #836 offload PRs 1–3 | unbuilt | ~~G3 citations probe~~ — **G3 cleared 2026-08-12**; baseline is full visual fidelity, uncited. Now blocked only on the eval harness owner (PRs 1–3 change model-visible context) |
+| G3 citations probe | ✅ **run 2026-08-12** — `document-citations-probe-findings.md`; script committed at `backend/scripts/probe_document_citations.py` | nothing |
+| eval harness (quality veto) | **unowned** — but **smaller than the specs assumed** as of the 2026-08-12 AgentCore Evaluations spike: the managed service supplies the judges, the trajectory/tool-call scoring and the result plumbing (~a third of the build). Scope decided the same day: internal instrument, no admin feature | an owner |
 | replay harness (#833 §4.2) | partially built — `experiment_agent_cache_arms.py` + `probe_runtime_session_affinity.py` drive real arms against dev; does not yet replay a recorded session's event stream | an owner for the rest |
 | §4.1 cohort scan | ✅ **run 2026-08-05** — cohort is 49 sessions (1.63%) / $172.46 (21.9% of recorded session spend); D2 and D3 both reproduce outside the incident (a 174,952-char summary on another session; anchor≠checkpoint on 199 of 1,238 rows). Written up in #833 §4.1 | nothing |
 | fleet spend anatomy (all conversations) | ✅ **run 2026-08-05** — `fleet-prefix-spend-anatomy.md`; script committed at `backend/scripts/scan_fleet_prefix_spend.py` | nothing |
@@ -221,6 +240,34 @@ between sessions. **Update a row here in the PR that changes it.**
   said *any* W2/W3 build PR, which #839 would have violated — but #833 §4.3
   explicitly exempts changes that alter no model-visible bytes, and #839 and
   #841 are both in that class. The rule was overbroad, not the merges.)
+
+  **Scope — decided 2026-08-12, previously implicit.** The harness is an
+  **internal instrument, not a product feature.** It exists to answer ship /
+  don't-ship on the four unbuilt PRs above, and then to sit idle until the next
+  W2/W3 change needs it. There is no admin-facing evaluation feature in this
+  arc, and nothing in the three specs ever proposed one — the scope was simply
+  never written down, which is how it drifts. Concretely: no UI, no result
+  persistence beyond a run artifact, no per-tenant config, no RBAC surface.
+  Almost none of the design generalizes anyway — the corpus, the
+  citation-page-identity canary and the pinning-boundary family are built
+  around document offload and compaction specifically.
+
+  **One deliberate exception:** the *arm runner* should sit on the headless run
+  primitive (`agentic-platform-primitives.md` F1), not on a bespoke script.
+  That is the one seam a future admin-facing feature would reuse; everything
+  else is disposable to it. `experiment_agent_cache_arms.py` already drives
+  real multi-turn dev-ai sessions through the runtime gateway, so this is a
+  question of where the code lives, not extra work. Do **not** build corpus
+  generality, a config surface, or result storage now.
+
+  **Deferred, not declined — admin-facing regression checks.** Two things
+  changed the economics in the week before this decision: agent version
+  snapshots shipped (#783–#801), so "did version 4 regress against version 3?"
+  is a question the platform can nearly ask; and the AgentCore Evaluations
+  spike found managed `llmAsAJudge` evaluators need **zero** infrastructure.
+  That makes an admin feature materially cheaper than it was — size it against
+  the marketplace roadmap in a future planning cycle, not by folding it into
+  this arc, which would delay four PRs that have measured dollars behind them.
 - **The replay harness** (#833 §4.2): deterministic re-run of a session's
   event stream through an arm, asserting predicted vs. actual cache
   reads/writes per turn. Same owner as above.
