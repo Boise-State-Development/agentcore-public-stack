@@ -55,8 +55,6 @@ UNSET = _Unset()
 
 DEFAULT_MAX_SCHEDULES_PER_USER = 20
 
-_WEEKDAY_CADENCES = {"weekday"}  # Monday-Friday
-
 
 class ScheduledPromptLimitExceeded(Exception):
     """Raised when a user already has the maximum number of schedules."""

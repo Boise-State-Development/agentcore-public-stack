@@ -8,7 +8,6 @@ These endpoints are at the root level to comply with AWS Bedrock AgentCore Runti
 """
 
 import asyncio
-import contextlib
 import json
 import logging
 from typing import AsyncGenerator, Optional, Union
@@ -1915,7 +1914,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # answerable without knowing whether the turn ran an approved snapshot or a draft.
         logger.info(
             "Agent configuration for this turn: %s",
-            f"published version {resolved_version}" if resolved_version else "live record / draft",
+            f"published version {scrub_log(resolved_version)}" if resolved_version else "live record / draft",
         )
 
         # ⚠️ Both bookkeeping writes below are skipped for a reviewer preview, because a

@@ -28,6 +28,7 @@ from apis.app_api.kb_upgrade.service import (
 )
 from apis.shared.assistants.service import resolve_assistant_permission
 from apis.shared.auth import User, get_current_user_from_session
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ async def read_upgrade_status(
         # unavailable upgrade card would be a strictly worse outcome. Logged at
         # error so the failure is not silent.
         logger.error(
-            f"kb {assistant_id}: could not derive upgrade status: {exc}",
+            f"kb {scrub_log(assistant_id)}: could not derive upgrade status: {scrub_log(exc)}",
             exc_info=True,
         )
         return UpgradeStatusResponse(phase="none", canUpgrade=False)

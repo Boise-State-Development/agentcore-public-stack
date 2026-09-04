@@ -8,6 +8,7 @@ from agents.main_agent.integrations.gateway_mcp_client import (
     get_gateway_client_if_enabled,
 )
 from apis.shared.tools.scoped_ids import parse_scoped_tool_id
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ async def expand_gateway_tool_ids(
             else:
                 logger.warning(
                     "Cannot resolve scoped gateway tool '%s' (no target_name); skipping",
-                    tool_id,
+                    scrub_log(tool_id),
                 )
             continue
 

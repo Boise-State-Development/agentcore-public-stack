@@ -8,6 +8,7 @@ import logging
 import os
 from .models import QuotaTier, QuotaAssignment, QuotaEvent, QuotaAssignmentType, QuotaOverride
 from agents.main_agent.config.constants import EnvVars, Defaults
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class QuotaRepository:
 
             return QuotaTier(**item)
         except ClientError as e:
-            logger.error(f"Error getting tier {tier_id}: {e}")
+            logger.error(f"Error getting tier {scrub_log(tier_id)}: {scrub_log(e)}")
             return None
 
     async def list_tiers(self, enabled_only: bool = False) -> List[QuotaTier]:
@@ -140,7 +141,7 @@ class QuotaRepository:
 
             return QuotaTier(**item)
         except ClientError as e:
-            logger.error(f"Error updating tier {tier_id}: {e}")
+            logger.error(f"Error updating tier {scrub_log(tier_id)}: {scrub_log(e)}")
             return None
 
     async def delete_tier(self, tier_id: str) -> bool:
@@ -154,7 +155,7 @@ class QuotaRepository:
             )
             return True
         except ClientError as e:
-            logger.error(f"Error deleting tier {tier_id}: {e}")
+            logger.error(f"Error deleting tier {scrub_log(tier_id)}: {scrub_log(e)}")
             return False
 
     # ========== Quota Assignments ==========
@@ -179,7 +180,7 @@ class QuotaRepository:
 
             return QuotaAssignment(**item)
         except ClientError as e:
-            logger.error(f"Error getting assignment {assignment_id}: {e}")
+            logger.error(f"Error getting assignment {scrub_log(assignment_id)}: {scrub_log(e)}")
             return None
 
     async def query_user_assignment(self, user_id: str) -> Optional[QuotaAssignment]:
@@ -208,7 +209,7 @@ class QuotaRepository:
 
             return QuotaAssignment(**item)
         except ClientError as e:
-            logger.error(f"Error querying user assignment for {user_id}: {e}")
+            logger.error(f"Error querying user assignment for {scrub_log(user_id)}: {scrub_log(e)}")
             return None
 
     async def query_app_role_assignments(self, app_role_id: str) -> List[QuotaAssignment]:
@@ -235,7 +236,7 @@ class QuotaRepository:
 
             return assignments
         except ClientError as e:
-            logger.error(f"Error querying app role assignments for {app_role_id}: {e}")
+            logger.error(f"Error querying app role assignments for {scrub_log(app_role_id)}: {scrub_log(e)}")
             return []
 
     async def query_role_assignments(self, role: str) -> List[QuotaAssignment]:
@@ -298,7 +299,7 @@ class QuotaRepository:
 
             return assignments
         except ClientError as e:
-            logger.error(f"Error listing assignments for type {assignment_type}: {e}")
+            logger.error(f"Error listing assignments for type {scrub_log(assignment_type)}: {scrub_log(e)}")
             return []
 
     async def list_all_assignments(self, enabled_only: bool = False) -> List[QuotaAssignment]:
@@ -388,7 +389,7 @@ class QuotaRepository:
 
             return QuotaAssignment(**item)
         except ClientError as e:
-            logger.error(f"Error updating assignment {assignment_id}: {e}")
+            logger.error(f"Error updating assignment {scrub_log(assignment_id)}: {scrub_log(e)}")
             return None
 
     async def delete_assignment(self, assignment_id: str) -> bool:
@@ -402,7 +403,7 @@ class QuotaRepository:
             )
             return True
         except ClientError as e:
-            logger.error(f"Error deleting assignment {assignment_id}: {e}")
+            logger.error(f"Error deleting assignment {scrub_log(assignment_id)}: {scrub_log(e)}")
             return False
 
     def _build_gsi_keys(self, assignment: QuotaAssignment) -> dict:
@@ -478,7 +479,7 @@ class QuotaRepository:
 
             return events
         except ClientError as e:
-            logger.error(f"Error getting events for user {user_id}: {e}")
+            logger.error(f"Error getting events for user {scrub_log(user_id)}: {scrub_log(e)}")
             return []
 
     async def get_tier_events(
@@ -512,7 +513,7 @@ class QuotaRepository:
 
             return events
         except ClientError as e:
-            logger.error(f"Error getting events for tier {tier_id}: {e}")
+            logger.error(f"Error getting events for tier {scrub_log(tier_id)}: {scrub_log(e)}")
             return []
 
     async def get_recent_event(
@@ -587,7 +588,7 @@ class QuotaRepository:
 
             return QuotaOverride(**item)
         except ClientError as e:
-            logger.error(f"Error getting override {override_id}: {e}")
+            logger.error(f"Error getting override {scrub_log(override_id)}: {scrub_log(e)}")
             return None
 
     async def get_active_override(self, user_id: str) -> Optional[QuotaOverride]:
@@ -709,7 +710,7 @@ class QuotaRepository:
 
             return QuotaOverride(**item)
         except ClientError as e:
-            logger.error(f"Error updating override {override_id}: {e}")
+            logger.error(f"Error updating override {scrub_log(override_id)}: {scrub_log(e)}")
             return None
 
     async def delete_override(self, override_id: str) -> bool:
@@ -723,5 +724,5 @@ class QuotaRepository:
             )
             return True
         except ClientError as e:
-            logger.error(f"Error deleting override {override_id}: {e}")
+            logger.error(f"Error deleting override {scrub_log(override_id)}: {scrub_log(e)}")
             return False

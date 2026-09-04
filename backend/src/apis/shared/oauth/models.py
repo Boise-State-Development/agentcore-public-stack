@@ -137,8 +137,8 @@ class OAuthProvider:
     # and an export target (e.g. a combined-scope Drive connector). Validated
     # in the admin route for the same reason as above.
     export_target_adapter_id: Optional[str] = None
-    created_at: str = field(default_factory=lambda: utc_now_iso())
-    updated_at: str = field(default_factory=lambda: utc_now_iso())
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
 
     @property
     def scopes_hash(self) -> str:
