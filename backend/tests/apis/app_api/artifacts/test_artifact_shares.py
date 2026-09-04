@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from moto import mock_aws
@@ -660,53 +661,120 @@ def test_cascade_swallows_a_backing_store_failure(env, monkeypatch) -> None:
     assert _cascade() == 0
 
 
+class _RecordingTable:
+    """Delegates to the real table, recording which DynamoDB API each
+    call uses and which key space it targets."""
+
+    def __init__(self, inner, calls: list):
+        self._inner = inner
+        self._calls = calls
+
+    def __getattr__(self, name):
+        # Anything not intercepted below (query, get_item, …) passes
+        # through — but record the API name so a test can assert on the
+        # surface actually used.
+        attr = getattr(self._inner, name)
+        if callable(attr):
+            def _recorded(*args, **kwargs):
+                self._calls.append((name, None))
+                return attr(*args, **kwargs)
+
+            return _recorded
+        return attr
+
+    def delete_item(self, Key):  # noqa: N803 — boto3 kwarg name
+        space = "lookup" if Key["PK"].startswith("SHARE#") else "owner"
+        self._calls.append(("delete_item", space))
+        return self._inner.delete_item(Key=Key)
+
+
+def _record_cascade(monkeypatch) -> list:
+    """Run the cascade against a table that records its API calls."""
+    calls: list = []
+    real = token_service._table()
+    monkeypatch.setattr(
+        token_service, "_table", lambda: _RecordingTable(real, calls)
+    )
+    return calls
+
+
 def test_cascade_deletes_the_lookup_row_before_the_owner_row(
     env, monkeypatch
 ) -> None:
     """Ordering is the safety property. The lookup row is what the
     recipient path resolves, so it goes first: a half-finished cascade
     then leaves an inert owner row rather than a live share its owner can
-    no longer see to revoke."""
+    no longer see to revoke. Both orders look identical when nothing
+    fails, so assert the order and not just the end state."""
     make_client, ddb = env
     _put_version(ddb)
     _put_head(ddb)
     _create_share(make_client())
 
-    seen: list[str] = []
-    real_table = token_service._table()
-
-    class _RecordingBatch:
-        def __init__(self, inner):
-            self._inner = inner
-
-        def delete_item(self, Key):  # noqa: N803 — boto3 kwarg name
-            seen.append("lookup" if Key["PK"].startswith("SHARE#") else "owner")
-            return self._inner.delete_item(Key=Key)
-
-    class _RecordingWriter:
-        def __init__(self, inner):
-            self._inner = inner
-
-        def __enter__(self):
-            return _RecordingBatch(self._inner.__enter__())
-
-        def __exit__(self, *exc):
-            return self._inner.__exit__(*exc)
-
-    class _RecordingTable:
-        """Delegates everything to the real table, recording which key
-        space each batched delete targets."""
-
-        def __getattr__(self, name):
-            return getattr(real_table, name)
-
-        def batch_writer(self, **kwargs):
-            return _RecordingWriter(real_table.batch_writer(**kwargs))
-
-    # Patch the module-level accessor: the service holds its own cached
-    # Table, and boto3 builds a distinct class per resource instance, so
-    # patching the class off a different resource would miss.
-    monkeypatch.setattr(token_service, "_table", lambda: _RecordingTable())
-
+    calls = _record_cascade(monkeypatch)
     assert _cascade() == 1
-    assert seen == ["lookup", "owner"], seen
+
+    deletes = [space for name, space in calls if name == "delete_item"]
+    assert deletes == ["lookup", "owner"], deletes
+
+
+def test_cascade_uses_only_iam_granted_dynamodb_actions(
+    env, monkeypatch
+) -> None:
+    """Regression guard for a real dev-environment failure.
+
+    The app-api task role is granted GetItem/PutItem/UpdateItem/
+    DeleteItem/Query on the artifacts table and nothing else. The rest of
+    this feature writes via `transact_write_items`, which DynamoDB
+    authorizes against those *underlying* item actions — but
+    `BatchWriteItem` is its own IAM action and is NOT covered by them, so
+    `table.batch_writer()` fails closed with AccessDenied in a deployed
+    environment while passing every moto test (moto does not enforce
+    IAM).
+
+    Pinning the API surface is the only way a unit test can catch that.
+    """
+    make_client, ddb = env
+    _put_version(ddb)
+    _put_head(ddb)
+    _create_share(make_client())
+
+    calls = _record_cascade(monkeypatch)
+    _cascade()
+
+    used = {name for name, _ in calls}
+    assert "batch_writer" not in used, used
+    assert used <= {"query", "delete_item"}, used
+
+
+def test_cascade_continues_after_one_row_fails(env, monkeypatch) -> None:
+    """One unlucky row must not strand the rest — every share left behind
+    is a link that keeps resolving."""
+    make_client, ddb = env
+    _put_version(ddb)
+    _put_head(ddb)
+    tc = make_client()
+    _create_share(tc)
+    _create_share(tc)
+
+    real = token_service._table()
+    seen = {"n": 0}
+
+    class _FlakyTable:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def delete_item(self, Key):  # noqa: N803
+            seen["n"] += 1
+            if seen["n"] == 1:
+                raise ClientError(
+                    {"Error": {"Code": "ProvisionedThroughputExceeded"}},
+                    "DeleteItem",
+                )
+            return real.delete_item(Key=Key)
+
+    monkeypatch.setattr(token_service, "_table", lambda: _FlakyTable())
+
+    # One lookup delete failed, the other succeeded — and the cascade
+    # reports what it actually revoked rather than what it attempted.
+    assert _cascade() == 1

@@ -112,6 +112,12 @@ as a best-effort background task: a failure leaves an orphan row, never a blocke
 delete, and the lookup row is always deleted before the owner row so a
 half-finished cleanup can never leave a live link its owner can no longer see.
 
+One implementation note that is easy to get wrong: the cleanup deletes rows with
+individual `DeleteItem` calls rather than a batch write. `BatchWriteItem` is its
+own IAM action and is **not** authorized by the underlying item permissions the
+way `TransactWriteItems` is, so a batch write fails closed with `AccessDenied` in
+a deployed environment while passing every local test.
+
 Deleting the artifact **content** on conversation delete is deliberately a
 separate question — that is a retention decision about artifacts as a whole,
 not about sharing.
