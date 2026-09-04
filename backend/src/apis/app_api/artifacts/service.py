@@ -920,5 +920,131 @@ class ArtifactShareService:
         return stripped
 
 
+    def delete_for_session(self, session_id: str, owner_id: str) -> int:
+        """Revoke every artifact share produced by one chat session.
+
+        Called as a background task when the session owner deletes a
+        conversation, mirroring `ShareService.delete_shares_for_session`
+        for conversation shares. Artifacts outlive the chat that made
+        them, so without this a deleted conversation would leave live
+        share links pointing at its artifacts.
+
+        Best-effort and **never raises**: a delete that partially fails
+        leaves an orphan row, and the caller has already returned 204.
+        Returns the number of shares revoked (0 on any failure, and 0
+        when the artifacts feature isn't configured for this deploy).
+
+        Scoped by `owner_id` deliberately. `SessionIndex` is not
+        user-partitioned — the same reason `ArtifactListService`
+        re-checks every HEAD row — so filtering here is what stops a
+        borrowed or colliding session id reaching another user's shares.
+
+        Deliberately NOT in scope: deleting the artifact content itself.
+        That is a retention decision about the artifacts feature as a
+        whole, not about sharing.
+        """
+        try:
+            table = _table()
+        except RenderTokenConfigError:
+            # Artifacts aren't enabled for this environment. The session
+            # routes are always mounted, so this is a normal no-op, not
+            # a failure.
+            logger.debug("artifacts not configured — skipping share cascade")
+            return 0
+
+        try:
+            shares = self._shares_for_session(table, session_id, owner_id)
+            if not shares:
+                return 0
+
+            # Lookup rows first, owner rows second — and never the other
+            # way round. The lookup row (PK=SHARE#{id}) is what the
+            # recipient path resolves, so dropping it is what actually
+            # kills the link. If the second pass fails we are left with
+            # an unreachable owner row, which is inert; the reverse
+            # order would leave a *live* share whose owner can no longer
+            # see it to revoke.
+            with table.batch_writer() as batch:
+                for share in shares:
+                    batch.delete_item(
+                        Key=_share_lookup_key(str(share["share_id"]))
+                    )
+            with table.batch_writer() as batch:
+                for share in shares:
+                    batch.delete_item(
+                        Key={
+                            "PK": f"USER#{owner_id}",
+                            "SK": _owner_share_sk(
+                                str(share["artifact_id"]),
+                                int(share["version"]),
+                                str(share["share_id"]),
+                            ),
+                        }
+                    )
+
+            logger.info(
+                "revoked %s artifact share(s) for deleted session %s",
+                len(shares),
+                scrub_log(session_id),
+            )
+            return len(shares)
+        except Exception:
+            logger.error(
+                "failed to revoke artifact shares for session %s",
+                scrub_log(session_id),
+                exc_info=True,
+            )
+            return 0
+
+    @staticmethod
+    def _shares_for_session(
+        table, session_id: str, owner_id: str
+    ) -> list[dict]:
+        """Every share row for the artifacts produced by one session.
+
+        Two steps, because there is no index from session to share:
+        `SessionIndex` projects only artifact HEAD rows, so it yields the
+        artifact ids, and the shares are then read off the owner's own
+        partition by SK prefix.
+        """
+        head_kwargs: dict = {
+            "IndexName": _SESSION_INDEX,
+            "KeyConditionExpression": Key("GSI1PK").eq(
+                f"SESSION#{session_id}"
+            ),
+        }
+        heads: list[dict] = []
+        while True:
+            resp = table.query(**head_kwargs)
+            heads.extend(resp.get("Items", []))
+            last = resp.get("LastEvaluatedKey")
+            if not last:
+                break
+            head_kwargs["ExclusiveStartKey"] = last
+
+        artifact_ids = list(
+            dict.fromkeys(
+                item.get("artifact_id", "")
+                for item in heads
+                if item.get("user_id") == owner_id and item.get("artifact_id")
+            )
+        )
+
+        shares: list[dict] = []
+        for artifact_id in artifact_ids:
+            kwargs: dict = {
+                "KeyConditionExpression": Key("PK").eq(f"USER#{owner_id}")
+                & Key("SK").begins_with(_owner_share_prefix(artifact_id)),
+            }
+            while True:
+                resp = table.query(**kwargs)
+                shares.extend(resp.get("Items", []))
+                last = resp.get("LastEvaluatedKey")
+                if not last:
+                    break
+                kwargs["ExclusiveStartKey"] = last
+        return shares
+
+
 def get_artifact_share_service() -> ArtifactShareService:
     return ArtifactShareService()

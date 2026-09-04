@@ -56,8 +56,22 @@ def env(monkeypatch: pytest.MonkeyPatch):
             AttributeDefinitions=[
                 {"AttributeName": "PK", "AttributeType": "S"},
                 {"AttributeName": "SK", "AttributeType": "S"},
+                {"AttributeName": "GSI1PK", "AttributeType": "S"},
+                {"AttributeName": "GSI1SK", "AttributeType": "S"},
             ],
             BillingMode="PAY_PER_REQUEST",
+            # The session-delete cascade walks SessionIndex to find the
+            # session's artifacts, so the fixture mirrors the real table.
+            GlobalSecondaryIndexes=[
+                {
+                    "IndexName": "SessionIndex",
+                    "KeySchema": [
+                        {"AttributeName": "GSI1PK", "KeyType": "HASH"},
+                        {"AttributeName": "GSI1SK", "KeyType": "RANGE"},
+                    ],
+                    "Projection": {"ProjectionType": "ALL"},
+                }
+            ],
         )
         monkeypatch.setenv("DYNAMODB_ARTIFACTS_TABLE_NAME", TABLE)
         monkeypatch.setenv("ARTIFACTS_ORIGIN", "https://a.test.example.com")
@@ -458,3 +472,241 @@ def test_every_route_requires_a_session(method, path, body) -> None:
     tc = TestClient(app)
     kwargs = {"json": body} if body is not None else {}
     assert getattr(tc, method)(path, **kwargs).status_code == 401
+
+
+# ------------------------------------------------------------------
+# Session-delete cascade
+# ------------------------------------------------------------------
+#
+# When a conversation is deleted its artifacts outlive it, so their
+# share links have to be revoked or they keep working forever. Runs as a
+# background task after the 204, so it must never raise.
+
+
+from apis.app_api.artifacts.service import ArtifactShareService  # noqa: E402
+
+
+def _put_head(
+    ddb,
+    *,
+    user_id: str = OWNER_ID,
+    artifact: str = "art-1",
+    session_id: str = "sess-1",
+) -> None:
+    """The HEAD row carrying GSI1PK — only HEAD rows are on SessionIndex."""
+    ddb.Table(TABLE).put_item(
+        Item={
+            "PK": f"USER#{user_id}",
+            "SK": f"ARTIFACT#{artifact}#HEAD",
+            "GSI1PK": f"SESSION#{session_id}",
+            "GSI1SK": f"ARTIFACT#2026-09-04#{artifact}",
+            "artifact_id": artifact,
+            "user_id": user_id,
+            "session_id": session_id,
+            "version": 1,
+            "title": "T",
+            "content_type": "text/html; charset=utf-8",
+        }
+    )
+
+
+def _cascade(session_id: str = "sess-1", owner: str = OWNER_ID) -> int:
+    return ArtifactShareService().delete_for_session(session_id, owner)
+
+
+def test_cascade_revokes_both_rows_of_every_share(env) -> None:
+    make_client, ddb = env
+    _put_version(ddb)
+    _put_head(ddb)
+    tc = make_client()
+    a = _create_share(tc)
+    b = _create_share(tc)
+
+    assert _cascade() == 2
+
+    table = ddb.Table(TABLE)
+    for share in (a, b):
+        sid = share["shareId"]
+        assert "Item" not in table.get_item(
+            Key={"PK": f"SHARE#{sid}", "SK": "META"}
+        )
+        assert "Item" not in table.get_item(
+            Key={
+                "PK": f"USER#{OWNER_ID}",
+                "SK": f"SHARE#art-1#V#00001#{sid}",
+            }
+        )
+
+
+def test_cascade_kills_the_recipient_path(env) -> None:
+    """The lookup row is the capability, so a cascaded share must stop
+    resolving — that is the whole point of the cleanup."""
+    make_client, ddb = env
+    _put_version(ddb)
+    _put_head(ddb)
+    share = _create_share(make_client())
+
+    viewer = User(email="v@x.com", user_id="viewer-1", name="V", roles=[])
+    assert (
+        make_client(viewer)
+        .get(f"/shared-artifacts/{share['shareId']}")
+        .status_code
+        == 200
+    )
+
+    _cascade()
+
+    assert (
+        make_client(viewer)
+        .get(f"/shared-artifacts/{share['shareId']}")
+        .status_code
+        == 404
+    )
+
+
+def test_cascade_covers_every_artifact_and_version_in_the_session(env) -> None:
+    make_client, ddb = env
+    for artifact in ("art-1", "art-2"):
+        _put_head(ddb, artifact=artifact)
+        _put_version(ddb, artifact=artifact, version=1)
+        _put_version(ddb, artifact=artifact, version=2)
+    tc = make_client()
+    _create_share(tc, artifact="art-1", version=1)
+    _create_share(tc, artifact="art-1", version=2)
+    _create_share(tc, artifact="art-2", version=1)
+
+    assert _cascade() == 3
+    assert tc.get("/artifacts/art-1/shares").json()["shares"] == []
+    assert tc.get("/artifacts/art-2/shares").json()["shares"] == []
+
+
+def test_cascade_leaves_other_sessions_alone(env) -> None:
+    make_client, ddb = env
+    _put_head(ddb, artifact="art-1", session_id="sess-1")
+    _put_head(ddb, artifact="art-2", session_id="sess-2")
+    _put_version(ddb, artifact="art-1")
+    _put_version(ddb, artifact="art-2")
+    tc = make_client()
+    _create_share(tc, artifact="art-1")
+    keep = _create_share(tc, artifact="art-2")
+
+    assert _cascade("sess-1") == 1
+
+    remaining = tc.get("/artifacts/art-2/shares").json()["shares"]
+    assert [s["shareId"] for s in remaining] == [keep["shareId"]]
+
+
+def test_cascade_never_touches_another_owners_shares(env) -> None:
+    """SessionIndex is not user-partitioned, so a borrowed or colliding
+    session id must not reach someone else's shares. The owner filter is
+    the only thing preventing that."""
+    make_client, ddb = env
+    _put_version(ddb)
+    _put_head(ddb)
+    share = _create_share(make_client())
+
+    # Same session id, a different caller.
+    assert _cascade("sess-1", owner="someone-else") == 0
+    assert (
+        make_client().get("/artifacts/art-1/shares").json()["shares"][0][
+            "shareId"
+        ]
+        == share["shareId"]
+    )
+
+
+def test_cascade_on_a_session_with_no_artifacts_is_zero(env) -> None:
+    make_client, _ = env
+    assert _cascade("sess-empty") == 0
+
+
+def test_cascade_on_artifacts_with_no_shares_is_zero(env) -> None:
+    make_client, ddb = env
+    _put_head(ddb)
+    _put_version(ddb)
+    assert _cascade() == 0
+
+
+def test_cascade_returns_zero_when_artifacts_are_not_configured(
+    env, monkeypatch
+) -> None:
+    """The session routes are always mounted; artifacts may not be. That
+    is a normal no-op, not an error."""
+    make_client, ddb = env
+    _put_version(ddb)
+    _put_head(ddb)
+    _create_share(make_client())
+    token_service._reset_caches_for_tests()
+    monkeypatch.delenv("DYNAMODB_ARTIFACTS_TABLE_NAME", raising=False)
+
+    assert _cascade() == 0
+
+
+def test_cascade_swallows_a_backing_store_failure(env, monkeypatch) -> None:
+    """It runs after the 204 has been sent, so raising would only produce
+    an unhandled background-task error — the failure mode is an orphan
+    row, never a blocked delete."""
+    make_client, ddb = env
+    _put_version(ddb)
+    _put_head(ddb)
+    _create_share(make_client())
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("dynamo is down")
+
+    monkeypatch.setattr(
+        ArtifactShareService, "_shares_for_session", staticmethod(boom)
+    )
+    assert _cascade() == 0
+
+
+def test_cascade_deletes_the_lookup_row_before_the_owner_row(
+    env, monkeypatch
+) -> None:
+    """Ordering is the safety property. The lookup row is what the
+    recipient path resolves, so it goes first: a half-finished cascade
+    then leaves an inert owner row rather than a live share its owner can
+    no longer see to revoke."""
+    make_client, ddb = env
+    _put_version(ddb)
+    _put_head(ddb)
+    _create_share(make_client())
+
+    seen: list[str] = []
+    real_table = token_service._table()
+
+    class _RecordingBatch:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def delete_item(self, Key):  # noqa: N803 — boto3 kwarg name
+            seen.append("lookup" if Key["PK"].startswith("SHARE#") else "owner")
+            return self._inner.delete_item(Key=Key)
+
+    class _RecordingWriter:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __enter__(self):
+            return _RecordingBatch(self._inner.__enter__())
+
+        def __exit__(self, *exc):
+            return self._inner.__exit__(*exc)
+
+    class _RecordingTable:
+        """Delegates everything to the real table, recording which key
+        space each batched delete targets."""
+
+        def __getattr__(self, name):
+            return getattr(real_table, name)
+
+        def batch_writer(self, **kwargs):
+            return _RecordingWriter(real_table.batch_writer(**kwargs))
+
+    # Patch the module-level accessor: the service holds its own cached
+    # Table, and boto3 builds a distinct class per resource instance, so
+    # patching the class off a different resource would miss.
+    monkeypatch.setattr(token_service, "_table", lambda: _RecordingTable())
+
+    assert _cascade() == 1
+    assert seen == ["lookup", "owner"], seen
