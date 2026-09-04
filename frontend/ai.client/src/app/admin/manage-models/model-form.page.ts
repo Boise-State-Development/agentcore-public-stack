@@ -27,6 +27,7 @@ import {
 import { ManagedModelsService } from './services/managed-models.service';
 import { CuratedModelPrefillService } from './services/curated-model-prefill.service';
 import { AppRolesService } from '../roles/services/app-roles.service';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 interface ParamRowGroup {
   /**
@@ -240,7 +241,7 @@ interface ModelFormGroup {
 
 @Component({
   selector: 'app-model-form-page',
-  imports: [ReactiveFormsModule, RouterLink, NgIcon],
+  imports: [ReactiveFormsModule, RouterLink, NgIcon, SpinnerComponent],
   providers: [provideIcons({ heroArrowLeft, heroChevronDown, heroChevronRight })],
   templateUrl: './model-form.page.html',
   styleUrl: './model-form.page.css',

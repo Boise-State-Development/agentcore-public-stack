@@ -25,7 +25,7 @@ interface FineTuningTab {
         @for (tab of tabs; track tab.route) {
           <a
             [routerLink]="tab.route"
-            routerLinkActive="border-blue-500 text-blue-600 dark:border-blue-400 dark:text-blue-400"
+            routerLinkActive="border-primary-500 text-primary-accessible dark:border-primary-400 dark:text-primary-accessible-dark"
             [routerLinkActiveOptions]="{ exact: tab.exact }"
             #rla="routerLinkActive"
             [attr.aria-current]="rla.isActive ? 'page' : null"

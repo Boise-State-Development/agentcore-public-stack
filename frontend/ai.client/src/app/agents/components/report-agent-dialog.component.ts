@@ -96,7 +96,7 @@ export type ReportAgentDialogResult =
             type="button"
             (click)="onCancel()"
             aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
           </button>
@@ -105,7 +105,7 @@ export type ReportAgentDialogResult =
         <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           @if (data.hasOpenReport) {
             <!-- D15.4 surfaced before the user writes, not after: they are amending. -->
-            <div class="mb-4 rounded-2xl bg-amber-50 px-4 py-3 dark:bg-amber-900/20">
+            <div class="mb-4 rounded-2xl bg-state-warning-50 px-4 py-3 dark:bg-state-warning-900/20">
               <p class="text-sm/6 text-gray-700 dark:text-gray-300">
                 You already have a report open on this agent. Sending this will
                 <strong>update</strong> it rather than adding a second one.
@@ -127,14 +127,14 @@ export type ReportAgentDialogResult =
                   class="flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 text-sm/6"
                   [class]="
                     reason() === option.value
-                      ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-900/20'
+                      ? 'border-primary-500 bg-primary-50 dark:border-primary-400 dark:bg-primary-900/20'
                       : 'border-gray-300 bg-white hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700'
-                  "
+                 "
                 >
                   <input
                     type="radio"
                     name="report-reason"
-                    class="mt-1 size-4 shrink-0 accent-blue-600"
+                    class="mt-1 size-4 shrink-0 accent-primary-600"
                     [value]="option.value"
                     [checked]="reason() === option.value"
                     (change)="reason.set(option.value)"
@@ -163,7 +163,7 @@ export type ReportAgentDialogResult =
             [value]="note()"
             (input)="onNoteInput($event)"
             placeholder="What did you ask, and what happened?"
-            class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+            class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
           ></textarea>
 
           <!-- Only offered when there is a conversation to offer. Ticked by default
@@ -175,7 +175,7 @@ export type ReportAgentDialogResult =
             >
               <input
                 type="checkbox"
-                class="mt-1 size-4 shrink-0 accent-blue-600"
+                class="mt-1 size-4 shrink-0 accent-primary-600"
                 [checked]="attachConversation()"
                 (change)="onAttachToggle($event)"
               />
@@ -197,7 +197,7 @@ export type ReportAgentDialogResult =
           <button
             type="button"
             (click)="onCancel()"
-            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
           >
             Cancel
           </button>
@@ -205,7 +205,7 @@ export type ReportAgentDialogResult =
             type="button"
             [disabled]="!reason()"
             (click)="onSubmit()"
-            class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 "
           >
             {{ submitLabel() }}
           </button>

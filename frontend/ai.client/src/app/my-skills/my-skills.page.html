@@ -16,7 +16,7 @@
       @if (accessible() === true) {
         <a
           routerLink="/my-skills/new"
-          class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+          class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
         >
           <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
           New skill
@@ -28,7 +28,7 @@
     @if (error()) {
       <div
         role="alert"
-        class="mt-6 rounded-2xl bg-red-50 px-4 py-3 text-sm/6 text-red-800 dark:bg-red-900/20 dark:text-red-400"
+        class="mt-6 rounded-2xl bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-400"
       >
         {{ error() }}
       </div>
@@ -71,7 +71,7 @@
         </p>
         <a
           routerLink="/my-skills/new"
-          class="mt-6 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+          class="mt-6 inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
         >
           <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
           Create your first skill
@@ -90,7 +90,7 @@
               <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
                 <a
                   [routerLink]="['/my-skills', skill.skillId, 'edit']"
-                  class="hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                  class="hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                 >
                   {{ skill.displayName }}
                 </a>
@@ -119,7 +119,7 @@
             <div class="mt-4 flex items-center gap-2 border-t border-gray-100 pt-4 dark:border-gray-700">
               <a
                 [routerLink]="['/my-skills', skill.skillId, 'edit']"
-                class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-300 dark:hover:bg-gray-700"
+                class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-gray-700"
               >
                 <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                 Edit
@@ -128,7 +128,7 @@
                 type="button"
                 [disabled]="deleting() === skill.skillId"
                 (click)="confirmDelete(skill.skillId, skill.displayName)"
-                class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-red-700 hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-900/20"
+                class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-state-danger-700 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:opacity-50 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
               >
                 <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                 {{ deleting() === skill.skillId ? 'Deleting…' : 'Delete' }}

@@ -6,6 +6,7 @@ import {
   input,
   output,
   computed,
+  signal,
   viewChild,
 } from '@angular/core';
 import { Message } from '../../services/models/message.model';
@@ -16,6 +17,7 @@ import { ParagraphSkeletonComponent } from '../../../components/paragraph-skelet
 import { Topnav } from '../../../components/topnav/topnav';
 import { SidenavService } from '../../../services/sidenav/sidenav.service';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
+import { BrandingService } from '../../../../branding/branding.service';
 import { Assistant } from '../../../assistants/models/assistant.model';
 import { Agent, AgentRunnability } from '../../../agents/models/agent.model';
 import {
@@ -83,6 +85,10 @@ export class ChatContainerComponent {
   private artifactState = inject(ArtifactStateService);
   private voiceChatService = inject(VoiceChatService);
   protected readonly isVoiceActive = this.voiceChatService.isVoiceActive;
+  protected branding = inject(BrandingService);
+
+  /** Whether the branding logo image failed to load (Requirement 2.8). */
+  protected logoLoadFailed = signal(false);
 
   // Child component reference for scroll functionality
   private messageListComponent = viewChild(MessageListComponent);
@@ -301,5 +307,16 @@ export class ChatContainerComponent {
 
   onVoiceClosed() {
     this.voiceClosed.emit();
+  }
+
+  /**
+   * Handles a branding logo `<img>` failing to load (missing/broken asset at
+   * its documented path). Sets `logoLoadFailed`, which the template uses to
+   * hide the broken `<img>` elements and reveal a same-dimension placeholder
+   * with a visible "logo failed to load" indication, without collapsing the
+   * layout (Requirement 2.8).
+   */
+  onLogoError(_event: Event): void {
+    this.logoLoadFailed.set(true);
   }
 }

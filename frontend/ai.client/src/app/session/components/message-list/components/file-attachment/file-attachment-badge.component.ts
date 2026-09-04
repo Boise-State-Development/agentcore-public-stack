@@ -34,14 +34,14 @@ export const FILE_TYPE_STYLES: Record<string, FileTypeStyle> = {
   'application/pdf': {
     icon: 'heroDocument',
     label: 'PDF',
-    accent_text: 'text-rose-600 dark:text-rose-300',
-    header_bg: 'bg-rose-50 dark:bg-rose-950/40',
+    accent_text: 'text-filetype-pdf-600 dark:text-filetype-pdf-300',
+    header_bg: 'bg-filetype-pdf-50 dark:bg-filetype-pdf-950/40',
   },
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': {
     icon: 'heroDocumentText',
     label: 'DOCX',
-    accent_text: 'text-blue-600 dark:text-blue-300',
-    header_bg: 'bg-blue-50 dark:bg-blue-950/40',
+    accent_text: 'text-filetype-doc-600 dark:text-filetype-doc-300',
+    header_bg: 'bg-filetype-doc-50 dark:bg-filetype-doc-950/40',
   },
   'text/plain': {
     icon: 'heroDocumentText',
@@ -52,65 +52,66 @@ export const FILE_TYPE_STYLES: Record<string, FileTypeStyle> = {
   'text/html': {
     icon: 'heroCodeBracket',
     label: 'HTML',
-    accent_text: 'text-orange-600 dark:text-orange-300',
-    header_bg: 'bg-orange-50 dark:bg-orange-950/40',
+    accent_text: 'text-filetype-code-600 dark:text-filetype-code-300',
+    header_bg: 'bg-filetype-code-50 dark:bg-filetype-code-950/40',
   },
   'text/csv': {
     icon: 'heroTableCells',
     label: 'CSV',
-    accent_text: 'text-green-600 dark:text-green-300',
-    header_bg: 'bg-green-50 dark:bg-green-950/40',
+    accent_text: 'text-filetype-sheet-600 dark:text-filetype-sheet-300',
+    header_bg: 'bg-filetype-sheet-50 dark:bg-filetype-sheet-950/40',
   },
   'application/vnd.ms-excel': {
     icon: 'heroTableCells',
     label: 'XLS',
-    accent_text: 'text-green-600 dark:text-green-300',
-    header_bg: 'bg-green-50 dark:bg-green-950/40',
+    accent_text: 'text-filetype-sheet-600 dark:text-filetype-sheet-300',
+    header_bg: 'bg-filetype-sheet-50 dark:bg-filetype-sheet-950/40',
   },
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
     icon: 'heroTableCells',
     label: 'XLSX',
-    accent_text: 'text-green-600 dark:text-green-300',
-    header_bg: 'bg-green-50 dark:bg-green-950/40',
+    accent_text: 'text-filetype-sheet-600 dark:text-filetype-sheet-300',
+    header_bg: 'bg-filetype-sheet-50 dark:bg-filetype-sheet-950/40',
   },
-  // Orange is PowerPoint's brand association, which makes the chip readable
-  // at a glance. It overlaps with HTML's accent, but the label text
-  // disambiguates and the two rarely appear in the same conversation.
+  // filetype-presentation is PowerPoint's orange brand association, which makes
+  // the chip readable at a glance. It shares its hue with filetype-code (HTML)
+  // under a separate token name, but the label text disambiguates and the two
+  // rarely appear in the same conversation.
   'application/vnd.openxmlformats-officedocument.presentationml.presentation': {
     icon: 'heroPresentationChartBar',
     label: 'PPTX',
-    accent_text: 'text-orange-600 dark:text-orange-300',
-    header_bg: 'bg-orange-50 dark:bg-orange-950/40',
+    accent_text: 'text-filetype-presentation-600 dark:text-filetype-presentation-300',
+    header_bg: 'bg-filetype-presentation-50 dark:bg-filetype-presentation-950/40',
   },
   'text/markdown': {
     icon: 'heroDocumentText',
     label: 'MD',
-    accent_text: 'text-purple-600 dark:text-purple-300',
-    header_bg: 'bg-purple-50 dark:bg-purple-950/40',
+    accent_text: 'text-filetype-markdown-600 dark:text-filetype-markdown-300',
+    header_bg: 'bg-filetype-markdown-50 dark:bg-filetype-markdown-950/40',
   },
   'image/png': {
     icon: 'heroPhoto',
     label: 'PNG',
-    accent_text: 'text-indigo-600 dark:text-indigo-300',
-    header_bg: 'bg-indigo-50 dark:bg-indigo-950/40',
+    accent_text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    header_bg: 'bg-filetype-image-50 dark:bg-filetype-image-950/40',
   },
   'image/jpeg': {
     icon: 'heroPhoto',
     label: 'JPG',
-    accent_text: 'text-indigo-600 dark:text-indigo-300',
-    header_bg: 'bg-indigo-50 dark:bg-indigo-950/40',
+    accent_text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    header_bg: 'bg-filetype-image-50 dark:bg-filetype-image-950/40',
   },
   'image/gif': {
     icon: 'heroPhoto',
     label: 'GIF',
-    accent_text: 'text-indigo-600 dark:text-indigo-300',
-    header_bg: 'bg-indigo-50 dark:bg-indigo-950/40',
+    accent_text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    header_bg: 'bg-filetype-image-50 dark:bg-filetype-image-950/40',
   },
   'image/webp': {
     icon: 'heroPhoto',
     label: 'WEBP',
-    accent_text: 'text-indigo-600 dark:text-indigo-300',
-    header_bg: 'bg-indigo-50 dark:bg-indigo-950/40',
+    accent_text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    header_bg: 'bg-filetype-image-50 dark:bg-filetype-image-950/40',
   },
 };
 
@@ -290,12 +291,12 @@ const SLIDE_BULLET_WIDTHS = [78, 92, 60];
               <div
                 class="relative flex size-full flex-col rounded-md border border-gray-200 bg-white p-2.5 shadow-sm dark:border-gray-600 dark:bg-gray-800"
               >
-                <div class="h-1.5 w-3/5 rounded-full bg-orange-500/80"></div>
-                <div class="mt-1.5 h-px w-2/5 bg-orange-200 dark:bg-orange-900"></div>
+                <div class="h-1.5 w-3/5 rounded-full bg-filetype-presentation-600/80"></div>
+                <div class="mt-1.5 h-px w-2/5 bg-filetype-presentation-300 dark:bg-filetype-presentation-900"></div>
                 <div class="mt-2 space-y-1.5">
                   @for (width of slideBulletWidths; track $index) {
                     <div class="flex items-center gap-1.5">
-                      <div class="size-1 shrink-0 rounded-full bg-orange-400/70"></div>
+                      <div class="size-1 shrink-0 rounded-full bg-filetype-presentation-400/70"></div>
                       <div
                         class="h-1 rounded-full bg-gray-200 dark:bg-gray-600"
                         [style.width.%]="width"

@@ -95,7 +95,7 @@ const ACCEPTED = ['image/png', 'image/jpeg'];
             type="button"
             (click)="onCancel()"
             aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
           </button>
@@ -123,7 +123,7 @@ const ACCEPTED = ['image/png', 'image/jpeg'];
           </p>
 
           <label
-            class="mt-5 flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-gray-300 px-4 py-5 text-sm/6 font-medium text-gray-700 hover:border-blue-500 hover:text-blue-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-blue-500 dark:border-gray-600 dark:text-gray-200 dark:hover:border-blue-400 dark:hover:text-blue-300"
+            class="mt-5 flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-gray-300 px-4 py-5 text-sm/6 font-medium text-gray-700 hover:border-primary-500 hover:text-primary-accessible focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary-500 dark:border-gray-600 dark:text-gray-200 dark:hover:border-primary-400 dark:hover:text-primary-accessible-dark"
           >
             <ng-icon name="heroArrowUpTray" class="size-5" aria-hidden="true" />
             {{ file() ? 'Choose a different image' : 'Choose an image' }}
@@ -136,7 +136,7 @@ const ACCEPTED = ['image/png', 'image/jpeg'];
           </label>
 
           @if (error(); as message) {
-            <p role="alert" class="mt-4 text-sm/6 text-rose-700 dark:text-rose-400">
+            <p role="alert" class="mt-4 text-sm/6 text-state-danger-700 dark:text-state-danger-400">
               {{ message }}
             </p>
           }
@@ -150,7 +150,7 @@ const ACCEPTED = ['image/png', 'image/jpeg'];
               type="button"
               (click)="onRemove()"
               [disabled]="busy()"
-              class="rounded-2xl px-3 py-2 text-sm/6 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+              class="rounded-2xl px-3 py-2 text-sm/6 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
             >
               Remove icon
             </button>
@@ -161,7 +161,7 @@ const ACCEPTED = ['image/png', 'image/jpeg'];
             <button
               type="button"
               (click)="onCancel()"
-              class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+              class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
             >
               Cancel
             </button>
@@ -169,7 +169,7 @@ const ACCEPTED = ['image/png', 'image/jpeg'];
               type="button"
               [disabled]="!canSave()"
               (click)="onSave()"
-              class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+              class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 "
             >
               {{ busy() ? 'Saving…' : 'Save icon' }}
             </button>

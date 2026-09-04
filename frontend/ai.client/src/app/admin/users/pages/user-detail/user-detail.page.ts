@@ -19,11 +19,12 @@ import {
 import { UserStateService } from '../../services/user-state.service';
 import { QuotaEventSummary } from '../../models';
 import { parseIso } from '../../../../utils/date';
+import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-user-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -50,7 +51,7 @@ import { parseIso } from '../../../../utils/date';
 
     <!-- Error State -->
     @if (state.hasError()) {
-      <div class="mb-6 p-4 bg-red-50 border border-red-200 rounded-sm text-red-800 dark:bg-red-900/20 dark:border-red-800 dark:text-red-200">
+      <div class="mb-6 p-4 bg-state-danger-50 border border-state-danger-200 rounded-sm text-state-danger-800 dark:bg-state-danger-900/20 dark:border-state-danger-800 dark:text-state-danger-200">
         <p>{{ state.error() }}</p>
         <button
           (click)="state.clearError()"
@@ -64,9 +65,7 @@ import { parseIso } from '../../../../utils/date';
     @if (state.loading()) {
       <div class="flex items-center justify-center h-64">
         <div class="flex flex-col items-center gap-4">
-          <div
-            class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400"
-          ></div>
+          <app-spinner size="xl" label="Loading user details" />
           <p class="text-sm text-gray-500 dark:text-gray-400">
             Loading user details...
           </p>
@@ -105,7 +104,7 @@ import { parseIso } from '../../../../utils/date';
           <div class="flex items-center gap-2 mt-2">
             @for (role of detail.profile.roles; track role) {
               <span
-                class="px-2 py-0.5 text-xs bg-blue-100 text-blue-800 rounded-xs dark:bg-blue-900 dark:text-blue-200"
+                class="px-2 py-0.5 text-xs bg-state-info-100 text-state-info-800 rounded-xs dark:bg-state-info-900 dark:text-state-info-200"
               >
                 {{ role }}
               </span>
@@ -131,7 +130,7 @@ import { parseIso } from '../../../../utils/date';
           class="p-6 bg-white border border-gray-300 rounded-sm dark:bg-gray-800 dark:border-gray-600"
         >
           <div class="flex items-center gap-2 mb-4">
-            <ng-icon name="heroCurrencyDollar" class="size-5 text-green-600" />
+            <ng-icon name="heroCurrencyDollar" class="size-5 text-state-success-600" />
             <h3 class="font-semibold">Current Month Cost</h3>
           </div>
           <div class="text-3xl font-bold mb-2">
@@ -144,7 +143,7 @@ import { parseIso } from '../../../../utils/date';
               {{ formatTokens(detail.costSummary.totalOutputTokens) }} output tokens
             </div>
             @if (detail.costSummary.cacheSavings > 0) {
-              <div class="text-green-600">
+              <div class="text-state-success-600">
                 \${{ detail.costSummary.cacheSavings.toFixed(2) }} cache savings
               </div>
             }
@@ -156,7 +155,7 @@ import { parseIso } from '../../../../utils/date';
           class="p-6 bg-white border border-gray-300 rounded-sm dark:bg-gray-800 dark:border-gray-600"
         >
           <div class="flex items-center gap-2 mb-4">
-            <ng-icon name="heroChartBar" class="size-5 text-blue-600" />
+            <ng-icon name="heroChartBar" class="size-5 text-vendor-microsoft-600" />
             <h3 class="font-semibold">Quota Status</h3>
           </div>
           @if (detail.quotaStatus.tierName) {
@@ -188,9 +187,9 @@ import { parseIso } from '../../../../utils/date';
             </div>
             @if (detail.quotaStatus.hasActiveOverride) {
               <div
-                class="flex items-center gap-2 mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded-xs dark:bg-yellow-900/20 dark:border-yellow-800"
+                class="flex items-center gap-2 mt-3 p-2 bg-state-warning-50 border border-state-warning-200 rounded-xs dark:bg-state-warning-900/20 dark:border-state-warning-800"
               >
-                <ng-icon name="heroShieldCheck" class="size-4 text-yellow-600" />
+                <ng-icon name="heroShieldCheck" class="size-4 text-state-warning-600" />
                 <span class="text-sm/6">
                   Override active: {{ detail.quotaStatus.overrideReason }}
                 </span>
@@ -206,7 +205,7 @@ import { parseIso } from '../../../../utils/date';
           class="p-6 bg-white border border-gray-300 rounded-sm dark:bg-gray-800 dark:border-gray-600"
         >
           <div class="flex items-center gap-2 mb-4">
-            <ng-icon name="heroClock" class="size-5 text-purple-600" />
+            <ng-icon name="heroClock" class="size-5 text-primary-600" />
             <h3 class="font-semibold">Activity</h3>
           </div>
           <div class="space-y-2 text-sm/6">
@@ -236,7 +235,7 @@ import { parseIso } from '../../../../utils/date';
           <h3 class="font-semibold">Recent Quota Events</h3>
           <button
             (click)="viewAllEvents()"
-            class="text-sm/6 text-blue-600 hover:text-blue-800 dark:text-blue-400"
+            class="text-sm/6 text-primary-accessible hover:underline dark:text-primary-accessible-dark"
           >
             View All
           </button>
@@ -271,7 +270,7 @@ import { parseIso } from '../../../../utils/date';
       <div class="flex gap-4 mt-6">
         <button
           (click)="createOverride()"
-          class="px-4 py-2 bg-blue-600 text-white rounded-sm hover:bg-blue-700"
+          class="px-4 py-2 bg-primary-accessible text-white rounded-sm hover:brightness-95"
         >
           Create Override
         </button>
@@ -354,9 +353,9 @@ export class UserDetailPage implements OnInit {
   getStatusClass(status: string): string {
     switch (status) {
       case 'active':
-        return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
+        return 'bg-state-success-100 text-state-success-800 dark:bg-state-success-900 dark:text-state-success-200';
       case 'suspended':
-        return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
+        return 'bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900 dark:text-state-danger-200';
       default:
         return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200';
     }
@@ -364,11 +363,11 @@ export class UserDetailPage implements OnInit {
 
   getUsageBarClass(percentage: number): string {
     if (percentage >= 90) {
-      return 'bg-red-500';
+      return 'bg-state-danger-500';
     } else if (percentage >= 80) {
-      return 'bg-yellow-500';
+      return 'bg-state-warning-500';
     }
-    return 'bg-green-500';
+    return 'bg-state-success-500';
   }
 
   getUsageBarWidth(percentage: number): number {
@@ -382,11 +381,11 @@ export class UserDetailPage implements OnInit {
   getEventIconClass(event: QuotaEventSummary): string {
     switch (event.eventType) {
       case 'block':
-        return 'text-red-500';
+        return 'text-state-danger-500';
       case 'warning':
-        return 'text-yellow-500';
+        return 'text-state-warning-500';
       default:
-        return 'text-blue-500';
+        return 'text-state-info-500';
     }
   }
 }

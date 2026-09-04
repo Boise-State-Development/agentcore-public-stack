@@ -8,16 +8,24 @@ Accessible, theme-aware component patterns for Tailwind CSS v4.1.
 
 ## Buttons
 
+> Color tokens only — never built-in palettes like `blue-600` or `red-500`.
+> See the Colors reference for the three token groups and when to use
+> `-accessible` rather than a numbered step.
+
 ### Primary Button
+
+Solid fill with white text, so the fill uses `primary-accessible` (guaranteed
+AA against white text) with no `dark:` override, and hover is a brightness
+filter rather than a darker step.
 
 ```html
 <button class="
   inline-flex items-center justify-center gap-2
   px-4 py-2 min-h-11
-  bg-primary-500 text-white font-medium
+  bg-primary-accessible text-white font-medium
   rounded-sm shadow-xs
-  hover:bg-primary-600
-  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500
+  transition-[filter] hover:brightness-95
+  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible
   disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed
   dark:disabled:bg-gray-700 dark:disabled:text-gray-400
 ">
@@ -35,7 +43,7 @@ Accessible, theme-aware component patterns for Tailwind CSS v4.1.
   border border-gray-300
   rounded-sm shadow-xs
   hover:bg-gray-50
-  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500
+  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible
   dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:hover:bg-gray-700
 ">
   Button text
@@ -51,7 +59,7 @@ Accessible, theme-aware component patterns for Tailwind CSS v4.1.
   text-gray-500 hover:text-gray-700
   rounded-sm
   hover:bg-gray-100
-  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500
+  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible
   dark:text-gray-400 dark:hover:text-white dark:hover:bg-gray-800
 ">
   <svg class="size-5" aria-hidden="true">...</svg>
@@ -76,9 +84,9 @@ Accessible, theme-aware component patterns for Tailwind CSS v4.1.
       px-3 py-2
       bg-white text-gray-900 placeholder-gray-400
       border border-gray-300 rounded-sm shadow-xs
-      focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+      focus:ring-2 focus:ring-primary-accessible focus:border-primary-accessible
       dark:bg-gray-800 dark:text-white dark:placeholder-gray-500
-      dark:border-gray-600 dark:focus:ring-primary-400
+      dark:border-gray-600 dark:focus:ring-primary-accessible-dark
     "
     placeholder="you@example.com"
   />
@@ -101,12 +109,12 @@ Accessible, theme-aware component patterns for Tailwind CSS v4.1.
       mt-2 block w-full
       px-3 py-2
       bg-white text-gray-900
-      border-2 border-red-500 rounded-sm
-      focus:ring-2 focus:ring-red-500 focus:border-red-500
+      border-2 border-state-danger-500 rounded-sm
+      focus:ring-2 focus:ring-state-danger-500 focus:border-state-danger-500
       dark:bg-gray-800 dark:text-white
     "
   />
-  <p id="email-error-message" class="mt-2 text-sm text-red-600 dark:text-red-400" role="alert">
+  <p id="email-error-message" class="mt-2 text-sm text-state-danger-600 dark:text-state-danger-400" role="alert">
     Please enter a valid email address.
   </p>
 </div>
@@ -126,7 +134,7 @@ Accessible, theme-aware component patterns for Tailwind CSS v4.1.
       px-3 py-2
       bg-white text-gray-900
       border border-gray-300 rounded-sm shadow-xs
-      focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+      focus:ring-2 focus:ring-primary-accessible focus:border-primary-accessible
       dark:bg-gray-800 dark:text-white dark:border-gray-600
     "
   >
@@ -146,8 +154,8 @@ Accessible, theme-aware component patterns for Tailwind CSS v4.1.
     class="
       size-4
       rounded-xs border-gray-300
-      text-primary-500 
-      focus:ring-2 focus:ring-primary-500 focus:ring-offset-2
+      text-primary-accessible
+      focus:ring-2 focus:ring-primary-accessible focus:ring-offset-2
       dark:border-gray-600 dark:bg-gray-800
       dark:focus:ring-offset-gray-900
     "
@@ -191,7 +199,7 @@ Accessible, theme-aware component patterns for Tailwind CSS v4.1.
     border border-gray-200
     overflow-hidden
     hover:shadow-md hover:border-gray-300
-    focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500
+    focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible
     transition-shadow
     dark:bg-gray-800 dark:border-gray-700
     dark:hover:border-gray-600
@@ -227,7 +235,7 @@ Accessible, theme-aware component patterns for Tailwind CSS v4.1.
               px-4 py-2 rounded-sm
               text-sm/6 font-medium
               text-gray-900 hover:bg-gray-100
-              focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500
+              focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible
               dark:text-white dark:hover:bg-gray-800
             "
             aria-current="page"
@@ -252,7 +260,7 @@ Always include a skip link for keyboard users:
     sr-only focus:not-sr-only
     focus:absolute focus:top-4 focus:left-4 focus:z-50
     focus:px-4 focus:py-2
-    focus:bg-primary-500 focus:text-white
+    focus:bg-primary-accessible focus:text-white
     focus:rounded-sm focus:shadow-lg
   "
 >
@@ -269,9 +277,9 @@ Always include a skip link for keyboard users:
   role="alert"
   class="
     flex gap-3 p-4
-    bg-blue-50 text-blue-800 
-    border border-blue-200 rounded-sm
-    dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800
+    bg-state-info-50 text-state-info-800
+    border border-state-info-200 rounded-sm
+    dark:bg-state-info-900/20 dark:text-state-info-300 dark:border-state-info-800
   "
 >
   <svg class="size-5 shrink-0 mt-0.5" aria-hidden="true">...</svg>
@@ -289,9 +297,9 @@ Always include a skip link for keyboard users:
   role="alert"
   class="
     flex gap-3 p-4
-    bg-red-50 text-red-800
-    border border-red-200 rounded-sm
-    dark:bg-red-900/20 dark:text-red-300 dark:border-red-800
+    bg-state-danger-50 text-state-danger-800
+    border border-state-danger-200 rounded-sm
+    dark:bg-state-danger-900/20 dark:text-state-danger-300 dark:border-state-danger-800
   "
 >
   <svg class="size-5 shrink-0 mt-0.5" aria-hidden="true">...</svg>
@@ -309,7 +317,7 @@ Always include a skip link for keyboard users:
 ```html
 <div role="status" class="flex items-center gap-2">
   <svg 
-    class="size-5 animate-spin text-primary-500" 
+    class="size-5 animate-spin text-primary-accessible" 
     viewBox="0 0 24 24"
     aria-hidden="true"
   >

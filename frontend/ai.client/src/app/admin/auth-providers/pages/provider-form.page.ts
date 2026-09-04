@@ -26,6 +26,7 @@ import {
   AuthProviderUpdateRequest,
   OIDCDiscoveryResponse,
 } from '../models/auth-provider.model';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 interface ProviderFormGroup {
   providerId: FormControl<string>;
@@ -61,7 +62,7 @@ interface ProviderFormGroup {
 @Component({
   selector: 'app-auth-provider-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReactiveFormsModule, NgIcon],
+  imports: [ReactiveFormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({ heroArrowLeft, heroArrowPath, heroInformationCircle }),
   ],
@@ -93,9 +94,7 @@ interface ProviderFormGroup {
         @if (loading()) {
           <div class="flex h-64 items-center justify-center">
             <div class="flex flex-col items-center gap-4">
-              <div
-                class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-t-blue-400 dark:border-gray-600"
-              ></div>
+              <app-spinner size="xl" label="Loading provider" />
               <p class="text-sm text-gray-500 dark:text-gray-400">
                 Loading provider...
               </p>
@@ -106,7 +105,7 @@ interface ProviderFormGroup {
           <form [formGroup]="providerForm" (ngSubmit)="onSubmit()" class="space-y-8">
 
             <!-- Basic Information -->
-            <div class="rounded-sm border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
+            <div class="rounded-xs border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
               <h2 class="mb-6 text-xl/8 font-semibold text-gray-900 dark:text-white">
                 Basic Information
               </h2>
@@ -115,7 +114,7 @@ interface ProviderFormGroup {
                 <!-- Provider ID -->
                 <div>
                   <label for="providerId" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Provider ID <span class="text-red-600">*</span>
+                    Provider ID <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     type="text"
@@ -123,14 +122,14 @@ interface ProviderFormGroup {
                     formControlName="providerId"
                     placeholder="e.g., entra-id, okta-prod, google"
                     [readonly]="isEditMode()"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 read-only:bg-gray-100 read-only:dark:bg-gray-600"
-                    [class.border-red-500]="providerForm.controls.providerId.invalid && providerForm.controls.providerId.touched"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 read-only:bg-gray-100 read-only:dark:bg-gray-600"
+                    [class.border-state-danger-500]="providerForm.controls.providerId.invalid && providerForm.controls.providerId.touched"
                   />
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     Lowercase letters, numbers, and hyphens only.
                   </p>
                   @if (providerForm.controls.providerId.invalid && providerForm.controls.providerId.touched) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                       @if (providerForm.controls.providerId.errors?.['required']) {
                         Provider ID is required
                       } @else if (providerForm.controls.providerId.errors?.['pattern']) {
@@ -143,18 +142,18 @@ interface ProviderFormGroup {
                 <!-- Display Name -->
                 <div>
                   <label for="displayName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Display Name <span class="text-red-600">*</span>
+                    Display Name <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     type="text"
                     id="displayName"
                     formControlName="displayName"
                     placeholder="e.g., Microsoft Entra ID, Okta, Google"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                    [class.border-red-500]="providerForm.controls.displayName.invalid && providerForm.controls.displayName.touched"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    [class.border-state-danger-500]="providerForm.controls.displayName.invalid && providerForm.controls.displayName.touched"
                   />
                   @if (providerForm.controls.displayName.invalid && providerForm.controls.displayName.touched) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Display name is required</p>
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Display name is required</p>
                   }
                 </div>
 
@@ -164,7 +163,7 @@ interface ProviderFormGroup {
                     type="checkbox"
                     id="enabled"
                     formControlName="enabled"
-                    class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                    class="size-4 rounded-xs border-gray-300 text-primary-600 focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700"
                   />
                   <label for="enabled" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                     Provider Enabled
@@ -174,7 +173,7 @@ interface ProviderFormGroup {
             </div>
 
             <!-- OIDC Configuration -->
-            <div class="rounded-sm border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
+            <div class="rounded-xs border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
               <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">
                 OIDC Configuration
               </h2>
@@ -184,24 +183,24 @@ interface ProviderFormGroup {
 
               <!-- Cognito Redirect URI Helper -->
               @if (cognitoRedirectUri()) {
-                <div class="mb-6 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+                <div class="mb-6 rounded-xs border border-state-info-200 bg-state-info-50 p-4 dark:border-state-info-800 dark:bg-state-info-900/20">
                   <div class="flex items-start gap-3">
-                    <ng-icon name="heroInformationCircle" class="mt-0.5 size-5 shrink-0 text-blue-600 dark:text-blue-400" />
+                    <ng-icon name="heroInformationCircle" class="mt-0.5 size-5 shrink-0 text-state-info-600 dark:text-state-info-400" />
                     <div class="min-w-0 flex-1">
-                      <p class="text-sm/6 font-medium text-blue-800 dark:text-blue-200">
+                      <p class="text-sm/6 font-medium text-state-info-800 dark:text-state-info-200">
                         Required: Add this Redirect URI to your identity provider
                       </p>
-                      <p class="mt-1 text-xs/5 text-blue-700 dark:text-blue-300">
+                      <p class="mt-1 text-xs/5 text-state-info-700 dark:text-state-info-300">
                         In your IdP's app registration (e.g., Azure Portal, Okta Admin), add the following as an allowed redirect URI:
                       </p>
                       <div class="mt-2 flex items-center gap-2">
-                        <code class="block flex-1 truncate rounded-xs bg-blue-100 px-3 py-1.5 font-mono text-sm text-blue-900 dark:bg-blue-800/40 dark:text-blue-100">
+                        <code class="block flex-1 truncate rounded-xs bg-state-info-100 px-3 py-1.5 font-mono text-sm text-state-info-900 dark:bg-state-info-800/40 dark:text-state-info-100">
                           {{ cognitoRedirectUri() }}
                         </code>
                         <button
                           type="button"
                           (click)="copyRedirectUri()"
-                          class="shrink-0 rounded-sm border border-blue-300 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 dark:border-blue-600 dark:bg-blue-800/40 dark:text-blue-200 dark:hover:bg-blue-800/60"
+                          class="shrink-0 rounded-xs border border-state-info-300 bg-white px-3 py-1.5 text-xs font-medium text-state-info-700 hover:bg-state-info-50 dark:border-state-info-600 dark:bg-state-info-800/40 dark:text-state-info-200 dark:hover:bg-state-info-800/60"
                         >
                           {{ copiedRedirectUri() ? 'Copied!' : 'Copy' }}
                         </button>
@@ -215,7 +214,7 @@ interface ProviderFormGroup {
                 <!-- Issuer URL with Discover -->
                 <div>
                   <label for="issuerUrl" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Issuer URL <span class="text-red-600">*</span>
+                    Issuer URL <span class="text-state-danger-600">*</span>
                   </label>
                   <div class="mt-1 flex gap-2">
                     <input
@@ -223,14 +222,14 @@ interface ProviderFormGroup {
                       id="issuerUrl"
                       formControlName="issuerUrl"
                       placeholder="https://login.microsoftonline.com/{tenant}/v2.0"
-                      class="block flex-1 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                      [class.border-red-500]="providerForm.controls.issuerUrl.invalid && providerForm.controls.issuerUrl.touched"
+                      class="block flex-1 rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                      [class.border-state-danger-500]="providerForm.controls.issuerUrl.invalid && providerForm.controls.issuerUrl.touched"
                     />
                     <button
                       type="button"
                       (click)="discoverEndpoints()"
                       [disabled]="discovering() || !providerForm.controls.issuerUrl.value"
-                      class="inline-flex items-center gap-2 rounded-sm border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                      class="inline-flex items-center gap-2 rounded-xs border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
                     >
                       <ng-icon
                         name="heroArrowPath"
@@ -241,15 +240,15 @@ interface ProviderFormGroup {
                     </button>
                   </div>
                   @if (providerForm.controls.issuerUrl.invalid && providerForm.controls.issuerUrl.touched) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Issuer URL is required</p>
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Issuer URL is required</p>
                   }
                   @if (discoveryResult()) {
-                    <p class="mt-1 text-sm/6 text-green-600 dark:text-green-400">
+                    <p class="mt-1 text-sm/6 text-state-success-600 dark:text-state-success-400">
                       Endpoints discovered successfully
                     </p>
                   }
                   @if (discoveryError()) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                       {{ discoveryError() }}
                     </p>
                   }
@@ -258,18 +257,18 @@ interface ProviderFormGroup {
                 <!-- Client ID -->
                 <div>
                   <label for="clientId" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Client ID <span class="text-red-600">*</span>
+                    Client ID <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     type="text"
                     id="clientId"
                     formControlName="clientId"
                     placeholder="Application/Client ID from your identity provider"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                    [class.border-red-500]="providerForm.controls.clientId.invalid && providerForm.controls.clientId.touched"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    [class.border-state-danger-500]="providerForm.controls.clientId.invalid && providerForm.controls.clientId.touched"
                   />
                   @if (providerForm.controls.clientId.invalid && providerForm.controls.clientId.touched) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Client ID is required</p>
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Client ID is required</p>
                   }
                 </div>
 
@@ -278,7 +277,7 @@ interface ProviderFormGroup {
                   <label for="clientSecret" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                     Client Secret
                     @if (!isEditMode()) {
-                      <span class="text-red-600">*</span>
+                      <span class="text-state-danger-600">*</span>
                     }
                   </label>
                   <input
@@ -286,7 +285,7 @@ interface ProviderFormGroup {
                     id="clientSecret"
                     formControlName="clientSecret"
                     [placeholder]="isEditMode() ? 'Leave empty to keep current secret' : 'Client secret from your identity provider'"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                   @if (isEditMode()) {
                     <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
@@ -305,7 +304,7 @@ interface ProviderFormGroup {
                     id="scopes"
                     formControlName="scopes"
                     placeholder="openid profile email"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     Space-separated OAuth scopes.
@@ -319,7 +318,7 @@ interface ProviderFormGroup {
                       type="checkbox"
                       id="pkceEnabled"
                       formControlName="pkceEnabled"
-                      class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                      class="size-4 rounded-xs border-gray-300 text-primary-600 focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700"
                     />
                     <label for="pkceEnabled" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                       PKCE Enabled (recommended)
@@ -336,7 +335,7 @@ interface ProviderFormGroup {
                       id="redirectUri"
                       formControlName="redirectUri"
                       placeholder="Leave empty for default"
-                      class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                      class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                     />
                   </div>
                 </div>
@@ -344,7 +343,7 @@ interface ProviderFormGroup {
             </div>
 
             <!-- Endpoints (auto-discovered or manual override) -->
-            <div class="rounded-sm border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
+            <div class="rounded-xs border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
               <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">
                 Endpoints
               </h2>
@@ -362,7 +361,7 @@ interface ProviderFormGroup {
                     id="authorizationEndpoint"
                     formControlName="authorizationEndpoint"
                     placeholder="Auto-discovered from issuer"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -375,7 +374,7 @@ interface ProviderFormGroup {
                     id="tokenEndpoint"
                     formControlName="tokenEndpoint"
                     placeholder="Auto-discovered from issuer"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -388,7 +387,7 @@ interface ProviderFormGroup {
                     id="jwksUri"
                     formControlName="jwksUri"
                     placeholder="Auto-discovered from issuer"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -401,7 +400,7 @@ interface ProviderFormGroup {
                     id="userinfoEndpoint"
                     formControlName="userinfoEndpoint"
                     placeholder="Auto-discovered from issuer"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -414,14 +413,14 @@ interface ProviderFormGroup {
                     id="endSessionEndpoint"
                     formControlName="endSessionEndpoint"
                     placeholder="Auto-discovered from issuer"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
               </div>
             </div>
 
             <!-- Claim Mappings -->
-            <div class="rounded-sm border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
+            <div class="rounded-xs border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
               <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">
                 JWT Claim Mappings
               </h2>
@@ -439,7 +438,7 @@ interface ProviderFormGroup {
                     id="userIdClaim"
                     formControlName="userIdClaim"
                     placeholder="sub"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     Supports URI-style claims (e.g., http://schemas.example.com/claims/id)
@@ -455,7 +454,7 @@ interface ProviderFormGroup {
                     id="emailClaim"
                     formControlName="emailClaim"
                     placeholder="email"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -468,7 +467,7 @@ interface ProviderFormGroup {
                     id="nameClaim"
                     formControlName="nameClaim"
                     placeholder="name"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -481,7 +480,7 @@ interface ProviderFormGroup {
                     id="rolesClaim"
                     formControlName="rolesClaim"
                     placeholder="roles"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -494,7 +493,7 @@ interface ProviderFormGroup {
                     id="pictureClaim"
                     formControlName="pictureClaim"
                     placeholder="picture"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -507,7 +506,7 @@ interface ProviderFormGroup {
                     id="firstNameClaim"
                     formControlName="firstNameClaim"
                     placeholder="given_name"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -520,7 +519,7 @@ interface ProviderFormGroup {
                     id="lastNameClaim"
                     formControlName="lastNameClaim"
                     placeholder="family_name"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     Used as fallback when the full name claim is empty.
@@ -530,7 +529,7 @@ interface ProviderFormGroup {
             </div>
 
             <!-- Validation Rules -->
-            <div class="rounded-sm border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
+            <div class="rounded-xs border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
               <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">
                 Validation Rules
               </h2>
@@ -548,7 +547,7 @@ interface ProviderFormGroup {
                     id="userIdPattern"
                     formControlName="userIdPattern"
                     placeholder="e.g., ^\\d{9}$ for 9-digit IDs"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     If set, user IDs must match this regex pattern during JWT validation.
@@ -564,7 +563,7 @@ interface ProviderFormGroup {
                     id="allowedAudiences"
                     formControlName="allowedAudiences"
                     placeholder="Comma-separated audience values"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     If set, JWT audience must match one of these values.
@@ -580,14 +579,14 @@ interface ProviderFormGroup {
                     id="requiredScopes"
                     formControlName="requiredScopes"
                     placeholder="Comma-separated required scopes"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
               </div>
             </div>
 
             <!-- Appearance -->
-            <div class="rounded-sm border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
+            <div class="rounded-xs border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
               <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">
                 Appearance
               </h2>
@@ -605,7 +604,7 @@ interface ProviderFormGroup {
                     id="logoUrl"
                     formControlName="logoUrl"
                     placeholder="https://example.com/logo.svg"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -620,8 +619,8 @@ interface ProviderFormGroup {
                       formControlName="buttonColor"
                       placeholder="#0078D4"
                       maxlength="7"
-                      class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                      [class.border-red-500]="providerForm.controls.buttonColor.invalid && providerForm.controls.buttonColor.touched"
+                      class="block w-full rounded-xs border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                      [class.border-state-danger-500]="providerForm.controls.buttonColor.invalid && providerForm.controls.buttonColor.touched"
                     />
                     @if (providerForm.controls.buttonColor.value) {
                       <div
@@ -634,7 +633,7 @@ interface ProviderFormGroup {
                     Hex color code (e.g., #0078D4 for Microsoft blue).
                   </p>
                   @if (providerForm.controls.buttonColor.invalid && providerForm.controls.buttonColor.touched) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                       Must be a valid hex color (e.g., #0078D4)
                     </p>
                   }
@@ -647,7 +646,7 @@ interface ProviderFormGroup {
               <button
                 type="submit"
                 [disabled]="isSubmitting() || providerForm.invalid"
-                class="rounded-sm bg-blue-600 px-6 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                class="rounded-xs bg-primary-accessible px-6 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 @if (isSubmitting()) {
                   Saving...
@@ -659,7 +658,7 @@ interface ProviderFormGroup {
                 type="button"
                 (click)="goBack()"
                 [disabled]="isSubmitting()"
-                class="rounded-sm border border-gray-300 bg-white px-6 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                class="rounded-xs border border-gray-300 bg-white px-6 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
               >
                 Cancel
               </button>

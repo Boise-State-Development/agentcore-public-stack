@@ -7,12 +7,12 @@
 
   <!-- Error banner -->
   @if (state.error(); as errorMsg) {
-    <div class="mb-6 flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">
-      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-red-600 dark:text-red-400" />
-      <p class="flex-1 text-sm/6 text-red-800 dark:text-red-200">{{ errorMsg }}</p>
+    <div class="mb-6 flex items-start gap-3 rounded-sm border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20" role="alert">
+      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" />
+      <p class="flex-1 text-sm/6 text-state-danger-800 dark:text-state-danger-200">{{ errorMsg }}</p>
       <button
         (click)="state.clearError()"
-        class="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+        class="text-state-danger-500 hover:text-state-danger-700 dark:text-state-danger-400 dark:hover:text-state-danger-300"
         [appTooltip]="'Dismiss'"
         appTooltipPosition="left"
         aria-label="Dismiss error"
@@ -24,16 +24,16 @@
 
   <!-- Download error -->
   @if (downloadError(); as errMsg) {
-    <div class="mb-6 flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">
-      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-red-600 dark:text-red-400" />
-      <p class="flex-1 text-sm/6 text-red-800 dark:text-red-200">{{ errMsg }}</p>
+    <div class="mb-6 flex items-start gap-3 rounded-sm border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20" role="alert">
+      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" />
+      <p class="flex-1 text-sm/6 text-state-danger-800 dark:text-state-danger-200">{{ errMsg }}</p>
     </div>
   }
 
   <!-- Loading spinner -->
   @if (state.loading() && !state.currentTrainingJob()) {
     <div class="flex items-center justify-center py-12">
-      <div class="size-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Loading"></div>
+      <app-spinner size="lg" label="Loading" />
     </div>
   }
 
@@ -92,7 +92,7 @@
         @if (elapsed(); as elapsedTime) {
           <div>
             <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Elapsed</dt>
-            <dd class="mt-1 text-sm/6 font-medium text-blue-600 dark:text-blue-400">{{ elapsedTime }}</dd>
+            <dd class="mt-1 text-sm/6 font-medium text-state-info-600 dark:text-state-info-400">{{ elapsedTime }}</dd>
           </div>
         }
         <!-- Ended -->
@@ -120,7 +120,7 @@
               <div class="flex items-center gap-2">
                 <div class="h-2 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700" role="progressbar" [attr.aria-valuenow]="job.training_progress" aria-valuemin="0" aria-valuemax="100">
                   <div
-                    class="h-full rounded-full bg-blue-500 transition-all"
+                    class="h-full rounded-full bg-primary-500 transition-all"
                     [style.width.%]="job.training_progress"
                   ></div>
                 </div>
@@ -134,8 +134,8 @@
       <!-- Error message -->
       @if (job.status === 'FAILED' && job.error_message) {
         <div class="border-t border-gray-200 px-4 py-3 dark:border-gray-700">
-          <dt class="text-xs font-medium uppercase tracking-wider text-red-600 dark:text-red-400">Error</dt>
-          <dd class="mt-1 text-sm/6 text-red-700 dark:text-red-300">{{ job.error_message }}</dd>
+          <dt class="text-xs font-medium uppercase tracking-wider text-state-danger-600 dark:text-state-danger-400">Error</dt>
+          <dd class="mt-1 text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ job.error_message }}</dd>
         </div>
       }
 
@@ -163,11 +163,11 @@
         <button
           (click)="downloadArtifact()"
           [disabled]="loadingDownload()"
-          [class]="'inline-flex items-center gap-1.5 rounded-sm px-4 py-2 text-sm font-medium text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-600 ' +
-            (loadingDownload() ? 'cursor-not-allowed bg-green-400' : 'bg-green-600 hover:bg-green-700')"
+          [class]="'inline-flex items-center gap-1.5 rounded-sm px-4 py-2 text-sm font-medium text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-success-600 ' +
+            (loadingDownload() ? 'cursor-not-allowed bg-state-success-400' : 'bg-state-success-600 hover:bg-state-success-700')"
         >
           @if (loadingDownload()) {
-            <div class="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white" role="status" aria-label="Preparing download"></div>
+            <app-spinner size="sm" variant="on-solid" label="Preparing download" />
             Preparing...
           } @else {
             <ng-icon name="heroArrowDownTray" class="size-4" />
@@ -178,10 +178,10 @@
 
       @if (confirmingStop()) {
         <div class="flex items-center gap-2">
-          <span class="text-sm text-red-600 dark:text-red-400">Stop this job?</span>
+          <span class="text-sm text-state-danger-600 dark:text-state-danger-400">Stop this job?</span>
           <button
             (click)="executeStop()"
-            class="rounded-sm bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+            class="rounded-sm bg-state-danger-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-state-danger-700"
           >
             Yes, Stop
           </button>
@@ -195,7 +195,7 @@
       } @else if (canStop(job.status)) {
         <button
           (click)="confirmStop()"
-          class="inline-flex items-center gap-1.5 rounded-sm border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-gray-800 dark:text-red-400 dark:hover:bg-red-900/20"
+          class="inline-flex items-center gap-1.5 rounded-sm border border-state-danger-300 bg-white px-4 py-2 text-sm font-medium text-state-danger-700 hover:bg-state-danger-50 dark:border-state-danger-700 dark:bg-gray-800 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
         >
           <ng-icon name="heroStopSolid" class="size-4" />
           Stop Job
@@ -220,7 +220,7 @@
 
       @if (loadingLogs() && state.currentLogs().length === 0) {
         <div class="flex items-center justify-center rounded-sm border border-gray-200 bg-white py-8 dark:border-gray-700 dark:bg-gray-900">
-          <div class="size-6 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Loading logs"></div>
+          <app-spinner size="md" label="Loading logs" />
         </div>
       } @else if (state.currentLogs().length > 0) {
         <div class="max-h-96 overflow-auto rounded-sm border border-gray-200 bg-gray-950 dark:border-gray-700">

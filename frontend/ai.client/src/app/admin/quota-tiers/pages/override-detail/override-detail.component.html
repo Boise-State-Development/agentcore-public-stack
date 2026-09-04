@@ -14,8 +14,8 @@
 
     <!-- Error Display -->
     @if (error()) {
-      <div class="mb-6 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
-        <p class="text-sm/6 text-red-800 dark:text-red-300">{{ error() }}</p>
+      <div class="mb-6 rounded-sm border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20">
+        <p class="text-sm/6 text-state-danger-800 dark:text-state-danger-300">{{ error() }}</p>
       </div>
     }
 
@@ -27,17 +27,17 @@
 
         <div>
           <label for="userId" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-            User ID <span class="text-red-500">*</span>
+            User ID <span class="text-state-danger-600">*</span>
           </label>
           <input
             type="text"
             id="userId"
             formControlName="userId"
             placeholder="e.g., user-123, auth0|abc123"
-            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:disabled:bg-gray-800"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:disabled:bg-gray-800"
           />
           @if (overrideForm.controls.userId.invalid && overrideForm.controls.userId.touched) {
-            <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">User ID is required</p>
+            <p class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">User ID is required</p>
           }
           @if (isEditMode()) {
             <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">User ID cannot be changed after creation</p>
@@ -53,7 +53,7 @@
           <!-- Override Type -->
           <div>
             <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-              Override Type <span class="text-red-500">*</span>
+              Override Type <span class="text-state-danger-600">*</span>
             </label>
             <div class="mt-3 space-y-3">
               <label class="flex items-start">
@@ -62,7 +62,7 @@
                   formControlName="overrideType"
                   value="custom_limit"
                   [disabled]="isEditMode()"
-                  class="mt-1 size-4 border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700"
+                  class="mt-1 size-4 border-gray-300 text-primary-600 focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700"
                 />
                 <span class="ml-3">
                   <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Custom Limit</span>
@@ -77,7 +77,7 @@
                   formControlName="overrideType"
                   value="unlimited"
                   [disabled]="isEditMode()"
-                  class="mt-1 size-4 border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700"
+                  class="mt-1 size-4 border-gray-300 text-primary-600 focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700"
                 />
                 <span class="ml-3">
                   <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Unlimited</span>
@@ -96,11 +96,11 @@
 
           <!-- Custom Limits (conditional) -->
           @if (selectedType() === 'custom_limit') {
-            <div class="space-y-6 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+            <div class="space-y-6 rounded-sm border border-primary-200 bg-primary-50 p-4 dark:border-primary-800 dark:bg-primary-900/20">
               <!-- Monthly Cost Limit -->
               <div>
                 <label for="monthlyCostLimit" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                  Monthly Cost Limit (USD) <span class="text-red-500">*</span>
+                  Monthly Cost Limit (USD) <span class="text-state-danger-600">*</span>
                 </label>
                 <input
                   type="number"
@@ -110,10 +110,10 @@
                   min="0"
                   placeholder="0.00"
                   [disabled]="isEditMode()"
-                  class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:disabled:bg-gray-800"
+                  class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:disabled:bg-gray-800"
                 />
                 @if (overrideForm.controls.monthlyCostLimit.invalid && overrideForm.controls.monthlyCostLimit.touched) {
-                  <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">
+                  <p class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                     @if (overrideForm.controls.monthlyCostLimit.errors?.['required']) {
                       Monthly cost limit is required for custom limit type
                     } @else {
@@ -141,10 +141,10 @@
                   min="0"
                   placeholder="0.00"
                   [disabled]="isEditMode()"
-                  class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:disabled:bg-gray-800"
+                  class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:disabled:bg-gray-800"
                 />
                 @if (overrideForm.controls.dailyCostLimit.invalid && overrideForm.controls.dailyCostLimit.touched) {
-                  <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">Daily cost limit must be 0 or greater</p>
+                  <p class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Daily cost limit must be 0 or greater</p>
                 }
               </div>
             </div>
@@ -160,17 +160,17 @@
           <!-- Valid From -->
           <div>
             <label for="validFrom" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-              Valid From <span class="text-red-500">*</span>
+              Valid From <span class="text-state-danger-600">*</span>
             </label>
             <input
               type="datetime-local"
               id="validFrom"
               formControlName="validFrom"
               [disabled]="isEditMode()"
-              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:disabled:bg-gray-800"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:disabled:bg-gray-800"
             />
             @if (overrideForm.controls.validFrom.invalid && overrideForm.controls.validFrom.touched) {
-              <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">Start date is required</p>
+              <p class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Start date is required</p>
             }
             @if (isEditMode()) {
               <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">Start date cannot be changed</p>
@@ -180,16 +180,16 @@
           <!-- Valid Until -->
           <div>
             <label for="validUntil" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-              Valid Until <span class="text-red-500">*</span>
+              Valid Until <span class="text-state-danger-600">*</span>
             </label>
             <input
               type="datetime-local"
               id="validUntil"
               formControlName="validUntil"
-              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
             />
             @if (overrideForm.controls.validUntil.invalid && overrideForm.controls.validUntil.touched) {
-              <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">End date is required</p>
+              <p class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">End date is required</p>
             }
             <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
               You can extend the expiry date by editing the override
@@ -206,17 +206,17 @@
           <!-- Reason -->
           <div>
             <label for="reason" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-              Reason <span class="text-red-500">*</span>
+              Reason <span class="text-state-danger-600">*</span>
             </label>
             <textarea
               id="reason"
               formControlName="reason"
               rows="3"
               placeholder="Explain why this override is needed..."
-              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
             ></textarea>
             @if (overrideForm.controls.reason.invalid && overrideForm.controls.reason.touched) {
-              <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">Reason is required</p>
+              <p class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Reason is required</p>
             }
             <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
               Provide context for why this override was created (e.g., special project, testing, emergency)
@@ -230,7 +230,7 @@
                 <input
                   type="checkbox"
                   formControlName="enabled"
-                  class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                  class="size-4 rounded-xs border-gray-300 text-primary-600 focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700"
                 />
                 <span class="ml-3">
                   <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Enable this override</span>
@@ -257,13 +257,10 @@
         <button
           type="submit"
           [disabled]="overrideForm.invalid || isSubmitting()"
-          class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+          class="inline-flex items-center gap-2 rounded-sm bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:opacity-50"
         >
           @if (isSubmitting()) {
-            <svg class="size-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
+            <app-spinner size="sm" variant="on-solid" label="Saving" />
             Saving...
           } @else {
             @if (isEditMode()) {

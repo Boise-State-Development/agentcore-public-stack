@@ -27,11 +27,12 @@ import {
   SkillRoleDialogData,
   SkillRoleDialogResult,
 } from '../components/skill-role-dialog.component';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-skill-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, FormsModule, NgIcon],
+  imports: [RouterLink, FormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroPlus,
@@ -56,7 +57,7 @@ import {
           </div>
           <a
             routerLink="/admin/skills/new"
-            class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex shrink-0 items-center gap-2 rounded-lg bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:brightness-110"
           >
             <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
             Add Skill
@@ -78,7 +79,7 @@ import {
               [ngModel]="searchQuery()"
               (ngModelChange)="searchQuery.set($event)"
               placeholder="Search by name, ID, or description…"
-              class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+              class="block w-full rounded-lg border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
             />
           </div>
 
@@ -87,7 +88,7 @@ import {
             id="status"
             [ngModel]="statusFilter()"
             (ngModelChange)="statusFilter.set($event)"
-            class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            class="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
           >
             <option value="">All statuses</option>
             @for (status of statuses; track status.value) {
@@ -98,7 +99,7 @@ import {
           @if (hasActiveFilters()) {
             <button
               (click)="resetFilters()"
-              class="rounded-2xl px-3 py-2 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+              class="rounded-lg px-3 py-2 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
             >
               Reset
             </button>
@@ -114,7 +115,7 @@ import {
         @if (skillsResource.isLoading() && skills().length === 0) {
           <div class="flex h-64 items-center justify-center">
             <div class="flex flex-col items-center gap-4">
-              <div class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
+              <app-spinner size="xl" label="Loading skills" />
               <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading skills…</p>
             </div>
           </div>
@@ -122,7 +123,7 @@ import {
 
         <!-- Error State -->
         @if (skillsResource.error()) {
-          <div class="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+          <div class="mb-6 rounded-lg border border-state-danger-200 bg-state-danger-50 p-4 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
             <p class="text-sm/6">Failed to load skills. Please try again.</p>
             <button
               (click)="adminSkillService.reload()"
@@ -136,14 +137,14 @@ import {
         <!-- Skills List -->
         @if (!skillsResource.isLoading() || skills().length > 0) {
           @if (filteredSkills().length === 0) {
-            <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+            <div class="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
               @if (hasActiveFilters()) {
                 <p class="text-sm/6 text-gray-500 dark:text-gray-400">No skills match the current filters.</p>
               } @else {
                 <p class="text-sm/6 text-gray-500 dark:text-gray-400">No skills in catalog yet.</p>
                 <a
                   routerLink="/admin/skills/new"
-                  class="mt-4 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  class="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 dark:hover:brightness-110"
                 >
                   <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
                   Add Skill
@@ -151,7 +152,7 @@ import {
               }
             </div>
           } @else {
-            <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
+            <ul class="divide-y divide-gray-200 overflow-hidden rounded-lg border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
               @for (skill of filteredSkills(); track skill.skillId) {
                 <li>
                   <!-- Row -->
@@ -162,7 +163,7 @@ import {
                       [attr.aria-expanded]="isExpanded(skill.skillId)"
                       [attr.aria-controls]="'skill-detail-' + skill.skillId"
                       [attr.aria-label]="(isExpanded(skill.skillId) ? 'Hide' : 'Show') + ' details for ' + skill.displayName"
-                      class="flex size-7 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                      class="flex size-7 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                     >
                       <ng-icon
                         name="heroChevronDown"
@@ -203,7 +204,7 @@ import {
                         (click)="openRoleDialog(skill)"
                         [attr.aria-label]="'Manage role access for ' + skill.displayName"
                         [title]="'Manage role access for ' + skill.displayName"
-                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                        class="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                       >
                         <ng-icon name="heroUserGroup" class="size-4" aria-hidden="true" />
                       </button>
@@ -211,7 +212,7 @@ import {
                         [routerLink]="['/admin/skills/edit', skill.skillId]"
                         [attr.aria-label]="'Edit ' + skill.displayName"
                         [title]="'Edit ' + skill.displayName"
-                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                        class="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                       >
                         <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                       </a>
@@ -220,7 +221,7 @@ import {
                         (click)="deleteSkill(skill)"
                         [attr.aria-label]="'Delete ' + skill.displayName"
                         [title]="'Delete ' + skill.displayName"
-                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                        class="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                       >
                         <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                       </button>
@@ -246,7 +247,7 @@ import {
                           <dd class="mt-1 flex flex-wrap gap-1.5">
                             @if (skill.resources.length > 0) {
                               @for (res of skill.resources; track res.filename) {
-                                <span class="inline-flex items-center rounded-2xl bg-gray-100 px-2 py-0.5 font-mono text-xs/5 text-gray-700 dark:bg-gray-700 dark:text-gray-300" [title]="res.size + ' bytes'">
+                                <span class="inline-flex items-center rounded-lg bg-gray-100 px-2 py-0.5 font-mono text-xs/5 text-gray-700 dark:bg-gray-700 dark:text-gray-300" [title]="res.size + ' bytes'">
                                   {{ res.filename }}
                                 </span>
                               }
@@ -261,7 +262,7 @@ import {
                           <dd class="mt-1 flex flex-wrap gap-1.5">
                             @if (skill.allowedAppRoles.length > 0) {
                               @for (roleId of skill.allowedAppRoles; track roleId) {
-                                <span class="inline-flex items-center rounded-2xl bg-purple-100 px-2 py-0.5 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300" [title]="roleId">
+                                <span class="inline-flex items-center rounded-lg bg-state-secondary-100 px-2 py-0.5 text-xs/5 text-state-secondary-700 dark:bg-state-secondary-900/50 dark:text-state-secondary-300" [title]="roleId">
                                   {{ getRoleDisplayName(roleId) }}
                                 </span>
                               }
@@ -350,14 +351,14 @@ export class SkillListPage {
   }
 
   getStatusClass(status: string): string {
-    const base = 'shrink-0 rounded-2xl px-2.5 py-0.5 text-xs/5 font-medium';
+    const base = 'shrink-0 rounded-lg px-2.5 py-0.5 text-xs/5 font-medium';
     switch (status) {
       case 'active':
-        return `${base} bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300`;
+        return `${base} bg-state-success-100 text-state-success-800 dark:bg-state-success-900/30 dark:text-state-success-300`;
       case 'draft':
-        return `${base} bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300`;
+        return `${base} bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/30 dark:text-state-warning-300`;
       case 'disabled':
-        return `${base} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`;
+        return `${base} bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/30 dark:text-state-danger-300`;
       default:
         return `${base} bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300`;
     }

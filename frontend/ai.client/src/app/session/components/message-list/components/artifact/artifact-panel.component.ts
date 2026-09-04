@@ -105,7 +105,7 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
         >
           <span
             aria-hidden="true"
-            class="h-12 w-1 rounded-full bg-gray-300 transition-colors group-hover:bg-blue-500 group-focus-visible:bg-blue-500 dark:bg-gray-600 dark:group-hover:bg-blue-400"
+            class="h-12 w-1 rounded-full bg-gray-300 transition-colors group-hover:bg-primary-500 group-focus-visible:bg-primary-500 dark:bg-gray-600 dark:group-hover:bg-primary-400"
           ></span>
         </div>
         <header
@@ -121,7 +121,7 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
               <div #versionControl class="relative">
                 <button
                   type="button"
-                  class="-ml-1 flex items-center gap-0.5 rounded px-1 py-0.5 text-xs text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:text-gray-100"
+                  class="-ml-1 flex items-center gap-0.5 rounded px-1 py-0.5 text-xs text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-400 dark:hover:text-gray-100"
                   aria-haspopup="menu"
                   [attr.aria-expanded]="menuOpen()"
                   aria-controls="artifact-version-menu"
@@ -154,7 +154,7 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
                         type="button"
                         role="menuitemradio"
                         [attr.aria-checked]="v.version === ref.version"
-                        class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+                        class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
                         [class]="
                           v.version === ref.version
                             ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-gray-100'
@@ -180,7 +180,7 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
                         </span>
                         @if (v.version === latestVersion()) {
                           <span
-                            class="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-500/15 dark:text-blue-300"
+                            class="shrink-0 rounded bg-primary-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-accessible dark:bg-primary-500/15 dark:text-primary-accessible-dark"
                             >Latest</span
                           >
                         }
@@ -202,7 +202,7 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
           >
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
               [class]="
                 view() === 'preview'
                   ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
@@ -217,7 +217,7 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
             </button>
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
               [class]="
                 view() === 'code'
                   ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
@@ -238,7 +238,7 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
           @if (view() === 'code') {
             <button
               type="button"
-              class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+              class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
               [attr.aria-label]="copied() ? 'Copied' : 'Copy code'"
               [disabled]="!source()"
               (click)="copy()"
@@ -246,14 +246,14 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
               <ng-icon
                 [name]="copied() ? 'heroCheck' : 'heroClipboard'"
                 class="text-lg"
-                [class.text-green-600]="copied()"
+                [class.text-state-success-600]="copied()"
                 aria-hidden="true"
               />
             </button>
           }
           <button
             type="button"
-            class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
             [attr.aria-label]="'Share artifact, version ' + ref.version"
             [appTooltip]="'Share version ' + ref.version"
             appTooltipPosition="bottom"
@@ -267,7 +267,7 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
           </button>
           <button
             type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
             [attr.aria-label]="
               downloading() ? 'Downloading artifact…' : 'Download artifact'
             "
@@ -284,7 +284,7 @@ import { TooltipDirective } from '../../../../../components/tooltip/tooltip.dire
           </button>
           <button
             type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
             aria-label="Close artifact"
             (click)="close()"
           >

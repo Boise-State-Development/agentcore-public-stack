@@ -117,7 +117,7 @@ interface NavGroup {
               <label for="admin-nav" class="sr-only">Admin section</label>
               <select
                 id="admin-nav"
-                class="block w-full rounded-sm border-gray-300 bg-white py-2 pl-3 pr-10 text-base text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                class="block w-full rounded-sm border-gray-300 bg-white py-2 pl-3 pr-10 text-base text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                 (change)="onMobileNavChange($event)"
               >
                 @for (group of navGroups(); track group.label) {
@@ -155,7 +155,7 @@ interface NavGroup {
                             @if (item.badge; as badge) {
                               @if (badge() > 0) {
                                 <span
-                                  class="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 px-1.5 text-xs/5 font-semibold text-white dark:bg-blue-500"
+                                  class="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-primary-accessible px-1.5 text-xs/5 font-semibold text-white"
                                   [attr.aria-label]="badge() + ' waiting'"
                                 >
                                   {{ badge() }}

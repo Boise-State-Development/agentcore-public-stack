@@ -44,7 +44,7 @@ import type { ArtifactContent } from '../../../../services/artifacts/artifact-ht
           >
             <ng-icon
               name="heroExclamationTriangle"
-              class="text-3xl text-amber-500"
+              class="text-3xl text-state-warning-500"
               aria-hidden="true"
             />
             <p class="text-sm text-gray-700 dark:text-gray-300">
@@ -52,7 +52,7 @@ import type { ArtifactContent } from '../../../../services/artifacts/artifact-ht
             </p>
             <button
               type="button"
-              class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
+              class="rounded-md bg-primary-accessible px-3 py-1.5 text-sm font-medium text-white transition-[filter] hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
               (click)="retrySource.emit()"
             >
               Try again
@@ -77,7 +77,7 @@ import type { ArtifactContent } from '../../../../services/artifacts/artifact-ht
           >
             <ng-icon
               name="heroExclamationTriangle"
-              class="text-3xl text-amber-500"
+              class="text-3xl text-state-warning-500"
               aria-hidden="true"
             />
             <p class="text-sm text-gray-700 dark:text-gray-300">
@@ -85,7 +85,7 @@ import type { ArtifactContent } from '../../../../services/artifacts/artifact-ht
             </p>
             <button
               type="button"
-              class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
+              class="rounded-md bg-primary-accessible px-3 py-1.5 text-sm font-medium text-white transition-[filter] hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
               (click)="retry.emit()"
             >
               Try again

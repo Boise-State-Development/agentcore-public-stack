@@ -21,10 +21,11 @@ import { FineTuningStateService } from '../../services/fine-tuning-state.service
 import { FineTuningHttpService } from '../../services/fine-tuning-http.service';
 import { FineTuningUploadService } from '../../services/fine-tuning-upload.service';
 import { AvailableModel, FileUploadState, CreateJobRequest, HuggingFaceModelResult } from '../../models/fine-tuning.models';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-create-training-job',
-  imports: [RouterLink, ReactiveFormsModule, NgIcon, DecimalPipe],
+  imports: [RouterLink, ReactiveFormsModule, NgIcon, DecimalPipe, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowLeft,

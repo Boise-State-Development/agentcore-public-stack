@@ -17,11 +17,12 @@ import {
 import { UserStateService } from '../../services/user-state.service';
 import { UserListItem, UserStatus } from '../../models';
 import { parseIso } from '../../../../utils/date';
+import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-user-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon],
+  imports: [FormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({ heroMagnifyingGlass, heroUser, heroChevronRight, heroXMark, heroArrowLeft }),
   ],
@@ -48,7 +49,7 @@ import { parseIso } from '../../../../utils/date';
           [(ngModel)]="searchEmail"
           (keyup.enter)="search()"
           placeholder="Search by email address..."
-          class="w-full pl-10 pr-10 py-2 bg-white border border-gray-300 rounded-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-800 dark:border-gray-500 dark:text-white dark:placeholder-gray-400"
+          class="w-full pl-10 pr-10 py-2 bg-white border border-gray-300 rounded-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 dark:bg-gray-800 dark:border-gray-500 dark:text-white dark:placeholder-gray-400"
         />
         @if (searchEmail) {
           <button
@@ -76,7 +77,7 @@ import { parseIso } from '../../../../utils/date';
 
     <!-- Error State -->
     @if (state.hasError()) {
-      <div class="mb-6 p-4 bg-red-50 border border-red-200 rounded-sm text-red-800 dark:bg-red-900/20 dark:border-red-800 dark:text-red-200">
+      <div class="mb-6 p-4 bg-state-danger-50 border border-state-danger-200 rounded-sm text-state-danger-800 dark:bg-state-danger-900/20 dark:border-state-danger-800 dark:text-state-danger-200">
         <p>{{ state.error() }}</p>
         <button
           (click)="state.clearError()"
@@ -91,9 +92,7 @@ import { parseIso } from '../../../../utils/date';
     @if (state.loading() && state.users().length === 0) {
       <div class="flex items-center justify-center h-64">
         <div class="flex flex-col items-center gap-4">
-          <div
-            class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400"
-          ></div>
+          <app-spinner size="xl" label="Loading users" />
           <p class="text-sm text-gray-500 dark:text-gray-400">
             Loading users...
           </p>
@@ -171,7 +170,7 @@ import { parseIso } from '../../../../utils/date';
         <button
           (click)="loadMore()"
           [disabled]="state.loading()"
-          class="px-4 py-2 text-blue-600 hover:text-blue-800 disabled:opacity-50 dark:text-blue-400 dark:hover:text-blue-300"
+          class="px-4 py-2 text-primary-accessible hover:underline disabled:opacity-50 dark:text-primary-accessible-dark"
         >
           @if (state.loading()) {
             Loading...
@@ -244,11 +243,11 @@ export class UserListPage implements OnInit {
   getStatusClass(status: UserStatus): string {
     switch (status) {
       case 'suspended':
-        return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
+        return 'bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900 dark:text-state-danger-200';
       case 'inactive':
         return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200';
       default:
-        return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
+        return 'bg-state-success-100 text-state-success-800 dark:bg-state-success-900 dark:text-state-success-200';
     }
   }
 }

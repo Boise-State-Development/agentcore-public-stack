@@ -63,8 +63,8 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
  *  - **Redesign tokens, not the source dialog's.** Per the frontend
  *    convention, an adapted dialog copies the older one's *structure*
  *    (backdrop + centred panel + DialogRef wiring) and not its
- *    pre-redesign styling — hence `rounded-2xl` / `text-sm/6` /
- *    `bg-blue-600` throughout.
+ *    pre-redesign styling — hence `rounded-2xl` / `text-sm/6` and the
+ *    brand `primary-*` / `state-*` tokens throughout.
  *
  * The dialog never touches artifact content. Opening a shared artifact
  * is a separate, access-checked mint on the recipient's side.
@@ -135,7 +135,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
             type="button"
             (click)="onClose()"
             aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
           </button>
@@ -152,7 +152,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                 class="flex cursor-pointer items-start gap-3 rounded-2xl border p-3 transition-colors"
                 [class]="
                   selectedAccess() === option.value
-                    ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-500/10'
+                    ? 'border-primary-500 bg-primary-50 dark:border-primary-400 dark:bg-primary-500/10'
                     : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700/40'
                 "
               >
@@ -162,7 +162,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                   [value]="option.value"
                   [checked]="selectedAccess() === option.value"
                   (change)="selectedAccess.set(option.value)"
-                  class="mt-1 size-4 text-blue-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                  class="mt-1 size-4 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                 />
                 <span class="min-w-0">
                   <span
@@ -192,7 +192,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                 <!-- Owner chip: the backend keeps the owner on every
                      allowlist, so it isn't removable here either. -->
                 <span
-                  class="inline-flex items-center gap-1 rounded-2xl bg-blue-100 px-2.5 py-0.5 text-xs/5 font-medium text-blue-700 dark:bg-blue-500/20 dark:text-blue-300"
+                  class="inline-flex items-center gap-1 rounded-2xl bg-primary-100 px-2.5 py-0.5 text-xs/5 font-medium text-primary-700 dark:bg-primary-500/20 dark:text-primary-300"
                 >
                   {{ data.ownerEmail }} (you)
                 </span>
@@ -205,7 +205,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                     <button
                       type="button"
                       (click)="removeEmail(email)"
-                      class="ml-0.5 inline-flex size-3.5 items-center justify-center rounded-2xl hover:bg-gray-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:hover:bg-gray-600"
+                      class="ml-0.5 inline-flex size-3.5 items-center justify-center rounded-2xl hover:bg-gray-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-600"
                       [attr.aria-label]="'Remove ' + email"
                     >
                       <ng-icon
@@ -226,13 +226,13 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                   [ngModel]="emailInput()"
                   (ngModelChange)="emailInput.set($event)"
                   (keydown.enter)="addEmail($event)"
-                  class="flex-1 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                  class="flex-1 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                 />
                 <button
                   type="button"
                   (click)="addEmail()"
                   [disabled]="!emailInput().trim()"
-                  class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white transition-[filter] hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Add
                 </button>
@@ -243,14 +243,14 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
           <!-- Result of the share just created -->
           @if (shareResult(); as result) {
             <div
-              class="mt-4 rounded-2xl border border-green-200 bg-green-50 p-3 dark:border-green-700 dark:bg-green-500/10"
+              class="mt-4 rounded-2xl border border-state-success-200 bg-state-success-50 p-3 dark:border-state-success-700 dark:bg-state-success-500/10"
             >
               <p
-                class="text-sm/6 font-medium text-green-800 dark:text-green-300"
+                class="text-sm/6 font-medium text-state-success-800 dark:text-state-success-300"
               >
                 Artifact shared
               </p>
-              <p class="mb-2 text-xs/5 text-green-700 dark:text-green-400">
+              <p class="mb-2 text-xs/5 text-state-success-700 dark:text-state-success-400">
                 This link always shows version {{ result.version }}. Later
                 versions aren't included.
               </p>
@@ -260,12 +260,12 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                   readonly
                   [value]="absoluteUrl(result)"
                   aria-label="Share link"
-                  class="min-w-0 flex-1 rounded-2xl border border-green-200 bg-white px-2.5 py-1.5 text-xs/5 text-gray-700 dark:border-green-700 dark:bg-gray-700 dark:text-gray-300"
+                  class="min-w-0 flex-1 rounded-2xl border border-state-success-200 bg-white px-2.5 py-1.5 text-xs/5 text-gray-700 dark:border-state-success-700 dark:bg-gray-700 dark:text-gray-300"
                 />
                 <button
                   type="button"
                   (click)="copyLink(result)"
-                  class="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                  class="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
                 >
                   <ng-icon
                     [name]="
@@ -301,13 +301,13 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                       @if (share.accessLevel === 'public') {
                         <ng-icon
                           name="heroGlobeAlt"
-                          class="size-4 shrink-0 text-green-600 dark:text-green-400"
+                          class="size-4 shrink-0 text-state-success-600 dark:text-state-success-400"
                           aria-hidden="true"
                         />
                       } @else {
                         <ng-icon
                           name="heroLockClosed"
-                          class="size-4 shrink-0 text-amber-600 dark:text-amber-400"
+                          class="size-4 shrink-0 text-state-warning-600 dark:text-state-warning-400"
                           aria-hidden="true"
                         />
                       }
@@ -329,7 +329,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                       <button
                         type="button"
                         (click)="copyLink(share)"
-                        class="rounded-2xl px-3 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-700"
+                        class="rounded-2xl px-3 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700"
                         [attr.aria-label]="
                           'Copy link for version ' + share.version
                         "
@@ -342,7 +342,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                         type="button"
                         (click)="revoke(share)"
                         [disabled]="revokingIds().has(share.shareId)"
-                        class="rounded-2xl px-3 py-1 text-xs/5 font-medium text-red-600 hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-60 dark:text-red-400 dark:hover:bg-red-500/10"
+                        class="rounded-2xl px-3 py-1 text-xs/5 font-medium text-state-danger-600 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-60 dark:text-state-danger-400 dark:hover:bg-state-danger-500/10"
                         [attr.aria-label]="
                           'Revoke link for version ' + share.version
                         "
@@ -363,7 +363,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
           <!-- Error -->
           @if (error()) {
             <p
-              class="mt-4 rounded-2xl bg-red-50 p-3 text-sm/6 text-red-700 dark:bg-red-500/10 dark:text-red-300"
+              class="mt-4 rounded-2xl bg-state-danger-50 p-3 text-sm/6 text-state-danger-700 dark:bg-state-danger-500/10 dark:text-state-danger-300"
               role="alert"
             >
               {{ error() }}
@@ -388,7 +388,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
               type="button"
               (click)="onShare()"
               [disabled]="isSubmitting()"
-              class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
+              class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white transition-[filter] hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
               @if (isSubmitting()) {
                 <span
@@ -404,9 +404,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
-
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../../../../styles/theme.css";
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;

@@ -37,6 +37,7 @@ import {
   DeclineSubmissionDialogResult,
 } from '../components/decline-submission-dialog.component';
 import { parseIso } from '../../../utils/date';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 /**
  * The Review queue — every submission awaiting a decision (D2).
@@ -56,7 +57,7 @@ import { parseIso } from '../../../utils/date';
 @Component({
   selector: 'app-review-queue',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, AgentTileComponent, ReviewDiffComponent],
+  imports: [NgIcon, RouterLink, AgentTileComponent, ReviewDiffComponent, SpinnerComponent],
   providers: [
     provideIcons({ heroInbox, heroCheck, heroArrowUturnLeft, heroEyeSlash, heroNoSymbol }),
   ],
@@ -80,7 +81,7 @@ import { parseIso } from '../../../utils/date';
         @if (error()) {
           <div
             role="alert"
-            class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mb-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
@@ -88,10 +89,7 @@ import { parseIso } from '../../../utils/date';
 
         @if (loading()) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading submissions</span>
+            <app-spinner size="lg" label="Loading submissions" />
           </div>
         } @else if (submissions().length === 0) {
           <div
@@ -127,7 +125,7 @@ import { parseIso } from '../../../utils/date';
                          and the decision buttons stay the row's only competing targets. -->
                     <a
                       [routerLink]="['/admin/marketplace/review', row.agentId]"
-                      class="truncate rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                      class="truncate rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                       >{{ row.name }}</a
                     >
                     <!-- The two things in this queue want opposite answers, and without a
@@ -136,7 +134,7 @@ import { parseIso } from '../../../utils/date';
                          author's request without ever saying so. -->
                     @if (isWithdrawal(row)) {
                       <span
-                        class="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs/5 font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                        class="shrink-0 rounded-full bg-state-warning-100 px-2 py-0.5 text-xs/5 font-medium text-state-warning-800 dark:bg-state-warning-900/40 dark:text-state-warning-300"
                         >Withdrawal requested</span
                       >
                     }
@@ -180,7 +178,7 @@ import { parseIso } from '../../../utils/date';
                       type="button"
                       [disabled]="busyId() === row.agentId"
                       (click)="decideWithdrawal(row, 'decline')"
-                      class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                      class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                     >
                       <ng-icon name="heroArrowUturnLeft" class="size-4" aria-hidden="true" />
                       Keep published
@@ -189,7 +187,7 @@ import { parseIso } from '../../../utils/date';
                       type="button"
                       [disabled]="busyId() === row.agentId"
                       (click)="decideWithdrawal(row, 'grant')"
-                      class="inline-flex items-center gap-1.5 rounded-2xl bg-rose-600 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-rose-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50"
+                      class="inline-flex items-center gap-1.5 rounded-2xl bg-state-danger-600 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <ng-icon name="heroEyeSlash" class="size-4" aria-hidden="true" />
                       Take it down
@@ -199,7 +197,7 @@ import { parseIso } from '../../../utils/date';
                       type="button"
                       [disabled]="busyId() === row.agentId"
                       (click)="decline(row)"
-                      class="inline-flex items-center gap-1.5 rounded-2xl border border-rose-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-rose-700 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-gray-800 dark:text-rose-300 dark:hover:bg-rose-900/20"
+                      class="inline-flex items-center gap-1.5 rounded-2xl border border-state-danger-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-state-danger-700 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-state-danger-800 dark:bg-gray-800 dark:text-state-danger-300 dark:hover:bg-state-danger-900/20"
                     >
                       <ng-icon name="heroNoSymbol" class="size-4" aria-hidden="true" />
                       Decline
@@ -208,7 +206,7 @@ import { parseIso } from '../../../utils/date';
                       type="button"
                       [disabled]="busyId() === row.agentId"
                       (click)="requestChanges(row)"
-                      class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                      class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                     >
                       <ng-icon name="heroArrowUturnLeft" class="size-4" aria-hidden="true" />
                       Request changes
@@ -217,7 +215,7 @@ import { parseIso } from '../../../utils/date';
                       type="button"
                       [disabled]="busyId() === row.agentId"
                       (click)="approve(row)"
-                      class="inline-flex items-center gap-1.5 rounded-2xl bg-blue-600 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                      class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3 py-1.5 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <ng-icon name="heroCheck" class="size-4" aria-hidden="true" />
                       Approve
@@ -236,7 +234,7 @@ import { parseIso } from '../../../utils/date';
                      them. -->
                 @if (reachabilityWarning(row); as warning) {
                   <p
-                    class="flex items-start gap-1.5 border-t border-gray-100 pt-3 text-sm/6 text-amber-700 dark:border-gray-700 dark:text-amber-400"
+                    class="flex items-start gap-1.5 border-t border-gray-100 pt-3 text-sm/6 text-state-warning-700 dark:border-gray-700 dark:text-state-warning-400"
                   >
                     <ng-icon name="heroEyeSlash" class="mt-1 size-4 shrink-0" aria-hidden="true" />
                     <span>{{ warning }}</span>

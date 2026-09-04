@@ -94,7 +94,7 @@ import { PreviewChatService } from '../../../assistants/assistant-form/services/
               [attr.aria-expanded]="expanded()"
               [attr.aria-label]="expanded() ? 'Collapse the test drive' : 'Expand the test drive to full width'"
               [title]="expanded() ? 'Collapse' : 'Expand to full width'"
-              class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
             >
               <ng-icon
                 [name]="expanded() ? 'heroArrowsPointingIn' : 'heroArrowsPointingOut'"
@@ -108,7 +108,7 @@ import { PreviewChatService } from '../../../assistants/assistant-form/services/
         <!-- Never collapsed away. A reviewer who reads a clean test drive as "this works
              for everyone" has drawn the one wrong conclusion this panel can produce. -->
         <p
-          class="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs/5 text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300"
+          class="mt-2 flex items-start gap-1.5 rounded-lg border border-state-warning-200 bg-state-warning-50 px-2.5 py-1.5 text-xs/5 text-state-warning-800 dark:border-state-warning-800/50 dark:bg-state-warning-900/20 dark:text-state-warning-300"
         >
           <ng-icon
             name="heroExclamationTriangle"
@@ -167,7 +167,7 @@ import { PreviewChatService } from '../../../assistants/assistant-form/services/
       @if (chat.error(); as message) {
         <p
           role="alert"
-          class="shrink-0 border-t border-gray-200 px-4 py-2 text-xs/5 text-rose-700 dark:border-gray-700 dark:text-rose-400"
+          class="shrink-0 border-t border-gray-200 px-4 py-2 text-xs/5 text-state-danger-700 dark:border-gray-700 dark:text-state-danger-400"
         >
           {{ message }}
         </p>

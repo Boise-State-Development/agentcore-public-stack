@@ -20,6 +20,7 @@ import {
   fieldLabel,
   formatValue,
 } from '../models/audit.model';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 /**
  * Audit Log — who changed which role, when, and from what to what.
@@ -45,7 +46,7 @@ import {
 @Component({
   selector: 'app-audit-log',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowPath,
@@ -70,7 +71,7 @@ import {
         @if (error()) {
           <div
             role="alert"
-            class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mb-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
@@ -86,7 +87,7 @@ import {
             id="audit-month"
             [value]="month()"
             (change)="onMonthChange($event)"
-            class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+            class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
           />
           <button
             type="button"
@@ -101,10 +102,7 @@ import {
 
         @if (loading() && records().length === 0) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading audit records</span>
+            <app-spinner size="lg" label="Loading audit records" />
           </div>
         } @else if (records().length === 0 && !error()) {
           <!-- Only when the read succeeded and genuinely returned nothing.
@@ -133,8 +131,8 @@ import {
                 class="rounded-2xl border bg-white dark:bg-gray-800"
                 [class.border-gray-200]="record.outcome !== 'denied'"
                 [class.dark:border-gray-700]="record.outcome !== 'denied'"
-                [class.border-rose-300]="record.outcome === 'denied'"
-                [class.dark:border-rose-800]="record.outcome === 'denied'"
+                [class.border-state-danger-300]="record.outcome === 'denied'"
+                [class.dark:border-state-danger-800]="record.outcome === 'denied'"
               >
                 <div class="p-4">
                   <div class="flex flex-wrap items-center gap-2">
@@ -143,7 +141,7 @@ import {
                     </span>
                     @if (record.outcome === 'denied') {
                       <span
-                        class="inline-flex items-center gap-1 rounded-xs bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-800 dark:bg-rose-900/30 dark:text-rose-300"
+                        class="inline-flex items-center gap-1 rounded-xs bg-state-danger-100 px-2 py-0.5 text-xs font-medium text-state-danger-800 dark:bg-state-danger-900/30 dark:text-state-danger-300"
                       >
                         <ng-icon name="heroExclamationTriangle" class="size-3" aria-hidden="true" />
                         Denied
@@ -159,7 +157,7 @@ import {
                   </p>
 
                   @if (record.reason) {
-                    <p class="mt-2 text-sm/6 text-rose-700 dark:text-rose-300">
+                    <p class="mt-2 text-sm/6 text-state-danger-700 dark:text-state-danger-300">
                       {{ record.reason }}
                     </p>
                   }

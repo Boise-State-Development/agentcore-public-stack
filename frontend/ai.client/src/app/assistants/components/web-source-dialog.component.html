@@ -26,7 +26,7 @@
         type="button"
         (click)="cancel()"
         aria-label="Close"
-        class="-mr-1 rounded-2xl p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+        class="-mr-1 rounded-2xl p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
       >
         <ng-icon name="heroXMark" class="size-5" />
       </button>
@@ -48,7 +48,7 @@
           [value]="url()"
           (input)="onUrlInput($any($event.target).value)"
           (keydown.enter)="submit()"
-          class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+          class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
         />
         <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
           Public http or https URLs only. JavaScript-only sites may render as empty pages — only the HTML is fetched.
@@ -63,7 +63,7 @@
             type="checkbox"
             [checked]="crawlLinkedPages()"
             (change)="setCrawlLinkedPages($any($event.target).checked)"
-            class="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+            class="size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
           />
         </div>
         <div class="min-w-0">
@@ -97,7 +97,7 @@
               step="1"
               [value]="maxDepth()"
               (input)="setMaxDepth($any($event.target).value)"
-              class="mt-1 w-full accent-blue-600"
+              class="mt-1 w-full accent-primary-600"
             />
             <p class="text-xs/5 text-gray-500 dark:text-gray-400">
               How many link hops from the start URL. 0 = single page, 3 = links of links of links.
@@ -118,7 +118,7 @@
               step="1"
               [value]="maxPages()"
               (input)="setMaxPages($any($event.target).value)"
-              class="mt-1 w-full accent-blue-600"
+              class="mt-1 w-full accent-primary-600"
             />
             <p class="text-xs/5 text-gray-500 dark:text-gray-400">
               Hard cap. Crawl stops once this many pages have been queued.
@@ -139,7 +139,7 @@
               step="1"
               [value]="concurrency()"
               (input)="setConcurrency($any($event.target).value)"
-              class="mt-1 w-full accent-blue-600"
+              class="mt-1 w-full accent-primary-600"
             />
           </div>
 
@@ -162,7 +162,7 @@
                   step="0.5"
                   [value]="minDelay()"
                   (input)="setMinDelay($any($event.target).value)"
-                  class="mt-1 w-full accent-blue-600"
+                  class="mt-1 w-full accent-primary-600"
                 />
               </div>
               <div>
@@ -175,12 +175,12 @@
                   step="0.5"
                   [value]="maxDelay()"
                   (input)="setMaxDelay($any($event.target).value)"
-                  class="mt-1 w-full accent-blue-600"
+                  class="mt-1 w-full accent-primary-600"
                 />
               </div>
             </div>
             @if (delayRangeInvalid()) {
-              <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">Max delay must be at least min delay.</p>
+              <p class="mt-1 text-xs/5 text-state-danger-600 dark:text-state-danger-400">Max delay must be at least min delay.</p>
             }
             <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
               Random pause between requests to the same host. Politer is slower.
@@ -194,9 +194,9 @@
       }
 
       @if (error(); as msg) {
-        <div class="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
-          <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-red-600 dark:text-red-400" aria-hidden="true" />
-          <p class="text-sm/6 text-red-700 dark:text-red-300">{{ msg }}</p>
+        <div class="flex items-start gap-3 rounded-2xl border border-state-danger-200 bg-state-danger-50 p-3 dark:border-state-danger-800 dark:bg-state-danger-900/20">
+          <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" aria-hidden="true" />
+          <p class="text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ msg }}</p>
         </div>
       }
     </div>
@@ -206,7 +206,7 @@
       <button
         type="button"
         (click)="cancel()"
-        class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
       >
         Cancel
       </button>
@@ -214,10 +214,10 @@
         type="button"
         (click)="submit()"
         [disabled]="!canSubmit() || delayRangeInvalid()"
-        class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-3 py-1.5 text-sm/6 font-semibold text-white hover:bg-blue-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+        class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-3 py-1.5 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60"
       >
         @if (submitting()) {
-          <div class="size-4 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white"></div>
+          <app-spinner size="sm" variant="on-solid" label="Starting" />
           Starting…
         } @else if (crawlLinkedPages()) {
           Start crawling

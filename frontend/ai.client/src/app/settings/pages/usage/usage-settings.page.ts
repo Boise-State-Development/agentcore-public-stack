@@ -8,11 +8,12 @@ import {
 import { DecimalPipe } from '@angular/common';
 import { CostService } from './services/cost.service';
 import { UserCostSummary } from './models/cost-summary.model';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-usage-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DecimalPipe],
+  imports: [DecimalPipe, SpinnerComponent],
   host: { class: 'block' },
   template: `
     <div class="flex flex-col gap-8">
@@ -30,7 +31,7 @@ import { UserCostSummary } from './models/cost-summary.model';
           type="button"
           (click)="resetToCurrentMonth()"
           [class]="selectedPeriodType() === 'current'
-            ? 'bg-blue-600 text-white border-blue-600 dark:bg-blue-500 dark:border-blue-500'
+            ? 'bg-primary-accessible text-white border-primary-accessible'
             : 'bg-white text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600'"
           class="rounded-sm border px-3 py-1.5 text-sm/6 font-medium transition-colors"
         >
@@ -40,7 +41,7 @@ import { UserCostSummary } from './models/cost-summary.model';
           type="button"
           (click)="loadLast30Days()"
           [class]="selectedPeriodType() === 'last30'
-            ? 'bg-blue-600 text-white border-blue-600 dark:bg-blue-500 dark:border-blue-500'
+            ? 'bg-primary-accessible text-white border-primary-accessible'
             : 'bg-white text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600'"
           class="rounded-sm border px-3 py-1.5 text-sm/6 font-medium transition-colors"
         >
@@ -52,7 +53,7 @@ import { UserCostSummary } from './models/cost-summary.model';
         <select
           (change)="loadMonth($any($event.target).value)"
           [value]="selectedPeriodType() === 'month' ? selectedMonthValue() : ''"
-          class="rounded-sm border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors focus:border-blue-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300"
+          class="rounded-sm border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors focus:border-primary-500 focus:outline-hidden focus:ring-2 focus:ring-primary-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300"
         >
           <option value="" disabled [selected]="selectedPeriodType() !== 'month'">Previous month...</option>
           @for (month of previousMonths; track month.value) {
@@ -65,7 +66,7 @@ import { UserCostSummary } from './models/cost-summary.model';
       @if ((selectedPeriodType() === 'current' && costSummary.isLoading()) || isLoadingCustomReport()) {
         <div class="flex items-center justify-center py-12">
           <div class="flex flex-col items-center gap-3">
-            <div class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-t-blue-400"></div>
+            <app-spinner size="lg" label="Loading cost data" />
             <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading cost data...</p>
           </div>
         </div>
@@ -73,14 +74,14 @@ import { UserCostSummary } from './models/cost-summary.model';
 
       <!-- Error State -->
       @else if (selectedPeriodType() === 'current' && costSummary.error()) {
-        <div class="rounded-lg bg-red-50 p-4 dark:bg-red-900/20">
-          <p class="text-sm/6 font-medium text-red-800 dark:text-red-200">Error loading cost data</p>
+        <div class="rounded-lg bg-state-danger-50 p-4 dark:bg-state-danger-900/20">
+          <p class="text-sm/6 font-medium text-state-danger-800 dark:text-state-danger-200">Error loading cost data</p>
         </div>
       }
 
       @else if (customReportError()) {
-        <div class="rounded-lg bg-red-50 p-4 dark:bg-red-900/20">
-          <p class="text-sm/6 text-red-800 dark:text-red-200">{{ customReportError() }}</p>
+        <div class="rounded-lg bg-state-danger-50 p-4 dark:bg-state-danger-900/20">
+          <p class="text-sm/6 text-state-danger-800 dark:text-state-danger-200">{{ customReportError() }}</p>
         </div>
       }
 
@@ -93,7 +94,7 @@ import { UserCostSummary } from './models/cost-summary.model';
               {{ formatCurrency(totalCost()) }}
             </p>
             @if (totalCacheSavings() > 0) {
-              <p class="mt-1 text-xs text-green-600 dark:text-green-400">
+              <p class="mt-1 text-xs text-state-success-600 dark:text-state-success-400">
                 Saved {{ formatCurrency(totalCacheSavings()) }} with caching
                 ({{ cacheSavingsPercentage() | number: '1.1-1' }}%)
               </p>

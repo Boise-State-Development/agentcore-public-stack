@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { TopUserCost } from '../models';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 type SortColumn = 'cost' | 'requests' | 'avgCost' | 'quota';
 type SortDirection = 'asc' | 'desc';
@@ -18,7 +19,7 @@ type SortDirection = 'asc' | 'desc';
  */
 @Component({
   selector: 'app-top-users-table',
-  imports: [DecimalPipe],
+  imports: [DecimalPipe, SpinnerComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div
@@ -51,8 +52,8 @@ type SortDirection = 'asc' | 'desc';
               </th>
               <th
                 class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-                [class.text-blue-600]="sortColumn() === 'cost'"
-                [class.dark:text-blue-400]="sortColumn() === 'cost'"
+                [class.text-primary-accessible]="sortColumn() === 'cost'"
+                [class.dark:text-primary-accessible-dark]="sortColumn() === 'cost'"
                 [class.text-gray-500]="sortColumn() !== 'cost'"
                 [class.dark:text-gray-400]="sortColumn() !== 'cost'"
                 (click)="toggleSort('cost')"
@@ -80,8 +81,8 @@ type SortDirection = 'asc' | 'desc';
               </th>
               <th
                 class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-                [class.text-blue-600]="sortColumn() === 'requests'"
-                [class.dark:text-blue-400]="sortColumn() === 'requests'"
+                [class.text-primary-accessible]="sortColumn() === 'requests'"
+                [class.dark:text-primary-accessible-dark]="sortColumn() === 'requests'"
                 [class.text-gray-500]="sortColumn() !== 'requests'"
                 [class.dark:text-gray-400]="sortColumn() !== 'requests'"
                 (click)="toggleSort('requests')"
@@ -109,8 +110,8 @@ type SortDirection = 'asc' | 'desc';
               </th>
               <th
                 class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-                [class.text-blue-600]="sortColumn() === 'avgCost'"
-                [class.dark:text-blue-400]="sortColumn() === 'avgCost'"
+                [class.text-primary-accessible]="sortColumn() === 'avgCost'"
+                [class.dark:text-primary-accessible-dark]="sortColumn() === 'avgCost'"
                 [class.text-gray-500]="sortColumn() !== 'avgCost'"
                 [class.dark:text-gray-400]="sortColumn() !== 'avgCost'"
                 (click)="toggleSort('avgCost')"
@@ -143,8 +144,8 @@ type SortDirection = 'asc' | 'desc';
               </th>
               <th
                 class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-                [class.text-blue-600]="sortColumn() === 'quota'"
-                [class.dark:text-blue-400]="sortColumn() === 'quota'"
+                [class.text-primary-accessible]="sortColumn() === 'quota'"
+                [class.dark:text-primary-accessible-dark]="sortColumn() === 'quota'"
                 [class.text-gray-500]="sortColumn() !== 'quota'"
                 [class.dark:text-gray-400]="sortColumn() !== 'quota'"
                 (click)="toggleSort('quota')"
@@ -189,10 +190,10 @@ type SortDirection = 'asc' | 'desc';
                 <td class="px-4 py-3 whitespace-nowrap">
                   <div class="flex items-center gap-3">
                     <div
-                      class="size-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0"
+                      class="size-8 rounded-full bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center shrink-0"
                     >
                       <span
-                        class="text-sm font-medium text-blue-600 dark:text-blue-400"
+                        class="text-sm font-medium text-primary-accessible dark:text-primary-accessible-dark"
                       >
                         {{ getAvatarInitial(user) }}
                       </span>
@@ -239,7 +240,7 @@ type SortDirection = 'asc' | 'desc';
                 <td class="px-4 py-3 whitespace-nowrap">
                   @if (user.tierName) {
                     <span
-                      class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+                      class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-state-info-100 text-state-info-800 dark:bg-state-info-900/30 dark:text-state-info-400"
                     >
                       {{ user.tierName }}
                     </span>
@@ -302,9 +303,7 @@ type SortDirection = 'asc' | 'desc';
           class="px-6 py-4 border-t border-gray-200 dark:border-gray-700 text-center"
         >
           <div class="inline-flex items-center gap-2 text-sm text-gray-500">
-            <div
-              class="animate-spin rounded-full size-4 border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400"
-            ></div>
+            <app-spinner size="sm" label="Loading more users" />
             Loading more users...
           </div>
         </div>
@@ -318,7 +317,7 @@ type SortDirection = 'asc' | 'desc';
           <button
             type="button"
             (click)="loadMore.emit()"
-            class="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 transition-colors"
+            class="text-sm font-medium text-primary-accessible dark:text-primary-accessible-dark hover:underline transition-colors"
           >
             Load more users
           </button>
@@ -426,17 +425,17 @@ export class TopUsersTableComponent {
   }
 
   getQuotaBarClass(percentage: number): string {
-    if (percentage >= 100) return 'bg-red-500';
-    if (percentage >= 80) return 'bg-yellow-500';
-    return 'bg-green-500';
+    if (percentage >= 100) return 'bg-state-danger-500';
+    if (percentage >= 80) return 'bg-state-warning-500';
+    return 'bg-state-success-500';
   }
 
   getQuotaTextClass(percentage: number): string {
     if (percentage >= 100) {
-      return 'text-red-600 dark:text-red-400 font-medium';
+      return 'text-state-danger-600 dark:text-state-danger-400 font-medium';
     }
     if (percentage >= 80) {
-      return 'text-yellow-600 dark:text-yellow-400';
+      return 'text-state-warning-600 dark:text-state-warning-400';
     }
     return 'text-gray-500 dark:text-gray-400';
   }

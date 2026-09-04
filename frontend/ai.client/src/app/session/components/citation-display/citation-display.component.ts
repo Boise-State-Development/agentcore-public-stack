@@ -1,11 +1,12 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { Citation } from '../../services/models/message.model';
 import { DocumentService } from '../../../assistants/services/document.service';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-citation-display',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [],
+  imports: [SpinnerComponent],
   host: {
     '(document:keydown.escape)': 'onEscapeKey()',
   },
@@ -22,10 +23,10 @@ import { DocumentService } from '../../../assistants/services/document.service';
         <button
           type="button"
           class="inline-flex min-h-7 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium
-                 bg-teal-100 text-teal-700 hover:bg-teal-200
-                 dark:bg-teal-900/30 dark:text-teal-300 dark:hover:bg-teal-900/50
+                 bg-primary-100 text-primary-accessible hover:bg-primary-200
+                 dark:bg-primary-900/30 dark:text-primary-accessible-dark dark:hover:bg-primary-900/50
                  transition-colors motion-reduce:transition-none
-                 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500"
+                 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
           [attr.aria-expanded]="isExpanded()"
           [attr.aria-controls]="isExpanded() ? 'citation-listbox' : null"
           aria-haspopup="listbox"
@@ -61,14 +62,14 @@ import { DocumentService } from '../../../assistants/services/document.service';
                 <div
                   class="group px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700
                          transition-colors motion-reduce:transition-none
-                         focus-within:bg-gray-50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-teal-500 dark:focus-within:bg-gray-700"
+                         focus-within:bg-gray-50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary-500 dark:focus-within:bg-gray-700"
                   role="option"
                   [attr.aria-selected]="false"
                 >
                   <div class="flex items-start gap-3">
                     <!-- Citation Number -->
                     <span
-                      class="flex size-6 shrink-0 items-center justify-center rounded-full bg-teal-100 text-xs font-semibold text-teal-700 dark:bg-teal-900/50 dark:text-teal-300"
+                      class="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary-100 text-xs font-semibold text-primary-accessible dark:bg-primary-900/50 dark:text-primary-accessible-dark"
                       aria-hidden="true"
                     >
                       {{ i + 1 }}
@@ -89,19 +90,15 @@ import { DocumentService } from '../../../assistants/services/document.service';
                       <!-- Download button -->
                       <button
                         type="button"
-                        class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-teal-600 hover:text-teal-700 hover:underline
-                               dark:text-teal-400 dark:hover:text-teal-300
-                               focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500
+                        class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary-accessible hover:text-primary-700 hover:underline
+                               dark:text-primary-accessible-dark dark:hover:text-primary-300
+                               focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500
                                disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
                         [disabled]="loadingDocumentId() === citation.documentId"
                         (click)="onDownloadClick(citation)"
                       >
                         @if (loadingDocumentId() === citation.documentId) {
-                          <!-- Loading spinner -->
-                          <svg class="size-3 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
+                          <app-spinner size="sm" label="Loading" />
                           <span>Loading...</span>
                         } @else {
                           <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
@@ -122,8 +119,7 @@ import { DocumentService } from '../../../assistants/services/document.service';
     }
   `,
   styles: `
-    @import 'tailwindcss';
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../../styles/theme.css";
 
     :host {
       display: inline-block;

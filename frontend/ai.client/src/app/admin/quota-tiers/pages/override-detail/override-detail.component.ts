@@ -4,6 +4,7 @@ import { FormBuilder, FormGroup, FormControl, Validators, ReactiveFormsModule } 
 import { QuotaStateService } from '../../services/quota-state.service';
 import { QuotaOverrideCreate, OverrideType } from '../../models/quota.models';
 import { parseIso } from '../../../../utils/date';
+import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
 
 interface OverrideFormGroup {
   userId: FormControl<string>;
@@ -18,7 +19,7 @@ interface OverrideFormGroup {
 
 @Component({
   selector: 'app-override-detail',
-  imports: [ReactiveFormsModule],
+  imports: [ReactiveFormsModule, SpinnerComponent],
   templateUrl: './override-detail.component.html',
   styleUrl: './override-detail.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,

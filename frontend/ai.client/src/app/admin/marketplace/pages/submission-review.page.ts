@@ -82,7 +82,7 @@ import {
       <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <a
           routerLink="/admin/marketplace/review"
-          class="inline-flex items-center gap-1.5 text-sm/6 font-medium text-blue-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400"
+          class="inline-flex items-center gap-1.5 text-sm/6 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
         >
           <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
           Review queue
@@ -93,7 +93,7 @@ import {
         @if (error(); as message) {
           <div
             role="alert"
-            class="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mt-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ message }}
           </div>
@@ -102,7 +102,7 @@ import {
         @if (loading()) {
           <div class="flex items-center justify-center py-24">
             <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
+              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-primary-600 dark:border-gray-600 dark:border-t-primary-400"
             ></div>
             <span class="sr-only">Loading submission</span>
           </div>
@@ -127,7 +127,7 @@ import {
           <!-- Warnings, before anything a reviewer might act on. -->
           @if (reachabilityWarning(); as warning) {
             <p
-              class="mt-4 flex items-start gap-1.5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-800 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-300"
+              class="mt-4 flex items-start gap-1.5 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 text-sm/6 text-state-warning-800 dark:border-state-warning-900 dark:bg-state-warning-900/20 dark:text-state-warning-300"
             >
               <ng-icon name="heroEyeSlash" class="mt-1 size-4 shrink-0" aria-hidden="true" />
               <span>{{ warning }}</span>
@@ -138,7 +138,7 @@ import {
                  What they must not do is assume the text below is pinned, because the
                  author can change it under them. -->
             <p
-              class="mt-3 flex items-start gap-1.5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-800 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-300"
+              class="mt-3 flex items-start gap-1.5 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 text-sm/6 text-state-warning-800 dark:border-state-warning-900 dark:bg-state-warning-900/20 dark:text-state-warning-300"
             >
               <ng-icon
                 name="heroExclamationTriangle"
@@ -291,7 +291,7 @@ import {
             @if (decisionError(); as message) {
               <p
                 role="alert"
-                class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+                class="rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-2 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
               >
                 {{ message }}
               </p>
@@ -313,7 +313,7 @@ import {
                   type="button"
                   [disabled]="busy()"
                   (click)="decline()"
-                  class="inline-flex items-center gap-1.5 rounded-2xl border border-rose-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-rose-700 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-gray-800 dark:text-rose-300 dark:hover:bg-rose-900/20"
+                  class="inline-flex items-center gap-1.5 rounded-2xl border border-state-danger-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-state-danger-700 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-state-danger-800 dark:bg-gray-800 dark:text-state-danger-300 dark:hover:bg-state-danger-900/20"
                 >
                   <ng-icon name="heroNoSymbol" class="size-4" aria-hidden="true" />
                   Decline
@@ -322,7 +322,7 @@ import {
                   type="button"
                   [disabled]="busy()"
                   (click)="requestChanges()"
-                  class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                  class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                 >
                   <ng-icon name="heroArrowUturnLeft" class="size-4" aria-hidden="true" />
                   Request changes
@@ -331,7 +331,7 @@ import {
                   type="button"
                   [disabled]="busy()"
                   (click)="approve()"
-                  class="inline-flex items-center gap-1.5 rounded-2xl bg-blue-600 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3 py-1.5 text-sm/6 font-medium text-white transition-[filter] hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <ng-icon name="heroCheck" class="size-4" aria-hidden="true" />
                   Approve

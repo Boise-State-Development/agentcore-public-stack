@@ -51,7 +51,7 @@ import {
         >
           <ng-icon
             name="heroCheckCircle"
-            class="size-3.5 shrink-0 text-green-600 dark:text-green-400"
+            class="size-3.5 shrink-0 text-state-success-600 dark:text-state-success-400"
             aria-hidden="true"
           />
           <span>{{ message }}</span>
@@ -61,7 +61,7 @@ import {
           type="button"
           [disabled]="busy()"
           (click)="onOpen()"
-          class="flex items-center gap-1.5 rounded-2xl px-2 py-1 text-xs/5 text-gray-500 hover:text-gray-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:text-gray-200"
+          class="flex items-center gap-1.5 rounded-2xl px-2 py-1 text-xs/5 text-gray-500 hover:text-gray-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:text-gray-200"
         >
           <ng-icon name="heroChatBubbleLeftRight" class="size-3.5 shrink-0" aria-hidden="true" />
           <span>Give feedback on {{ agentName() }}</span>
@@ -69,7 +69,7 @@ import {
       }
 
       @if (error(); as message) {
-        <p class="text-xs/5 text-red-600 dark:text-red-400" role="alert">{{ message }}</p>
+        <p class="text-xs/5 text-state-danger-600 dark:text-state-danger-400" role="alert">{{ message }}</p>
       }
     </div>
   `,

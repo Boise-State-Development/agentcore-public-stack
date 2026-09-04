@@ -2,6 +2,7 @@ import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs/operators';
+import { Title } from '@angular/platform-browser';
 import { Sidenav } from './components/sidenav/sidenav';
 import { ErrorToastComponent } from './components/error-toast/error-toast.component';
 import { ToastComponent } from './components/toast';
@@ -13,6 +14,7 @@ import { SessionService } from './auth/session.service';
 import { SessionService as SessionListService } from './session/services/session/session.service';
 import { ArtifactStateService } from './session/services/artifacts/artifact-state.service';
 import { isMinimalChromeRoute } from './shared/utils/route-chrome';
+import { BrandingService } from '../branding/branding.service';
 
 @Component({
   selector: 'app-root',
@@ -35,6 +37,8 @@ export class App {
   private session = inject(SessionService);
   private sessionList = inject(SessionListService);
   private artifactState = inject(ArtifactStateService);
+  private titleService = inject(Title);
+  private branding = inject(BrandingService);
 
   /** Re-read on every completed navigation; the value itself is unused,
    *  it exists so `minimalChrome` recomputes when the route changes. */
@@ -82,6 +86,9 @@ export class App {
   );
 
   constructor() {
+    // Set page title from branding config
+    this.titleService.setTitle(this.branding.pageTitle);
+
     // Re-probe the BFF session whenever the tab regains focus. A session
     // that expired while the tab was backgrounded surfaces immediately
     // (redirect to /auth/login) instead of waiting for the next user

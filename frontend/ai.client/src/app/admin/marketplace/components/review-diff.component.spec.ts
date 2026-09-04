@@ -127,8 +127,8 @@ describe('ReviewDiffComponent', () => {
     const presentation = items.find((li) => li.textContent?.trim() === 'Tagline')!;
 
     expect(behavior.className).not.toBe(presentation.className);
-    expect(behavior.className).toContain('amber');
-    expect(presentation.className).not.toContain('amber');
+    expect(behavior.className).toContain('state-warning');
+    expect(presentation.className).not.toContain('state-warning');
   });
 
   it('renders the instructions diff with added and removed lines distinguished', async () => {
@@ -148,8 +148,8 @@ describe('ReviewDiffComponent', () => {
     const removed = spans.find((s) => s.textContent?.includes('-Be concise.'))!;
     const added = spans.find((s) => s.textContent?.includes('+Be thorough.'))!;
 
-    expect(removed.className).toContain('rose');
-    expect(added.className).toContain('emerald');
+    expect(removed.className).toContain('state-danger');
+    expect(added.className).toContain('state-success');
   });
 
   it('degrades to a message the reviewer can act on when the fetch fails', async () => {

@@ -18,6 +18,7 @@ import { ConfigService } from '../../../services/config.service';
 import { ModelService } from '../../../session/services/model/model.service';
 import { ApiKeyService, ApiKey, CreateApiKeyResponse } from './api-key.service';
 import { parseIso } from '../../../utils/date';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 type ResponseType = 'non-streaming' | 'streaming';
 type ExampleFormat = 'simple' | 'conversation';
@@ -26,7 +27,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
 
 @Component({
   selector: 'app-api-keys',
-  imports: [NgIcon],
+  imports: [NgIcon, SpinnerComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   providers: [
     provideIcons({
@@ -72,11 +73,11 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
               </div>
             } @else if (!showCreateDialog()) {
               <button (click)="handleCreateClick()"
-                class="flex items-center justify-center gap-2 rounded-sm border-2 border-dashed border-orange-300 bg-white px-4 py-3 text-sm/6 font-semibold text-orange-600 transition-colors hover:border-orange-400 hover:bg-orange-50 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 dark:border-orange-600/40 dark:bg-gray-800 dark:text-orange-400 dark:hover:border-orange-500 dark:hover:bg-orange-950/30">
+                class="flex items-center justify-center gap-2 rounded-sm border-2 border-dashed border-secondary-300 bg-white px-4 py-3 text-sm/6 font-semibold text-secondary-600 transition-colors hover:border-secondary-400 hover:bg-secondary-50 focus-visible:ring-2 focus-visible:ring-secondary-500 focus-visible:ring-offset-2 dark:border-secondary-600/40 dark:bg-gray-800 dark:text-secondary-400 dark:hover:border-secondary-500 dark:hover:bg-secondary-950/30">
                 <ng-icon name="heroPlus" class="size-4" /> Create New API Key
               </button>
             } @else {
-              <div class="rounded-sm border border-orange-300 bg-white p-5 shadow-sm dark:border-orange-700/50 dark:bg-gray-800">
+              <div class="rounded-sm border border-secondary-300 bg-white p-5 shadow-sm dark:border-secondary-700/50 dark:bg-gray-800">
                 <div class="flex items-center justify-between">
                   <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">New API Key</h3>
                   <button (click)="closeCreateDialog()" class="rounded-xs p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" aria-label="Close">
@@ -88,11 +89,11 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                     <input id="key-name" type="text" placeholder="Key name, e.g. my-app"
                       [value]="newKeyName()" (input)="newKeyName.set($any($event.target).value)" (keydown.enter)="createKey()"
                       [disabled]="creating()"
-                      class="block flex-1 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:outline-hidden focus:ring-2 focus:ring-orange-500/30 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500" />
+                      class="block flex-1 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder-gray-400 focus:border-secondary-500 focus:outline-hidden focus:ring-2 focus:ring-secondary-500/30 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500" />
                     <button (click)="createKey()" [disabled]="!newKeyName().trim() || creating()"
-                      class="inline-flex shrink-0 items-center gap-2 rounded-sm bg-orange-500 px-4 py-2 text-sm/6 font-semibold text-white transition-colors hover:bg-orange-600 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+                      class="inline-flex shrink-0 items-center gap-2 rounded-sm bg-secondary-500 px-4 py-2 text-sm/6 font-semibold text-white transition-colors hover:bg-secondary-600 focus-visible:ring-2 focus-visible:ring-secondary-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
                       @if (creating()) {
-                        <div class="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
+                        <app-spinner size="sm" variant="on-solid" label="Generating" />
                         Generating...
                       } @else {
                         Generate
@@ -100,15 +101,15 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                     </button>
                   </div>
                 } @else {
-                  <div class="mt-3 rounded-sm border border-green-300 bg-green-50 p-4 dark:border-green-700/50 dark:bg-green-950/30">
+                  <div class="mt-3 rounded-sm border border-state-success-300 bg-state-success-50 p-4 dark:border-state-success-700/50 dark:bg-state-success-950/30">
                     <div class="flex items-start gap-2">
-                      <ng-icon name="heroShieldCheck" class="mt-0.5 size-5 shrink-0 text-green-600 dark:text-green-400" />
+                      <ng-icon name="heroShieldCheck" class="mt-0.5 size-5 shrink-0 text-state-success-600 dark:text-state-success-400" />
                       <div class="min-w-0 flex-1">
-                        <p class="text-sm/6 font-semibold text-green-800 dark:text-green-200">Copy your key now — you won't see it again</p>
+                        <p class="text-sm/6 font-semibold text-state-success-800 dark:text-state-success-200">Copy your key now — you won't see it again</p>
                         <div class="mt-2 flex items-center gap-2">
-                          <code class="block flex-1 truncate rounded-xs bg-green-100 px-2 py-1 font-mono text-xs text-green-900 dark:bg-green-900/40 dark:text-green-100">{{ createdKeySecret() }}</code>
+                          <code class="block flex-1 truncate rounded-xs bg-state-success-100 px-2 py-1 font-mono text-xs text-state-success-900 dark:bg-state-success-900/40 dark:text-state-success-100">{{ createdKeySecret() }}</code>
                           <button (click)="copyToClipboard(createdKeySecret()!, 'secret')"
-                            class="shrink-0 rounded-xs p-1.5 text-green-700 hover:bg-green-200 focus-visible:ring-2 focus-visible:ring-green-500 dark:text-green-300 dark:hover:bg-green-800" aria-label="Copy API key">
+                            class="shrink-0 rounded-xs p-1.5 text-state-success-700 hover:bg-state-success-200 focus-visible:ring-2 focus-visible:ring-state-success-500 dark:text-state-success-300 dark:hover:bg-state-success-800" aria-label="Copy API key">
                             <ng-icon [name]="copiedField() === 'secret' ? 'heroCheck' : 'heroClipboardDocument'" class="size-4" />
                           </button>
                         </div>
@@ -127,19 +128,19 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
               <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" (click)="showConfirmReplace.set(false)">
                 <div class="mx-4 w-full max-w-sm rounded-sm border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-700 dark:bg-gray-800" (click)="$event.stopPropagation()">
                   <div class="flex items-start gap-3">
-                    <div class="flex size-10 shrink-0 items-center justify-center rounded-full bg-orange-100 dark:bg-orange-900/30">
-                      <ng-icon name="heroExclamationTriangle" class="size-5 text-orange-600 dark:text-orange-400" />
+                    <div class="flex size-10 shrink-0 items-center justify-center rounded-full bg-secondary-100 dark:bg-secondary-900/30">
+                      <ng-icon name="heroExclamationTriangle" class="size-5 text-secondary-600 dark:text-secondary-400" />
                     </div>
                     <div>
                       <h3 class="text-base/6 font-semibold text-gray-900 dark:text-white">Replace existing key?</h3>
                       <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
-                        Creating a new API key will <span class="font-semibold text-red-600 dark:text-red-400">permanently delete</span> your current key. Any integrations using the old key will stop working immediately.
+                        Creating a new API key will <span class="font-semibold text-state-danger-600 dark:text-state-danger-400">permanently delete</span> your current key. Any integrations using the old key will stop working immediately.
                       </p>
                     </div>
                   </div>
                   <div class="mt-5 flex justify-end gap-3">
                     <button (click)="showConfirmReplace.set(false)" class="rounded-sm px-3 py-1.5 text-sm/6 font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">Cancel</button>
-                    <button (click)="confirmCreateKey()" class="rounded-sm bg-orange-500 px-4 py-1.5 text-sm/6 font-semibold text-white transition-colors hover:bg-orange-600 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2">Replace Key</button>
+                    <button (click)="confirmCreateKey()" class="rounded-sm bg-secondary-500 px-4 py-1.5 text-sm/6 font-semibold text-white transition-colors hover:bg-secondary-600 focus-visible:ring-2 focus-visible:ring-secondary-500 focus-visible:ring-offset-2">Replace Key</button>
                   </div>
                 </div>
               </div>
@@ -150,27 +151,27 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
               <!-- handled above -->
             } @else if (apiKey(); as key) {
               <div class="rounded-sm border bg-white shadow-xs dark:bg-gray-800"
-                [class]="!isExpired() ? 'border-gray-200 dark:border-gray-700' : 'border-red-200 dark:border-red-900/50'">
+                [class]="!isExpired() ? 'border-gray-200 dark:border-gray-700' : 'border-state-danger-200 dark:border-state-danger-900/50'">
                 <div class="flex items-start justify-between p-4">
                   <div class="min-w-0">
                     <h3 class="truncate text-base/6 font-semibold text-gray-900 dark:text-white">{{ key.name }}</h3>
                     @if (!isExpired()) {
                       <div class="mt-1 flex items-center gap-1.5">
-                        <span class="inline-block size-2 rounded-full bg-green-500"></span>
-                        <span class="text-sm/5 font-medium text-green-600 dark:text-green-400">Expires {{ daysUntil(key.expires_at) }}</span>
+                        <span class="inline-block size-2 rounded-full bg-state-success-500"></span>
+                        <span class="text-sm/5 font-medium text-state-success-600 dark:text-state-success-400">Expires {{ daysUntil(key.expires_at) }}</span>
                       </div>
                     } @else {
                       <div class="mt-1 flex items-center gap-1.5">
-                        <span class="inline-block size-2 rounded-full bg-red-500"></span>
-                        <span class="text-sm/5 font-medium text-red-600 dark:text-red-400">Expired</span>
+                        <span class="inline-block size-2 rounded-full bg-state-danger-500"></span>
+                        <span class="text-sm/5 font-medium text-state-danger-600 dark:text-state-danger-400">Expired</span>
                       </div>
                     }
                   </div>
                   <button (click)="deleteKey()" [disabled]="deleting()"
-                    class="shrink-0 rounded-sm p-2 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-950/30 dark:hover:text-red-400"
+                    class="shrink-0 rounded-sm p-2 text-gray-400 transition-colors hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:ring-2 focus-visible:ring-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-state-danger-950/30 dark:hover:text-state-danger-400"
                     [attr.aria-label]="'Delete key ' + key.name">
                     @if (deleting()) {
-                      <div class="size-5 animate-spin rounded-full border-2 border-gray-300 border-t-red-500"></div>
+                      <app-spinner size="md" variant="danger" label="Deleting" />
                     } @else {
                       <ng-icon name="heroTrash" class="size-5" />
                     }
@@ -198,10 +199,10 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
             <!-- Available Models -->
             <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
               <button (click)="modelsExpanded.set(!modelsExpanded())"
-                class="flex w-full items-center justify-between p-4 text-left focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+                class="flex w-full items-center justify-between p-4 text-left focus-visible:ring-2 focus-visible:ring-secondary-500 focus-visible:ring-offset-2"
                 [attr.aria-expanded]="modelsExpanded()">
                 <div class="flex items-center gap-3">
-                  <div class="flex size-8 items-center justify-center rounded-xs bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
+                  <div class="flex size-8 items-center justify-center rounded-xs bg-tertiary-100 text-tertiary-600 dark:bg-tertiary-900/30 dark:text-tertiary-400">
                     <ng-icon name="heroCpuChip" class="size-4" />
                   </div>
                   <div>
@@ -214,8 +215,9 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
               @if (modelsExpanded()) {
                 <div class="border-t border-gray-200 dark:border-gray-700">
                   @if (modelService.modelsLoading()) {
+                    <!-- phase-3-outlier-colors: intentional border-t-secondary-500 spinner - API Keys page uses orange as section accent throughout (see orange-300 border, orange-500 text, orange-50 bg); documented exception to raw-color rule -->
                     <div class="flex items-center justify-center p-6">
-                      <div class="size-6 animate-spin rounded-full border-2 border-gray-300 border-t-orange-500"></div>
+                      <div class="size-6 animate-spin rounded-full border-2 border-gray-300 border-t-secondary-500"></div>
                     </div>
                   } @else {
                     <div class="divide-y divide-gray-100 dark:divide-gray-800">
@@ -228,7 +230,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                           <div class="flex shrink-0 items-center gap-1.5">
                             <code class="max-w-48 truncate rounded-xs bg-gray-100 px-2 py-0.5 font-mono text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">{{ model.modelId }}</code>
                             <button (click)="copyToClipboard(model.modelId, model.modelId)"
-                              class="rounded-xs p-1 text-gray-400 hover:text-gray-600 focus-visible:ring-2 focus-visible:ring-orange-500 dark:hover:text-gray-200"
+                              class="rounded-xs p-1 text-gray-400 hover:text-gray-600 focus-visible:ring-2 focus-visible:ring-secondary-500 dark:hover:text-gray-200"
                               [attr.aria-label]="'Copy model ID ' + model.modelId">
                               <ng-icon [name]="copiedField() === model.modelId ? 'heroCheck' : 'heroClipboardDocument'" class="size-3.5" />
                             </button>
@@ -244,10 +246,10 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
             <!-- Important Information -->
             <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
               <button (click)="infoExpanded.set(!infoExpanded())"
-                class="flex w-full items-center justify-between p-4 text-left focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+                class="flex w-full items-center justify-between p-4 text-left focus-visible:ring-2 focus-visible:ring-secondary-500 focus-visible:ring-offset-2"
                 [attr.aria-expanded]="infoExpanded()">
                 <div class="flex items-center gap-3">
-                  <div class="flex size-8 items-center justify-center rounded-xs bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                  <div class="flex size-8 items-center justify-center rounded-xs bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400">
                     <ng-icon name="heroInformationCircle" class="size-4" />
                   </div>
                   <div>
@@ -261,19 +263,19 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                 <div class="border-t border-gray-200 px-4 pb-4 pt-3 dark:border-gray-700">
                   <div class="space-y-3 text-sm/6 text-gray-600 dark:text-gray-300">
                     <div class="flex gap-3">
-                      <ng-icon name="heroClock" class="mt-0.5 size-4 shrink-0 text-orange-500" />
+                      <ng-icon name="heroClock" class="mt-0.5 size-4 shrink-0 text-gray-400 dark:text-gray-500" />
                       <div><span class="font-semibold text-gray-900 dark:text-white">Expiration — </span>Keys expire 90 days after creation. Generate a new key before expiry to maintain access.</div>
                     </div>
                     <div class="flex gap-3">
-                      <ng-icon name="heroCpuChip" class="mt-0.5 size-4 shrink-0 text-purple-500" />
+                      <ng-icon name="heroCpuChip" class="mt-0.5 size-4 shrink-0 text-gray-400 dark:text-gray-500" />
                       <div><span class="font-semibold text-gray-900 dark:text-white">Quota &amp; Rate Limits — </span>API usage counts against your monthly quota. The same limits apply as the web interface.</div>
                     </div>
                     <div class="flex gap-3">
-                      <ng-icon name="heroShieldCheck" class="mt-0.5 size-4 shrink-0 text-green-500" />
+                      <ng-icon name="heroShieldCheck" class="mt-0.5 size-4 shrink-0 text-gray-400 dark:text-gray-500" />
                       <div><span class="font-semibold text-gray-900 dark:text-white">Security — </span>Treat your API key like a password. Never commit it to source control or share it publicly.</div>
                     </div>
                     <div class="flex gap-3">
-                      <ng-icon name="heroKey" class="mt-0.5 size-4 shrink-0 text-blue-500" />
+                      <ng-icon name="heroKey" class="mt-0.5 size-4 shrink-0 text-gray-400 dark:text-gray-500" />
                       <div><span class="font-semibold text-gray-900 dark:text-white">Authentication — </span>Include your key in the <code class="rounded-xs bg-gray-100 px-1 font-mono text-xs dark:bg-gray-800">X-API-Key</code> header with every request.</div>
                     </div>
                   </div>
@@ -285,16 +287,16 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
           <!-- RIGHT COLUMN -->
           <div class="flex flex-col gap-5">
             <div class="rounded-sm border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
-              <p class="text-xs/5 font-semibold uppercase tracking-wider text-orange-500 dark:text-orange-400">Interactive examples with your available models</p>
+              <p class="text-xs/5 font-semibold uppercase tracking-wider text-secondary-500 dark:text-secondary-400">Interactive examples with your available models</p>
               <div class="mt-2 flex items-center gap-3">
-                <ng-icon name="heroCodeBracket" class="size-6 text-orange-500" />
+                <ng-icon name="heroCodeBracket" class="size-6 text-secondary-500" />
                 <h2 class="text-xl/7 font-bold tracking-tight text-gray-900 dark:text-white">Usage Examples</h2>
               </div>
               <div class="mt-4 flex flex-col gap-3">
                 <div>
                   <label for="model-select" class="block text-xs/5 font-medium text-gray-500 dark:text-gray-400">Select Model</label>
                   <select id="model-select" (change)="selectedModelId.set($any($event.target).value)"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-orange-500 focus:outline-hidden focus:ring-2 focus:ring-orange-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
+                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-secondary-500 focus:outline-hidden focus:ring-2 focus:ring-secondary-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
                     @for (model of availableModels(); track model.id) {
                       <option [value]="model.modelId" [selected]="model.modelId === selectedModelId()">{{ model.modelName }} ({{ model.modelId }})</option>
                     }
@@ -307,7 +309,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                     <div class="relative">
                       <button (mouseenter)="activeTooltip.set('responseType')" (mouseleave)="activeTooltip.set(null)"
                         (focus)="activeTooltip.set('responseType')" (blur)="activeTooltip.set(null)"
-                        class="rounded-full text-gray-400 hover:text-orange-500 focus-visible:ring-2 focus-visible:ring-orange-500 dark:hover:text-orange-400"
+                        class="rounded-full text-gray-400 hover:text-secondary-500 focus-visible:ring-2 focus-visible:ring-secondary-500 dark:hover:text-secondary-400"
                         aria-label="Response type information" type="button">
                         <ng-icon name="heroQuestionMarkCircle" class="size-3.5" />
                       </button>
@@ -323,7 +325,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                     </div>
                   </div>
                   <select id="response-type" (change)="selectedResponseType.set($any($event.target).value)"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-orange-500 focus:outline-hidden focus:ring-2 focus:ring-orange-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
+                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-secondary-500 focus:outline-hidden focus:ring-2 focus:ring-secondary-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
                     <option value="non-streaming" [selected]="selectedResponseType() === 'non-streaming'">Non-Streaming (Complete)</option>
                     <option value="streaming" [selected]="selectedResponseType() === 'streaming'">Streaming (SSE)</option>
                   </select>
@@ -335,7 +337,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                     <div class="relative">
                       <button (mouseenter)="activeTooltip.set('exampleFormat')" (mouseleave)="activeTooltip.set(null)"
                         (focus)="activeTooltip.set('exampleFormat')" (blur)="activeTooltip.set(null)"
-                        class="rounded-full text-gray-400 hover:text-orange-500 focus-visible:ring-2 focus-visible:ring-orange-500 dark:hover:text-orange-400"
+                        class="rounded-full text-gray-400 hover:text-secondary-500 focus-visible:ring-2 focus-visible:ring-secondary-500 dark:hover:text-secondary-400"
                         aria-label="Example format information" type="button">
                         <ng-icon name="heroQuestionMarkCircle" class="size-3.5" />
                       </button>
@@ -351,7 +353,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                     </div>
                   </div>
                   <select id="example-format" (change)="selectedFormat.set($any($event.target).value)"
-                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-orange-500 focus:outline-hidden focus:ring-2 focus:ring-orange-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
+                    class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-secondary-500 focus:outline-hidden focus:ring-2 focus:ring-secondary-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
                     <option value="simple" [selected]="selectedFormat() === 'simple'">Simple Message</option>
                     <option value="conversation" [selected]="selectedFormat() === 'conversation'">Conversation History</option>
                   </select>
@@ -361,7 +363,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                   <div class="relative flex items-center py-1">
                     <div class="grow border-t border-gray-200 dark:border-gray-700"></div>
                     <button (click)="optionalParamsExpanded.set(!optionalParamsExpanded())"
-                      class="mx-3 flex shrink-0 items-center gap-1.5 text-xs/5 font-medium text-gray-400 transition-colors hover:text-orange-500 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 dark:text-gray-500 dark:hover:text-orange-400"
+                      class="mx-3 flex shrink-0 items-center gap-1.5 text-xs/5 font-medium text-gray-400 transition-colors hover:text-secondary-500 focus-visible:ring-2 focus-visible:ring-secondary-500 focus-visible:ring-offset-2 dark:text-gray-500 dark:hover:text-secondary-400"
                       [attr.aria-expanded]="optionalParamsExpanded()" type="button">
                       {{ optionalParamsExpanded() ? 'Hide' : 'Show' }} optional parameters
                       <ng-icon [name]="optionalParamsExpanded() ? 'heroChevronUp' : 'heroChevronDown'" class="size-3.5" />
@@ -375,14 +377,14 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                           <label for="param-temperature" class="block text-xs/5 font-medium text-gray-500 dark:text-gray-400">Temperature</label>
                           <input id="param-temperature" type="text" placeholder="0.7"
                             [value]="paramTemperature()" (input)="paramTemperature.set($any($event.target).value)"
-                            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:outline-hidden focus:ring-2 focus:ring-orange-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500" />
+                            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 placeholder-gray-400 focus:border-secondary-500 focus:outline-hidden focus:ring-2 focus:ring-secondary-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500" />
                           <p class="mt-0.5 text-xs/4 text-gray-400 dark:text-gray-500">0.0 – 1.0</p>
                         </div>
                         <div>
                           <label for="param-max-tokens" class="block text-xs/5 font-medium text-gray-500 dark:text-gray-400">Max Tokens</label>
                           <input id="param-max-tokens" type="text" placeholder="4096"
                             [value]="paramMaxTokens()" (input)="paramMaxTokens.set($any($event.target).value)"
-                            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:outline-hidden focus:ring-2 focus:ring-orange-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500" />
+                            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 placeholder-gray-400 focus:border-secondary-500 focus:outline-hidden focus:ring-2 focus:ring-secondary-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500" />
                           <p class="mt-0.5 text-xs/4 text-gray-400 dark:text-gray-500">1 – model max</p>
                         </div>
                       </div>
@@ -390,14 +392,14 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                         <label for="param-top-p" class="block text-xs/5 font-medium text-gray-500 dark:text-gray-400">Top P</label>
                         <input id="param-top-p" type="text" placeholder="(default)"
                           [value]="paramTopP()" (input)="paramTopP.set($any($event.target).value)"
-                          class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:outline-hidden focus:ring-2 focus:ring-orange-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500" />
+                          class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 placeholder-gray-400 focus:border-secondary-500 focus:outline-hidden focus:ring-2 focus:ring-secondary-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500" />
                         <p class="mt-0.5 text-xs/4 text-gray-400 dark:text-gray-500">Nucleus sampling, 0.0 – 1.0</p>
                       </div>
                       <div>
                         <label for="param-system-prompt" class="block text-xs/5 font-medium text-gray-500 dark:text-gray-400">System Prompt</label>
                         <textarea id="param-system-prompt" rows="2" placeholder="(none)"
                           [value]="paramSystemPrompt()" (input)="paramSystemPrompt.set($any($event.target).value)"
-                          class="mt-1 block w-full resize-y rounded-sm border border-gray-300 bg-white px-3 py-1.5 text-sm/6 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:outline-hidden focus:ring-2 focus:ring-orange-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500"></textarea>
+                          class="mt-1 block w-full resize-y rounded-sm border border-gray-300 bg-white px-3 py-1.5 text-sm/6 text-gray-900 placeholder-gray-400 focus:border-secondary-500 focus:outline-hidden focus:ring-2 focus:ring-secondary-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500"></textarea>
                         <p class="mt-0.5 text-xs/4 text-gray-400 dark:text-gray-500">Instructions for the model's behavior</p>
                       </div>
                     </div>
@@ -412,7 +414,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                 @for (lang of languages; track lang.id) {
                   <button (click)="selectedLanguage.set(lang.id)"
                     [class]="selectedLanguage() === lang.id
-                      ? 'flex-1 rounded-xs bg-orange-500 px-3 py-2 text-sm/6 font-medium text-white shadow-sm'
+                      ? 'flex-1 rounded-xs bg-secondary-500 px-3 py-2 text-sm/6 font-medium text-white shadow-sm'
                       : 'flex-1 rounded-xs px-3 py-2 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'">
                     <div class="flex items-center justify-center gap-2">
                       <ng-icon [name]="lang.icon" class="size-4" /> {{ lang.label }}
@@ -424,7 +426,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                 <div class="flex items-center justify-between bg-gray-800 px-4 py-2">
                   <span class="text-xs/5 font-medium text-gray-400">{{ currentLanguageLabel() }}</span>
                   <button (click)="copyToClipboard(codeExample(), 'code')"
-                    class="flex items-center gap-1.5 rounded-xs px-2 py-1 text-xs/5 font-medium text-orange-400 hover:bg-gray-700 focus-visible:ring-2 focus-visible:ring-orange-500">
+                    class="flex items-center gap-1.5 rounded-xs px-2 py-1 text-xs/5 font-medium text-secondary-400 hover:bg-gray-700 focus-visible:ring-2 focus-visible:ring-secondary-500">
                     <ng-icon [name]="copiedField() === 'code' ? 'heroCheck' : 'heroClipboardDocument'" class="size-3.5" />
                     {{ copiedField() === 'code' ? 'Copied' : 'Copy' }}
                   </button>
@@ -837,3 +839,4 @@ if (data.usage) {
 }`;
   }
 }
+

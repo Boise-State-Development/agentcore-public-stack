@@ -3,8 +3,9 @@
   "version": "1.17.0",
   "scripts": {
     "ng": "ng",
+    "prestart": "tsx scripts/branding/generate-brand-theme.ts && tsx scripts/branding/generate-surface-theme.ts && tsx scripts/branding/generate-surface-colors.ts && tsx scripts/branding/generate-favicons.ts",
     "start": "ng serve",
-    "prebuild": "node scripts/gen-version.js",
+    "prebuild": "node scripts/gen-version.js && tsx scripts/branding/generate-brand-theme.ts && tsx scripts/branding/generate-surface-theme.ts && tsx scripts/branding/generate-surface-colors.ts && tsx scripts/branding/generate-favicons.ts",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
@@ -65,7 +66,9 @@
     "fast-check": "4.7.0",
     "jsdom": "29.1.0",
     "postcss": "8.5.28",
+    "sharp": "0.33.0",
     "tailwindcss": "4.2.4",
+    "tsx": "4.23.12",
     "typescript": "5.9.3",
     "vitest": "4.1.5"
   },

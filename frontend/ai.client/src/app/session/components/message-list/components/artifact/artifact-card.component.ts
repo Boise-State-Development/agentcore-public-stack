@@ -207,7 +207,7 @@ interface ArtifactKind {
       align-items: center;
       gap: 0.875rem;
       padding: 0.8rem 1rem 0.8rem 1.1rem;
-      background: #f1f2f4;
+      background: var(--color-gray-100);
       border-radius: 1rem;
       overflow: hidden;
       transition: background-color 0.18s ease;
@@ -218,7 +218,7 @@ interface ArtifactKind {
     }
 
     .artifact-card:hover .artifact-card__surface {
-      background: #e7e8ec;
+      background: var(--color-gray-200);
     }
 
     :host-context(html.dark) .artifact-card:hover .artifact-card__surface {

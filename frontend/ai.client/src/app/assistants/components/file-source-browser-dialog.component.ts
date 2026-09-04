@@ -35,6 +35,7 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 /**
  * What the dialog is for. `import` (default) multi-selects files to ingest
@@ -94,7 +95,7 @@ type ConnectPhase = 'initiating' | 'awaiting';
 @Component({
   selector: 'app-file-source-browser-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon],
+  imports: [DialogDismissDirective, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowDownTray,
@@ -117,9 +118,8 @@ type ConnectPhase = 'initiating' | 'awaiting';
   },
   templateUrl: './file-source-browser-dialog.component.html',
   styles: `
-    @import 'tailwindcss';
+    @reference "../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;

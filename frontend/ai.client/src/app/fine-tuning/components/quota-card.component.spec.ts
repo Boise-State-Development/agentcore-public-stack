@@ -67,25 +67,25 @@ describe('QuotaCardComponent', () => {
     expect(component.usedPercent()).toBe(0);
   });
 
-  it('should return blue bar color for low usage (<70%)', () => {
+  it('should return info bar color for low usage (<70%)', () => {
     const component = createComponent(baseAccess); // 30%
-    expect(component.barColor()).toBe('bg-blue-500');
+    expect(component.barColor()).toBe('bg-state-info-500');
   });
 
-  it('should return amber bar color for moderate usage (70-89%)', () => {
+  it('should return warning bar color for moderate usage (70-89%)', () => {
     const component = createComponent({ ...baseAccess, current_month_usage_hours: 7.5 }); // 75%
-    expect(component.barColor()).toBe('bg-amber-500');
+    expect(component.barColor()).toBe('bg-state-warning-500');
   });
 
-  it('should return red bar color for high usage (>=90%)', () => {
+  it('should return danger bar color for high usage (>=90%)', () => {
     const component = createComponent({ ...baseAccess, current_month_usage_hours: 9.5 }); // 95%
-    expect(component.barColor()).toBe('bg-red-500');
+    expect(component.barColor()).toBe('bg-state-danger-500');
   });
 
   it('should handle null usage hours', () => {
     const component = createComponent({ ...baseAccess, current_month_usage_hours: null });
     expect(component.usedHours()).toBe(0);
     expect(component.usedPercent()).toBe(0);
-    expect(component.barColor()).toBe('bg-blue-500');
+    expect(component.barColor()).toBe('bg-state-info-500');
   });
 });

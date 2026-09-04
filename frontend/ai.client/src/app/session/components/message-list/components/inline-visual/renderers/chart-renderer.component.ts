@@ -9,6 +9,7 @@ import {
   OnDestroy
 } from '@angular/core';
 import { Chart, ChartConfiguration, ChartType, ChartData, ChartOptions } from 'chart.js/auto';
+import { getChromeColorsForMode } from '../../../../../../shared/constants/chart-colors.constants';
 
 /**
  * Payload structure for Chart.js charts.
@@ -166,24 +167,23 @@ export class ChartRendererComponent implements OnDestroy {
 
   /** Build chart options with theme-aware colors */
   private buildOptions(payload: ChartPayload, isDarkMode: boolean): ChartOptions {
-    const textColor = isDarkMode ? '#9ca3af' : '#6b7280';
-    const gridColor = isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+    const chromeColors = getChromeColorsForMode(isDarkMode);
 
     const baseOptions: ChartOptions = {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          labels: { color: textColor }
+          labels: { color: chromeColors.axisText }
         },
         title: {
-          color: textColor
+          color: chromeColors.axisText
         },
         tooltip: {
-          backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-          titleColor: isDarkMode ? '#ffffff' : '#111827',
-          bodyColor: isDarkMode ? '#d1d5db' : '#4b5563',
-          borderColor: isDarkMode ? '#374151' : '#e5e7eb',
+          backgroundColor: chromeColors.background,
+          titleColor: chromeColors.titleText,
+          bodyColor: chromeColors.bodyText,
+          borderColor: chromeColors.border,
           borderWidth: 1
         }
       }
@@ -193,12 +193,12 @@ export class ChartRendererComponent implements OnDestroy {
     if (['bar', 'line', 'scatter', 'bubble'].includes(payload.chartType)) {
       baseOptions.scales = {
         x: {
-          ticks: { color: textColor },
-          grid: { color: gridColor }
+          ticks: { color: chromeColors.axisText },
+          grid: { color: chromeColors.gridLine }
         },
         y: {
-          ticks: { color: textColor },
-          grid: { color: gridColor },
+          ticks: { color: chromeColors.axisText },
+          grid: { color: chromeColors.gridLine },
           beginAtZero: true
         }
       };
@@ -208,9 +208,9 @@ export class ChartRendererComponent implements OnDestroy {
     if (payload.chartType === 'radar') {
       baseOptions.scales = {
         r: {
-          ticks: { color: textColor, backdropColor: 'transparent' },
-          grid: { color: gridColor },
-          pointLabels: { color: textColor },
+          ticks: { color: chromeColors.axisText, backdropColor: 'transparent' },
+          grid: { color: chromeColors.gridLine },
+          pointLabels: { color: chromeColors.axisText },
           beginAtZero: true
         }
       };

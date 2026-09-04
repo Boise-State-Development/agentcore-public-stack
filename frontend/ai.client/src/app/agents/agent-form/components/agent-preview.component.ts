@@ -82,11 +82,11 @@ import { ModelService } from '../../../session/services/model/model.service';
 
           <!-- Dirty banner: bindings/model/params resolve from the saved record -->
           @if (isDirty()) {
-            <div class="mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 dark:border-amber-800/50 dark:bg-amber-900/20">
-              <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
-              <p class="min-w-0 flex-1 text-xs/5 text-amber-800 dark:text-amber-300">The preview runs the saved agent. Save to apply your latest changes.</p>
+            <div class="mt-2 flex items-center gap-2 rounded-lg border border-state-warning-200 bg-state-warning-50 px-2.5 py-1.5 dark:border-state-warning-800/50 dark:bg-state-warning-900/20">
+              <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
+              <p class="min-w-0 flex-1 text-xs/5 text-state-warning-800 dark:text-state-warning-300">The preview runs the saved agent. Save to apply your latest changes.</p>
               @if (canSave()) {
-                <button type="button" (click)="save.emit()" [disabled]="saving()" class="shrink-0 rounded-md bg-amber-600 px-2 py-1 text-xs/5 font-semibold text-white transition hover:bg-amber-700 disabled:opacity-50">
+                <button type="button" (click)="save.emit()" [disabled]="saving()" class="shrink-0 rounded-md bg-state-warning-600 px-2 py-1 text-xs/5 font-semibold text-white transition hover:bg-state-warning-700 disabled:opacity-50">
                   {{ saving() ? 'Saving…' : 'Save' }}
                 </button>
               }

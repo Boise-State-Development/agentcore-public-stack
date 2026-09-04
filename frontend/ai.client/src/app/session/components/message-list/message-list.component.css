@@ -1,4 +1,3 @@
 /* Message list component styles */
 
-@import "tailwindcss";
-@custom-variant dark (&:where(.dark, .dark *));
+@reference "../../../../styles/theme.css";

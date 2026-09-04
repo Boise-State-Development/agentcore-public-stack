@@ -68,7 +68,7 @@ export type AddCuratedModelDialogResult = string[] | undefined;
             type="button"
             (click)="onCancel()"
             aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
           </button>
@@ -79,11 +79,11 @@ export type AddCuratedModelDialogResult = string[] | undefined;
           @if (rolesResource.isLoading()) {
             <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading roles…</p>
           } @else if (rolesResource.error()) {
-            <p class="text-sm/6 text-red-600 dark:text-red-400">
+            <p class="text-sm/6 text-state-danger-600 dark:text-state-danger-400">
               Failed to load roles. Please refresh the page.
             </p>
           } @else if (availableRoles().length === 0) {
-            <p class="text-sm/6 text-amber-600 dark:text-amber-400">
+            <p class="text-sm/6 text-state-warning-600 dark:text-state-warning-400">
               No roles configured. Create roles in Admin &gt; Roles first.
             </p>
           } @else {
@@ -95,7 +95,7 @@ export type AddCuratedModelDialogResult = string[] | undefined;
                 <button
                   type="button"
                   (click)="selectAll()"
-                  class="font-medium text-blue-600 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+                  class="font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
                 >
                   Select all
                 </button>
@@ -114,14 +114,14 @@ export type AddCuratedModelDialogResult = string[] | undefined;
                   type="button"
                   (click)="toggleRole(role.roleId)"
                   [attr.aria-pressed]="isSelected(role.roleId)"
-                  [class.bg-purple-600]="isSelected(role.roleId)"
+                  [class.bg-primary-600]="isSelected(role.roleId)"
                   [class.text-white]="isSelected(role.roleId)"
                   [class.bg-gray-100]="!isSelected(role.roleId)"
                   [class.text-gray-700]="!isSelected(role.roleId)"
-                  [class.dark:bg-purple-500]="isSelected(role.roleId)"
+                  [class.dark:bg-primary-500]="isSelected(role.roleId)"
                   [class.dark:bg-gray-700]="!isSelected(role.roleId)"
                   [class.dark:text-gray-300]="!isSelected(role.roleId)"
-                  class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-500"
+                  class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                   [title]="role.description"
                 >
                   {{ role.displayName }}
@@ -129,7 +129,7 @@ export type AddCuratedModelDialogResult = string[] | undefined;
               }
             </div>
             @if (selectedRoleIds().size === 0) {
-              <p class="mt-3 text-xs/5 text-amber-600 dark:text-amber-400">
+              <p class="mt-3 text-xs/5 text-state-warning-600 dark:text-state-warning-400">
                 Select at least one role so users can see this model.
               </p>
             }
@@ -149,7 +149,7 @@ export type AddCuratedModelDialogResult = string[] | undefined;
             type="button"
             (click)="confirm()"
             [disabled]="!canConfirm()"
-            class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:brightness-110"
           >
             Add to models
           </button>
@@ -158,9 +158,8 @@ export type AddCuratedModelDialogResult = string[] | undefined;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;

@@ -11,6 +11,7 @@ import { heroBookmark } from '@ng-icons/heroicons/outline';
 import { AgentPinService } from '../services/agent-pin.service';
 import { AgentsTabsComponent } from '../components/agents-tabs.component';
 import { AgentListingRowComponent } from '../components/agent-listing-row.component';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 /**
  * Pinned — the Agents a user has added to their own set, plus the ones their role seeds
@@ -33,7 +34,7 @@ import { AgentListingRowComponent } from '../components/agent-listing-row.compon
 @Component({
   selector: 'app-agent-pinned',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AgentsTabsComponent, AgentListingRowComponent, NgIcon, RouterLink],
+  imports: [AgentsTabsComponent, AgentListingRowComponent, NgIcon, RouterLink, SpinnerComponent],
   // The empty state renders <ng-icon name="heroBookmark" />, and ng-icons resolves that
   // name from a registration rather than from the import. Both symbols were imported and
   // neither was ever called, so the glyph silently rendered as nothing — CodeQL surfaced
@@ -56,7 +57,7 @@ import { AgentListingRowComponent } from '../components/agent-listing-row.compon
         @if (error()) {
           <div
             role="alert"
-            class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mb-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
@@ -64,10 +65,7 @@ import { AgentListingRowComponent } from '../components/agent-listing-row.compon
 
         @if (loading()) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading pinned agents</span>
+            <app-spinner size="lg" label="Loading pinned agents" />
           </div>
         } @else if (isEmpty()) {
           <div
@@ -86,7 +84,7 @@ import { AgentListingRowComponent } from '../components/agent-listing-row.compon
             </p>
             <a
               routerLink="/agents/discover"
-              class="mt-4 inline-flex rounded-full bg-blue-600 px-4 py-2 text-sm/6 font-semibold text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-400"
+              class="mt-4 inline-flex rounded-full bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
             >
               Browse agents
             </a>

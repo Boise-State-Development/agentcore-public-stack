@@ -10,6 +10,11 @@ import {
 } from '@angular/core';
 import { Chart, ChartConfiguration, ChartData } from 'chart.js/auto';
 import { ModelUsageSummary } from '../models';
+import {
+  CHART_CATEGORICAL_PALETTE,
+  getChromeColorsForMode,
+  getCategoricalColor,
+} from '../../../shared/constants/chart-colors.constants';
 
 type ChartView = 'pie' | 'bar';
 
@@ -36,10 +41,10 @@ type ChartView = 'pie' | 'bar';
             type="button"
             (click)="setChartView('pie')"
             class="px-3 py-1 text-sm font-medium rounded-md transition-colors"
-            [class.bg-blue-100]="chartView() === 'pie'"
-            [class.text-blue-700]="chartView() === 'pie'"
-            [class.dark:bg-blue-900/30]="chartView() === 'pie'"
-            [class.dark:text-blue-400]="chartView() === 'pie'"
+            [class.bg-primary-100]="chartView() === 'pie'"
+            [class.text-primary-accessible]="chartView() === 'pie'"
+            [class.dark:bg-primary-900/30]="chartView() === 'pie'"
+            [class.dark:text-primary-accessible-dark]="chartView() === 'pie'"
             [class.text-gray-600]="chartView() !== 'pie'"
             [class.dark:text-gray-400]="chartView() !== 'pie'"
             [class.hover:text-gray-900]="chartView() !== 'pie'"
@@ -51,10 +56,10 @@ type ChartView = 'pie' | 'bar';
             type="button"
             (click)="setChartView('bar')"
             class="px-3 py-1 text-sm font-medium rounded-md transition-colors"
-            [class.bg-blue-100]="chartView() === 'bar'"
-            [class.text-blue-700]="chartView() === 'bar'"
-            [class.dark:bg-blue-900/30]="chartView() === 'bar'"
-            [class.dark:text-blue-400]="chartView() === 'bar'"
+            [class.bg-primary-100]="chartView() === 'bar'"
+            [class.text-primary-accessible]="chartView() === 'bar'"
+            [class.dark:bg-primary-900/30]="chartView() === 'bar'"
+            [class.dark:text-primary-accessible-dark]="chartView() === 'bar'"
             [class.text-gray-600]="chartView() !== 'bar'"
             [class.dark:text-gray-400]="chartView() !== 'bar'"
             [class.hover:text-gray-900]="chartView() !== 'bar'"
@@ -126,20 +131,6 @@ export class ModelBreakdownComponent {
   private chartCanvas = viewChild<ElementRef<HTMLCanvasElement>>('chartCanvas');
   private chart: Chart | null = null;
 
-  // Color palette for charts
-  private readonly colors = [
-    '#3b82f6', // blue
-    '#10b981', // emerald
-    '#f59e0b', // amber
-    '#ef4444', // red
-    '#8b5cf6', // violet
-    '#ec4899', // pink
-    '#06b6d4', // cyan
-    '#84cc16', // lime
-    '#f97316', // orange
-    '#6366f1', // indigo
-  ];
-
   // Sort data by cost descending
   sortedData = computed(() => {
     return [...this.data()].sort((a, b) => b.totalCost - a.totalCost);
@@ -167,7 +158,7 @@ export class ModelBreakdownComponent {
   }
 
   getColor(index: number): string {
-    return this.colors[index % this.colors.length];
+    return getCategoricalColor(index);
   }
 
   getPercentage(cost: number): string {
@@ -191,13 +182,12 @@ export class ModelBreakdownComponent {
     const backgroundColors = models.map((_, i) => this.getColor(i));
 
     const isDarkMode = document.documentElement.classList.contains('dark');
-    const textColor = isDarkMode ? '#9ca3af' : '#6b7280';
-    const gridColor = isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+    const chromeColors = getChromeColorsForMode(isDarkMode);
 
     if (view === 'pie') {
-      this.renderPieChart(canvas, labels, costData, backgroundColors, isDarkMode);
+      this.renderPieChart(canvas, labels, costData, backgroundColors, isDarkMode, chromeColors);
     } else {
-      this.renderBarChart(canvas, labels, costData, backgroundColors, textColor, gridColor, isDarkMode);
+      this.renderBarChart(canvas, labels, costData, backgroundColors, chromeColors, isDarkMode);
     }
   }
 
@@ -206,7 +196,8 @@ export class ModelBreakdownComponent {
     labels: string[],
     data: number[],
     colors: string[],
-    isDarkMode: boolean
+    isDarkMode: boolean,
+    chromeColors: ReturnType<typeof getChromeColorsForMode>
   ): void {
     const chartData: ChartData<'doughnut'> = {
       labels,
@@ -214,7 +205,7 @@ export class ModelBreakdownComponent {
         {
           data,
           backgroundColor: colors,
-          borderColor: isDarkMode ? '#1f2937' : '#ffffff',
+          borderColor: isDarkMode ? chromeColors.background : '#ffffff',
           borderWidth: 2,
           hoverOffset: 4,
         },
@@ -233,10 +224,10 @@ export class ModelBreakdownComponent {
             display: false,
           },
           tooltip: {
-            backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-            titleColor: isDarkMode ? '#ffffff' : '#111827',
-            bodyColor: isDarkMode ? '#d1d5db' : '#4b5563',
-            borderColor: isDarkMode ? '#374151' : '#e5e7eb',
+            backgroundColor: chromeColors.background,
+            titleColor: chromeColors.titleText,
+            bodyColor: chromeColors.bodyText,
+            borderColor: chromeColors.border,
             borderWidth: 1,
             padding: 12,
             callbacks: {
@@ -260,8 +251,7 @@ export class ModelBreakdownComponent {
     labels: string[],
     data: number[],
     colors: string[],
-    textColor: string,
-    gridColor: string,
+    chromeColors: ReturnType<typeof getChromeColorsForMode>,
     isDarkMode: boolean
   ): void {
     const chartData: ChartData<'bar'> = {
@@ -288,10 +278,10 @@ export class ModelBreakdownComponent {
             display: false,
           },
           tooltip: {
-            backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-            titleColor: isDarkMode ? '#ffffff' : '#111827',
-            bodyColor: isDarkMode ? '#d1d5db' : '#4b5563',
-            borderColor: isDarkMode ? '#374151' : '#e5e7eb',
+            backgroundColor: chromeColors.background,
+            titleColor: chromeColors.titleText,
+            bodyColor: chromeColors.bodyText,
+            borderColor: chromeColors.border,
             borderWidth: 1,
             padding: 12,
             callbacks: {
@@ -304,10 +294,10 @@ export class ModelBreakdownComponent {
         scales: {
           x: {
             grid: {
-              color: gridColor,
+              color: chromeColors.gridLine,
             },
             ticks: {
-              color: textColor,
+              color: chromeColors.axisText,
               callback: value => this.formatCurrencyShort(Number(value)),
             },
           },
@@ -316,7 +306,7 @@ export class ModelBreakdownComponent {
               display: false,
             },
             ticks: {
-              color: textColor,
+              color: chromeColors.axisText,
             },
           },
         },

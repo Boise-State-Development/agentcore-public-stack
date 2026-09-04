@@ -51,10 +51,11 @@ export type DeleteToolDialogResult = boolean | undefined;
       >
         <!-- Close button (top-right) -->
         <div class="absolute top-0 right-0 hidden pt-4 pr-4 sm:block">
+          <!-- intentional: shared dialog-convention indigo focus outline, tracked in phase-3-outlier-colors-and-icon-spinners.md, not this doc -->
           <button
             type="button"
             (click)="onCancel()"
-            class="rounded-md bg-white text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-600 dark:bg-gray-800 dark:hover:text-gray-300 dark:focus:outline-white"
+            class="rounded-md bg-white text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-primary-600 dark:bg-gray-800 dark:hover:text-gray-300 dark:focus:outline-white"
             aria-label="Close dialog"
           >
             <span class="sr-only">Close</span>
@@ -64,8 +65,8 @@ export type DeleteToolDialogResult = boolean | undefined;
 
         <!-- Header with Icon -->
         <div class="sm:flex sm:items-start">
-          <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:size-10 dark:bg-red-500/10">
-            <ng-icon name="heroExclamationTriangle" class="size-6 text-red-600 dark:text-red-400" aria-hidden="true" />
+          <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-full bg-state-danger-100 sm:mx-0 sm:size-10 dark:bg-state-danger-500/10">
+            <ng-icon name="heroExclamationTriangle" class="size-6 text-state-danger-600 dark:text-state-danger-400" aria-hidden="true" />
           </div>
           <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
             <h3 id="dialog-title" class="text-base font-semibold text-gray-900 dark:text-white">
@@ -85,7 +86,7 @@ export type DeleteToolDialogResult = boolean | undefined;
           <button
             type="button"
             (click)="onConfirm()"
-            class="inline-flex w-full justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-red-500 sm:ml-3 sm:w-auto dark:bg-red-500 dark:shadow-none dark:hover:bg-red-400"
+            class="inline-flex w-full justify-center rounded-md bg-state-danger-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-state-danger-500 sm:ml-3 sm:w-auto dark:bg-state-danger-500 dark:shadow-none dark:hover:bg-state-danger-400"
           >
             Delete
           </button>
@@ -101,9 +102,8 @@ export type DeleteToolDialogResult = boolean | undefined;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     /* Backdrop fade-in animation */
     .dialog-backdrop {
@@ -148,3 +148,4 @@ export class DeleteToolDialogComponent {
     this.dialogRef.close(undefined);
   }
 }
+

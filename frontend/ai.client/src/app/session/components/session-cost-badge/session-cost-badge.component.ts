@@ -65,7 +65,7 @@ const RING_FILL_DELAY_MS = 750;
           >·</span>
 
           <span
-            class="badge-ring-enter group relative inline-flex items-center gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
+            class="badge-ring-enter group relative inline-flex items-center gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
             tabindex="0"
             [attr.aria-label]="contextAriaLabel()"
           >
@@ -214,25 +214,25 @@ export class SessionCostBadgeComponent {
 
   protected readonly ringStrokeClass = computed(() => {
     const pct = this.contextPctValue();
-    if (pct >= 90) return 'stroke-red-500 dark:stroke-red-400';
-    if (pct >= 70) return 'stroke-amber-500 dark:stroke-amber-400';
-    if (pct >= 50) return 'stroke-blue-500 dark:stroke-blue-400';
-    return 'stroke-emerald-500 dark:stroke-emerald-400';
+    if (pct >= 90) return 'stroke-state-danger-500 dark:stroke-state-danger-400';
+    if (pct >= 70) return 'stroke-state-warning-500 dark:stroke-state-warning-400';
+    if (pct >= 50) return 'stroke-state-info-500 dark:stroke-state-info-400';
+    return 'stroke-state-success-500 dark:stroke-state-success-400';
   });
 
   protected readonly contextLabelClass = computed(() => {
     const pct = this.contextPctValue();
-    if (pct >= 90) return 'text-red-600 dark:text-red-400 font-medium';
-    if (pct >= 70) return 'text-amber-600 dark:text-amber-400 font-medium';
+    if (pct >= 90) return 'text-state-danger-600 dark:text-state-danger-400 font-medium';
+    if (pct >= 70) return 'text-state-warning-600 dark:text-state-warning-400 font-medium';
     return '';
   });
 
   protected readonly popoverPctClass = computed(() => {
     const pct = this.contextPctValue();
-    if (pct >= 90) return 'text-red-600 dark:text-red-400';
-    if (pct >= 70) return 'text-amber-600 dark:text-amber-400';
-    if (pct >= 50) return 'text-blue-600 dark:text-blue-400';
-    return 'text-emerald-600 dark:text-emerald-400';
+    if (pct >= 90) return 'text-state-danger-600 dark:text-state-danger-400';
+    if (pct >= 70) return 'text-state-warning-600 dark:text-state-warning-400';
+    if (pct >= 50) return 'text-state-info-600 dark:text-state-info-400';
+    return 'text-state-success-600 dark:text-state-success-400';
   });
 
   protected readonly tokensUsedLabel = computed(() =>

@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: "frontend/*"
+fileMatchPattern: ["frontend/**"]
 ---
 
 # Tailwind CSS v4.1 Best Practices
@@ -33,6 +33,10 @@ Never use deprecated utilities — always use replacements:
 <!-- Gap over space utilities -->
 <div class="flex gap-4">...</div>
 
+<!-- Color tokens, never built-in palettes -->
+<button class="bg-primary-accessible text-white hover:brightness-95">...</button>
+<div role="alert" class="bg-state-danger-50 text-state-danger-800">...</div>
+
 <!-- Opacity modifiers -->
 <div class="bg-primary-500/60">...</div>
 
@@ -62,20 +66,24 @@ For detailed patterns, see:
 - **Components** — #[[file:tailwind-components.md]]
   - Accessible component patterns (buttons, forms, cards, nav)
 
+- **Colors** — #[[file:tailwind-colors.md]]
+  - Which color token to use, and why never the built-in palettes
+
 ## Core Principles
 
-1. **Use Tailwind's scale** — Avoid arbitrary values like `ml-[16px]`; use `ml-4`
-2. **Never use @apply** — Use CSS variables or framework components
-3. **Gap over margins** — Use `gap-*` in flex/grid, not `space-*` or child margins
-4. **Test both modes** — Always verify light AND dark mode appearance
-5. **Accessibility first** — Every interactive element needs visible focus states and proper contrast
+1. **Never use built-in color palettes** — No `bg-blue-600`, `text-red-500`, `border-amber-300`. Use brand (`primary-*`), status (`state-*`), or category (`vendor-*`, `filetype-*`) tokens. Neutrals (`gray`, `white`, `black`) are fine. See the Colors reference
+2. **Use Tailwind's scale** — Avoid arbitrary values like `ml-[16px]`; use `ml-4`
+3. **Never use @apply** — Use CSS variables or framework components
+4. **Gap over margins** — Use `gap-*` in flex/grid, not `space-*` or child margins
+5. **Test both modes** — Always verify light AND dark mode appearance
+6. **Accessibility first** — Every interactive element needs visible focus states and proper contrast
 
 ## Common Patterns
 
 ### Focus States
 
 ```html
-<button class="focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2">
+<button class="focus-visible:ring-2 focus-visible:ring-primary-accessible focus-visible:ring-offset-2">
   Accessible button
 </button>
 ```

@@ -7,6 +7,8 @@ import { SessionService } from '../session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ConfigService } from '../../services/config.service';
 import { SystemService } from '../../services/system.service';
+import { BrandingService } from '../../../branding/branding.service';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 interface AuthProviderPublicInfo {
   provider_id: string;
@@ -21,7 +23,7 @@ interface AuthProviderPublicListResponse {
 
 @Component({
   selector: 'app-login',
-  imports: [CommonModule],
+  imports: [CommonModule, SpinnerComponent],
   styleUrl: './login.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -45,16 +47,16 @@ interface AuthProviderPublicListResponse {
       </div>
 
       <div class="relative w-full max-w-md px-4 py-12">
-        <!-- Logo -->
+        <!-- Logo (read through BrandingService, never from BRAND_CONFIG directly) -->
         <div class="mb-8 flex justify-center">
           <img
-            src="/img/logo-light.png"
-            alt="Logo"
-            class="size-16 dark:hidden">
+            [src]="branding.logo.light"
+            [alt]="branding.appName"
+            class="h-16 w-16 object-contain dark:hidden">
           <img
-            src="/img/logo-dark.png"
-            alt="Logo"
-            class="hidden size-16 dark:block">
+            [src]="branding.logo.dark"
+            [alt]="branding.appName"
+            class="hidden h-16 w-16 object-contain dark:block">
         </div>
 
         <div class="login-card rounded-2xl p-8">
@@ -69,12 +71,12 @@ interface AuthProviderPublicListResponse {
             </div>
 
             @if (errorMessage()) {
-              <div class="w-full p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg" role="alert">
+              <div class="w-full p-4 bg-state-danger-50 dark:bg-state-danger-900/20 border border-state-danger-200 dark:border-state-danger-800 rounded-lg" role="alert">
                 <div class="flex items-start gap-3">
-                  <svg class="size-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <svg class="size-5 text-state-danger-600 dark:text-state-danger-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <p class="text-sm text-red-800 dark:text-red-300">
+                  <p class="text-sm text-state-danger-800 dark:text-state-danger-300">
                     {{ errorMessage() }}
                   </p>
                 </div>
@@ -91,7 +93,7 @@ interface AuthProviderPublicListResponse {
                 class="w-full px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-primary-500 hover:bg-primary-600 shadow-lg shadow-primary-500/20 disabled:opacity-60"
               >
                 @if (isLoading() && !activeProviderId()) {
-                  <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <app-spinner size="md" variant="on-solid" label="Connecting" />
                   <span>Connecting...</span>
                 } @else {
                   <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
@@ -123,7 +125,7 @@ interface AuthProviderPublicListResponse {
                     [style.--hover-bg]="provider.button_color ? adjustBrightness(provider.button_color, -15) : '#1d4ed8'"
                   >
                     @if (isLoading() && activeProviderId() === provider.provider_id) {
-                      <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <app-spinner size="md" variant="on-solid" label="Connecting" />
                       <span>Connecting...</span>
                     } @else {
                       @if (provider.logo_url) {
@@ -142,9 +144,7 @@ interface AuthProviderPublicListResponse {
               <!-- Loading spinner for federated providers -->
               @if (providersLoading()) {
                 <div class="flex justify-center py-2">
-                  <div class="size-5 border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin" role="status">
-                    <span class="sr-only">Loading federated providers</span>
-                  </div>
+                  <app-spinner size="md" label="Loading federated providers" />
                 </div>
               }
             </div>
@@ -166,6 +166,7 @@ export class LoginPage implements OnInit, OnDestroy {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private systemService = inject(SystemService);
+  protected branding = inject(BrandingService);
 
   isLoading = signal(false);
   errorMessage = signal<string | null>(null);

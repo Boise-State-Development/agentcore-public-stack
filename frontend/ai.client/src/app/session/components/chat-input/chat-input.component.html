@@ -197,22 +197,19 @@
             @if (voiceStatus() === 'listening') {
               <!-- Pulsing dot indicator for listening -->
               <span class="relative flex size-3">
-                <span class="absolute inline-flex size-full animate-ping rounded-full bg-red-400 opacity-75"></span>
-                <span class="relative inline-flex size-3 rounded-full bg-red-500"></span>
+                <span class="absolute inline-flex size-full animate-ping rounded-full bg-state-danger-400 opacity-75"></span>
+                <span class="relative inline-flex size-3 rounded-full bg-state-danger-500"></span>
               </span>
             } @else if (voiceStatus() === 'speaking') {
               <!-- Wave bars for speaking -->
               <span class="flex items-center gap-0.5" aria-hidden="true">
-                <span class="h-3 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 0ms;"></span>
-                <span class="h-4 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 150ms;"></span>
-                <span class="h-3 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 300ms;"></span>
+                <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 0ms;"></span>
+                <span class="h-4 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 150ms;"></span>
+                <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 300ms;"></span>
               </span>
             } @else if (voiceStatus() === 'connecting') {
               <!-- Spinner for connecting -->
-              <svg class="size-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-              </svg>
+              <app-spinner size="md" label="Connecting" />
             } @else {
               <!-- Mic icon for idle -->
               <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
@@ -227,7 +224,7 @@
           -->
           @if (mentionedAgent(); as agent) {
             <div
-              class="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 pl-2.5 pr-1 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+              class="flex items-center gap-1 rounded-full border border-state-success-200 bg-state-success-50 pl-2.5 pr-1 py-1 text-xs font-medium text-state-success-700 dark:border-state-success-700 dark:bg-state-success-900/30 dark:text-state-success-300"
               role="status"
               [attr.aria-label]="'This message goes to ' + agent.name"
             >
@@ -235,7 +232,7 @@
               <button
                 type="button"
                 (click)="clearMention()"
-                class="flex size-4 shrink-0 items-center justify-center rounded-full text-emerald-500 transition-colors hover:bg-emerald-200 hover:text-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-500 dark:text-emerald-400 dark:hover:bg-emerald-700 dark:hover:text-emerald-200"
+                class="flex size-4 shrink-0 items-center justify-center rounded-full text-state-success-500 transition-colors hover:bg-state-success-200 hover:text-state-success-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-state-success-500 dark:text-state-success-400 dark:hover:bg-state-success-700 dark:hover:text-state-success-200"
                 aria-label="Send this message to the assistant instead"
               >
                 <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
@@ -274,7 +271,7 @@
             (click)="onPrimaryButtonClick()"
             [disabled]="!isLoading() && hasActivePendingUploads()"
             [class]="isLoading()
-              ? 'flex size-10 items-center justify-center rounded-full bg-red-500 text-white shadow-sm transition-all hover:bg-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500'
+              ? 'flex size-10 items-center justify-center rounded-full bg-state-danger-500 text-white shadow-sm transition-all hover:bg-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500'
               : 'flex size-10 items-center justify-center rounded-full bg-secondary-500 text-white shadow-sm transition-all hover:bg-secondary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary-500'"
             [attr.aria-label]="isLoading() ? 'Stop generation' : (hasActivePendingUploads() ? 'Upload in progress' : 'Submit message')"
           >

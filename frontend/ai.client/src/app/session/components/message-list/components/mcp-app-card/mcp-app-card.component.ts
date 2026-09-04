@@ -52,7 +52,7 @@ import type { McpAppCard } from '../../../../services/mcp-apps/mcp-app-card-stat
         @if (card().isError) {
           <ng-icon
             name="heroExclamationTriangle"
-            class="size-4 shrink-0 text-red-600 dark:text-red-400"
+            class="size-4 shrink-0 text-state-danger-600 dark:text-state-danger-400"
             [attr.aria-label]="'errored'"
           />
         }

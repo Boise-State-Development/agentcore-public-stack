@@ -82,7 +82,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
                the app. Deliberately understated — one link, not a nav. -->
           <a
             routerLink="/"
-            class="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            class="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
           >
             boisestate.ai
           </a>
@@ -112,7 +112,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
         <div class="flex flex-1 items-center justify-center py-20">
           <div class="text-center">
             <div
-              class="mx-auto size-8 animate-spin rounded-full border-2 border-gray-300 border-t-blue-500"
+              class="mx-auto size-8 animate-spin rounded-full border-2 border-gray-300 border-t-primary-600"
             ></div>
             <p class="mt-3 text-sm text-gray-500 dark:text-gray-400">
               Loading shared artifact…
@@ -173,7 +173,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
           >
             <button
               type="button"
-              class="flex size-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              class="flex size-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible"
               [class]="
                 view() === 'preview'
                   ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
@@ -189,7 +189,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
             </button>
             <button
               type="button"
-              class="flex size-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              class="flex size-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible"
               [class]="
                 view() === 'code'
                   ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
@@ -212,7 +212,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
           @if (view() === 'code') {
             <button
               type="button"
-              class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+              class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
               [attr.aria-label]="copied() ? 'Copied' : 'Copy code'"
               [appTooltip]="copied() ? 'Copied' : 'Copy code'"
               appTooltipPosition="bottom"
@@ -222,7 +222,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
               <ng-icon
                 [name]="copied() ? 'heroCheck' : 'heroClipboard'"
                 class="text-lg"
-                [class.text-green-600]="copied()"
+                [class.text-state-success-600]="copied()"
                 aria-hidden="true"
               />
             </button>
@@ -231,7 +231,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
           @if (a.canDownload) {
             <button
               type="button"
-              class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+              class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
               [attr.aria-label]="
                 downloading() ? 'Downloading artifact…' : 'Download artifact'
               "

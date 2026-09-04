@@ -203,7 +203,7 @@ import { SessionService } from '../../../../../services/session/session.service'
 
           @if (isError()) {
             <span
-              class="shrink-0 text-xs font-medium text-red-600 dark:text-red-400"
+              class="shrink-0 text-xs font-medium text-state-danger-600 dark:text-state-danger-400"
               >Failed</span
             >
           }
@@ -211,7 +211,7 @@ import { SessionService } from '../../../../../services/session/session.service'
           @if (displayMode() === 'fullscreen') {
             <button
               type="button"
-              class="ml-auto flex shrink-0 items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+              class="ml-auto flex shrink-0 items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
               (click)="exitFullscreen()"
             >
               <svg
@@ -233,7 +233,7 @@ import { SessionService } from '../../../../../services/session/session.service'
           } @else {
             <button
               type="button"
-              class="ml-auto shrink-0 rounded-sm p-1 text-gray-500 hover:bg-gray-200 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              class="ml-auto shrink-0 rounded-sm p-1 text-gray-500 hover:bg-gray-200 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-300"
               [attr.aria-expanded]="detailsExpanded()"
               [attr.aria-label]="
                 detailsExpanded() ? 'Hide request and response' : 'Show request and response'
@@ -277,7 +277,7 @@ import { SessionService } from '../../../../../services/session/session.service'
                 >
                   <span>Response</span>
                   @if (isError()) {
-                    <span class="text-red-600 dark:text-red-400">(Error)</span>
+                    <span class="text-state-danger-600 dark:text-state-danger-400">(Error)</span>
                   }
                 </div>
                 <pre
