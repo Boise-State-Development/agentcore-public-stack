@@ -33,7 +33,7 @@ import argparse
 import logging
 import os
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import boto3
 from boto3.dynamodb.conditions import Attr

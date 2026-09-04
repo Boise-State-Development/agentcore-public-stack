@@ -10,6 +10,22 @@
 #   all                                Run all tracks with default branches
 #                                      (tests + deploy + e2e on develop)
 #
+#   <branch> MUST be `main` or `develop`. Any other branch is rejected with an
+#   error. This is a security boundary, not an oversight: the workflow is
+#   triggered by `schedule`/`workflow_dispatch`, so it runs in the context of the
+#   default branch and its jobs can WRITE the default-branch GitHub Actions cache
+#   scope. Checking out an arbitrary ref would let unreviewed code execute while
+#   holding that cache token and poison entries that privileged workflows later
+#   restore (CWE-349; CodeQL actions/cache-poisoning/*).
+#
+#   The refs are assigned as literal strings in the parser below rather than
+#   sliced out of the track token — keep it that way, so attacker-influenced
+#   text never reaches a `ref:`.
+#
+#   To exercise a feature branch, open a pull request: tests.yml runs per-PR in a
+#   non-privileged context. To make another long-lived branch nightly-testable,
+#   add explicit cases for it in the parser below.
+#
 # Examples:
 #   test-backend-develop
 #   test-frontend-main,test-backend-main
@@ -121,25 +137,58 @@ jobs:
                   run_e2e=true
                   e2e_ref="develop"
                   ;;
-                test-backend-*)
+                test-backend-main)
                   run_test_backend=true
-                  test_backend_ref="${token#test-backend-}"
+                  test_backend_ref="main"
                   ;;
-                test-frontend-*)
+                test-backend-develop)
+                  run_test_backend=true
+                  test_backend_ref="develop"
+                  ;;
+                test-frontend-main)
                   run_test_frontend=true
-                  test_frontend_ref="${token#test-frontend-}"
+                  test_frontend_ref="main"
                   ;;
-                deploy-*)
+                test-frontend-develop)
+                  run_test_frontend=true
+                  test_frontend_ref="develop"
+                  ;;
+                deploy-main)
                   run_deploy=true
-                  deploy_ref="${token#deploy-}"
+                  deploy_ref="main"
                   ;;
-                scan-images-*)
+                deploy-develop)
+                  run_deploy=true
+                  deploy_ref="develop"
+                  ;;
+                scan-images-main)
                   run_scan_images=true
-                  scan_images_ref="${token#scan-images-}"
+                  scan_images_ref="main"
                   ;;
-                e2e-*)
+                scan-images-develop)
+                  run_scan_images=true
+                  scan_images_ref="develop"
+                  ;;
+                e2e-main)
                   run_e2e=true
-                  e2e_ref="${token#e2e-}"
+                  e2e_ref="main"
+                  ;;
+                e2e-develop)
+                  run_e2e=true
+                  e2e_ref="develop"
+                  ;;
+                test-backend-*|test-frontend-*|deploy-*|scan-images-*|e2e-*)
+                  # Refuse any branch outside the allowlist above. This workflow
+                  # runs on `schedule`/`workflow_dispatch`, i.e. in the context of
+                  # the default branch, where the job can WRITE the default-branch
+                  # Actions cache scope. Checking out an arbitrary ref here would
+                  # let unreviewed code run with that cache token and poison
+                  # entries that privileged workflows later restore
+                  # (CWE-349; CodeQL actions/cache-poisoning/*).
+                  echo "::error::Track '$token' names a branch outside the allowlist (main, develop)."
+                  echo "::error::Nightly runs privileged; testing an arbitrary branch here risks Actions cache poisoning."
+                  echo "::error::To test another branch, open a PR (tests.yml runs per-PR) or add the branch to the allowlist in this workflow."
+                  exit 1
                   ;;
                 *)
                   echo "::warning::Unknown track token: $token"

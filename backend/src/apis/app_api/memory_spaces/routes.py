@@ -42,6 +42,7 @@ from apis.shared.memory.service import (
 )
 from apis.shared.memory.store import MemorySpaceStoreError
 
+from apis.shared.security.log_sanitize import scrub_log
 from apis.app_api.memory_spaces.models import (
     ConsolidateRequest,
     ConsolidationReportResponse,
@@ -252,7 +253,7 @@ def export_space(
     except MemorySpaceError as e:
         raise _translate(e)
     except MemorySpaceStoreError as e:
-        logger.error("memory-spaces: export failed for space=%s: %s", space_id, e)
+        logger.error("memory-spaces: export failed for space=%s: %s", scrub_log(space_id), scrub_log(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="failed to read memory space contents for export",
@@ -292,7 +293,7 @@ def consolidate_space(
     except MemorySpaceError as e:
         raise _translate(e)
     except MemorySpaceStoreError as e:
-        logger.error("memory-spaces: consolidate failed for space=%s: %s", space_id, e)
+        logger.error("memory-spaces: consolidate failed for space=%s: %s", scrub_log(space_id), scrub_log(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="failed to consolidate memory space storage",

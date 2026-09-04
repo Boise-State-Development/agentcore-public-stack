@@ -38,7 +38,7 @@ import hashlib
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import boto3
 

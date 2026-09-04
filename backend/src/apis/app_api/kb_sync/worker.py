@@ -65,8 +65,6 @@ from apis.app_api.kb_sync import records
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-_NATIVE_PREFIX = "application/vnd.google-apps."
-
 
 def _now_timestamp() -> str:
     # Normalize the +00:00 offset to a single trailing Z; "…+00:00Z" (offset AND
