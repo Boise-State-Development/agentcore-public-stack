@@ -725,6 +725,61 @@ describe('ChatInputComponent — a queue held behind a paused turn (PR-6)', () =
     setStreaming(false);
   }
 
+  it('queues a follow-up typed AFTER the pause, rather than sending it', () => {
+    // The sequence a real user performs, and the one the original PR-6 tests
+    // missed: they queued while streaming and then paused. A pause closes the
+    // stream, so `isChatLoading` is already false by the time the prompt is on
+    // screen — and gating the queue on loading alone routed Enter straight to
+    // `submitChatRequest`, firing a brand-new turn that abandoned the paused
+    // one. Observed live on dev.
+    pauseTurn();
+
+    type('after the greeting, also tell me the day');
+    pressEnter();
+
+    expect(submitted).toEqual([]);
+    expect(component.queuedMessages().map((q) => q.content)).toEqual([
+      'after the greeting, also tell me the day',
+    ]);
+  });
+
+  it('the Send button makes the same decision as Enter while held', () => {
+    // Two affordances that disagree about what "send" means is worse than
+    // either behaviour on its own.
+    pauseTurn();
+
+    type('via the button');
+    component.onPrimaryButtonClick();
+
+    expect(submitted).toEqual([]);
+    expect(component.queuedMessages().map((q) => q.content)).toEqual(['via the button']);
+  });
+
+  it('does not try to arm an entry queued while paused', async () => {
+    // The paused turn released its lease when the stream closed, so there is
+    // no inbox to arm against — the entry rides the resume request instead.
+    pauseTurn();
+
+    type('rides the resume');
+    pressEnter();
+    await Promise.resolve();
+
+    expect(steering.armCalls).toEqual([]);
+    expect(steering.published.map((e) => e.text)).toEqual(['rides the resume']);
+  });
+
+  it('still sends immediately when nothing is paused and nothing is streaming', () => {
+    // The ordinary idle path must not become a queue.
+    steering.held.set(false);
+    setStreaming(false);
+
+    type('just a normal message');
+    pressEnter();
+
+    expect(submitted.map((m) => m.content)).toEqual(['just a normal message']);
+    expect(component.queuedMessages()).toEqual([]);
+  });
+
   it('does not send a follow-up while a prompt is awaiting an answer', () => {
     setStreaming(true);
     type('actually use the local file');
