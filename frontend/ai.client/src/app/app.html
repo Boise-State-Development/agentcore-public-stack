@@ -1,5 +1,5 @@
 <!-- Mobile sidenav overlay -->
-@if (sidenavService.isVisible() && !sidenavService.isHidden()) {
+@if (sidenavService.isVisible() && !chromeHidden()) {
     <div class="relative z-50 lg:hidden" role="dialog" aria-modal="true">
       <!-- Backdrop -->
       <div
@@ -30,7 +30,7 @@
   }
 
   <!-- Static sidebar for desktop -->
-  @if (!sidenavService.isHidden()) {
+  @if (!chromeHidden()) {
     <div
       class="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex size-auto transition-transform duration-300"
       [class.-translate-x-full]="sidenavService.isCollapsed()">
@@ -40,7 +40,7 @@
   }
 
   <!-- Desktop controls (when sidenav collapsed) -->
-  @if (sidenavService.isCollapsed() && !sidenavService.isHidden()) {
+  @if (sidenavService.isCollapsed() && !chromeHidden()) {
     <div class="hidden lg:flex fixed top-4 left-4 z-50 gap-2">
       <!-- Expand sidebar button -->
       <button
@@ -71,7 +71,7 @@
   }
 
   <!-- Mobile controls (when header content hidden and sidenav not visible) -->
-  @if (!headerService.showContent() && !sidenavService.isVisible() && !sidenavService.isHidden()) {
+  @if (!headerService.showContent() && !sidenavService.isVisible() && !chromeHidden()) {
     <div class="flex lg:hidden fixed top-4 left-4 z-50 gap-2">
       <!-- Open sidenav button -->
       <button
@@ -104,15 +104,24 @@
   <div
     class="transition-[padding] duration-300"
     [style.--artifact-pane-width]="artifactPaneWidthCss()"
-    [class.lg:pl-72]="!sidenavService.isCollapsed() && !sidenavService.isHidden()"
-    [class.lg:pl-0]="sidenavService.isCollapsed() || sidenavService.isHidden()"
+    [class.lg:pl-72]="!sidenavService.isCollapsed() && !chromeHidden()"
+    [class.lg:pl-0]="sidenavService.isCollapsed() || chromeHidden()"
     [class.artifact-pane-open]="artifactPanelOpen()">
     <main class="flex h-dvh flex-col">
       <!-- Scrollable Content. The id is a stable hook for code that reads
            or sets the scroll position (session scroll save/restore) — the
            window itself no longer scrolls now that this container is real. -->
       <div id="app-scroll-container" class="flex-1 overflow-y-auto">
-        <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
+        <!-- A minimal-chrome route (e.g. a shared artifact) opts out of
+             the centred, padded content box so its own layout can fill
+             the shell edge to edge. -->
+        <div
+          [class]="
+            minimalChrome()
+              ? 'h-full'
+              : 'mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10'
+          "
+        >
           <router-outlet />
         </div>
       </div>

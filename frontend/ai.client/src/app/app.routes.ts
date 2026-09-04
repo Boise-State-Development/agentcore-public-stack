@@ -36,6 +36,10 @@ export const routes: Routes = [
                 m => m.SharedArtifactViewPage,
             ),
         canActivate: [authGuard],
+        // A recipient opened a link to view one thing. Drop the sidenav
+        // and the centred content box so the artifact fills the shell —
+        // the app reads this in `app.html`.
+        data: { chrome: 'minimal' },
     },
     {
         path: 'auth/login',
