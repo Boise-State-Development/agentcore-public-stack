@@ -1,7 +1,8 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import type {
   ArtifactContent,
   RenderToken,
@@ -79,6 +80,23 @@ export class ArtifactShareService {
     return `${this.config.appApiUrl()}/shared-artifacts`;
   }
 
+  /**
+   * Opt a request out of the global error toast.
+   *
+   * Applied to every call whose caller renders its own inline error —
+   * the share modal's message box and the recipient page's 403/404/500
+   * screens. Without it a dead share link produces two notices at once:
+   * the page's "Artifact not found" *and* a generic toast repeating the
+   * backend detail.
+   *
+   * Deliberately NOT applied to `listShares`: it degrades silently by
+   * design (the dialog still opens and can create a link), so the toast
+   * is the only signal that the existing-links list is incomplete.
+   */
+  private inlineErrors(): { context: HttpContext } {
+    return { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) };
+  }
+
   // ----------------------------------------------------------------
   // Owner CRUD
   // ----------------------------------------------------------------
@@ -102,6 +120,7 @@ export class ArtifactShareService {
           accessLevel,
           ...(allowedEmails?.length ? { allowedEmails } : {}),
         },
+        this.inlineErrors(),
       ),
     );
   }
@@ -131,6 +150,7 @@ export class ArtifactShareService {
       this.http.patch<ArtifactShare>(
         `${this.artifactsUrl()}/shares/${encodeURIComponent(shareId)}`,
         body,
+        this.inlineErrors(),
       ),
     );
   }
@@ -141,6 +161,7 @@ export class ArtifactShareService {
     await firstValueFrom(
       this.http.delete(
         `${this.artifactsUrl()}/shares/${encodeURIComponent(shareId)}`,
+        this.inlineErrors(),
       ),
     );
   }
@@ -154,6 +175,7 @@ export class ArtifactShareService {
     return firstValueFrom(
       this.http.get<SharedArtifact>(
         `${this.sharedUrl()}/${encodeURIComponent(shareId)}`,
+        this.inlineErrors(),
       ),
     );
   }
@@ -171,6 +193,7 @@ export class ArtifactShareService {
       this.http.post<RenderTokenResponseDto>(
         `${this.sharedUrl()}/${encodeURIComponent(shareId)}/render-token`,
         {},
+        this.inlineErrors(),
       ),
     );
     return { url: res.url, expiresAt: res.expires_at };
@@ -190,6 +213,7 @@ export class ArtifactShareService {
     const res = await firstValueFrom(
       this.http.get<ArtifactContentResponseDto>(
         `${this.sharedUrl()}/${encodeURIComponent(shareId)}/content`,
+        this.inlineErrors(),
       ),
     );
     return {

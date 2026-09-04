@@ -127,4 +127,14 @@ describe('ArtifactCardComponent', () => {
       version: 3,
     });
   });
+
+  it('keeps both action labels in the accessible name at any card width', () => {
+    // On a narrow card (artifact panel docked open, split view, mobile) a
+    // container query hides these labels visually so the title isn't
+    // squeezed to nothing — but they are only *visually* hidden, never
+    // removed, so the visible-label-in-accessible-name rule (WCAG 2.5.3)
+    // still holds and the buttons keep their [appTooltip].
+    expect(button(/^Share /).textContent).toContain('Share');
+    expect(button(/^Download /).textContent).toContain('Download');
+  });
 });

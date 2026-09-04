@@ -23,6 +23,7 @@ import {
   type ArtifactShareModalData,
 } from './artifact-share-modal.component';
 import { UserService } from '../../../../../auth/user.service';
+import { TooltipDirective } from '../../../../../components/tooltip/tooltip.directive';
 import { parseIso } from '../../../../../utils/date';
 
 /** Visual treatment derived from an artifact's content type. */
@@ -58,7 +59,7 @@ interface ArtifactKind {
 @Component({
   selector: 'app-artifact-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, TooltipDirective],
   providers: [
     provideIcons({
       heroCodeBracket,
@@ -112,6 +113,7 @@ interface ArtifactKind {
             type="button"
             class="artifact-card__action"
             [attr.aria-label]="shareAriaLabel()"
+            [appTooltip]="'Share version ' + artifact().version"
             (click)="share()"
           >
             <ng-icon name="heroArrowUpOnSquare" aria-hidden="true" />
@@ -124,6 +126,7 @@ interface ArtifactKind {
             [class.is-busy]="downloading()"
             [attr.aria-label]="downloadAriaLabel()"
             [attr.aria-busy]="downloading()"
+            [appTooltip]="'Download version ' + artifact().version"
             [disabled]="downloading()"
             (click)="download()"
           >
@@ -152,6 +155,11 @@ interface ArtifactKind {
       isolation: isolate;
       display: block;
       width: 100%;
+      /* Establishes the query container for the narrow-card rules at the
+         bottom of this block. The card is sized by the chat column, not
+         the viewport — the artifact panel docking open halves it — so a
+         container query is correct here and a media query is not. */
+      container-type: inline-size;
       /* matches the chat input's rounded-2xl so the focus ring and the
          surface share the app's corner radius */
       border-radius: 1rem;
@@ -256,8 +264,13 @@ interface ArtifactKind {
       line-height: 1;
     }
 
+    /* min-width:0 lets the 1fr column actually shrink; overflow:hidden
+       is what stops its contents painting outside it. Without the
+       latter the metadata line spills under the action buttons once the
+       chat column narrows (e.g. with the artifact panel docked open). */
     .artifact-card__body {
       min-width: 0;
+      overflow: hidden;
     }
 
     .artifact-card__title {
@@ -276,6 +289,9 @@ interface ArtifactKind {
     }
 
     /* Metadata line — the app's sans, small and quiet. */
+    /* Truncates as one line rather than wrapping or overflowing: the
+       type/version/time chunks are progressively less important, so
+       clipping from the right degrades in the right order. */
     .artifact-card__meta {
       display: flex;
       align-items: center;
@@ -283,6 +299,12 @@ interface ArtifactKind {
       margin-top: 0.2rem;
       font-size: 0.75rem;
       color: #4b5563;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .artifact-card__meta > * {
+      flex: 0 0 auto;
     }
 
     :host-context(html.dark) .artifact-card__meta {
@@ -313,6 +335,10 @@ interface ArtifactKind {
       display: inline-flex;
       align-items: center;
       gap: 0.4rem;
+      /* The grid's last column is sized auto, so the actions always get
+         the width they ask for; this just stops them being the thing
+         that wraps. */
+      flex: 0 0 auto;
     }
 
     /* A bordered, labelled action button. Both actions keep a visible
@@ -388,6 +414,32 @@ interface ArtifactKind {
     @keyframes artifact-card-spin {
       to {
         transform: rotate(360deg);
+      }
+    }
+
+    /* Narrow card (docked artifact panel, split view, mobile): the two
+       labelled buttons would otherwise consume the whole row and the
+       title would clip to nothing. Drop the labels to icons and let the
+       title win the space back.
+
+       The label is visually hidden rather than removed, so it stays in
+       the accessible name (WCAG 2.5.3) — and the buttons carry
+       [appTooltip], which is what a sighted user gets in place of the
+       text they can no longer see. */
+    @container (max-width: 26rem) {
+      .artifact-card__action-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+      .artifact-card__action {
+        padding-left: 0.45rem;
+        padding-right: 0.45rem;
       }
     }
 
