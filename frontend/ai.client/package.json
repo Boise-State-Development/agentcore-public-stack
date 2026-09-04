@@ -66,7 +66,7 @@
     "fast-check": "4.7.0",
     "jsdom": "29.1.0",
     "postcss": "8.5.28",
-    "sharp": "^0.33.0",
+    "sharp": "0.33.0",
     "tailwindcss": "4.2.4",
     "tsx": "4.23.12",
     "typescript": "5.9.3",
