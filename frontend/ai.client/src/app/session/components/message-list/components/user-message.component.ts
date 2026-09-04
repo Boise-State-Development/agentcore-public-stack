@@ -7,6 +7,7 @@ import {
   ElementRef,
   viewChild,
   AfterViewInit,
+  OnDestroy,
   inject,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -124,7 +125,7 @@ const MAX_HEIGHT_PX = 200;
     }
   `,
 })
-export class UserMessageComponent implements AfterViewInit {
+export class UserMessageComponent implements AfterViewInit, OnDestroy {
   message = input.required<Message>();
 
   contentWrapper = viewChild<ElementRef<HTMLDivElement>>('contentWrapper');
@@ -211,8 +212,35 @@ export class UserMessageComponent implements AfterViewInit {
     this.fileAttachments().filter((a) => !isImageMimeType(a.mimeType)),
   );
 
+  /** Re-measures whenever the bubble's box settles. See {@link ngAfterViewInit}. */
+  private resizeObserver?: ResizeObserver;
+
   ngAfterViewInit(): void {
+    const wrapper = this.contentWrapper()?.nativeElement;
+    if (!wrapper) {
+      return;
+    }
+
+    // Measure whenever the box settles, not once and for all.
+    //
+    // A single `ngAfterViewInit` reading can land before layout has settled,
+    // and it latched: a one-line mid-turn steer measured its 40 characters as
+    // dozens of wrapped lines in a not-yet-widened container, set
+    // `isOverflowing`, and rendered a "Show more" plus a fade dimming its own
+    // single line — permanently, because nothing ever measured again.
+    // Observed live on dev.
+    //
+    // The observed element is the inner wrapper, whose box is pinned by
+    // `max-height` and unaffected by the fade (absolutely positioned) and the
+    // button (a sibling outside it), so reacting here cannot feed back into a
+    // resize loop.
+    this.resizeObserver = new ResizeObserver(() => this.checkOverflow());
+    this.resizeObserver.observe(wrapper);
     this.checkOverflow();
+  }
+
+  ngOnDestroy(): void {
+    this.resizeObserver?.disconnect();
   }
 
   toggleExpanded(): void {
