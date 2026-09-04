@@ -15,7 +15,7 @@ Endpoints under test:
 Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8
 """
 
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock, call
 
 import pytest
 from fastapi import FastAPI
@@ -775,6 +775,95 @@ class TestBulkDeleteSessions:
 
         assert resp.status_code == 200
         assert mock_share_service.delete_shares_for_session.call_count == 2
+
+    def test_bulk_delete_queues_artifact_share_cleanup(
+        self, app, make_user, authenticated_client
+    ):
+        """Bulk delete must cascade artifact shares too, per session.
+
+        The single-delete path has its own test; this is the one that
+        catches the bulk path being wired wrong or not at all — the
+        failure mode being live share links surviving the conversations
+        that produced them.
+        """
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        mock_service.delete_session = AsyncMock(side_effect=[True, True])
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
+        mock_artifact_shares = MagicMock()
+        mock_artifact_shares.delete_for_session = MagicMock(return_value=1)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_artifact_share_service",
+            return_value=mock_artifact_shares,
+        ):
+            resp = client.post(
+                "/sessions/bulk-delete",
+                json={"sessionIds": ["sess-001", "sess-002"]},
+            )
+
+        assert resp.status_code == 200
+        # Once per session, each scoped to the caller — SessionIndex is
+        # not user-partitioned, so the owner id is what keeps the cascade
+        # off other users' shares.
+        assert mock_artifact_shares.delete_for_session.call_args_list == [
+            call("sess-001", user.user_id),
+            call("sess-002", user.user_id),
+        ]
+
+    def test_bulk_delete_skips_artifact_cleanup_for_failed_deletes(
+        self, app, make_user, authenticated_client
+    ):
+        """A session that wasn't deleted keeps its artifacts, so revoking
+        its share links would destroy live links to a conversation the
+        user still has."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        # Second session doesn't exist.
+        mock_service.delete_session = AsyncMock(side_effect=[True, False])
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
+        mock_artifact_shares = MagicMock()
+        mock_artifact_shares.delete_for_session = MagicMock(return_value=0)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_artifact_share_service",
+            return_value=mock_artifact_shares,
+        ):
+            resp = client.post(
+                "/sessions/bulk-delete",
+                json={"sessionIds": ["sess-001", "sess-missing"]},
+            )
+
+        assert resp.status_code == 200
+        assert mock_artifact_shares.delete_for_session.call_args_list == [
+            call("sess-001", user.user_id)
+        ]
 
     def test_rejects_empty_list(self, app, make_user, authenticated_client):
         """Req 3.7: Should return 422 for empty session_ids list."""
