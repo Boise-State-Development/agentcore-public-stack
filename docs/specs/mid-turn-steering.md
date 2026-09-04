@@ -1,6 +1,6 @@
 # Mid-turn steering
 
-**Status:** built — PRs 1–6 complete. Pending the dev evaluation Risk 2 asks for.
+**Status:** SHIPPED and validated end to end on dev (2026-09-04). Risk 2 answered: the model reads and obeys the injection.
 **Follow-up to:** PR #916 (`feature/queue-followup-instead-of-interrupt`)
 **Refs:** `docs/kaizen/reviews/2026-08-28.md` proposal #5
 
@@ -314,7 +314,27 @@ is still streaming — this is the one piece of visual design work in the change
 | 3 | app-api `POST /sessions/{id}/steer` + `DELETE .../steer/{entryId}`, `get_current_user_from_session` auth per the house rule. | **built** |
 | 4 | `steering_applied` SSE event: coordinator emit, parser case, CLAUDE.md table row. | **built** |
 | 5 | SPA: pending-ack queue state, POST/DELETE wiring, conditional placeholder, mid-turn user bubble rendering. | **built** |
-| 6 | Paused-turn carry-through on the resume path (D "Paused turns"). Optional, ships after the rest is live in dev. | **built** |
+| 6 | Paused-turn carry-through on the resume path (D "Paused turns"). Optional, ships after the rest is live in dev. | **built + verified live** |
+
+Three defects surfaced only by driving it against dev, none by reading it:
+
+* **#930** — a steer rendered ~36 times live. `syncStreamingMessages` truncates
+  to the last user message; a steer is a user message that does not start a
+  turn, so it became its own truncation point and re-appended per sync tick.
+  Persisted history was always correct, so nothing but counting live bubbles
+  would have caught it.
+* **#934** — PR-6's hold was unreachable. A pause CLOSES the stream, so
+  `isChatLoading` is false while the prompt waits; `onSubmit` gated the queue on
+  loading alone and Enter went straight to a new turn, abandoning the paused
+  one. The tests here queued while streaming and then paused — a real user types
+  *after* the pause.
+* **#935** — the steer bubble had its own tint on top of the caption. Two
+  signals for one distinction; it now uses the standard user bubble.
+
+**Reproducing a paused turn:** dev's `sk_hello_approval` (live MCP server, no
+OAuth, `say_hello` flagged `needsApproval`) gives a real Strands pause that
+resumes on one Approve click, no credentials. The `localhost:8026` MCP-stub
+recipe is stale — `canvas_faculty` moved to a Lambda URL.
 
 Four implementation notes worth carrying forward:
 
