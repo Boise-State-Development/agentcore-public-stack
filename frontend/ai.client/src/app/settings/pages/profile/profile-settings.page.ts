@@ -5,7 +5,7 @@ import {
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroDocument, heroChevronRight } from '@ng-icons/heroicons/outline';
+import { heroDocument, heroDocumentText, heroChevronRight } from '@ng-icons/heroicons/outline';
 import { UserService } from '../../../auth/user.service';
 
 @Component({
@@ -13,7 +13,7 @@ import { UserService } from '../../../auth/user.service';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink, NgIcon],
   providers: [
-    provideIcons({ heroDocument, heroChevronRight }),
+    provideIcons({ heroDocument, heroDocumentText, heroChevronRight }),
   ],
   host: { class: 'block' },
   template: `
@@ -93,6 +93,29 @@ import { UserService } from '../../../auth/user.service';
               <span class="text-sm/6 font-medium text-gray-900 dark:text-white">My Files</span>
               <p class="text-sm/6 text-gray-500 dark:text-gray-400">
                 Browse and manage your uploaded files.
+              </p>
+            </div>
+          </div>
+          <ng-icon name="heroChevronRight" class="size-5 shrink-0 text-gray-400 dark:text-gray-500" />
+        </a>
+      </div>
+
+      <!-- Artifacts. Alongside My Files deliberately: the two are the same
+           kind of thing from the user's side — one is what they brought in,
+           the other what the assistant made. -->
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
+        <a
+          routerLink="/artifacts"
+          class="flex items-center justify-between gap-4 p-6 transition-colors hover:bg-gray-50 dark:hover:bg-white/5"
+        >
+          <div class="flex items-start gap-3">
+            <div class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-white/10">
+              <ng-icon name="heroDocumentText" class="size-4 text-gray-500 dark:text-gray-400" />
+            </div>
+            <div>
+              <span class="text-sm/6 font-medium text-gray-900 dark:text-white">Artifacts</span>
+              <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+                Everything you've made with the assistant, from every conversation.
               </p>
             </div>
           </div>

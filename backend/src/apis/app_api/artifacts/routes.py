@@ -9,8 +9,10 @@ from apis.shared.auth import User, get_current_user_from_session
 
 from .models import (
     ArtifactContentResponse,
+    ArtifactLibraryResponse,
     ArtifactListResponse,
     ArtifactSummary,
+    LibraryArtifact,
     RenderTokenRequest,
     RenderTokenResponse,
 )
@@ -107,6 +109,48 @@ async def list_session_artifacts(
 
     return ArtifactListResponse(
         artifacts=[ArtifactSummary(**row) for row in rows]
+    )
+
+
+@router.get("/library", response_model=ArtifactLibraryResponse)
+async def list_user_artifacts(
+    user: User = Depends(get_current_user_from_session),
+    service: ArtifactListService = Depends(get_artifact_list_service),
+) -> ArtifactLibraryResponse:
+    """Every artifact the caller owns, at HEAD, newest-first.
+
+    Backs the artifact library page. Takes no scoping parameter by
+    design: the only user it can ever describe is the authenticated one,
+    since the underlying Query is keyed on `PK=USER#{uid}`. There is no
+    way to ask this endpoint about somebody else.
+
+    A separate route rather than an optional `session_id` on the list
+    endpoint above, because the two differ in cardinality: that one
+    returns a row per *version* (the SPA anchors each to its turn), this
+    one a row per *artifact*. Overloading one path with both shapes would
+    make the response type depend on which query params were present.
+
+    Unpaginated, matching the shape of the data: the heaviest partition
+    in production holds well under a single 1MB Query page. Pagination
+    lands with the user index when it is needed, not before.
+    """
+    try:
+        rows = service.list_for_user(user_id=user.user_id)
+    except RenderTokenConfigError:
+        logger.exception("artifact library service misconfigured")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Artifact listing is unavailable",
+        )
+    except ArtifactQueryError:
+        logger.exception("artifact library query failed")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Artifact listing is temporarily unavailable",
+        )
+
+    return ArtifactLibraryResponse(
+        artifacts=[LibraryArtifact(**row) for row in rows]
     )
 
 

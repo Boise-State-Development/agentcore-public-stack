@@ -61,6 +61,30 @@ class ArtifactListResponse(BaseModel):
     artifacts: list[ArtifactSummary] = Field(default_factory=list)
 
 
+class LibraryArtifact(BaseModel):
+    """One artifact at its current HEAD, for the user-wide library page.
+
+    Distinct from `ArtifactSummary` in cardinality, not just fields: the
+    session list returns one row per *version* so the SPA can anchor a
+    card under the turn that produced it, while the library returns one
+    row per *artifact*. Carries `session_id` so the library can link back
+    to the conversation that produced it — the summary has no need for it
+    (the caller already supplied the session id).
+    """
+
+    artifact_id: str
+    version: int
+    title: str
+    content_type: str
+    created_at: str
+    updated_at: str
+    session_id: str
+
+
+class ArtifactLibraryResponse(BaseModel):
+    artifacts: list[LibraryArtifact] = Field(default_factory=list)
+
+
 class ArtifactContentResponse(BaseModel):
     """Raw source of one artifact version, for the panel's code view.
 
