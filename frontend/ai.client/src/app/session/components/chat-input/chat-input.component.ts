@@ -448,9 +448,17 @@ export class ChatInputComponent {
    * Stopping stays on the button, deliberately. Making Enter ambiguous — send
    * when idle, abort when busy — is what let a reflex keystroke kill a run the
    * user was waiting on, and stopping is the rarer, more destructive of the two.
+   *
+   * `queueHeld()` is the second reason to queue, and it is NOT covered by
+   * `isLoading()`: a turn paused for consent or approval has already closed its
+   * stream, so loading is false while the prompt sits there waiting. Gating on
+   * loading alone sent the follow-up as a brand-new turn — abandoning the
+   * paused turn the user was mid-answer on — while the placeholder promised it
+   * would go in when they answered. See docs/specs/mid-turn-steering.md
+   * ("Paused turns").
    */
   onSubmit() {
-    if (this.isLoading()) {
+    if (this.isLoading() || this.queueHeld()) {
       this.queueChatRequest();
     } else {
       this.submitChatRequest();
@@ -466,7 +474,9 @@ export class ChatInputComponent {
     if (this.isLoading()) {
       this.cancelChatRequest();
     } else {
-      this.submitChatRequest();
+      // Not streaming, so this is Send — but it must make the same decision
+      // Enter does, or the two disagree while a prompt is holding the queue.
+      this.onSubmit();
     }
   }
 
@@ -526,6 +536,9 @@ export class ChatInputComponent {
     const sessionId = this.sessionId();
     if (!sessionId) return;
     if (entry.fileUploadIds?.length || entry.mentionAgentId) return;
+    // A paused turn released its lease when the stream closed, so there is no
+    // inbox to arm against. This entry rides the resume request instead.
+    if (this.queueHeld()) return;
 
     const armed = await this.steering.arm(sessionId, entry.id, entry.content);
     if (!armed) return;
