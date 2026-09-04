@@ -237,6 +237,66 @@ describe('MessageMapService', () => {
     expect(bMessages[1].content).toEqual([{ type: 'text', text: 'answer B' }]);
   });
 
+  it('renders a mid-turn steer exactly once across many sync ticks', () => {
+    // Regression, caught live in dev: a steer rendered ~36 times.
+    //
+    // `syncStreamingMessages` truncates the map back to the last user message
+    // and appends the stream's messages. A mid-turn steer IS a user message,
+    // so once it lands in the map it became the truncation point — moving that
+    // point forward past itself, so the stream's copy (which the parser keeps
+    // emitting every tick) was appended again on every subsequent tick.
+    //
+    // Each parse below drives one sync tick, which is what makes this able to
+    // fail: with one event it looked fine.
+    const parser = TestBed.inject(StreamParserService);
+
+    // Each event is followed by TestBed.tick(), which runs the parser->map sync
+    // effect. That is what makes this test able to fail at all: the duplication
+    // is one extra copy per SYNC, so a version that only syncs once at
+    // endStreaming looks perfectly healthy.
+    const send = (event: string, data: unknown) => {
+      parser.parseEventSourceMessage('steer-1', event, data);
+      TestBed.tick();
+    };
+
+    service.addUserMessage('steer-1', 'do a long thing');
+    service.startStreaming('steer-1');
+
+    send('message_start', { role: 'assistant' });
+    send('content_block_delta', { contentBlockIndex: 0, text: 'working' });
+    // The tool-calling message stays active on a tool_use stop reason, which is
+    // the state a steer actually lands in.
+    send('message_stop', { stopReason: 'tool_use' });
+    send('steering_applied', {
+      type: 'steering_applied',
+      sessionId: 'steer-1',
+      entryId: 'entry-1',
+      text: 'actually stop after two',
+    });
+
+    // Keep the stream going: every one of these is another chance to duplicate.
+    send('message_start', { role: 'assistant' });
+    for (const text of [' more', ' and', ' more', ' still']) {
+      send('content_block_delta', { contentBlockIndex: 0, text });
+    }
+    send('message_stop', { stopReason: 'end_turn' });
+    service.endStreaming('steer-1');
+
+    const messages = service.getMessagesForSession('steer-1')();
+    const steers = messages.filter(m => m.steering);
+    expect(steers).toHaveLength(1);
+    expect(steers[0].content).toEqual([{ type: 'text', text: 'actually stop after two' }]);
+
+    // And it stays in place: after the assistant turn it interrupted, before
+    // the one that follows.
+    expect(messages.map(m => (m.steering ? 'steer' : m.role))).toEqual([
+      'user',
+      'assistant',
+      'steer',
+      'assistant',
+    ]);
+  });
+
   it('endStreaming for one session leaves another session streaming', () => {
     service.startStreaming('conc-c');
     service.startStreaming('conc-d');

@@ -298,10 +298,20 @@ export class MessageMapService {
         return [...continuationPrefix, ...streamMessages];
       }
 
-      // Find the index of the last user message
+      // Find the index of the last TURN-STARTING user message.
+      //
+      // A mid-turn steer is a user message that does not start a turn — it is
+      // part of the response already streaming, and the parser is still
+      // emitting it in `streamMessages` every tick. Treating it as the
+      // truncation point moves that point forward past itself, so the stream's
+      // copy is appended again on the next tick, and the next, and the next:
+      // one bubble per sync tick (observed live in dev as ~36 copies of one
+      // follow-up). Skipping it keeps the truncation anchored on the user
+      // message that actually opened the turn, which is what makes repeated
+      // syncs idempotent. Same predicate turn grouping uses.
       let lastUserMessageIndex = -1;
       for (let i = existingMessages.length - 1; i >= 0; i--) {
-        if (existingMessages[i].role === 'user') {
+        if (existingMessages[i].role === 'user' && !existingMessages[i].steering) {
           lastUserMessageIndex = i;
           break;
         }
