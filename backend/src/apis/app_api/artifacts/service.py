@@ -964,30 +964,41 @@ class ArtifactShareService:
             # an unreachable owner row, which is inert; the reverse
             # order would leave a *live* share whose owner can no longer
             # see it to revoke.
-            with table.batch_writer() as batch:
-                for share in shares:
-                    batch.delete_item(
-                        Key=_share_lookup_key(str(share["share_id"]))
-                    )
-            with table.batch_writer() as batch:
-                for share in shares:
-                    batch.delete_item(
-                        Key={
-                            "PK": f"USER#{owner_id}",
-                            "SK": _owner_share_sk(
-                                str(share["artifact_id"]),
-                                int(share["version"]),
-                                str(share["share_id"]),
-                            ),
-                        }
-                    )
+            #
+            # Plain DeleteItem per row, NOT `table.batch_writer()`.
+            # `BatchWriteItem` is its own IAM action and is *not*
+            # authorized by the underlying item actions the way
+            # `TransactWriteItems` is — the task role is granted
+            # GetItem/PutItem/UpdateItem/DeleteItem/Query and nothing
+            # else, so a batch write fails closed with AccessDenied at
+            # runtime. Per-item deletes also isolate failures: one bad
+            # row can't strand the rest of the cascade.
+            revoked = 0
+            for share in shares:
+                if self._delete_quietly(
+                    table, _share_lookup_key(str(share["share_id"]))
+                ):
+                    revoked += 1
+            for share in shares:
+                self._delete_quietly(
+                    table,
+                    {
+                        "PK": f"USER#{owner_id}",
+                        "SK": _owner_share_sk(
+                            str(share["artifact_id"]),
+                            int(share["version"]),
+                            str(share["share_id"]),
+                        ),
+                    },
+                )
 
             logger.info(
-                "revoked %s artifact share(s) for deleted session %s",
+                "revoked %s of %s artifact share(s) for deleted session %s",
+                revoked,
                 len(shares),
                 scrub_log(session_id),
             )
-            return len(shares)
+            return revoked
         except Exception:
             logger.error(
                 "failed to revoke artifact shares for session %s",
@@ -995,6 +1006,23 @@ class ArtifactShareService:
                 exc_info=True,
             )
             return 0
+
+    @staticmethod
+    def _delete_quietly(table, key: dict) -> bool:
+        """Delete one row, reporting success rather than raising.
+
+        A single failed row must not strand the rest of the cascade —
+        every remaining share link would stay live."""
+        try:
+            table.delete_item(Key=key)
+            return True
+        except ClientError:
+            logger.warning(
+                "artifact share cascade could not delete %s",
+                scrub_log(key.get("PK", "")),
+                exc_info=True,
+            )
+            return False
 
     @staticmethod
     def _shares_for_session(
