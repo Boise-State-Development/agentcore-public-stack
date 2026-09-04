@@ -6,6 +6,8 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
+import { HttpContext } from '@angular/common/http';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { ArtifactShareService } from './artifact-share.service';
 import { ConfigService } from '../../../services/config.service';
 
@@ -190,5 +192,44 @@ describe('ArtifactShareService', () => {
       .expectOne(`${API}/shared-artifacts/s%2F1/render-token`)
       .flush({ url: 'u', expires_at: 'e' });
     await mint;
+  });
+
+  // ----------------------------------------------------------------
+  // Global error toast
+  // ----------------------------------------------------------------
+
+  it('opts calls with inline error UI out of the global toast', async () => {
+    // The share modal and the recipient page render their own error
+    // messages; without this a dead link shows the page's "Artifact not
+    // found" AND a generic toast repeating the backend detail.
+    const cases: Array<[string, () => Promise<unknown>, string]> = [
+      ['create', () => service.createShare('art-1', 1, 'public'), `${API}/artifacts/art-1/shares`],
+      ['update', () => service.updateShare('s1'), `${API}/artifacts/shares/s1`],
+      ['revoke', () => service.revokeShare('s1'), `${API}/artifacts/shares/s1`],
+      ['metadata', () => service.getSharedArtifact('s1'), `${API}/shared-artifacts/s1`],
+      ['mint', () => service.mintSharedRenderToken('s1'), `${API}/shared-artifacts/s1/render-token`],
+      ['content', () => service.getSharedArtifactContent('s1'), `${API}/shared-artifacts/s1/content`],
+    ];
+
+    for (const [label, call, url] of cases) {
+      const p = call();
+      const req = httpMock.expectOne(url);
+      expect(
+        req.request.context.get(SUPPRESS_ERROR_TOAST),
+        `${label} should suppress the global toast`,
+      ).toBe(true);
+      req.flush({ url: 'u', expires_at: 'e', content: '', content_type: '', version: 1 });
+      await p;
+    }
+  });
+
+  it('leaves the toast on for the share list, which degrades silently', async () => {
+    // listShares has no inline error UI — the dialog still opens and can
+    // create a link — so the toast is the only signal the list is stale.
+    const p = service.listShares('art-1');
+    const req = httpMock.expectOne(`${API}/artifacts/art-1/shares`);
+    expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(false);
+    req.flush({ shares: [] });
+    await p;
   });
 });
