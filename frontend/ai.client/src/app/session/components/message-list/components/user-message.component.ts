@@ -56,10 +56,15 @@ const MAX_HEIGHT_PX = 200;
 
         <!-- Text content (message bubble) -->
         @if (hasTextContent()) {
+          <!--
+            A mid-turn steer uses the SAME bubble as any other user message.
+            It IS an ordinary thing the user said; only its timing is unusual,
+            and the "Sent while responding" caption above already carries that.
+            A second visual treatment made it read as a different kind of
+            object, which it isn't.
+          -->
           <div
-            [class]="message().steering
-              ? 'max-w-[80%] rounded-2xl border border-primary-500/40 bg-primary-50 px-4 py-3 text-base/6 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
-              : 'max-w-[80%] rounded-2xl bg-primary-500 px-4 py-3 text-base/6 text-white/90'"
+            class="max-w-[80%] rounded-2xl bg-primary-500 px-4 py-3 text-base/6 text-white/90"
           >
             <div class="relative">
               <div
@@ -79,9 +84,7 @@ const MAX_HEIGHT_PX = 200;
               </div>
               @if (isOverflowing() && !expanded()) {
                 <div
-                  [class]="message().steering
-                    ? 'pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-primary-50 to-transparent dark:from-gray-800'
-                    : 'pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-primary-500 to-transparent'"
+                  class="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-primary-500 to-transparent"
                 ></div>
               }
             </div>
@@ -89,9 +92,7 @@ const MAX_HEIGHT_PX = 200;
               <button
                 type="button"
                 (click)="toggleExpanded()"
-                [class]="message().steering
-                  ? 'mt-2 text-sm font-medium text-primary-700 underline underline-offset-2 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200'
-                  : 'mt-2 text-sm font-medium text-white/80 underline underline-offset-2 hover:text-white'"
+                class="mt-2 text-sm font-medium text-white/80 underline underline-offset-2 hover:text-white"
               >
                 {{ expanded() ? 'Show less' : 'Show more' }}
               </button>
