@@ -33,6 +33,7 @@ from apis.shared.sessions.metadata import (
 )
 from .services.session_service import SessionService
 from apis.app_api.shares.service import get_share_service
+from apis.app_api.artifacts.service import get_artifact_share_service
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.feature_flags import mid_turn_steering_enabled
 from apis.shared.auth.models import User
@@ -456,6 +457,17 @@ async def delete_session_endpoint(
             session_id
         )
 
+        # 4. Revoke artifact shares from this session. Artifacts outlive
+        # the chat that produced them, so without this a deleted
+        # conversation leaves live links to its artifacts. Best-effort
+        # and never-raising, like the conversation cascade above — and a
+        # no-op when artifacts aren't enabled for this environment.
+        background_tasks.add_task(
+            get_artifact_share_service().delete_for_session,
+            session_id,
+            user_id
+        )
+
         logger.info("Successfully deleted session")
 
         return Response(status_code=204)
@@ -516,6 +528,7 @@ async def bulk_delete_sessions_endpoint(
     try:
         service = SessionService()
         share_service = get_share_service()
+        artifact_share_service = get_artifact_share_service()
 
         for session_id in session_ids:
             try:
@@ -538,6 +551,11 @@ async def bulk_delete_sessions_endpoint(
                     background_tasks.add_task(
                         share_service.delete_shares_for_session,
                         session_id
+                    )
+                    background_tasks.add_task(
+                        artifact_share_service.delete_for_session,
+                        session_id,
+                        user_id
                     )
                     results.append(BulkDeleteSessionResult(
                         session_id=session_id,

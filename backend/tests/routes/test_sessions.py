@@ -604,6 +604,79 @@ class TestDeleteSession:
         # Background task should have been called with the session id
         mock_share_service.delete_shares_for_session.assert_called_once_with("sess-001")
 
+    def test_queues_artifact_share_cleanup_on_delete(
+        self, app, make_user, authenticated_client
+    ):
+        """Artifacts outlive the chat that produced them, so deleting a
+        conversation must also revoke the share links pointing at its
+        artifacts — otherwise they keep resolving forever."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        mock_service.delete_session = AsyncMock(return_value=True)
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
+        mock_artifact_shares = MagicMock()
+        mock_artifact_shares.delete_for_session = MagicMock(return_value=1)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_artifact_share_service",
+            return_value=mock_artifact_shares,
+        ):
+            resp = client.delete("/sessions/sess-001")
+
+        assert resp.status_code == 204
+        # Scoped to the caller: SessionIndex is not user-partitioned, so
+        # the owner id is what keeps the cascade off other users' shares.
+        mock_artifact_shares.delete_for_session.assert_called_once_with(
+            "sess-001", user.user_id
+        )
+
+    def test_artifact_share_cleanup_failure_does_not_break_delete(
+        self, app, make_user, authenticated_client
+    ):
+        """The cascade runs after the 204 is sent. A raising task would
+        surface as an unhandled background-task error, so the service
+        swallows failures — this pins that the route still succeeds."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        mock_service.delete_session = AsyncMock(return_value=True)
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
+        mock_artifact_shares = MagicMock()
+        mock_artifact_shares.delete_for_session = MagicMock(return_value=0)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_artifact_share_service",
+            return_value=mock_artifact_shares,
+        ):
+            resp = client.delete("/sessions/sess-001")
+
+        assert resp.status_code == 204
+
 
 # ---------------------------------------------------------------------------
 # Requirement 3.7: POST /sessions/bulk-delete returns 200

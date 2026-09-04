@@ -1,12 +1,135 @@
 ---
-title: Artifacts
-description: Rendered artifact panel.
+title: Artifacts and Artifact Sharing
+description: How the agent produces standalone documents, how they are rendered in isolation, and how a user shares one.
 sidebar:
+  label: Artifacts
   order: 5
 ---
 
-:::caution[Draft]
-This page is a scaffolded placeholder — content to be written.
-:::
+An **artifact** is a standalone document the agent authors as a first-class
+object rather than as text in the chat — an HTML page, a chart, a Markdown
+report. It gets its own card in the conversation, its own versioned history, and
+its own sandboxed viewer.
 
-Single artifact SSE event and the artifact-render image.
+The interesting part is not the authoring. It's that an artifact is
+**attacker-authored markup rendered in a browser**, so almost every design
+decision below is about containing it.
+
+## Producing an artifact
+
+Two agent tools write artifacts: `create_artifact` makes v1, and
+`update_artifact` appends a new version. **Versions are immutable and
+append-only** — an update writes `V#{n+1}` and re-points a `#HEAD` pointer; it
+never rewrites what came before. Nothing in the platform has a `DeleteObject`
+grant on artifact content.
+
+That immutability is load-bearing later: it is what lets a share pin one exact
+version with no snapshot copy.
+
+Each version lives in two places:
+
+| Where | What |
+| --- | --- |
+| DynamoDB (`{prefix}-user-artifacts`) | Metadata: title, content type, version, session, and a pointer to the content |
+| S3 (`{prefix}-artifacts-content`) | The document bytes themselves |
+
+## Rendering: three layers of isolation
+
+Artifact content is never inlined into the SPA. It is served from a **separate
+origin** (`artifacts.<domain>`) and framed, which gives three independent
+containment layers:
+
+1. **A separate origin.** The artifact cannot touch the app's cookies, storage,
+   or DOM, because the browser treats it as a different site.
+2. **A strict CSP**, stamped by both CloudFront and the render Lambda (defense in
+   depth, so the policy holds even if the handler is buggy). `connect-src 'none'`
+   means artifact JavaScript cannot phone home or exfiltrate anything.
+3. **A sandboxed iframe** — `sandbox="allow-scripts"` **without**
+   `allow-same-origin`. The framed document is a null origin, so scripts run but
+   reach nothing.
+
+To load one, the SPA asks app-api to mint a **render token**: a short-lived
+(~120 second) HS256 JWT that pins one exact `(user, artifact, version)`. The
+token goes in the iframe URL and is re-minted on every open — never cached.
+
+## Sharing an artifact
+
+A user can share one artifact version with other people. The model deliberately
+mirrors conversation sharing, so the two behave alike.
+
+### What a share is
+
+A share is an owner-created, revocable pointer to **one immutable version**.
+
+- **It pins a version, never `#HEAD`.** A link made against v1 keeps showing v1
+  after the model writes v2. A pointer that moved under the recipient would be a
+  different feature with different consent semantics.
+- **Access levels** are `public` — any *authenticated* user with the link — or
+  `specific`, an email allowlist matched case-insensitively. There is no
+  anonymous access: `public` still sits behind sign-in, exactly as it does for
+  conversation shares. Governance here is identity, not content inspection.
+- **Revocation** deletes the share. Already-issued render tokens finish their
+  ~120 second life, so the revocation window is bounded by the token TTL rather
+  than by how long the recipient keeps the tab open.
+
+### Sharing one
+
+Owners share from the **Share** button on the artifact card or in the artifact
+panel header. Both share the version currently on screen — the card shows one row
+per version, and the panel follows its version menu. The dialog also lists the
+artifact's existing links so they can be copied or revoked.
+
+### Opening one
+
+Recipients open `/shared-artifact/{shareId}`, which renders the artifact
+full-width in the same sandboxed iframe the owner sees, with a preview/code
+toggle and a download. The page is read-only: no re-sharing, no version
+switching, no editing.
+
+### How access is actually enforced
+
+This is the part worth understanding before changing anything.
+
+The render Lambda uses the token's `sub` claim purely as the **DynamoDB
+partition key** it builds the lookup from. It performs no ownership comparison of
+its own and never sees the viewer — **the token is the capability**.
+
+So a share-scoped token is minted with `sub` set to the **owner**, not the
+viewer. That is an *address*, not an identity assertion; setting it to the viewer
+would simply point the Lambda at the viewer's own partition and 404. The real
+viewer travels in a `vwr` claim and the grant it was issued under in `shr`, so
+render logs attribute a view to whoever actually looked.
+
+The consequence: **the ACL check in app-api is the only thing standing between
+"sharing" and "read any artifact by id."** Every recipient request — metadata,
+render token, content — re-checks the share record before resolving the owner.
+
+## Lifecycle
+
+Artifacts outlive the turn that produced them, but not the conversation.
+Deleting a conversation revokes the share links for every artifact it produced,
+as a best-effort background task: a failure leaves an orphan row, never a blocked
+delete, and the lookup row is always deleted before the owner row so a
+half-finished cleanup can never leave a live link its owner can no longer see.
+
+Deleting the artifact **content** on conversation delete is deliberately a
+separate question — that is a retention decision about artifacts as a whole,
+not about sharing.
+
+## Enabling the feature
+
+Artifacts are enabled by the presence of `ARTIFACTS_RENDER_TOKEN_SECRET_ARN`,
+which infrastructure sets only when the artifacts stack is deployed for the
+environment. The sharing routes ride the same signal: a share is only ever
+consumed by minting a render token, so it cannot be useful without artifacts
+being on.
+
+## Known gap: artifacts inside a shared conversation
+
+Sharing a *conversation* does not share the artifacts it produced. A recipient
+viewing a shared conversation sees nothing where the owner sees artifact cards,
+because artifact hydration filters by the requesting user.
+
+Closing that properly means deciding whether sharing a conversation should also
+share its artifacts — a consent question, not just a wiring one — so it is
+tracked as a known gap rather than treated as a bug.
