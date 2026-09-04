@@ -123,6 +123,38 @@ def test_update_increments_and_preserves_old(aws) -> None:
     assert head["title"] == "T"  # carried forward
 
 
+def test_head_rows_carry_user_index_keys_on_both_write_paths(aws) -> None:
+    """GSI2PK/GSI2SK are stamped ahead of the index that will consume them.
+
+    No index exists yet (the fixture table declares only SessionIndex), so
+    nothing queries these — but a sparse GSI only ever contains rows that
+    already carry its key attributes. A write path that stops stamping them
+    produces rows permanently invisible to the future UserArtifactsIndex,
+    and does so silently. Both paths are asserted because `update` re-puts
+    HEAD wholesale: dropping the attributes there would strip them from
+    every artifact that is ever edited.
+    """
+    ddb, _ = aws
+    aid, _ = service.create_artifact_record(USER, SESSION, "T", DOC, "")
+
+    head = _item(ddb, aid, "HEAD")
+    assert head["GSI2PK"] == f"USER#{USER}"
+    # Sorts newest-first within the user's partition, so it must track
+    # updated_at rather than creation time.
+    assert head["GSI2SK"] == f"ARTIFACT#{head['updated_at']}#{aid}"
+
+    # Sparse by design: one indexed row per artifact, not one per version.
+    assert "GSI2PK" not in _item(ddb, aid, "V#00001")
+
+    service.update_artifact_record(USER, aid, "<p>v2</p>", None, None)
+
+    updated = _item(ddb, aid, "HEAD")
+    assert updated["GSI2PK"] == f"USER#{USER}"
+    assert updated["GSI2SK"] == f"ARTIFACT#{updated['updated_at']}#{aid}"
+    assert updated["GSI2SK"] > head["GSI2SK"]
+    assert "GSI2PK" not in _item(ddb, aid, "V#00002")
+
+
 def test_update_unknown_artifact_raises(aws) -> None:
     with pytest.raises(service.ArtifactNotFoundError):
         service.update_artifact_record(USER, "nope", DOC, None, None)
