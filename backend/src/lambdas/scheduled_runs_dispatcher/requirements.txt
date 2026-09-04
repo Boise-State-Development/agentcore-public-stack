@@ -9,5 +9,5 @@ bedrock-agentcore==1.21.0
 # apis.shared.sessions_bff, whose cookie.py needs cryptography (AESGCM) and
 # cache.py needs cachetools (TTLCache). The dispatcher itself does not import
 # these, but the shared image must satisfy the worker's import chain.
-cryptography==48.0.1
+cryptography==50.0.1
 cachetools==6.2.4
