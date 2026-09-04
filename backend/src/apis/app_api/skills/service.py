@@ -31,6 +31,7 @@ from apis.shared.skills.repository import (
 )
 from apis.shared.skills.bundle import generate_skill_md
 from apis.shared.skills.resource_types import resolve_upload_content_type
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.resource_store import (
     SkillResourceStore,
     SkillResourceStoreError,
@@ -192,7 +193,7 @@ class SkillCatalogService:
         self._write_skill_md(created)
 
         logger.info(
-            f"Admin {admin.email} created skill: {skill.skill_id}",
+            f"Admin {scrub_log(admin.email)} created skill: {scrub_log(skill.skill_id)}",
             extra={
                 "event": "skill_created",
                 "skill_id": skill.skill_id,
@@ -233,7 +234,7 @@ class SkillCatalogService:
             # is cheap and idempotent.
             self._write_skill_md(updated)
             logger.info(
-                f"Admin {admin.email} updated skill: {skill_id}",
+                f"Admin {scrub_log(admin.email)} updated skill: {scrub_log(skill_id)}",
                 extra={
                     "event": "skill_updated",
                     "skill_id": skill_id,
@@ -275,7 +276,7 @@ class SkillCatalogService:
 
         if deleted:
             logger.info(
-                f"Admin {admin.email} deleted skill: {skill_id}",
+                f"Admin {scrub_log(admin.email)} deleted skill: {scrub_log(skill_id)}",
                 extra={
                     "event": "skill_deleted",
                     "skill_id": skill_id,
@@ -397,7 +398,7 @@ class SkillCatalogService:
         self._gc_orphaned(existing, new_resources)
 
         logger.info(
-            f"Admin {admin.email} uploaded reference file to skill {skill_id}",
+            f"Admin {scrub_log(admin.email)} uploaded reference file to skill {scrub_log(skill_id)}",
             extra={
                 "event": "skill_resource_added",
                 "skill_id": skill_id,
@@ -456,7 +457,7 @@ class SkillCatalogService:
         self._gc_orphaned(existing, new_resources)
 
         logger.info(
-            f"Admin {admin.email} deleted reference file from skill {skill_id}",
+            f"Admin {scrub_log(admin.email)} deleted reference file from skill {scrub_log(skill_id)}",
             extra={
                 "event": "skill_resource_deleted",
                 "skill_id": skill_id,
@@ -628,7 +629,7 @@ class SkillCatalogService:
             await self._remove_skill_from_role(role_id, skill_id, admin)
 
         logger.info(
-            f"Admin {admin.email} set roles for skill {skill_id}",
+            f"Admin {scrub_log(admin.email)} set roles for skill {scrub_log(skill_id)}",
             extra={
                 "event": "skill_roles_updated",
                 "skill_id": skill_id,
