@@ -208,6 +208,78 @@ def test_rename_updates_head_and_every_version_row(client):
         assert row["title"] == "Renamed"
 
 
+def test_rename_cascades_the_title_onto_share_rows(client):
+    """A recipient must not be left looking at the name the artifact had
+    on the day it was shared.
+
+    Share rows denormalize `title` so the recipient header needs no
+    second read, and nothing kept them current: the owner saw the new
+    name on every surface they own while every recipient kept seeing the
+    old one, with neither party able to notice the difference."""
+    api, ddb, s3 = client
+    _seed_artifact(ddb, s3, versions=2)
+    _seed_share(ddb, version=1, share_id="share-1")
+    _seed_share(ddb, version=2, share_id="share-2")
+
+    assert api.patch(
+        "/artifacts/art-1", json={"title": "Renamed"}
+    ).status_code == 200
+
+    for share_id, version in (("share-1", 1), ("share-2", 2)):
+        # Both rows, always together — the owner's view of a share and
+        # the one the recipient path resolves must never disagree.
+        owner_row = _row(
+            ddb,
+            f"USER#{USER_ID}",
+            f"SHARE#art-1#V#{version:05d}#{share_id}",
+        )
+        lookup_row = _row(ddb, f"SHARE#{share_id}", "META")
+        assert owner_row["title"] == "Renamed"
+        assert lookup_row["title"] == "Renamed"
+
+
+def test_rename_leaves_shares_of_other_artifacts_alone(client):
+    api, ddb, s3 = client
+    _seed_artifact(ddb, s3, versions=1)
+    _seed_share(ddb, artifact="art-2", share_id="other-share")
+
+    assert api.patch(
+        "/artifacts/art-1", json={"title": "Renamed"}
+    ).status_code == 200
+
+    assert _row(ddb, "SHARE#other-share", "META")["title"] == (
+        "Original title"
+    )
+
+
+def test_rename_succeeds_even_if_the_share_cascade_fails(
+    client, monkeypatch
+):
+    """The rows that decide what the OWNER sees are written first, so a
+    share that cannot be retitled is exactly the old behaviour rather
+    than a failed rename. Reporting failure here would be worse: the
+    rename the caller asked for has already happened."""
+    api, ddb, s3 = client
+    _seed_artifact(ddb, s3, versions=1)
+    _seed_share(ddb)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("dynamo is down")
+
+    monkeypatch.setattr(
+        artifact_service.ArtifactShareService,
+        "_shares_for_artifact",
+        staticmethod(boom),
+    )
+
+    resp = api.patch("/artifacts/art-1", json={"title": "Renamed"})
+
+    assert resp.status_code == 200
+    assert _row(ddb, f"USER#{USER_ID}", "ARTIFACT#art-1#HEAD")["title"] == (
+        "Renamed"
+    )
+
+
 def test_rename_does_not_touch_version_or_updated_at(client):
     """`version` is the writer's optimistic-lock attribute and
     `updated_at` is baked into HEAD's GSI sort keys. A rename that moved

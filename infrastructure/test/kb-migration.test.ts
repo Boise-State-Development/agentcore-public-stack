@@ -979,7 +979,8 @@ describe('KbMigration wiring on PlatformStack', () => {
       infrastructureHostedZoneDomain: 'example.com',
       certificateArn: cert,
       frontend: { cloudFrontPriceClass: 'PriceClass_100', certificateArn: cert },
-      artifacts: { retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
+      artifacts: {
+        shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
       mcpSandbox: { extraFrameAncestors: [], certificateArn: cert },
       fineTuning: {
         enabled: true,

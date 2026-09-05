@@ -21,7 +21,8 @@ describe('Alarm routing — every alarm reaches a human', () => {
       infrastructureHostedZoneDomain: 'example.com',
       certificateArn: cert,
       frontend: { cloudFrontPriceClass: 'PriceClass_100', certificateArn: cert },
-      artifacts: { retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
+      artifacts: {
+        shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
       mcpSandbox: { extraFrameAncestors: [], certificateArn: cert },
       fineTuning: { enabled: true, defaultQuotaHours: 0 },
       // Every optional alarm-bearing subsystem ON, so the guard sees the

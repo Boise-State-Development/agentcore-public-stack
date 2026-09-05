@@ -171,3 +171,36 @@ def mid_turn_steering_enabled() -> bool:
     transitional: a turn that calls no tools has no boundary to inject at.
     """
     return os.environ.get("MID_TURN_STEERING_ENABLED", "").strip().lower() != "false"
+
+
+def artifact_share_inbox_enabled() -> bool:
+    """Whether a recipient can *discover* artifacts shared with them.
+
+    Covers the ``GET /shared-artifacts`` inbox endpoint and, through it,
+    the library page's "Shared with you" tab. **Default OFF, opt-in**
+    (the deferred-feature pattern, mirroring the long-deleted
+    ``FINE_TUNING_ENABLED``): only the literal ``"true"``
+    (case-insensitive) enables it. Every other flag in this module ships
+    default-on with a kill switch; this one is deliberately the other
+    way round, because the surface it gates lands before the product
+    decision about it does.
+
+    ############################################################
+    # This flag gates the READ ONLY. The recipient fan-out rows the
+    # inbox reads are written UNCONDITIONALLY, by every share write,
+    # whether or not this is on.
+    #
+    # That asymmetry is the whole point. If the writes were gated too,
+    # turning this on would expose an inbox missing every share created
+    # while it was off — a wrong answer rather than an empty one, and
+    # one nobody can see is wrong. Writing the pointer rows regardless
+    # costs one small row per recipient and makes the flip complete and
+    # instant, with no backfill to sequence.
+    #
+    # So: do not "optimise" the write path by wrapping it in this flag.
+    ############################################################
+    """
+    return (
+        os.environ.get("ARTIFACT_SHARE_INBOX_ENABLED", "").strip().lower()
+        == "true"
+    )

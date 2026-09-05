@@ -104,6 +104,48 @@ The consequence: **the ACL check in app-api is the only thing standing between
 "sharing" and "read any artifact by id."** Every recipient request — metadata,
 render token, content — re-checks the share record before resolving the owner.
 
+### Finding what has been shared with you
+
+The library's "Shared with you" tab is backed by `GET /shared-artifacts`, and it
+is worth knowing how it is stored, because the obvious answer is wrong.
+
+Every share writes one **fan-out row per recipient**, keyed
+`PK=SHARED_WITH#{email}` / `SK=SHARE#{createdAt}#{shareId}`. That is not a
+workaround for avoiding an index — `allowedEmails` is a *list*, and a DynamoDB
+GSI cannot project one item into several index entries, so any recipient lookup
+needs a row per recipient no matter where it lives. Given that, the row belongs
+in the recipient's own partition, where the query is already partitioned by the
+access dimension, ordered newest-first by the sort key, and paginable with no
+filter.
+
+Three properties hold this together:
+
+- **The fan-out row is a pointer.** It carries no title or content type. Share
+  rows denormalize those, so copying them per recipient would multiply every
+  staleness bug by the size of the allowlist and make a rename cost one write per
+  recipient instead of one per share.
+- **The read never trusts the pointer.** Each row is resolved through the share
+  lookup row and re-checked against `_check_share_access`, so a stranded pointer
+  lists nothing and grants nothing. That is what makes the fan-out safe to write
+  best-effort, outside the share's two-row transaction — which in turn is what
+  keeps the allowlist from being capped at ~40 by `TransactWriteItems`' 100-item
+  limit.
+- **Fan-out is discovery, never authorization.** A row that failed to write costs
+  a recipient a listing, not their access; the link still works and the ACL check
+  is unchanged.
+
+Addresses are folded to lower case for the partition key. Share rows store them
+exactly as typed and lowercase only at compare time, so skipping that fold
+returns an empty inbox to the person a share was addressed to — a wrong answer
+that looks exactly like "nobody has shared anything with you".
+
+Only `specific` shares appear. `public` means "any authenticated tenant user",
+which has no recipient list to fan out to, so public shares stay link-delivered.
+
+The read path uses per-item `GetItem`, never `BatchGetItem`, for exactly the
+reason the delete cascade avoids `BatchWriteItem` — see the note under
+[Lifecycle](#lifecycle).
+
 ## Lifecycle
 
 Artifacts outlive the turn that produced them, but not the conversation.
@@ -129,6 +171,20 @@ which infrastructure sets only when the artifacts stack is deployed for the
 environment. The sharing routes ride the same signal: a share is only ever
 consumed by minting a render token, so it cannot be useful without artifacts
 being on.
+
+The "Shared with you" inbox has a flag of its own: `ARTIFACT_SHARE_INBOX_ENABLED`
+(CDK: `CDK_ARTIFACT_SHARE_INBOX_ENABLED`). Unlike the kill-switch flags elsewhere
+in the platform it is **default off and opt-in** — only the literal `"true"`
+enables it — because the surface shipped ahead of the product decision about it.
+While off, `GET /shared-artifacts` 404s and the SPA renders the library without
+tabs.
+
+The flag gates the **read only**. Fan-out rows are written by every share
+regardless of it. That asymmetry is deliberate: if the writes were gated too,
+turning the flag on would reveal an inbox missing every share created while it
+was off — a wrong answer rather than an empty one, and one nobody could see was
+wrong. Writing the rows regardless makes the flip complete and instant, with no
+backfill to sequence.
 
 ## Known gap: artifacts inside a shared conversation
 
