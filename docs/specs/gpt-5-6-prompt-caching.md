@@ -582,9 +582,27 @@ Reproduces exactly as `60x2.75 + 6x16.50 + 3,642x0.275` per MTok, so the
 cached tokens now contribute $0.001002 instead of nothing — 4.8x more accurate
 on that turn.
 
-⚠️ **PROD has not been checked** and very likely has the same shape: its
-`openai.gpt-5.4` row predates all of this, and prod carries real traffic. That
-is the follow-up with actual money attached.
+### ✅ PROD fixed 2026-09-05T17:41Z
+
+Prod had exactly the same shape — `supportsCaching: False`, no cache-read rate,
+on an **enabled** model that seven assistants hard-bind. Now set to
+`supportsCaching: true` / `cacheRead 0.275` / `cacheWrite 0` and verified on
+the record.
+
+Done through `PUT /api/admin/managed-models/{id}` rather than the admin form,
+because #963 is a frontend change that has not reached prod — the backend has
+always accepted these fields for Mantle. ⚠️ That endpoint enforces double-submit
+CSRF: the `__Host-bff_csrf` cookie is JS-readable and must be echoed in
+`X-CSRF-Token`, or it 403s.
+
+⚠️ **History is not corrected.** Pricing snapshots are captured per message at
+write time, so prod turns before 17:41Z keep their $0.00 cache cost and
+inflated savings. Any gpt-5.4 cost figure quoted for an earlier period is wrong
+in both directions.
+
+⚠️ Deleting the row was considered and **rejected**: seven prod assistants
+hard-bind it through `modelConfig: {modelId, provider}` and the `staff` role
+grants it explicitly, so removing it would strand them.
 
 ## Verification
 
