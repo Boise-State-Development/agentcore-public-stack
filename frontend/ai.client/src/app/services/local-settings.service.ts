@@ -28,12 +28,21 @@ export class LocalSettingsService {
   );
 
   /**
-   * List is the default here, unlike Agents. An agent tile earns its size by
-   * showing artwork you recognise; an artifact has no artwork, so a grid card
-   * spends a lot of space to show the same title and date a row does. Most
-   * artifacts are documents — text/markdown outnumbers text/html roughly two
-   * to one in production — and a document library is something you scan, not
-   * something you browse.
+   * List is still the default here, unlike Agents — but the reason has changed
+   * and is now a much closer call.
+   *
+   * It used to be that a grid card spent a lot of space to show the same title
+   * and date a row does, because an artifact had no artwork. Grid cards now
+   * carry a live scaled-down render of the artifact itself
+   * (`ArtifactThumbnailComponent`), so that argument is gone: a grid card
+   * shows something a row cannot.
+   *
+   * What keeps list the default is cost, not density. Every visible grid card
+   * mints a render token and invokes the render Lambda, uncached; a list view
+   * costs one request for the whole page. Defaulting everyone into the
+   * expensive view is a fleet-wide change to make on purpose, with the numbers
+   * in hand, rather than as a side effect of shipping previews. Revisit once
+   * the render path's traffic is known.
    */
   readonly artifactsViewMode = signal<ViewMode>(
     this.loadViewMode(this.ARTIFACTS_VIEW_MODE_KEY, 'list'),

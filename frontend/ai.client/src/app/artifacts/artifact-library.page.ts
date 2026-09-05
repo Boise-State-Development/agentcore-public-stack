@@ -37,6 +37,7 @@ import {
   ConfirmationDialogComponent,
   type ConfirmationDialogData,
 } from '../components/confirmation-dialog';
+import { ArtifactThumbnailComponent } from './components/artifact-thumbnail.component';
 import {
   RenameArtifactDialogComponent,
   type RenameArtifactDialogData,
@@ -126,7 +127,13 @@ const DEFAULT_TYPE_STYLE: TypeStyle = {
  */
 @Component({
   selector: 'app-artifact-library',
-  imports: [RouterLink, NgIcon, DatePipe, TooltipDirective],
+  imports: [
+    RouterLink,
+    NgIcon,
+    DatePipe,
+    TooltipDirective,
+    ArtifactThumbnailComponent,
+  ],
   templateUrl: './artifact-library.page.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
   viewProviders: [

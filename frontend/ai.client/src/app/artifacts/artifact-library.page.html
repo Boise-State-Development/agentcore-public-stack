@@ -130,13 +130,35 @@
       </div>
     }
 
-    <!-- Loading -->
+    <!-- Loading. Shaped like the view it is standing in for — a column of
+         row-height bars where cards are about to appear reads as a layout
+         change rather than as loading. -->
     @if (loading()) {
-      <div class="mt-6 space-y-2" aria-busy="true" aria-label="Loading artifacts">
-        @for (placeholder of [1, 2, 3, 4, 5]; track placeholder) {
-          <div class="h-16 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
-        }
-      </div>
+      @if (viewMode() === 'grid') {
+        <div
+          class="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3"
+          aria-busy="true"
+          aria-label="Loading artifacts"
+        >
+          @for (placeholder of [1, 2, 3, 4, 5, 6]; track placeholder) {
+            <div
+              class="animate-pulse rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
+            >
+              <div class="aspect-[16/10] rounded-t-2xl bg-gray-200 dark:bg-gray-700"></div>
+              <div class="space-y-2 p-5">
+                <div class="h-4 w-3/4 rounded bg-gray-200 dark:bg-gray-700"></div>
+                <div class="h-3 w-1/2 rounded bg-gray-200 dark:bg-gray-700"></div>
+              </div>
+            </div>
+          }
+        </div>
+      } @else {
+        <div class="mt-6 space-y-2" aria-busy="true" aria-label="Loading artifacts">
+          @for (placeholder of [1, 2, 3, 4, 5]; track placeholder) {
+            <div class="h-16 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
+          }
+        </div>
+      }
     }
 
     <!-- Empty: nothing has ever been created -->
@@ -269,115 +291,123 @@
     @if (!loading() && filtered().length > 0 && viewMode() === 'grid') {
       <ul role="list" class="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
         @for (item of filtered(); track item.artifactId) {
-          <!-- @container: the footer below collapses its button labels on a
-               narrow card. The card is sized by the grid (three columns at
-               `lg`, so ~13rem on a 1080px window), not by the viewport, so a
-               container query is correct here and a media query is not. -->
           <li
-            class="@container flex flex-col rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800"
+            class="flex flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
           >
-            <div class="flex items-start gap-3">
-              <span
-                class="grid size-10 shrink-0 place-items-center rounded-2xl"
-                [class]="styleFor(item.contentType).bg"
-                aria-hidden="true"
-              >
-                <ng-icon
-                  [name]="styleFor(item.contentType).icon"
-                  class="size-5"
-                  [class]="styleFor(item.contentType).text"
-                />
-              </span>
-              <div class="min-w-0 flex-1">
-                <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
-                  <button
-                    type="button"
-                    (click)="open(item)"
-                    class="block max-w-full text-left line-clamp-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
-                  >
-                    {{ item.title || 'Untitled artifact' }}
-                  </button>
-                </h2>
-                <span
-                  class="mt-1.5 inline-flex items-center rounded-2xl px-2 py-0.5 text-xs/5 font-medium"
-                  [class]="styleFor(item.contentType).bg + ' ' + styleFor(item.contentType).text"
-                >
-                  {{ styleFor(item.contentType).label }}
-                </span>
-              </div>
+            <!-- The preview, and a redundant click target over it.
+                 `aria-hidden` on the wrapper is deliberate: this div opens the
+                 same artifact as the title heading directly below it and the
+                 Open button below that, both of which are real, focusable
+                 controls. Exposing a third identical action would make a
+                 keyboard or screen-reader user tab past one destination three
+                 times, so the picture stays a picture and the mouse
+                 affordance rides along with it. -->
+            <div
+              (click)="open(item)"
+              aria-hidden="true"
+              class="cursor-pointer border-b border-gray-200 dark:border-gray-700"
+            >
+              <app-artifact-thumbnail
+                [artifactId]="item.artifactId"
+                [version]="item.version"
+                [sessionId]="item.sessionId"
+                [contentType]="item.contentType"
+              />
             </div>
 
-            <p class="mt-4 grow text-xs/5 text-gray-500 dark:text-gray-400">
-              @if (item.updatedAt) {
-                Updated {{ item.updatedAt | date: 'mediumDate' }}
-              } @else {
-                Date unknown
-              }
-              @if (item.version > 1) {
-                <span aria-hidden="true"> · </span>{{ versionLabel(item.version) }}
-              }
-            </p>
+            <!-- @container on the padded body rather than on the <li>: the
+                 footer below collapses its button labels on a narrow card, and
+                 the threshold is measured against the container's content box.
+                 The card is sized by the grid (three columns at `lg`, so ~13rem
+                 on a 1080px window), not by the viewport, so a container query
+                 is correct here and a media query is not. -->
+            <div class="@container flex flex-1 flex-col p-5">
+              <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
+                <button
+                  type="button"
+                  (click)="open(item)"
+                  class="block max-w-full text-left line-clamp-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+                >
+                  {{ item.title || 'Untitled artifact' }}
+                </button>
+              </h2>
 
-            <!-- Four controls in one row: labelled Open + Conversation need
-                 ~290px, and three columns give the card far less than that on
-                 a narrow window (~166px at 1080px), so the two text labels
-                 drop to `sr-only` below 19rem — kept in the accessible name,
-                 since these controls have no aria-label of their own and
-                 would otherwise become nameless icons, with [appTooltip]
-                 standing in for the text a sighted user can no longer see.
+              <p class="mt-1 grow text-xs/5 text-gray-500 dark:text-gray-400">
+                {{ styleFor(item.contentType).label }}
+                @if (item.version > 1) {
+                  <span aria-hidden="true"> · </span>{{ versionLabel(item.version) }}
+                }
+                <span aria-hidden="true"> · </span>
+                @if (item.updatedAt) {
+                  Updated {{ item.updatedAt | date: 'mediumDate' }}
+                } @else {
+                  Date unknown
+                }
+              </p>
 
-                 19rem is measured against the card's CONTENT box, which is
-                 what an `inline-size` container query reports — `p-5` means
-                 the border box is 40px wider. Sizing the threshold off the
-                 border box (the intuitive reading) leaves the labels hidden
-                 on cards that could comfortably show them. -->
-            <div
-              class="mt-4 flex items-center gap-2 border-t border-gray-100 pt-4 dark:border-gray-700"
-            >
-              <button
-                type="button"
-                (click)="open(item)"
-                [appTooltip]="'Open'"
-                appTooltipPosition="top"
-                class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-gray-700"
+              <!-- Four controls in one row: labelled Open + Conversation need
+                   ~290px, and three columns give the card far less than that
+                   on a narrow window (~166px at 1080px), so the two text
+                   labels drop to `sr-only` below 19rem — kept in the
+                   accessible name, since these controls have no aria-label of
+                   their own and would otherwise become nameless icons, with
+                   [appTooltip] standing in for the text a sighted user can no
+                   longer see.
+
+                   19rem is measured against the container's CONTENT box, which
+                   is what an `inline-size` container query reports — the
+                   body's `p-5` means the card is 40px wider than the number
+                   here. Sizing the threshold off the card (the intuitive
+                   reading) leaves the labels hidden on cards that could
+                   comfortably show them. -->
+              <div
+                class="mt-4 flex items-center gap-2 border-t border-gray-100 pt-4 dark:border-gray-700"
               >
-                <ng-icon name="heroEye" class="size-4" aria-hidden="true" />
-                <span class="@max-[19rem]:sr-only">Open</span>
-              </button>
-              @if (item.sessionId) {
-                <a
-                  [routerLink]="['/s', item.sessionId]"
-                  [appTooltip]="'Open the conversation'"
+                <button
+                  type="button"
+                  (click)="open(item)"
+                  [appTooltip]="'Open'"
                   appTooltipPosition="top"
                   class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-gray-700"
                 >
-                  <ng-icon name="heroChatBubbleLeftRight" class="size-4" aria-hidden="true" />
-                  <span class="@max-[19rem]:sr-only">Conversation</span>
-                </a>
-              }
-              <div class="ml-auto flex items-center gap-1">
-                <button
-                  type="button"
-                  (click)="rename(item)"
-                  [disabled]="busy() === item.artifactId"
-                  [appTooltip]="'Rename'"
-                  appTooltipPosition="top"
-                  class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-                >
-                  <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
-                  <span class="sr-only">Rename {{ item.title }}</span>
+                  <ng-icon name="heroEye" class="size-4" aria-hidden="true" />
+                  <span class="@max-[19rem]:sr-only">Open</span>
                 </button>
-                <button
-                  type="button"
-                  (click)="confirmDelete(item)"
-                  [disabled]="busy() === item.artifactId"
-                  [appTooltip]="'Delete'"
-                  appTooltipPosition="top"
-                  class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-500/10 dark:hover:text-state-danger-400"
-                >
-                  <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
-                  <span class="sr-only">Delete {{ item.title }}</span>
-                </button>
+                @if (item.sessionId) {
+                  <a
+                    [routerLink]="['/s', item.sessionId]"
+                    [appTooltip]="'Open the conversation'"
+                    appTooltipPosition="top"
+                    class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-gray-700"
+                  >
+                    <ng-icon name="heroChatBubbleLeftRight" class="size-4" aria-hidden="true" />
+                    <span class="@max-[19rem]:sr-only">Conversation</span>
+                  </a>
+                }
+                <div class="ml-auto flex items-center gap-1">
+                  <button
+                    type="button"
+                    (click)="rename(item)"
+                    [disabled]="busy() === item.artifactId"
+                    [appTooltip]="'Rename'"
+                    appTooltipPosition="top"
+                    class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  >
+                    <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+                    <span class="sr-only">Rename {{ item.title }}</span>
+                  </button>
+                  <button
+                    type="button"
+                    (click)="confirmDelete(item)"
+                    [disabled]="busy() === item.artifactId"
+                    [appTooltip]="'Delete'"
+                    appTooltipPosition="top"
+                    class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-500/10 dark:hover:text-state-danger-400"
+                  >
+                    <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                    <span class="sr-only">Delete {{ item.title }}</span>
+                  </button>
+                </div>
               </div>
             </div>
           </li>
