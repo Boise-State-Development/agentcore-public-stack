@@ -198,8 +198,7 @@
               <button
                 type="button"
                 (click)="open(item)"
-                [disabled]="opening() === item.artifactId"
-                class="block max-w-full truncate text-left text-sm/6 font-semibold text-gray-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60 dark:text-white"
+                class="block max-w-full truncate text-left text-sm/6 font-semibold text-gray-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white"
               >
                 {{ item.title || 'Untitled artifact' }}
               </button>
@@ -233,15 +232,10 @@
               <button
                 type="button"
                 (click)="open(item)"
-                [disabled]="opening() === item.artifactId"
-                class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
               >
-                <ng-icon
-                  name="heroArrowTopRightOnSquare"
-                  class="size-4"
-                  aria-hidden="true"
-                />
-                <span class="sr-only">Open {{ item.title }} in a new tab</span>
+                <ng-icon name="heroEye" class="size-4" aria-hidden="true" />
+                <span class="sr-only">Open {{ item.title }}</span>
               </button>
               <button
                 type="button"
@@ -249,7 +243,7 @@
                 [disabled]="busy() === item.artifactId"
                 [appTooltip]="'Rename'"
                 appTooltipPosition="top"
-                class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
               >
                 <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                 <span class="sr-only">Rename {{ item.title }}</span>
@@ -260,7 +254,7 @@
                 [disabled]="busy() === item.artifactId"
                 [appTooltip]="'Delete'"
                 appTooltipPosition="top"
-                class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:opacity-60 dark:text-gray-500 dark:hover:bg-state-danger-500/10 dark:hover:text-state-danger-400"
+                class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-500/10 dark:hover:text-state-danger-400"
               >
                 <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                 <span class="sr-only">Delete {{ item.title }}</span>
@@ -299,8 +293,7 @@
                   <button
                     type="button"
                     (click)="open(item)"
-                    [disabled]="opening() === item.artifactId"
-                    class="block max-w-full text-left line-clamp-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60"
+                    class="block max-w-full text-left line-clamp-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                   >
                     {{ item.title || 'Untitled artifact' }}
                   </button>
@@ -344,15 +337,12 @@
               <button
                 type="button"
                 (click)="open(item)"
-                [disabled]="opening() === item.artifactId"
-                [appTooltip]="'Open in a new tab'"
+                [appTooltip]="'Open'"
                 appTooltipPosition="top"
-                class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60 dark:text-gray-300 dark:hover:bg-gray-700"
+                class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-gray-700"
               >
-                <ng-icon name="heroArrowTopRightOnSquare" class="size-4" aria-hidden="true" />
-                <span class="@max-[19rem]:sr-only">{{
-                  opening() === item.artifactId ? 'Opening…' : 'Open'
-                }}</span>
+                <ng-icon name="heroEye" class="size-4" aria-hidden="true" />
+                <span class="@max-[19rem]:sr-only">Open</span>
               </button>
               @if (item.sessionId) {
                 <a
@@ -372,7 +362,7 @@
                   [disabled]="busy() === item.artifactId"
                   [appTooltip]="'Rename'"
                   appTooltipPosition="top"
-                  class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                 >
                   <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                   <span class="sr-only">Rename {{ item.title }}</span>
@@ -383,7 +373,7 @@
                   [disabled]="busy() === item.artifactId"
                   [appTooltip]="'Delete'"
                   appTooltipPosition="top"
-                  class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:opacity-60 dark:text-gray-500 dark:hover:bg-state-danger-500/10 dark:hover:text-state-danger-400"
+                  class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-500/10 dark:hover:text-state-danger-400"
                 >
                   <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                   <span class="sr-only">Delete {{ item.title }}</span>

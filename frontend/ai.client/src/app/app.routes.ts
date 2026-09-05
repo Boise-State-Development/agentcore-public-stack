@@ -186,6 +186,21 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        // Declared before the list route so the viewer owns the two-segment
+        // path; Angular matches in order.
+        path: 'artifacts/:artifactId',
+        loadComponent: () => import('./artifacts/artifact-view.page').then(m => m.ArtifactViewPage),
+        canActivate: [authGuard],
+        // Minimal chrome, same as the shared-artifact viewer. Not cosmetic:
+        // the padded content box has no definite height, so a viewer laid
+        // out with `h-full` inside it collapses — measured at 150px of
+        // iframe in a 720px viewport. The minimal branch is `h-full` of the
+        // scroll container, which is `flex-1` of an `h-dvh` main, so the
+        // artifact finally gets the whole shell. It costs the sidenav,
+        // which is why the header carries a labelled way back.
+        data: { chrome: 'minimal' },
+    },
+    {
         path: 'artifacts',
         loadComponent: () => import('./artifacts/artifact-library.page').then(m => m.ArtifactLibraryPage),
         canActivate: [authGuard],
