@@ -306,6 +306,24 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./manage-user-menu-links/user-menu-link-form.page').then(m => m.UserMenuLinkFormPage),
   },
   {
+    path: 'manage-announcements',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.announcements' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./manage-announcements/manage-announcements.page').then(m => m.ManageAnnouncementsPage),
+  },
+  {
+    path: 'manage-announcements/new',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.announcements' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./manage-announcements/announcement-form.page').then(m => m.AnnouncementFormPage),
+  },
+  {
+    path: 'manage-announcements/edit/:id',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.announcements' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./manage-announcements/announcement-form.page').then(m => m.AnnouncementFormPage),
+  },
+  {
     path: 'system-prompts',
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.system_prompts' } satisfies AdminScopeRouteData,
