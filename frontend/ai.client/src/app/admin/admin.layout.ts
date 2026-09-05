@@ -25,6 +25,7 @@ import {
   heroFingerPrint,
   heroClipboardDocumentList,
   heroBars3,
+  heroMegaphone,
   heroSparkles,
   heroInbox,
   heroFlag,
@@ -77,6 +78,7 @@ interface NavGroup {
       heroFingerPrint,
       heroClipboardDocumentList,
       heroBars3,
+      heroMegaphone,
       heroSparkles,
       heroInbox,
       heroFlag,
@@ -246,6 +248,7 @@ export class AdminLayout implements OnInit {
     {
       label: 'Customization',
       items: [
+        { label: 'Announcements', icon: 'heroMegaphone', route: '/admin/manage-announcements', scope: 'admin.announcements' },
         { label: 'User Menu Links', icon: 'heroBars3', route: '/admin/manage-user-menu-links', scope: 'admin.user_menu_links' },
         { label: 'Conversation Modes', icon: 'heroSparkles', route: '/admin/system-prompts', scope: 'admin.system_prompts' },
       ],
