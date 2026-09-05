@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from apis.shared.auth import User, get_current_user_from_session
 
@@ -13,18 +13,23 @@ from .models import (
     ArtifactListResponse,
     ArtifactSummary,
     LibraryArtifact,
+    RenameArtifactRequest,
+    RenamedArtifactResponse,
     RenderTokenRequest,
     RenderTokenResponse,
 )
 from .service import (
     ArtifactContentService,
+    ArtifactLifecycleService,
     ArtifactListService,
     ArtifactNotFoundError,
     ArtifactQueryError,
+    ArtifactTitleError,
     ArtifactTooLargeError,
     RenderTokenConfigError,
     RenderTokenService,
     get_artifact_content_service,
+    get_artifact_lifecycle_service,
     get_artifact_list_service,
     get_render_token_service,
 )
@@ -205,3 +210,101 @@ async def get_artifact_content(
         content_type=content_type,
         version=version,
     )
+
+
+# ---------------------------------------------------------------------
+# Lifecycle
+#
+# Both paths are single-segment under `/artifacts`, so neither collides
+# with the two-segment share routes next door (`/artifacts/shares/{id}`)
+# that `shares.py` mounts on the same prefix.
+# ---------------------------------------------------------------------
+
+
+@router.patch("/{artifact_id}", response_model=RenamedArtifactResponse)
+async def rename_artifact(
+    artifact_id: str,
+    request: RenameArtifactRequest,
+    user: User = Depends(get_current_user_from_session),
+    service: ArtifactLifecycleService = Depends(get_artifact_lifecycle_service),
+) -> RenamedArtifactResponse:
+    """Retitle an artifact. Owner only.
+
+    Ownership needs no explicit check: the lookup key is built from the
+    authenticated session, so another user's artifact id simply resolves
+    to no row and 404s — the same shape as every other route here.
+
+    The new title applies to the HEAD row and to every version row, so
+    the library and the originating conversation cannot disagree about
+    what the artifact is called.
+    """
+    try:
+        head = service.rename(
+            user_id=user.user_id,
+            artifact_id=artifact_id,
+            title=request.title,
+        )
+    except ArtifactNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artifact not found")
+    except ArtifactTitleError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    except RenderTokenConfigError:
+        logger.exception("artifact lifecycle service misconfigured")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Artifacts are unavailable",
+        )
+    except ArtifactQueryError:
+        logger.exception("artifact rename failed")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Renaming is temporarily unavailable",
+        )
+
+    return RenamedArtifactResponse(
+        artifact_id=str(head.get("artifact_id", artifact_id)),
+        version=int(head.get("version", 0)),
+        title=str(head.get("title", "")),
+        content_type=str(
+            head.get("content_type", "text/html; charset=utf-8")
+        ),
+        created_at=str(head.get("created_at") or ""),
+        updated_at=str(head.get("updated_at") or ""),
+        session_id=str(head.get("session_id") or ""),
+    )
+
+
+@router.delete("/{artifact_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_artifact(
+    artifact_id: str,
+    user: User = Depends(get_current_user_from_session),
+    service: ArtifactLifecycleService = Depends(get_artifact_lifecycle_service),
+) -> Response:
+    """Delete an artifact, every version of it, and every share of it.
+
+    Owner only, by the same key-scoping as the rest of this router.
+
+    Permanent from the caller's side — there is no trash and no undo.
+    The DynamoDB rows go immediately (which is what stops it rendering
+    everywhere at once) while the S3 objects are tagged for the bucket's
+    retention-window expiry. See the block comment on
+    `ArtifactLifecycleService` for why the two halves differ.
+    """
+    try:
+        service.delete(user_id=user.user_id, artifact_id=artifact_id)
+    except ArtifactNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artifact not found")
+    except RenderTokenConfigError:
+        logger.exception("artifact lifecycle service misconfigured")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Artifacts are unavailable",
+        )
+    except ArtifactQueryError:
+        logger.exception("artifact delete failed")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Deleting is temporarily unavailable",
+        )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

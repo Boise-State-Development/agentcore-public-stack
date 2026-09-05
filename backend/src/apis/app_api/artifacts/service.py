@@ -85,6 +85,15 @@ class ArtifactQueryError(RenderTokenError):
     feature is set up correctly, the request just couldn't be served."""
 
 
+class ArtifactTitleError(RenderTokenError):
+    """A caller-supplied artifact title is empty or over the length cap.
+
+    A 400, not a 500 — it describes the request, not the service. Kept in
+    this exception family so the routes' existing except-ladder shape
+    still applies.
+    """
+
+
 class ArtifactTooLargeError(RenderTokenError):
     """The artifact body exceeds the inline code-view cap. The caller
     should fall back to the download path rather than streaming a huge
@@ -1049,12 +1058,12 @@ class ArtifactShareService:
             # row can't strand the rest of the cascade.
             revoked = 0
             for share in shares:
-                if self._delete_quietly(
+                if self.delete_quietly(
                     table, _share_lookup_key(str(share["share_id"]))
                 ):
                     revoked += 1
             for share in shares:
-                self._delete_quietly(
+                self.delete_quietly(
                     table,
                     {
                         "PK": f"USER#{owner_id}",
@@ -1081,8 +1090,87 @@ class ArtifactShareService:
             )
             return 0
 
+    def revoke_for_artifact(self, *, owner_id: str, artifact_id: str) -> int:
+        """Revoke every share of one artifact. Returns the count revoked.
+
+        The cascade behind `ArtifactLifecycleService.delete`. Shares are
+        per-version, so deleting an artifact has to sweep the whole
+        `SHARE#{artifact_id}#V#` prefix — otherwise a link handed out for
+        v2 outlives the artifact it points at.
+
+        Ordering matches `delete_for_session` and must not be flipped:
+        the lookup row (`PK=SHARE#{id}`) is what the recipient path
+        resolves, so dropping it is what actually kills the link. If the
+        second pass fails we are left with an unreachable owner row,
+        which is inert; the reverse order would leave a *live* share
+        whose owner can no longer see it to revoke.
+
+        Unlike `delete_for_session`, enumeration failures raise. That
+        call site is a fire-and-forget background task after a 204 has
+        already gone out, so it can only swallow; this one runs inside
+        the request that is about to start deleting rows, and failing
+        before anything has changed is strictly better than proceeding
+        blind. Individual row deletes stay best-effort for the same
+        reason they are there: one bad row must not strand the rest.
+        """
+        table = _table()
+        shares = self._shares_for_artifact(table, owner_id, artifact_id)
+        if not shares:
+            return 0
+
+        revoked = 0
+        for share in shares:
+            if self.delete_quietly(
+                table, _share_lookup_key(str(share["share_id"]))
+            ):
+                revoked += 1
+        for share in shares:
+            self.delete_quietly(
+                table,
+                {
+                    "PK": f"USER#{owner_id}",
+                    "SK": _owner_share_sk(
+                        str(share["artifact_id"]),
+                        int(share["version"]),
+                        str(share["share_id"]),
+                    ),
+                },
+            )
+
+        logger.info(
+            "revoked %s of %s artifact share(s) for deleted artifact %s",
+            revoked,
+            len(shares),
+            scrub_log(artifact_id),
+        )
+        return revoked
+
     @staticmethod
-    def _delete_quietly(table, key: dict) -> bool:
+    def _shares_for_artifact(
+        table, owner_id: str, artifact_id: str
+    ) -> list[dict]:
+        """Every share row the owner holds for one artifact, across all
+        versions. Partition-scoped to the owner, so it can never reach
+        another user's shares."""
+        shares: list[dict] = []
+        kwargs: dict = {
+            "KeyConditionExpression": Key("PK").eq(f"USER#{owner_id}")
+            & Key("SK").begins_with(_owner_share_prefix(artifact_id)),
+        }
+        try:
+            while True:
+                resp = table.query(**kwargs)
+                shares.extend(resp.get("Items", []))
+                last = resp.get("LastEvaluatedKey")
+                if not last:
+                    break
+                kwargs["ExclusiveStartKey"] = last
+        except ClientError as exc:
+            raise ArtifactQueryError("share list query failed") from exc
+        return shares
+
+    @staticmethod
+    def delete_quietly(table, key: dict) -> bool:
         """Delete one row, reporting success rather than raising.
 
         A single failed row must not strand the rest of the cascade —
@@ -1134,19 +1222,326 @@ class ArtifactShareService:
 
         shares: list[dict] = []
         for artifact_id in artifact_ids:
-            kwargs: dict = {
-                "KeyConditionExpression": Key("PK").eq(f"USER#{owner_id}")
-                & Key("SK").begins_with(_owner_share_prefix(artifact_id)),
-            }
-            while True:
-                resp = table.query(**kwargs)
-                shares.extend(resp.get("Items", []))
-                last = resp.get("LastEvaluatedKey")
-                if not last:
-                    break
-                kwargs["ExclusiveStartKey"] = last
+            shares.extend(
+                ArtifactShareService._shares_for_artifact(
+                    table, owner_id, artifact_id
+                )
+            )
         return shares
 
 
 def get_artifact_share_service() -> ArtifactShareService:
     return ArtifactShareService()
+
+
+# ---------------------------------------------------------------------
+# Artifact lifecycle — rename + delete
+#
+# The library page lists every artifact a user has ever produced, which
+# made "get rid of this one" the first thing missing from it. Both
+# operations live here rather than in the agent-side writer
+# (`agents/builtin_tools/artifacts/service.py`) because they are
+# user-initiated CRUD on an existing record, not part of the agent's
+# write path — and because the inference-api container cannot serve a
+# custom route at all (see the inference-api boundary note in CLAUDE.md).
+#
+# DELETE SEMANTICS — read this before changing anything below.
+#
+# The DynamoDB rows are hard-deleted; the S3 objects are soft-deleted by
+# tagging them `lifecycle-class=deleted`, which the artifacts bucket's
+# existing `expire-soft-deleted` lifecycle rule reaps after
+# `config.artifacts.retentionDays`.
+#
+# That split is deliberate, and the DynamoDB half is the part worth
+# defending. The rows are the only authority on reachability: the render
+# Lambda resolves a token to content by GetItem-ing the *version* row and
+# following its `content_key`, and every listing, content and share path
+# keys off these rows too. Deleting them makes an artifact unreachable
+# everywhere at once, with no new condition to write and — more to the
+# point — no new condition for a future reader to *forget*. A soft flag
+# on the row would have to be honoured by the render Lambda (a separate
+# deployable, and a frozen cross-PR contract), by both list paths, by the
+# content endpoint, by share creation and by the share-scoped mint; one
+# missed filter is a deleted artifact that still renders, and it fails
+# silently. There is no undo built on top of the flag either, since the
+# S3 bytes are what an undo would need and they are on a retention clock
+# regardless.
+#
+# So: from the user's side delete is immediate and permanent. The
+# retention window is an operational recovery path, not a user-facing
+# trash — restoring an artifact means restoring its rows (the table has
+# point-in-time recovery enabled in production) inside the S3 retention
+# window, not flipping a flag.
+#
+# IAM: this needs nothing new. The app-api task role is already granted
+# `s3:PutObjectTagging` and `dynamodb:DeleteItem`
+# (infrastructure/lib/constructs/app-api/app-api-iam-grants.ts), which is
+# the other reason tagging beats `DeleteObject` here — no bucket-policy
+# widening and no infra deploy has to land before this code ships. Note
+# there is still no `dynamodb:BatchWriteItem`, so deletes below are
+# per-item, exactly as `delete_for_session` documents.
+# ---------------------------------------------------------------------
+
+# The tag the artifacts bucket's `expire-soft-deleted` lifecycle rule
+# filters on. Frozen contract with
+# infrastructure/lib/constructs/artifacts/artifacts-data-construct.ts —
+# a typo here is invisible (the object simply never expires).
+_DELETED_TAG_KEY = "lifecycle-class"
+_DELETED_TAG_VALUE = "deleted"
+
+# Generous ceiling on a user-supplied title. Long enough that no honest
+# title hits it, short enough that the attribute can't be used as free
+# storage on a row every list endpoint reads.
+MAX_ARTIFACT_TITLE_LENGTH = 200
+
+
+class ArtifactLifecycleService:
+    """Rename and delete whole artifacts, owner-scoped.
+
+    Every method builds `PK=USER#{user_id}` from the authenticated
+    session, so ownership is enforced by the key rather than checked
+    after the fact: another user's artifact id resolves to no HEAD row
+    and is an indistinguishable 404.
+    """
+
+    def __init__(self, shares: Optional["ArtifactShareService"] = None) -> None:
+        # Injected so the delete cascade can be asserted in isolation and
+        # so share-row key construction stays owned by the share service.
+        self._shares = shares or ArtifactShareService()
+
+    # -- rename --------------------------------------------------------
+
+    def rename(self, *, user_id: str, artifact_id: str, title: str) -> dict:
+        """Retitle an artifact. Returns the updated HEAD row.
+
+        Writes `title` to the HEAD row *and* to every version row.
+        Renaming HEAD alone would split the display name in two: the
+        library reads HEAD, but the session list reads version rows, so
+        the same artifact would show its new title on `/artifacts` and
+        its old one on the conversation that produced it.
+
+        ############################################################
+        # This is a bare `SET title`. It must never touch `version`.
+        # `update_artifact_record` re-points HEAD under an optimistic
+        # lock (`ConditionExpression="version = :cur"`), so a rename that
+        # wrote `version` would race a concurrent agent update and one of
+        # them would lose. Same reasoning — and the same restraint — as
+        # `set_produced_by_message_index` in the writer.
+        ############################################################
+
+        `updated_at` is deliberately left alone too. It is not just a
+        display field: HEAD's `GSI1SK`/`GSI2SK` embed it, and only the
+        writer keeps those in sync. Bumping the attribute without
+        rewriting the keys would order the library (which sorts on the
+        attribute) differently from the session index (which sorts on the
+        key) for the same artifacts. "Updated" means the content changed;
+        a rename records `renamed_at`, which nothing sorts on.
+        """
+        title = title.strip()
+        if not title:
+            raise ArtifactTitleError("title must not be empty")
+        if len(title) > MAX_ARTIFACT_TITLE_LENGTH:
+            raise ArtifactTitleError(
+                f"title must be {MAX_ARTIFACT_TITLE_LENGTH} characters or fewer"
+            )
+
+        table = _table()
+        head = self._require_head(table, user_id, artifact_id)
+        now = _now_iso()
+
+        # HEAD first: it is what both list surfaces read, so if the
+        # per-version pass fails partway the user still sees the rename
+        # take effect and can retry into a consistent state. The reverse
+        # order would look like the rename silently did nothing.
+        sort_keys = [f"ARTIFACT#{artifact_id}#HEAD"] + [
+            f"ARTIFACT#{artifact_id}#V#{int(item['version']):05d}"
+            for item in self._version_rows(table, user_id, artifact_id)
+            if item.get("version") is not None
+        ]
+        try:
+            for sk in sort_keys:
+                table.update_item(
+                    Key={"PK": f"USER#{user_id}", "SK": sk},
+                    UpdateExpression="SET title = :t, renamed_at = :now",
+                    ExpressionAttributeValues={":t": title, ":now": now},
+                    # Never resurrect a row the delete path just removed.
+                    ConditionExpression="attribute_exists(SK)",
+                )
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code == "ConditionalCheckFailedException":
+                # The row went away under us — a concurrent delete.
+                raise ArtifactNotFoundError(artifact_id) from exc
+            raise ArtifactQueryError("artifact rename failed") from exc
+
+        logger.info(
+            "renamed artifact user=%s artifact=%s versions=%s",
+            scrub_log(user_id),
+            scrub_log(artifact_id),
+            len(sort_keys) - 1,
+        )
+        return {**head, "title": title, "renamed_at": now}
+
+    # -- delete --------------------------------------------------------
+
+    def delete(self, *, user_id: str, artifact_id: str) -> int:
+        """Delete an artifact and every version of it. Returns the
+        number of version rows removed.
+
+        All versions, never just the HEAD pointer. Versions are
+        addressable independently — the panel's version picker mints a
+        render token per version, and shares are per-version — so
+        dropping only the pointer would leave every prior version live
+        for anyone holding a link, and unlisted, so the owner could
+        neither see nor clean them up. That is not a delete.
+
+        Ordering is the load-bearing part, and it is the same principle
+        as `delete_for_session`: kill reachability first, kill visibility
+        last, so that every partial-failure state is fail-closed and a
+        retry finishes the job.
+
+          1. Revoke shares (lookup row before owner row, as ever).
+          2. Tag the S3 objects `lifecycle-class=deleted` — this has to
+             happen while the version rows still exist, because those
+             rows hold the only `content_key` pointers to the objects.
+          3. Delete the version rows. This is the moment the artifact
+             stops rendering: the render Lambda's GetItem finds nothing.
+          4. Delete the HEAD row last. It is what the library and the
+             session index list, so an interrupted delete leaves an
+             artifact that is already unreachable but still listed —
+             visibly wrong and self-healing on retry, rather than
+             invisibly still live.
+        """
+        table = _table()
+        self._require_head(table, user_id, artifact_id)
+        versions = self._version_rows(table, user_id, artifact_id)
+
+        # 1 — shares. Enumeration failures raise (nothing has changed
+        # yet, so there is a clean state to fail into); individual row
+        # deletes are best-effort so one bad row can't strand the rest.
+        self._shares.revoke_for_artifact(
+            owner_id=user_id, artifact_id=artifact_id
+        )
+
+        # 2 — soft-delete the bytes.
+        self._tag_objects_deleted(versions)
+
+        # 3 — version rows.
+        deleted = 0
+        for item in versions:
+            version = item.get("version")
+            if version is None:
+                continue
+            if self._shares.delete_quietly(
+                table,
+                {
+                    "PK": f"USER#{user_id}",
+                    "SK": f"ARTIFACT#{artifact_id}#V#{int(version):05d}",
+                },
+            ):
+                deleted += 1
+
+        # 4 — HEAD.
+        try:
+            table.delete_item(
+                Key={
+                    "PK": f"USER#{user_id}",
+                    "SK": f"ARTIFACT#{artifact_id}#HEAD",
+                }
+            )
+        except ClientError as exc:
+            raise ArtifactQueryError("artifact delete failed") from exc
+
+        logger.info(
+            "deleted artifact user=%s artifact=%s versions=%s/%s",
+            scrub_log(user_id),
+            scrub_log(artifact_id),
+            deleted,
+            len(versions),
+        )
+        return deleted
+
+    # -- internals -----------------------------------------------------
+
+    @staticmethod
+    def _require_head(table, user_id: str, artifact_id: str) -> dict:
+        try:
+            result = table.get_item(
+                Key={
+                    "PK": f"USER#{user_id}",
+                    "SK": f"ARTIFACT#{artifact_id}#HEAD",
+                }
+            )
+        except ClientError as exc:
+            raise ArtifactQueryError("artifact lookup failed") from exc
+        head = result.get("Item")
+        if not head:
+            raise ArtifactNotFoundError(artifact_id)
+        return head
+
+    @staticmethod
+    def _version_rows(table, user_id: str, artifact_id: str) -> list[dict]:
+        """Every immutable version row for one artifact. `#HEAD` shares
+        the SK prefix but not the `#V#` infix, so it is excluded."""
+        items: list[dict] = []
+        kwargs: dict = {
+            "KeyConditionExpression": Key("PK").eq(f"USER#{user_id}")
+            & Key("SK").begins_with(f"ARTIFACT#{artifact_id}#V#"),
+        }
+        try:
+            while True:
+                resp = table.query(**kwargs)
+                items.extend(resp.get("Items", []))
+                last = resp.get("LastEvaluatedKey")
+                if not last:
+                    break
+                kwargs["ExclusiveStartKey"] = last
+        except ClientError as exc:
+            raise ArtifactQueryError("artifact version query failed") from exc
+        return items
+
+    @staticmethod
+    def _tag_objects_deleted(versions: list[dict]) -> None:
+        """Tag each version's S3 object for lifecycle expiry.
+
+        Best-effort per object, and never fatal. A failed tag leaves an
+        orphaned object that the lifecycle rule will not reap — wasted
+        bytes, logged loudly — whereas aborting the delete over it would
+        leave the artifact *visible*, which is the failure the user
+        actually cares about. The object is already unreachable the
+        moment its row goes, tag or no tag.
+
+        `put_object_tagging` replaces the whole tag set; artifact objects
+        are written untagged, so there is nothing to preserve.
+        """
+        bucket = _bucket_name()
+        client = _s3()
+        for item in versions:
+            key = item.get("content_key")
+            if not isinstance(key, str) or not key:
+                continue
+            try:
+                client.put_object_tagging(
+                    Bucket=bucket,
+                    Key=key,
+                    Tagging={
+                        "TagSet": [
+                            {
+                                "Key": _DELETED_TAG_KEY,
+                                "Value": _DELETED_TAG_VALUE,
+                            }
+                        ]
+                    },
+                )
+            except ClientError:
+                logger.warning(
+                    "artifact delete could not tag object for expiry "
+                    "artifact=%s version=%s",
+                    scrub_log(str(item.get("artifact_id", ""))),
+                    item.get("version"),
+                    exc_info=True,
+                )
+
+
+def get_artifact_lifecycle_service() -> ArtifactLifecycleService:
+    return ArtifactLifecycleService()
