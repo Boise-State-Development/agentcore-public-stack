@@ -14,11 +14,16 @@
 
       @if (items().length > 0) {
         <!-- One setting with two values, so a radiogroup rather than two
-             independent toggle buttons. Mirrors the Agents page. -->
+             independent toggle buttons. Mirrors the Agents page.
+
+             `self-start` is load-bearing, not tidying: below `sm` the header
+             is a flex column, whose default align-items:stretch pulls this to
+             full width and strands two 32px icons in an empty bar.
+             `inline-flex` sets display, not alignment, so it does not help. -->
         <div
           role="radiogroup"
           aria-label="Layout"
-          class="inline-flex shrink-0 gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800"
+          class="inline-flex shrink-0 self-start gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800"
         >
           <button
             type="button"
