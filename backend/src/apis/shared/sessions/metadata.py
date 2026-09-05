@@ -405,6 +405,7 @@ def _derive_cache_observability(
 
         from apis.shared.observability import (
             CacheStatus,
+            cache_ttl_seconds_for,
             classify_cache_status,
             compute_wasted_usd,
             prompt_cache_observability_enabled,
@@ -497,12 +498,24 @@ def _derive_cache_observability(
             classify_gap = None
             prev_cached_prefix = _cached_prefix_of(prev_row)
 
+        # The TTL is the serving model's, not a module constant: Bedrock is a
+        # ~5-minute sliding window, the OpenAI Responses API on bedrock-runtime
+        # holds entries for 30 minutes. Using 5 minutes for the latter calls a
+        # live entry expired, which downgrades `partial_miss` to `hit` and
+        # `miss_avoidable` to `miss_ttl_expired` — both zeroing `wastedUsd`.
+        model_info = message_metadata.model_info
+        ttl_seconds = cache_ttl_seconds_for(
+            provider=getattr(model_info, "provider", None),
+            model_id=getattr(model_info, "model_id", None),
+        )
+
         status = classify_cache_status(
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
             previous_call_exists=prev_row is not None,
             gap_seconds=classify_gap,
             previous_cached_prefix_tokens=prev_cached_prefix,
+            ttl_seconds=ttl_seconds,
         )
         wasted_usd = compute_wasted_usd(
             cache_status=status,
