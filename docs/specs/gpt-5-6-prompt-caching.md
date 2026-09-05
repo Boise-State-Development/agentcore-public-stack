@@ -260,7 +260,7 @@ than an error, which is exactly the failure the Verification section exists to
 catch. Decide before curating: either model the dimensions, or scope the row
 to standard-tier short-context and gate on staying inside it.
 
-### PR-4 — Explicit cache breakpoints + `prompt_cache_key` ✅ SHIPPED
+### PR-4 — Explicit cache breakpoints + `prompt_cache_key` ⛔ SHIPPED OFF (measured pessimization)
 
 Only worth building for 5.6, where the 1.25× write premium makes placement matter.
 
@@ -319,11 +319,41 @@ placed boundary is therefore worse than not switching at all. Two mitigations:
   changeset validation after CI is green. Flipping it in a deployed environment
   needs an out-of-band Runtime update.
 
-None of this is verified against a live model — no GPT-5.6 catalog row exists
-while PR-3 is blocked. **The Verification section below is the gate before this
-is trusted in prod**, and the specific thing to confirm is that turns 2+ report
-`cacheRead` tracking the whole static prefix. If they do not, the boundary is
-misplaced and the flag is the way out.
+#### ⛔ Measured live — the premise was wrong, so this ships OFF
+
+Run 2026-09-05 against `us.openai.gpt-5.6-sol` (dev-ai, us-west-2) via
+`backend/scripts/probe_gpt56_cache_rates.py --mode both --grow-history`:
+8k-token static prefix, 5 turns, ~1.5k tokens of history growth per turn.
+
+|          | uncached input | cacheRead | cacheWrite | input-equivalents |
+|----------|---------------:|----------:|-----------:|------------------:|
+| explicit |     **22,790** |    23,228 |      5,807 |        **32,372** |
+| implicit |         **10** |    38,410 |     13,405 |        **20,607** |
+
+(Input-equivalents price the buckets at the Price List ratios this same
+investigation confirmed: input 1×, cache read 0.1×, cache write 1.25×.)
+
+**Explicit cost ~57% more.** Per turn, explicit's uncached input grew
+1,516 → 7,600 while its `cacheRead` stayed flat at 5,807; implicit held
+uncached input at 2/turn and let `cacheRead` grow with the conversation.
+
+The reasoning above had the *counterfactual* wrong. Implicit caching does not
+re-write history when it grows — it appends the delta (measured: 1,521
+cacheWrite per turn). So a breakpoint after the static prefix saves no
+re-write; it only stops the history being cached at all, and the cost of that
+grows linearly with conversation length.
+
+The code ships behind `BEDROCK_RESPONSES_EXPLICIT_CACHE_ENABLED`, **default
+OFF**, so the production path is byte-identical to stock Strands. It is kept
+rather than deleted because the *placement*, not the mechanism, is what failed
+— the API allows up to 4 breakpoints, and a scheme that also marks the end of
+history might beat implicit. **Do not re-enable without re-running that probe
+and beating the implicit arm.**
+
+Untested idea worth its own measurement: `prompt_cache_key` is currently tied
+to the explicit path, so it is off too. Applying it on the implicit path is
+plausibly free and helps cross-request routing, but that is a fleet-level
+effect a single-session probe cannot show — measure before shipping it.
 
 ### PR-5 — Observability
 
@@ -389,3 +419,36 @@ Prove the cost impact rather than assuming it — per the cost-effectiveness ten
   no write fee; PR-1 and PR-3 fix its accounting where it sits.
 - Guardrails for GPT-5.6 (Converse-only, and we're deliberately not on Converse).
 - Chat Completions on either endpoint — no caching support, no reason.
+
+## Live verification, 2026-09-05
+
+First end-to-end exercise of this work against a real model, via
+`backend/scripts/probe_gpt56_cache_rates.py` on `us.openai.gpt-5.6-sol`
+(dev-ai, us-west-2). The probe calls the transport directly — it touches no
+shared catalog row, no RBAC, and not the agent loop — so it could run while
+PR-3 is still blocked.
+
+| Step | Verdict |
+|---|---|
+| PR-1 usage normalization | ✅ buckets disjoint on every turn of every run |
+| PR-2 bedrock-runtime transport | ✅ reached the model; base URL, per-request bearer token and inference-profile id all correct |
+| PR-4 explicit breakpoints | ⛔ ~57% more expensive than implicit — shipped OFF |
+| PR-5 model-derived TTL | ✅ warm turns read the prefix, so the 30m window is the one that matters |
+
+**The finding that mattered.** Turn 1 of the first run reported
+`inputTokens=2, cacheWriteInputTokens=1,446`. Un-normalized, OpenAI reports
+`input_tokens=1448` — inclusive of the write bucket. That is PR-1's
+cache-write subtraction proving itself on live data: without it that turn
+double-bills 1,446 tokens at the input rate *plus* the 1.25× write premium.
+It also confirms the `cache_write_tokens` recovery works, since Strands drops
+the field and the bucket would otherwise read 0.
+
+**Rates.** The runs consumed ~190k tokens on usage types nothing else in dev
+uses, so Cost Explorer attribution is unambiguous. Recover the rates with:
+
+    AWS_PROFILE=dev-ai uv run python scripts/probe_gpt56_cache_rates.py \
+        --rates-only --since 2026-09-05
+
+⚠️ Confirm the usage *unit* before trusting the derived $/MTok — Bedrock token
+usage types are reported in 1K-token units, and the script's conversion assumes
+that. Cross-check one row against the token totals the run printed.

@@ -124,24 +124,40 @@ def _warn_on_missing_inference_profile(model_id: str) -> None:
 
 # ── Explicit prompt caching (GPT-5.6) ────────────────────────────────────────
 #
-# GPT-5.6 caches implicitly by default. Explicit mode instead lets us mark
-# where the reusable prefix ends, which is what buys the resilience the Claude
-# path already has: a change in conversation history costs a *read* of the
-# ~30k static prefix (tools + system prompt) rather than a full re-write at the
-# 1.25x premium.
+# ⛔ OPT-IN, DEFAULT OFF — measured as a pessimization on our workload.
 #
-# Kill switch, default ON per repo convention. Only the literal string "false"
-# disables it — an empty or unset value stays enabled, because workflow env
-# vars can materialize as "".
+# The plan was: mark where the reusable prefix ends, so a change in
+# conversation history costs a *read* of the static prefix rather than a full
+# re-write at the 1.25x premium. That reasoning had the counterfactual wrong.
+# GPT-5.6's default **implicit** caching does not re-write history when it
+# grows — it appends the delta — so a single breakpoint after the static
+# prefix does not save a re-write. It stops the history being cached at all.
+#
+# Measured live on `us.openai.gpt-5.6-sol` (dev-ai, us-west-2, 8k static
+# prefix, 5 turns, ~1.5k tokens of history growth per turn), priced at the
+# Price List ratios (input 1x, cache read 0.1x, cache write 1.25x):
+#
+#                uncached input   cacheRead   cacheWrite   input-equivalents
+#   explicit            22,790      23,228        5,807              32,372
+#   implicit                10      38,410       13,405              20,607
+#
+# Explicit cost ~57% MORE. Under explicit the uncached input grew every turn
+# (1,516 -> 7,600) while cacheRead stayed flat at 5,807; under implicit the
+# whole growing conversation stayed cached.
+#
+# The code is kept because the placement, not the mechanism, is what failed —
+# the API allows up to 4 breakpoints, and a scheme that also marks the end of
+# history could plausibly beat implicit. Nobody should turn this on again
+# without re-running `scripts/probe_gpt56_cache_rates.py --mode both
+# --grow-history` and beating the implicit arm.
+#
+# Opt-in: only the literal string "true" enables it.
 #
 # ⚠️ Deliberately NOT wired into the CDK Runtime construct.
 # `AWS::BedrockAgentCore::Runtime` caps EnvironmentVariables at 50 and
 # `inference-agentcore-construct.ts` is AT that cap — a 51st entry fails
 # CloudFormation *changeset validation*, i.e. after synth, tsc, jest and green
-# CI (it broke the dev Platform Stack deploy on 2026-08-05). A code-level flag
-# that reads os.environ and defaults ON needs no entry, which is exactly this
-# one. Turning it off in a deployed environment takes an out-of-band Runtime
-# update until a slot is freed.
+# CI (it broke the dev Platform Stack deploy on 2026-08-05).
 EXPLICIT_CACHE_ENABLED_ENV = "BEDROCK_RESPONSES_EXPLICIT_CACHE_ENABLED"
 
 # Request-level cache controls. `ttl` is the string form of the same window
@@ -159,10 +175,14 @@ _CACHE_BREAKPOINT = {"mode": "explicit"}
 def explicit_prompt_cache_enabled() -> bool:
     """Whether to send explicit cache breakpoints on this transport.
 
+    **Default OFF** — see the measurement above; explicit mode cost ~57% more
+    than the model's default implicit caching on a conversation with growing
+    history. Only the literal string ``"true"`` opts in.
+
     Read per call (no module-level caching) so tests and live config changes
     behave predictably; the env read is negligible next to request assembly.
     """
-    return os.environ.get(EXPLICIT_CACHE_ENABLED_ENV, "").lower() != "false"
+    return os.environ.get(EXPLICIT_CACHE_ENABLED_ENV, "").lower() == "true"
 
 
 def build_prompt_cache_key(
