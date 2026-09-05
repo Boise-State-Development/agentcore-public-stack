@@ -55,7 +55,13 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "BEDROCK_RESPONSES_PARAM_MAP",
     "BEDROCK_RUNTIME_OPENAI_PATH",
+    "EXPLICIT_CACHE_ENABLED_ENV",
+    "EXPLICIT_CACHE_OPTIONS",
+    "EXPLICIT_CACHE_TTL",
+    "apply_explicit_prompt_cache",
     "build_bedrock_responses_model",
+    "build_prompt_cache_key",
+    "explicit_prompt_cache_enabled",
     "get_bedrock_runtime_openai_base_url",
 ]
 
@@ -116,6 +122,128 @@ def _warn_on_missing_inference_profile(model_id: str) -> None:
         )
 
 
+# ── Explicit prompt caching (GPT-5.6) ────────────────────────────────────────
+#
+# GPT-5.6 caches implicitly by default. Explicit mode instead lets us mark
+# where the reusable prefix ends, which is what buys the resilience the Claude
+# path already has: a change in conversation history costs a *read* of the
+# ~30k static prefix (tools + system prompt) rather than a full re-write at the
+# 1.25x premium.
+#
+# Kill switch, default ON per repo convention. Only the literal string "false"
+# disables it — an empty or unset value stays enabled, because workflow env
+# vars can materialize as "".
+#
+# ⚠️ Deliberately NOT wired into the CDK Runtime construct.
+# `AWS::BedrockAgentCore::Runtime` caps EnvironmentVariables at 50 and
+# `inference-agentcore-construct.ts` is AT that cap — a 51st entry fails
+# CloudFormation *changeset validation*, i.e. after synth, tsc, jest and green
+# CI (it broke the dev Platform Stack deploy on 2026-08-05). A code-level flag
+# that reads os.environ and defaults ON needs no entry, which is exactly this
+# one. Turning it off in a deployed environment takes an out-of-band Runtime
+# update until a slot is freed.
+EXPLICIT_CACHE_ENABLED_ENV = "BEDROCK_RESPONSES_EXPLICIT_CACHE_ENABLED"
+
+# Request-level cache controls. `ttl` is the string form of the same window
+# the cache-status classifier measures gaps against
+# (``OPENAI_RESPONSES_CACHE_TTL_SECONDS``); a test asserts the two agree so a
+# change to one cannot silently diverge from the other.
+EXPLICIT_CACHE_TTL = "30m"
+EXPLICIT_CACHE_OPTIONS: Dict[str, str] = {"mode": "explicit", "ttl": EXPLICIT_CACHE_TTL}
+
+# Marks the end of the reusable prefix. Goes on a *content block*, not on the
+# request — see the AWS explicit-prompt-caching guidance for GPT-5.6.
+_CACHE_BREAKPOINT = {"mode": "explicit"}
+
+
+def explicit_prompt_cache_enabled() -> bool:
+    """Whether to send explicit cache breakpoints on this transport.
+
+    Read per call (no module-level caching) so tests and live config changes
+    behave predictably; the env read is negligible next to request assembly.
+    """
+    return os.environ.get(EXPLICIT_CACHE_ENABLED_ENV, "").lower() != "false"
+
+
+def build_prompt_cache_key(
+    system_prompt: Optional[str],
+    tool_specs: Optional[Any],
+) -> str:
+    """Cache key for requests that share a prefix.
+
+    Derived from the same fingerprints the prompt-cache observability layer
+    records on each call, so requests with an identical static prefix route to
+    one cache entry and any config change rotates the key *by construction* —
+    there is no separate list to keep in sync.
+
+    Deliberately covers only the static prefix (system prompt + tool
+    definitions). Including conversation history would rotate the key every
+    turn, which is precisely the cache-busting this exists to prevent.
+    """
+    from apis.shared.observability import fingerprint_canonical_json, fingerprint_text
+
+    return f"{fingerprint_text(system_prompt)}:{fingerprint_canonical_json(tool_specs or [])}"
+
+
+def apply_explicit_prompt_cache(
+    request: Dict[str, Any],
+    system_prompt: Optional[str],
+    tool_specs: Optional[Any],
+) -> Dict[str, Any]:
+    """Stamp explicit cache controls onto a formatted Responses request.
+
+    Strands emits the system prompt as the top-level ``instructions`` string,
+    but a breakpoint has to sit on a *content block*. So the instructions are
+    re-expressed as the ``developer`` message the AWS guidance shows, placed at
+    the head of ``input`` and carrying the breakpoint — which puts the cache
+    boundary exactly at the end of the static prefix (tools + system), before
+    any conversation history.
+
+    Args:
+        request: The request dict from ``OpenAIResponsesModel._format_request``.
+            Mutated in place and returned.
+        system_prompt: This turn's system prompt.
+        tool_specs: This turn's tool specifications.
+
+    Returns:
+        ``request``.
+
+    Note:
+        With no system prompt there is no content block marking the end of a
+        static prefix, so this returns the request untouched and the model
+        keeps its default **implicit** caching. Switching to explicit mode with
+        a badly placed boundary would be worse than not switching at all.
+    """
+    instructions = request.get("instructions")
+    if not instructions:
+        return request
+
+    developer_message = {
+        "type": "message",
+        "role": "developer",
+        "content": [
+            {
+                "type": "input_text",
+                "text": instructions,
+                "prompt_cache_breakpoint": dict(_CACHE_BREAKPOINT),
+            }
+        ],
+    }
+    request.pop("instructions", None)
+    existing_input = request.get("input")
+    request["input"] = [developer_message, *(existing_input or [])]
+
+    # `prompt_cache_key` is a first-class SDK parameter; `prompt_cache_options`
+    # is not, so it rides `extra_body`. Merge rather than assign — a caller's
+    # `params` may already carry an extra_body.
+    request.setdefault("prompt_cache_key", build_prompt_cache_key(system_prompt, tool_specs))
+    extra_body = dict(request.get("extra_body") or {})
+    extra_body.setdefault("prompt_cache_options", dict(EXPLICIT_CACHE_OPTIONS))
+    request["extra_body"] = extra_body
+
+    return request
+
+
 _model_cls: Optional[type] = None
 
 
@@ -161,6 +289,29 @@ def _bedrock_responses_model_cls() -> type:
             args = dict(super()._resolve_client_args())
             args["api_key"] = generate_bedrock_bearer_token(self._bedrock_region)
             return args
+
+        def _format_request(
+            self,
+            messages: Any,
+            tool_specs: Optional[Any] = None,
+            system_prompt: Optional[str] = None,
+            *args: Any,
+            **kwargs: Any,
+        ) -> Dict[str, Any]:
+            """Format the request, then mark where the reusable prefix ends.
+
+            The three leading parameters are named because this override needs
+            two of them; ``tool_choice`` / ``model_state`` (and anything a
+            future SDK adds) ride ``*args`` / ``**kwargs`` untouched. Strands
+            calls this both positionally with five arguments and by keyword,
+            so both forms have to work.
+            """
+            request = super()._format_request(messages, tool_specs, system_prompt, *args, **kwargs)
+            if not explicit_prompt_cache_enabled():
+                return request
+            return apply_explicit_prompt_cache(
+                request, system_prompt=system_prompt, tool_specs=tool_specs
+            )
 
     _model_cls = usage_normalized(BedrockRuntimeResponsesModel)
     return _model_cls
