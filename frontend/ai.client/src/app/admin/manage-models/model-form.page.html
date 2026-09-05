@@ -95,7 +95,7 @@
                 [class.border-state-danger-500]="modelForm.controls.provider.invalid && modelForm.controls.provider.touched"
               >
                 @for (provider of availableProviders; track provider) {
-                  <option [value]="provider">{{ provider }}</option>
+                  <option [value]="provider">{{ providerLabels[provider] }}</option>
                 }
               </select>
               @if (modelForm.controls.provider.invalid && modelForm.controls.provider.touched) {
@@ -121,7 +121,21 @@
             </div>
           </div>
 
-          <!-- Bedrock Mantle API surface + region (Mantle provider only) -->
+          <!-- OpenAI-compatible Bedrock surfaces: API surface + region -->
+          @if (isBedrockResponses()) {
+            <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
+              <p class="text-sm/6 text-gray-700 dark:text-gray-300">
+                This transport always uses the <strong>Responses API</strong> on
+                <code>bedrock-runtime</code> — it exists because GPT-5.6 serves prompt caching
+                only over that API. The same model routed over Converse gets no caching at all.
+              </p>
+              <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
+                Use a cross-Region inference profile id (<code>us.</code> or <code>global.</code>
+                prefixed, e.g. <code>us.openai.gpt-5.6-sol</code>). In-Region ids are not offered
+                on this endpoint for the GPT-5.6 family.
+              </p>
+            </div>
+          }
           @if (isMantle()) {
             <div>
               <label for="mantleApiMode" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
@@ -143,9 +157,11 @@
                 API" error at chat time.
               </p>
             </div>
+          }
+          @if (isOpenAiSurface()) {
             <div>
               <label for="mantleRegion" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                Mantle region
+                Endpoint region
               </label>
               <input
                 type="text"
@@ -156,7 +172,8 @@
               />
               <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                 Optional. Pins inference to the region hosting the model (e.g. <code>us-east-1</code>),
-                independent of where the app runs. Leave blank to use the app's region.
+                independent of where the app runs, and signs the bearer token for it. Leave blank to
+                use the app's region.
               </p>
             </div>
           }
@@ -438,11 +455,11 @@
             </div>
           </div>
 
-          <!-- Prompt Caching (Bedrock Only) -->
-          @if (modelForm.value.provider === 'bedrock') {
+          <!-- Prompt Caching (Bedrock Converse + bedrock-runtime Responses) -->
+          @if (supportsCachingControls()) {
             <div class="space-y-4">
               <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
-                Prompt caching (Bedrock only)
+                Prompt caching
               </h3>
 
               <!-- Supports Caching Toggle -->

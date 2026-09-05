@@ -1,17 +1,51 @@
 /**
  * Available model providers.
  *
- * `mantle` is Amazon Bedrock Mantle — AWS's OpenAI-compatible inference
- * surface for Bedrock-hosted open-weight models. It is a distinct provider
- * from `bedrock` because the backend reaches it over the OpenAI wire
- * protocol with a bearer token rather than the Converse API.
+ * Two of them are OpenAI-compatible Bedrock surfaces — the backend reaches
+ * both over the OpenAI wire protocol with a bearer token rather than the
+ * Converse API, which is why neither is just `bedrock`:
+ *
+ * - `mantle` — Amazon Bedrock Mantle, AWS's OpenAI-compatible surface for
+ *   Bedrock-hosted open-weight models.
+ * - `bedrock-responses` — the OpenAI **Responses** API on `bedrock-runtime`.
+ *   Exists because GPT-5.6 serves prompt caching only over the Responses API;
+ *   the same model routed over Converse gets no caching at all.
  */
-export type ModelProvider = 'bedrock' | 'openai' | 'gemini' | 'mantle';
+export type ModelProvider = 'bedrock' | 'openai' | 'gemini' | 'mantle' | 'bedrock-responses';
 
 /**
  * Available model providers as a constant array.
  */
-export const AVAILABLE_PROVIDERS: ModelProvider[] = ['bedrock', 'openai', 'gemini', 'mantle'];
+export const AVAILABLE_PROVIDERS: ModelProvider[] = [
+  'bedrock',
+  'openai',
+  'gemini',
+  'mantle',
+  'bedrock-responses',
+];
+
+/**
+ * Providers that ride the OpenAI wire protocol against a Bedrock endpoint.
+ *
+ * These share the `apiMode` / `region` fields and the bearer-token transport.
+ * Kept as one list so the form doesn't accumulate `=== 'mantle' || === ...`
+ * checks that drift apart.
+ */
+export const OPENAI_SURFACE_PROVIDERS: readonly ModelProvider[] = ['mantle', 'bedrock-responses'];
+
+/**
+ * Human-readable labels for the provider picker.
+ *
+ * The raw values are wire identifiers; `bedrock-responses` in particular says
+ * nothing useful to an admin choosing a transport.
+ */
+export const PROVIDER_LABELS: Record<ModelProvider, string> = {
+  bedrock: 'Bedrock (Converse)',
+  openai: 'OpenAI',
+  gemini: 'Google Gemini',
+  mantle: 'Bedrock Mantle',
+  'bedrock-responses': 'Bedrock Runtime (Responses API)',
+};
 
 /**
  * Capability + bounds for a single inference parameter.
@@ -112,16 +146,20 @@ export interface ManagedModel {
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
   /**
-   * Bedrock Mantle API surface (`provider === 'mantle'` only): `chat` (OpenAI
-   * Chat Completions, the default) or `responses` (OpenAI Responses API —
-   * required by models that don't serve Chat Completions, e.g. openai.gpt-5.x).
-   * Null/absent for every other provider.
+   * OpenAI-compatible API surface: `chat` (OpenAI Chat Completions, the
+   * default) or `responses` (OpenAI Responses API — required by models that
+   * don't serve Chat Completions, e.g. openai.gpt-5.x).
+   *
+   * Selectable for `provider === 'mantle'`. Forced to `responses` for
+   * `provider === 'bedrock-responses'`, whose whole reason to exist is that
+   * GPT-5.6 caches only over that API. Null/absent for every other provider.
    */
   apiMode?: MantleApiMode | null;
   /**
-   * Bedrock Mantle region override (`provider === 'mantle'` only): pins
-   * inference to the region hosting the model (e.g. `us-east-1`), independent
-   * of where the app runs. Null/absent -> the app's region and for other providers.
+   * Region override for an OpenAI-compatible Bedrock surface (`mantle` or
+   * `bedrock-responses`): pins inference to the region hosting the model
+   * (e.g. `us-east-1`), independent of where the app runs, and signs the
+   * bearer token for it. Null/absent -> the app's region and for other providers.
    */
   region?: string | null;
   /** @deprecated No longer used — the SDK derives the base path from the model id. */
@@ -183,24 +221,25 @@ export interface ManagedModelFormData {
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
   /**
-   * Bedrock Mantle API surface (`provider === 'mantle'` only): `chat` or
-   * `responses`. Inert for other providers.
+   * OpenAI-compatible API surface: `chat` or `responses`. Selectable for
+   * `mantle`; forced to `responses` for `bedrock-responses`. Inert for other
+   * providers.
    */
   apiMode?: MantleApiMode | null;
   /**
-   * Bedrock Mantle region override (`provider === 'mantle'` only). Empty ->
-   * the app's region. Inert for other providers.
+   * Region override for an OpenAI-compatible Bedrock surface (`mantle` or
+   * `bedrock-responses`). Empty -> the app's region. Inert for other providers.
    */
   region?: string | null;
   /** Per-model inference parameter capabilities */
   supportedParams?: SupportedParams | null;
 }
 
-/** Selectable Bedrock Mantle API surfaces for the model form. */
+/** Selectable OpenAI-compatible API surfaces for the model form. */
 export const MANTLE_API_MODES = ['chat', 'responses'] as const;
 export type MantleApiMode = (typeof MANTLE_API_MODES)[number];
 
-/** Human-readable labels for the Mantle API surface options. */
+/** Human-readable labels for the OpenAI API surface options. */
 export const MANTLE_API_MODE_LABELS: Record<MantleApiMode, string> = {
   chat: 'Chat Completions',
   responses: 'Responses API',
@@ -268,8 +307,9 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
       openai: { min: 0, max: 2 },    // OpenAI accepts 0–2
       gemini: { min: 0, max: 1 },
       mantle: { min: 0, max: 2 },    // OpenAI wire protocol range
+      'bedrock-responses': { min: 0, max: 2 },
     },
-    providers: ['bedrock', 'openai', 'gemini', 'mantle'],
+    providers: ['bedrock', 'openai', 'gemini', 'mantle', 'bedrock-responses'],
   },
   {
     key: 'top_p',
@@ -278,7 +318,7 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
     kind: 'number',
     defaultMin: 0,
     defaultMax: 1,
-    providers: ['bedrock', 'openai', 'gemini', 'mantle'],
+    providers: ['bedrock', 'openai', 'gemini', 'mantle', 'bedrock-responses'],
   },
   {
     key: 'top_k',
@@ -294,7 +334,7 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
     description: 'Maximum tokens in the model response.',
     kind: 'integer',
     defaultMin: 1,
-    providers: ['bedrock', 'openai', 'gemini', 'mantle'],
+    providers: ['bedrock', 'openai', 'gemini', 'mantle', 'bedrock-responses'],
   },
   {
     key: 'thinking',
@@ -321,9 +361,11 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
   {
     key: 'reasoning_effort',
     label: 'Reasoning Effort',
-    description: 'Reasoning depth (OpenAI o-series and reasoning models on Bedrock Mantle).',
+    description:
+      'Reasoning depth (OpenAI o-series and reasoning models on the ' +
+      'OpenAI-compatible Bedrock surfaces).',
     kind: 'number',
-    providers: ['openai', 'mantle'],
+    providers: ['openai', 'mantle', 'bedrock-responses'],
   },
 ];
 

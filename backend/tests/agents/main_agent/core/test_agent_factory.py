@@ -166,6 +166,95 @@ class TestCreateAgentMantle:
 
 
 # ---------------------------------------------------------------------------
+# bedrock-responses provider creates an Agent with an OpenAI Responses model on
+# the bedrock-runtime endpoint — the only Bedrock path that caches for GPT-5.6.
+# ---------------------------------------------------------------------------
+class TestCreateAgentBedrockResponses:
+    """Delegation contract for the second OpenAI-compatible Bedrock surface.
+
+    Construction behavior (base URL, per-request token mint, usage
+    normalization) is covered directly on the builder in
+    ``tests/shared/test_bedrock_responses.py``.
+    """
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.build_bedrock_responses_model")
+    def test_delegates_to_the_shared_builder(self, mock_build, mock_agent_cls, monkeypatch):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        mock_model_instance = MagicMock()
+        mock_build.return_value = mock_model_instance
+
+        config = ModelConfig(
+            model_id="us.openai.gpt-5.6-sol",
+            provider=ModelProvider.BEDROCK_RESPONSES,
+        )
+        AgentFactory.create_agent(model_config=config, **_COMMON_KWARGS)
+
+        mock_build.assert_called_once()
+        call_kwargs = mock_build.call_args.kwargs
+        assert call_kwargs["model_id"] == "us.openai.gpt-5.6-sol"
+        assert call_kwargs["region"] == "us-west-2"
+        assert mock_agent_cls.call_args.kwargs["model"] is mock_model_instance
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.build_bedrock_responses_model")
+    def test_region_override_pins_the_endpoint(self, mock_build, mock_agent_cls, monkeypatch):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        config = ModelConfig(
+            model_id="global.openai.gpt-5.6-sol",
+            provider=ModelProvider.BEDROCK_RESPONSES,
+            mantle_region="us-east-1",
+        )
+        AgentFactory.create_agent(model_config=config, **_COMMON_KWARGS)
+
+        assert mock_build.call_args.kwargs["region"] == "us-east-1"
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.build_bedrock_responses_model")
+    def test_never_routes_through_the_mantle_builder(
+        self, mock_build, mock_agent_cls, monkeypatch
+    ):
+        """The two surfaces must not cross: Mantle's config hardcodes its host."""
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        config = ModelConfig(
+            model_id="us.openai.gpt-5.6-sol",
+            provider=ModelProvider.BEDROCK_RESPONSES,
+        )
+        with patch("agents.main_agent.core.agent_factory.build_mantle_model") as mantle:
+            AgentFactory.create_agent(model_config=config, **_COMMON_KWARGS)
+
+        mantle.assert_not_called()
+        mock_build.assert_called_once()
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.build_bedrock_responses_model")
+    def test_inference_params_translate_to_responses_native_names(
+        self, mock_build, mock_agent_cls, monkeypatch
+    ):
+        """`max_tokens` is `max_output_tokens` on the Responses API."""
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        config = ModelConfig(
+            model_id="us.openai.gpt-5.6-sol",
+            provider=ModelProvider.BEDROCK_RESPONSES,
+            inference_params={"max_tokens": 2048, "temperature": 0.3},
+        )
+        AgentFactory.create_agent(model_config=config, **_COMMON_KWARGS)
+
+        params = mock_build.call_args.kwargs["params"]
+        assert params["max_output_tokens"] == 2048
+        assert params["temperature"] == 0.3
+        assert "max_tokens" not in params
+
+
+# ---------------------------------------------------------------------------
 # Req 4.3 — Gemini provider with API key creates Agent with GeminiModel
 # ---------------------------------------------------------------------------
 class TestCreateAgentGemini:

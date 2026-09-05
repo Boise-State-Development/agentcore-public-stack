@@ -297,10 +297,18 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
  * Provider-keyed lookup for the catalog tabs. Bedrock + Mantle are populated;
  * OpenAI/Gemini are intentional empty arrays — the page renders a
  * 'Coming soon' empty state when the active tab has no entries.
+ *
+ * `bedrock-responses` is empty for now: the transport landed ahead of its
+ * catalog rows, whose rates have to be verified against the Price List API
+ * first. Adding a model there today means the escape-hatch form, which works.
+ * NOTE for whoever curates it: `mantleDefaults()` hardcodes
+ * `supportsCaching: false` — a GPT-5.6 row must not inherit that, since
+ * caching is the entire reason this transport exists.
  */
 export const CURATED_MODELS_BY_PROVIDER: Record<ModelProvider, CuratedModel[]> = {
   bedrock: CURATED_BEDROCK_MODELS,
   openai: [],
   gemini: [],
   mantle: CURATED_MANTLE_MODELS,
+  'bedrock-responses': [],
 };

@@ -38,6 +38,17 @@ class ModelProvider(str, Enum):
     # bearer token, not the Converse API with SigV4. Never auto-detected from
     # model_id — admins set it explicitly on the managed model.
     MANTLE = "mantle"
+    # The OpenAI **Responses** API on `bedrock-runtime.<region>.amazonaws.com`
+    # — the second OpenAI-compatible Bedrock surface. Same wire protocol and
+    # bearer-token auth as MANTLE, different host, IAM and model-id shape
+    # (cross-Region inference profiles: `us.` / `global.`).
+    #
+    # It exists for one reason: GPT-5.6 serves prompt caching ONLY over the
+    # Responses API. Routing the same model over Converse (which
+    # `bedrock-runtime` also supports) would drop into the BEDROCK path with
+    # no caching at all — ~10x the input cost on a long stable prefix.
+    # Never auto-detected from model_id; admins set it on the managed model.
+    BEDROCK_RESPONSES = "bedrock-responses"
 
 
 # Canonical param name -> provider-native key path (dot-separated for nested SDK fields).
@@ -293,11 +304,16 @@ class ModelConfig:
     # Completions vs Responses). Only consulted on the MANTLE provider path,
     # where the factory uses it to pick OpenAIModel vs OpenAIResponsesModel.
     mantle_api_mode: MantleApiMode = MantleApiMode.CHAT_COMPLETIONS
-    # Bedrock Mantle: optional AWS region override for the inference endpoint.
+    # Optional AWS region override for an OpenAI-compatible Bedrock endpoint.
     # ``None`` -> the agent's AWS_REGION. Lets a model pin inference to the
     # region where it's hosted (e.g. openai.gpt-5.x in us-east-1) independent
-    # of where the app runs. Drives both the Mantle base URL and the region
-    # the bearer token is signed for (via bedrock_mantle_config).
+    # of where the app runs. Drives both the base URL and the region the
+    # bearer token is signed for, on BOTH OpenAI-compatible surfaces — Mantle
+    # (via bedrock_mantle_config) and bedrock-runtime Responses.
+    #
+    # The attribute name is historical: Mantle was the only such surface when
+    # it was added. The wire/persisted field is already the transport-neutral
+    # `region`, so only this Python name lags.
     mantle_region: Optional[str] = None
 
     def get_provider(self) -> ModelProvider:
@@ -480,6 +496,27 @@ class ModelConfig:
             config["params"] = params
         return config
 
+    def to_bedrock_responses_config(self) -> Dict[str, Any]:
+        """Convert to OpenAI Responses kwargs for the bedrock-runtime surface.
+
+        The Responses API's native param names are the same ones Mantle-Responses
+        uses — they belong to the API, not the transport — so the map is shared.
+        The builder supplies the client (base_url + per-request bearer token)
+        via ``client_args``; see ``apis.shared.models.bedrock_responses``.
+        """
+        params: Dict[str, Any] = {}
+        _apply_canonical_params(
+            params,
+            self.inference_params,
+            _MANTLE_RESPONSES_PARAM_MAP,
+            "bedrock-responses",
+            self.model_id,
+        )
+        config: Dict[str, Any] = {"model_id": self.model_id}
+        if params:
+            config["params"] = params
+        return config
+
     def to_gemini_config(self) -> Dict[str, Any]:
         """Convert to GeminiModel kwargs, translating canonical inference params."""
         params: Dict[str, Any] = {}
@@ -517,7 +554,8 @@ class ModelConfig:
         Args:
             model_id: Model ID (provider-specific format)
             caching_enabled: Whether to enable prompt caching (Bedrock only)
-            provider: Provider name ("bedrock", "openai", "gemini", or "mantle")
+            provider: Provider name ("bedrock", "openai", "gemini", "mantle",
+                or "bedrock-responses")
             inference_params: Canonical-name -> value map (temperature, top_p,
                 max_tokens, thinking, ...). Each provider's translation table
                 drops unsupported keys silently.

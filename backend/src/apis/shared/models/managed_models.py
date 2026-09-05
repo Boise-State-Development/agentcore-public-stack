@@ -25,7 +25,8 @@ def _resolve_supports_caching(supports_caching: Optional[bool], provider: str) -
 
     Args:
         supports_caching: Explicit value from model data (None if not set)
-        provider: The model provider (bedrock, openai, gemini)
+        provider: The model provider (bedrock, openai, gemini, mantle,
+            bedrock-responses)
 
     Returns:
         bool: Whether the model supports caching
@@ -33,33 +34,59 @@ def _resolve_supports_caching(supports_caching: Optional[bool], provider: str) -
     if supports_caching is not None:
         return supports_caching
 
-    # Default behavior: Only Bedrock models support caching by default
-    # Admins can explicitly set this to False for Bedrock models that don't support it
-    return provider.lower() == 'bedrock'
+    # Default behavior: Bedrock Converse models, and the bedrock-runtime
+    # Responses transport (implicit prompt caching is ON by default there —
+    # it is the reason that transport exists). Admins can explicitly set this
+    # to False for models in either family that don't support it.
+    #
+    # Deliberately NOT 'mantle': Mantle hosts open-weight models that mostly
+    # don't cache, and openai.gpt-5.4 there is implicit-only with no write fee.
+    return provider.lower() in ('bedrock', 'bedrock-responses')
+
+
+# The two OpenAI-compatible Bedrock surfaces. Both ride the OpenAI wire
+# protocol with a short-term bearer token; they differ in host, IAM and
+# model-id shape. The `apiMode` / `region` fields are meaningful on both,
+# which is why they are wire-named generically even though the Python
+# attributes still carry the historical `mantle_` prefix.
+_OPENAI_SURFACE_PROVIDERS = ('mantle', 'bedrock-responses')
 
 
 def _resolve_mantle_api_mode(api_mode: Optional[str], provider: str) -> Optional[str]:
-    """Resolve the Bedrock Mantle API surface for a model.
+    """Resolve the OpenAI-compatible API surface for a model.
 
-    Only meaningful for ``provider == 'mantle'`` — it selects Chat Completions
-    vs the Responses API, a per-model fact Mantle exposes no API to discover.
-    Defaults to ``'chat'`` for Mantle models when unset; ``None`` for every
-    other provider (the field is inert there).
+    On ``provider == 'mantle'`` this selects Chat Completions vs the Responses
+    API — a per-model fact Mantle exposes no API to discover. Defaults to
+    ``'chat'`` when unset.
+
+    On ``provider == 'bedrock-responses'`` the answer is fixed: that transport
+    exists precisely because GPT-5.6 serves prompt caching only over the
+    Responses API, so an admin cannot select Chat Completions there. Anything
+    stored is normalized to ``'responses'`` rather than honored — a model
+    silently downgraded to Chat Completions would lose caching, which is the
+    whole point of the transport, and would fail quietly rather than loudly.
+
+    ``None`` for every other provider (the field is inert there).
     """
-    if provider.lower() != 'mantle':
+    normalized_provider = provider.lower()
+    if normalized_provider == 'bedrock-responses':
+        return 'responses'
+    if normalized_provider != 'mantle':
         return None
     mode = (api_mode or '').lower()
     return mode if mode in ('chat', 'responses') else 'chat'
 
 
 def _resolve_mantle_region(region: Optional[str], provider: str) -> Optional[str]:
-    """Resolve the Bedrock Mantle region override for a model.
+    """Resolve the region override for an OpenAI-compatible Bedrock surface.
 
-    Only meaningful for ``provider == 'mantle'`` — pins inference to the region
-    hosting the model, independent of the app's region. ``None`` (fall back to
-    the app's region at agent-build time) when unset or for other providers.
+    Meaningful on both ``'mantle'`` and ``'bedrock-responses'`` — pins
+    inference to a specific region independent of the app's region, and drives
+    both the endpoint host and the region the bearer token is signed for.
+    ``None`` (fall back to the app's region at agent-build time) when unset or
+    for other providers.
     """
-    if provider.lower() != 'mantle':
+    if provider.lower() not in _OPENAI_SURFACE_PROVIDERS:
         return None
     return region or None
 

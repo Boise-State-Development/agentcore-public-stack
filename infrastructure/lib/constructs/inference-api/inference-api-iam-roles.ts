@@ -79,6 +79,16 @@ export function createRuntimeExecutionRole(
   // resource, already covered below. Without this action a flipped native
   // flag AccessDenies and caches the model into the no-count skip list for
   // the process lifetime.
+  //
+  // ⚠️ The account-scoped resource below is LOAD-BEARING for two things
+  // beyond the inference profile, so do not narrow it to
+  // `inference-profile/*` without re-checking:
+  //   - OpenAI models on the `bedrock-runtime` OpenAI-compatible endpoint
+  //     (provider="bedrock-responses") additionally require
+  //     `bedrock:InvokeModel` on the account's DEFAULT PROJECT,
+  //     `arn:aws:bedrock:<region>:<account>:project/default`, which the
+  //     `:*` suffix already matches. There is no separate statement for it.
+  //   - CountTokens on the inference-profile ARN.
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'BedrockModelInvocation',
     effect: iam.Effect.ALLOW,

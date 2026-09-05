@@ -485,6 +485,13 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   //     across regions, so foundation-model must be granted on ALL regions
   //     (`bedrock:*::`), and the inference-profile resource itself is the
   //     account-level ARN in this region.
+  //
+  // ⚠️ The account-scoped resource is also what authorizes the
+  // `bedrock-runtime` OpenAI-compatible endpoint (provider="bedrock-responses",
+  // reached from api-converse), which additionally requires
+  // `bedrock:InvokeModel` on the account's DEFAULT PROJECT —
+  // `arn:aws:bedrock:<region>:<account>:project/default`, already matched by
+  // the `:*` suffix. Do not narrow this to `inference-profile/*`.
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
       sid: 'BedrockInvokeModel',
