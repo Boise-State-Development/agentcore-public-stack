@@ -73,6 +73,7 @@ DYNAMODB_TABLES: list[dict[str, Any]] = [
     {"logical": "system-cost-rollup",   "ssm": "/cost-tracking/system-cost-rollup-table-name"},
     {"logical": "managed-models",       "ssm": "/admin/managed-models-table-name"},
     {"logical": "user-menu-links",      "ssm": "/admin/user-menu-links-table-name"},
+    {"logical": "announcements",        "ssm": "/admin/announcements-table-name",       "optional": True},
     {"logical": "user-settings",        "ssm": "/settings/user-settings-table-name"},
     {"logical": "user-file-uploads",    "ssm": "/user-file-uploads/table-name"},
     {"logical": "shared-conversations", "ssm": "/shares/shared-conversations-table-name"},
