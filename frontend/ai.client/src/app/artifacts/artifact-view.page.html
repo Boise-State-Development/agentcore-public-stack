@@ -1,0 +1,187 @@
+<div class="flex h-full min-h-0 flex-col bg-white dark:bg-gray-900">
+  @if (isLoading()) {
+    <div class="flex flex-1 items-center justify-center py-20">
+      <div class="text-center">
+        <div
+          class="mx-auto size-8 animate-spin rounded-full border-2 border-gray-300 border-t-primary-600 dark:border-gray-600 dark:border-t-primary-400"
+        ></div>
+        <p class="mt-3 text-sm/6 text-gray-500 dark:text-gray-400">Loading artifact…</p>
+      </div>
+    </div>
+  } @else if (notFound() || loadFailed()) {
+    <div class="flex flex-1 items-center justify-center py-20">
+      <div class="max-w-sm text-center">
+        <ng-icon
+          name="heroExclamationTriangle"
+          class="mx-auto size-12 text-gray-400 dark:text-gray-500"
+          aria-hidden="true"
+        />
+        @if (notFound()) {
+          <h1 class="mt-4 text-lg/7 font-semibold text-gray-900 dark:text-white">
+            Artifact not found
+          </h1>
+          <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
+            It may have been deleted, or it belongs to someone else.
+          </p>
+        } @else {
+          <h1 class="mt-4 text-lg/7 font-semibold text-gray-900 dark:text-white">
+            Something went wrong
+          </h1>
+          <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
+            We couldn't load this artifact. Try again in a moment.
+          </p>
+        }
+        <a
+          routerLink="/artifacts"
+          class="mt-6 inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+        >
+          <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
+          Back to artifacts
+        </a>
+      </div>
+    </div>
+  } @else if (artifact(); as a) {
+    <header
+      class="flex items-center gap-2 border-b border-gray-200 px-3 py-3 sm:px-4 dark:border-gray-700"
+    >
+      <!-- Labelled, not an icon: this route runs on minimal chrome, so
+           there is no sidenav and this is the only way back. -->
+      <a
+        routerLink="/artifacts"
+        class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl px-2 py-1 text-sm/6 font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+      >
+        <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
+        Artifacts
+      </a>
+
+      <div class="min-w-0 flex-1">
+        <h1 class="truncate text-sm/6 font-semibold text-gray-900 dark:text-gray-100">
+          {{ a.title || 'Untitled artifact' }}
+        </h1>
+        <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+          Version {{ a.version }}
+          @if (a.updatedAt) {
+            · Updated {{ a.updatedAt | date: 'mediumDate' }}
+          }
+        </p>
+      </div>
+
+      <div
+        role="group"
+        aria-label="Artifact view mode"
+        class="flex shrink-0 items-center gap-0.5 rounded-2xl border border-gray-200 p-0.5 dark:border-gray-700"
+      >
+        <button
+          type="button"
+          class="flex size-7 items-center justify-center rounded-xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible"
+          [class]="
+            view() === 'preview'
+              ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
+              : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100'
+          "
+          [attr.aria-pressed]="view() === 'preview'"
+          aria-label="Preview"
+          [appTooltip]="'Preview'"
+          appTooltipPosition="bottom"
+          (click)="setView('preview')"
+        >
+          <ng-icon name="heroEye" class="text-base" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="flex size-7 items-center justify-center rounded-xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible"
+          [class]="
+            view() === 'code'
+              ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
+              : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100'
+          "
+          [attr.aria-pressed]="view() === 'code'"
+          aria-label="View code"
+          [appTooltip]="'View code'"
+          appTooltipPosition="bottom"
+          (click)="setView('code')"
+        >
+          <ng-icon name="heroCodeBracket" class="text-base" aria-hidden="true" />
+        </button>
+      </div>
+
+      @if (view() === 'code') {
+        <button
+          type="button"
+          class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+          [attr.aria-label]="copied() ? 'Copied' : 'Copy code'"
+          [appTooltip]="copied() ? 'Copied' : 'Copy code'"
+          appTooltipPosition="bottom"
+          [disabled]="!source()"
+          (click)="copy()"
+        >
+          <ng-icon
+            [name]="copied() ? 'heroCheck' : 'heroClipboard'"
+            class="text-lg"
+            [class.text-state-success-600]="copied()"
+            aria-hidden="true"
+          />
+        </button>
+      }
+
+      @if (a.sessionId) {
+        <a
+          [routerLink]="['/s', a.sessionId]"
+          [appTooltip]="'Open the conversation'"
+          appTooltipPosition="bottom"
+          class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+        >
+          <ng-icon name="heroChatBubbleLeftRight" class="text-lg" aria-hidden="true" />
+          <span class="sr-only">Open the conversation for this artifact</span>
+        </a>
+      }
+
+      <!-- Secondary by design. A blocked pop-up here costs nothing — the
+           artifact is already rendered below — so there is no error path. -->
+      <button
+        type="button"
+        class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+        [appTooltip]="'Open in a new tab'"
+        appTooltipPosition="bottom"
+        [disabled]="!safeUrl()"
+        (click)="openInNewTab()"
+      >
+        <ng-icon name="heroArrowTopRightOnSquare" class="text-lg" aria-hidden="true" />
+        <span class="sr-only">Open this artifact in a new tab</span>
+      </button>
+
+      <button
+        type="button"
+        class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+        [attr.aria-label]="downloading() ? 'Downloading artifact…' : 'Download artifact'"
+        [appTooltip]="'Download'"
+        appTooltipPosition="bottom"
+        [attr.aria-busy]="downloading()"
+        [disabled]="downloading() || !safeUrl()"
+        (click)="download()"
+      >
+        <ng-icon
+          [name]="downloading() ? 'heroArrowPath' : 'heroArrowDownTray'"
+          class="text-lg"
+          [class.animate-spin]="downloading()"
+          aria-hidden="true"
+        />
+      </button>
+    </header>
+
+    <div class="relative flex min-h-0 flex-1 flex-col">
+      <app-artifact-viewer
+        [safeUrl]="safeUrl()"
+        [title]="a.title"
+        [view]="view()"
+        [source]="source()"
+        [error]="renderError()"
+        [sourceError]="sourceError()"
+        [previewReady]="previewReady()"
+        (retry)="retry()"
+        (retrySource)="retrySource()"
+        (iframeLoad)="onIframeLoad()"
+      />
+    </div>
+  }
+</div>

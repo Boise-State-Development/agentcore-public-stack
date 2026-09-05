@@ -6,18 +6,18 @@ import {
   signal,
 } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
-  heroArrowTopRightOnSquare,
   heroBars3,
   heroChatBubbleLeftRight,
   heroChevronDown,
   heroCodeBracket,
   heroDocument,
   heroDocumentText,
+  heroEye,
   heroMagnifyingGlass,
   heroPencilSquare,
   heroPhoto,
@@ -131,13 +131,13 @@ const DEFAULT_TYPE_STYLE: TypeStyle = {
   changeDetection: ChangeDetectionStrategy.OnPush,
   viewProviders: [
     provideIcons({
-      heroArrowTopRightOnSquare,
-      heroBars3,
+          heroBars3,
       heroChatBubbleLeftRight,
       heroChevronDown,
       heroCodeBracket,
       heroDocument,
       heroDocumentText,
+      heroEye,
       heroMagnifyingGlass,
       heroPencilSquare,
       heroPhoto,
@@ -151,6 +151,7 @@ export class ArtifactLibraryPage {
   private readonly artifacts = inject(ArtifactHttpService);
   private readonly localSettings = inject(LocalSettingsService);
   private readonly toast = inject(ToastService);
+  private readonly router = inject(Router);
   private readonly dialog = inject(Dialog);
 
   protected readonly items = signal<LibraryArtifact[]>([]);
@@ -158,8 +159,6 @@ export class ArtifactLibraryPage {
   protected readonly error = signal<string | null>(null);
   protected readonly search = signal('');
   protected readonly typeFilter = signal<string>('all');
-  /** Artifact id whose render URL is being minted, so its button can wait. */
-  protected readonly opening = signal<string | null>(null);
   /** Artifact id currently being renamed or deleted, so its row can wait. */
   protected readonly busy = signal<string | null>(null);
 
@@ -247,65 +246,23 @@ export class ArtifactLibraryPage {
   }
 
   /**
-   * Open the rendered artifact in a new tab.
+   * Open an artifact in the in-app viewer.
    *
-   * The tab is opened *before* the await, then pointed at the minted URL.
-   * Opening it afterwards would be a popup blocked by every browser,
-   * because by then the click is no longer the active user gesture.
+   * This used to mint a render token and hand it to `window.open`, which
+   * made viewing your own artifact contingent on a pop-up — the one thing
+   * a browser is entitled to refuse. Anyone with a blocker got a toast
+   * instead of their document, and embedded webviews (the Claude Code
+   * browser pane among them) refuse `window.open` unconditionally, with
+   * or without a feature string, so for them the library was decorative.
    *
-   * Minting is per-click rather than up front for the whole list: a
-   * render token is a short-lived (~120s) bearer credential in a URL, so
-   * pre-minting one per row would both expire before use and mean a
-   * round trip per artifact just to draw the page.
-   *
-   * The feature string must NOT contain `noopener` (nor `noreferrer`,
-   * which implies it). `window.open()` returns **null** whenever
-   * `noopener` is set — that is the specified behaviour, not a failure:
-   * severing the opener relationship means there is no handle to hand
-   * back. Passing it here opened a stray blank tab, made the null check
-   * below read as a blocked pop-up, and reported "Pop-up blocked" on
-   * every single click. We need the handle, so the opener is severed
-   * afterwards by assignment instead, which is the pre-`rel=noopener`
-   * mitigation and equally durable across the navigation.
+   * Navigation cannot be blocked, so opening is now a route change.
+   * `/artifacts/:id` mints the token itself and renders through the same
+   * `ArtifactViewerComponent` as the docked panel. The new-tab affordance
+   * moved into that page, where a refusal is harmless because the
+   * artifact is already on screen beside it.
    */
-  protected async open(item: LibraryArtifact): Promise<void> {
-    const tab = window.open('', '_blank');
-    if (!tab) {
-      this.toast.error(
-        'Pop-up blocked',
-        'Allow pop-ups for this site to open artifacts in a new tab.',
-      );
-      return;
-    }
-
-    // Reverse-tabnabbing guard, standing in for the `noopener` we cannot
-    // pass. Set while the tab is still same-origin about:blank; it
-    // survives the navigation, so the artifact origin never gets a
-    // handle back to this window.
-    try {
-      tab.opener = null;
-    } catch {
-      // Some embedded webviews make `opener` read-only. Not worth
-      // abandoning the open over — the destination is our own origin.
-    }
-
-    this.opening.set(item.artifactId);
-    try {
-      const token = await this.artifacts.mintRenderToken(
-        item.artifactId,
-        item.version,
-        item.sessionId,
-      );
-      tab.location.href = token.url;
-    } catch {
-      tab.close();
-      this.toast.error(
-        'Could not open artifact',
-        'The preview link could not be created. Try again in a moment.',
-      );
-    } finally {
-      this.opening.set(null);
-    }
+  protected open(item: LibraryArtifact): void {
+    void this.router.navigate(['/artifacts', item.artifactId]);
   }
 
   /**

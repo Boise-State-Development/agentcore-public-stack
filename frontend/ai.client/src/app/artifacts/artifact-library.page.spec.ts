@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { signal } from '@angular/core';
 import { Dialog } from '@angular/cdk/dialog';
 import { of } from 'rxjs';
@@ -71,6 +71,7 @@ describe('ArtifactLibraryPage', () => {
         provideRouter([
           { path: '', children: [] },
           { path: 's/:sessionId', children: [] },
+          { path: 'artifacts/:artifactId', children: [] },
         ]),
         { provide: ArtifactHttpService, useValue: mockHttp },
         { provide: LocalSettingsService, useValue: mockSettings },
@@ -109,7 +110,7 @@ describe('ArtifactLibraryPage', () => {
       typeFilter: { set: (v: string) => void };
       styleFor: (t: string) => { label: string };
       setViewMode: (m: ViewMode) => void;
-      open: (item: LibraryArtifact) => Promise<void>;
+      open: (item: LibraryArtifact) => void;
       load: () => Promise<void>;
       rename: (item: LibraryArtifact) => Promise<void>;
       confirmDelete: (item: LibraryArtifact) => Promise<void>;
@@ -208,108 +209,41 @@ describe('ArtifactLibraryPage', () => {
 
   describe('open()', () => {
     /**
-     * Stands in for a real `window.open`, including the rule that bit us:
-     * per spec it returns **null** when `noopener` (or `noreferrer`, which
-     * implies it) is set, because severing the opener leaves no handle to
-     * return. A mock that hands back a tab regardless of the feature
-     * string is how the bug shipped — it agreed with the broken code
-     * instead of with the browser.
+     * The library used to open artifacts with `window.open`, which made
+     * viewing your own document contingent on a pop-up — refusable by any
+     * blocker, and refused unconditionally by embedded webviews. Opening
+     * is now in-app navigation, which nothing can block. These tests pin
+     * that down so nobody reintroduces the pop-up dependency.
      */
-    function spyOnWindowOpen() {
-      const tab = { location: { href: '' }, opener: {} as unknown, close: vi.fn() };
-      const spy = vi
-        .spyOn(window, 'open')
-        .mockImplementation((_url?: string | URL, _target?: string, features?: string) =>
-          /noopener|noreferrer/.test(features ?? '') ? null : (tab as unknown as Window),
-        );
-      return { tab, spy };
-    }
-
-    it('does not pass noopener, which would make window.open return null', async () => {
-      // Regression: 'noopener,noreferrer' reported "Pop-up blocked" on
-      // every click and left a stray about:blank tab behind.
-      const { tab, spy } = spyOnWindowOpen();
+    it('navigates to the in-app viewer instead of opening a window', async () => {
+      const openSpy = vi.spyOn(window, 'open');
+      const navigate = vi
+        .spyOn(TestBed.inject(Router), 'navigate')
+        .mockResolvedValue(true);
 
       const c = api(await createComponent());
-      await c.open(stubArtifact());
+      c.open(stubArtifact({ artifactId: 'a1' }));
 
-      const features = spy.mock.calls[0]?.[2] ?? '';
-      expect(features).not.toMatch(/noopener|noreferrer/);
-      expect(mockToast.error).not.toHaveBeenCalled();
-      expect(tab.location.href).toBe('https://artifacts.example/x?t=tok');
+      expect(navigate).toHaveBeenCalledWith(['/artifacts', 'a1']);
+      expect(openSpy).not.toHaveBeenCalled();
     });
 
-    it('severs the opener itself, since it cannot ask the browser to', async () => {
-      const { tab } = spyOnWindowOpen();
-
+    it('does not mint a render token — the viewer owns that', async () => {
+      vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
       const c = api(await createComponent());
-      await c.open(stubArtifact());
-
-      // Reverse-tabnabbing guard standing in for the unusable noopener.
-      expect(tab.opener).toBeNull();
-    });
-
-    it('still opens when the webview makes opener read-only', async () => {
-      const tab = { location: { href: '' }, close: vi.fn() };
-      Object.defineProperty(tab, 'opener', {
-        get: () => null,
-        set: () => {
-          throw new TypeError('read only');
-        },
-      });
-      vi.spyOn(window, 'open').mockImplementation(() => tab as unknown as Window);
-
-      const c = api(await createComponent());
-      await c.open(stubArtifact());
-
-      expect(tab.location.href).toBe('https://artifacts.example/x?t=tok');
-      expect(mockToast.error).not.toHaveBeenCalled();
-    });
-
-    it('opens the tab before awaiting the mint, then points it at the URL', async () => {
-      // The ordering is the whole contract: a window.open() after the await
-      // is no longer tied to the click gesture and every browser blocks it.
-      const { tab, spy: openSpy } = spyOnWindowOpen();
-
-      let mintStarted = false;
-      mockHttp.mintRenderToken.mockImplementation(async () => {
-        mintStarted = true;
-        expect(openSpy).toHaveBeenCalled();
-        return { url: 'https://artifacts.example/a1', expiresAt: '' };
-      });
-
-      const c = api(await createComponent());
-      await c.open(stubArtifact({ artifactId: 'a1', version: 3, sessionId: 's9' }));
-
-      expect(mintStarted).toBe(true);
-      expect(mockHttp.mintRenderToken).toHaveBeenCalledWith('a1', 3, 's9');
-      expect(tab.location.href).toBe('https://artifacts.example/a1');
-      expect(tab.close).not.toHaveBeenCalled();
-    });
-
-    it('closes the blank tab and reports the failure when minting fails', async () => {
-      const { tab } = spyOnWindowOpen();
-      mockHttp.mintRenderToken.mockRejectedValue(new Error('500'));
-
-      const c = api(await createComponent());
-      await c.open(stubArtifact());
-
-      // Leaving an about:blank tab open would look like a broken app.
-      expect(tab.close).toHaveBeenCalled();
-      expect(mockToast.error).toHaveBeenCalled();
-    });
-
-    it('reports a blocked pop-up without minting a token', async () => {
-      vi.spyOn(window, 'open').mockImplementation(() => null);
-
-      const c = api(await createComponent());
-      await c.open(stubArtifact());
+      c.open(stubArtifact());
 
       expect(mockHttp.mintRenderToken).not.toHaveBeenCalled();
-      expect(mockToast.error).toHaveBeenCalledWith(
-        'Pop-up blocked',
-        expect.stringContaining('Allow pop-ups'),
-      );
+    });
+
+    it('cannot fail in a way the user has to be told about', async () => {
+      // A route change has no blocked/failed path to report, so the old
+      // "Pop-up blocked" and "Could not open artifact" toasts are gone.
+      vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+      const c = api(await createComponent());
+      c.open(stubArtifact());
+
+      expect(mockToast.error).not.toHaveBeenCalled();
     });
   });
 

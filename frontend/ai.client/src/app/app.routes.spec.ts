@@ -94,12 +94,23 @@ describe('app routes — shell chrome', () => {
     expect(route!.data?.['chrome']).toBe(MINIMAL_CHROME);
   });
 
+  it('asks for a minimal shell on the artifact viewer route', () => {
+    const route = routes.find(r => r.path === 'artifacts/:artifactId');
+    expect(route).toBeDefined();
+    // Not styling. The full shell's content box has no definite height,
+    // so a viewer laid out to fill it collapses to a ~150px iframe. The
+    // minimal branch is the only one that hands a route real height.
+    expect(route!.data?.['chrome']).toBe(MINIMAL_CHROME);
+  });
+
   it('leaves every other route on the full shell', () => {
     // Opt-in by design: the flag strips app navigation, so it should
-    // never spread by accident.
+    // never spread by accident. Both entries here are artifact viewers,
+    // which is the shape that needs it — one thing, filling the shell,
+    // carrying its own way back.
     const minimal = routes
       .filter(r => r.data?.['chrome'] === MINIMAL_CHROME)
       .map(r => r.path);
-    expect(minimal).toEqual(['shared-artifact/:shareId']);
+    expect(minimal).toEqual(['shared-artifact/:shareId', 'artifacts/:artifactId']);
   });
 });
