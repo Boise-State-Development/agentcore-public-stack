@@ -1,6 +1,6 @@
 # Plan: prompt caching for OpenAI GPT-5.6 on Bedrock
 
-**Status:** Proposal (not started)
+**Status:** In progress — PR-1 shipped (#945), PR-2..PR-5 outstanding
 **Author:** (drafted with Claude)
 **Date:** 2026-09-04
 **Related:** `agents/main_agent/core/model_config.py`, `agents/main_agent/core/agent_factory.py`,
@@ -89,7 +89,7 @@ Does **not** give us (verified by grepping the installed package — zero hits):
 
 ## Work plan
 
-### PR-1 — Normalize OpenAI usage semantics (correctness; blocks the rest)
+### PR-1 — Normalize OpenAI usage semantics (correctness; blocks the rest) ✅ SHIPPED (#945)
 
 The bug that bites the moment any GPT-5 turn runs, caching or not:
 
@@ -102,7 +102,7 @@ is billed at the full input rate *and* the cache-read rate. The same assumption
 is baked into the context-attribution sum at `stream_coordinator.py:725`.
 
 - Normalize on the OpenAI-family path before usage reaches the calculator:
-  `inputTokens -= cacheReadInputTokens`, clamped at 0.
+  `inputTokens -= (cacheReadInputTokens + cacheWriteInputTokens)`, clamped at 0.
 - Map `cache_write_tokens` → `cacheWriteInputTokens` (Strands drops it; this is
   the one field that makes 5.6's 1.25× premium visible at all). Upstream a patch
   to `strands-agents` in parallel — we shouldn't carry this forever.
@@ -112,6 +112,62 @@ is baked into the context-attribution sum at `stream_coordinator.py:725`.
 **Tests:** a usage-mapping unit test asserting the disjoint invariant per provider,
 and a calculator test proving a fully-cached GPT-5.6 call costs
 `cached × readRate`, not `cached × (inputRate + readRate)`.
+
+#### ⚠️ Correction: subtract the write bucket too
+
+The first draft of this section said `inputTokens -= cacheReadInputTokens`. That
+was written when `cacheWriteInputTokens` was always 0 — Strands drops the field —
+so only reads could double-count. The moment the bullet above maps
+`cache_write_tokens`, the *same* double-count reappears for writes, and worse: at
+`inputRate + 1.25×inputRate` rather than `inputRate + 0.1×inputRate`.
+
+AWS's GPT-5.6 prompt-caching guidance states the identity outright:
+
+```
+input_tokens = cached_tokens + cache_write_tokens + non-cached remainder
+```
+
+Both cache buckets are *inside* the inclusive total, so restoring disjointness
+means subtracting both. #945 ships it that way; the bullet above is corrected to
+match.
+
+#### What actually shipped
+
+`apis/shared/models/usage_normalization.py`:
+
+- `normalize_usage(usage, provider)` — Bedrock passes through untouched; OpenAI
+  gets both cache buckets subtracted out of `inputTokens`, clamped at 0.
+- `openai_cache_write_tokens(usage_obj)` — reads
+  `input_tokens_details.cache_write_tokens` (also checks the top level, where some
+  OpenAI-compatible gateways hoist it).
+- `usage_normalized(model_cls)` — memoized subclass applying both while the model
+  formats its `metadata` chunk.
+
+The seam is the **model class**, not any downstream usage reader: Strands destroys
+`cache_write_tokens` inside its chunk formatter, so by the time usage reaches
+`stream_processor._extract_usage_data` the field is unrecoverable. Installed at the
+two OpenAI-family *construction* sites — `build_mantle_model` and
+`AgentFactory._create_openai_model`. The two SDK classes disagree on the method
+name (`OpenAIResponsesModel._format_chunk` is private,
+`OpenAIModel.format_chunk` is public), which the shim resolves and pins with a
+contract test.
+
+⚠️ **The convention follows the model family, not the adapter.** GPT-5.6 routed
+over *Converse* on `bedrock-runtime` reports **disjoint** buckets — the Bedrock
+convention — measured by a third party on
+[strands-agents/harness-sdk#3546](https://github.com/strands-agents/harness-sdk/issues/3546).
+Keying the shim off the OpenAI model class is correct for the Responses transport
+PR-2 builds, but a Converse-routed OpenAI model must **not** be wrapped or its
+input will be under-counted. Anything that adds an OpenAI model on the Converse
+path has to opt out.
+
+**Upstream:** [harness-sdk#4193](https://github.com/strands-agents/harness-sdk/pull/4193)
+maps the dropped `cache_write_tokens`. Note the prior art before proposing anything
+broader: #3546 is an open umbrella bug for this exact convention split, and the
+84-file fix for it (#3561) was closed unmerged — maintainers want small,
+independently-reviewable PRs. A maintainer on that thread also notes AgentCore
+GenAI Observability currently double-counts these tokens in its own cost display
+and suggests pinning `strands-agents==1.53.0`; we are on 1.51.0.
 
 ### PR-2 — `bedrock-runtime` Responses transport
 
@@ -176,7 +232,7 @@ Only worth building for 5.6, where the 1.25× write premium makes placement matt
   OpenAI's 30-minute TTL, so `classify_cache_status` will call
   `miss_ttl_expired` on entries that are still live. Make the TTL model-derived
   rather than a module constant.
-- Once PR-1 lands `cacheWriteInputTokens`, `partial_miss` / `miss_avoidable` /
+- Now that PR-1 has landed `cacheWriteInputTokens`, `partial_miss` / `miss_avoidable` /
   `wastedUsd` start working for GPT-5.6 as they do for Claude. Until it lands,
   every call classifies as `hit` or `uncached` and `wastedUsd` is structurally
   $0 — a silent blind spot, which is exactly the failure mode that let the
