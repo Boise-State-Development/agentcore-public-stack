@@ -257,15 +257,36 @@ export class ArtifactLibraryPage {
    * render token is a short-lived (~120s) bearer credential in a URL, so
    * pre-minting one per row would both expire before use and mean a
    * round trip per artifact just to draw the page.
+   *
+   * The feature string must NOT contain `noopener` (nor `noreferrer`,
+   * which implies it). `window.open()` returns **null** whenever
+   * `noopener` is set — that is the specified behaviour, not a failure:
+   * severing the opener relationship means there is no handle to hand
+   * back. Passing it here opened a stray blank tab, made the null check
+   * below read as a blocked pop-up, and reported "Pop-up blocked" on
+   * every single click. We need the handle, so the opener is severed
+   * afterwards by assignment instead, which is the pre-`rel=noopener`
+   * mitigation and equally durable across the navigation.
    */
   protected async open(item: LibraryArtifact): Promise<void> {
-    const tab = window.open('', '_blank', 'noopener,noreferrer');
+    const tab = window.open('', '_blank');
     if (!tab) {
       this.toast.error(
         'Pop-up blocked',
         'Allow pop-ups for this site to open artifacts in a new tab.',
       );
       return;
+    }
+
+    // Reverse-tabnabbing guard, standing in for the `noopener` we cannot
+    // pass. Set while the tab is still same-origin about:blank; it
+    // survives the navigation, so the artifact origin never gets a
+    // handle back to this window.
+    try {
+      tab.opener = null;
+    } catch {
+      // Some embedded webviews make `opener` read-only. Not worth
+      // abandoning the open over — the destination is our own origin.
     }
 
     this.opening.set(item.artifactId);
