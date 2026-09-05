@@ -19,6 +19,7 @@ import {
   heroCog6Tooth,
   heroArrowTopRightOnSquare,
   heroDocumentText,
+  heroMegaphone,
 } from '@ng-icons/heroicons/outline';
 import { ThemeService, ThemePreference } from './theme-toggle/theme.service';
 import { VERSION } from '../../../../version';
@@ -28,6 +29,8 @@ import {
   UserMenuLinkModalComponent,
   UserMenuLinkModalData,
 } from './user-menu-link-modal/user-menu-link-modal.component';
+import { WhatsNewPanelComponent } from './whats-new-panel/whats-new-panel.component';
+import { AnnouncementsService } from '../../../services/announcements/announcements.service';
 
 export interface User {
   firstName: string;
@@ -56,6 +59,7 @@ export interface User {
       heroCog6Tooth,
       heroArrowTopRightOnSquare,
       heroDocumentText,
+      heroMegaphone,
     })
   ],
   template: `
@@ -68,6 +72,16 @@ export interface User {
         aria-label="User menu"
       >
         <span class="sr-only">Open user menu</span>
+
+        <!-- Unread announcements. The count is in the label, not the colour —
+             a coloured dot alone is not an accessible signal. -->
+        @if (unreadCount() > 0) {
+          <span
+            class="absolute left-7 top-1.5 size-2.5 rounded-full bg-primary-600 ring-2 ring-white dark:ring-gray-900"
+            role="status"
+            [attr.aria-label]="unreadLabel()"
+          ></span>
+        }
 
         @if (user().picture) {
           <img
@@ -144,6 +158,31 @@ export interface User {
                 />
                 <span>Settings</span>
               </a>
+            </div>
+
+            <!-- What's New (feature announcements) -->
+            <div class="border-t border-gray-200 py-1 dark:border-gray-700">
+              <button
+                cdkMenuItem
+                type="button"
+                (click)="openWhatsNew()"
+                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden text-left"
+                role="menuitem"
+              >
+                <ng-icon
+                  name="heroMegaphone"
+                  class="size-5 text-gray-400 dark:text-gray-500"
+                />
+                <span class="flex-1 truncate">What's New</span>
+                @if (unreadCount() > 0) {
+                  <span
+                    class="rounded-full bg-primary-600 px-1.5 py-0.5 text-xs/4 font-medium text-white"
+                    [attr.aria-label]="unreadLabel()"
+                  >
+                    {{ unreadCount() }}
+                  </span>
+                }
+              </button>
             </div>
 
             <!-- Admin-managed custom links -->
@@ -245,7 +284,17 @@ export interface User {
 export class UserDropdownComponent {
   private readonly themeService = inject(ThemeService);
   private readonly userMenuLinksService = inject(UserMenuLinksService);
+  private readonly announcements = inject(AnnouncementsService);
   private readonly dialog = inject(Dialog);
+
+  // Unread announcements. The service loads its feed on first read, which is
+  // here — the topnav only renders this dropdown once the session has
+  // resolved, so the request goes out post-auth with the user's roles known.
+  protected readonly unreadCount = this.announcements.unreadCount;
+  protected readonly unreadLabel = computed(() => {
+    const count = this.unreadCount();
+    return `${count} unread ${count === 1 ? 'announcement' : 'announcements'}`;
+  });
 
   // Inputs
   user = input.required<User>();
@@ -255,6 +304,13 @@ export class UserDropdownComponent {
   protected readonly customLinks = computed<UserMenuLink[]>(
     () => this.userMenuLinksService.enabledLinksResource.value()?.links ?? [],
   );
+
+  protected openWhatsNew(): void {
+    this.dialog.open<void>(WhatsNewPanelComponent, {
+      hasBackdrop: false, // the dialog component owns its own backdrop
+      panelClass: 'whats-new-panel',
+    });
+  }
 
   protected openLinkModal(link: UserMenuLink): void {
     this.dialog.open<void, UserMenuLinkModalData>(UserMenuLinkModalComponent, {
