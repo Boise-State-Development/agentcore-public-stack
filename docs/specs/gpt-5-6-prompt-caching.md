@@ -487,6 +487,105 @@ write), and 26.40 is *derived* from the GovCloud 1:6 input:output ratio rather
 than published. The **ratios** above are real; the absolute dollars wait on
 PR-3.
 
+## ⚠️ `global.*` inference profiles are blocked **in dev** by an organization SCP
+
+Discovered 2026-09-05 while adding GPT-5.6 Luna. Adding it as
+`global.openai.gpt-5.6-luna` fails at the first turn:
+
+```
+401 ... not authorized to perform: bedrock:InvokeModel on resource:
+arn:aws:bedrock:::foundation-model/openai.gpt-5.6-luna
+with an explicit deny in a service control policy:
+arn:aws:organizations::977099011063:policy/o-09d6ih8vwl/service_control_policy/p-r61tynkc
+```
+
+Editing that same row to `us.openai.gpt-5.6-luna` — same model, same account,
+same region, **only the profile prefix changed** — succeeds. That isolates the
+prefix as the cause: the deny is on the **region-less foundation-model ARN**
+that a Global CRIS profile resolves to, not on the model.
+
+### Scope: dev only — **prod is not affected**
+
+Confirmed by Phil: `global.*` is **not** blocked in prod, which is the account
+that matters for the cost model. The Decision section's preference for
+`bedrock-runtime` on Global CRIS pricing ($4.00 vs $4.40 input for Sol
+short-context) therefore **stands** — the ~9% discount is available where the
+spend is.
+
+What this actually costs us is a **dev/prod model-id divergence**: a GPT-5.6
+row must be `us.*` in dev and can be `global.*` in prod. Anything that copies a
+model row between environments — a seed script, a curated catalog entry, a
+runbook — has to carry the prefix per environment rather than assume one id
+works in both.
+
+⚠️ **Method note for whoever hits this next.** `aws iam
+simulate-principal-policy` does **not** evaluate SCPs, only identity policies.
+Every simulation of the runtime role came back `allowed` while the real call
+was denied. An SCP deny is only observable by actually invoking, which is also
+why this surfaced at the first turn rather than in any earlier check.
+
+Note the direction is the **opposite** of the Claude-family rule of thumb,
+where `us.*` costs ~10% *more* than `global.*`.
+
+## ⚠️ Mantle's `openai.gpt-5.4` caches, and was priced at $0.00
+
+Measured live 2026-09-05, two turns:
+
+| turn | status | input | cacheRead | cost |
+|---|---|---:|---:|---:|
+| 1 | `uncached` | 3,681 | 0 | $0.01021 |
+| 2 | `hit` | 60 | **3,642** | $0.000264 |
+
+Turn 2's cost reproduces exactly from input + output alone, so the 3,642 cached
+tokens contributed nothing — a ~5.5x under-report on that turn, on a model in
+daily use. The Price List confirms the model has a cache-read SKU ($0.33
+GovCloud) and **no cache-write SKU**, exactly as PR-3 predicted.
+
+Root cause was the admin form, not the data: the caching block was gated to
+`bedrock` / `bedrock-responses`, so for a Mantle model the checkbox and the
+cache-rate fields were never rendered and the row could only carry the
+provider default of `false`. Fixed in #963 by adding
+`CACHING_CAPABLE_PROVIDERS` (wider than the defaults list — Mantle stays off by
+default, it just becomes selectable).
+
+### The dashboard was wrong in BOTH directions
+
+`Cost Analytics` computes `savings = cacheRead x (inputPrice - cacheReadPrice)`
+per message from the pricing snapshot
+(`app_api/sessions/services/metadata.py:257`). With `cacheReadPricePerMtok`
+absent it reads as `0`, so the same missing rate produced two compounding
+errors on `gpt-5.4`:
+
+- **cost understated** — cached tokens priced at $0.00
+- **savings overstated** — credited as a *100%* saving rather than 90%
+
+So the model looked cheaper than it was *and* more efficient than it was, and
+it carried ~5x the traffic of any GPT-5.6 row ($0.38 vs $0.07 in the window).
+The GPT-5.6 rows were unaffected: they carry both rates, so their savings were
+correct from the start.
+
+### ✅ Fixed 2026-09-05 (dev)
+
+Set through the admin UI once #963 deployed: `supportsCaching: true`,
+`cacheReadPricePerMillionTokens: 0.275` (0.1x our catalog's $2.75 input,
+matching the family ratio), `cacheWritePricePerMillionTokens: 0` (the Price
+List has no cache-write SKU for this model).
+
+Re-measured on an identical turn shape — 60 input, 3,642 cacheRead, 6 output:
+
+| | cost |
+|---|---:|
+| before | $0.000264 |
+| after | **$0.0012655** |
+
+Reproduces exactly as `60x2.75 + 6x16.50 + 3,642x0.275` per MTok, so the
+cached tokens now contribute $0.001002 instead of nothing — 4.8x more accurate
+on that turn.
+
+⚠️ **PROD has not been checked** and very likely has the same shape: its
+`openai.gpt-5.4` row predates all of this, and prod carries real traffic. That
+is the follow-up with actual money attached.
+
 ## Verification
 
 Prove the cost impact rather than assuming it — per the cost-effectiveness tenet:
