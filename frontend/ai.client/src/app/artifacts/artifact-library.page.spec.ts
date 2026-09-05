@@ -449,4 +449,45 @@ describe('ArtifactLibraryPage', () => {
       expect(c.busy()).toBeNull();
     });
   });
+
+  describe('grid card footer', () => {
+    it('keeps both button labels in the DOM when they collapse', async () => {
+      // The footer carries four controls and the card is ~13rem wide at
+      // three columns on a 1080px window, so a container query drops the
+      // "Open" / "Conversation" text below 19rem. It must be dropped to
+      // `sr-only`, never `hidden`: these buttons have no aria-label, so
+      // removing the text would leave them with no accessible name at
+      // exactly the width where they become bare icons.
+      mockSettings.artifactsViewMode.set('grid');
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+      const fixture = await createComponent();
+      const host = fixture.nativeElement as HTMLElement;
+
+      const labels = [...host.querySelectorAll('ul.grid span')].filter((el) =>
+        ['Open', 'Conversation'].includes((el.textContent ?? '').trim()),
+      );
+      expect(labels).toHaveLength(2);
+      for (const label of labels) {
+        expect(label.className).toContain('@max-[19rem]:sr-only');
+        expect(label.className).not.toContain('hidden');
+      }
+    });
+
+    it('gives the collapsing buttons a tooltip to stand in for the text', async () => {
+      mockSettings.artifactsViewMode.set('grid');
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+      const fixture = await createComponent();
+      const host = fixture.nativeElement as HTMLElement;
+
+      const open = [...host.querySelectorAll('ul.grid button')].find((b) =>
+        (b.textContent ?? '').includes('Open'),
+      )!;
+      // TooltipDirective binds no attribute of its own, so assert via the
+      // directive instance the template wired up.
+      const de = fixture.debugElement
+        .queryAll((n) => n.nativeElement === open)
+        .at(0);
+      expect(de?.attributes['appTooltipPosition']).toBe('top');
+    });
+  });
 });
