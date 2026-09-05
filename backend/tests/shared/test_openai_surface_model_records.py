@@ -69,7 +69,23 @@ class TestCachingDefault:
     def test_other_providers_default_off(self, provider):
         assert _resolve_supports_caching(None, provider) is False
 
-    @pytest.mark.parametrize("provider", ["bedrock", "bedrock-responses", "mantle"])
-    def test_explicit_value_always_wins(self, provider):
+    @pytest.mark.parametrize("provider", ["bedrock", "mantle", "openai", "gemini"])
+    def test_explicit_value_wins_where_caching_is_optional(self, provider):
         assert _resolve_supports_caching(False, provider) is False
         assert _resolve_supports_caching(True, provider) is True
+
+    @pytest.mark.parametrize("stored", [None, True, False])
+    def test_bedrock_responses_is_always_caching(self, stored):
+        """Not a setting: the transport caches implicitly, server-side.
+
+        A stored False would be untrue, and its only practical effect is that
+        the cache rates get cleared — pricing cached tokens at $0.00 while the
+        provider bills them in full. On a warm conversation nearly every input
+        token is a cache read, so that is close to total under-reporting.
+        Normalized rather than honored, exactly like `apiMode` on the same
+        transport.
+        """
+        assert _resolve_supports_caching(stored, "bedrock-responses") is True
+
+    def test_forcing_is_case_insensitive(self):
+        assert _resolve_supports_caching(False, "Bedrock-Responses") is True
