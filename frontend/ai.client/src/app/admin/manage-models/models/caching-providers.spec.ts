@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   AVAILABLE_PROVIDERS,
+  CACHING_CAPABLE_PROVIDERS,
   CACHING_DEFAULT_PROVIDERS,
   CACHING_FORCED_PROVIDERS,
   defaultSupportsCaching,
@@ -47,6 +48,30 @@ describe('supportsCaching policy', () => {
         expect(supportsCachingForProvider('bedrock-responses', chosen)).toBe(true);
       },
     );
+  });
+
+  describe('CACHING_CAPABLE_PROVIDERS', () => {
+    it('includes mantle even though it is not a caching default', () => {
+      // Most Mantle models are open-weight and don't cache, so it is rightly
+      // not a default — but openai.gpt-5.x there DOES cache implicitly. Hiding
+      // the caching controls for Mantle left no way to enter a cache-read
+      // rate, so those tokens were priced at $0.00 while the provider billed
+      // them. Measured live on openai.gpt-5.4: a warm turn read 3,642 tokens
+      // from cache and contributed nothing to the recorded cost.
+      expect(CACHING_CAPABLE_PROVIDERS).toContain('mantle');
+      expect(CACHING_DEFAULT_PROVIDERS).not.toContain('mantle');
+    });
+
+    it('is a superset of the providers that default on', () => {
+      for (const p of CACHING_DEFAULT_PROVIDERS) {
+        expect(CACHING_CAPABLE_PROVIDERS).toContain(p);
+      }
+    });
+
+    it('excludes providers with no Bedrock cache accounting', () => {
+      expect(CACHING_CAPABLE_PROVIDERS).not.toContain('openai');
+      expect(CACHING_CAPABLE_PROVIDERS).not.toContain('gemini');
+    });
   });
 
   describe('provider lists', () => {
