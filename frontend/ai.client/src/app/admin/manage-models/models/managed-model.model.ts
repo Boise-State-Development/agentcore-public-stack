@@ -57,6 +57,25 @@ export const CACHING_DEFAULT_PROVIDERS: readonly ModelProvider[] = ['bedrock', '
 export const CACHING_FORCED_PROVIDERS: readonly ModelProvider[] = ['bedrock-responses'];
 
 /**
+ * Providers whose models *can* prompt-cache, and therefore need the caching
+ * controls and cache-rate fields on the admin form.
+ *
+ * Wider than {@link CACHING_DEFAULT_PROVIDERS} on purpose. `mantle` is not a
+ * caching default — most Mantle models are open-weight and don't cache — but
+ * `openai.gpt-5.x` there *does*, implicitly, with a cache-read discount and no
+ * write fee. Excluding Mantle from the form meant an admin had no way to enable
+ * caching or enter a cache-read rate for those models, so their cached tokens
+ * were priced at $0.00 while the provider billed them. Measured live on
+ * `openai.gpt-5.4`: a warm turn read 3,642 tokens from cache and contributed
+ * nothing to the recorded cost.
+ */
+export const CACHING_CAPABLE_PROVIDERS: readonly ModelProvider[] = [
+  'bedrock',
+  'bedrock-responses',
+  'mantle',
+];
+
+/**
  * The caching default for a provider when nothing has been chosen.
  *
  * Mirrors `_resolve_supports_caching` on the backend — kept in step by

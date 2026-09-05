@@ -14,6 +14,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowLeft, heroChevronDown, heroChevronRight } from '@ng-icons/heroicons/outline';
 import {
   AVAILABLE_PROVIDERS,
+  CACHING_CAPABLE_PROVIDERS,
   CACHING_FORCED_PROVIDERS,
   defaultSupportsCaching,
   supportsCachingForProvider,
@@ -284,8 +285,8 @@ export class ModelFormPage implements OnInit {
   );
   readonly providerLabels = PROVIDER_LABELS;
   /** Providers whose models can prompt-cache — drives the caching form block. */
-  readonly supportsCachingControls = computed(
-    () => this.selectedProvider() === 'bedrock' || this.isBedrockResponses(),
+  readonly supportsCachingControls = computed(() =>
+    CACHING_CAPABLE_PROVIDERS.includes(this.selectedProvider()),
   );
   /**
    * Whether caching is a fact rather than a choice for the selected provider.
