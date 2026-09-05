@@ -246,20 +246,28 @@ async def preflight_huggingface_model(hf_id: str, spec) -> None:
     Network problems are *not* treated as failures: the Hub being unreachable
     should not block a submission, so an unavailable check falls through and
     lets the training job be the judge.
+
+    ``follow_redirects`` is required: canonical single-segment repos such as
+    ``bert-base-uncased`` and ``gpt2`` answer with a 307 to their namespaced
+    form. Without it every one of those silently skipped every check below.
     """
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
             response = await client.get(f"https://huggingface.co/api/models/{hf_id}")
     except httpx.HTTPError as e:
         logger.warning(f"HuggingFace pre-flight unavailable for {hf_id}: {e}")
         return
 
-    if response.status_code == 404:
+    # The Hub answers 401 for a repo that does not exist as well as one that is
+    # private or gated — it will not confirm existence to an anonymous caller.
+    # All three are equally unusable here, so they share one message.
+    if response.status_code in (401, 403, 404):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"HuggingFace model '{hf_id}' was not found. Check the id, and "
-                f"note that gated or private models cannot be used."
+                f"HuggingFace model '{hf_id}' could not be read. Check the id — "
+                f"and note that private or gated models cannot be used, since "
+                f"training runs without your Hub credentials."
             ),
         )
     if response.status_code >= 400:

@@ -218,11 +218,38 @@ class TestHuggingFacePreflight:
         )
         await preflight_huggingface_model("google/vit-base-patch16-224", IMAGE_SPEC)
 
-    async def test_reports_a_missing_model(self, monkeypatch):
-        _patch_client(monkeypatch, response=_FakeResponse(404))
+    @pytest.mark.parametrize("status", [401, 403, 404])
+    async def test_reports_a_model_it_cannot_read(self, monkeypatch, status):
+        """The Hub answers 401 for a missing repo, not 404.
+
+        It will not confirm existence to an anonymous caller, so a nonexistent
+        id and a private one are indistinguishable — and equally unusable,
+        since training runs without the user's Hub credentials. Treating 401
+        as "check unavailable" let the job through to fail on SageMaker with
+        an opaque 500 instead of a 400 here.
+        """
+        _patch_client(monkeypatch, response=_FakeResponse(status))
         with pytest.raises(HTTPException) as excinfo:
             await preflight_huggingface_model("nobody/nothing", TEXT_SPEC)
-        assert "was not found" in excinfo.value.detail
+        assert "could not be read" in excinfo.value.detail
+
+    async def test_follows_redirects(self, monkeypatch):
+        """Canonical repos (bert-base-uncased, gpt2) answer 307.
+
+        httpx does not follow redirects by default, so without this every
+        canonical id skipped all the checks below it.
+        """
+        captured = {}
+
+        class _Recording(_FakeClient):
+            def __init__(self, *a, **k):
+                captured.update(k)
+                super().__init__(_FakeResponse(200, {"pipeline_tag": "fill-mask",
+                                                    "siblings": [{"rfilename": "model.safetensors"}]}))
+
+        monkeypatch.setattr(httpx, "AsyncClient", _Recording)
+        await preflight_huggingface_model("bert-base-uncased", TEXT_SPEC)
+        assert captured.get("follow_redirects") is True
 
     async def test_an_unreachable_hub_does_not_block_submission(self, monkeypatch):
         """The Hub being down is our problem, not the researcher's."""
