@@ -11,14 +11,15 @@ describe('FineTuningStateService', () => {
 
   const mockAccess: FineTuningAccessResponse = {
     has_access: true,
-    monthly_quota_hours: 10,
-    current_month_usage_hours: 3,
+    monthly_quota_usd: 10,
+    current_month_usage_usd: 3,
     quota_period: '2026-03',
   };
 
   const mockTrainingJob: JobResponse = {
     job_id: 'j1', user_id: 'u1', email: 'test@example.com', model_id: 'm1',
     model_name: 'Llama', status: 'TRAINING', dataset_s3_key: 'key', output_s3_prefix: null,
+    task_type: 'text-classification',
     instance_type: 'ml.g5.2xlarge', instance_count: 1, hyperparameters: null,
     sagemaker_job_name: null, training_start_time: null, training_end_time: null,
     billable_seconds: null, estimated_cost_usd: null, created_at: '2026-03-01T00:00:00Z',
@@ -106,7 +107,7 @@ describe('FineTuningStateService', () => {
   });
 
   it('should cap quotaUsedPercent at 100', () => {
-    service.access.set({ ...mockAccess, current_month_usage_hours: 15, monthly_quota_hours: 10 });
+    service.access.set({ ...mockAccess, current_month_usage_usd: 15, monthly_quota_usd: 10 });
     expect(service.quotaUsedPercent()).toBe(100);
   });
 

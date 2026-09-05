@@ -1,170 +1,185 @@
 """SageMaker Inference Toolkit handler for Batch Transform.
 
-Implements the four handler functions required by the HuggingFace inference DLC:
-  - model_fn(model_dir):  Load model and tokenizer
-  - input_fn(body, type):  Parse input text
-  - predict_fn(data, model):  Run batched inference with softmax
-  - output_fn(prediction, accept):  Format as CSV with probability columns
+A dispatcher, mirroring ``train.py``.  It implements the four handler
+functions the HuggingFace inference DLC calls, resolves the task type recorded
+in the model artifact, and delegates the modality-specific work to the
+matching ``task_*`` module.
 
-SageMaker Batch Transform:
-  - Extracts model.tar.gz to a directory, finds code/inference.py
-  - Calls model_fn once to load the model
-  - For each input record: input_fn -> predict_fn -> output_fn
+  - model_fn(model_dir):            load model + processor for the task
+  - input_fn(body, content_type):   parse the payload into records
+  - predict_fn(records, model):     batched inference with softmax
+  - output_fn(prediction, accept):  format as CSV with probability columns
+
+The output shape is deliberately identical across every task — an identifier
+column followed by one probability column per class — so a new modality never
+breaks the result viewer.
 """
 
 import json
 import logging
+import os
 
-# Heavy ML dependencies are imported lazily inside functions since they are only
-# available in the SageMaker DLC container.  input_fn, output_fn, and
-# _sanitize_label must remain importable without torch/transformers so they
-# can be unit-tested locally.
+try:  # package context: unit tests and the app-api container
+    from .. import task_types
+    from . import task_image_classification
+    from . import task_image_text_classification
+    from . import task_text_classification
+except ImportError:  # pragma: no cover - flat sourcedir inside the SageMaker DLC
+    import task_types  # type: ignore
+    import task_image_classification  # type: ignore
+    import task_image_text_classification  # type: ignore
+    import task_text_classification  # type: ignore
 
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 64
+#: Written into the model artifact at training time so the handler can tell
+#: which task it is serving without being told by the caller.
+TASK_MARKER_FILENAME = "task_type.json"
 
+TASK_MODULES = {
+    task_types.TEXT_CLASSIFICATION: task_text_classification,
+    task_types.IMAGE_CLASSIFICATION: task_image_classification,
+    task_types.IMAGE_TEXT_CLASSIFICATION: task_image_text_classification,
+}
+
+#: Task type of the artifact currently loaded, remembered at module scope.
+#:
+#: The SageMaker inference toolkit calls the user's ``input_fn`` as
+#: ``input_fn(input_data, content_type)`` — the loaded model is NOT passed to
+#: it, only to ``predict_fn``.  The single-entry-point ``transform_fn`` does
+#: receive the model, but the toolkit forbids defining it alongside
+#: input_fn/predict_fn/output_fn.  So the one place ``input_fn`` can learn
+#: which task it is parsing for is here, written by ``model_fn``, which the
+#: toolkit always calls first and exactly once.
+#:
+#: Without this an image artifact would parse its .zip payload as newline
+#: delimited text and fail on every record.
+_LOADED_TASK_TYPE = None
+
+
+def read_task_type(model_dir):
+    """Read the task type recorded in a model artifact.
+
+    Falls back to the default task for an artifact trained before task types
+    existed — those directories have no marker and are all text classifiers.
+    """
+    marker = os.path.join(model_dir, TASK_MARKER_FILENAME)
+    if not os.path.exists(marker):
+        logger.info(
+            f"No {TASK_MARKER_FILENAME} in artifact; assuming "
+            f"'{task_types.DEFAULT_TASK_TYPE}'"
+        )
+        return task_types.DEFAULT_TASK_TYPE
+
+    with open(marker) as handle:
+        return json.load(handle).get("task_type", task_types.DEFAULT_TASK_TYPE)
+
+
+def resolve_task_module(task_type):
+    """Return the (module, spec) pair serving ``task_type``."""
+    spec = task_types.get_task_spec(task_type)
+    module = TASK_MODULES.get(spec.task_type)
+    if module is None:  # pragma: no cover - registry/module drift
+        raise ValueError(
+            f"Task type '{spec.task_type}' is registered but has no inference module."
+        )
+    return module, spec
+
+
+# =========================================================================
+# SageMaker handler functions
+# =========================================================================
 
 def model_fn(model_dir):
-    """Load model and tokenizer from the model directory.
+    """Load the model for whichever task this artifact was trained for."""
+    global _LOADED_TASK_TYPE
 
-    Returns a tuple of (model, tokenizer, device).
+    task_type = read_task_type(model_dir)
+    module, spec = resolve_task_module(task_type)
+    # Remember the task before loading, so input_fn can dispatch on it.
+    _LOADED_TASK_TYPE = spec.task_type
+
+    loaded = module.model_fn(model_dir)
+    # Carry the task through to input_fn/predict_fn, which SageMaker calls
+    # with only the payload and this object.
+    loaded["task_type"] = spec.task_type
+    loaded["spec"] = spec
+    return loaded
+
+
+def input_fn(request_body, content_type="text/plain", model=None):
+    """Parse the Batch Transform payload into task-appropriate records.
+
+    The toolkit calls this with only ``(input_data, content_type)``, so the
+    task normally comes from :data:`_LOADED_TASK_TYPE`, set by ``model_fn``.
+    ``model`` is accepted as an optional override for direct callers and
+    tests.  Falls back to the default task when nothing has been loaded, which
+    preserves the pre-task-types behaviour.
     """
-    import torch
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    task_type = None
+    if isinstance(model, dict):
+        task_type = model.get("task_type")
+    task_type = task_type or _LOADED_TASK_TYPE or task_types.DEFAULT_TASK_TYPE
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    module, spec = resolve_task_module(task_type)
+    return module.input_fn(request_body, content_type, spec)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_dir,
-        torch_dtype="auto",
+
+def predict_fn(input_data, model):
+    """Run inference for the loaded task.
+
+    Names the identifier column here rather than in each task module, so every
+    task is guaranteed to produce a labelled first column.
+    """
+    module, spec = resolve_task_module(model["task_type"])
+    prediction = module.predict_fn(input_data, model, spec)
+    prediction.setdefault(
+        "identifier_column", spec.image_column or spec.text_column or "id"
     )
-    model.resize_token_embeddings(len(tokenizer))
-    model.to(device)
-    model.eval()
-
-    logger.info(f"Loaded model from {model_dir} on {device}")
-    return (model, tokenizer, device)
-
-
-def input_fn(request_body, content_type="text/plain"):
-    """Parse input data.
-
-    Supports:
-      - text/plain: one text string per line
-      - application/json: list of strings or {"texts": [...]}
-
-    Returns a list of non-empty text strings.
-    """
-    # SageMaker HuggingFace DLC passes request_body as bytes, not str.
-    if isinstance(request_body, (bytes, bytearray)):
-        request_body = request_body.decode("utf-8")
-
-    if content_type == "text/plain":
-        lines = request_body.strip().split("\n")
-        texts = [line.strip() for line in lines if line.strip()]
-        return texts
-    elif content_type == "application/json":
-        data = json.loads(request_body)
-        if isinstance(data, list):
-            return [str(item) for item in data if str(item).strip()]
-        elif isinstance(data, dict) and "texts" in data:
-            return [str(t) for t in data["texts"] if str(t).strip()]
-        raise ValueError('JSON input must be a list or {"texts": [...]}')
-    else:
-        raise ValueError(f"Unsupported content type: {content_type}")
-
-
-def predict_fn(input_data, model_tuple):
-    """Run batched inference with softmax probabilities.
-
-    Args:
-        input_data: List of text strings from input_fn
-        model_tuple: (model, tokenizer, device) from model_fn
-
-    Returns a dict with 'texts', 'probabilities' (numpy array), and 'labels'.
-    """
-    import torch
-    import numpy as np
-
-    model, tokenizer, device = model_tuple
-    texts = input_data
-
-    if not texts:
-        return {"texts": [], "probabilities": np.zeros((0, 0)), "labels": []}
-
-    # Batched inference
-    all_probs = []
-    with torch.no_grad():
-        for start in range(0, len(texts), BATCH_SIZE):
-            batch_texts = texts[start : start + BATCH_SIZE]
-            enc = tokenizer(
-                batch_texts,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-            )
-            enc = {k: v.to(device) for k, v in enc.items()}
-            outputs = model(**enc)
-            probs = torch.softmax(outputs.logits, dim=-1).cpu().numpy()
-            all_probs.append(probs)
-
-    probabilities = np.vstack(all_probs) if all_probs else np.zeros((0, 0))
-
-    # Build label names from model config
-    num_labels = (
-        probabilities.shape[1] if len(probabilities.shape) > 1 else 0
-    )
-    id2label = getattr(model.config, "id2label", None)
-    if isinstance(id2label, dict):
-        labels = [
-            id2label.get(i) or id2label.get(str(i)) or f"class_{i}"
-            for i in range(num_labels)
-        ]
-    elif isinstance(id2label, (list, tuple)):
-        labels = list(id2label)[:num_labels]
-    else:
-        labels = [f"class_{i}" for i in range(num_labels)]
-
-    return {"texts": texts, "probabilities": probabilities, "labels": labels}
+    return prediction
 
 
 def _sanitize_label(label):
     """Sanitize a label string for use as a CSV column name."""
     if label is None:
         return "class"
-    return "".join(
-        c if (c.isalnum() or c == "_") else "_" for c in str(label)
-    )
+    return "".join(c if (c.isalnum() or c == "_") else "_" for c in str(label))
+
+
+def _escape_csv(value):
+    """Quote and escape a value for CSV output."""
+    return '"' + str(value).replace('"', '""') + '"'
 
 
 def output_fn(prediction, accept="text/csv"):
-    """Format prediction output as CSV with probability columns.
+    """Format predictions as CSV with one probability column per class.
 
     Output format:
-        text,prob_label1,prob_label2,...
-        "example text",0.850000,0.150000
+        id,prob_label1,prob_label2,...
+        "example.jpg",0.850000,0.150000
+
+    The first column is whatever identifies a record for the task: the input
+    text for text classification, the archive-relative image path for the
+    image tasks.
     """
-    texts = prediction["texts"]
-    probs = prediction["probabilities"]
+    identifiers = prediction["identifiers"]
+    probabilities = prediction["probabilities"]
     labels = prediction["labels"]
+    identifier_column = prediction.get("identifier_column", "id")
 
-    # Build CSV header
-    prob_columns = [f"prob_{_sanitize_label(l)}" for l in labels]
-    header = "text," + ",".join(prob_columns)
+    header = identifier_column + "," + ",".join(
+        f"prob_{_sanitize_label(label)}" for label in labels
+    )
 
-    # Build rows
     rows = [header]
-    for i, text in enumerate(texts):
-        # Escape text for CSV (handle commas and quotes)
-        escaped_text = '"' + text.replace('"', '""') + '"'
-        if probs.shape[0] > i and probs.shape[1] > 0:
-            prob_values = ",".join(
-                f"{probs[i, j]:.6f}" for j in range(probs.shape[1])
+    for index, identifier in enumerate(identifiers):
+        if probabilities.shape[0] > index and probabilities.shape[1] > 0:
+            values = ",".join(
+                f"{probabilities[index, column]:.6f}"
+                for column in range(probabilities.shape[1])
             )
         else:
-            prob_values = ",".join("0.000000" for _ in labels)
-        rows.append(f"{escaped_text},{prob_values}")
+            values = ",".join("0.000000" for _ in labels)
+        rows.append(f"{_escape_csv(identifier)},{values}")
 
     return "\n".join(rows)

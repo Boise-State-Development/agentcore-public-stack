@@ -15,8 +15,26 @@ logger = logging.getLogger(__name__)
 # Directory containing the SageMaker scripts (relative to this module)
 SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "sagemaker_scripts")
 
-# Files to include in the source directory tar.gz
-SCRIPT_FILES = ["train.py", "inference.py", "requirements.txt"]
+# Directory containing modules shared between the app-api and the training
+# container.  task_types.py is the task registry, and both sides have to agree
+# on it, so it is packaged rather than duplicated.
+PACKAGE_DIR = os.path.dirname(__file__)
+
+# Files to include in the source directory tar.gz, flattened to the archive
+# root.  The task modules travel with the dispatcher because train.py resolves
+# the task type at runtime and imports whichever module implements it.
+SCRIPT_FILES = [
+    "train.py",
+    "inference.py",
+    "requirements.txt",
+    "task_common.py",
+    "task_text_classification.py",
+    "task_image_classification.py",
+    "task_image_text_classification.py",
+]
+
+# Files pulled from the package directory rather than sagemaker_scripts/.
+SHARED_FILES = ["task_types.py"]
 
 # S3 key for the packaged scripts
 SCRIPTS_S3_KEY = "scripts/sourcedir.tar.gz"
@@ -38,12 +56,23 @@ class ScriptPackagingService:
         )
         self._cached_s3_uri: Optional[str] = None
 
+    @staticmethod
+    def _source_paths() -> list:
+        """Return (archive name, source path) for every packaged file.
+
+        Ordered deterministically so the content hash is stable across calls —
+        an unstable hash would re-upload the source dir on every job.
+        """
+        paths = [(name, os.path.join(SCRIPTS_DIR, name)) for name in SCRIPT_FILES]
+        paths += [(name, os.path.join(PACKAGE_DIR, name)) for name in SHARED_FILES]
+        return sorted(paths, key=lambda pair: pair[0])
+
     def _compute_content_hash(self) -> str:
         """Compute SHA256 hash of all script file contents."""
         hasher = hashlib.sha256()
-        for filename in sorted(SCRIPT_FILES):
-            filepath = os.path.join(SCRIPTS_DIR, filename)
+        for name, filepath in self._source_paths():
             if os.path.exists(filepath):
+                hasher.update(name.encode("utf-8"))
                 with open(filepath, "rb") as f:
                     hasher.update(f.read())
         return hasher.hexdigest()
@@ -56,10 +85,9 @@ class ScriptPackagingService:
         """
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            for filename in SCRIPT_FILES:
-                filepath = os.path.join(SCRIPTS_DIR, filename)
+            for name, filepath in self._source_paths():
                 if os.path.exists(filepath):
-                    tar.add(filepath, arcname=filename)
+                    tar.add(filepath, arcname=name)
                 else:
                     logger.warning(f"Script file not found: {filepath}")
         buf.seek(0)

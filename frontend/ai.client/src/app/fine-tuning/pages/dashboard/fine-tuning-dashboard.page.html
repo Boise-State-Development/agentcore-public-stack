@@ -45,10 +45,16 @@
     </summary>
     <div class="border-t border-state-info-200 px-4 py-3 text-sm/6 text-gray-700 dark:border-state-info-800/40 dark:text-gray-300">
       <p>
-        If you have a need for a language model to perform automatic coding or classification for your research, and the input is text, then this is a potentially useful option for you. Fine-tuning takes an existing small language model and helps it become better at coding/classification on the data that you provide.
+        If you need a model to perform automatic coding or classification for your research, this is a potentially useful option for you. Fine-tuning takes an existing pre-trained model and helps it become better at coding/classification on the data that you provide. Your input can be text, images, or images paired with text.
       </p>
       <p class="mt-2">
-        To get started, upload a <strong>.csv</strong> file with two columns: <strong>text</strong> (your input data) and <strong>label</strong> (the code/classification you want the model to predict). You can control the train/test split, and once fine-tuning is complete, download the model for your own use. We also provide the ability to run inference on any future data you collect.
+        For <strong>text classification</strong>, upload a <strong>.csv</strong> file with two columns: <strong>text</strong> (your input data) and <strong>label</strong> (the code/classification you want the model to predict).
+      </p>
+      <p class="mt-2">
+        For <strong>image</strong> or <strong>image + text classification</strong>, upload a <strong>.zip</strong> containing a manifest (CSV, JSONL, or JSON) plus the image files it references. The manifest needs an <strong>image</strong> column holding each file's path inside the archive, a <strong>label</strong> column, and — for image + text — a <strong>text</strong> column.
+      </p>
+      <p class="mt-2">
+        You can control the train/test split, and once fine-tuning is complete, download the model for your own use. We also provide the ability to run inference on any future data you collect.
       </p>
     </div>
   </details>

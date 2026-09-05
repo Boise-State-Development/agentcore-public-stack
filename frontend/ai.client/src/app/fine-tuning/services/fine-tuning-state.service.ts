@@ -63,8 +63,8 @@ export class FineTuningStateService {
   /** Quota usage percentage (0-100). */
   readonly quotaUsedPercent = computed(() => {
     const a = this.access();
-    if (!a?.monthly_quota_hours || !a.current_month_usage_hours) return 0;
-    return Math.min(100, (a.current_month_usage_hours / a.monthly_quota_hours) * 100);
+    if (!a?.monthly_quota_usd || !a.current_month_usage_usd) return 0;
+    return Math.min(100, (a.current_month_usage_usd / a.monthly_quota_usd) * 100);
   });
 
   /** Total number of training jobs. */

@@ -1,6 +1,8 @@
 """Pydantic models for SageMaker Batch Transform inference jobs."""
 
 from pydantic import BaseModel, Field
+
+from . import task_types
 from typing import List, Optional
 
 
@@ -52,6 +54,9 @@ class TrainedModelResponse(BaseModel):
     training_job_id: str
     model_id: str
     model_name: str
+    #: The task this model was fine-tuned for.  Drives which input formats the
+    #: inference form will accept — an image classifier cannot read a .txt.
+    task_type: str = task_types.DEFAULT_TASK_TYPE
     model_s3_path: str
     instance_type: str
     completed_at: Optional[str] = None
