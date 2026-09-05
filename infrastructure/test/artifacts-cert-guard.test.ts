@@ -52,7 +52,8 @@ describe('ArtifactsDistributionConstruct — domain/cert guard', () => {
       buildConstruct({
         domainName: 'example.com',
         infrastructureHostedZoneDomain: 'example.com',
-        artifacts: { retentionDays: 90, extraFrameAncestors: [] }, // no certificateArn
+        artifacts: {
+          shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [] }, // no certificateArn
       }),
     ).toThrow(/Artifacts iframe origin requires an ACM certificate/);
   });
@@ -62,7 +63,8 @@ describe('ArtifactsDistributionConstruct — domain/cert guard', () => {
       buildConstruct({
         domainName: 'example.com',
         infrastructureHostedZoneDomain: 'example.com',
-        artifacts: { retentionDays: 90, extraFrameAncestors: [] },
+        artifacts: {
+          shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [] },
       }),
     ).toThrow(
       /CDK_ARTIFACTS_CERTIFICATE_ARN.*CDK_CLOUDFRONT_CERTIFICATE_ARN.*artifacts\.example\.com/s,
@@ -74,7 +76,8 @@ describe('ArtifactsDistributionConstruct — domain/cert guard', () => {
       buildConstruct({
         domainName: 'example.com',
         infrastructureHostedZoneDomain: 'example.com',
-        artifacts: { retentionDays: 90, extraFrameAncestors: [], certificateArn: CERT },
+        artifacts: {
+          shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [], certificateArn: CERT },
       }),
     ).not.toThrow();
   });
@@ -86,7 +89,8 @@ describe('ArtifactsDistributionConstruct — domain/cert guard', () => {
     // default domain like McpSandboxDistributionConstruct.
     expect(() =>
       buildConstruct({
-        artifacts: { retentionDays: 90, extraFrameAncestors: [] }, // no domain, no cert
+        artifacts: {
+          shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [] }, // no domain, no cert
       }),
     ).not.toThrow();
   });

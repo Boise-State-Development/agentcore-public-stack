@@ -104,6 +104,13 @@ export interface ArtifactsConfig {
   // iframes via CSP frame-ancestors — e.g. http://localhost:4200 for a
   // local SPA pointed at this deployment. Empty on prod.
   extraFrameAncestors: string[];
+  // Whether recipients can *discover* artifacts shared with them (the
+  // library's "Shared with you" tab, backed by GET /shared-artifacts).
+  // Default OFF and opt-in, unlike the kill-switch flags elsewhere in this
+  // file: the surface lands before the product decision about it. Gates the
+  // read only — the fan-out rows behind it are written unconditionally, so
+  // enabling this never needs a backfill.
+  shareInboxEnabled: boolean;
 }
 
 export interface FrontendConfig {
@@ -814,6 +821,14 @@ export function loadConfig(scope: cdk.App): AppConfig {
         .map((s) => s.trim()).filter(Boolean)
         || scope.node.tryGetContext('artifacts')?.extraFrameAncestors
         || [],
+      // Default OFF, opt-in — the inverse of the kill-switch ternary used by
+      // scheduledRuns/memorySpaces/skills above. Only the literal "true"
+      // enables, so the empty string an unset GitHub Actions variable
+      // forwards resolves to off, which is the intended default rather than
+      // an accident.
+      shareInboxEnabled: process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED
+        ? process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED === 'true'
+        : scope.node.tryGetContext('artifacts')?.shareInboxEnabled ?? false,
     },
     mcpSandbox: {
       certificateArn: process.env.CDK_MCP_SANDBOX_CERTIFICATE_ARN || scope.node.tryGetContext('mcpSandbox')?.certificateArn,

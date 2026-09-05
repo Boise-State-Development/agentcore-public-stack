@@ -22,9 +22,10 @@ before touching it.
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from apis.shared.auth import User, get_current_user_from_session
+from apis.shared.feature_flags import artifact_share_inbox_enabled
 from apis.shared.security.log_sanitize import scrub_log
 
 from .models import (
@@ -34,6 +35,8 @@ from .models import (
     CreateArtifactShareRequest,
     RenderTokenResponse,
     SharedArtifactResponse,
+    SharedWithMeArtifact,
+    SharedWithMeResponse,
     UpdateArtifactShareRequest,
 )
 from .service import (
@@ -250,6 +253,78 @@ async def revoke_artifact_share(
 # ------------------------------------------------------------------
 # Recipient endpoints
 # ------------------------------------------------------------------
+
+
+@shared_artifacts_router.get(
+    "",
+    response_model=SharedWithMeResponse,
+    response_model_by_alias=True,
+)
+async def list_shared_with_me(
+    limit: int = Query(
+        25, ge=1, le=100, description="Maximum shares to return"
+    ),
+    cursor: str | None = Query(
+        None, description="Opaque continuation token from a previous page"
+    ),
+    user: User = Depends(get_current_user_from_session),
+    service: ArtifactShareService = Depends(get_artifact_share_service),
+) -> SharedWithMeResponse:
+    """Artifacts other people have shared with the caller, newest first.
+
+    Scoped by construction, like every other listing in this domain: the
+    partition is built from the authenticated session's email and there
+    is no parameter that could widen it. There is no way to ask this
+    endpoint about somebody else's inbox.
+
+    Only `specific` shares appear. `public` means "any authenticated
+    tenant user", which has no recipient list to fan out to — those stay
+    link-delivered. Listing every public share in the tenant would be a
+    different feature with a different consent story.
+
+    404s while `ARTIFACT_SHARE_INBOX_ENABLED` is off, matching the
+    mid-turn-steering endpoint's behaviour under its own flag: the
+    surface does not exist in this environment, which is exactly what a
+    404 says. The SPA reads that as "no tabs" and renders the library it
+    always did. Note the flag gates only this read — the rows behind it
+    are written regardless, so turning it on shows a complete inbox
+    rather than one that starts from the flip.
+    """
+    if not artifact_share_inbox_enabled():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+
+    try:
+        items, next_cursor = service.list_for_recipient(
+            viewer=user, limit=limit, cursor=cursor
+        )
+    except RenderTokenConfigError:
+        logger.exception("artifact share inbox misconfigured")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Artifact sharing is unavailable",
+        )
+    except ArtifactQueryError:
+        logger.exception("artifact share inbox query failed")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Artifact sharing is temporarily unavailable",
+        )
+
+    return SharedWithMeResponse(
+        artifacts=[
+            SharedWithMeArtifact(
+                share_id=item["share_id"],
+                title=item["title"],
+                content_type=item["content_type"],
+                version=item["version"],
+                owner_email=item["owner_email"],
+                shared_at=item["shared_at"],
+                share_url=f"/shared-artifact/{item['share_id']}",
+            )
+            for item in items
+        ],
+        next_cursor=next_cursor,
+    )
 
 
 @shared_artifacts_router.get(

@@ -265,3 +265,52 @@ class SharedArtifactResponse(BaseModel):
         "recipient who can view can also download — surfaced as a field "
         "so a future policy can withhold it without a shape change.",
     )
+
+
+class SharedWithMeArtifact(BaseModel):
+    """One artifact somebody else shared with the caller.
+
+    Deliberately the recipient shape, not the owner one: no `ownerId`,
+    no `artifactId`, no `allowedEmails`. A recipient addresses a shared
+    artifact by its share id and nothing else — `shareUrl` is the only
+    route they have to it, and handing them the owner's artifact id
+    would imply an addressability they do not have.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    share_id: str = Field(..., alias="shareId")
+    title: str = Field(default="")
+    content_type: str = Field(default="", alias="contentType")
+    version: int
+    owner_email: str = Field(
+        ..., alias="ownerEmail", description="Who shared this"
+    )
+    shared_at: str = Field(
+        ...,
+        alias="sharedAt",
+        description="When the share was created — not when the artifact "
+        "was made or last edited, which are the owner's timestamps and "
+        "mean nothing to a recipient",
+    )
+    share_url: str = Field(..., alias="shareUrl")
+
+
+class SharedWithMeResponse(BaseModel):
+    """A page of the caller's share inbox.
+
+    `nextCursor` terminates the listing, not the page size: rows are
+    dropped after the underlying query (a share revoked since it was
+    fanned out, an allowlist edited), so a short page can still have
+    more behind it. Page until the cursor is null.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    artifacts: List[SharedWithMeArtifact] = Field(default_factory=list)
+    next_cursor: Optional[str] = Field(
+        default=None,
+        alias="nextCursor",
+        description="Opaque continuation token; null when the listing is "
+        "complete",
+    )

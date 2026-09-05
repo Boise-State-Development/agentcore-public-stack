@@ -133,6 +133,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       defaultQuotaHours: 0,
     },
     artifacts: {
+      shareInboxEnabled: false,
       retentionDays: 90,
       extraFrameAncestors: [],
     },
