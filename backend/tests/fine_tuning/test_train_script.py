@@ -303,7 +303,7 @@ class TestResolveImagePath:
 
 
 class TestLoadManifestFrame:
-    """End-to-end load, where pandas is available (the training container)."""
+    """End-to-end load through pandas, exercising every accepted format."""
 
     @pytest.mark.parametrize(
         "filename,content",
@@ -322,7 +322,6 @@ class TestLoadManifestFrame:
         ],
     )
     def test_loads_each_supported_format(self, tmp_path, filename, content):
-        pytest.importorskip("pandas")
         path = tmp_path / filename
         path.write_text(content)
 
@@ -335,7 +334,6 @@ class TestLoadManifestFrame:
 class TestPrepareDataset:
 
     def test_text_task_reads_the_channel_directly(self, tmp_path):
-        pytest.importorskip("pandas")
         (tmp_path / "d.csv").write_text("text,label\nhello,a\nbye,b\n")
 
         frame, image_root = prepare_dataset(str(tmp_path), TEXT_SPEC)
@@ -344,7 +342,6 @@ class TestPrepareDataset:
         assert frame["text"].tolist() == ["hello", "bye"]
 
     def test_image_task_unpacks_and_resolves_paths(self, tmp_path, monkeypatch):
-        pytest.importorskip("pandas")
         from apis.app_api.fine_tuning.sagemaker_scripts import task_common
 
         monkeypatch.setattr(task_common, "EXTRACT_DIR", str(tmp_path / "extracted"))
@@ -369,7 +366,6 @@ class TestPrepareDataset:
             assert path.startswith(image_root)
 
     def test_image_task_reports_a_missing_image(self, tmp_path, monkeypatch):
-        pytest.importorskip("pandas")
         from apis.app_api.fine_tuning.sagemaker_scripts import task_common
 
         monkeypatch.setattr(task_common, "EXTRACT_DIR", str(tmp_path / "extracted"))
@@ -388,7 +384,6 @@ class TestPrepareDataset:
 class TestBuildLabelMapping:
 
     def test_maps_string_labels_to_contiguous_ids(self):
-        pytest.importorskip("pandas")
         import pandas as pd
 
         frame = pd.DataFrame({"text": ["a", "b", "c"], "label": ["dog", "cat", "dog"]})
@@ -401,7 +396,6 @@ class TestBuildLabelMapping:
 
     def test_rejects_a_single_class(self):
         """One class cannot be classified, and the GPU error is unreadable."""
-        pytest.importorskip("pandas")
         import pandas as pd
 
         frame = pd.DataFrame({"text": ["a", "b"], "label": ["same", "same"]})
