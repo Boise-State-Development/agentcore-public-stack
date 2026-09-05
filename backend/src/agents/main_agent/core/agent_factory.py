@@ -13,6 +13,7 @@ from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider
 from agents.main_agent.config.constants import EnvVars
 from apis.shared.models.mantle import build_mantle_model
+from apis.shared.models.usage_normalization import usage_normalized
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,11 @@ class AgentFactory:
         client_args = {"api_key": api_key}
 
         logger.info(f"Creating OpenAI model with model_id={model_config.model_id}")
-        return OpenAIModel(client_args=client_args, **openai_config)
+        # Wrapped for Bedrock-Converse token-bucket semantics — OpenAI's
+        # `input_tokens` is inclusive of the cache buckets, which our cost and
+        # context-size math treats as disjoint. See
+        # apis/shared/models/usage_normalization.py.
+        return usage_normalized(OpenAIModel)(client_args=client_args, **openai_config)
 
     @staticmethod
     def _create_mantle_model(model_config: ModelConfig):

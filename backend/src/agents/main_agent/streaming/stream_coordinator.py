@@ -719,6 +719,11 @@ class StreamCoordinator:
                     # cacheReadInputTokens. Summing all three buckets
                     # below is the only correct "current context size"
                     # under caching.
+                    #
+                    # The sum is only correct because the buckets are
+                    # disjoint. OpenAI-family models report an inclusive
+                    # inputTokens and are normalized to this convention at
+                    # the model seam — apis/shared/models/usage_normalization.py.
                     if hasattr(session_manager, "update_after_turn"):
                         usage = accumulated_metadata.get("usage", {})
                         total_input_tokens = (
