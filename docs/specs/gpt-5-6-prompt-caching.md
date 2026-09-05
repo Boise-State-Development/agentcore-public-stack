@@ -487,7 +487,7 @@ write), and 26.40 is *derived* from the GovCloud 1:6 input:output ratio rather
 than published. The **ratios** above are real; the absolute dollars wait on
 PR-3.
 
-## ⛔ `global.*` inference profiles are blocked by an organization SCP
+## ⚠️ `global.*` inference profiles are blocked **in dev** by an organization SCP
 
 Discovered 2026-09-05 while adding GPT-5.6 Luna. Adding it as
 `global.openai.gpt-5.6-luna` fails at the first turn:
@@ -504,17 +504,28 @@ same region, **only the profile prefix changed** — succeeds. That isolates the
 prefix as the cause: the deny is on the **region-less foundation-model ARN**
 that a Global CRIS profile resolves to, not on the model.
 
-**This contradicts the cost model in this plan.** The Decision section prefers
-`bedrock-runtime` partly because "Global CRIS is cheaper ($4.00 vs $4.40 input
-for Sol short-context)" — that saving is **unavailable to us** while the SCP
-stands. Every GPT-5.6 row must use `us.*`, and the ~9% Global discount should
-not be assumed in any projection.
+### Scope: dev only — **prod is not affected**
 
-Not fixable in this account: the policy lives at the AWS Organization
-(`977099011063`). Whether to request an exception is a decision for whoever
-administers it. Until then, treat `us.*` as the only usable prefix — and note
-this is the **opposite** of the Claude-family rule of thumb, where `us.*` costs
-~10% more than `global.*`.
+Confirmed by Phil: `global.*` is **not** blocked in prod, which is the account
+that matters for the cost model. The Decision section's preference for
+`bedrock-runtime` on Global CRIS pricing ($4.00 vs $4.40 input for Sol
+short-context) therefore **stands** — the ~9% discount is available where the
+spend is.
+
+What this actually costs us is a **dev/prod model-id divergence**: a GPT-5.6
+row must be `us.*` in dev and can be `global.*` in prod. Anything that copies a
+model row between environments — a seed script, a curated catalog entry, a
+runbook — has to carry the prefix per environment rather than assume one id
+works in both.
+
+⚠️ **Method note for whoever hits this next.** `aws iam
+simulate-principal-policy` does **not** evaluate SCPs, only identity policies.
+Every simulation of the runtime role came back `allowed` while the real call
+was denied. An SCP deny is only observable by actually invoking, which is also
+why this surfaced at the first turn rather than in any earlier check.
+
+Note the direction is the **opposite** of the Claude-family rule of thumb,
+where `us.*` costs ~10% *more* than `global.*`.
 
 ## ⚠️ Mantle's `openai.gpt-5.4` caches, and was priced at $0.00
 
