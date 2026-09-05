@@ -48,6 +48,9 @@ export class CreateInferenceJobPage implements OnInit {
   /** Upload state tracking. */
   readonly uploadState = signal<FileUploadState | null>(null);
 
+  /** The currently chosen training job id, mirrored from the form control. */
+  readonly selectedTrainingJobId = signal<string>('');
+
   /**
    * The task the chosen model was fine-tuned for.
    *
@@ -68,9 +71,6 @@ export class CreateInferenceJobPage implements OnInit {
   readonly uploadAccept = computed(() =>
     this.requiresArchive() ? '.zip' : '.txt,.csv,.jsonl,.json',
   );
-
-  /** The currently chosen training job id, as a signal for the computeds above. */
-  readonly selectedTrainingJobId = signal<string>('');
 
   /** Whether the form is being submitted. */
   readonly submitting = signal(false);
