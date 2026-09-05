@@ -10,8 +10,27 @@ import {
   ArtifactHttpService,
   type LibraryArtifact,
 } from '../session/services/artifacts/artifact-http.service';
+import {
+  ArtifactShareService,
+  type SharedWithMeArtifact,
+} from '../session/services/artifacts/artifact-share.service';
 import { LocalSettingsService, type ViewMode } from '../services/local-settings.service';
 import { ToastService } from '../services/toast/toast.service';
+
+function stubShared(
+  overrides: Partial<SharedWithMeArtifact> = {},
+): SharedWithMeArtifact {
+  return {
+    shareId: 'sh-1',
+    title: 'Their deck',
+    contentType: 'text/html',
+    version: 1,
+    ownerEmail: 'ada@x.com',
+    sharedAt: '2026-06-01T10:00:00+00:00',
+    shareUrl: '/shared-artifact/sh-1',
+    ...overrides,
+  };
+}
 
 function stubArtifact(overrides: Partial<LibraryArtifact> = {}): LibraryArtifact {
   return {
@@ -35,6 +54,7 @@ describe('ArtifactLibraryPage', () => {
   };
   /** Stands in for the CDK dialog. `closed` is what the page awaits, so
    *  each test sets the value the user "chose" before acting. */
+  let mockShares: { listSharedWithMe: ReturnType<typeof vi.fn> };
   let mockDialog: { open: ReturnType<typeof vi.fn> };
   let dialogResult: unknown;
   let mockSettings: {
@@ -54,6 +74,9 @@ describe('ArtifactLibraryPage', () => {
       renameArtifact: vi.fn(),
       deleteArtifact: vi.fn().mockResolvedValue(undefined),
     };
+    // Default: the inbox does not exist in this environment (the flag is
+    // off), which is what every pre-existing test in this file assumes.
+    mockShares = { listSharedWithMe: vi.fn().mockResolvedValue(null) };
     dialogResult = undefined;
     mockDialog = {
       open: vi.fn(() => ({ closed: of(dialogResult) })),
@@ -74,6 +97,7 @@ describe('ArtifactLibraryPage', () => {
           { path: 'artifacts/:artifactId', children: [] },
         ]),
         { provide: ArtifactHttpService, useValue: mockHttp },
+        { provide: ArtifactShareService, useValue: mockShares },
         { provide: LocalSettingsService, useValue: mockSettings },
         { provide: ToastService, useValue: mockToast },
         { provide: Dialog, useValue: mockDialog },
@@ -100,7 +124,14 @@ describe('ArtifactLibraryPage', () => {
   function api(fixture: Awaited<ReturnType<typeof createComponent>>) {
     return fixture.componentInstance as unknown as {
       items: () => LibraryArtifact[];
-      filtered: () => LibraryArtifact[];
+      filtered: () => Array<{
+        key: string;
+        kind: 'owned' | 'shared';
+        title: string;
+        route: readonly string[];
+        ownerEmail?: string;
+        timestampLabel: string;
+      }>;
       typeOptions: () => Array<{ value: string; label: string }>;
       isEmpty: () => boolean;
       isFilteredEmpty: () => boolean;
@@ -110,7 +141,15 @@ describe('ArtifactLibraryPage', () => {
       typeFilter: { set: (v: string) => void };
       styleFor: (t: string) => { label: string };
       setViewMode: (m: ViewMode) => void;
-      open: (item: LibraryArtifact) => void;
+      open: (row: { route: readonly string[] }) => void;
+      tab: () => 'all' | 'yours' | 'shared';
+      setTab: (t: 'all' | 'yours' | 'shared') => void;
+      sharedAvailable: () => boolean;
+      received: () => SharedWithMeArtifact[] | null;
+      receivedCursor: () => string | null;
+      loadMoreShared: () => Promise<void>;
+      totalCount: () => number;
+      tabCount: () => number;
       load: () => Promise<void>;
       rename: (item: LibraryArtifact) => Promise<void>;
       confirmDelete: (item: LibraryArtifact) => Promise<void>;
@@ -131,7 +170,9 @@ describe('ArtifactLibraryPage', () => {
       stubArtifact({ artifactId: 'a', updatedAt: '2026-09-01T00:00:00+00:00' }),
     ]);
     const c = api(await createComponent());
-    expect(c.filtered().map((i) => i.artifactId)).toEqual(['b', 'a']);
+    // Keys are prefixed by provenance — an artifact id and a share id
+    // come from different key spaces and could otherwise collide.
+    expect(c.filtered().map((r) => r.key)).toEqual(['owned:b', 'owned:a']);
   });
 
   it('surfaces a retryable message when the load fails', async () => {
@@ -148,7 +189,7 @@ describe('ArtifactLibraryPage', () => {
     ]);
     const c = api(await createComponent());
     c.search.set('BUDGET');
-    expect(c.filtered().map((i) => i.artifactId)).toEqual(['a']);
+    expect(c.filtered().map((r) => r.key)).toEqual(['owned:a']);
   });
 
   it('filters by type with the charset suffix normalized away', async () => {
@@ -160,7 +201,7 @@ describe('ArtifactLibraryPage', () => {
     ]);
     const c = api(await createComponent());
     c.typeFilter.set('text/html');
-    expect(c.filtered().map((i) => i.artifactId)).toEqual(['a']);
+    expect(c.filtered().map((r) => r.key)).toEqual(['owned:a']);
   });
 
   it('offers only the types the user actually has, deduped', async () => {
@@ -221,8 +262,13 @@ describe('ArtifactLibraryPage', () => {
         .spyOn(TestBed.inject(Router), 'navigate')
         .mockResolvedValue(true);
 
+      mockHttp.listLibrary.mockResolvedValue([
+        stubArtifact({ artifactId: 'a1' }),
+      ]);
       const c = api(await createComponent());
-      c.open(stubArtifact({ artifactId: 'a1' }));
+      // Opened through the row the page actually built, so the route
+      // under test is the projection's, not the spec's.
+      c.open(c.filtered()[0]);
 
       expect(navigate).toHaveBeenCalledWith(['/artifacts', 'a1']);
       expect(openSpy).not.toHaveBeenCalled();
@@ -230,8 +276,9 @@ describe('ArtifactLibraryPage', () => {
 
     it('does not mint a render token — the viewer owns that', async () => {
       vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
       const c = api(await createComponent());
-      c.open(stubArtifact());
+      c.open(c.filtered()[0]);
 
       expect(mockHttp.mintRenderToken).not.toHaveBeenCalled();
     });
@@ -240,10 +287,191 @@ describe('ArtifactLibraryPage', () => {
       // A route change has no blocked/failed path to report, so the old
       // "Pop-up blocked" and "Could not open artifact" toasts are gone.
       vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
       const c = api(await createComponent());
-      c.open(stubArtifact());
+      c.open(c.filtered()[0]);
 
       expect(mockToast.error).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('shared with you', () => {
+    /** Turn the inbox on with the given rows. */
+    function withInbox(
+      artifacts: SharedWithMeArtifact[],
+      nextCursor: string | null = null,
+    ): void {
+      mockShares.listSharedWithMe.mockResolvedValue({
+        artifacts,
+        nextCursor,
+      });
+    }
+
+    it('hides the tabs entirely when the inbox does not exist', async () => {
+      // `null` is the backend saying the endpoint 404'd — the feature is
+      // off in this environment. A lone "Yours" tab would be chrome
+      // around nothing.
+      mockShares.listSharedWithMe.mockResolvedValue(null);
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+      const c = api(await createComponent());
+
+      expect(c.sharedAvailable()).toBe(false);
+      expect(c.filtered()).toHaveLength(1);
+    });
+
+    it('distinguishes an absent inbox from an empty one', async () => {
+      // Collapsing these would either show a permanently empty tab
+      // wherever the feature is off, or hide a real empty state.
+      withInbox([]);
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+      const c = api(await createComponent());
+
+      expect(c.sharedAvailable()).toBe(true);
+      expect(c.received()).toEqual([]);
+    });
+
+    it('merges both lists newest-first on the All tab', async () => {
+      mockHttp.listLibrary.mockResolvedValue([
+        stubArtifact({
+          artifactId: 'mine',
+          updatedAt: '2026-06-05T10:00:00+00:00',
+        }),
+      ]);
+      withInbox([
+        stubShared({ shareId: 'theirs', sharedAt: '2026-06-10T10:00:00+00:00' }),
+      ]);
+      const c = api(await createComponent());
+
+      // Two independently server-ordered lists can only be shown as one
+      // by interleaving them here; the tabs that show one list each do
+      // not sort at all.
+      expect(c.filtered().map((r) => r.key)).toEqual([
+        'shared:theirs',
+        'owned:mine',
+      ]);
+    });
+
+    it('scopes each tab to its own list', async () => {
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact({ artifactId: 'mine' })]);
+      withInbox([stubShared({ shareId: 'theirs' })]);
+      const c = api(await createComponent());
+
+      c.setTab('yours');
+      expect(c.filtered().map((r) => r.key)).toEqual(['owned:mine']);
+
+      c.setTab('shared');
+      expect(c.filtered().map((r) => r.key)).toEqual(['shared:theirs']);
+    });
+
+    it('routes a received artifact to the recipient page', async () => {
+      // A recipient has no artifact id and no owner route — the share id
+      // is the only handle they have on it.
+      mockHttp.listLibrary.mockResolvedValue([]);
+      withInbox([stubShared({ shareId: 'sh-9' })]);
+      const c = api(await createComponent());
+
+      const row = c.filtered()[0];
+      expect(row.kind).toBe('shared');
+      expect(row.route).toEqual(['/shared-artifact', 'sh-9']);
+      expect(row.ownerEmail).toBe('ada@x.com');
+      // "Updated" is the owner's clock and means nothing to a recipient.
+      expect(row.timestampLabel).toBe('Shared');
+    });
+
+    it('searches received artifacts by sender as well as title', async () => {
+      mockHttp.listLibrary.mockResolvedValue([]);
+      withInbox([
+        stubShared({ shareId: 'a', title: 'Deck', ownerEmail: 'ada@x.com' }),
+        stubShared({ shareId: 'b', title: 'Notes', ownerEmail: 'bob@x.com' }),
+      ]);
+      const c = api(await createComponent());
+
+      // "Who sent me that thing" is at least as likely a starting point
+      // as remembering what it was called.
+      c.search.set('ada');
+      expect(c.filtered().map((r) => r.key)).toEqual(['shared:a']);
+    });
+
+    it('keeps your library when the inbox request fails', async () => {
+      // The library is the page's reason to exist; a 503 on the inbox
+      // must not blank it. The tabs simply do not appear.
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+      mockShares.listSharedWithMe.mockRejectedValue(new Error('503'));
+      const c = api(await createComponent());
+
+      expect(c.error()).toBeNull();
+      expect(c.filtered()).toHaveLength(1);
+      expect(c.sharedAvailable()).toBe(false);
+    });
+
+    it('still fails the page when your own library fails', async () => {
+      mockHttp.listLibrary.mockRejectedValue(new Error('503'));
+      withInbox([stubShared()]);
+      const c = api(await createComponent());
+
+      expect(c.error()).toContain("couldn't load");
+    });
+
+    it('appends the next page rather than replacing it', async () => {
+      mockHttp.listLibrary.mockResolvedValue([]);
+      withInbox([stubShared({ shareId: 'first' })], 'cursor-1');
+      const c = api(await createComponent());
+
+      expect(c.receivedCursor()).toBe('cursor-1');
+
+      mockShares.listSharedWithMe.mockResolvedValue({
+        artifacts: [stubShared({ shareId: 'second' })],
+        nextCursor: null,
+      });
+      await c.loadMoreShared();
+
+      expect(mockShares.listSharedWithMe).toHaveBeenLastCalledWith('cursor-1');
+      expect(c.filtered().map((r) => r.key)).toEqual([
+        'shared:first',
+        'shared:second',
+      ]);
+      expect(c.receivedCursor()).toBeNull();
+    });
+
+    it('drops the tabs if the inbox disappears while paging', async () => {
+      // A deploy or a flag flip mid-session. Leaving a "Load more"
+      // button that does nothing is worse than losing the tab.
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+      withInbox([stubShared()], 'cursor-1');
+      const c = api(await createComponent());
+
+      mockShares.listSharedWithMe.mockResolvedValue(null);
+      await c.loadMoreShared();
+
+      expect(c.sharedAvailable()).toBe(false);
+      expect(c.receivedCursor()).toBeNull();
+    });
+
+    it('falls back to All when the selected tab stops existing', async () => {
+      withInbox([stubShared()]);
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+      const c = api(await createComponent());
+      c.setTab('shared');
+
+      mockShares.listSharedWithMe.mockResolvedValue(null);
+      await c.load();
+
+      expect(c.tab()).toBe('all');
+      expect(c.filtered()).toHaveLength(1);
+    });
+
+    it('counts against the tab, not the whole library', async () => {
+      mockHttp.listLibrary.mockResolvedValue([
+        stubArtifact({ artifactId: 'a' }),
+        stubArtifact({ artifactId: 'b' }),
+      ]);
+      withInbox([stubShared()]);
+      const c = api(await createComponent());
+
+      expect(c.totalCount()).toBe(3);
+      c.setTab('shared');
+      // "n of m" has to follow the tab or it reads as a bug.
+      expect(c.tabCount()).toBe(1);
     });
   });
 

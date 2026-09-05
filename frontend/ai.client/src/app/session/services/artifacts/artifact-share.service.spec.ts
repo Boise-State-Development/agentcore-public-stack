@@ -223,6 +223,45 @@ describe('ArtifactShareService', () => {
     }
   });
 
+  describe('listSharedWithMe', () => {
+    it('returns null when the inbox does not exist in this environment', async () => {
+      // A 404 is the backend saying ARTIFACT_SHARE_INBOX_ENABLED is off.
+      // Null and an empty page are different facts and the library page
+      // renders them differently — null hides the tabs, [] says
+      // "nothing yet".
+      const p = service.listSharedWithMe();
+      httpMock
+        .expectOne((r) => r.url === `${API}/shared-artifacts`)
+        .flush(null, { status: 404, statusText: 'Not Found' });
+
+      await expect(p).resolves.toBeNull();
+    });
+
+    it('rethrows anything that is not a 404', async () => {
+      // "We could not load your inbox" is not "you do not have one" —
+      // swallowing a 503 would silently hide a tab that exists.
+      const p = service.listSharedWithMe();
+      httpMock
+        .expectOne((r) => r.url === `${API}/shared-artifacts`)
+        .flush(null, { status: 503, statusText: 'Service Unavailable' });
+
+      await expect(p).rejects.toBeTruthy();
+    });
+
+    it('passes the cursor through and normalizes a missing one', async () => {
+      const p = service.listSharedWithMe('cursor-1');
+      const req = httpMock.expectOne(
+        (r) => r.url === `${API}/shared-artifacts`,
+      );
+      expect(req.request.params.get('cursor')).toBe('cursor-1');
+      req.flush({ artifacts: [] });
+
+      // The backend omits `nextCursor` on the last page; the client
+      // normalizes it so callers can page until it is null.
+      await expect(p).resolves.toEqual({ artifacts: [], nextCursor: null });
+    });
+  });
+
   it('leaves the toast on for the share list, which degrades silently', async () => {
     // listShares has no inline error UI — the dialog still opens and can
     // create a link — so the toast is the only signal the list is stale.

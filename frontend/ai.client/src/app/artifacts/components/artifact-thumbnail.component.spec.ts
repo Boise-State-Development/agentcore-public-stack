@@ -1,12 +1,25 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { ArtifactThumbnailComponent } from './artifact-thumbnail.component';
+import {
+  ArtifactThumbnailComponent,
+  type ArtifactThumbnailSource,
+} from './artifact-thumbnail.component';
 import { ArtifactHttpService } from '../../session/services/artifacts/artifact-http.service';
+import { ArtifactShareService } from '../../session/services/artifacts/artifact-share.service';
+
+const OWNED: ArtifactThumbnailSource = {
+  kind: 'owned',
+  artifactId: 'a1',
+  version: 2,
+  sessionId: 'sess-9',
+  contentType: 'text/html',
+};
 
 describe('ArtifactThumbnailComponent', () => {
   let fixture: ComponentFixture<ArtifactThumbnailComponent>;
   let mockHttp: { mintRenderToken: ReturnType<typeof vi.fn> };
+  let mockShares: { mintSharedRenderToken: ReturnType<typeof vi.fn> };
 
   /** Fires the observed element into view. Null until one is observed. */
   let intersect: (() => void) | null;
@@ -61,16 +74,10 @@ describe('ArtifactThumbnailComponent', () => {
   }
 
   async function create(
-    inputs: Record<string, unknown> = {},
+    source: ArtifactThumbnailSource = OWNED,
   ): Promise<ComponentFixture<ArtifactThumbnailComponent>> {
     fixture = TestBed.createComponent(ArtifactThumbnailComponent);
-    fixture.componentRef.setInput('artifactId', 'a1');
-    fixture.componentRef.setInput('version', 2);
-    fixture.componentRef.setInput('sessionId', 'sess-9');
-    fixture.componentRef.setInput('contentType', 'text/html');
-    for (const [k, v] of Object.entries(inputs)) {
-      fixture.componentRef.setInput(k, v);
-    }
+    fixture.componentRef.setInput('source', source);
     setHostWidth(512);
     fixture.detectChanges(); // runs ngAfterViewInit → wires the observers
     return fixture;
@@ -88,10 +95,19 @@ describe('ArtifactThumbnailComponent', () => {
         expiresAt: '2026-09-05T00:02:00+00:00',
       }),
     };
+    mockShares = {
+      mintSharedRenderToken: vi.fn().mockResolvedValue({
+        url: 'https://artifacts.example/shared?t=jwt',
+        expiresAt: '2026-09-05T00:02:00+00:00',
+      }),
+    };
 
     TestBed.configureTestingModule({
       imports: [ArtifactThumbnailComponent],
-      providers: [{ provide: ArtifactHttpService, useValue: mockHttp }],
+      providers: [
+        { provide: ArtifactHttpService, useValue: mockHttp },
+        { provide: ArtifactShareService, useValue: mockShares },
+      ],
     });
   });
 
@@ -224,7 +240,7 @@ describe('ArtifactThumbnailComponent', () => {
 
   it('falls back to the type glyph when minting fails', async () => {
     mockHttp.mintRenderToken.mockRejectedValue(new Error('503'));
-    await create({ contentType: 'text/csv' });
+    await create({ ...OWNED, contentType: 'text/csv' });
     intersect!();
     await fixture.whenStable();
     fixture.detectChanges();
@@ -234,5 +250,36 @@ describe('ArtifactThumbnailComponent', () => {
     expect(iframe()).toBeNull();
     expect(el().querySelector('ng-icon')).not.toBeNull();
     expect(el().textContent).not.toContain('Try again');
+  });
+
+  // ----------------------------------------------------------------
+  // The two access paths
+  // ----------------------------------------------------------------
+
+  it('mints a received artifact through the share endpoint', async () => {
+    // A recipient has no artifact id, and the owner endpoint builds its
+    // key from the authenticated session — calling it would 404. The
+    // two kinds are two different credentials for the same bytes.
+    await create({
+      kind: 'shared',
+      shareId: 'share-7',
+      contentType: 'text/html',
+    });
+    intersect!();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(mockShares.mintSharedRenderToken).toHaveBeenCalledWith('share-7');
+    expect(mockHttp.mintRenderToken).not.toHaveBeenCalled();
+    expect(iframe()).not.toBeNull();
+  });
+
+  it('mints an owned artifact through the owner endpoint', async () => {
+    await create();
+    intersect!();
+    await fixture.whenStable();
+
+    expect(mockHttp.mintRenderToken).toHaveBeenCalledWith('a1', 2, 'sess-9');
+    expect(mockShares.mintSharedRenderToken).not.toHaveBeenCalled();
   });
 });
