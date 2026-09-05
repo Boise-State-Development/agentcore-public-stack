@@ -89,6 +89,35 @@ class ShareListResponse(BaseModel):
     shares: List[ShareResponse] = Field(..., description="List of shares for the session")
 
 
+class SharedConversationArtifact(BaseModel):
+    """One artifact pinned into a conversation share's snapshot.
+
+    The recipient shape: no owner id, and no session id to go back to.
+    A recipient reaches this artifact only through the conversation
+    share that carries it, so the pair (share id, artifact id) is the
+    whole of their handle on it.
+
+    `version` is the version the artifact stood at when the conversation
+    was shared, not its current HEAD — the same point-in-time promise
+    the messages make.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    artifact_id: str = Field(..., alias="artifactId")
+    version: int
+    title: str = Field(default="")
+    content_type: str = Field(default="", alias="contentType")
+    produced_by_message_index: Optional[int] = Field(
+        default=None,
+        alias="producedByMessageIndex",
+        description="0-based index of the assistant message that produced "
+        "this artifact, so the shared view can anchor its card under the "
+        "same turn the owner sees it under. Null for artifacts written "
+        "before that linkage existed.",
+    )
+
+
 class SharedConversationResponse(BaseModel):
     """Response model for retrieving a shared conversation"""
 
@@ -102,3 +131,11 @@ class SharedConversationResponse(BaseModel):
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of share creation")
     owner_id: str = Field(..., alias="ownerId", description="User ID of the share creator")
     messages: List[MessageResponse] = Field(..., description="Snapshot of conversation messages")
+    artifacts: List[SharedConversationArtifact] = Field(
+        default_factory=list,
+        description="Artifacts the conversation produced, pinned at the "
+        "versions they stood at when it was shared. Empty for shares "
+        "created before artifacts were captured, and for conversations "
+        "that produced none — the two are indistinguishable and neither "
+        "is an error.",
+    )

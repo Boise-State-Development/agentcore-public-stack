@@ -25,6 +25,7 @@ from .models import (
     CreateShareRequest,
     ShareListResponse,
     ShareResponse,
+    SharedConversationArtifact,
     SharedConversationResponse,
     UpdateShareRequest,
 )
@@ -106,8 +107,25 @@ class ShareService:
         if not self._snapshot_store.enabled:
             raise ShareStorageUnavailableError()
 
+        # Artifacts the conversation produced, pinned at the version each
+        # stood at right now.
+        #
+        # They belong in the snapshot for the same reason the messages
+        # do: this share is a point-in-time copy, and an artifact
+        # resolved live would drift under a recipient who is reading a
+        # frozen conversation — they would see a chart the transcript
+        # around it never describes. Pinning also makes the snapshot the
+        # ALLOWLIST: the mint route will serve an (artifact, version)
+        # pair only if it appears here, so a recipient cannot name an
+        # arbitrary artifact of the owner's.
+        artifacts_snapshot = self._snapshot_artifacts(session_id, user)
+
         body_bytes = json.dumps(
-            {"metadata": metadata_snapshot, "messages": messages_snapshot}
+            {
+                "metadata": metadata_snapshot,
+                "messages": messages_snapshot,
+                "artifacts": artifacts_snapshot,
+            }
         ).encode("utf-8")
 
         try:
@@ -566,6 +584,16 @@ class ShareService:
     def _load_snapshot_body(self, item: dict) -> Tuple[dict, list]:
         """Return ``(metadata, messages)`` for a share item.
 
+        A narrowing of :meth:`_load_snapshot_raw` kept because it is what
+        every existing caller wants; anything needing another key of the
+        body (the pinned artifact list) reads the raw dict instead.
+        """
+        body = self._load_snapshot_raw(item)
+        return body.get("metadata", {}) or {}, body.get("messages", []) or []
+
+    def _load_snapshot_raw(self, item: dict) -> dict:
+        """Return the whole snapshot body for a share item.
+
         Handles three item shapes for backward compatibility:
 
           - **New** (``body_ref`` present): fetch the JSON body from S3.
@@ -574,6 +602,10 @@ class ShareService:
             offload. Existing shares predate the offload and stay readable
             with no migration.
           - **Malformed** (neither): unreadable → ``ShareNotFoundError``.
+
+        Callers must treat every key as optional. Bodies written before a
+        key existed simply do not have it, and there is no migration —
+        conversation sharing is in production.
         """
         body_ref = item.get("body_ref")
         if body_ref:
@@ -588,14 +620,22 @@ class ShareService:
                     f"key={key}: {e}"
                 )
                 raise ShareNotFoundError() from e
-            return body.get("metadata", {}) or {}, body.get("messages", []) or []
+            return body if isinstance(body, dict) else {}
 
         if item.get("messages") is not None:
             # Legacy inline share — DynamoDB stored floats as Decimal; convert
             # back so downstream JSON/Pydantic handling matches the S3 path.
-            metadata = self._convert_decimals_to_float(item.get("metadata", {}) or {})
-            messages = self._convert_decimals_to_float(item.get("messages", []))
-            return metadata, messages
+            # Legacy inline shares predate artifacts entirely, so there
+            # is no `artifacts` key to recover here — the caller's
+            # tolerance for a missing one is what covers them.
+            return {
+                "metadata": self._convert_decimals_to_float(
+                    item.get("metadata", {}) or {}
+                ),
+                "messages": self._convert_decimals_to_float(
+                    item.get("messages", [])
+                ),
+            }
 
         logger.warning(
             f"Share {self._sanitize_id(str(item.get('share_id', '')))} has neither "
@@ -617,6 +657,99 @@ class ShareService:
         if key:
             self._snapshot_store.delete(key)
 
+    @staticmethod
+    def _snapshot_artifacts(session_id: str, user: User) -> list[dict]:
+        """The session's artifacts at HEAD, for the snapshot body.
+
+        Best-effort and never raising. Sharing a conversation must not
+        fail because the artifacts feature is off in this environment,
+        or because its table hiccuped — a share with no artifacts is the
+        behaviour every share had before this existed, and it degrades
+        to exactly that. The alternative, failing the share, would trade
+        a missing picture for a missing conversation.
+        """
+        try:
+            from apis.app_api.artifacts.service import (
+                get_artifact_list_service,
+            )
+
+            return get_artifact_list_service().heads_for_session(
+                user_id=user.user_id, session_id=session_id
+            )
+        except Exception:
+            logger.warning(
+                "could not snapshot artifacts for session %s — sharing "
+                "the conversation without them",
+                ShareService._sanitize_id(session_id),
+                exc_info=True,
+            )
+            return []
+
+    def resolve_shared_artifact(
+        self, *, share_id: str, artifact_id: str, requester: User
+    ) -> tuple[str, int]:
+        """Authorize one artifact inside a shared conversation.
+
+        Returns (owner_id, pinned_version) for a caller that is about to
+        mint. Raises ShareNotFoundError when the share is gone or does
+        not carry that artifact, and AccessDeniedError when the viewer
+        may not open the share.
+
+        ############################################################
+        # This is the access-control boundary for artifacts in shared
+        # conversations, and it is the whole of it — the mint it feeds
+        # (`mint_for_conversation_share`) performs no checks of its
+        # own, by design and by the comment on it.
+        #
+        # Two things have to hold, and both are here:
+        #   1. the viewer may open this conversation share, and
+        #   2. the artifact is one the SNAPSHOT pinned.
+        #
+        # (2) is what stops a recipient swapping in another artifact id
+        # belonging to the same owner. `sub` on the minted token is a
+        # partition address, so without it any valid share id would be
+        # a read primitive over the owner's whole artifact partition.
+        # An unknown artifact is a 404 rather than a 403, so it also
+        # reveals nothing about what the owner has.
+        ############################################################
+        """
+        self._ensure_enabled()
+
+        item = self._get_share_item(share_id)
+        if not item:
+            raise ShareNotFoundError()
+
+        self._check_access(item, requester)
+
+        for entry in self._load_snapshot_artifacts(item):
+            if str(entry.get("artifact_id", "")) == artifact_id:
+                return str(item["owner_id"]), int(entry.get("version", 0))
+
+        raise ShareNotFoundError()
+
+    def _load_snapshot_artifacts(self, item: dict) -> list[dict]:
+        """The pinned artifact list from a share's snapshot body.
+
+        Absent on every share created before this feature, and on any
+        share whose owner had no artifacts — both are a normal empty
+        list, not an error. Conversation sharing is already in
+        production, so this MUST stay tolerant of a body with no
+        `artifacts` key; there is no migration and none is needed.
+        """
+        try:
+            body = self._load_snapshot_raw(item)
+        except ShareNotFoundError:
+            raise
+        except Exception:
+            logger.warning(
+                "could not read snapshot artifacts for share %s",
+                self._sanitize_id(str(item.get("share_id", ""))),
+                exc_info=True,
+            )
+            return []
+        raw = body.get("artifacts")
+        return raw if isinstance(raw, list) else []
+
     def _build_shared_conversation_response(self, item: dict) -> SharedConversationResponse:
         from apis.shared.sessions.models import MessageResponse
 
@@ -629,6 +762,20 @@ class ShareService:
             except Exception as e:
                 logger.warning(f"Skipping malformed message in share {item['share_id']}: {e}")
 
+        artifacts = []
+        for entry in self._load_snapshot_artifacts(item):
+            try:
+                artifacts.append(
+                    SharedConversationArtifact.model_validate(entry)
+                )
+            except Exception as e:
+                # One malformed entry must not cost the recipient the
+                # conversation, the same way a malformed message does not.
+                logger.warning(
+                    f"Skipping malformed artifact in share "
+                    f"{self._sanitize_id(str(item.get('share_id', '')))}: {e}"
+                )
+
         return SharedConversationResponse(
             share_id=item["share_id"],
             title=metadata.get("title", "Untitled Conversation"),
@@ -636,6 +783,7 @@ class ShareService:
             created_at=item["created_at"],
             owner_id=item["owner_id"],
             messages=messages,
+            artifacts=artifacts,
         )
 
 

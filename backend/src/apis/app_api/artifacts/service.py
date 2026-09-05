@@ -321,6 +321,76 @@ class RenderTokenService:
         return f"{origin}/?t={token}", exp
 
 
+    def mint_for_conversation_share(
+        self,
+        *,
+        owner_id: str,
+        artifact_id: str,
+        version: int,
+        conversation_share_id: str,
+        viewer: User,
+    ) -> tuple[str, int]:
+        """Mint a render token for an artifact inside a *shared conversation*.
+
+        Returns (render_url, exp_unix). Raises ArtifactNotFoundError or
+        RenderTokenConfigError.
+
+        ############################################################
+        # SECURITY — this method performs NO access control.
+        #
+        # Unlike `mint_for_share`, which resolves and checks its own
+        # share record, this one is handed an owner id and an artifact
+        # id by its caller. Both the conversation-share ACL check and
+        # the "is this artifact actually in that share's snapshot"
+        # check happen in `shares/service.py`, because the grant lives
+        # in the shared-conversations table, which this module does not
+        # read.
+        #
+        # So the ONLY safe caller is one that has already done both. Do
+        # not expose this on a route, do not call it with an
+        # artifact id taken from a request, and do not add a default
+        # for `owner_id`. Given `sub` is a partition address (see
+        # `mint_for_share`), an unchecked call here is "read any
+        # artifact by id" with extra steps.
+        ############################################################
+        """
+        origin = _origin()
+        # The snapshot is denormalized metadata; the version row is the
+        # truth. Re-assert it so an artifact deleted since the
+        # conversation was shared 404s here rather than minting a token
+        # that renders the Lambda's error page in the recipient's frame.
+        _assert_version_exists(owner_id, artifact_id, version)
+
+        now = int(time.time())
+        exp = now + _TTL_SECONDS
+        claims = {
+            "iss": _ISS,
+            "aud": _AUD,
+            "sub": owner_id,  # DynamoDB partition — NOT an identity claim.
+            "aid": artifact_id,
+            "ver": version,
+            "sid": "",
+            "vwr": viewer.user_id,  # who actually looked (audit)
+            # The grant is a CONVERSATION share, not an artifact share.
+            # Prefixed so a log or a later Lambda can tell the two apart
+            # rather than silently reading it as an artifact share id.
+            "shr": f"conv:{conversation_share_id}",
+            "iat": now,
+            "exp": exp,
+        }
+        token = jwt.encode(claims, _signing_key(), algorithm="HS256")
+        logger.info(
+            "minted conversation-share render token share=%s owner=%s "
+            "viewer=%s artifact=%s v=%s",
+            scrub_log(conversation_share_id),
+            scrub_log(owner_id),
+            scrub_log(viewer.user_id),
+            scrub_log(artifact_id),
+            scrub_log(version),
+        )
+        return f"{origin}/?t={token}", exp
+
+
 def get_render_token_service() -> RenderTokenService:
     return RenderTokenService()
 
@@ -393,6 +463,71 @@ class ArtifactListService:
                 self._versions_for_artifact(user_id, artifact_id)
             )
         return summaries
+
+    def heads_for_session(
+        self, *, user_id: str, session_id: str
+    ) -> list[dict]:
+        """Each artifact the session produced, at HEAD, newest-first.
+
+        One row per *artifact*, unlike `list_for_session`, which returns
+        one per version so the session view can anchor a card under the
+        turn that made it. This is the shape a point-in-time snapshot
+        wants: the version each artifact stood at when the conversation
+        was shared.
+
+        Only HEAD rows carry `GSI1PK`, so the index query alone is the
+        answer — no per-artifact expansion, and no base-table read.
+
+        `user_id` filters rather than keys, because `SessionIndex` is
+        partitioned by session and is NOT user-scoped. Dropping that
+        filter would let a borrowed session id enumerate somebody else's
+        artifacts, which is the same reason `list_for_session` re-checks
+        it per row.
+        """
+        table = _table()
+        items: list[dict] = []
+        kwargs: dict = {
+            "IndexName": _SESSION_INDEX,
+            "KeyConditionExpression": Key("GSI1PK").eq(
+                f"SESSION#{session_id}"
+            ),
+            "ScanIndexForward": False,  # GSI1SK embeds updated_at → newest first
+        }
+        try:
+            while True:
+                resp = table.query(**kwargs)
+                items.extend(resp.get("Items", []))
+                last = resp.get("LastEvaluatedKey")
+                if not last:
+                    break
+                kwargs["ExclusiveStartKey"] = last
+        except ClientError as exc:
+            raise ArtifactQueryError("artifact head query failed") from exc
+
+        heads: list[dict] = []
+        seen: set = set()
+        for item in items:
+            artifact_id = str(item.get("artifact_id", ""))
+            if not artifact_id or item.get("user_id") != user_id:
+                continue
+            if artifact_id in seen:
+                continue
+            seen.add(artifact_id)
+            produced_by = item.get("produced_by_message_index")
+            heads.append(
+                {
+                    "artifact_id": artifact_id,
+                    "version": int(item.get("version", 1)),
+                    "title": str(item.get("title", "")),
+                    "content_type": str(
+                        item.get("content_type", "text/html; charset=utf-8")
+                    ),
+                    "produced_by_message_index": (
+                        int(produced_by) if produced_by is not None else None
+                    ),
+                }
+            )
+        return heads
 
     def list_for_user(self, *, user_id: str) -> list[dict]:
         """Every artifact the user owns, at HEAD, newest-first.
