@@ -2,11 +2,16 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Dialog } from '@angular/cdk/dialog';
 import { signal } from '@angular/core';
+import { of } from 'rxjs';
 import { ArtifactCardComponent } from './artifact-card.component';
 import { ArtifactShareModalComponent } from './artifact-share-modal.component';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
+import { ArtifactHttpService } from '../../../../services/artifacts/artifact-http.service';
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
 import { UserService } from '../../../../../auth/user.service';
+import { ToastService } from '../../../../../services/toast/toast.service';
+import { ConfirmationDialogComponent } from '../../../../../components/confirmation-dialog';
+import { RenameArtifactDialogComponent } from '../../../../../artifacts/components/rename-artifact-dialog.component';
 import type { Artifact } from '../../../../services/artifacts/artifact.model';
 
 const ARTIFACT: Artifact = {
@@ -20,8 +25,24 @@ const ARTIFACT: Artifact = {
 describe('ArtifactCardComponent', () => {
   let fixture: ComponentFixture<ArtifactCardComponent>;
   let dialog: { open: ReturnType<typeof vi.fn> };
-  let artifactState: { openArtifactPanel: ReturnType<typeof vi.fn> };
+  let artifactState: {
+    openArtifactPanel: ReturnType<typeof vi.fn>;
+    versionsFor: ReturnType<typeof vi.fn>;
+    remove: ReturnType<typeof vi.fn>;
+    rename: ReturnType<typeof vi.fn>;
+  };
   let download: { download: ReturnType<typeof vi.fn> };
+  let http: {
+    renameArtifact: ReturnType<typeof vi.fn>;
+    deleteArtifact: ReturnType<typeof vi.fn>;
+  };
+  let toast: { error: ReturnType<typeof vi.fn> };
+  /** What the stubbed CDK dialog "returns" — the user's choice. */
+  let dialogResult: unknown;
+
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  }
 
   const el = () => fixture.nativeElement as HTMLElement;
   const button = (label: RegExp): HTMLButtonElement => {
@@ -35,9 +56,22 @@ describe('ArtifactCardComponent', () => {
   beforeEach(() => {
     TestBed.resetTestingModule();
 
-    dialog = { open: vi.fn() };
-    artifactState = { openArtifactPanel: vi.fn() };
+    dialogResult = undefined;
+    dialog = { open: vi.fn(() => ({ closed: of(dialogResult) })) };
+    artifactState = {
+      openArtifactPanel: vi.fn(),
+      versionsFor: vi.fn(() => [ARTIFACT]),
+      remove: vi.fn(),
+      rename: vi.fn(),
+    };
     download = { download: vi.fn().mockResolvedValue(true) };
+    http = {
+      renameArtifact: vi
+        .fn()
+        .mockResolvedValue({ artifactId: 'art-1', title: 'Renamed' }),
+      deleteArtifact: vi.fn().mockResolvedValue(undefined),
+    };
+    toast = { error: vi.fn() };
 
     TestBed.configureTestingModule({
       imports: [ArtifactCardComponent],
@@ -45,6 +79,8 @@ describe('ArtifactCardComponent', () => {
         { provide: Dialog, useValue: dialog },
         { provide: ArtifactStateService, useValue: artifactState },
         { provide: ArtifactDownloadService, useValue: download },
+        { provide: ArtifactHttpService, useValue: http },
+        { provide: ToastService, useValue: toast },
         {
           provide: UserService,
           useValue: { currentUser: signal({ email: 'owner@example.com' }) },
@@ -96,6 +132,8 @@ describe('ArtifactCardComponent', () => {
         { provide: Dialog, useValue: dialog },
         { provide: ArtifactStateService, useValue: artifactState },
         { provide: ArtifactDownloadService, useValue: download },
+        { provide: ArtifactHttpService, useValue: http },
+        { provide: ToastService, useValue: toast },
         { provide: UserService, useValue: { currentUser: signal(null) } },
       ],
     });
@@ -136,5 +174,92 @@ describe('ArtifactCardComponent', () => {
     // still holds and the buttons keep their [appTooltip].
     expect(button(/^Share /).textContent).toContain('Share');
     expect(button(/^Download /).textContent).toContain('Download');
+  });
+
+  describe('rename and delete', () => {
+    it('names no version on the whole-artifact actions', () => {
+      // Share and Download really are scoped to this card's version and
+      // say so. These two are not, so a matching "version 3" suffix
+      // would promise something they do not do.
+      expect(button(/^Rename /).getAttribute('aria-label')).toBe(
+        'Rename artifact Quarterly Chart',
+      );
+      expect(button(/^Delete /).getAttribute('aria-label')).toBe(
+        'Delete artifact Quarterly Chart and all versions',
+      );
+    });
+
+    it('renames the whole artifact in local state', async () => {
+      dialogResult = 'Renamed';
+      button(/^Rename /).click();
+      await flush();
+
+      expect(dialog.open.mock.calls[0][0]).toBe(RenameArtifactDialogComponent);
+      expect(http.renameArtifact).toHaveBeenCalledWith('art-1', 'Renamed');
+      expect(artifactState.rename).toHaveBeenCalledWith('art-1', 'Renamed');
+    });
+
+    it('leaves state alone when a rename fails', async () => {
+      dialogResult = 'Renamed';
+      http.renameArtifact.mockRejectedValue(new Error('503'));
+      button(/^Rename /).click();
+      await flush();
+
+      expect(artifactState.rename).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalled();
+    });
+
+    it('spells out the version count before deleting', async () => {
+      // The card is captioned "v3" and sits beside version-scoped
+      // buttons, so the dialog is the last chance to correct the reading
+      // that this removes one version.
+      artifactState.versionsFor.mockReturnValue([ARTIFACT, ARTIFACT, ARTIFACT]);
+      dialogResult = false;
+      button(/^Delete /).click();
+      await flush();
+
+      expect(dialog.open.mock.calls[0][0]).toBe(ConfirmationDialogComponent);
+      const data = dialog.open.mock.calls[0][1].data;
+      expect(data.destructive).toBe(true);
+      expect(data.message).toContain('all 3 versions');
+      expect(data.message).toContain('not just the version on this card');
+    });
+
+    it('deletes the whole artifact and clears every sibling card', async () => {
+      dialogResult = true;
+      button(/^Delete /).click();
+      await flush();
+
+      expect(http.deleteArtifact).toHaveBeenCalledWith('art-1');
+      // One registry call is what removes this card, its siblings for
+      // the same artifact, and the docked panel.
+      expect(artifactState.remove).toHaveBeenCalledWith('art-1');
+    });
+
+    it('does nothing when the confirmation is declined', async () => {
+      dialogResult = false;
+      button(/^Delete /).click();
+      await flush();
+
+      expect(http.deleteArtifact).not.toHaveBeenCalled();
+      expect(artifactState.remove).not.toHaveBeenCalled();
+    });
+
+    it('keeps the card when the delete fails', async () => {
+      dialogResult = true;
+      http.deleteArtifact.mockRejectedValue(new Error('503'));
+      button(/^Delete /).click();
+      await flush();
+
+      expect(artifactState.remove).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalled();
+    });
+
+    it('does not steal the card body click', () => {
+      const hit = el().querySelector<HTMLButtonElement>('.artifact-card__hit');
+      hit!.click();
+      expect(artifactState.openArtifactPanel).toHaveBeenCalled();
+      expect(dialog.open).not.toHaveBeenCalled();
+    });
   });
 });
