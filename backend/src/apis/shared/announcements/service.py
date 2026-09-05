@@ -1,16 +1,19 @@
 """Service layer for feature announcements.
 
-Thin over the repository, with two pieces of policy that must not live in a
-route handler because PR-2's user-facing surface will call the same methods:
+Thin over the repository, with the policy that must not live in a route
+handler because both the admin surface and the user surface go through it:
 
   - ``panel`` is forced into ``surfaces`` (§D1) — dismissing a loud surface can
     never destroy the information.
   - ack TTLs are derived from the announcement, not supplied by the caller
     (§5), so a client cannot pick its own retention.
+  - the user feed is assembled here, so ``GET /announcements`` and the ack
+    endpoint's 404 check answer "can this user see it?" the same way.
 """
 
 import logging
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import List, Optional, Sequence
 
 from .models import (
     Announcement,
@@ -19,6 +22,7 @@ from .models import (
     AnnouncementUpdate,
 )
 from .repository import AnnouncementsRepository, get_announcements_repository
+from .visibility import AnnouncementFeed, compute_feed
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +127,32 @@ class AnnouncementsService:
         self, user_id: str, announcement_id: str, revision: int
     ) -> Optional[AnnouncementAck]:
         return await self._repo.get_ack(user_id, announcement_id, revision)
+
+    # ── User-facing feed ─────────────────────────────────────────────────
+
+    async def build_feed(
+        self,
+        *,
+        user_id: str,
+        user_roles: Sequence[str],
+        user_created_at: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> AnnouncementFeed:
+        """What this user should see, already filtered and capped (§D5, §D7).
+
+        Two DynamoDB queries — the published announcements and this user's
+        acks. Both are tens of items, and neither is on the model call path
+        (§D12).
+        """
+        announcements = await self._repo.list_announcements(states=["published"])
+        acks = await self._repo.list_acks(user_id)
+        return compute_feed(
+            announcements=announcements,
+            user_roles=user_roles,
+            acks=acks,
+            now=now or datetime.now(timezone.utc),
+            user_created_at=user_created_at,
+        )
 
 
 _service: Optional[AnnouncementsService] = None

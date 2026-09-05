@@ -422,6 +422,75 @@ class AnnouncementListResponse(BaseModel):
     total: int
 
 
+# =============================================================================
+# User-facing response models
+#
+# Deliberately NOT a subset alias of ``AnnouncementResponse``. That model is
+# the admin view and carries ``state``, ``targetRoles``, ``showToNewUsers``,
+# ``createdBy`` and the audit timestamps — telling a user which roles a notice
+# was aimed at, or that one exists in a state they cannot see, is a small
+# information leak with no upside. Two explicit models means adding an admin
+# field can never widen the user payload by accident.
+# =============================================================================
+
+
+class UserAnnouncement(BaseModel):
+    """One announcement as a user sees it."""
+
+    announcement_id: str
+    title: str
+    body_markdown: str
+    summary: Optional[str] = None
+    surfaces: List[str]
+    severity: str
+    publish_at: str
+    expires_at: Optional[str] = None
+    requires_ack: bool
+    cta_label: Optional[str] = None
+    cta_url: Optional[str] = None
+    revision: int
+    #: No acknowledgement recorded at this revision — drives the unread dot.
+    is_unread: bool
+    #: Acked an earlier revision but not this one, so the panel says "Updated"
+    #: rather than "New" (§D4).
+    is_updated: bool
+
+    @classmethod
+    def from_announcement(
+        cls, a: Announcement, *, is_unread: bool, is_updated: bool
+    ) -> "UserAnnouncement":
+        return cls(
+            announcement_id=a.announcement_id,
+            title=a.title,
+            body_markdown=a.body_markdown,
+            summary=a.summary,
+            surfaces=list(a.surfaces),
+            severity=a.severity,
+            publish_at=a.publish_at,
+            expires_at=a.expires_at,
+            requires_ack=a.requires_ack,
+            cta_label=a.cta_label,
+            cta_url=a.cta_url,
+            revision=a.revision,
+            is_unread=is_unread,
+            is_updated=is_updated,
+        )
+
+
+class AnnouncementFeedResponse(BaseModel):
+    """``GET /announcements`` — already filtered and capped (§D5, §D7).
+
+    ``banner`` and ``modal`` are populated from PR-2 onward even though no SPA
+    surface renders them until PR-4 / PR-5; the contract is complete so those
+    PRs are pure frontend.
+    """
+
+    panel: List[UserAnnouncement]
+    banner: Optional[UserAnnouncement] = None
+    modal: Optional[UserAnnouncement] = None
+    unread_count: int
+
+
 def validate_announcement_invariants(
     *,
     surfaces: List[str],
