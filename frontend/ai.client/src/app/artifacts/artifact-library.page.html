@@ -238,6 +238,28 @@
                 />
                 <span class="sr-only">Open {{ item.title }} in a new tab</span>
               </button>
+              <button
+                type="button"
+                (click)="rename(item)"
+                [disabled]="busy() === item.artifactId"
+                [appTooltip]="'Rename'"
+                appTooltipPosition="top"
+                class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              >
+                <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+                <span class="sr-only">Rename {{ item.title }}</span>
+              </button>
+              <button
+                type="button"
+                (click)="confirmDelete(item)"
+                [disabled]="busy() === item.artifactId"
+                [appTooltip]="'Delete'"
+                appTooltipPosition="top"
+                class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:opacity-60 dark:text-gray-500 dark:hover:bg-state-danger-500/10 dark:hover:text-state-danger-400"
+              >
+                <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                <span class="sr-only">Delete {{ item.title }}</span>
+              </button>
             </div>
           </li>
         }
@@ -315,6 +337,30 @@
                   Conversation
                 </a>
               }
+              <div class="ml-auto flex items-center gap-1">
+                <button
+                  type="button"
+                  (click)="rename(item)"
+                  [disabled]="busy() === item.artifactId"
+                  [appTooltip]="'Rename'"
+                  appTooltipPosition="top"
+                  class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                >
+                  <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+                  <span class="sr-only">Rename {{ item.title }}</span>
+                </button>
+                <button
+                  type="button"
+                  (click)="confirmDelete(item)"
+                  [disabled]="busy() === item.artifactId"
+                  [appTooltip]="'Delete'"
+                  appTooltipPosition="top"
+                  class="grid size-8 place-items-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:opacity-60 dark:text-gray-500 dark:hover:bg-state-danger-500/10 dark:hover:text-state-danger-400"
+                >
+                  <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                  <span class="sr-only">Delete {{ item.title }}</span>
+                </button>
+              </div>
             </div>
           </li>
         }

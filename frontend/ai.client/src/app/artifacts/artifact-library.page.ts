@@ -7,6 +7,8 @@ import {
 } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
+import { Dialog } from '@angular/cdk/dialog';
+import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowTopRightOnSquare,
@@ -17,9 +19,11 @@ import {
   heroDocument,
   heroDocumentText,
   heroMagnifyingGlass,
+  heroPencilSquare,
   heroPhoto,
   heroSquares2x2,
   heroTableCells,
+  heroTrash,
 } from '@ng-icons/heroicons/outline';
 
 import {
@@ -29,6 +33,15 @@ import {
 import { LocalSettingsService, type ViewMode } from '../services/local-settings.service';
 import { ToastService } from '../services/toast/toast.service';
 import { TooltipDirective } from '../components/tooltip/tooltip.directive';
+import {
+  ConfirmationDialogComponent,
+  type ConfirmationDialogData,
+} from '../components/confirmation-dialog';
+import {
+  RenameArtifactDialogComponent,
+  type RenameArtifactDialogData,
+  type RenameArtifactDialogResult,
+} from './components/rename-artifact-dialog.component';
 
 /**
  * Presentation for one artifact content type.
@@ -126,9 +139,11 @@ const DEFAULT_TYPE_STYLE: TypeStyle = {
       heroDocument,
       heroDocumentText,
       heroMagnifyingGlass,
+      heroPencilSquare,
       heroPhoto,
       heroSquares2x2,
       heroTableCells,
+      heroTrash,
     }),
   ],
 })
@@ -136,6 +151,7 @@ export class ArtifactLibraryPage {
   private readonly artifacts = inject(ArtifactHttpService);
   private readonly localSettings = inject(LocalSettingsService);
   private readonly toast = inject(ToastService);
+  private readonly dialog = inject(Dialog);
 
   protected readonly items = signal<LibraryArtifact[]>([]);
   protected readonly loading = signal(true);
@@ -144,6 +160,8 @@ export class ArtifactLibraryPage {
   protected readonly typeFilter = signal<string>('all');
   /** Artifact id whose render URL is being minted, so its button can wait. */
   protected readonly opening = signal<string | null>(null);
+  /** Artifact id currently being renamed or deleted, so its row can wait. */
+  protected readonly busy = signal<string | null>(null);
 
   protected readonly viewMode = this.localSettings.artifactsViewMode;
 
@@ -266,6 +284,91 @@ export class ArtifactLibraryPage {
       );
     } finally {
       this.opening.set(null);
+    }
+  }
+
+  /**
+   * Rename an artifact.
+   *
+   * The list is patched from the *response*, not from what was typed:
+   * the server trims the title, and reconciling against its answer is
+   * what keeps this page honest if the two ever diverge.
+   */
+  protected async rename(item: LibraryArtifact): Promise<void> {
+    const data: RenameArtifactDialogData = { title: item.title };
+    const dialogRef = this.dialog.open<RenameArtifactDialogResult>(
+      RenameArtifactDialogComponent,
+      { data },
+    );
+    const title = await firstValueFrom(dialogRef.closed);
+    if (!title) {
+      return;
+    }
+
+    this.busy.set(item.artifactId);
+    try {
+      const updated = await this.artifacts.renameArtifact(item.artifactId, title);
+      this.items.update((list) =>
+        list.map((row) =>
+          row.artifactId === updated.artifactId
+            ? { ...row, title: updated.title }
+            : row,
+        ),
+      );
+      this.toast.success('Artifact renamed');
+    } catch {
+      this.toast.error(
+        'Could not rename artifact',
+        'The change was not saved. Try again in a moment.',
+      );
+    } finally {
+      this.busy.set(null);
+    }
+  }
+
+  /**
+   * Delete an artifact after confirmation.
+   *
+   * The dialog copy names what actually goes — every version, and every
+   * share link — because none of that is visible from this page, and a
+   * user who shared v2 with a colleague deserves to know the link dies
+   * with it. There is no undo, so the row is removed only after the
+   * request succeeds.
+   */
+  protected async confirmDelete(item: LibraryArtifact): Promise<void> {
+    const data: ConfirmationDialogData = {
+      title: 'Delete this artifact?',
+      message:
+        `"${item.title || 'Untitled artifact'}" will be deleted permanently, ` +
+        'along with every version of it and any share links you have created. ' +
+        'This cannot be undone.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      destructive: true,
+    };
+
+    const dialogRef = this.dialog.open<boolean>(ConfirmationDialogComponent, {
+      data,
+    });
+    const confirmed = await firstValueFrom(dialogRef.closed);
+    if (!confirmed) {
+      return;
+    }
+
+    this.busy.set(item.artifactId);
+    try {
+      await this.artifacts.deleteArtifact(item.artifactId);
+      this.items.update((list) =>
+        list.filter((row) => row.artifactId !== item.artifactId),
+      );
+      this.toast.success('Artifact deleted');
+    } catch {
+      this.toast.error(
+        'Could not delete artifact',
+        'Nothing was removed. Try again in a moment.',
+      );
+    } finally {
+      this.busy.set(null);
     }
   }
 
