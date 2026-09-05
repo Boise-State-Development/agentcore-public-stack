@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { Message } from '../models/message.model';
+import type { RenderToken } from '../artifacts/artifact-http.service';
 
 // ------------------------------------------------------------------
 // Interfaces
@@ -32,6 +33,26 @@ export interface ShareListResponse {
   shares: ShareResponse[];
 }
 
+/**
+ * One artifact pinned into a shared conversation's snapshot.
+ *
+ * The recipient shape — no artifact-level share id, because there is no
+ * artifact share: the CONVERSATION share is the grant, and the pair
+ * (conversation shareId, artifactId) is the whole handle a recipient
+ * has. `version` is the version the artifact stood at when the
+ * conversation was shared, matching the frozen transcript around it
+ * rather than whatever the owner has edited it into since.
+ */
+export interface SharedConversationArtifact {
+  artifactId: string;
+  version: number;
+  title: string;
+  contentType: string;
+  /** Anchors the card under the same turn the owner sees it under.
+   *  Null for artifacts written before that linkage existed. */
+  producedByMessageIndex: number | null;
+}
+
 export interface SharedConversationResponse {
   shareId: string;
   title: string;
@@ -39,6 +60,10 @@ export interface SharedConversationResponse {
   createdAt: string;
   ownerId: string;
   messages: Message[];
+  /** Empty for shares created before artifacts were captured, and for
+   *  conversations that produced none — indistinguishable, and neither
+   *  is an error. */
+  artifacts: SharedConversationArtifact[];
 }
 
 export interface ExportResponse {
@@ -79,6 +104,33 @@ export class ShareService {
     return firstValueFrom(
       this.http.get<SharedConversationResponse>(`${this.sharedUrl()}/${shareId}`)
     );
+  }
+
+  /**
+   * Mint a render URL for one artifact inside a shared conversation.
+   *
+   * The grant is the conversation share, so this is addressed by
+   * (shareId, artifactId) and never by an artifact share id — there
+   * isn't one. The backend serves only artifacts the snapshot pinned,
+   * at the version it pinned, so a 404 here means "not part of this
+   * share" as much as "gone".
+   *
+   * The returned URL embeds a short-lived (~120s) bearer credential:
+   * set it as an iframe `src` and re-mint on each open rather than
+   * caching it.
+   */
+  async mintConversationArtifactToken(
+    shareId: string,
+    artifactId: string,
+  ): Promise<RenderToken> {
+    const res = await firstValueFrom(
+      this.http.post<{ url: string; expires_at: string }>(
+        `${this.sharedUrl()}/${encodeURIComponent(shareId)}/artifacts/` +
+          `${encodeURIComponent(artifactId)}/render-token`,
+        {},
+      ),
+    );
+    return { url: res.url, expiresAt: res.expires_at };
   }
 
   async updateShare(shareId: string, accessLevel?: string, allowedEmails?: string[]): Promise<ShareResponse> {
