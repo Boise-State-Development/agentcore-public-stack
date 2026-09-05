@@ -270,6 +270,29 @@ describe('ArtifactLibraryPage', () => {
       expect(fixture.nativeElement.textContent).toContain('Conversation');
     });
 
+    it('previews the artifact on grid cards but not on list rows', async () => {
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+
+      const listFixture = await createComponent();
+      // A row is a scanning surface; a preview per row would spend a render
+      // Lambda invocation each on a picture 24px tall.
+      expect(
+        listFixture.nativeElement.querySelector('app-artifact-thumbnail'),
+      ).toBeNull();
+      listFixture.destroy();
+
+      mockSettings.artifactsViewMode.set('grid');
+      const gridFixture = await createComponent();
+      const thumbnail = gridFixture.nativeElement.querySelector(
+        'app-artifact-thumbnail',
+      );
+      expect(thumbnail).not.toBeNull();
+      // The preview opens the same artifact as the title and the Open button,
+      // so it stays out of the accessibility tree rather than becoming a third
+      // route to one destination.
+      expect(thumbnail.closest('[aria-hidden="true"]')).not.toBeNull();
+    });
+
     it('falls back to a placeholder title and an undated label', async () => {
       mockHttp.listLibrary.mockResolvedValue([
         stubArtifact({ title: '', updatedAt: '' }),
