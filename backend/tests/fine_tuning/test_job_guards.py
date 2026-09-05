@@ -233,6 +233,41 @@ class TestHuggingFacePreflight:
         _patch_client(monkeypatch, response=_FakeResponse(503))
         await preflight_huggingface_model("bert-base-uncased", TEXT_SPEC)
 
+    async def test_rejects_a_generative_vlm_for_the_dual_encoder_task(self, monkeypatch):
+        """LLaVA-style models are image-text, but not dual encoders.
+
+        They are generative: there is no text tower to pool, so the fusion
+        head has nothing to concatenate. The trainer catches this, but only
+        after a GPU has been provisioned — so the tag filter must exclude
+        them here, before anything is billed.
+        """
+        _patch_client(
+            monkeypatch,
+            response=_FakeResponse(
+                200,
+                {
+                    "pipeline_tag": "image-text-to-text",
+                    "siblings": [{"rfilename": "model-00001-of-00003.safetensors"}],
+                },
+            ),
+        )
+        with pytest.raises(HTTPException) as excinfo:
+            await preflight_huggingface_model("llava-hf/llava-1.5-7b-hf", IMAGE_TEXT_SPEC)
+        assert "not compatible" in excinfo.value.detail
+
+    async def test_accepts_a_dual_encoder(self, monkeypatch):
+        _patch_client(
+            monkeypatch,
+            response=_FakeResponse(
+                200,
+                {
+                    "pipeline_tag": "zero-shot-image-classification",
+                    "siblings": [{"rfilename": "model.safetensors"}],
+                },
+            ),
+        )
+        await preflight_huggingface_model("openai/clip-vit-base-patch32", IMAGE_TEXT_SPEC)
+
     async def test_an_untagged_model_is_allowed_through(self, monkeypatch):
         """Many valid checkpoints simply carry no pipeline_tag."""
         _patch_client(

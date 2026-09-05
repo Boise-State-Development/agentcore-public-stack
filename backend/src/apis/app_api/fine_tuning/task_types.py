@@ -220,12 +220,17 @@ TASK_SPECS: Dict[str, TaskSpec] = {
         inference_content_type="application/zip",
         inference_max_payload_mb=100,
         dlc_family=DLC_FAMILY_VISION,
-        hf_pipeline_tags=(
-            "zero-shot-image-classification",
-            "image-text-to-text",
-            "image-feature-extraction",
-            "visual-question-answering",
-        ),
+        # Deliberately narrow. This task needs a *dual encoder* exposing both
+        # get_image_features and get_text_features, which in practice means
+        # the CLIP/SigLIP/ALIGN family — exactly what carries the
+        # zero-shot-image-classification tag.
+        #
+        # "image-text-to-text" (LLaVA, Qwen-VL) and "visual-question-answering"
+        # (ViLT, BLIP) are generative or fusion models with no text tower to
+        # pool, and are excluded on purpose: allowing them would let the
+        # pre-flight pass a model that only fails later, on a billed GPU,
+        # inside the trainer's dual-encoder check.
+        hf_pipeline_tags=("zero-shot-image-classification",),
         default_instance_type="ml.g6.xlarge",
         default_hyperparameters={
             **_COMMON_HYPERPARAMETERS,
