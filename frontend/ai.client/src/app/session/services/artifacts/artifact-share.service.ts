@@ -1,5 +1,9 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpContext } from '@angular/common/http';
+import {
+  HttpClient,
+  HttpContext,
+  HttpErrorResponse,
+} from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
@@ -31,6 +35,48 @@ export interface ArtifactShare {
 
 interface ArtifactShareListResponse {
   shares: ArtifactShare[];
+}
+
+/**
+ * One artifact somebody else shared with you, as the library's
+ * "Shared with you" tab sees it.
+ *
+ * Deliberately *not* `LibraryArtifact` with extra fields. A received
+ * artifact has no `artifactId` and no `sessionId` you can reach — the
+ * share id is the only handle you have on it — and no `updatedAt` that
+ * means anything to you, because that is the owner's clock. Modelling
+ * the two as one type would invite a template to reach for a field that
+ * is structurally absent on half its rows.
+ */
+export interface SharedWithMeArtifact {
+  shareId: string;
+  title: string;
+  contentType: string;
+  version: number;
+  /** Who shared it. */
+  ownerEmail: string;
+  /** When it was shared with you — not when it was made or last edited. */
+  sharedAt: string;
+  /** SPA-relative recipient route, e.g. `/shared-artifact/{id}`. */
+  shareUrl: string;
+}
+
+interface SharedWithMeResponseDto {
+  artifacts: SharedWithMeArtifact[];
+  nextCursor: string | null;
+}
+
+/**
+ * A page of the share inbox, plus where to continue from.
+ *
+ * `nextCursor` terminates the listing, not the page length: the backend
+ * drops rows after its underlying query (a share revoked since it was
+ * fanned out, an allowlist edited), so a short page can still have more
+ * behind it. Page until the cursor is null.
+ */
+export interface SharedWithMePage {
+  artifacts: SharedWithMeArtifact[];
+  nextCursor: string | null;
 }
 
 /** Recipient-facing share metadata. Never carries artifact content. */
@@ -169,6 +215,43 @@ export class ArtifactShareService {
   // ----------------------------------------------------------------
   // Recipient
   // ----------------------------------------------------------------
+
+  /**
+   * One page of the artifacts other people have shared with the caller.
+   *
+   * Returns `null` — not an empty page — when the endpoint 404s, which
+   * is how the backend says the inbox does not exist in this
+   * environment (`ARTIFACT_SHARE_INBOX_ENABLED` off). The two are
+   * different facts and the library page renders them differently: null
+   * hides the tabs entirely, an empty page shows "Nothing yet". Any
+   * other failure rethrows, because "we could not load your inbox" is
+   * not the same as "you do not have one".
+   *
+   * Scoped by the session cookie; there is no parameter that could ask
+   * about anybody else.
+   */
+  async listSharedWithMe(
+    cursor?: string,
+    limit = 100,
+  ): Promise<SharedWithMePage | null> {
+    try {
+      const res = await firstValueFrom(
+        this.http.get<SharedWithMeResponseDto>(this.sharedUrl(), {
+          ...this.inlineErrors(),
+          params: cursor ? { cursor, limit } : { limit },
+        }),
+      );
+      return {
+        artifacts: res.artifacts ?? [],
+        nextCursor: res.nextCursor ?? null,
+      };
+    } catch (err: unknown) {
+      if (err instanceof HttpErrorResponse && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  }
 
   /** Metadata for a shared artifact. Never returns content. */
   async getSharedArtifact(shareId: string): Promise<SharedArtifact> {

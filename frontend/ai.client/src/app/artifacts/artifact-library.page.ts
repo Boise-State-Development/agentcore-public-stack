@@ -37,7 +37,14 @@ import {
   ConfirmationDialogComponent,
   type ConfirmationDialogData,
 } from '../components/confirmation-dialog';
-import { ArtifactThumbnailComponent } from './components/artifact-thumbnail.component';
+import {
+  ArtifactThumbnailComponent,
+  type ArtifactThumbnailSource,
+} from './components/artifact-thumbnail.component';
+import {
+  ArtifactShareService,
+  type SharedWithMeArtifact,
+} from '../session/services/artifacts/artifact-share.service';
 import {
   RenameArtifactDialogComponent,
   type RenameArtifactDialogData,
@@ -106,6 +113,46 @@ const DEFAULT_TYPE_STYLE: TypeStyle = {
   text: 'text-gray-600 dark:text-gray-300',
 };
 
+/** Which slice of the library is on screen. */
+export type LibraryTab = 'all' | 'yours' | 'shared';
+
+/**
+ * One card, whichever list it came from.
+ *
+ * The two sources are genuinely different records — a received artifact
+ * has no artifact id, no session to go back to, and no `updatedAt` that
+ * means anything to the viewer — so they are normalized into one row
+ * shape here rather than the template branching on which fields happen
+ * to be present. `kind` is what the template branches on, and it is the
+ * only thing it needs to branch on: everything else is already resolved.
+ */
+interface LibraryRow {
+  /** Stable `@for` key. Ids come from different key spaces, so they are
+   *  prefixed — an artifact id and a share id could otherwise collide
+   *  and make Angular reuse one row's DOM for the other. */
+  readonly key: string;
+  readonly kind: 'owned' | 'shared';
+  readonly title: string;
+  readonly contentType: string;
+  readonly version: number;
+  /** What the card mints its preview through — the two kinds are two
+   *  different credentials for the same bytes. */
+  readonly thumbnail: ArtifactThumbnailSource;
+  /** ISO timestamp this row is ordered and labelled by. */
+  readonly timestamp: string;
+  /** "Updated" for your own, "Shared" for one you received — the words
+   *  are not interchangeable and neither are the clocks they read. */
+  readonly timestampLabel: string;
+  /** Where clicking the card goes. Owner and recipient routes are
+   *  different pages, not one page with a mode. */
+  readonly route: readonly string[];
+  /** Present only on owned rows — the record rename/delete act on. */
+  readonly owned?: LibraryArtifact;
+  /** Present only on received rows. */
+  readonly ownerEmail?: string;
+  readonly sessionId?: string;
+}
+
 /**
  * The artifact library at `/artifacts` — every artifact the user has ever
  * produced, across every conversation.
@@ -156,12 +203,30 @@ const DEFAULT_TYPE_STYLE: TypeStyle = {
 })
 export class ArtifactLibraryPage {
   private readonly artifacts = inject(ArtifactHttpService);
+  private readonly shares = inject(ArtifactShareService);
   private readonly localSettings = inject(LocalSettingsService);
   private readonly toast = inject(ToastService);
   private readonly router = inject(Router);
   private readonly dialog = inject(Dialog);
 
   protected readonly items = signal<LibraryArtifact[]>([]);
+
+  /**
+   * Artifacts shared with the caller — or `null` when the inbox does not
+   * exist in this environment.
+   *
+   * The distinction is the whole feature flag. `null` means the backend
+   * 404'd the endpoint (`ARTIFACT_SHARE_INBOX_ENABLED` off) and the tabs
+   * are not rendered at all; `[]` means the inbox is real and empty, and
+   * says so. Collapsing the two would either show a permanently empty
+   * tab everywhere the feature is off, or hide a real empty state.
+   */
+  protected readonly received = signal<SharedWithMeArtifact[] | null>(null);
+  /** Continuation for the inbox; non-null means there is more to load. */
+  protected readonly receivedCursor = signal<string | null>(null);
+  protected readonly loadingMore = signal(false);
+
+  protected readonly tab = signal<LibraryTab>('all');
   protected readonly loading = signal(true);
   protected readonly error = signal<string | null>(null);
   protected readonly search = signal('');
@@ -178,10 +243,13 @@ export class ArtifactLibraryPage {
    */
   protected readonly typeOptions = computed(() => {
     const seen = new Map<string, string>();
-    for (const item of this.items()) {
-      const key = this.normalizeType(item.contentType);
+    // Both lists: the filter sits above the tabs and applies to whatever
+    // is on screen, so offering only the types you happen to own would
+    // make it look broken on the "Shared with you" tab.
+    for (const row of this.allRows()) {
+      const key = this.normalizeType(row.contentType);
       if (!seen.has(key)) {
-        seen.set(key, this.styleFor(item.contentType).label);
+        seen.set(key, this.styleFor(row.contentType).label);
       }
     }
     return [...seen.entries()]
@@ -189,20 +257,129 @@ export class ArtifactLibraryPage {
       .sort((a, b) => a.label.localeCompare(b.label));
   });
 
-  protected readonly filtered = computed(() => {
+  /** True once the backend has confirmed the inbox exists here. */
+  protected readonly sharedAvailable = computed(
+    () => this.received() !== null,
+  );
+
+  /**
+   * "All" leads, because the page's job is to be the one place your
+   * artifacts are — splitting them by provenance is a filter on that,
+   * not the default reading of it.
+   */
+  protected readonly tabOptions: ReadonlyArray<{
+    value: LibraryTab;
+    label: string;
+  }> = [
+    { value: 'all', label: 'All' },
+    { value: 'yours', label: 'Yours' },
+    { value: 'shared', label: 'Shared with you' },
+  ];
+
+  /** Rows in the current tab before filtering — the denominator in
+   *  "n of m", which has to follow the tab or it reads as a bug. */
+  protected readonly tabCount = computed(() => this.tabRows().length);
+
+  private readonly ownedRows = computed<LibraryRow[]>(() =>
+    this.items().map((item) => ({
+      key: `owned:${item.artifactId}`,
+      kind: 'owned' as const,
+      title: item.title,
+      contentType: item.contentType,
+      version: item.version,
+      thumbnail: {
+        kind: 'owned' as const,
+        artifactId: item.artifactId,
+        version: item.version,
+        sessionId: item.sessionId,
+        contentType: item.contentType,
+      },
+      timestamp: item.updatedAt,
+      timestampLabel: 'Updated',
+      route: ['/artifacts', item.artifactId],
+      owned: item,
+      sessionId: item.sessionId,
+    })),
+  );
+
+  private readonly sharedRows = computed<LibraryRow[]>(() =>
+    (this.received() ?? []).map((item) => ({
+      key: `shared:${item.shareId}`,
+      kind: 'shared' as const,
+      title: item.title,
+      contentType: item.contentType,
+      version: item.version,
+      thumbnail: {
+        kind: 'shared' as const,
+        shareId: item.shareId,
+        contentType: item.contentType,
+      },
+      timestamp: item.sharedAt,
+      timestampLabel: 'Shared',
+      route: ['/shared-artifact', item.shareId],
+      ownerEmail: item.ownerEmail,
+    })),
+  );
+
+  /**
+   * Both lists interleaved, newest first.
+   *
+   * This is the one place the page sorts, and it is a deliberate
+   * exception to the rule below: two independently server-ordered lists
+   * cannot be shown as one without interleaving them on the client,
+   * because there is no single server ordering to preserve. Each list is
+   * still consumed in the order the server gave it; only the merge is
+   * ours. The tabs that show one list each do not sort at all.
+   */
+  private readonly allRows = computed<LibraryRow[]>(() =>
+    [...this.ownedRows(), ...this.sharedRows()].sort((a, b) =>
+      b.timestamp.localeCompare(a.timestamp),
+    ),
+  );
+
+  /** The rows for the selected tab, before search and type filtering. */
+  private readonly tabRows = computed<LibraryRow[]>(() => {
+    if (!this.sharedAvailable()) {
+      // No inbox here, so there are no tabs and "everything" is yours.
+      return this.ownedRows();
+    }
+    switch (this.tab()) {
+      case 'yours':
+        return this.ownedRows();
+      case 'shared':
+        return this.sharedRows();
+      default:
+        return this.allRows();
+    }
+  });
+
+  protected readonly filtered = computed<LibraryRow[]>(() => {
     const term = this.search().trim().toLowerCase();
     const type = this.typeFilter();
-    return this.items().filter((item) => {
-      if (type !== 'all' && this.normalizeType(item.contentType) !== type) {
+    return this.tabRows().filter((row) => {
+      if (type !== 'all' && this.normalizeType(row.contentType) !== type) {
         return false;
       }
-      return term === '' || item.title.toLowerCase().includes(term);
+      if (term === '') {
+        return true;
+      }
+      // Sender is searchable on a received row: "who sent me that thing"
+      // is at least as likely a starting point as remembering its title.
+      return (
+        row.title.toLowerCase().includes(term) ||
+        (row.ownerEmail ?? '').toLowerCase().includes(term)
+      );
     });
   });
 
+  /** Everything the page holds, for the empty-state distinction below. */
+  protected readonly totalCount = computed(
+    () => this.items().length + (this.received()?.length ?? 0),
+  );
+
   /** True only once loading has resolved, so the empty state can't flash. */
   protected readonly isEmpty = computed(
-    () => !this.loading() && !this.error() && this.items().length === 0,
+    () => !this.loading() && !this.error() && this.totalCount() === 0,
   );
 
   /**
@@ -212,7 +389,7 @@ export class ArtifactLibraryPage {
   protected readonly isFilteredEmpty = computed(
     () =>
       !this.loading() &&
-      this.items().length > 0 &&
+      this.totalCount() > 0 &&
       this.filtered().length === 0,
   );
 
@@ -224,11 +401,74 @@ export class ArtifactLibraryPage {
     this.loading.set(true);
     this.error.set(null);
     try {
-      this.items.set(await this.artifacts.listLibrary());
+      // Both in parallel, and the inbox is allowed to fail on its own:
+      // `allSettled`, not `all`. Your own library is the page's reason to
+      // exist, so an inbox that 503s must not blank it — the tabs simply
+      // do not appear, exactly as when the feature is off. The reverse is
+      // not true: if your library fails there is nothing to show.
+      const [owned, inbox] = await Promise.allSettled([
+        this.artifacts.listLibrary(),
+        this.shares.listSharedWithMe(),
+      ]);
+
+      if (owned.status === 'rejected') {
+        throw owned.reason;
+      }
+      this.items.set(owned.value);
+
+      const page = inbox.status === 'fulfilled' ? inbox.value : null;
+      this.received.set(page?.artifacts ?? null);
+      this.receivedCursor.set(page?.nextCursor ?? null);
+      if (!page && this.tab() === 'shared') {
+        // The tab that was selected no longer exists.
+        this.tab.set('all');
+      }
     } catch {
       this.error.set("We couldn't load your artifacts. Try again in a moment.");
     } finally {
       this.loading.set(false);
+    }
+  }
+
+  protected setTab(next: LibraryTab): void {
+    this.tab.set(next);
+  }
+
+  /**
+   * Fetch the next page of the inbox and append it.
+   *
+   * The owned library arrives whole (its endpoint is unpaginated), but
+   * the inbox is paged, because a share partition grows by one row per
+   * share received and has no ceiling this app controls. So "Load more"
+   * is an inbox-only affordance, and it stays visible on the All tab
+   * too — the merged list is only as complete as what has been loaded,
+   * and hiding the control there would quietly present a partial merge
+   * as the whole thing.
+   */
+  protected async loadMoreShared(): Promise<void> {
+    const cursor = this.receivedCursor();
+    if (!cursor || this.loadingMore()) {
+      return;
+    }
+    this.loadingMore.set(true);
+    try {
+      const page = await this.shares.listSharedWithMe(cursor);
+      if (!page) {
+        // The feature went away under us (a deploy, a flag flip). Drop
+        // the tabs rather than leaving a control that does nothing.
+        this.received.set(null);
+        this.receivedCursor.set(null);
+        return;
+      }
+      this.received.update((rows) => [...(rows ?? []), ...page.artifacts]);
+      this.receivedCursor.set(page.nextCursor);
+    } catch {
+      this.toast.error(
+        'Could not load more',
+        'The rest of your shared artifacts did not load. Try again in a moment.',
+      );
+    } finally {
+      this.loadingMore.set(false);
     }
   }
 
@@ -268,8 +508,8 @@ export class ArtifactLibraryPage {
    * moved into that page, where a refusal is harmless because the
    * artifact is already on screen beside it.
    */
-  protected open(item: LibraryArtifact): void {
-    void this.router.navigate(['/artifacts', item.artifactId]);
+  protected open(row: LibraryRow): void {
+    void this.router.navigate([...row.route]);
   }
 
   /**

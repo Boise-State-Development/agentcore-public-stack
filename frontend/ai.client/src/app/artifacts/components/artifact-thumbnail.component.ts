@@ -20,6 +20,35 @@ import {
 } from '@ng-icons/heroicons/outline';
 
 import { ArtifactHttpService } from '../../session/services/artifacts/artifact-http.service';
+import { ArtifactShareService } from '../../session/services/artifacts/artifact-share.service';
+
+/**
+ * Which access path this thumbnail mints through.
+ *
+ * A recipient cannot mint against an artifact id — the owner endpoint
+ * builds its DynamoDB key from the authenticated session, so it would
+ * 404 — and an owner has no share id. The two are genuinely different
+ * credentials for the same bytes, so the source says which one it is
+ * rather than the component guessing from which fields are populated.
+ *
+ * This mirrors `ArtifactViewerComponent`, which serves the owner panel
+ * and the recipient page through two mint endpoints; that one takes the
+ * URL pre-minted from its parent, which this cannot do because it mints
+ * lazily, on intersection, long after the parent rendered it.
+ */
+export type ArtifactThumbnailSource =
+  | {
+      readonly kind: 'owned';
+      readonly artifactId: string;
+      readonly version: number;
+      readonly sessionId: string;
+      readonly contentType: string;
+    }
+  | {
+      readonly kind: 'shared';
+      readonly shareId: string;
+      readonly contentType: string;
+    };
 
 /**
  * The virtual viewport an artifact is rendered at before being scaled
@@ -170,13 +199,11 @@ const TYPE_ICONS: Record<string, string> = {
 })
 export class ArtifactThumbnailComponent implements AfterViewInit, OnDestroy {
   private readonly artifacts = inject(ArtifactHttpService);
+  private readonly shares = inject(ArtifactShareService);
   private readonly sanitizer = inject(DomSanitizer);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
-  readonly artifactId = input.required<string>();
-  readonly version = input.required<number>();
-  readonly sessionId = input<string>('');
-  readonly contentType = input<string>('');
+  readonly source = input.required<ArtifactThumbnailSource>();
 
   protected readonly virtualWidth = VIRTUAL_WIDTH;
   protected readonly virtualHeight = VIRTUAL_HEIGHT;
@@ -197,7 +224,10 @@ export class ArtifactThumbnailComponent implements AfterViewInit, OnDestroy {
   protected readonly scale = computed(() => this.boxWidth() / VIRTUAL_WIDTH);
 
   protected readonly fallbackIcon = computed(
-    () => TYPE_ICONS[this.contentType().split(';')[0].trim().toLowerCase()] ?? 'heroDocument',
+    () =>
+      TYPE_ICONS[
+        this.source().contentType.split(';')[0].trim().toLowerCase()
+      ] ?? 'heroDocument',
   );
 
   private intersectionObserver?: IntersectionObserver;
@@ -281,12 +311,16 @@ export class ArtifactThumbnailComponent implements AfterViewInit, OnDestroy {
       return;
     }
     this.requested = true;
+    const source = this.source();
     try {
-      const token = await this.artifacts.mintRenderToken(
-        this.artifactId(),
-        this.version(),
-        this.sessionId(),
-      );
+      const token =
+        source.kind === 'owned'
+          ? await this.artifacts.mintRenderToken(
+              source.artifactId,
+              source.version,
+              source.sessionId,
+            )
+          : await this.shares.mintSharedRenderToken(source.shareId);
       if (this.destroyed) {
         return;
       }
