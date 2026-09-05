@@ -311,3 +311,8 @@ class TaskTypeResponse(BaseModel):
     requires_archive: bool
     inference_upload_extensions: List[str]
     default_instance_type: str
+    #: The hyperparameters this task actually uses, with their defaults. The
+    #: create-job form both renders and submits from these keys, so which
+    #: knobs a task exposes is declared once here rather than duplicated as
+    #: per-task conditions in the SPA.
+    default_hyperparameters: Dict[str, str]

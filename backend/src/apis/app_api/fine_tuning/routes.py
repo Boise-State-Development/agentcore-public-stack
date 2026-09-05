@@ -123,6 +123,7 @@ async def list_task_types(
             requires_archive=spec.requires_archive,
             inference_upload_extensions=list(spec.inference_upload_extensions),
             default_instance_type=spec.default_instance_type,
+            default_hyperparameters=dict(spec.default_hyperparameters),
         )
         for spec in (
             task_types.get_task_spec(t) for t in task_types.TASK_TYPES

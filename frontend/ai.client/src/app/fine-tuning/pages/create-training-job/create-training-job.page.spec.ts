@@ -84,6 +84,10 @@ const mockTaskTypes: TaskTypeResponse[] = [
     requires_archive: false,
     inference_upload_extensions: ['.txt', '.csv', '.jsonl', '.json'],
     default_instance_type: 'ml.g5.xlarge',
+    default_hyperparameters: {
+      epochs: '3', learning_rate: '5e-5', weight_decay: '0.01', split_ratio: '0.8',
+      seed: '42', per_device_train_batch_size: '16', context_length: '512',
+    },
   },
   {
     task_type: 'image-classification',
@@ -94,6 +98,10 @@ const mockTaskTypes: TaskTypeResponse[] = [
     requires_archive: true,
     inference_upload_extensions: ['.zip'],
     default_instance_type: 'ml.g6.xlarge',
+    default_hyperparameters: {
+      epochs: '3', learning_rate: '5e-5', weight_decay: '0.01', split_ratio: '0.8',
+      seed: '42', per_device_train_batch_size: '16', image_size: '224',
+    },
   },
 ];
 
@@ -444,5 +452,35 @@ describe('CreateTrainingJobPage', () => {
     // registry rather than the SPA guessing.
     expect(call.instance_type).toBeUndefined();
     expect(call.task_type).toBe('text-classification');
+  });
+
+  it('submits only the hyperparameters the chosen task uses', async () => {
+    const component = createComponent();
+    const router = TestBed.inject(Router);
+    vi.spyOn(router, 'navigate').mockResolvedValue(true);
+    await Promise.resolve();   // let the task-type fetch settle
+
+    component.selectTaskType('image-classification');
+    component.selectModel({ ...mockModel, task_type: 'image-classification' });
+    component.uploadState.set({
+      file: new File([''], 'd.zip'), progress: 100, status: 'complete', s3Key: 'uploads/d.zip',
+    });
+
+    await component.submitJob();
+
+    const hp = mockState.createTrainingJob.mock.calls[0][0].hyperparameters!;
+    // An image task has no context length; sending one records a parameter
+    // the trainer ignores.
+    expect(hp['context_length']).toBeUndefined();
+    expect(hp['image_size']).toBe('224');
+    expect(hp['epochs']).toBeDefined();
+  });
+
+  it('renders every hyperparameter while the task list is still loading', () => {
+    const component = createComponent();
+    // taskTypes() is empty before the fetch resolves — the form should show
+    // its full set rather than briefly collapsing to nothing.
+    expect(component.usesHyperparameter('context_length')).toBe(true);
+    expect(component.usesHyperparameter('image_size')).toBe(true);
   });
 });

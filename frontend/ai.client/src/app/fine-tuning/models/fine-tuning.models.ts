@@ -35,6 +35,8 @@ export interface TaskTypeResponse {
   requires_archive: boolean;
   inference_upload_extensions: string[];
   default_instance_type: string;
+  /** Hyperparameters this task actually uses, with their defaults. */
+  default_hyperparameters: Record<string, string>;
 }
 
 // ── Model Catalog ───────────────────────────────────────────────────────

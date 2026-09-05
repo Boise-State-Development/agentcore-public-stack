@@ -96,6 +96,34 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
   /** Columns a record must carry, for the upload hint. */
   readonly requiredColumns = computed(() => this.selectedTaskSpec()?.required_columns ?? []);
 
+  /**
+   * Form control name -> the hyperparameter key the backend expects.
+   *
+   * Which of these a task actually uses is declared by the task registry, not
+   * repeated here: an image task has no context length, a text task has no
+   * image size.
+   */
+  private static readonly HYPERPARAMETER_KEYS: Record<string, string> = {
+    epochs: 'epochs',
+    batchSize: 'per_device_train_batch_size',
+    learningRate: 'learning_rate',
+    weightDecay: 'weight_decay',
+    seed: 'seed',
+    contextLength: 'context_length',
+    imageSize: 'image_size',
+  };
+
+  /**
+   * Whether the selected task uses a given hyperparameter.
+   *
+   * Returns true while the task list is still loading, so the form renders
+   * its full set rather than briefly collapsing to nothing.
+   */
+  usesHyperparameter(key: string): boolean {
+    const spec = this.selectedTaskSpec();
+    return spec ? key in spec.default_hyperparameters : true;
+  }
+
   /** Currently selected model (catalog or custom). */
   readonly selectedModel = signal<AvailableModel | null>(null);
 
@@ -434,15 +462,15 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
     try {
       const formValues = this.form.getRawValue();
 
-      // Build hyperparameters dict from form values (skip empty)
+      // Submit only the hyperparameters the chosen task actually uses. The
+      // form keeps every control alive regardless of which are visible, so
+      // sending them all would record e.g. a context_length on an image job.
+      const values = formValues as unknown as Record<string, string | number | null>;
       const hyperparameters: Record<string, string> = {};
-      if (formValues.epochs) hyperparameters['epochs'] = formValues.epochs;
-      if (formValues.batchSize) hyperparameters['per_device_train_batch_size'] = formValues.batchSize;
-      if (formValues.learningRate) hyperparameters['learning_rate'] = formValues.learningRate;
-      if (formValues.weightDecay) hyperparameters['weight_decay'] = formValues.weightDecay;
-      if (formValues.seed) hyperparameters['seed'] = formValues.seed;
-      if (formValues.contextLength) hyperparameters['context_length'] = formValues.contextLength;
-      if (formValues.imageSize) hyperparameters['image_size'] = formValues.imageSize;
+      for (const [control, key] of Object.entries(CreateTrainingJobPage.HYPERPARAMETER_KEYS)) {
+        const value = values[control];
+        if (value && this.usesHyperparameter(key)) hyperparameters[key] = String(value);
+      }
 
       // Convert slider percentage (e.g. 80) to decimal string (e.g. "0.8")
       hyperparameters['split_ratio'] = (this.splitSlider.value / 100).toString();

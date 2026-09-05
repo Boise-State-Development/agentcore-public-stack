@@ -451,8 +451,8 @@
             />
           </div>
 
-          <!-- Context Length — text-bearing tasks only -->
-          @if (selectedTaskType() !== 'image-classification') {
+          <!-- Context Length — only for tasks that declare it -->
+          @if (usesHyperparameter('context_length')) {
             <div>
               <label for="hp-ctx" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Context Length</label>
               <input
@@ -464,8 +464,8 @@
             </div>
           }
 
-          <!-- Image Size — image-bearing tasks only -->
-          @if (requiresArchive()) {
+          <!-- Image Size — only for tasks that declare it -->
+          @if (usesHyperparameter('image_size')) {
             <div>
               <label for="hp-img" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Image Size</label>
               <input
