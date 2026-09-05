@@ -186,6 +186,11 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'artifacts',
+        loadComponent: () => import('./artifacts/artifact-library.page').then(m => m.ArtifactLibraryPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'oauth-complete',
         loadComponent: () => import('./oauth-complete/oauth-complete.page').then(m => m.OAuthCompletePage),
     },

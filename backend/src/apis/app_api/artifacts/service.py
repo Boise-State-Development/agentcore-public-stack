@@ -385,6 +385,80 @@ class ArtifactListService:
             )
         return summaries
 
+    def list_for_user(self, *, user_id: str) -> list[dict]:
+        """Every artifact the user owns, at HEAD, newest-first.
+
+        One base-table Query, no index. The table is already partitioned
+        by user (`PK=USER#{uid}`), so ownership is enforced by the key
+        rather than re-checked per row the way `list_for_session` has to
+        be — a user-wide list is the query this schema was already
+        shaped for.
+
+        Deliberately not using a GSI. `SessionIndex` is partitioned by
+        session, not user, so it cannot serve this at all; the sparse
+        user index the writer stamps keys for (`GSI2PK`/`GSI2SK`) does
+        not exist yet, and is not needed while the heaviest partition
+        sits far under a 1MB page. See the writer's module docstring.
+
+        Two consequences of reading the base table, both deliberate:
+
+        * The Query spans version rows as well as HEAD rows, so it reads
+          roughly 3x what it returns. Filtering happens here rather than
+          in a FilterExpression because the obvious server-side
+          discriminator (`attribute_exists(GSI1PK)`) would couple "is
+          HEAD" to "is session-indexed" — two facts that only happen to
+          coincide today — and a FilterExpression saves payload, not
+          read capacity, so it buys nothing worth that coupling.
+        * The base table sorts by artifact id (a random uuid4), not by
+          time, so recency ordering is applied here in memory. This is
+          the part that would move server-side behind the user index.
+        """
+        table = _table()
+        items: list[dict] = []
+        kwargs: dict = {
+            "KeyConditionExpression": Key("PK").eq(f"USER#{user_id}")
+            & Key("SK").begins_with("ARTIFACT#"),
+        }
+        try:
+            while True:
+                resp = table.query(**kwargs)
+                items.extend(resp.get("Items", []))
+                last = resp.get("LastEvaluatedKey")
+                if not last:
+                    break
+                kwargs["ExclusiveStartKey"] = last
+        except ClientError as exc:
+            raise ArtifactQueryError("artifact library query failed") from exc
+
+        heads = [
+            item for item in items
+            if str(item.get("SK", "")).endswith("#HEAD")
+        ]
+        rows = [
+            {
+                "artifact_id": item.get("artifact_id", ""),
+                "version": int(item.get("version", 0)),
+                "title": item.get("title", ""),
+                "content_type": item.get(
+                    "content_type", "text/html; charset=utf-8"
+                ),
+                # Rows written before these attributes existed degrade to
+                # an empty string rather than dropping out of the library.
+                "created_at": item.get("created_at") or "",
+                "updated_at": item.get("updated_at") or "",
+                "session_id": item.get("session_id") or "",
+            }
+            for item in heads
+            if item.get("artifact_id")
+        ]
+        # Newest-first. Undated legacy rows sort last rather than first,
+        # which an empty-string key would otherwise do.
+        rows.sort(
+            key=lambda row: (bool(row["updated_at"]), row["updated_at"]),
+            reverse=True,
+        )
+        return rows
+
     @staticmethod
     def _versions_for_artifact(
         user_id: str, artifact_id: str
