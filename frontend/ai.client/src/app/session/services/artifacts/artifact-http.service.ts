@@ -144,6 +144,49 @@ export class ArtifactHttpService {
   }
 
   /**
+   * Retitle an artifact. Returns the server's view of the updated HEAD.
+   *
+   * The backend applies the new title to the HEAD row *and* to every
+   * version row, so the library and the conversation that produced the
+   * artifact cannot end up showing different names for it. Callers
+   * should reconcile against the returned title rather than the one
+   * they sent — it comes back trimmed.
+   */
+  async renameArtifact(artifactId: string, title: string): Promise<LibraryArtifact> {
+    const res = await firstValueFrom(
+      this.http.patch<LibraryArtifactDto>(
+        `${this.config.appApiUrl()}/artifacts/${encodeURIComponent(artifactId)}`,
+        { title },
+      ),
+    );
+    return {
+      artifactId: res.artifact_id,
+      version: res.version,
+      title: res.title,
+      contentType: res.content_type,
+      createdAt: res.created_at,
+      updatedAt: res.updated_at,
+      sessionId: res.session_id,
+    };
+  }
+
+  /**
+   * Delete an artifact, every version of it, and every share of it.
+   *
+   * Permanent — there is no trash and no undo, which is why every call
+   * site is behind a destructive confirmation dialog. The content bytes
+   * sit on a server-side retention clock afterwards, but nothing in the
+   * app can bring the artifact back.
+   */
+  async deleteArtifact(artifactId: string): Promise<void> {
+    await firstValueFrom(
+      this.http.delete<void>(
+        `${this.config.appApiUrl()}/artifacts/${encodeURIComponent(artifactId)}`,
+      ),
+    );
+  }
+
+  /**
    * Every artifact the signed-in user owns, at HEAD, newest-first.
    *
    * Takes no argument on purpose: the endpoint is scoped by the session

@@ -16,6 +16,17 @@ Frozen cross-PR contract (must stay in sync with the render Lambda
 Versions are immutable (no DeleteObject grant in inference-api) — an
 update writes a new version and re-points HEAD.
 
+Immutable, but not permanent: app-api's `ArtifactLifecycleService`
+deletes whole artifacts (every version row, the HEAD row, and every
+share of them) and retitles them. Two consequences for anything written
+here. Rows can vanish between a read and a write, so every write-back on
+an existing row — `set_produced_by_message_index` is the one today —
+must carry `attribute_exists(SK)` rather than resurrect a deleted
+artifact. And `title` is no longer writer-owned: a rename updates it on
+HEAD and on every version row, deliberately touching neither `version`
+(the optimistic lock below) nor `updated_at` (embedded in the GSI sort
+keys, which only this module maintains).
+
 GSI2PK/GSI2SK are written ahead of the index that will consume them.
 Nothing queries them today — a user-wide artifact list is served by a
 base-table Query on PK=USER#{uid}, which is adequate while the heaviest

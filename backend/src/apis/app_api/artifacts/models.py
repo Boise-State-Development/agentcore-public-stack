@@ -15,6 +15,8 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .service import MAX_ARTIFACT_TITLE_LENGTH
+
 
 class RenderTokenRequest(BaseModel):
     version: int = Field(..., ge=1, description="Artifact version to render")
@@ -83,6 +85,41 @@ class LibraryArtifact(BaseModel):
 
 class ArtifactLibraryResponse(BaseModel):
     artifacts: list[LibraryArtifact] = Field(default_factory=list)
+
+
+class RenameArtifactRequest(BaseModel):
+    """Request body for retitling an artifact.
+
+    A PATCH body with one field rather than a `/title` sub-resource, so
+    a future editable field (a description, say) is an added key rather
+    than another endpoint. The length cap is enforced here *and* in the
+    service — the model guards the HTTP surface, the service guards any
+    other caller, and they read from the same constant.
+    """
+
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_ARTIFACT_TITLE_LENGTH,
+        description="New display title for the artifact",
+    )
+
+
+class RenamedArtifactResponse(BaseModel):
+    """The artifact's HEAD after a rename.
+
+    Returns the whole record rather than an echo of the title so the SPA
+    can reconcile against the server's view — the same shape the library
+    endpoint already hands it, minus nothing it uses.
+    """
+
+    artifact_id: str
+    version: int
+    title: str
+    content_type: str
+    created_at: str
+    updated_at: str
+    session_id: str
 
 
 class ArtifactContentResponse(BaseModel):

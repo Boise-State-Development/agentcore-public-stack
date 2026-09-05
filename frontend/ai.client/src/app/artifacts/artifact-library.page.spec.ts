@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { signal } from '@angular/core';
+import { Dialog } from '@angular/cdk/dialog';
+import { of } from 'rxjs';
 
 import { ArtifactLibraryPage } from './artifact-library.page';
 import {
@@ -28,7 +30,13 @@ describe('ArtifactLibraryPage', () => {
   let mockHttp: {
     listLibrary: ReturnType<typeof vi.fn>;
     mintRenderToken: ReturnType<typeof vi.fn>;
+    renameArtifact: ReturnType<typeof vi.fn>;
+    deleteArtifact: ReturnType<typeof vi.fn>;
   };
+  /** Stands in for the CDK dialog. `closed` is what the page awaits, so
+   *  each test sets the value the user "chose" before acting. */
+  let mockDialog: { open: ReturnType<typeof vi.fn> };
+  let dialogResult: unknown;
   let mockSettings: {
     artifactsViewMode: ReturnType<typeof signal<ViewMode>>;
     setArtifactsViewMode: ReturnType<typeof vi.fn>;
@@ -43,6 +51,12 @@ describe('ArtifactLibraryPage', () => {
       mintRenderToken: vi
         .fn()
         .mockResolvedValue({ url: 'https://artifacts.example/x?t=tok', expiresAt: '' }),
+      renameArtifact: vi.fn(),
+      deleteArtifact: vi.fn().mockResolvedValue(undefined),
+    };
+    dialogResult = undefined;
+    mockDialog = {
+      open: vi.fn(() => ({ closed: of(dialogResult) })),
     };
     mockSettings = {
       artifactsViewMode: signal<ViewMode>('list'),
@@ -61,6 +75,7 @@ describe('ArtifactLibraryPage', () => {
         { provide: ArtifactHttpService, useValue: mockHttp },
         { provide: LocalSettingsService, useValue: mockSettings },
         { provide: ToastService, useValue: mockToast },
+        { provide: Dialog, useValue: mockDialog },
       ],
     });
   });
@@ -96,6 +111,9 @@ describe('ArtifactLibraryPage', () => {
       setViewMode: (m: ViewMode) => void;
       open: (item: LibraryArtifact) => Promise<void>;
       load: () => Promise<void>;
+      rename: (item: LibraryArtifact) => Promise<void>;
+      confirmDelete: (item: LibraryArtifact) => Promise<void>;
+      busy: () => string | null;
     };
   }
 
@@ -276,6 +294,104 @@ describe('ArtifactLibraryPage', () => {
       mockHttp.listLibrary.mockResolvedValue([stubArtifact({ sessionId: '' })]);
       const fixture = await createComponent();
       expect(fixture.nativeElement.querySelector('a[href^="/s/"]')).toBeNull();
+    });
+  });
+
+  describe('rename', () => {
+    it('patches the row from the response, not from what was typed', async () => {
+      // The server trims. Echoing the typed value back would let the page
+      // drift from what is actually stored.
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact({ artifactId: 'a' })]);
+      mockHttp.renameArtifact.mockResolvedValue(
+        stubArtifact({ artifactId: 'a', title: 'Trimmed' }),
+      );
+      const c = api(await createComponent());
+      dialogResult = '  Trimmed  ';
+
+      await c.rename(c.items()[0]);
+
+      expect(mockHttp.renameArtifact).toHaveBeenCalledWith('a', '  Trimmed  ');
+      expect(c.items()[0].title).toBe('Trimmed');
+    });
+
+    it('does nothing when the dialog is cancelled', async () => {
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+      const c = api(await createComponent());
+      dialogResult = undefined;
+
+      await c.rename(c.items()[0]);
+
+      expect(mockHttp.renameArtifact).not.toHaveBeenCalled();
+    });
+
+    it('keeps the old title and warns when the request fails', async () => {
+      mockHttp.listLibrary.mockResolvedValue([
+        stubArtifact({ title: 'Quarterly plan' }),
+      ]);
+      mockHttp.renameArtifact.mockRejectedValue(new Error('503'));
+      const c = api(await createComponent());
+      dialogResult = 'New name';
+
+      await c.rename(c.items()[0]);
+
+      expect(c.items()[0].title).toBe('Quarterly plan');
+      expect(mockToast.error).toHaveBeenCalled();
+      expect(c.busy()).toBeNull();
+    });
+  });
+
+  describe('delete', () => {
+    it('removes the row only after the request succeeds', async () => {
+      mockHttp.listLibrary.mockResolvedValue([
+        stubArtifact({ artifactId: 'a' }),
+        stubArtifact({ artifactId: 'b' }),
+      ]);
+      const c = api(await createComponent());
+      dialogResult = true;
+
+      await c.confirmDelete(c.items()[0]);
+
+      expect(mockHttp.deleteArtifact).toHaveBeenCalledWith('a');
+      expect(c.items().map((i) => i.artifactId)).toEqual(['b']);
+    });
+
+    it('does nothing when the confirmation is declined', async () => {
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact({ artifactId: 'a' })]);
+      const c = api(await createComponent());
+      dialogResult = false;
+
+      await c.confirmDelete(c.items()[0]);
+
+      expect(mockHttp.deleteArtifact).not.toHaveBeenCalled();
+      expect(c.items()).toHaveLength(1);
+    });
+
+    it('confirms destructively, naming versions and shares', async () => {
+      // Neither is visible from this page, so the dialog copy is the only
+      // place a user learns a share link dies with the artifact.
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+      const c = api(await createComponent());
+      dialogResult = false;
+
+      await c.confirmDelete(c.items()[0]);
+
+      const data = mockDialog.open.mock.calls[0][1].data;
+      expect(data.destructive).toBe(true);
+      expect(data.message).toContain('every version');
+      expect(data.message).toContain('share links');
+    });
+
+    it('keeps the row and warns when the request fails', async () => {
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact({ artifactId: 'a' })]);
+      mockHttp.deleteArtifact.mockRejectedValue(new Error('503'));
+      const c = api(await createComponent());
+      dialogResult = true;
+
+      await c.confirmDelete(c.items()[0]);
+
+      expect(c.items()).toHaveLength(1);
+      expect(mockToast.error).toHaveBeenCalled();
+      expect(c.busy()).toBeNull();
     });
   });
 });

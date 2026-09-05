@@ -9,6 +9,8 @@ import { ArtifactHttpService } from '../../../../services/artifacts/artifact-htt
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
 import { SessionService } from '../../../../services/session/session.service';
 import { UserService } from '../../../../../auth/user.service';
+import { ToastService } from '../../../../../services/toast/toast.service';
+import { of } from 'rxjs';
 
 /**
  * Guards the PR-3 extraction: the panel's viewer body moved into
@@ -22,7 +24,16 @@ describe('ArtifactPanelComponent', () => {
   let http: {
     mintRenderToken: ReturnType<typeof vi.fn>;
     getArtifactContent: ReturnType<typeof vi.fn>;
+    renameArtifact: ReturnType<typeof vi.fn>;
+    deleteArtifact: ReturnType<typeof vi.fn>;
   };
+  let state: {
+    remove: ReturnType<typeof vi.fn>;
+    rename: ReturnType<typeof vi.fn>;
+  };
+  let toast: { error: ReturnType<typeof vi.fn> };
+  /** What the stubbed CDK dialog "returns" — the user's choice. */
+  let dialogResult: unknown;
 
   const OPEN = { artifactId: 'art-1', version: 2, title: 'Chart' };
   const openArtifact = signal<typeof OPEN | null>(OPEN);
@@ -51,7 +62,14 @@ describe('ArtifactPanelComponent', () => {
         contentType: 'text/html',
         version: 2,
       }),
+      renameArtifact: vi
+        .fn()
+        .mockResolvedValue({ artifactId: 'art-1', title: 'Renamed' }),
+      deleteArtifact: vi.fn().mockResolvedValue(undefined),
     };
+    state = { remove: vi.fn(), rename: vi.fn() };
+    toast = { error: vi.fn() };
+    dialogResult = undefined;
 
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
@@ -68,6 +86,8 @@ describe('ArtifactPanelComponent', () => {
             openArtifactPanel: vi.fn(),
             closeArtifactPanel: vi.fn(),
             setPaneWidth: vi.fn(),
+            remove: state.remove,
+            rename: state.rename,
           },
         },
         { provide: ArtifactHttpService, useValue: http },
@@ -80,7 +100,11 @@ describe('ArtifactPanelComponent', () => {
           provide: UserService,
           useValue: { currentUser: signal({ email: 'owner@example.com' }) },
         },
-        { provide: Dialog, useValue: { open: vi.fn() } },
+        { provide: ToastService, useValue: toast },
+        {
+          provide: Dialog,
+          useValue: { open: vi.fn(() => ({ closed: of(dialogResult) })) },
+        },
       ],
     });
 
@@ -151,5 +175,61 @@ describe('ArtifactPanelComponent', () => {
     fixture.detectChanges();
     // The iframe would otherwise swallow the pointer stream mid-drag.
     expect(viewerInstance()!.inert()).toBe(true);
+  });
+
+  describe('rename and delete', () => {
+    const panel = () =>
+      fixture.componentInstance as unknown as Record<string, any>;
+
+    it('applies a rename to the whole artifact in local state', async () => {
+      // The backend retitles every version row, so the registry has to
+      // follow — otherwise the version picker lists one artifact under
+      // two names.
+      dialogResult = 'Renamed';
+      await panel()['rename'](OPEN);
+
+      expect(http.renameArtifact).toHaveBeenCalledWith('art-1', 'Renamed');
+      expect(state.rename).toHaveBeenCalledWith('art-1', 'Renamed');
+    });
+
+    it('leaves state untouched when a rename fails', async () => {
+      dialogResult = 'Renamed';
+      http.renameArtifact.mockRejectedValue(new Error('503'));
+
+      await panel()['rename'](OPEN);
+
+      expect(state.rename).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalled();
+    });
+
+    it('removes the artifact from state once the delete succeeds', async () => {
+      // Removal is what clears the inline cards *and* closes this panel;
+      // both read the same registry.
+      dialogResult = true;
+      await panel()['confirmDelete'](OPEN);
+
+      expect(http.deleteArtifact).toHaveBeenCalledWith('art-1');
+      expect(state.remove).toHaveBeenCalledWith('art-1');
+    });
+
+    it('does not delete when the confirmation is declined', async () => {
+      dialogResult = false;
+      await panel()['confirmDelete'](OPEN);
+
+      expect(http.deleteArtifact).not.toHaveBeenCalled();
+      expect(state.remove).not.toHaveBeenCalled();
+    });
+
+    it('keeps the artifact on screen when the delete fails', async () => {
+      // An optimistic removal would look like success and then reappear
+      // on the next session load.
+      dialogResult = true;
+      http.deleteArtifact.mockRejectedValue(new Error('503'));
+
+      await panel()['confirmDelete'](OPEN);
+
+      expect(state.remove).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalled();
+    });
   });
 });
