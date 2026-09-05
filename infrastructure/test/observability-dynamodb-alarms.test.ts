@@ -41,8 +41,8 @@ describe('DynamoDB per-table alarms', () => {
 
   // Tied to the real table count, so a new table without an alarm fails here.
   it('covers every table in the stack — one throttle alarm each', () => {
-    expect(tableCount).toBe(26);
-    // 26 per-table throttle alarms + 1 account-level UserErrors alarm.
+    expect(tableCount).toBe(27);
+    // 27 per-table throttle alarms + 1 account-level UserErrors alarm.
     expect(ddbAlarmNames()).toHaveLength(tableCount + 1);
   });
 

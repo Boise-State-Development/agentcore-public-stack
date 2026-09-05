@@ -183,6 +183,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly managedModelsTable: dynamodb.ITable;
   public readonly userSettingsTable: dynamodb.ITable;
   public readonly userMenuLinksTable: dynamodb.ITable;
+  public readonly announcementsTable: dynamodb.ITable;
   public readonly systemPromptsTable: dynamodb.ITable;
   public readonly sharedConversationsTable: dynamodb.ITable;
   public readonly sharedConversationsBucket: s3.IBucket;
@@ -423,6 +424,7 @@ export class PlatformStack extends cdk.Stack {
     });
     this.userSettingsTable = adminTables.userSettingsTable;
     this.userMenuLinksTable = adminTables.userMenuLinksTable;
+    this.announcementsTable = adminTables.announcementsTable;
     this.systemPromptsTable = adminTables.systemPromptsTable;
 
     const fileUpload = new FileUploadConstruct(this, 'FileUpload', { config });
@@ -826,6 +828,7 @@ export class PlatformStack extends cdk.Stack {
       managedModelsTable: this.managedModelsTable,
       userSettingsTable: this.userSettingsTable,
       userMenuLinksTable: this.userMenuLinksTable,
+      announcementsTable: this.announcementsTable,
       systemPromptsTable: this.systemPromptsTable,
       sharedConversationsTable: this.sharedConversationsTable,
       sharedConversationsBucket: this.sharedConversationsBucket,
@@ -1000,6 +1003,7 @@ export class PlatformStack extends cdk.Stack {
         { name: 'managed-models', table: this.managedModelsTable },
         { name: 'user-settings', table: this.userSettingsTable },
         { name: 'user-menu-links', table: this.userMenuLinksTable },
+        { name: 'announcements', table: this.announcementsTable },
         { name: 'system-prompts', table: this.systemPromptsTable },
         { name: 'shared-conversations', table: this.sharedConversationsTable },
         { name: 'user-file-uploads', table: this.fileUploadTable },
