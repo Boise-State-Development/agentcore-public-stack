@@ -190,6 +190,46 @@ and suggests pinning `strands-agents==1.53.0`; we are on 1.51.0.
   profile. Not present in `inference-api-iam-roles.ts` today — this is a
   `platform.yml` deploy, so sequence it ahead of the backend change.
 
+#### ⚠️ CORRECTED TWICE — the real IAM gap was a different action
+
+**The `InvokeModel` half of that bullet was already satisfied.** Simulated against
+the deployed dev roles with `iam simulate-principal-policy`:
+
+| action | resource | runtime role |
+|---|---|---|
+| `bedrock:InvokeModel` | `inference-profile/us.openai.gpt-5.6-sol` | allowed |
+| `bedrock:InvokeModel` | `project/default` | allowed |
+| `bedrock:InvokeModelWithResponseStream` | inference profile | allowed |
+| **`bedrock:CallWithBearerToken`** | any | **implicitDeny** |
+
+The account-scoped `arn:aws:bedrock:{region}:{account}:*` resource on the existing
+`BedrockModelInvocation` statement already matches `project/default`, so PR-2
+shipped without an IAM change on that basis — correctly, as far as it went.
+
+**What PR-2 missed is the bearer token itself.** The `bedrock-runtime`
+OpenAI-compatible endpoint authenticates with the same short-term token
+construction as Mantle, but authorizes it under a *different IAM service
+namespace*: `bedrock:CallWithBearerToken`, not
+`bedrock-mantle:CallWithBearerToken`. Only the Mantle one was granted, so the
+first real turn failed:
+
+```
+401 ... is not authorized to perform: bedrock:CallWithBearerToken on resource: *
+because no identity-based policy allows the action
+```
+
+Both roles need it — the AgentCore runtime role (agent loop) and the app-api task
+role (`/chat/api-converse`). **This IS a `platform.yml` deploy**, and it must land
+before the transport can serve a single turn.
+
+Why no earlier step caught it: unit tests construct the model but never issue a
+request, and the `probe_gpt56_cache_rates.py` run that verified PR-1/2/5 executed
+under a developer's SSO credentials, which carry far broader permissions than the
+runtime role. Only an end-to-end turn through the deployed agent exercises the
+actual principal. Worth remembering as a general shape — a transport that
+authenticates differently from its neighbours needs its IAM verified against the
+*deployed role*, not inferred from the neighbour's grants.
+
 **Boundary check:** this is model-transport code, so it belongs in
 `apis/shared/models/` next to `mantle.py`, consumed by both `agent_factory` and the
 API-key `/chat/api-converse` handler. Don't fork the build logic.

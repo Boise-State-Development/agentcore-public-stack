@@ -548,6 +548,28 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── bedrock-runtime OpenAI bearer token ──
+  // The OpenAI-compatible endpoint on `bedrock-runtime`
+  // (provider="bedrock-responses") authenticates with the SAME short-term
+  // bearer token construction as Mantle, but authorizes it under a DIFFERENT
+  // IAM service namespace: `bedrock:CallWithBearerToken`, not
+  // `bedrock-mantle:CallWithBearerToken`. Granting only the Mantle one gets:
+  //
+  //   401 ... is not authorized to perform: bedrock:CallWithBearerToken
+  //   on resource: * because no identity-based policy allows the action
+  //
+  // Caught end-to-end in dev on 2026-09-05 — it does not show up in unit
+  // tests, and it does not show up when a developer drives the transport with
+  // their own SSO credentials, only under the runtime/task role.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'BedrockRuntimeCallWithBearerToken',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:CallWithBearerToken'],
+      resources: ['*'],
+    }),
+  );
+
   // ── SSM read for inference-api image tag (runtime endpoint resolution) ──
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
