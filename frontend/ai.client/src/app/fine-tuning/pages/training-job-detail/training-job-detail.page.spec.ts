@@ -12,6 +12,7 @@ const mockJob: JobResponse = {
   email: 'test@example.com',
   model_id: 'model-1',
   model_name: 'Test Model',
+  task_type: 'text-classification',
   status: 'TRAINING',
   dataset_s3_key: 's3://bucket/data.jsonl',
   output_s3_prefix: null,

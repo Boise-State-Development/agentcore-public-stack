@@ -903,6 +903,7 @@ async def list_trained_models(
                 model_id=job["model_id"],
                 model_name=job["model_name"],
                 model_s3_path=model_s3_path,
+                task_type=job.get("task_type", task_types.DEFAULT_TASK_TYPE),
                 instance_type=job["instance_type"],
                 completed_at=job.get("training_end_time"),
                 estimated_cost_usd=job.get("estimated_cost_usd"),

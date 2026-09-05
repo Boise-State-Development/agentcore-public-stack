@@ -9,8 +9,8 @@ const mockGrant: FineTuningGrant = {
   email: 'user@example.com',
   granted_by: 'admin@example.com',
   granted_at: '2026-03-01T00:00:00Z',
-  monthly_quota_hours: 10,
-  current_month_usage_hours: 3,
+  monthly_quota_usd: 10,
+  current_month_usage_usd: 3,
   quota_period: '2026-03',
 };
 

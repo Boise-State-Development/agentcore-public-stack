@@ -4,7 +4,7 @@
     <div>
       <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Fine-Tuning Access</h1>
       <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-        Manage which users can create fine-tuning and inference jobs. Each user gets a monthly GPU-hour quota.
+        Manage which users can create fine-tuning and inference jobs. Each user gets a monthly spending quota in US dollars.
       </p>
     </div>
     <button
@@ -34,7 +34,7 @@
           />
         </div>
         <div class="w-36">
-          <label for="grant-quota" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Monthly hours</label>
+          <label for="grant-quota" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Monthly quota (USD)</label>
           <input
             id="grant-quota"
             type="number"
@@ -124,9 +124,9 @@
                       [(ngModel)]="editQuota"
                       [ngModelOptions]="{standalone: true}"
                       class="w-20 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                      aria-label="Monthly quota hours"
+                      aria-label="Monthly quota in US dollars"
                     />
-                    <span class="text-gray-500 dark:text-gray-400">hrs</span>
+                    <span class="text-gray-500 dark:text-gray-400">USD</span>
                     <button
                       type="submit"
                       class="text-state-success-600 hover:text-state-success-800 dark:text-state-success-400 dark:hover:text-state-success-300"
@@ -148,7 +148,7 @@
                     </button>
                   </form>
                 } @else {
-                  {{ grant.monthly_quota_hours }} hrs
+                  ${{ grant.monthly_quota_usd.toFixed(2) }}
                 }
               </td>
 
@@ -156,15 +156,15 @@
               <td class="px-4 py-3">
                 <div class="flex items-center gap-3">
                   <div class="w-24">
-                    <div class="h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700" role="progressbar" [attr.aria-valuenow]="usagePercent(grant.current_month_usage_hours, grant.monthly_quota_hours)" aria-valuemin="0" aria-valuemax="100">
+                    <div class="h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700" role="progressbar" [attr.aria-valuenow]="usagePercent(grant.current_month_usage_usd, grant.monthly_quota_usd)" aria-valuemin="0" aria-valuemax="100">
                       <div
-                        [class]="'h-full rounded-full transition-all ' + usageBarColor(grant.current_month_usage_hours, grant.monthly_quota_hours)"
-                        [style.width.%]="usagePercent(grant.current_month_usage_hours, grant.monthly_quota_hours)"
+                        [class]="'h-full rounded-full transition-all ' + usageBarColor(grant.current_month_usage_usd, grant.monthly_quota_usd)"
+                        [style.width.%]="usagePercent(grant.current_month_usage_usd, grant.monthly_quota_usd)"
                       ></div>
                     </div>
                   </div>
                   <span class="whitespace-nowrap text-sm/6 text-gray-600 dark:text-gray-400">
-                    {{ grant.current_month_usage_hours.toFixed(1) }} / {{ grant.monthly_quota_hours }} hrs
+                    {{ grant.current_month_usage_usd.toFixed(1) }} / ${{ grant.monthly_quota_usd.toFixed(2) }}
                   </span>
                 </div>
               </td>
@@ -195,7 +195,7 @@
                 } @else {
                   <div class="flex items-center justify-end gap-1">
                     <button
-                      (click)="startEdit(grant.email, grant.monthly_quota_hours)"
+                      (click)="startEdit(grant.email, grant.monthly_quota_usd)"
                       class="rounded-sm p-1.5 text-gray-400 hover:text-primary-accessible dark:text-gray-500 dark:hover:text-primary-accessible-dark"
                       [appTooltip]="'Edit Quota'"
                       appTooltipPosition="top"

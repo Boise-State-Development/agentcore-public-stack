@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 from apis.app_api.fine_tuning import task_types
 from apis.app_api.fine_tuning.sagemaker_scripts import task_text_classification
+from apis.app_api.fine_tuning.sagemaker_scripts import inference as inference_handler
 from apis.app_api.fine_tuning.sagemaker_scripts.inference import (
     _sanitize_label,
     input_fn,
@@ -22,6 +23,14 @@ from apis.app_api.fine_tuning.sagemaker_scripts.inference import (
     read_task_type,
     resolve_task_module,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_loaded_task():
+    """model_fn writes module state; keep it from leaking between tests."""
+    inference_handler._LOADED_TASK_TYPE = None
+    yield
+    inference_handler._LOADED_TASK_TYPE = None
 
 TEXT_SPEC = task_types.get_task_spec(task_types.TEXT_CLASSIFICATION)
 
@@ -144,6 +153,31 @@ class TestInputFn:
                 "application/zip",
                 {"task_type": task_types.IMAGE_CLASSIFICATION},
             )
+
+    def test_dispatches_on_module_state_when_called_with_two_arguments(self):
+        """The toolkit calls input_fn(input_data, content_type) — no model.
+
+        The loaded task therefore has to come from module state written by
+        model_fn. Without it an image artifact parses its .zip as newline
+        delimited text and fails on every record.
+        """
+        inference_handler._LOADED_TASK_TYPE = task_types.IMAGE_CLASSIFICATION
+
+        with pytest.raises(ValueError, match="Expected archive bytes"):
+            input_fn("alpha\nbeta\n", "application/zip")
+
+    def test_falls_back_to_text_when_nothing_is_loaded(self):
+        assert inference_handler._LOADED_TASK_TYPE is None
+        assert _texts(input_fn("alpha\nbeta\n", "text/plain")) == ["alpha", "beta"]
+
+    def test_an_explicit_model_argument_overrides_module_state(self):
+        inference_handler._LOADED_TASK_TYPE = task_types.IMAGE_CLASSIFICATION
+
+        records = input_fn(
+            "alpha\n", "text/plain", {"task_type": task_types.TEXT_CLASSIFICATION}
+        )
+
+        assert _texts(records) == ["alpha"]
 
 
 class TestSanitizeLabel:

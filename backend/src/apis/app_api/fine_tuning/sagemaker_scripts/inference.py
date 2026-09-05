@@ -42,6 +42,20 @@ TASK_MODULES = {
     task_types.IMAGE_TEXT_CLASSIFICATION: task_image_text_classification,
 }
 
+#: Task type of the artifact currently loaded, remembered at module scope.
+#:
+#: The SageMaker inference toolkit calls the user's ``input_fn`` as
+#: ``input_fn(input_data, content_type)`` — the loaded model is NOT passed to
+#: it, only to ``predict_fn``.  The single-entry-point ``transform_fn`` does
+#: receive the model, but the toolkit forbids defining it alongside
+#: input_fn/predict_fn/output_fn.  So the one place ``input_fn`` can learn
+#: which task it is parsing for is here, written by ``model_fn``, which the
+#: toolkit always calls first and exactly once.
+#:
+#: Without this an image artifact would parse its .zip payload as newline
+#: delimited text and fail on every record.
+_LOADED_TASK_TYPE = None
+
 
 def read_task_type(model_dir):
     """Read the task type recorded in a model artifact.
@@ -78,8 +92,12 @@ def resolve_task_module(task_type):
 
 def model_fn(model_dir):
     """Load the model for whichever task this artifact was trained for."""
+    global _LOADED_TASK_TYPE
+
     task_type = read_task_type(model_dir)
     module, spec = resolve_task_module(task_type)
+    # Remember the task before loading, so input_fn can dispatch on it.
+    _LOADED_TASK_TYPE = spec.task_type
 
     loaded = module.model_fn(model_dir)
     # Carry the task through to input_fn/predict_fn, which SageMaker calls
@@ -92,15 +110,18 @@ def model_fn(model_dir):
 def input_fn(request_body, content_type="text/plain", model=None):
     """Parse the Batch Transform payload into task-appropriate records.
 
-    ``model`` is supplied by the SageMaker inference toolkit when the handler
-    declares it.  When it is absent the payload is assumed to be text, which
+    The toolkit calls this with only ``(input_data, content_type)``, so the
+    task normally comes from :data:`_LOADED_TASK_TYPE`, set by ``model_fn``.
+    ``model`` is accepted as an optional override for direct callers and
+    tests.  Falls back to the default task when nothing has been loaded, which
     preserves the pre-task-types behaviour.
     """
-    if model is None:
-        module, spec = resolve_task_module(task_types.DEFAULT_TASK_TYPE)
-    else:
-        module, spec = resolve_task_module(model["task_type"])
+    task_type = None
+    if isinstance(model, dict):
+        task_type = model.get("task_type")
+    task_type = task_type or _LOADED_TASK_TYPE or task_types.DEFAULT_TASK_TYPE
 
+    module, spec = resolve_task_module(task_type)
     return module.input_fn(request_body, content_type, spec)
 
 

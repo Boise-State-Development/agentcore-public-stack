@@ -2,7 +2,10 @@ import { Component, ChangeDetectionStrategy, input, computed } from '@angular/co
 import { FineTuningAccessResponse } from '../models/fine-tuning.models';
 
 /**
- * Displays the user's monthly fine-tuning quota usage as a card with a progress bar.
+ * Displays the user's monthly fine-tuning spend against their quota.
+ *
+ * The quota is denominated in dollars rather than GPU-hours: hours stopped
+ * describing the budget once more than one instance type was offered.
  */
 @Component({
   selector: 'app-quota-card',
@@ -18,10 +21,10 @@ import { FineTuningAccessResponse } from '../models/fine-tuning.models';
       <div class="mt-3">
         <div class="flex items-baseline justify-between">
           <span class="text-2xl font-bold text-gray-900 dark:text-white">
-            {{ usedHours().toFixed(1) }}
+            \${{ usedUsd().toFixed(2) }}
           </span>
           <span class="text-sm/6 text-gray-500 dark:text-gray-400">
-            / {{ totalHours().toFixed(0) }} hrs
+            / \${{ totalUsd().toFixed(2) }}
           </span>
         </div>
         <div
@@ -38,7 +41,7 @@ import { FineTuningAccessResponse } from '../models/fine-tuning.models';
           ></div>
         </div>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          {{ remainingHours().toFixed(1) }} hours remaining
+          \${{ remainingUsd().toFixed(2) }} remaining
         </p>
       </div>
     </div>
@@ -47,14 +50,14 @@ import { FineTuningAccessResponse } from '../models/fine-tuning.models';
 export class QuotaCardComponent {
   readonly access = input.required<FineTuningAccessResponse>();
 
-  readonly usedHours = computed(() => this.access().current_month_usage_hours ?? 0);
-  readonly totalHours = computed(() => this.access().monthly_quota_hours ?? 0);
-  readonly remainingHours = computed(() => Math.max(0, this.totalHours() - this.usedHours()));
+  readonly usedUsd = computed(() => this.access().current_month_usage_usd ?? 0);
+  readonly totalUsd = computed(() => this.access().monthly_quota_usd ?? 0);
+  readonly remainingUsd = computed(() => Math.max(0, this.totalUsd() - this.usedUsd()));
 
   readonly usedPercent = computed(() => {
-    const total = this.totalHours();
+    const total = this.totalUsd();
     if (total <= 0) return 0;
-    return Math.min(100, (this.usedHours() / total) * 100);
+    return Math.min(100, (this.usedUsd() / total) * 100);
   });
 
   readonly barColor = computed(() => {
