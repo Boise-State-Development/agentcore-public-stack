@@ -171,3 +171,23 @@ def mid_turn_steering_enabled() -> bool:
     transitional: a turn that calls no tools has no boundary to inject at.
     """
     return os.environ.get("MID_TURN_STEERING_ENABLED", "").strip().lower() != "false"
+
+
+def announcements_enabled() -> bool:
+    """Whether the feature-announcement system is enabled for this environment.
+
+    Covers the admin authoring surface (``/admin/announcements``) today, and
+    the user-facing ``GET /announcements`` + ack endpoint and the panel /
+    banner / modal surfaces as those land. **Default ON with a kill switch**
+    (house style, mirroring ``scheduled_runs_enabled``): unset or empty
+    resolves to enabled; only the literal ``"false"`` (case-insensitive)
+    disables.
+
+    While off, the admin router is unmounted so the surface 404s; the data and
+    code remain intact. There is no separate RBAC capability on this axis —
+    *who* may author is the delegable ``admin.announcements`` scope, and *who
+    sees* a published announcement is the announcement's own ``targetRoles``
+    display filter (which is deliberately **not** an RBAC grant; see
+    ``docs/specs/feature-announcements.md`` §D9).
+    """
+    return os.environ.get("ANNOUNCEMENTS_ENABLED", "").strip().lower() != "false"

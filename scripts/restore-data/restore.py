@@ -92,6 +92,7 @@ TABLE_SSM_MAP: dict[str, str] = {
     "system-cost-rollup":   "/cost-tracking/system-cost-rollup-table-name",
     "managed-models":       "/admin/managed-models-table-name",
     "user-menu-links":      "/admin/user-menu-links-table-name",
+    "announcements":        "/admin/announcements-table-name",
     "user-settings":        "/settings/user-settings-table-name",
     "user-file-uploads":    "/user-file-uploads/table-name",
     "shared-conversations": "/shares/shared-conversations-table-name",

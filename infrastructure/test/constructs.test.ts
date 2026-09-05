@@ -211,11 +211,27 @@ describe('CostTrackingTablesConstruct', () => {
 });
 
 describe('AdminTablesConstruct', () => {
-  it('creates 3 DDB tables', () => {
+  it('creates 4 DDB tables', () => {
     const stack = testStack();
     new AdminTablesConstruct(stack, 'Admin', { config: createMockConfig() });
     const t = Template.fromStack(stack);
-    t.resourceCountIs('AWS::DynamoDB::Table', 3);
+    // user-settings, user-menu-links, announcements, system-prompts.
+    t.resourceCountIs('AWS::DynamoDB::Table', 4);
+  });
+
+  it('gives only the announcements table a TTL attribute', () => {
+    // The ack rows (PK `USER#<id>`) expire; the announcement rows and every
+    // sibling table's rows do not. A TTL that spread to a sibling would
+    // silently delete admin-authored content.
+    const stack = testStack();
+    new AdminTablesConstruct(stack, 'Admin', { config: createMockConfig() });
+    const t = Template.fromStack(stack);
+    const ttlTables = Object.values(t.findResources('AWS::DynamoDB::Table'))
+      .filter((table: any) => table.Properties.TimeToLiveSpecification !== undefined)
+      .map((table: any) => table.Properties.TableName as string);
+
+    expect(ttlTables).toHaveLength(1);
+    expect(ttlTables[0]).toContain('announcements');
   });
 });
 

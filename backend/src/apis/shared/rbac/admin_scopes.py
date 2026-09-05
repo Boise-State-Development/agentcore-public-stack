@@ -139,6 +139,13 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         group=GROUP_CUSTOMIZATION,
         description="Manage the custom links shown in the user menu.",
     ),
+    AdminScope(
+        id="admin.announcements",
+        label="Announcements",
+        group=GROUP_CUSTOMIZATION,
+        description="Author and publish feature announcements shown to all users.",
+        delegable=True,
+    ),
     # ── Non-delegable ────────────────────────────────────────────────────────
     # Present in the registry so they are named, documented, and covered by the
     # route-coverage test — but rejected by validation if anyone tries to grant

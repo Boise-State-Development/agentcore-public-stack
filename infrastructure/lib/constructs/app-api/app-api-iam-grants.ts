@@ -99,6 +99,21 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Announcements (admin-authored notices + per-user acks) ──
+  // One table, two item shapes: the announcement rows under the fixed
+  // `ANNOUNCEMENTS` partition, and each user's ack rows under `USER#<id>`.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'AnnouncementsTableAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+        'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
+      ],
+      resources: [props.refs.announcementsTable.tableArn, `${props.refs.announcementsTable.tableArn}/index/*`],
+    }),
+  );
+
   // ── System prompts (Conversation Modes catalog) ──
   // Admin-managed CRUD; per-user reads (name + description) go through
   // the user-facing `/system-prompts` endpoint, which uses the same
