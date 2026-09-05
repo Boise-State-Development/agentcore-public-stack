@@ -336,7 +336,41 @@ Deliberately **not** in scope: deleting artifact content on session delete.
 That is a retention decision about the artifacts feature as a whole, not about
 sharing, and it deserves its own spec.
 
-## 8. Known gap: artifacts in shared conversations
+## 8. Artifacts in shared conversations — CLOSED
+
+**Status: implemented.** Sharing a conversation now shares the artifacts it
+produced. The rest of this section is the original gap analysis, kept because
+the reasoning still explains the shape of the fix.
+
+The mechanism differs from the sketch below in one important way: **no artifact
+share records are created.** The conversation share record *is* the grant.
+
+- `create_share` pins the session's artifacts, at the version each stood at, into
+  the snapshot body alongside the messages. That preserves the point-in-time
+  promise (a recipient reading a frozen conversation sees the artifact the
+  transcript describes) and makes the snapshot the **allowlist**.
+- `resolve_shared_artifact` is the whole access boundary: it checks the
+  conversation share's ACL *and* that the artifact is one the snapshot pinned,
+  then hands an owner id and pinned version to
+  `RenderTokenService.mint_for_conversation_share`, which checks nothing itself.
+- Access, updates and revocation are therefore free. Narrow the conversation's
+  allowlist and the artifacts follow in the same write; revoke it and they go
+  with it.
+
+Auto-provisioning parallel artifact shares (the original sketch) was rejected on
+two grounds. Each would need cascading on update, revoke, artifact delete and
+session delete — and a missed cascade leaves an artifact readable after its
+conversation was locked down, which is a security bug rather than a display one.
+It would also put N rows in the recipient's "Shared with you" inbox for one
+conversation share, when the conversation is the thing that was shared.
+
+The snapshot's artifact list is optional on read. Conversation sharing is in
+production, so bodies written before this exist and have no `artifacts` key;
+they read as an empty list, and there is no migration.
+
+### Original gap analysis
+
+
 
 `shared-view.page.ts` renders `MessageListComponent` with `embeddedMode` and has
 no artifact wiring. Artifact hydration goes through

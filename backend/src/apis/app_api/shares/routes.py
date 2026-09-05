@@ -8,11 +8,22 @@ Three routers:
 """
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+
+# The artifacts domain owns render-token minting; this module owns the
+# grant that authorizes it. Both live under app_api, so this is a
+# same-package import, not a service boundary crossing.
+from apis.app_api.artifacts.models import RenderTokenResponse
+from apis.app_api.artifacts.service import (
+    ArtifactNotFoundError,
+    RenderTokenConfigError,
+    get_render_token_service,
+)
 
 from .models import (
     CreateShareRequest,
@@ -211,3 +222,72 @@ async def get_shared_conversation(
         sanitized_share_id = share_id.replace("\r", "").replace("\n", "")
         logger.error(f"Error retrieving shared conversation {sanitized_share_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve shared conversation")
+
+
+@shared_view_router.post(
+    "/{share_id}/artifacts/{artifact_id}/render-token",
+    response_model=RenderTokenResponse,
+)
+async def mint_shared_conversation_artifact_token(
+    share_id: str,
+    artifact_id: str,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Mint a render URL for an artifact inside a shared conversation.
+
+    The grant is the CONVERSATION share — there is no separate artifact
+    share record, and none is created. Sharing a conversation shares the
+    artifacts it produced, so the conversation share is the single thing
+    that grants, updates and revokes them: change its allowlist and the
+    artifacts follow in the same write, revoke it and they die with it.
+    Parallel artifact-share rows would each need cascading, and a missed
+    cascade is an artifact still readable after its conversation was
+    locked down.
+
+    The version served is the one pinned in the snapshot, so a recipient
+    sees the artifact the transcript around it describes rather than
+    whatever the owner has edited it into since.
+
+    `resolve_shared_artifact` is the access boundary and does both
+    checks — may this viewer open this share, and is this artifact one
+    the snapshot pinned. The mint it feeds performs none of its own.
+    """
+    try:
+        owner_id, version = get_share_service().resolve_shared_artifact(
+            share_id=share_id,
+            artifact_id=artifact_id,
+            requester=current_user,
+        )
+        url, exp = get_render_token_service().mint_for_conversation_share(
+            owner_id=owner_id,
+            artifact_id=artifact_id,
+            version=version,
+            conversation_share_id=share_id,
+            viewer=current_user,
+        )
+    except ShareNotFoundError:
+        # Also the "not in this snapshot" case, deliberately: an artifact
+        # the share does not carry is indistinguishable from one that
+        # does not exist, so this reveals nothing about what the owner has.
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    except AccessDeniedError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    except ArtifactNotFoundError:
+        # Pinned by the snapshot but gone from the table — deleted since
+        # the conversation was shared.
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    except ShareTableNotFoundError:
+        raise HTTPException(
+            status_code=503,
+            detail="Share feature unavailable - table not deployed",
+        )
+    except RenderTokenConfigError:
+        logger.error("artifact render token service misconfigured", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail="Artifact rendering is unavailable"
+        )
+
+    return RenderTokenResponse(
+        url=url,
+        expires_at=datetime.fromtimestamp(exp, tz=timezone.utc).isoformat(),
+    )

@@ -186,12 +186,41 @@ was off — a wrong answer rather than an empty one, and one nobody could see wa
 wrong. Writing the rows regardless makes the flip complete and instant, with no
 backfill to sequence.
 
-## Known gap: artifacts inside a shared conversation
+## Artifacts inside a shared conversation
 
-Sharing a *conversation* does not share the artifacts it produced. A recipient
-viewing a shared conversation sees nothing where the owner sees artifact cards,
-because artifact hydration filters by the requesting user.
+Sharing a conversation shares the artifacts it produced. A recipient sees the
+artifact cards where the owner sees them, anchored under the same turns.
 
-Closing that properly means deciding whether sharing a conversation should also
-share its artifacts — a consent question, not just a wiring one — so it is
-tracked as a known gap rather than treated as a bug.
+The mechanism is worth knowing before changing it: **the conversation share is
+the grant.** No artifact share records are created for this. Instead
+`create_share` pins the session's artifacts — at the version each stood at right
+then — into the conversation's snapshot body, next to the messages.
+
+That does two jobs at once. It keeps the point-in-time promise the snapshot
+already makes, so a recipient reading a frozen conversation is not shown an
+artifact the transcript around it never describes. And it makes the snapshot the
+**allowlist**: `resolve_shared_artifact` will only serve an `(artifact, version)`
+pair that appears there, which is what stops a recipient naming an arbitrary
+artifact belonging to the same owner. That check matters because the minted
+token's `sub` is a partition address rather than an identity — see
+[How access is actually enforced](#how-access-is-actually-enforced).
+
+The payoff is that access has one source of truth. Narrow a conversation's
+allowlist and its artifacts lock down in the same write; revoke the share and
+they go with it. Provisioning parallel artifact shares would instead need a
+cascade on every one of those paths, and a missed cascade leaves an artifact
+readable after its conversation was locked down.
+
+Shares created before this landed carry no artifact list and read as an empty
+one. There is no migration.
+
+## Historical note: how this used to be broken
+
+Until the section above shipped, sharing a *conversation* did not share the
+artifacts it produced. A recipient saw nothing where the owner saw artifact
+cards — silently, with no placeholder — because artifact hydration goes through
+`GET /artifacts?session_id=…`, which filters HEAD rows by the requesting user.
+
+It stayed open as long as it did because the fix needed a consent decision
+("should sharing a conversation also share its artifacts?") rather than only
+wiring. The answer was yes.
