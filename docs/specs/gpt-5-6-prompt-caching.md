@@ -1,6 +1,6 @@
 # Plan: prompt caching for OpenAI GPT-5.6 on Bedrock
 
-**Status:** In progress — PR-1 shipped (#945), PR-2..PR-5 outstanding
+**Status:** In progress — PR-1 (#945), PR-2 (#949) and PR-5 shipped; PR-3 BLOCKED (no commercial rates in the Price List API), PR-4 outstanding
 **Author:** (drafted with Claude)
 **Date:** 2026-09-04
 **Related:** `agents/main_agent/core/model_config.py`, `agents/main_agent/core/agent_factory.py`,
@@ -207,6 +207,59 @@ API-key `/chat/api-converse` handler. Don't fork the build logic.
   $0 rather than inventing waste.
 - Re-verify every rate against the Price List API, per the ⚠️ above.
 
+#### ⛔ BLOCKED — the Price List API does not publish these rates
+
+Checked 2026-09-05 against dev-ai (490617140655) with SSO credentials, across
+every Bedrock service code:
+
+| Service code | GPT-5.6 coverage |
+|---|---|
+| `AmazonBedrock` | `openai.gpt-5.6-terra` + `-luna` only, **`us-gov-west-1` only**, and only `-mantle-` usage types. **`sol` absent entirely.** |
+| `AmazonBedrockService` | `provider` attribute values are `Anthropic` and `Luma AI` only — no OpenAI |
+| `AmazonBedrockFoundationModels` | no GPT entries in `servicename` |
+| `AmazonBedrockAgentCore` | AgentCore consumption SKUs, not foundation-model pricing |
+
+**Commercial-region rates for the GPT-5.6 family are not in the Price List API
+at all.** Neither are commercial `openai.gpt-5.4` rates — so the shipped
+`$2.75 / $16.50` row on that model was never Price-List-verified either; it
+came from the model card. This PR's own gate therefore cannot be satisfied
+today, and PR-3 is deferred rather than shipped on transcribed numbers.
+
+Options when it is picked back up, in preference order:
+
+1. Wait for AWS to publish commercial rates and verify as specced.
+2. Derive them empirically — add the model through the admin escape-hatch
+   form (the PR-2 transport already supports it), drive real turns via the
+   dev-ai experiment harness, and reconcile against Cost Explorer to back out
+   per-token rates. Stronger evidence than a published table, but Cost
+   Explorer lags ~24h.
+3. Ship model-card rates explicitly labelled unverified, in code and in the
+   PR. Last resort: these rows price real spend against faculty quotas.
+
+What the GovCloud rows *do* establish, and can be relied on:
+
+- The **ratios are exact**. Terra standard: input `2.64`, cache read `0.264`
+  (0.1x), cache write `3.30` (1.25x). The cache economics this whole plan
+  rests on are confirmed.
+- The **30-minute TTL is confirmed** by the SKU naming itself — the write
+  usage types are `...-cache-write-tokens-30m-...`. That is the corroboration
+  PR-5 needed.
+
+#### ⚠️ Modeling gap PR-3 must resolve before it ships
+
+The Price List rows carry two pricing dimensions `CuratedModel` cannot
+represent:
+
+- **Service tiers.** Every model is priced at `flex` / `standard` / `priority`
+  = 0.5x / 1x / 2x.
+- **Long context.** Every rate has a `-long-ctx` twin at **2x** the base.
+
+Our catalog holds one flat rate per bucket, so a GPT-5.6 row would mis-price
+any long-context turn by 2x — silently, as a plausible-looking number rather
+than an error, which is exactly the failure the Verification section exists to
+catch. Decide before curating: either model the dimensions, or scope the row
+to standard-tier short-context and gate on staying inside it.
+
 ### PR-4 — Explicit cache breakpoints + `prompt_cache_key`
 
 Only worth building for 5.6, where the 1.25× write premium makes placement matter.
@@ -228,10 +281,22 @@ Only worth building for 5.6, where the 1.25× write premium makes placement matt
 
 ### PR-5 — Observability
 
-- `CACHE_TTL_SECONDS = 300` (`observability/prompt_cache.py:56`) is wrong by 6× for
-  OpenAI's 30-minute TTL, so `classify_cache_status` will call
-  `miss_ttl_expired` on entries that are still live. Make the TTL model-derived
-  rather than a module constant.
+- ✅ **DONE.** `CACHE_TTL_SECONDS = 300` was wrong by 6× for OpenAI's
+  30-minute TTL, so `classify_cache_status` called `miss_ttl_expired` on
+  entries that were still live. The TTL is now model-derived via
+  `cache_ttl_seconds_for(provider, model_id)`, threaded through
+  `classify_cache_status(ttl_seconds=...)` from the serving model's
+  `ModelInfo`. Only `bedrock-responses` gets the 30-minute window —
+  deliberately **not** the whole OpenAI family, since `mantle`'s
+  implicit-only caching has no documented 30m retention and guessing there
+  would over-report waste. `CACHE_TTL_SECONDS` stays as the default for
+  existing importers.
+
+  Note the error direction, which is why this mattered: a TTL shorter than
+  the model's real one *hides* waste. `partial_miss` is gated on
+  `gap <= ttl`, so it degraded to `hit`; `miss_avoidable` degraded to
+  `miss_ttl_expired`. Both zero `wastedUsd` — the metric that exists to
+  catch this exact class of bug.
 - Now that PR-1 has landed `cacheWriteInputTokens`, `partial_miss` / `miss_avoidable` /
   `wastedUsd` start working for GPT-5.6 as they do for Claude. Until it lands,
   every call classifies as `hit` or `uncached` and `wastedUsd` is structurally
