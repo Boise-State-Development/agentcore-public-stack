@@ -9,10 +9,31 @@ Frozen cross-PR contract (must stay in sync with the render Lambda
   HEAD row    : PK=USER#{user_id}  SK=ARTIFACT#{aid}#HEAD
                 + GSI1PK=SESSION#{session_id}
                 + GSI1SK=ARTIFACT#{updated_at}#{aid}   (SessionIndex)
+                + GSI2PK=USER#{user_id}
+                + GSI2SK=ARTIFACT#{updated_at}#{aid}   (index NOT YET CREATED)
   S3 layout   : {user_id}/{aid}/v{n}/index.html
 
 Versions are immutable (no DeleteObject grant in inference-api) — an
 update writes a new version and re-points HEAD.
+
+GSI2PK/GSI2SK are written ahead of the index that will consume them.
+Nothing queries them today — a user-wide artifact list is served by a
+base-table Query on PK=USER#{uid}, which is adequate while the heaviest
+user holds well under a 1MB page. They are stamped now because a sparse
+GSI only ever contains rows that already carry its key attributes: rows
+written before the attributes exist stay invisible to it forever unless
+a migration script backfills them, and that omission fails silently (a
+library page that lists only artifacts created after the deploy, with no
+error anywhere). Writing them from now on means the eventual
+`UserArtifactsIndex` — GSI2PK hash, GSI2SK range, queried with
+ScanIndexForward=False for newest-first — backfills every row stamped
+since this change, shrinking the manual backfill to the rows that
+predate it. Until then they are inert ordinary attributes: DynamoDB
+charges no index write when no index consumes them.
+
+Stamped on HEAD rows only, deliberately: one indexed row per artifact
+rather than one per version. Both write paths below must stamp them, or
+an artifact's HEAD loses the attributes on its next update.
 
 Markdown artifacts: when `content_type` is a Markdown type, the model
 authors raw Markdown but S3 stores a self-contained HTML render wrapper
@@ -340,6 +361,8 @@ def create_artifact_record(
                 "updated_at": now,
                 "GSI1PK": f"SESSION#{session_id}",
                 "GSI1SK": f"ARTIFACT#{now}#{artifact_id}",
+                "GSI2PK": pk,
+                "GSI2SK": f"ARTIFACT#{now}#{artifact_id}",
             },
             ConditionExpression="attribute_not_exists(SK)",
         )
@@ -414,6 +437,8 @@ def update_artifact_record(
                 "updated_at": now,
                 "GSI1PK": f"SESSION#{head.get('session_id', '')}",
                 "GSI1SK": f"ARTIFACT#{now}#{artifact_id}",
+                "GSI2PK": pk,
+                "GSI2SK": f"ARTIFACT#{now}#{artifact_id}",
             },
             ConditionExpression="version = :cur",
             ExpressionAttributeValues={":cur": current},
