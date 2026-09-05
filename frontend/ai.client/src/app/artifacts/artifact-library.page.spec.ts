@@ -207,13 +207,69 @@ describe('ArtifactLibraryPage', () => {
   });
 
   describe('open()', () => {
+    /**
+     * Stands in for a real `window.open`, including the rule that bit us:
+     * per spec it returns **null** when `noopener` (or `noreferrer`, which
+     * implies it) is set, because severing the opener leaves no handle to
+     * return. A mock that hands back a tab regardless of the feature
+     * string is how the bug shipped — it agreed with the broken code
+     * instead of with the browser.
+     */
+    function spyOnWindowOpen() {
+      const tab = { location: { href: '' }, opener: {} as unknown, close: vi.fn() };
+      const spy = vi
+        .spyOn(window, 'open')
+        .mockImplementation((_url?: string | URL, _target?: string, features?: string) =>
+          /noopener|noreferrer/.test(features ?? '') ? null : (tab as unknown as Window),
+        );
+      return { tab, spy };
+    }
+
+    it('does not pass noopener, which would make window.open return null', async () => {
+      // Regression: 'noopener,noreferrer' reported "Pop-up blocked" on
+      // every click and left a stray about:blank tab behind.
+      const { tab, spy } = spyOnWindowOpen();
+
+      const c = api(await createComponent());
+      await c.open(stubArtifact());
+
+      const features = spy.mock.calls[0]?.[2] ?? '';
+      expect(features).not.toMatch(/noopener|noreferrer/);
+      expect(mockToast.error).not.toHaveBeenCalled();
+      expect(tab.location.href).toBe('https://artifacts.example/x?t=tok');
+    });
+
+    it('severs the opener itself, since it cannot ask the browser to', async () => {
+      const { tab } = spyOnWindowOpen();
+
+      const c = api(await createComponent());
+      await c.open(stubArtifact());
+
+      // Reverse-tabnabbing guard standing in for the unusable noopener.
+      expect(tab.opener).toBeNull();
+    });
+
+    it('still opens when the webview makes opener read-only', async () => {
+      const tab = { location: { href: '' }, close: vi.fn() };
+      Object.defineProperty(tab, 'opener', {
+        get: () => null,
+        set: () => {
+          throw new TypeError('read only');
+        },
+      });
+      vi.spyOn(window, 'open').mockImplementation(() => tab as unknown as Window);
+
+      const c = api(await createComponent());
+      await c.open(stubArtifact());
+
+      expect(tab.location.href).toBe('https://artifacts.example/x?t=tok');
+      expect(mockToast.error).not.toHaveBeenCalled();
+    });
+
     it('opens the tab before awaiting the mint, then points it at the URL', async () => {
       // The ordering is the whole contract: a window.open() after the await
       // is no longer tied to the click gesture and every browser blocks it.
-      const tab = { location: { href: '' }, close: vi.fn() };
-      const openSpy = vi
-        .spyOn(window, 'open')
-        .mockImplementation(() => tab as unknown as Window);
+      const { tab, spy: openSpy } = spyOnWindowOpen();
 
       let mintStarted = false;
       mockHttp.mintRenderToken.mockImplementation(async () => {
@@ -232,8 +288,7 @@ describe('ArtifactLibraryPage', () => {
     });
 
     it('closes the blank tab and reports the failure when minting fails', async () => {
-      const tab = { location: { href: '' }, close: vi.fn() };
-      vi.spyOn(window, 'open').mockImplementation(() => tab as unknown as Window);
+      const { tab } = spyOnWindowOpen();
       mockHttp.mintRenderToken.mockRejectedValue(new Error('500'));
 
       const c = api(await createComponent());
