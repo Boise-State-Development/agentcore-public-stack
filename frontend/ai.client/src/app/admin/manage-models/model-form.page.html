@@ -462,24 +462,38 @@
                 Prompt caching
               </h3>
 
-              <!-- Supports Caching Toggle -->
-              <div>
-                <label class="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    formControlName="supportsCaching"
-                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
-                  />
-                  <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Model supports prompt caching
-                  </span>
-                </label>
-                <p class="ml-7 mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                  Disable this if the model doesn't support prompt caching (e.g., some Amazon models). When disabled, the agent will skip cache-related API calls.
-                </p>
-              </div>
+              <!-- Supports Caching — a choice, except where the provider caches unconditionally -->
+              @if (cachingIsForced()) {
+                <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
+                  <p class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    This model always caches
+                  </p>
+                  <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                    Prompt caching is implicit and server-side on this transport, so it can't be
+                    turned off. Enter the cache rates below — on a warm conversation almost every
+                    input token is a cache read, so leaving them blank reports those tokens at
+                    <strong>$0.00</strong> while the provider still bills them.
+                  </p>
+                </div>
+              } @else {
+                <div>
+                  <label class="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      formControlName="supportsCaching"
+                      class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                    />
+                    <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      Model supports prompt caching
+                    </span>
+                  </label>
+                  <p class="ml-7 mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                    Disable this if the model doesn't support prompt caching (e.g., some Amazon models). When disabled, the agent will skip cache-related API calls.
+                  </p>
+                </div>
+              }
 
-              @if (modelForm.value.supportsCaching) {
+              @if (modelForm.value.supportsCaching || cachingIsForced()) {
                 <p class="text-sm/6 text-gray-600 dark:text-gray-400">
                   Optional pricing for prompt caching. Cache writes typically cost ~25% more, while cache reads cost ~90% less than standard input tokens.
                 </p>

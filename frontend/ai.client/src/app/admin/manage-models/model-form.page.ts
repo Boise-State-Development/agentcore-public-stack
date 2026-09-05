@@ -14,6 +14,9 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowLeft, heroChevronDown, heroChevronRight } from '@ng-icons/heroicons/outline';
 import {
   AVAILABLE_PROVIDERS,
+  CACHING_FORCED_PROVIDERS,
+  defaultSupportsCaching,
+  supportsCachingForProvider,
   OPENAI_SURFACE_PROVIDERS,
   PROVIDER_LABELS,
   KNOWN_PARAMS,
@@ -284,6 +287,16 @@ export class ModelFormPage implements OnInit {
   readonly supportsCachingControls = computed(
     () => this.selectedProvider() === 'bedrock' || this.isBedrockResponses(),
   );
+  /**
+   * Whether caching is a fact rather than a choice for the selected provider.
+   *
+   * When true the template states it instead of offering a checkbox: the
+   * service caches regardless, so the only thing unchecking would achieve is
+   * clearing the cache rates and pricing cached tokens at $0.
+   */
+  readonly cachingIsForced = computed(() =>
+    CACHING_FORCED_PROVIDERS.includes(this.selectedProvider()),
+  );
 
   /**
    * Model-id suggestions for the Mantle escape-hatch form, sourced from the
@@ -345,7 +358,12 @@ export class ModelFormPage implements OnInit {
     cacheWritePricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
-    supportsCaching: this.fb.control(false, { nonNullable: true }),
+    // Seeded for the form's initial provider ('bedrock') and re-derived on
+    // every provider switch. A hardcoded `false` here disagreed with the
+    // `?? true` used when loading an existing model or a curated template,
+    // so the same model got a different answer depending on how you reached
+    // the form.
+    supportsCaching: this.fb.control(true, { nonNullable: true }),
     mantleApiMode: this.fb.control<MantleApiMode>('chat', { nonNullable: true }),
     mantleRegion: this.fb.control('', { nonNullable: true }),
     inferenceParams: this.fb.array<FormGroup<ParamRowGroup>>([], {
@@ -465,6 +483,13 @@ export class ModelFormPage implements OnInit {
         // truthful so a later provider switch doesn't carry 'chat' back in.
         this.modelForm.controls.mantleApiMode.setValue('responses');
       }
+      // Caching support is a property of the provider, so re-derive it on a
+      // provider switch rather than carrying the previous provider's answer
+      // over. Without this the form's hardcoded `false` silently wins for
+      // every caching-capable model an admin adds.
+      this.modelForm.controls.supportsCaching.setValue(
+        defaultSupportsCaching(provider),
+      );
     });
 
     // Keep the max_tokens row pinned to the model's output ceiling: pre-fill
@@ -1008,7 +1033,7 @@ export class ModelFormPage implements OnInit {
         cacheWritePricePerMillionTokens: v.cacheWritePricePerMillionTokens,
         cacheReadPricePerMillionTokens: v.cacheReadPricePerMillionTokens,
         knowledgeCutoffDate: v.knowledgeCutoffDate,
-        supportsCaching: v.supportsCaching,
+        supportsCaching: supportsCachingForProvider(v.provider, v.supportsCaching),
         // Only meaningful on an OpenAI-compatible Bedrock surface; null
         // elsewhere so the backend stores nothing for other providers. An
         // empty region means "app's region". The bedrock-runtime transport

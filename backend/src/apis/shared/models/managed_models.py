@@ -19,6 +19,13 @@ from .models import ManagedModel, ManagedModelCreate, ManagedModelUpdate
 logger = logging.getLogger(__name__)
 
 
+# Providers whose models prompt-cache by default when the field is unset.
+_CACHING_DEFAULT_PROVIDERS = ('bedrock', 'bedrock-responses')
+
+# Providers where caching is not optional — see _resolve_supports_caching.
+_CACHING_FORCED_PROVIDERS = ('bedrock-responses',)
+
+
 def _resolve_supports_caching(supports_caching: Optional[bool], provider: str) -> bool:
     """
     Resolve the supports_caching value based on explicit setting or provider defaults.
@@ -31,17 +38,30 @@ def _resolve_supports_caching(supports_caching: Optional[bool], provider: str) -
     Returns:
         bool: Whether the model supports caching
     """
+    normalized_provider = provider.lower()
+
+    # On bedrock-responses caching is a fact, not a setting: it is implicit and
+    # server-side, and nothing we send turns it off. A stored False there would
+    # be untrue, and its only practical effect is that the cache rates get
+    # cleared — which prices cached tokens at $0.00 while the provider bills
+    # them in full. On a warm conversation nearly every input token is a cache
+    # read, so that is close to total under-reporting of the model's spend.
+    #
+    # Normalized rather than honored, exactly like `apiMode` on the same
+    # transport, so no client can persist the impossible state.
+    if normalized_provider in _CACHING_FORCED_PROVIDERS:
+        return True
+
     if supports_caching is not None:
         return supports_caching
 
     # Default behavior: Bedrock Converse models, and the bedrock-runtime
-    # Responses transport (implicit prompt caching is ON by default there —
-    # it is the reason that transport exists). Admins can explicitly set this
-    # to False for models in either family that don't support it.
+    # Responses transport. Admins can explicitly set this to False for Bedrock
+    # models that don't support it.
     #
     # Deliberately NOT 'mantle': Mantle hosts open-weight models that mostly
     # don't cache, and openai.gpt-5.4 there is implicit-only with no write fee.
-    return provider.lower() in ('bedrock', 'bedrock-responses')
+    return normalized_provider in _CACHING_DEFAULT_PROVIDERS
 
 
 # The two OpenAI-compatible Bedrock surfaces. Both ride the OpenAI wire

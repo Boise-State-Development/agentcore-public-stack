@@ -34,6 +34,53 @@ export const AVAILABLE_PROVIDERS: ModelProvider[] = [
 export const OPENAI_SURFACE_PROVIDERS: readonly ModelProvider[] = ['mantle', 'bedrock-responses'];
 
 /**
+ * Providers whose models prompt-cache by default.
+ *
+ * Mirrors `_resolve_supports_caching` on the backend. The form has to know
+ * this because it always posts a `supportsCaching` value — so the backend's
+ * own provider default never sees `None` from the UI and can never apply.
+ */
+export const CACHING_DEFAULT_PROVIDERS: readonly ModelProvider[] = ['bedrock', 'bedrock-responses'];
+
+/**
+ * Providers where prompt caching is **not optional**.
+ *
+ * GPT-5.6 on `bedrock-runtime` caches implicitly, server-side, and we have no
+ * way to turn that off. So "supports caching = false" there is simply untrue,
+ * and the only thing it changes is that the cache rate fields get cleared —
+ * which prices cached tokens at $0.00 while AWS bills them in full. On a warm
+ * conversation nearly all input tokens sit in the cache buckets, so that is
+ * close to total under-reporting.
+ *
+ * Treated the same way as `apiMode` on this transport: normalized, not honored.
+ */
+export const CACHING_FORCED_PROVIDERS: readonly ModelProvider[] = ['bedrock-responses'];
+
+/**
+ * The caching default for a provider when nothing has been chosen.
+ *
+ * Mirrors `_resolve_supports_caching` on the backend — kept in step by
+ * `tests/shared/test_caching_provider_contract.py`, which reads this file.
+ */
+export function defaultSupportsCaching(provider: ModelProvider): boolean {
+  return CACHING_DEFAULT_PROVIDERS.includes(provider);
+}
+
+/**
+ * The `supportsCaching` value to persist for a provider.
+ *
+ * Forced on where caching is unconditional; otherwise the admin's choice wins,
+ * falling back to the provider default when unset.
+ */
+export function supportsCachingForProvider(
+  provider: ModelProvider,
+  chosen: boolean | null | undefined,
+): boolean {
+  if (CACHING_FORCED_PROVIDERS.includes(provider)) return true;
+  return chosen ?? defaultSupportsCaching(provider);
+}
+
+/**
  * Human-readable labels for the provider picker.
  *
  * The raw values are wire identifiers; `bedrock-responses` in particular says
