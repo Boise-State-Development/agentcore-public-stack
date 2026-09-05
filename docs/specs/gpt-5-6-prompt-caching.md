@@ -1,6 +1,6 @@
 # Plan: prompt caching for OpenAI GPT-5.6 on Bedrock
 
-**Status:** In progress — PR-1 (#945), PR-2 (#949), PR-5 (#951) and PR-4 shipped; PR-3 BLOCKED (no commercial rates in the Price List API). No step is verified against a live model yet — that waits on PR-3.
+**Status:** Shipped and VERIFIED LIVE 2026-09-05 — PR-1 (#945), PR-2 (#949), PR-5 (#951), PR-4 (#954, shipped OFF via #956) and the IAM fix (#959). Caching confirmed working end-to-end through the agent loop: warm turns cost 10.6x less than cold. PR-3 (catalog rates) remains BLOCKED — no commercial rates in the Price List API — so dollar figures are provisional.
 **Author:** (drafted with Claude)
 **Date:** 2026-09-04
 **Related:** `agents/main_agent/core/model_config.py`, `agents/main_agent/core/agent_factory.py`,
@@ -435,6 +435,57 @@ effect a single-session probe cannot show — measure before shipping it.
 - **Structured outputs and server-side tool use** are unsupported for GPT-5.6 on
   `bedrock-runtime`. Neither is on the agent path today; confirm before any
   feature starts depending on them for this model.
+
+## ✅ VERIFIED END-TO-END — 2026-09-05, dev, through the agent loop
+
+Session `f76ab27a-51a6-4f70-be93-e94c81e01d85`, `us.openai.gpt-5.6-sol` selected in
+the SPA model picker, four turns, read back from
+`GET /admin/costs/sessions/{id}/calls`:
+
+| turn | cacheStatus | input | cacheRead | cacheWrite | output | cost |
+|---|---|---:|---:|---:|---:|---:|
+| 1 | `first_write` | 2 | 0 | 3,679 | 5 | $0.02038 |
+| 2 | `hit` | 2 | 3,679 | 21 | 6 | $0.00190 |
+| 3 | `hit` | 2 | 3,700 | 22 | 6 | $0.00192 |
+| 4 | `hit` | 2 | 3,722 | 22 | 6 | $0.00193 |
+
+**Warm turns cost 10.6x less than the cold turn.** Every prediction this plan
+made holds, and each PR is confirmed by a specific column:
+
+- **PR-1 — usage normalization.** `inputTokens` is **2** on every turn, not
+  ~3,681. OpenAI reports `input_tokens` inclusive of both cache buckets; the
+  buckets here are disjoint and sum exactly to the prefix
+  (2+0+3,679 = 3,681; 2+3,679+21 = 3,702 — matching the SPA's context-window
+  readout to the token). `cacheWriteInputTokens` is **populated at all**, which
+  is only possible because we recover `cache_write_tokens` — Strands drops it.
+  Turn 1 alone would otherwise have double-billed 3,679 tokens at the input
+  rate *plus* the 1.25x premium, which is precisely the correction #947 made to
+  this spec.
+- **PR-2 — transport.** Reached a live model: base URL, per-request bearer
+  token, inference-profile id all correct.
+- **PR-5 — model-derived TTL.** Gaps of 30s / 78s / 18s classified `hit`, and
+  `wastedUsd = $0.00` on every row with no avoidable re-writes.
+- **#956 — explicit caching OFF.** This is the implicit shape the probe
+  predicted: `cacheRead` **grows with the conversation** (3,679 -> 3,700 ->
+  3,722) while `cacheWrite` is just the appended delta (~21). Under explicit
+  mode `cacheRead` would be flat and uncached input would climb every turn.
+  The 57%-worse finding is confirmed in the agent loop, not just at the
+  transport.
+- **#959 — IAM.** `bedrock:CallWithBearerToken`, without which none of the
+  above could run.
+
+Prefix fingerprints were stable exactly where they should be: `toolConfigHash`
+`8eafb0765ed810a2` and `systemPromptHash` `5a71749b3bee37ab` identical across
+all four calls, `historyHash` changing each turn.
+
+The cost math reproduces to the cent from the disjoint buckets and the
+catalog rates, so `CostCalculator` is verified against live usage as well.
+
+⚠️ The **dollar amounts are provisional** — they use the model-card rates
+seeded on the dev row (4.40 in / 26.40 out / 0.44 cache read / 5.50 cache
+write), and 26.40 is *derived* from the GovCloud 1:6 input:output ratio rather
+than published. The **ratios** above are real; the absolute dollars wait on
+PR-3.
 
 ## Verification
 
