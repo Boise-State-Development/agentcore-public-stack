@@ -1,6 +1,6 @@
 # Plan: prompt caching for OpenAI GPT-5.6 on Bedrock
 
-**Status:** In progress — PR-1 (#945), PR-2 (#949) and PR-5 shipped; PR-3 BLOCKED (no commercial rates in the Price List API), PR-4 outstanding
+**Status:** In progress — PR-1 (#945), PR-2 (#949), PR-5 (#951) and PR-4 shipped; PR-3 BLOCKED (no commercial rates in the Price List API). No step is verified against a live model yet — that waits on PR-3.
 **Author:** (drafted with Claude)
 **Date:** 2026-09-04
 **Related:** `agents/main_agent/core/model_config.py`, `agents/main_agent/core/agent_factory.py`,
@@ -260,7 +260,7 @@ than an error, which is exactly the failure the Verification section exists to
 catch. Decide before curating: either model the dimensions, or scope the row
 to standard-tier short-context and gate on staying inside it.
 
-### PR-4 — Explicit cache breakpoints + `prompt_cache_key`
+### PR-4 — Explicit cache breakpoints + `prompt_cache_key` ✅ SHIPPED
 
 Only worth building for 5.6, where the 1.25× write premium makes placement matter.
 
@@ -278,6 +278,52 @@ Only worth building for 5.6, where the 1.25× write premium makes placement matt
 - The existing prompt-cache contract carries over unchanged — implicit and
   explicit caching are both exact-prefix, so deterministic tool/skill ordering and
   the truncation anchor in `TurnBasedSessionManager` remain load-bearing.
+
+#### Two corrections from building it
+
+**`prompt_cache_key` does not ride `config["params"]`.** It is a first-class
+parameter on the OpenAI SDK's `responses.create`, so it is set directly on the
+formatted request. `prompt_cache_options` is *not* a named parameter and has to
+travel in `extra_body`. Both are set in the `_format_request` override rather
+than at model construction, because that is the only seam where the system
+prompt and tool specs — the inputs the key is derived from — are actually in
+scope.
+
+**There is no "system/developer message" to stamp in Strands' output.** It emits
+the system prompt as the top-level `instructions` *string*, and a breakpoint has
+to sit on a content **block**. So the override re-expresses `instructions` as the
+`developer` message AWS's guidance shows, at the head of `input`, carrying the
+breakpoint:
+
+```python
+{"type": "message", "role": "developer",
+ "content": [{"type": "input_text", "text": ...,
+              "prompt_cache_breakpoint": {"mode": "explicit"}}]}
+```
+
+That places the boundary exactly at the end of the static prefix (tools +
+system), before any history. Stamping `input[0]`'s existing block instead would
+have put the first user message inside the cached segment, so compaction — which
+rewrites history — would invalidate the tools+system segment too.
+
+#### Risk this PR carries
+
+Explicit mode **opts out of** the model's default implicit caching. A badly
+placed boundary is therefore worse than not switching at all. Two mitigations:
+
+- With no system prompt there is no static prefix to bound, so the request is
+  left untouched and implicit caching stays on.
+- Kill switch `BEDROCK_RESPONSES_EXPLICIT_CACHE_ENABLED` (default ON).
+  ⚠️ Deliberately **not** wired into the CDK Runtime construct: that construct is
+  at the `AWS::BedrockAgentCore::Runtime` 50-variable cap, and a 51st entry fails
+  changeset validation after CI is green. Flipping it in a deployed environment
+  needs an out-of-band Runtime update.
+
+None of this is verified against a live model — no GPT-5.6 catalog row exists
+while PR-3 is blocked. **The Verification section below is the gate before this
+is trusted in prod**, and the specific thing to confirm is that turns 2+ report
+`cacheRead` tracking the whole static prefix. If they do not, the boundary is
+misplaced and the flag is the way out.
 
 ### PR-5 — Observability
 
