@@ -204,18 +204,22 @@ class ManagedModelCreate(BaseModel):
     mantle_api_mode: Optional[str] = Field(
         None,
         alias="apiMode",
-        description="Bedrock Mantle API surface (provider='mantle' only): 'chat' "
-                    "(OpenAI Chat Completions, the default) or 'responses' (OpenAI "
-                    "Responses API — required by models that don't serve Chat "
-                    "Completions, e.g. openai.gpt-5.x). Ignored for other providers."
+        description="OpenAI-compatible API surface: 'chat' (OpenAI Chat "
+                    "Completions, the default) or 'responses' (OpenAI Responses "
+                    "API — required by models that don't serve Chat Completions, "
+                    "e.g. openai.gpt-5.x). Selectable for provider='mantle'; "
+                    "forced to 'responses' for provider='bedrock-responses', "
+                    "which exists because GPT-5.6 caches only over that API. "
+                    "Ignored for other providers."
     )
     mantle_region: Optional[str] = Field(
         None,
         alias="region",
-        description="Bedrock Mantle region override (provider='mantle' only): pins "
-                    "inference to the region hosting the model (e.g. 'us-east-1'), "
-                    "independent of where the app runs. Empty -> the app's region. "
-                    "Ignored for other providers."
+        description="Region override for an OpenAI-compatible Bedrock surface "
+                    "(provider='mantle' or 'bedrock-responses'): pins inference to "
+                    "the region hosting the model (e.g. 'us-east-1'), independent "
+                    "of where the app runs, and signs the bearer token for it. "
+                    "Empty -> the app's region. Ignored for other providers."
     )
     mantle_endpoint_path: Optional[str] = Field(
         None,
@@ -292,14 +296,16 @@ class ManagedModelUpdate(BaseModel):
     mantle_api_mode: Optional[str] = Field(
         None,
         alias="apiMode",
-        description="Bedrock Mantle API surface (provider='mantle' only): 'chat' "
-                    "or 'responses'. Ignored for other providers."
+        description="OpenAI-compatible API surface: 'chat' or 'responses'. "
+                    "Selectable for provider='mantle'; forced to 'responses' for "
+                    "provider='bedrock-responses'. Ignored for other providers."
     )
     mantle_region: Optional[str] = Field(
         None,
         alias="region",
-        description="Bedrock Mantle region override (provider='mantle' only). "
-                    "Empty -> the app's region. Ignored for other providers."
+        description="Region override for an OpenAI-compatible Bedrock surface "
+                    "(provider='mantle' or 'bedrock-responses'). Empty -> the "
+                    "app's region. Ignored for other providers."
     )
     mantle_endpoint_path: Optional[str] = Field(
         None,
@@ -382,14 +388,17 @@ class ManagedModel(BaseModel):
     mantle_api_mode: Optional[str] = Field(
         None,
         alias="apiMode",
-        description="Bedrock Mantle API surface (provider='mantle' only): 'chat' "
-                    "(default) or 'responses'. Ignored for other providers."
+        description="OpenAI-compatible API surface: 'chat' (default) or "
+                    "'responses'. Selectable for provider='mantle'; forced to "
+                    "'responses' for provider='bedrock-responses'. Ignored for "
+                    "other providers."
     )
     mantle_region: Optional[str] = Field(
         None,
         alias="region",
-        description="Bedrock Mantle region override (provider='mantle' only). "
-                    "Empty -> the app's region. Ignored for other providers."
+        description="Region override for an OpenAI-compatible Bedrock surface "
+                    "(provider='mantle' or 'bedrock-responses'). Empty -> the "
+                    "app's region. Ignored for other providers."
     )
     mantle_endpoint_path: Optional[str] = Field(
         None,

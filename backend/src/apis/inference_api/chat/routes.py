@@ -431,15 +431,16 @@ async def _resolve_model_settings(
 
     Returns ``(caching_enabled, inference_params, mantle_api_mode,
     mantle_region, provider)``. A single registry lookup drives all of them.
-    The Mantle fields are server-authoritative (recorded on the model):
+    The API-surface fields are server-authoritative (recorded on the model):
     ``mantle_api_mode`` selects Chat Completions vs the Responses API and
-    ``mantle_region`` optionally pins inference to a specific region; both
-    ``None`` for non-Mantle models. ``provider`` is the model's registered
-    provider (e.g. ``"mantle"``), returned so callers can recover it when the
-    request/binding didn't carry one — without it a Mantle model like
-    ``openai.gpt-5.4`` misroutes to Bedrock ConverseStream and fails with an
-    invalid-model-identifier error. Resolving these here keeps them off the
-    client request — the SPA can't override.
+    ``mantle_region`` optionally pins inference to a specific region. Both are
+    meaningful on either OpenAI-compatible Bedrock surface — ``"mantle"`` and
+    ``"bedrock-responses"`` — and ``None`` for every other provider.
+    ``provider`` is the model's registered provider, returned so callers can
+    recover it when the request/binding didn't carry one — without it a Mantle
+    model like ``openai.gpt-5.4`` misroutes to Bedrock ConverseStream and fails
+    with an invalid-model-identifier error. Resolving these here keeps them off
+    the client request — the SPA can't override.
     """
     request_params = dict(request_inference_params or {})
 

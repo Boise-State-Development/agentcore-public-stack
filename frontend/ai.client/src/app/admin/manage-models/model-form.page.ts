@@ -14,6 +14,8 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowLeft, heroChevronDown, heroChevronRight } from '@ng-icons/heroicons/outline';
 import {
   AVAILABLE_PROVIDERS,
+  OPENAI_SURFACE_PROVIDERS,
+  PROVIDER_LABELS,
   KNOWN_PARAMS,
   KnownParamMeta,
   MANTLE_API_MODES,
@@ -263,12 +265,25 @@ export class ModelFormPage implements OnInit {
 
   /**
    * Tracks the selected provider as a signal so the template can show/hide
-   * the Mantle-only API-mode/region fields and suppress the caching controls
-   * (Mantle open-weight models never cache). Kept in sync with the form
-   * control in ngOnInit + its valueChanges subscription.
+   * the API-mode/region fields and the caching controls. Kept in sync with the
+   * form control in ngOnInit + its valueChanges subscription.
    */
   readonly selectedProvider = signal<ModelProvider>('bedrock');
   readonly isMantle = computed(() => this.selectedProvider() === 'mantle');
+  readonly isBedrockResponses = computed(() => this.selectedProvider() === 'bedrock-responses');
+  /**
+   * Either OpenAI-compatible Bedrock surface. Both carry a region override and
+   * a bearer-token transport; only the API surface differs, and only Mantle
+   * lets an admin choose it.
+   */
+  readonly isOpenAiSurface = computed(() =>
+    OPENAI_SURFACE_PROVIDERS.includes(this.selectedProvider()),
+  );
+  readonly providerLabels = PROVIDER_LABELS;
+  /** Providers whose models can prompt-cache — drives the caching form block. */
+  readonly supportsCachingControls = computed(
+    () => this.selectedProvider() === 'bedrock' || this.isBedrockResponses(),
+  );
 
   /**
    * Model-id suggestions for the Mantle escape-hatch form, sourced from the
@@ -444,6 +459,11 @@ export class ModelFormPage implements OnInit {
       this.selectedProvider.set(provider);
       if (provider === 'mantle') {
         this.loadMantleModelIdOptions();
+      }
+      if (provider === 'bedrock-responses') {
+        // Not admin-selectable on this transport; keep the control's value
+        // truthful so a later provider switch doesn't carry 'chat' back in.
+        this.modelForm.controls.mantleApiMode.setValue('responses');
       }
     });
 
@@ -989,10 +1009,15 @@ export class ModelFormPage implements OnInit {
         cacheReadPricePerMillionTokens: v.cacheReadPricePerMillionTokens,
         knowledgeCutoffDate: v.knowledgeCutoffDate,
         supportsCaching: v.supportsCaching,
-        // Only meaningful for Mantle; null elsewhere so the backend stores
-        // nothing for other providers. An empty region means "app's region".
-        apiMode: v.provider === 'mantle' ? v.mantleApiMode : null,
-        region: v.provider === 'mantle' ? (v.mantleRegion?.trim() || null) : null,
+        // Only meaningful on an OpenAI-compatible Bedrock surface; null
+        // elsewhere so the backend stores nothing for other providers. An
+        // empty region means "app's region". The bedrock-runtime transport
+        // has no API-surface choice — it exists because GPT-5.6 caches only
+        // over Responses — so it is pinned rather than read from the form.
+        apiMode: this.apiModeForProvider(v.provider),
+        region: OPENAI_SURFACE_PROVIDERS.includes(v.provider)
+          ? (v.mantleRegion?.trim() || null)
+          : null,
         supportedParams: this.collectSupportedParams(),
       };
 
@@ -1015,6 +1040,21 @@ export class ModelFormPage implements OnInit {
     } finally {
       this.isSubmitting.set(false);
     }
+  }
+
+  /**
+   * The API surface to persist for a provider.
+   *
+   * Mantle is the only provider where this is a real choice. The
+   * bedrock-runtime transport is pinned to `responses` — the same
+   * normalization the backend applies when the record is written — because a
+   * model silently downgraded to Chat Completions there would lose prompt
+   * caching, which is the only reason to use that transport.
+   */
+  private apiModeForProvider(provider: ModelProvider): MantleApiMode | null {
+    if (provider === 'bedrock-responses') return 'responses';
+    if (provider === 'mantle') return this.modelForm.value.mantleApiMode ?? 'chat';
+    return null;
   }
 
   /**
