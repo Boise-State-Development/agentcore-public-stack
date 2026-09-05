@@ -270,8 +270,12 @@
     @if (!loading() && filtered().length > 0 && viewMode() === 'grid') {
       <ul role="list" class="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
         @for (item of filtered(); track item.artifactId) {
+          <!-- @container: the footer below collapses its button labels on a
+               narrow card. The card is sized by the grid (three columns at
+               `lg`, so ~13rem on a 1080px window), not by the viewport, so a
+               container query is correct here and a media query is not. -->
           <li
-            class="flex flex-col rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800"
+            class="@container flex flex-col rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800"
           >
             <div class="flex items-start gap-3">
               <span
@@ -316,6 +320,19 @@
               }
             </p>
 
+            <!-- Four controls in one row: labelled Open + Conversation need
+                 ~290px, and three columns give the card far less than that on
+                 a narrow window (~166px at 1080px), so the two text labels
+                 drop to `sr-only` below 19rem — kept in the accessible name,
+                 since these controls have no aria-label of their own and
+                 would otherwise become nameless icons, with [appTooltip]
+                 standing in for the text a sighted user can no longer see.
+
+                 19rem is measured against the card's CONTENT box, which is
+                 what an `inline-size` container query reports — `p-5` means
+                 the border box is 40px wider. Sizing the threshold off the
+                 border box (the intuitive reading) leaves the labels hidden
+                 on cards that could comfortably show them. -->
             <div
               class="mt-4 flex items-center gap-2 border-t border-gray-100 pt-4 dark:border-gray-700"
             >
@@ -323,18 +340,24 @@
                 type="button"
                 (click)="open(item)"
                 [disabled]="opening() === item.artifactId"
+                [appTooltip]="'Open in a new tab'"
+                appTooltipPosition="top"
                 class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60 dark:text-gray-300 dark:hover:bg-gray-700"
               >
                 <ng-icon name="heroArrowTopRightOnSquare" class="size-4" aria-hidden="true" />
-                {{ opening() === item.artifactId ? 'Opening…' : 'Open' }}
+                <span class="@max-[19rem]:sr-only">{{
+                  opening() === item.artifactId ? 'Opening…' : 'Open'
+                }}</span>
               </button>
               @if (item.sessionId) {
                 <a
                   [routerLink]="['/s', item.sessionId]"
+                  [appTooltip]="'Open the conversation'"
+                  appTooltipPosition="top"
                   class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-gray-700"
                 >
                   <ng-icon name="heroChatBubbleLeftRight" class="size-4" aria-hidden="true" />
-                  Conversation
+                  <span class="@max-[19rem]:sr-only">Conversation</span>
                 </a>
               }
               <div class="ml-auto flex items-center gap-1">
