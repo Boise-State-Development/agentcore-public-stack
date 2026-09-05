@@ -1,9 +1,15 @@
 """Explicit prompt-cache controls on the bedrock-runtime Responses transport.
 
-GPT-5.6 caches implicitly by default. Explicit mode lets us mark where the
-reusable prefix ends, so a change in conversation history costs a *read* of the
-~30k static prefix instead of a full re-write at the 1.25x premium — the
-resilience the Claude path already has.
+⛔ **This feature is OPT-IN and DEFAULT OFF.** It was built on the premise that
+a breakpoint after the static prefix would turn a history change from a full
+re-write into a read. Measured live, that premise was wrong: GPT-5.6's default
+implicit caching appends the history delta rather than re-writing, so the
+breakpoint only stops history being cached — explicit cost ~57% MORE on a
+churning conversation. The mechanism works; the placement is what failed.
+
+These tests therefore split in two: the behaviour tests opt in explicitly via
+the `model` fixture, and `TestOptInFlag` pins that the DEFAULT path — what
+production actually sends — is byte-identical to the stock Strands request.
 
 The request shape asserted here is AWS's documented one for explicit prompt
 caching: ``prompt_cache_breakpoint`` on a content block of a ``developer``
@@ -43,7 +49,21 @@ MESSAGES = [
 
 
 @pytest.fixture
-def model():
+def explicit_on(monkeypatch):
+    """Opt in. Explicit mode is DEFAULT OFF — it measured ~57% more expensive
+    than the model's implicit caching on a conversation with growing history
+    (see the module docstring in bedrock_responses.py)."""
+    monkeypatch.setenv(EXPLICIT_CACHE_ENABLED_ENV, "true")
+
+
+@pytest.fixture
+def model(explicit_on):
+    return build_bedrock_responses_model("us.openai.gpt-5.6-sol", region="us-west-2")
+
+
+@pytest.fixture
+def default_model():
+    """The model as it behaves with no opt-in — i.e. in production."""
     return build_bedrock_responses_model("us.openai.gpt-5.6-sol", region="us-west-2")
 
 
@@ -208,37 +228,61 @@ class TestNoSystemPrompt:
         assert "prompt_cache_options" not in (request.get("extra_body") or {})
 
 
-class TestKillSwitch:
-    def test_enabled_by_default(self, monkeypatch):
+class TestOptInFlag:
+    """Default OFF, and the default path must be byte-identical to stock.
+
+    Explicit mode measured ~57% MORE expensive than implicit on a churning
+    conversation: the breakpoint after the static prefix stops history being
+    cached, so uncached input grows every turn. The mechanism works; the
+    placement is what failed. Nobody re-enables this without re-running
+    `scripts/probe_gpt56_cache_rates.py --mode both --grow-history` and beating
+    the implicit arm.
+    """
+
+    def test_disabled_by_default(self, monkeypatch):
         monkeypatch.delenv(EXPLICIT_CACHE_ENABLED_ENV, raising=False)
 
-        assert explicit_prompt_cache_enabled() is True
+        assert explicit_prompt_cache_enabled() is False
 
-    def test_empty_string_stays_enabled(self, monkeypatch):
-        # Workflow env vars can materialize as "" — that must not disable it.
+    def test_empty_string_stays_disabled(self, monkeypatch):
+        # Workflow env vars can materialize as "" — that must not opt in.
         monkeypatch.setenv(EXPLICIT_CACHE_ENABLED_ENV, "")
 
+        assert explicit_prompt_cache_enabled() is False
+
+    @pytest.mark.parametrize("value", ["true", "TRUE", "True"])
+    def test_only_the_literal_true_enables(self, monkeypatch, value):
+        monkeypatch.setenv(EXPLICIT_CACHE_ENABLED_ENV, value)
+
         assert explicit_prompt_cache_enabled() is True
 
-    @pytest.mark.parametrize("value", ["false", "FALSE", "False"])
-    def test_only_the_literal_false_disables(self, monkeypatch, value):
+    @pytest.mark.parametrize("value", ["false", "1", "yes", "on", "explicit"])
+    def test_nothing_else_enables(self, monkeypatch, value):
         monkeypatch.setenv(EXPLICIT_CACHE_ENABLED_ENV, value)
 
         assert explicit_prompt_cache_enabled() is False
 
-    def test_disabled_leaves_the_stock_request_shape(self, model, monkeypatch):
-        monkeypatch.setenv(EXPLICIT_CACHE_ENABLED_ENV, "false")
+    def test_the_default_request_is_the_stock_shape(self, default_model, monkeypatch):
+        """What production actually sends: untouched, on implicit caching."""
+        monkeypatch.delenv(EXPLICIT_CACHE_ENABLED_ENV, raising=False)
 
-        request = _format(model)
+        request = _format(default_model)
 
         assert request["instructions"] == SYSTEM
         assert "prompt_cache_key" not in request
         assert "extra_body" not in request
         assert request["input"][0]["role"] == "user"
+        assert not any(
+            "prompt_cache_breakpoint" in block
+            for item in request["input"]
+            if isinstance(item.get("content"), list)
+            for block in item["content"]
+            if isinstance(block, dict)
+        )
 
 
 class TestOtherTransportsUnaffected:
-    def test_mantle_responses_gets_no_explicit_controls(self):
+    def test_mantle_responses_gets_no_explicit_controls(self, explicit_on):
         """openai.gpt-5.4 on Mantle is implicit-only — it has no breakpoints.
 
         Sending explicit controls there would at best be ignored and at worst
