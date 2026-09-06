@@ -219,6 +219,20 @@ describe('AnnouncementBannerComponent', () => {
       expect(host).not.toContain('top-16');
     });
 
+    it('takes the other side when the composer is centred', () => {
+      // The empty state puts the greeting immediately above a centred
+      // composer, so `above` would float the pill over it — visibly so at
+      // narrow widths, where the greeting wraps.
+      bannerItem.set(makeAnnouncement());
+      const fixture = TestBed.createComponent(AnnouncementBannerComponent);
+      fixture.componentRef.setInput('placement', 'below');
+      fixture.detectChanges();
+
+      const host = (fixture.nativeElement as HTMLElement).className;
+      expect(host).toContain('top-full');
+      expect(host).not.toContain('bottom-full');
+    });
+
     it('reads as a compact tab beside the quota warning, not a full-bleed strip', () => {
       bannerItem.set(makeAnnouncement());
       const fixture = create();

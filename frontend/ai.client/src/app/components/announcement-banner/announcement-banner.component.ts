@@ -4,6 +4,7 @@ import {
   computed,
   effect,
   inject,
+  input,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -58,8 +59,19 @@ import {
  * surface only**; What's New remains the everywhere-record, which is why
  * `panel` is forced onto every announcement server-side.
  *
- * `bottom-full` against the `relative` chat-input host puts it clear of the
- * quota tabs, which stay visually attached to the input.
+ * **Which side of the composer it takes follows the composer.** In a
+ * conversation the composer is pinned to the bottom of the viewport, so the
+ * pill goes above it. On the empty state the composer is centred with the
+ * greeting directly above it, so the pill goes below instead — otherwise it
+ * floats over the greeting, which is exactly what it does at narrow widths.
+ * The caller passes `placement`; it is derived from the container's
+ * `isEmptyState()`, not measured, because that signal is what decides which
+ * layout branch renders in the first place. Measuring viewport position would
+ * re-derive the same fact less reliably, and would have to be recomputed on
+ * resize, on scroll, and when the artifact pane opens.
+ *
+ * Either way it floats clear of the quota tabs, which stay visually attached
+ * to the input.
  *
  * The wrapper is `pointer-events-none` and only the pill itself takes events,
  * so the full-width positioning strip cannot swallow clicks aimed at the
@@ -85,7 +97,11 @@ import {
     // The positioning strip. `pointer-events-none` here (and `auto` on the
     // pill) keeps it from swallowing clicks meant for the chrome beneath.
     class:
-      'pointer-events-none absolute inset-x-0 bottom-full z-30 mb-2 flex justify-center px-4',
+      'pointer-events-none absolute inset-x-0 z-30 flex justify-center px-4',
+    '[class.bottom-full]': "placement() === 'above'",
+    '[class.mb-2]': "placement() === 'above'",
+    '[class.top-full]': "placement() === 'below'",
+    '[class.mt-2]': "placement() === 'below'",
   },
   template: `
     @if (announcement(); as item) {
@@ -130,6 +146,13 @@ import {
 })
 export class AnnouncementBannerComponent {
   private readonly announcements = inject(AnnouncementsService);
+
+  /**
+   * Which side of the composer to take. `'above'` suits a bottom-pinned
+   * composer; `'below'` keeps the pill off the greeting when the composer is
+   * centred on the empty state.
+   */
+  readonly placement = input<'above' | 'below'>('above');
 
   readonly announcement = computed<Announcement | null>(() =>
     this.announcements.bannerItem(),

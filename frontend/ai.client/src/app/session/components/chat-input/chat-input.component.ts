@@ -172,6 +172,13 @@ export class ChatInputComponent {
    */
   readonly showAnnouncements = input<boolean>(true);
 
+  /**
+   * Which side of this composer an announcement takes. Supplied by the
+   * container, which knows whether the composer is centred (empty state) or
+   * pinned to the bottom (a conversation).
+   */
+  readonly announcementPlacement = input<'above' | 'below'>('above');
+
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
 
   // Use the input directly - parent controls loading state

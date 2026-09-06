@@ -34,6 +34,7 @@ class ChatInputStub {
   readonly showVoiceControl = input<boolean>(true);
   readonly showSettingsControl = input<boolean>(true);
   readonly showAnnouncements = input<boolean>(true);
+  readonly announcementPlacement = input<'above' | 'below'>('above');
   readonly messageSubmitted = output<unknown>();
   readonly messageCancelled = output<void>();
   readonly fileAttached = output<File>();

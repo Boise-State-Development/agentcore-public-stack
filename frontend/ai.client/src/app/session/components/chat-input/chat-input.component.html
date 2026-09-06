@@ -3,7 +3,7 @@
      user's cursor. Sits above the quota tabs, which stay attached to the
      input itself. -->
 @if (showAnnouncements()) {
-  <app-announcement-banner />
+  <app-announcement-banner [placement]="announcementPlacement()" />
 }
 
 <!-- Cost quota warning indicator -->

@@ -234,6 +234,19 @@ export class ChatContainerComponent {
     () => !this.resolvedConfig().embeddedMode,
   );
 
+  /**
+   * Which side of the composer an announcement takes, following the composer.
+   *
+   * The empty state centres the composer with the greeting immediately above
+   * it, so a pill placed above would float over the greeting — visibly so at
+   * narrow widths, where the greeting wraps. A conversation pins the composer
+   * to the bottom, where below would be off the edge. Same `isEmptyState()`
+   * that picks the layout branch picks the side, so the two cannot drift.
+   */
+  protected readonly announcementPlacement = computed<'above' | 'below'>(
+    () => (this.isEmptyState() ? 'below' : 'above'),
+  );
+
   protected readonly showChatTopnav = computed(
     () =>
       this.resolvedConfig().fullPageMode &&
