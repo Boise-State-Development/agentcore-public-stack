@@ -1,4 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  signal,
+} from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -146,6 +153,16 @@ import { parseIso } from '../../utils/date';
                       · {{ item.audience }}
                     }
                   </p>
+
+                  @if (item.reach; as reach) {
+                    <p
+                      class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400"
+                      [title]="reachHint"
+                    >
+                      <span class="font-medium text-gray-700 dark:text-gray-300">Reach</span>
+                      {{ reach }}
+                    </p>
+                  }
                 </div>
 
                 <div class="flex shrink-0 flex-wrap items-center gap-2">
@@ -219,6 +236,16 @@ export class ManageAnnouncementsPage {
 
   constructor() {
     this.service.ensureLoaded();
+
+    // Reach is a second endpoint per announcement, so it is fetched once the
+    // list resolves rather than blocking it. `loadStats` skips ids it has
+    // already requested, so re-running on every list change is cheap and the
+    // effect cannot feed itself.
+    effect(() => {
+      const announcements = this.announcements();
+      if (announcements.length === 0) return;
+      void this.service.loadStats(announcements);
+    });
   }
 
   protected readonly announcements = this.service.announcements;
@@ -239,8 +266,14 @@ export class ManageAnnouncementsPage {
       announcement,
       timing: this.describeTiming(announcement),
       audience: this.describeAudience(announcement),
+      reach: this.describeReach(announcement),
     })),
   );
+
+  protected readonly reachHint =
+    'Approximate. Counts are cumulative — anyone who acknowledged also ' +
+    'counts as dismissed and as seen. The audience size is an estimate that ' +
+    'moves as people join.';
 
   protected canPublish(a: Announcement): boolean {
     // Archived is terminal; the server refuses to publish out of it, so do not
@@ -281,6 +314,32 @@ export class ManageAnnouncementsPage {
     if (!markdown) return '(empty)';
     const stripped = markdown.replace(/[#*_`>\-]/g, '').replace(/\s+/g, ' ').trim();
     return stripped.length > 140 ? stripped.slice(0, 140) + '…' : stripped;
+  }
+
+  /**
+   * One line of reach, or null when there is nothing honest to say.
+   *
+   * Null for a draft (nothing has been shown, so a row of zeroes would read
+   * as "nobody engaged" rather than "not sent yet") and while the fetch is
+   * still in flight.
+   *
+   * The counts are a funnel, not a partition — see `AnnouncementStats`. They
+   * are rendered as such: "12 seen · 8 dismissed" means 8 of those 12, not 20
+   * people.
+   */
+  private describeReach(a: Announcement): string | null {
+    if (!AnnouncementsAdminService.hasReach(a)) return null;
+    const stats = this.service.statsFor(a.announcement_id);
+    if (!stats) return null;
+
+    const parts = [`${stats.seen} seen`, `${stats.dismissed} dismissed`];
+    // Only meaningful where an acknowledgement was ever asked for.
+    if (a.requires_ack) parts.push(`${stats.acknowledged} acknowledged`);
+
+    const line = parts.join(' · ');
+    return stats.targeted != null
+      ? `${line} — of ~${stats.targeted} targeted (estimate)`
+      : `${line} (audience not estimated)`;
   }
 
   private describeTiming(a: Announcement): string {

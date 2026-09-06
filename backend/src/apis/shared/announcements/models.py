@@ -488,6 +488,13 @@ class AnnouncementStatsResponse(BaseModel):
       documented trade for O(1) stats with no GSI and no scan.
     - ``targeted`` is a denominator that moves as people join and roles
       change. **Do not build compliance reporting on it.**
+    - **Nothing is backfilled.** The counters are incremented by the ack write
+      path, so acks recorded before this shipped are invisible here — an
+      existing environment starts every announcement at zero on deploy day
+      even where people have already read and dismissed it. The ack rows
+      themselves are intact; only the tallies begin at the deploy. There is no
+      cheap repair for this (counting the existing rows is the scan the design
+      exists to avoid), so read early numbers as "reach since stats shipped".
     """
 
     announcement_id: str

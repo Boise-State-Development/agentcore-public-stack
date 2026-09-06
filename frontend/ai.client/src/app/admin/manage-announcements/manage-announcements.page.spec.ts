@@ -3,7 +3,11 @@ import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { ManageAnnouncementsPage } from './manage-announcements.page';
 import { AnnouncementsAdminService } from './services/announcements-admin.service';
-import { Announcement, AnnouncementState } from './models/announcement.model';
+import {
+  Announcement,
+  AnnouncementState,
+  AnnouncementStats,
+} from './models/announcement.model';
 
 function makeAnnouncement(overrides: Partial<Announcement> = {}): Announcement {
   return {
@@ -29,17 +33,33 @@ function makeAnnouncement(overrides: Partial<Announcement> = {}): Announcement {
   };
 }
 
+function makeStats(overrides: Partial<AnnouncementStats> = {}): AnnouncementStats {
+  return {
+    announcement_id: 'a1',
+    revision: 1,
+    seen: 12,
+    dismissed: 8,
+    acknowledged: 3,
+    targeted: 40,
+    ...overrides,
+  };
+}
+
 describe('ManageAnnouncementsPage', () => {
   let items: ReturnType<typeof signal<Announcement[]>>;
+  let statsById: ReturnType<typeof signal<Map<string, AnnouncementStats>>>;
   let service: any;
   let confirmSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
     items = signal<Announcement[]>([]);
+    statsById = signal<Map<string, AnnouncementStats>>(new Map());
     service = {
       ensureLoaded: vi.fn(),
       announcements: items,
+      loadStats: vi.fn(async () => undefined),
+      statsFor: (id: string) => statsById().get(id) ?? null,
       announcementsResource: { isLoading: () => false, error: () => null },
       publish: vi.fn(async () => makeAnnouncement({ state: 'published' })),
       archive: vi.fn(async () => makeAnnouncement({ state: 'archived' })),
@@ -196,6 +216,81 @@ describe('ManageAnnouncementsPage', () => {
       const states: AnnouncementState[] = ['draft', 'scheduled', 'published', 'archived'];
       const classes = states.map(s => page.stateChipClass(s));
       expect(new Set(classes).size).toBe(states.length);
+    });
+  });
+
+  describe('reach', () => {
+    it('says nothing for a draft — zeroes would read as "nobody engaged"', () => {
+      items.set([makeAnnouncement({ state: 'draft' })]);
+      statsById.set(new Map([['a1', makeStats()]]));
+      const page = createPage();
+      expect(page.rows()[0].reach).toBeNull();
+    });
+
+    it('says nothing until the stats have arrived', () => {
+      items.set([makeAnnouncement({ state: 'published' })]);
+      const page = createPage();
+      expect(page.rows()[0].reach).toBeNull();
+    });
+
+    it('renders the funnel once stats land', () => {
+      items.set([makeAnnouncement({ state: 'published' })]);
+      const page = createPage();
+      statsById.set(new Map([['a1', makeStats()]]));
+
+      const reach = page.rows()[0].reach!;
+      expect(reach).toContain('12 seen');
+      expect(reach).toContain('8 dismissed');
+      expect(reach).toContain('~40 targeted');
+      expect(reach).toContain('estimate');
+    });
+
+    it('omits acknowledged unless one was ever asked for', () => {
+      items.set([
+        makeAnnouncement({ state: 'published', requires_ack: false }),
+      ]);
+      const page = createPage();
+      statsById.set(new Map([['a1', makeStats()]]));
+      expect(page.rows()[0].reach).not.toContain('acknowledged');
+    });
+
+    it('shows acknowledged for a requiresAck announcement', () => {
+      items.set([makeAnnouncement({ state: 'published', requires_ack: true })]);
+      const page = createPage();
+      statsById.set(new Map([['a1', makeStats()]]));
+      expect(page.rows()[0].reach).toContain('3 acknowledged');
+    });
+
+    it('says the audience is not estimated rather than implying zero', () => {
+      // A role-scoped announcement cannot be counted — `targeted` is null, and
+      // rendering that as "of ~0" would read as nobody being targeted.
+      items.set([
+        makeAnnouncement({ state: 'published', target_roles: ['faculty'] }),
+      ]);
+      const page = createPage();
+      statsById.set(new Map([['a1', makeStats({ targeted: null })]]));
+
+      const reach = page.rows()[0].reach!;
+      expect(reach).toContain('audience not estimated');
+      expect(reach).not.toContain('~0');
+    });
+
+    it('still reports reach for an archived announcement', () => {
+      // Archiving stops it showing but keeps the acks — the record is the
+      // reason to archive rather than delete.
+      items.set([makeAnnouncement({ state: 'archived' })]);
+      const page = createPage();
+      statsById.set(new Map([['a1', makeStats()]]));
+      expect(page.rows()[0].reach).toContain('12 seen');
+    });
+
+    it('requests stats once the list resolves', () => {
+      items.set([makeAnnouncement({ state: 'published' })]);
+      createPage();
+      // The fetch is an effect, so it needs a flush — the page is constructed
+      // directly here rather than through a fixture.
+      TestBed.tick();
+      expect(service.loadStats).toHaveBeenCalled();
     });
   });
 });

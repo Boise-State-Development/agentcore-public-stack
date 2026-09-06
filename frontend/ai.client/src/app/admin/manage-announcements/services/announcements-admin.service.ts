@@ -7,6 +7,7 @@ import {
   Announcement,
   AnnouncementCreateRequest,
   AnnouncementListResponse,
+  AnnouncementStats,
   AnnouncementUpdateRequest,
 } from '../models/announcement.model';
 
@@ -119,9 +120,89 @@ export class AnnouncementsAdminService {
     this.refresh();
   }
 
+  // ── Reach (§9) ────────────────────────────────────────────────────────
+  //
+  // Stats are a separate endpoint per announcement rather than a field on the
+  // list, so they are fetched into this map and read by id. Only announcements
+  // that have actually been shown are worth a request: a draft has by
+  // definition reached nobody, and asking would be N wasted round trips on the
+  // rows an admin is still writing.
+
+  private readonly statsById = signal<ReadonlyMap<string, AnnouncementStats>>(
+    new Map(),
+  );
+  /** Ids already requested, so the loader is not re-entered on every render. */
+  private readonly requestedStats = new Set<string>();
+
+  readonly stats = this.statsById.asReadonly();
+
+  statsFor(id: string): AnnouncementStats | null {
+    return this.statsById().get(id) ?? null;
+  }
+
+  /** Whether reach is meaningful — nothing has been shown before publication. */
+  static hasReach(announcement: Announcement): boolean {
+    return (
+      announcement.state === 'published' || announcement.state === 'archived'
+    );
+  }
+
+  /**
+   * Fetch reach for any of these that has been live and is not already
+   * loaded. Fails soft per id: a stats endpoint erroring must not blank the
+   * admin list, which is the page's actual job.
+   */
+  async loadStats(announcements: Announcement[]): Promise<void> {
+    const pending = announcements
+      .filter(a => AnnouncementsAdminService.hasReach(a))
+      .filter(a => !this.requestedStats.has(this.statsKey(a)));
+    if (pending.length === 0) return;
+
+    for (const a of pending) this.requestedStats.add(this.statsKey(a));
+
+    const results = await Promise.all(
+      pending.map(async a => {
+        try {
+          return await firstValueFrom(
+            this.http.get<AnnouncementStats>(
+              `${this.baseUrl()}/${a.announcement_id}/stats`,
+            ),
+          );
+        } catch {
+          // Leave it absent; the row renders without a reach line.
+          this.requestedStats.delete(this.statsKey(a));
+          return null;
+        }
+      }),
+    );
+
+    this.statsById.update(prev => {
+      const next = new Map(prev);
+      for (const stats of results) {
+        if (stats) next.set(stats.announcement_id, stats);
+      }
+      return next;
+    });
+  }
+
+  /**
+   * Keyed by revision, not just id.
+   *
+   * "Show again" bumps the revision and the counters restart, so a cached
+   * entry from the previous revision would show stale reach for a broadcast
+   * that has only just gone out.
+   */
+  private statsKey(a: Announcement): string {
+    return `${a.announcement_id}#R${a.revision}`;
+  }
+
   private refresh(): void {
     this.announcementsResource.reload();
     // The admin is also a user: keep their own What's-New in step.
     this.userFeed.reload();
+    // Publishing, archiving and revising all change what reach means, so drop
+    // the cache and let the list re-request it.
+    this.requestedStats.clear();
+    this.statsById.set(new Map());
   }
 }
