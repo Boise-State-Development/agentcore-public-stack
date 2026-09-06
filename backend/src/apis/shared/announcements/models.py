@@ -39,6 +39,9 @@ ANNOUNCEMENTS_PK = "ANNOUNCEMENTS"
 ANNOUNCEMENT_SK_PREFIX = "ANNOUNCEMENT#"
 ACK_SK_PREFIX = "ACK#"
 
+#: ``targetRoles`` entry meaning "everyone" (§D9). A display filter, never a grant.
+TARGET_EVERYONE = "*"
+
 TITLE_MAX_LENGTH = 140
 BODY_MAX_BYTES = 16 * 1024
 
@@ -57,6 +60,29 @@ SUPPRESSING_RANK = ACTION_RANKS["dismissed"]
 #: Ack TTLs (§5). Bounded forever without a sweeper.
 ACK_TTL_AFTER_EXPIRY = timedelta(days=90)
 ACK_TTL_OPEN_ENDED = timedelta(days=730)
+
+#: Ack counters live as **top-level** attributes on the announcement item,
+#: one per (revision, action) — ``ackCountsR1Seen`` and friends.
+#:
+#: Top-level rather than a nested ``ackCounts`` map for one reason:
+#: DynamoDB's ``ADD`` only works on top-level attributes, and it creates the
+#: attribute (treating a missing one as 0) in the same atomic write. A nested
+#: map needs ``SET path = if_not_exists(path, :zero) + :one``, which raises
+#: ValidationException until the parent map exists — so every announcement
+#: authored before this shipped would need an init-then-retry path around
+#: every ack. One atomic write with no fallback beats a tidier shape with a
+#: repair branch on the hot path.
+#:
+#: Keyed by revision because "Show again" (§D4) is a deliberate re-broadcast:
+#: rolling its acks into the previous revision's totals would silently inflate
+#: them and make the numbers lie about the version people actually saw.
+ACK_COUNT_ATTR_PREFIX = "ackCounts"
+
+
+def ack_count_attr(revision: int, action: str) -> str:
+    """Attribute name holding the count of users who reached ``action``."""
+    return f"{ACK_COUNT_ATTR_PREFIX}R{int(revision)}{action.capitalize()}"
+
 
 _LOUD_SURFACES = frozenset({"banner", "modal"})
 
@@ -144,6 +170,20 @@ class Announcement:
     cta_url: Optional[str] = None
     revision: int = 1
     created_by: Optional[str] = None
+    #: Ack funnel counters, carried through read → write.
+    #:
+    #: **Not domain state — a projection that must survive.** Every admin
+    #: mutation (``update_announcement``, ``set_state``, ``bump_revision``)
+    #: is a full ``put_item`` of this dataclass, so any attribute the model
+    #: does not know about is destroyed by it. Without this field, publishing
+    #: or archiving an announcement — or hitting "Show again" — would silently
+    #: zero every stat the feature exists to report.
+    #:
+    #: The read-modify-write does mean an ack landing in the same instant as
+    #: an admin edit can lose its increment. That is the documented cost of
+    #: approximate O(1) counters (§9); admin writes are rare, and the ack
+    #: itself is never at risk because it is a different item.
+    ack_counts: Dict[str, int] = field(default_factory=dict)
 
     def to_dynamo_item(self) -> Dict[str, Any]:
         item: Dict[str, Any] = {
@@ -173,6 +213,9 @@ class Announcement:
             item["ctaUrl"] = self.cta_url
         if self.created_by:
             item["createdBy"] = self.created_by
+        # Carried forward verbatim so a full-item put cannot destroy them.
+        for attr, value in (self.ack_counts or {}).items():
+            item[attr] = int(value)
         return item
 
     @classmethod
@@ -205,6 +248,11 @@ class Announcement:
             created_at=created_at,
             updated_at=updated_at,
             created_by=item.get("createdBy"),
+            ack_counts={
+                key: int(value)
+                for key, value in item.items()
+                if key.startswith(ACK_COUNT_ATTR_PREFIX)
+            },
         )
 
     def ack_ttl(self, action: str) -> Optional[int]:
@@ -420,6 +468,36 @@ class AnnouncementResponse(BaseModel):
 class AnnouncementListResponse(BaseModel):
     announcements: List[AnnouncementResponse]
     total: int
+
+
+class AnnouncementStatsResponse(BaseModel):
+    """Reach for one announcement, at its **current** revision.
+
+    The three counts are a **funnel, not a partition**: a user who
+    acknowledged also counts as dismissed and as seen, because the stored rank
+    only ever rises through them (§D2). So ``seen >= dismissed >=
+    acknowledged`` always holds, and "how many only ever saw it" is
+    ``seen - dismissed``. Reading them as disjoint buckets would understate
+    every stage.
+
+    Everything here is approximate by construction and must be labelled that
+    way in the UI (§11):
+
+    - the counts are incremented on a **second** write after the ack itself
+      lands, so a failure between the two under-counts by one. That is the
+      documented trade for O(1) stats with no GSI and no scan.
+    - ``targeted`` is a denominator that moves as people join and roles
+      change. **Do not build compliance reporting on it.**
+    """
+
+    announcement_id: str
+    revision: int
+    seen: int
+    dismissed: int
+    acknowledged: int
+    #: Active users this announcement is aimed at, or None when the audience
+    #: cannot be counted — see ``AnnouncementsService.get_stats``.
+    targeted: Optional[int] = None
 
 
 # =============================================================================
