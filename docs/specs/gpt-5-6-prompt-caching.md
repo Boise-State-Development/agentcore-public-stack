@@ -1,6 +1,6 @@
 # Plan: prompt caching for OpenAI GPT-5.6 on Bedrock
 
-**Status:** Shipped and VERIFIED LIVE 2026-09-05 — PR-1 (#945), PR-2 (#949), PR-5 (#951), PR-4 (#954, shipped OFF via #956) and the IAM fix (#959). Caching confirmed working end-to-end through the agent loop: warm turns cost 10.6x less than cold. PR-3 (catalog rates) remains BLOCKED — no commercial rates in the Price List API — so dollar figures are provisional.
+**Status:** Shipped and VERIFIED LIVE 2026-09-05 — PR-1 (#945), PR-2 (#949), PR-5 (#951), PR-4 (#954, shipped OFF via #956) and the IAM fix (#959). Caching confirmed working end-to-end through the agent loop: warm turns cost 10.6x less than cold. PR-3 (catalog rates) remains BLOCKED, but the blocker changed on 2026-09-06: these models bill through AWS Marketplace, which no pricing API covers, so no amount of waiting will publish them. The empirical route is open instead — Cost Explorer carries the dollars but names no model, so rates are only attributable on a single-model day. First controlled window claimed 2026-09-06 (Sol). Dollar figures stay provisional until it is read.
 **Author:** (drafted with Claude)
 **Date:** 2026-09-04
 **Related:** `agents/main_agent/core/model_config.py`, `agents/main_agent/core/agent_factory.py`,
@@ -275,6 +275,97 @@ Options when it is picked back up, in preference order:
    Explorer lags ~24h.
 3. Ship model-card rates explicitly labelled unverified, in code and in the
    PR. Last resort: these rows price real spend against faculty quotas.
+
+
+#### 2026-09-06 — Option 2 attempted: what Cost Explorer can and cannot say
+
+Option 2 was run against dev-ai. It is viable, but only under a constraint the
+plan above did not anticipate, and it closed off Option 1 in the process.
+
+**Option 1 is not a waiting game.** These models bill through **AWS
+Marketplace**, and the Price List API has no Marketplace service code — all 269
+service codes were enumerated on 2026-09-06 and none covers Marketplace. The
+Marketplace Catalog API is seller-side and returns nothing for a subscriber.
+So the earlier "not published yet" reading was wrong: there is no pricing API
+that *could* carry these rates while they bill this way. Waiting will not
+produce them.
+
+**Cost Explorer has the dollars, but names no model.** Usage types look like
+`USW2-MP:USW2_cache_read_tokens_standard-Units` — they carry the token bucket
+and the service tier, never the model id. Every OpenAI-family model in the
+account shares the same four rows. There is no finer dimension: checked
+`USAGE_TYPE` grouped by `OPERATION` (all `InvokeModelStreamingInference`) and
+by `BILLING_ENTITY` (all `AWS Marketplace`).
+
+**Therefore a rate is attributable only on a single-model day.** That is the
+method, and it works — dev has near-zero organic OpenAI traffic, so clean days
+are easy to claim. `probe_gpt56_cache_rates.py --rates-only --table <sessions
+table>` now prints which models we recorded that day and refuses to vouch for a
+number when more than one OpenAI-family model ran.
+
+Two traps, both hit and both now guarded in the script:
+
+- **Read it DAILY, not monthly.** Daily rows come back as exact round numbers;
+  a multi-day window silently blends models into a meaningless average. August
+  shows two distinct price cards — `$5.50 / $27.50` and `$2.20 / $11.00` — and
+  2026-08-31 is visibly a blend of the two (`$4.3780` input). A monthly read
+  would have reported that blend as if it were a rate.
+- **The unit is `1M tokens`, not `1K`.** Cost Explorer declares it in the
+  `Unit` field, and it differs by billing path: Marketplace rows are `1M
+  tokens`, natively-billed rows (Nova, Titan, Mantle-served models) are `1K
+  tokens`. The script previously assumed 1K for everything, which overstated
+  every Marketplace rate by 1000x. It now reads the declared unit.
+
+**The cache ratios hold, independently confirmed.** On every clean day, in both
+price cards, cache read is exactly `0.1x` input and cache write exactly
+`1.25x`. This is commercial-region billing data, and it corroborates the
+GovCloud ratio finding below from a completely different source.
+
+**Bearing on the modelling gap.** Every row observed is `_standard`; no
+`-long-ctx` usage type has ever appeared in this account. So the 0.5x/2x tier
+and 2x long-context dimensions are not currently being billed against us, and a
+flat standard rate is correct *for our present traffic*. That downgrades the
+gap from "silently mis-prices" to "mis-prices only if traffic changes, and Cost
+Explorer will show a new usage type when it does" — which is a monitorable
+condition rather than a blocking unknown.
+
+**Controlled window claimed: 2026-09-06, `us.openai.gpt-5.6-sol` only.** Dev
+had zero recorded model calls that day before the probe. Expected totals, to be
+divided into that day's Cost Explorer dollars:
+
+| bucket | tokens |
+|---|---|
+| `inputTokens` | 2,660 |
+| `cacheReadInputTokens` | 17,496 |
+| `cacheWriteInputTokens` | 5,868 |
+| `outputTokens` | 50 |
+
+Two arms produced these: an 8,000-token prefix over 4 turns for the cache
+buckets, and a 600-token prefix over 6 turns — deliberately under the
+1024-token minimum cacheable prefix, so nothing caches and input tokens
+accumulate as the rate anchor. Read it once Marketplace settles (allow 24-48h,
+not 24h) and Terra and Luna need their own single-model days.
+
+**What the read will actually settle.** The dev rows currently carry:
+
+| model | input | output | cache read | cache write |
+|---|---:|---:|---:|---:|
+| `us.openai.gpt-5.6-sol` | 4.40 | 26.40 | 0.44 | 5.50 |
+| `us.openai.gpt-5.6-terra` | 2.64 | 15.84 | 0.264 | 3.30 |
+| `us.openai.gpt-5.6-luna` | 0.264 | 1.584 | 0.0264 | 0.33 |
+
+The cache columns are not the risk — they are `0.1x` and `1.25x` of input, now
+confirmed from two independent sources. The risk is concentrated in two places:
+
+- **Every output rate is a guess.** They are `6x` input, a ratio taken from the
+  GovCloud Terra row. Commercial daily billing shows both price cards running
+  at `1:5`, not `1:6` — so if GPT-5.6 also prices at `1:5`, Sol's output rate is
+  overstated by 20%. Output is the largest per-token number in each row.
+- **Sol's input rate has no source at all.** Terra and Luna at least descend
+  from GovCloud Price List rows; `sol` is absent from the Price List entirely,
+  so `4.40` came from the model card.
+
+The single-model day yields input and output directly, which settles both.
 
 What the GovCloud rows *do* establish, and can be relied on:
 
