@@ -205,5 +205,39 @@ describe('ChatStateService', () => {
     it('abortRequest is a no-op for sessions without an in-flight request', () => {
       expect(() => service.abortRequest('nope')).not.toThrow();
     });
+
+    it('drops a session from streamingSessionIds once its controller is released', () => {
+      // The bug this guards: a completed stream used to leave its controller
+      // behind, so the session looked in-flight for the life of the tab and
+      // the next page-hide marked its finished turn `navigated_away`.
+      const a = service.createAbortController('a');
+      service.createAbortController('b');
+
+      expect(service.streamingSessionIds().sort()).toEqual(['a', 'b']);
+
+      service.releaseAbortController('a', a);
+
+      expect(service.streamingSessionIds()).toEqual(['b']);
+      // Released, not aborted — the stream finished on its own.
+      expect(a.signal.aborted).toBe(false);
+    });
+
+    it('releaseAbortController ignores a controller the session no longer owns', () => {
+      // A superseded stream's late teardown must not clear the controller of
+      // the stream that replaced it.
+      const first = service.createAbortController('a');
+      const second = service.createAbortController('a');
+
+      service.releaseAbortController('a', first);
+
+      expect(service.streamingSessionIds()).toEqual(['a']);
+      expect(second.signal.aborted).toBe(false);
+    });
+
+    it('releaseAbortController is a no-op for an unknown session', () => {
+      expect(() =>
+        service.releaseAbortController('nope', new AbortController()),
+      ).not.toThrow();
+    });
   });
 });
