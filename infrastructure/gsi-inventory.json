@@ -63,7 +63,8 @@
     "system-cost-rollup": [],
     "system-prompts": [],
     "user-artifacts": [
-      "SessionIndex"
+      "SessionIndex",
+      "UserArtifactsIndex"
     ],
     "user-cost-summary": [
       "PeriodCostIndex"

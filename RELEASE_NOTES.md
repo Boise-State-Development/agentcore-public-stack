@@ -1,3 +1,76 @@
+# Release Notes — v1.19.0
+
+**Release Date:** September 6, 2026
+**Previous Release:** v1.18.0 (September 6, 2026)
+
+---
+
+> 🏗️ **CDK deploy required.** One new GSI — `UserArtifactsIndex` on the **existing** `{prefix}-user-artifacts` table. That is **one** index operation on one existing table, within DynamoDB's one-GSI-per-`UpdateTable` limit, so this release does not need splitting. Confirm the index reports `ACTIVE` before considering the deploy done — CloudFormation reporting `UPDATE_COMPLETE` is not the same thing.
+>
+> ⚙️ **`CDK_ARTIFACT_SHARE_INBOX_ENABLED` changes meaning.** It was opt-in (only `"true"` enabled the inbox); it is now a kill switch (unset or empty means **enabled**, only `"false"` disables). An environment that never set it **gains the "Shared with you" tab on this deploy**. Set it to `"false"` before deploying to keep that surface dark.
+>
+> 🧹 **Two optional one-shot scripts, both dry-run by default.** Neither is required for the deploy to be correct; see Deployment notes.
+
+---
+
+## Highlights
+
+This release makes a conversation stop misreporting its own history. Two unrelated defects were doing it: a response that finished normally could be labelled **"Response interrupted"** with a Continue button that would resume an already-complete answer, and a response that genuinely *was* interrupted could show the model-directed `<interruption_note>` — text written for the model, not the user — inside the user's own chat bubble, permanently. Both are fixed where they originate rather than papered over at the render layer. Alongside them, the artifact **"Shared with you" inbox now ships on by default** with a kill switch, and `UserArtifactsIndex` is added to the artifacts table as groundwork with nothing reading it yet.
+
+## Interrupted turns now tell the truth
+
+Two independent bugs, both surfacing as a conversation describing itself incorrectly after an interruption.
+
+**A completed turn could claim it was interrupted.** The SPA creates one `AbortController` per streaming request and used to release it only when the user clicked Stop — never on normal stream teardown. `streamingSessionIds()` reads exactly that controller to decide which turns a page departure interrupted, so after any turn that finished on its own, the session still looked in-flight for the rest of the tab's life. The next refresh, tab close, or cross-document navigation then attributed a `navigated_away` interruption to a finished answer, and a single departure marked *every* session that tab had ever streamed. On the next load the conversation showed "Response interrupted" and offered Continue, which would spend a turn resuming a response that had already ended.
+
+**An interrupted turn could show the note meant for the model.** When a turn is interrupted, the next turn's prompt carries an `<interruption_note>` telling the model what happened. That note is deliberately part of persisted history — it is an honest record of what the model read — and the UI is supposed to render `displayText`, the clean copy of what the user typed, in its place. `displayText` was written by a single call site at the end of a *successful* turn, so a turn that was stopped, dropped, or errored never wrote one and the augmented prompt became the only text available to render. The failure concentrated where it was most visible: a turn only carries an interruption note because the *previous* turn was interrupted, so notes rode disproportionately on turns likely to be interrupted themselves.
+
+### Backend
+
+- `apis/app_api/sessions/routes.py` — `POST /sessions/{id}/interrupt` now verifies a turn is genuinely in flight against the session's single-flight lease before recording `navigated_away`. `user_stopped` is deliberately ungated: the Stop button only exists while streaming, and the same request arms distributed cancellation, which must still reach a turn whose lease read fails open.
+- `agents/main_agent/session/hooks/display_text.py` — new `DisplayTextHook` writes `displayText` on `MessageAddedEvent`, when the user's message enters history and before the model call, so every later exit path already has it. Not every role-`user` message is the user: tool results carry that role, and Strands prepends a synthetic tool-result message ahead of the prompt when history ends on a dangling `toolUse` — precisely what an interrupted tool turn leaves behind — so content carrying `toolResult`/`toolUse` is skipped.
+- `agents/main_agent/streaming/stream_coordinator.py` — arms the hook at the head of every turn, unconditionally including to `None`, because the agent instance is cached across turns. Its own end-of-turn write remains as a backstop for callers with no hook and for a failed write.
+
+### Frontend
+
+- `session/services/chat/chat-state.service.ts` and `chat-http.service.ts` — a session's controller is released on stream teardown, identity-checked so a superseded stream's late close cannot clear the controller of the stream that replaced it.
+
+### Test Coverage
+
+19 new backend tests across the hook and the coordinator's arming/backstop seam, plus SPA specs covering controller release, the identity guard, and the lease-gated and ungated interrupt paths.
+
+## 🐛 Bug fixes
+
+- **The sidebar said "No Chats Yet" while sessions were still loading**, showing an empty-state message to users who had conversations. The loading test read `value() === undefined`, but the sessions resource short-circuits to `null` on the ordinary cold-start path — `SessionService` is constructed during the `APP_INITIALIZER` pass, before the BFF bootstrap promise resolves — and `reload()` preserves that `null` through the real fetch, so the skeleton never rendered (#985)
+
+## ⚠️ Changed
+
+- **The artifact "Shared with you" inbox defaults on.** `ARTIFACT_SHARE_INBOX_ENABLED` was opt-in when the surface shipped in 1.18.0, because the surface landed before the product decision about it did. That decision has since been made and the inbox went live; leaving the default opt-in would mean every institution forking this repository silently loses a finished feature and has to discover a variable to get it back. `"false"` still turns it off (#986)
+
+## 🏗️ Infrastructure
+
+- **`UserArtifactsIndex`** on the existing `{prefix}-user-artifacts` table — `GSI2PK=USER#{uid}`, `GSI2SK=ARTIFACT#{updated_at}#{aid}`, sparse over HEAD rows. The artifact writer stamps both keys on both of its write paths. **Nothing reads the index in this release**; the library listing still serves from the base table, so the index is groundwork and can be deployed and backfilled without any user-visible change (#982)
+
+## 🚀 Deployment notes
+
+**A CDK deploy is required**, and one existing table gains one index. Verify it before moving on:
+
+```bash
+aws dynamodb describe-table --table-name <prefix>-user-artifacts \
+  --query 'Table.GlobalSecondaryIndexes[].{Name:IndexName,Status:IndexStatus}'
+```
+
+`UPDATE_COMPLETE` on the stack does not mean the index is usable — wait for `ACTIVE`.
+
+**Check `CDK_ARTIFACT_SHARE_INBOX_ENABLED` before deploying.** Its default inverted: an environment that never set it gains the "Shared with you" tab. Set it to `"false"` first to keep that surface dark.
+
+**Two optional one-shot scripts**, both dry-run unless given `--apply`:
+
+- `backend/scripts/backfill_artifact_user_index_keys.py` — stamps `GSI2` keys onto artifact rows written before 2026-09-04. The index is sparse, so unstamped rows are absent from it rather than stale. Nothing reads the index yet, so this can run any time after it reports `ACTIVE` — but it must run before anything does.
+- `backend/scripts/backfill_false_interrupted_markers.py` — clears interrupted-turn markers left by the defect above. It only touches `navigated_away` markers written more than 900s after the session's last message, which no interruption could have produced (the stream times out at 600s). Markers self-clear at the start of that session's next turn, so this only matters for conversations nobody returns to.
+
+---
+
 # Release Notes — v1.18.0
 
 **Release Date:** September 6, 2026

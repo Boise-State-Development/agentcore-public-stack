@@ -3,7 +3,10 @@ import { TestBed } from '@angular/core/testing';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { provideMarkdown } from 'ngx-markdown';
 import { AnnouncementsService } from '../../services/announcements/announcements.service';
-import { Announcement } from '../../services/announcements/announcement.model';
+import {
+  Announcement,
+  AnnouncementSurface,
+} from '../../services/announcements/announcement.model';
 import {
   AnnouncementModalComponent,
   AnnouncementModalData,
@@ -33,7 +36,10 @@ describe('AnnouncementModalComponent', () => {
   let ack: ReturnType<typeof vi.fn>;
   let close: ReturnType<typeof vi.fn>;
 
-  function setup(announcement: Announcement) {
+  function setup(
+    announcement: Announcement,
+    sourceSurface?: AnnouncementSurface,
+  ) {
     TestBed.resetTestingModule();
     ack = vi.fn(async () => true);
     close = vi.fn();
@@ -45,7 +51,10 @@ describe('AnnouncementModalComponent', () => {
         { provide: DialogRef, useValue: { close, closed: { subscribe: vi.fn() } } },
         {
           provide: DIALOG_DATA,
-          useValue: { announcement } satisfies AnnouncementModalData,
+          useValue: {
+            announcement,
+            sourceSurface,
+          } satisfies AnnouncementModalData,
         },
       ],
     });
@@ -170,6 +179,33 @@ describe('AnnouncementModalComponent', () => {
     const link = el(fixture).querySelector('a')!;
     expect(link.getAttribute('href')).toBe('https://example.edu/policy');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  describe('ack attribution', () => {
+    it('defaults to the `modal` surface — the §D8 interruption', () => {
+      setup(makeAnnouncement());
+      expect(ack).toHaveBeenCalledWith('a1', 'seen', 'modal');
+    });
+
+    it('attributes every ack to the surface the user came from', () => {
+      // Opened by clicking the banner text. The ack row's `surface` is the
+      // only record of what drove the dismissal, so it must say `banner` —
+      // otherwise banner engagement is indistinguishable from an interruption
+      // the user never asked for.
+      const fixture = setup(makeAnnouncement(), 'banner');
+      expect(ack).toHaveBeenCalledWith('a1', 'seen', 'banner');
+
+      ack.mockClear();
+      confirmButton(fixture).click();
+      expect(ack).toHaveBeenCalledWith('a1', 'dismissed', 'banner');
+    });
+
+    it('carries the surface through an `acknowledged` too', () => {
+      const fixture = setup(makeAnnouncement({ requires_ack: true }), 'banner');
+      ack.mockClear();
+      confirmButton(fixture).click();
+      expect(ack).toHaveBeenCalledWith('a1', 'acknowledged', 'banner');
+    });
   });
 
   it('is a labelled modal dialog', () => {

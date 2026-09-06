@@ -344,6 +344,22 @@ class StreamCoordinator:
         initial_message_count = self._get_initial_message_count(session_manager)
         logger.info(f"📊 Initial message count before streaming: {initial_message_count}")
 
+        # Arm the displayText write for this turn. The hook stores the user's
+        # original message on `MessageAddedEvent` — i.e. before the model
+        # call — so a turn that is stopped, dropped, or errors still has the
+        # clean text to render instead of the augmented prompt the model was
+        # sent. Armed UNCONDITIONALLY, including to None: the agent instance
+        # is cached across turns (#741/#751), so an arm left by a previous
+        # turn would otherwise fire against this one. See the end-of-turn
+        # backstop below for wrappers that carry no hook.
+        self._arm_display_text(
+            main_agent_wrapper,
+            session_id=session_id,
+            user_id=user_id,
+            message_index=initial_message_count,
+            display_text=original_message,
+        )
+
         # MCP Apps PR #5: subscribe this conversation stream to the
         # app-initiated tool-event broker so a `tools/call` proxied from an
         # embedded MCP App surfaces as a tool_use/tool_result card in the
@@ -1186,8 +1202,13 @@ class StreamCoordinator:
 
                 logger.info(f"✅ Message metadata stored for {len(message_ids_to_store)} assistant messages (sequential)")
 
-            # Store displayText for user message if original_message differs from augmented
-            if original_message:
+            # displayText backstop. `DisplayTextHook` normally wrote this at
+            # append time, which is the write that matters — it is the only
+            # one an interrupted turn ever reaches. This runs only when that
+            # didn't happen: a wrapper with no hook (voice, tests), or a
+            # failed write. Skipped otherwise, so the normal path still makes
+            # exactly one put.
+            if original_message and not self._display_text_written(main_agent_wrapper):
                 user_message_index = initial_message_count  # User message is first in this turn
                 try:
                     from apis.shared.sessions.metadata import store_user_display_text
@@ -2135,6 +2156,48 @@ class StreamCoordinator:
         except Exception as e:  # noqa: BLE001 - best-effort side channel
             logger.warning("Failed to emit ui_tool_input_partial event: %s", e)
             return []
+
+    def _arm_display_text(
+        self,
+        main_agent_wrapper: Any,
+        *,
+        session_id: str,
+        user_id: str,
+        message_index: int,
+        display_text: Optional[str],
+    ) -> None:
+        """Prime this turn's ``displayText`` write on the agent's hook.
+
+        No-op for a wrapper that carries no hook (voice, tests) — those fall
+        through to the coordinator's end-of-turn backstop, which is exactly
+        the behaviour they had before the hook existed.
+        """
+        hook = getattr(main_agent_wrapper, "display_text_hook", None)
+        if hook is None:
+            return
+        try:
+            hook.arm(
+                session_id=session_id,
+                user_id=user_id,
+                message_index=message_index,
+                display_text=display_text,
+            )
+        except Exception:  # noqa: BLE001 - never break a turn on a UI nicety
+            logger.warning("Could not arm displayText hook", exc_info=True)
+
+    def _display_text_written(self, main_agent_wrapper: Any) -> bool:
+        """Whether the hook already stored this turn's ``displayText``.
+
+        False whenever we can't tell, so the backstop runs — a duplicate put
+        of an identical record is harmless, a missing one is the bug.
+        """
+        hook = getattr(main_agent_wrapper, "display_text_hook", None)
+        if hook is None:
+            return False
+        try:
+            return bool(hook.wrote_this_turn)
+        except Exception:  # noqa: BLE001
+            return False
 
     def _drain_steering_events(
         self, main_agent_wrapper: Any, session_id: str
