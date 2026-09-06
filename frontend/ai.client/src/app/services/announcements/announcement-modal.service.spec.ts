@@ -233,6 +233,64 @@ describe('AnnouncementModalService (§D8 turn-safety gate)', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  describe('openFor — the user asked for it', () => {
+    it('opens even when every §D8 gate would refuse an interruption', () => {
+      // A click is not an interruption. The gate exists to stop us throwing a
+      // dialog at someone mid-thought; here the user is the one asking.
+      isLoadingSession.set('session-1');
+      toolApprovalPending.set(true);
+      focusComposer('half a thought');
+      const service = start();
+
+      service.openFor(makeAnnouncement(), 'banner');
+
+      expect(open).toHaveBeenCalledTimes(1);
+      const [, config] = open.mock.calls[0];
+      expect(config.data.announcement.announcement_id).toBe('a1');
+      expect(config.data.sourceSurface).toBe('banner');
+    });
+
+    it('defaults the surface to `modal` when no source is given', () => {
+      const service = start();
+      service.openFor(makeAnnouncement());
+      expect(open.mock.calls[0][1].data.sourceSurface).toBe('modal');
+    });
+
+    it('keeps disableClose on a requiresAck announcement', () => {
+      // Opening it yourself is not a way around the acknowledgement.
+      const service = start();
+      service.openFor(makeAnnouncement({ requires_ack: true }), 'banner');
+      expect(open.mock.calls[0][1].disableClose).toBe(true);
+    });
+
+    it('refuses to stack a second dialog on an open one', () => {
+      const service = start();
+      service.openFor(makeAnnouncement(), 'banner');
+      service.openFor(makeAnnouncement({ announcement_id: 'a2' }), 'banner');
+      expect(open).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops the §D8 effect re-opening what the user already read', () => {
+      // Same announcement in both slots — without marking it shown, the user
+      // would read it from the banner and then be interrupted by it on the
+      // next navigation.
+      const service = start();
+      service.openFor(makeAnnouncement(), 'banner');
+      expect(open).toHaveBeenCalledTimes(1);
+
+      // Let the dialog close, so `openRef` is not what is holding it back.
+      const onClosed = open.mock.results[0].value.closed.subscribe.mock
+        .calls[0][0] as () => void;
+      onClosed();
+
+      modalItem.set(makeAnnouncement());
+      TestBed.tick();
+      navigate();
+
+      expect(open).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('opens on the next settled navigation after a failed gate', () => {
     isLoadingSession.set('session-1');
     start();
