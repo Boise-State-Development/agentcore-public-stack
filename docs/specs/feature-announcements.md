@@ -88,6 +88,25 @@ An announcement carries `surfaces: list[Literal["panel", "banner", "modal"]]`.
   rendered by a sibling of `quota-warning-banner`. One line plus an optional
   CTA and a ✕.
 
+  **Its text is a button that opens the announcement's own dialog.** The pill
+  renders no body, so without a way in, its only affordances are ✕ and an
+  optional external CTA — which trains people to dismiss unread, with What's
+  New (buried in the user menu) as the only other route to the content. It
+  opens the single-announcement dialog rather than the What's New list
+  deliberately: the pill named one thing, and handing back a list to search
+  through is a worse answer than the thing itself. The dialog owns the ack
+  from that point (`sourceSurface: "banner"`, so reach stats can tell a
+  banner-driven read from an interruption), and any of its exits retires the
+  pill durably — having read the body is a stronger signal of consumption
+  than clicking ✕ on a one-line strip.
+
+  **A `requiresAck` announcement gets no ✕ on the pill.** Dismissal
+  suppression is rank-based and covers the banner *and* modal slots alike
+  (§D7), so a ✕ here would let a user retire a compliance notice from the
+  strip before the blocking modal ever fired — leaving no `acknowledged`
+  record anywhere. On those, the only way out is to open it and press the
+  button.
+
   *Revised after PR-4 shipped.* It was first built as a full-bleed strip below
   the top nav. Two things moved it. Dismissing a strip that occupied layout
   reflowed the whole view, so it became an overlay; and what a banner
@@ -127,6 +146,11 @@ bust. **Announcements never touch the model call path** (D12).
 | `seen` | The announcement renders on any surface | Clears the unread dot. Does not suppress anything. |
 | `dismissed` | User clicks ✕ or "Got it" | Suppresses banner and modal. Entry stays in the panel. |
 | `acknowledged` | User clicks the confirm button on a `requiresAck` modal | As `dismissed`, plus it is a durable record an admin can report on. |
+
+The ack's `surface` records **where the gesture happened**, not which surface
+owns the announcement: a dialog the user opened by clicking the banner's text
+writes `banner` for every action it records, so reach stats can distinguish a
+banner that earned a read from a modal the user never asked for.
 
 They are ranked (`seen=1 < dismissed=2 < acknowledged=3`) and the stored rank
 **only ever increases**. The write is a conditional `UpdateExpression`:
