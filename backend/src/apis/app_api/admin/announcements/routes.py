@@ -1,9 +1,8 @@
 """Admin API routes for feature announcements.
 
-Authoring, scheduling, and lifecycle for the notices users see. There is no
-user-facing counterpart yet — PR-2 adds ``GET /announcements`` and the ack
-endpoint. Until then this surface ships dark: admins can author drafts and
-nothing renders anywhere.
+Authoring, scheduling, and lifecycle for the notices users see, plus the
+reach numbers for one. The user-facing counterpart is ``GET /announcements``
+and its ack endpoint in ``apis/app_api/announcements/``.
 
 See ``docs/specs/feature-announcements.md`` §6.
 """
@@ -18,6 +17,7 @@ from apis.shared.announcements.models import (
     AnnouncementState,
     AnnouncementListResponse,
     AnnouncementResponse,
+    AnnouncementStatsResponse,
     AnnouncementUpdate,
 )
 from apis.shared.announcements.service import get_announcements_service
@@ -202,3 +202,31 @@ async def delete_announcement(
     deleted = await service.delete_announcement(announcement_id)
     if not deleted:
         raise _not_found(announcement_id)
+
+
+@router.get(
+    "/{announcement_id}/stats",
+    response_model=AnnouncementStatsResponse,
+    summary="Reach for one announcement",
+)
+async def get_announcement_stats(
+    announcement_id: str,
+    admin_user: User = Depends(require_announcements_admin),
+) -> AnnouncementStatsResponse:
+    """Funnel counts for the announcement's **current** revision.
+
+    ``seen``/``dismissed``/``acknowledged`` are cumulative, not disjoint — a
+    user who acknowledged is counted in all three, because the stored rank
+    only ever rises through them (§D2).
+
+    Every number is approximate and the UI must say so (§11): the counters are
+    incremented on a second write after the ack lands, and ``targeted`` is a
+    denominator that moves as people join and roles change. ``targeted`` is
+    null when the audience is role-scoped rather than everyone — that means
+    "not estimated", not zero.
+    """
+    service = get_announcements_service()
+    stats = await service.get_stats(announcement_id)
+    if stats is None:
+        raise _not_found(announcement_id)
+    return stats

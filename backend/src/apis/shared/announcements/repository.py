@@ -14,7 +14,7 @@ The write worth reading closely is :meth:`record_ack`.
 import logging
 import os
 import uuid
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -23,12 +23,14 @@ from apis.shared.timestamps import utc_now_iso
 
 from .models import (
     ACK_SK_PREFIX,
+    ACTION_RANKS,
     ANNOUNCEMENT_SK_PREFIX,
     ANNOUNCEMENTS_PK,
     Announcement,
     AnnouncementAck,
     AnnouncementCreate,
     AnnouncementUpdate,
+    ack_count_attr,
     action_rank,
     validate_announcement_invariants,
 )
@@ -318,7 +320,7 @@ class AnnouncementsRepository:
             expression_values[":ttl"] = int(ttl)
 
         try:
-            self._table.update_item(
+            response = self._table.update_item(
                 Key={
                     "PK": AnnouncementAck.partition_key(user_id),
                     "SK": AnnouncementAck.sort_key(announcement_id, revision),
@@ -329,6 +331,11 @@ class AnnouncementsRepository:
                 ),
                 ExpressionAttributeNames=names,
                 ExpressionAttributeValues=expression_values,
+                # The rank this user held *before* this write. Absent when the
+                # item is new, which reads as 0. It is what makes the counters
+                # count users rather than clicks: without it a `seen` followed
+                # by a `dismissed` would add two to the seen total.
+                ReturnValues="UPDATED_OLD",
             )
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
@@ -344,7 +351,108 @@ class AnnouncementsRepository:
                 return False
             logger.error("Error recording announcement ack", exc_info=True)
             raise
+
+        previous_rank = int(response.get("Attributes", {}).get("actionRank", 0))
+        self._increment_ack_counts(
+            announcement_id=announcement_id,
+            revision=revision,
+            from_rank=previous_rank,
+            to_rank=rank,
+        )
         return True
+
+    def _increment_ack_counts(
+        self,
+        *,
+        announcement_id: str,
+        revision: int,
+        from_rank: int,
+        to_rank: int,
+    ) -> None:
+        """Bump the funnel counters for every rank this write crossed.
+
+        A user landing straight on ``acknowledged`` crosses all three, so all
+        three rise; one already at ``dismissed`` crosses only the third. That
+        is what keeps ``seen >= dismissed >= acknowledged`` true without ever
+        reading the counters back.
+
+        **Best-effort on purpose.** This is a second write after the ack has
+        already been durably recorded, and the ack is the record that matters
+        (§D2/§D3). A failure here is logged and swallowed: an under-counted
+        stat is a worse dashboard, while raising would turn a successful
+        acknowledgement into a 500 and lose the user's click. The spec asks
+        for exactly this trade — approximate, O(1), no GSI, no scan.
+        """
+        crossed = [
+            action
+            for action, action_value in ACTION_RANKS.items()
+            if from_rank < action_value <= to_rank
+        ]
+        if not crossed:
+            return
+
+        names = {}
+        values = {":one": 1}
+        clauses = []
+        for index, action in enumerate(crossed):
+            alias = f"#c{index}"
+            names[alias] = ack_count_attr(revision, action)
+            clauses.append(f"{alias} :one")
+
+        try:
+            # ADD, not SET: it creates a missing attribute as 0 in the same
+            # atomic write, so announcements authored before stats shipped
+            # need no backfill and no init-then-retry branch.
+            self._table.update_item(
+                Key={
+                    "PK": ANNOUNCEMENTS_PK,
+                    "SK": f"{ANNOUNCEMENT_SK_PREFIX}{announcement_id}",
+                },
+                UpdateExpression="ADD " + ", ".join(clauses),
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+        except ClientError:
+            logger.warning(
+                "Ack recorded but its stats counters were not incremented: "
+                "announcement=%s revision=%s crossed=%s",
+                announcement_id,
+                revision,
+                crossed,
+                exc_info=True,
+            )
+
+    async def get_ack_counts(
+        self, announcement_id: str, revision: int
+    ) -> Dict[str, int]:
+        """Funnel counts for one revision, zero-filled.
+
+        Reads the announcement item itself — the counters live on it, which is
+        the whole point of the design: no GSI on ``announcementId`` and no
+        scan of the ack partitions.
+        """
+        zero = {action: 0 for action in ACTION_RANKS}
+        if not self._enabled:
+            return zero
+
+        try:
+            response = self._table.get_item(
+                Key={
+                    "PK": ANNOUNCEMENTS_PK,
+                    "SK": f"{ANNOUNCEMENT_SK_PREFIX}{announcement_id}",
+                }
+            )
+        except ClientError:
+            logger.error("Error reading announcement ack counts", exc_info=True)
+            raise
+
+        item = response.get("Item")
+        if not item:
+            return zero
+        return {
+            action: int(item.get(ack_count_attr(revision, action), 0))
+            for action in ACTION_RANKS
+        }
 
     async def list_acks(self, user_id: str) -> List[AnnouncementAck]:
         """Every ack this user has ever written, across revisions."""

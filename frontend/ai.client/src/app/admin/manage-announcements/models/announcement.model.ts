@@ -72,3 +72,26 @@ export interface AnnouncementCreateRequest {
 export type AnnouncementUpdateRequest = Partial<
   Omit<AnnouncementCreateRequest, 'state'>
 >;
+
+
+/**
+ * `GET /admin/announcements/{id}/stats` — reach for the **current** revision.
+ *
+ * The three counts are a **funnel, not a partition**: the stored rank only
+ * ever rises through seen → dismissed → acknowledged (§D2), so someone who
+ * acknowledged is counted in all three and `seen >= dismissed >=
+ * acknowledged` always holds. "Only ever saw it" is `seen - dismissed`.
+ * Rendering them as disjoint buckets would understate every stage.
+ *
+ * All of it is approximate and the UI must say so (§11). `targeted` is null
+ * when the audience is role-scoped rather than everyone — that means **not
+ * estimated, not zero**.
+ */
+export interface AnnouncementStats {
+  announcement_id: string;
+  revision: number;
+  seen: number;
+  dismissed: number;
+  acknowledged: number;
+  targeted?: number | null;
+}

@@ -15,10 +15,14 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional, Sequence
 
+from apis.shared.users.repository import UserRepository
+
 from .models import (
+    TARGET_EVERYONE,
     Announcement,
     AnnouncementAck,
     AnnouncementCreate,
+    AnnouncementStatsResponse,
     AnnouncementUpdate,
 )
 from .repository import AnnouncementsRepository, get_announcements_repository
@@ -127,6 +131,69 @@ class AnnouncementsService:
         self, user_id: str, announcement_id: str, revision: int
     ) -> Optional[AnnouncementAck]:
         return await self._repo.get_ack(user_id, announcement_id, revision)
+
+    async def get_stats(
+        self, announcement_id: str
+    ) -> Optional[AnnouncementStatsResponse]:
+        """Reach for one announcement at its current revision, or None if gone.
+
+        Counts come from the counters on the announcement item itself — no GSI
+        on ``announcementId``, no scan of the ack partitions. They are a
+        funnel, not a partition (see ``AnnouncementStatsResponse``).
+        """
+        announcement = await self._repo.get_announcement(announcement_id)
+        if announcement is None:
+            return None
+
+        counts = await self._repo.get_ack_counts(
+            announcement_id, announcement.revision
+        )
+        return AnnouncementStatsResponse(
+            announcement_id=announcement_id,
+            revision=announcement.revision,
+            seen=counts.get("seen", 0),
+            dismissed=counts.get("dismissed", 0),
+            acknowledged=counts.get("acknowledged", 0),
+            targeted=await self._estimate_targeted(announcement),
+        )
+
+    async def _estimate_targeted(
+        self, announcement: Announcement
+    ) -> Optional[int]:
+        """Roughly how many active users this announcement is aimed at.
+
+        **Only answerable for a ``"*"`` audience, and None otherwise.** The
+        count comes from a ``Select="COUNT"`` query on the users table's
+        ``StatusLoginIndex`` — but that index is projected ``INCLUDE`` with
+        ``userId``/``email``/``name``/``emailDomain`` and **not** ``roles``, so
+        a role-filtered count cannot be evaluated against it. The alternatives
+        are both worse than an honest None: widening the projection means
+        replacing a GSI on the users table (and CFN reporting green well
+        before the index is ACTIVE), while a filtered table scan is the
+        option the spec ranks last for exactly this reason.
+
+        Nor is there a membership list to count instead: roles arrive as JWT
+        claims mapped at login, so nothing stores "who holds this role".
+
+        None means "not estimated" and the UI must say so — it does **not**
+        mean zero. Even the ``"*"`` number is an estimate that moves as people
+        join, and §11 is explicit that no compliance reporting should be built
+        on it.
+        """
+        if TARGET_EVERYONE not in (announcement.target_roles or []):
+            return None
+        try:
+            users = UserRepository()
+            if not users.enabled:
+                return None
+            return await users.count_active_users()
+        except Exception:
+            logger.warning(
+                "Could not estimate the targeted audience for %s",
+                announcement.announcement_id,
+                exc_info=True,
+            )
+            return None
 
     # ── User-facing feed ─────────────────────────────────────────────────
 

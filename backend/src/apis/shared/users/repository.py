@@ -267,6 +267,41 @@ class UserRepository:
             logger.error(f"Error listing users by status {status}: {e}")
             return [], None
 
+    async def count_active_users(self) -> Optional[int]:
+        """How many users are active, via a COUNT query on StatusLoginIndex.
+
+        ``Select="COUNT"`` returns only a tally, so nothing is transferred per
+        user — but DynamoDB still pages, hence the loop. Callers use this as a
+        denominator for "roughly how many people is this aimed at"; it moves as
+        people join and sign in, so treat it as an estimate.
+
+        **Cannot be filtered by role.** That index is projected ``INCLUDE``
+        with userId/email/name/emailDomain and not ``roles``, so a filter on
+        roles has nothing to evaluate against. Returns None if the repository
+        is disabled or the query fails, which means "unknown", never zero.
+        """
+        if not self._enabled:
+            return None
+
+        try:
+            total = 0
+            kwargs: dict = {
+                "IndexName": "StatusLoginIndex",
+                "KeyConditionExpression": "GSI3PK = :pk",
+                "ExpressionAttributeValues": {":pk": "STATUS#active"},
+                "Select": "COUNT",
+            }
+            while True:
+                response = self.table.query(**kwargs)
+                total += int(response.get("Count", 0))
+                last_key = response.get("LastEvaluatedKey")
+                if not last_key:
+                    return total
+                kwargs["ExclusiveStartKey"] = last_key
+        except ClientError as e:
+            logger.error(f"Error counting active users: {e}")
+            return None
+
     # ========== Helper Methods ==========
 
     def _profile_to_item(self, profile: UserProfile) -> dict:

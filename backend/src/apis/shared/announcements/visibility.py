@@ -21,7 +21,12 @@ from typing import Dict, Iterable, List, Optional, Sequence
 
 from apis.shared.timestamps import from_iso
 
-from .models import SUPPRESSING_RANK, Announcement, AnnouncementAck
+from .models import (
+    SUPPRESSING_RANK,
+    TARGET_EVERYONE,
+    Announcement,
+    AnnouncementAck,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +35,6 @@ logger = logging.getLogger(__name__)
 #: colours already imply, used only to decide which of several eligible items
 #: goes first. Lower sorts earlier.
 SEVERITY_ORDER: Dict[str, int] = {"warning": 0, "success": 1, "info": 2}
-
-_TARGET_EVERYONE = "*"
-
 
 @dataclass
 class VisibleAnnouncement:
@@ -97,8 +99,8 @@ def _targets_user(announcement: Announcement, roles: Sequence[str]) -> bool:
     There is no ``can_access_*`` predicate behind this and nothing is inherited;
     it decides what a notice board shows, not what a user may do.
     """
-    targets = announcement.target_roles or [_TARGET_EVERYONE]
-    if _TARGET_EVERYONE in targets:
+    targets = announcement.target_roles or [TARGET_EVERYONE]
+    if TARGET_EVERYONE in targets:
         return True
     return bool(set(targets) & set(roles or []))
 
