@@ -64,6 +64,7 @@
       <!-- Fixed input at bottom for embedded empty state -->
       <div class="chat-input-footer embedded">
         <app-chat-input
+          [showAnnouncements]="showAnnouncements()"
           [sessionId]="sessionId()"
           [isChatLoading]="isChatLoading()"
           [showFileControls]="resolvedConfig().showFileControls"
@@ -123,6 +124,7 @@
       [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="mx-auto px-4 max-w-[720px]">
           <app-chat-input
+            [showAnnouncements]="showAnnouncements()"
             [sessionId]="sessionId()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
@@ -171,6 +173,7 @@
       [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="mx-auto px-4 max-w-[720px]">
           <app-chat-input
+            [showAnnouncements]="showAnnouncements()"
             [sessionId]="sessionId()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
@@ -224,6 +227,7 @@
 
           <div class="relative">
             <app-chat-input
+              [showAnnouncements]="showAnnouncements()"
               [sessionId]="sessionId()"
               [isChatLoading]="isChatLoading()"
               [showFileControls]="resolvedConfig().showFileControls"
@@ -294,6 +298,7 @@
           </div>
         }
         <app-chat-input
+          [showAnnouncements]="showAnnouncements()"
           [sessionId]="sessionId()"
           [isChatLoading]="isChatLoading()"
           [showFileControls]="resolvedConfig().showFileControls"
@@ -339,6 +344,7 @@
           <app-session-cost-badge />
         </div>
         <app-chat-input
+          [showAnnouncements]="showAnnouncements()"
           [sessionId]="sessionId()"
           [isChatLoading]="isChatLoading()"
           [showFileControls]="resolvedConfig().showFileControls"

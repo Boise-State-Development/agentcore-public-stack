@@ -223,6 +223,17 @@ export class ChatContainerComponent {
    * remounting — a remount restarts the fixed wrapper's `left` transition,
    * which reads as the whole bar sweeping across the screen.
    */
+  /**
+   * Whether a composer in this container may float an announcement.
+   *
+   * Off in embedded mode: an agent preview or a marketplace test-drive is
+   * exercising one specific agent, and a platform-wide notice inside that
+   * pane reads as a bug. The real chat is the only place it belongs.
+   */
+  protected readonly showAnnouncements = computed(
+    () => !this.resolvedConfig().embeddedMode,
+  );
+
   protected readonly showChatTopnav = computed(
     () =>
       this.resolvedConfig().fullPageMode &&

@@ -84,8 +84,20 @@ An announcement carries `surfaces: list[Literal["panel", "banner", "modal"]]`.
   never interrupts, browsable forever. **Implied on every announcement**: the
   service adds `"panel"` if the admin omits it, so dismissing a loud surface
   can never destroy the information.
-- **`banner`** — a strip below the top nav, rendered by a sibling of
-  `quota-warning-banner`. One line plus an optional CTA and a ✕.
+- **`banner`** — a compact pill floating just above the chat composer,
+  rendered by a sibling of `quota-warning-banner`. One line plus an optional
+  CTA and a ✕.
+
+  *Revised after PR-4 shipped.* It was first built as a full-bleed strip below
+  the top nav. Two things moved it. Dismissing a strip that occupied layout
+  reflowed the whole view, so it became an overlay; and what a banner
+  announces — a new model, a new capability — is acted on **in the composer**,
+  so the notice belongs where the decision is made rather than in a corner the
+  eye has already left. The consequence to keep in mind: the banner is now a
+  **chat-view surface only**, and it is deliberately suppressed in the
+  embedded preview panes (agent preview, marketplace test-drive). The panel
+  remains the everywhere-record, which is why `panel` is forced onto every
+  announcement server-side.
 - **`modal`** — a dialog on next load. This is the only surface that can
   demand a real acknowledgement (`requiresAck`).
 
@@ -474,7 +486,7 @@ from §D7.
 | Component | Location | Notes |
 |---|---|---|
 | Whats-new panel | `components/topnav/components/whats-new-panel/` | Dialog listing panel items newest-first, relative dates, **New** / **Updated** pills, markdown body. Opens from the user dropdown; unread dot on the avatar and the menu row. Mirrors `user-menu-link-modal`. |
-| Announcement banner | `components/announcement-banner/` | Sibling of `quota-warning-banner`. `role="status"`, `aria-live="polite"`, severity colours from the `state-*` token scale that banner already uses, ✕ + optional CTA. |
+| Announcement banner | `components/announcement-banner/` | Mounted by `chat-input` beside `quota-warning-banner`, floated `bottom-full` so dismissing it never moves the composer. `role="status"`, `aria-live="polite"`, severity colours from the `state-*` token scale, ✕ + optional CTA. Gated off in embedded panes via `[showAnnouncements]="false"`. |
 | Announcement modal | `components/announcement-modal/` | `user-menu-link-modal` plus a primary ack button. When `requiresAck`, `appDialogDismiss` and the escape handler are disabled so the only exit is the button. |
 | Admin list | `admin/manage-announcements/manage-announcements.page.ts` | Mirrors `manage-user-menu-links`. State chips, surface icons, ack counts, "Show again" action. |
 | Admin form | `admin/manage-announcements/announcement-form.page.ts` | Title, markdown body with live preview, surface checkboxes, severity, schedule, role picker, `showToNewUsers` (with the §D6 warning text), `requiresAck`, CTA. |

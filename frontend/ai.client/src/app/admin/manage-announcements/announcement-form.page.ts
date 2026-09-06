@@ -178,7 +178,7 @@ function byteLength(value: string): number {
                   class="mt-1 size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
                 <label for="surface-banner" class="text-sm/6 text-gray-700 dark:text-gray-300">
-                  <span class="font-medium">Banner</span> — a strip below the top nav
+                  <span class="font-medium">Banner</span> — a pill above the chat composer
                   <span class="block text-xs text-gray-500 dark:text-gray-400">
                     Ambient. Dismissible with a ✕.
                   </span>

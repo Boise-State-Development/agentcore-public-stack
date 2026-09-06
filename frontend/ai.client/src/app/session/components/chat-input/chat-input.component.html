@@ -1,3 +1,11 @@
+<!-- Ambient announcement (spec §D1), floated above the composer rather than
+     stacked in flow: dismissing it must not move the composer under the
+     user's cursor. Sits above the quota tabs, which stay attached to the
+     input itself. -->
+@if (showAnnouncements()) {
+  <app-announcement-banner />
+}
+
 <!-- Cost quota warning indicator -->
 <app-quota-warning-banner />
 

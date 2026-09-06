@@ -49,11 +49,17 @@ import {
  * `--announcement-banner-height`: nothing has to move any more, so that
  * variable, its `ResizeObserver`, and all three offsets are gone.
  *
- * `top-16` is not arbitrary. On a chat route it lands the pill immediately
- * below the fixed topnav — the placement §D1 asks for — and everywhere else
- * it clears the shell's floating sidenav controls, which sit at `top-4` and
- * would otherwise be overlapped by a centred pill on any viewport narrow
- * enough for the two to meet. One constant, no route awareness.
+ * **It lives above the composer, not at the top of the shell.** A deviation
+ * from §D1's "strip below the top nav", and a deliberate one: what these
+ * announce — a new model, a new capability — is acted on in the composer, so
+ * the notice belongs where the decision is made rather than in a corner the
+ * eye has already left. It mounts from `chat-input` beside
+ * `quota-warning-banner` for that reason, which also means it is a **chat
+ * surface only**; What's New remains the everywhere-record, which is why
+ * `panel` is forced onto every announcement server-side.
+ *
+ * `bottom-full` against the `relative` chat-input host puts it clear of the
+ * quota tabs, which stay visually attached to the input.
  *
  * The wrapper is `pointer-events-none` and only the pill itself takes events,
  * so the full-width positioning strip cannot swallow clicks aimed at the
@@ -79,23 +85,23 @@ import {
     // The positioning strip. `pointer-events-none` here (and `auto` on the
     // pill) keeps it from swallowing clicks meant for the chrome beneath.
     class:
-      'pointer-events-none absolute inset-x-0 top-16 z-50 flex justify-center px-4',
+      'pointer-events-none absolute inset-x-0 bottom-full z-30 mb-2 flex justify-center px-4',
   },
   template: `
     @if (announcement(); as item) {
       <div
-        class="pointer-events-auto flex w-full max-w-2xl items-center gap-x-3 rounded-2xl border px-4 py-2.5 shadow-lg sm:px-5"
+        class="pointer-events-auto inline-flex max-w-full items-center gap-x-2 rounded-2xl border px-3 py-1.5 text-xs shadow-md"
         [class]="severityClass()"
         role="status"
         aria-live="polite"
       >
         <ng-icon
           [name]="iconName()"
-          class="size-5 shrink-0"
+          class="size-4 shrink-0"
           aria-hidden="true"
         />
 
-        <p class="min-w-0 flex-1 truncate text-sm/6 font-medium">
+        <p class="min-w-0 truncate font-medium">
           {{ bannerText() }}
         </p>
 
@@ -104,7 +110,7 @@ import {
             [href]="item.cta_url"
             target="_blank"
             rel="noopener noreferrer"
-            class="shrink-0 text-sm/6 font-semibold underline underline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current"
+            class="shrink-0 font-semibold underline underline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current"
           >
             {{ item.cta_label }}
           </a>
@@ -114,9 +120,9 @@ import {
           type="button"
           (click)="onDismiss()"
           [attr.aria-label]="'Dismiss announcement: ' + item.title"
-          class="-mr-1 flex size-7 shrink-0 items-center justify-center rounded-2xl hover:bg-black/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current dark:hover:bg-white/10"
+          class="-mr-1 flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-black/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current dark:hover:bg-white/10"
         >
-          <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+          <ng-icon name="heroXMark" class="size-3.5" aria-hidden="true" />
         </button>
       </div>
     }

@@ -305,7 +305,8 @@ export class ManageAnnouncementsPage {
   }
 
   protected surfaceHint(surface: string): string {
-    if (surface === 'banner') return 'A strip below the top nav. At most one at a time.';
+    if (surface === 'banner')
+      return 'A pill above the chat composer, in the chat view only. At most one at a time.';
     if (surface === 'modal') return 'A dialog on next load. At most one at a time.';
     return "Always on. The What's New entry in the user menu.";
   }
