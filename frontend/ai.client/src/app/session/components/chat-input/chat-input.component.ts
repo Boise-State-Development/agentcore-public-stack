@@ -25,6 +25,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { heroPaperAirplaneSolid, heroStopSolid } from '@ng-icons/heroicons/solid';
 import { ModelDropdownComponent } from '../../../components/model-dropdown/model-dropdown.component';
+import { AnnouncementBannerComponent } from '../../../components/announcement-banner/announcement-banner.component';
 import { QuotaWarningBannerComponent } from '../../../components/quota-warning-banner/quota-warning-banner.component';
 import { TooltipDirective } from '../../../components/tooltip';
 import { FileCardComponent } from '../../../components/file-card';
@@ -105,7 +106,10 @@ interface MentionToken {
 
 @Component({
   selector: 'app-chat-input',
-  imports: [FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SpinnerComponent],
+  imports: [AnnouncementBannerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SpinnerComponent],
+  // `relative` is the anchor the announcement banner floats against — it sits
+  // `bottom-full` of this host, above the quota tabs and clear of the composer.
+  host: { class: 'relative block' },
   providers: [
     provideIcons({
       heroPlus,
@@ -156,6 +160,24 @@ export class ChatInputComponent {
   // another Agent makes no sense — the Agent editor's own preview, which is already
   // running the Agent being edited.
   readonly showAgentMentions = input<boolean>(true);
+
+  /**
+   * Whether an announcement banner may float above this composer.
+   *
+   * True for the real chat and false for the embedded preview panes — an
+   * agent-preview or a marketplace test-drive is exercising one specific
+   * agent, and a platform-wide "new models are available" notice appearing
+   * inside that small pane reads as a bug rather than an announcement.
+   * Follows the same opt-out shape as the `show*` controls above.
+   */
+  readonly showAnnouncements = input<boolean>(true);
+
+  /**
+   * Which side of this composer an announcement takes. Supplied by the
+   * container, which knows whether the composer is centred (empty state) or
+   * pinned to the bottom (a conversation).
+   */
+  readonly announcementPlacement = input<'above' | 'below'>('above');
 
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
 

@@ -114,6 +114,7 @@ import { ModelService } from '../../../session/services/model/model.service';
                 [showSettingsControl]="false"
                 [autoFocus]="false"
                 [showAgentMentions]="false"
+                [showAnnouncements]="false"
                 (messageSubmitted)="onMessageSubmitted($event)"
                 (messageCancelled)="onMessageCancelled()"
               />

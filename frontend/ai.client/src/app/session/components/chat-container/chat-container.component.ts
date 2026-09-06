@@ -223,6 +223,30 @@ export class ChatContainerComponent {
    * remounting — a remount restarts the fixed wrapper's `left` transition,
    * which reads as the whole bar sweeping across the screen.
    */
+  /**
+   * Whether a composer in this container may float an announcement.
+   *
+   * Off in embedded mode: an agent preview or a marketplace test-drive is
+   * exercising one specific agent, and a platform-wide notice inside that
+   * pane reads as a bug. The real chat is the only place it belongs.
+   */
+  protected readonly showAnnouncements = computed(
+    () => !this.resolvedConfig().embeddedMode,
+  );
+
+  /**
+   * Which side of the composer an announcement takes, following the composer.
+   *
+   * The empty state centres the composer with the greeting immediately above
+   * it, so a pill placed above would float over the greeting — visibly so at
+   * narrow widths, where the greeting wraps. A conversation pins the composer
+   * to the bottom, where below would be off the edge. Same `isEmptyState()`
+   * that picks the layout branch picks the side, so the two cannot drift.
+   */
+  protected readonly announcementPlacement = computed<'above' | 'below'>(
+    () => (this.isEmptyState() ? 'below' : 'above'),
+  );
+
   protected readonly showChatTopnav = computed(
     () =>
       this.resolvedConfig().fullPageMode &&

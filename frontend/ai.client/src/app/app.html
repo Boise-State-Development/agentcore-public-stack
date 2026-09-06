@@ -107,15 +107,7 @@
     [class.lg:pl-72]="!sidenavService.isCollapsed() && !chromeHidden()"
     [class.lg:pl-0]="sidenavService.isCollapsed() || chromeHidden()"
     [class.artifact-pane-open]="artifactPanelOpen()">
-    <main class="relative flex h-dvh flex-col">
-      <!-- Ambient announcement strip (spec §D1). Positioned `absolute` against
-           this `relative` main, so showing or dismissing it never reflows the
-           page. `relative` is load-bearing: without it the pill would anchor
-           to the viewport and drift out from under the sidenav padding. -->
-      @if (showAnnouncementBanner()) {
-        <app-announcement-banner />
-      }
-
+    <main class="flex h-dvh flex-col">
       <!-- Scrollable Content. The id is a stable hook for code that reads
            or sets the scroll position (session scroll save/restore) — the
            window itself no longer scrolls now that this container is real. -->

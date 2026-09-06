@@ -197,9 +197,9 @@ describe('AnnouncementBannerComponent', () => {
       expect(host.className).not.toContain('block');
     });
 
-    it('lets clicks through the positioning strip to the chrome beneath', () => {
-      // The strip spans the full content width. Without this, it would
-      // swallow clicks aimed at the topnav and the sidebar buttons under it.
+    it('lets clicks through the positioning strip to whatever is beneath', () => {
+      // The strip spans the composer's full width. Without this, it would
+      // swallow clicks aimed at the message list behind it.
       bannerItem.set(makeAnnouncement());
       const fixture = create();
       const host = fixture.nativeElement as HTMLElement;
@@ -208,23 +208,42 @@ describe('AnnouncementBannerComponent', () => {
       expect(strip(fixture)!.className).toContain('pointer-events-auto');
     });
 
-    it('clears the topnav and the floating sidenav controls', () => {
-      // `top-16` puts the pill just below a chat route's fixed topnav, and
-      // below the shell's `top-4` sidebar buttons everywhere else — one
-      // constant instead of route awareness.
+    it('floats above the composer rather than stacking in flow with it', () => {
+      // `bottom-full` against the `relative` chat-input host: the pill sits
+      // clear of the quota tabs, which stay attached to the input, and
+      // dismissing it cannot move the composer under the user's cursor.
       bannerItem.set(makeAnnouncement());
       const fixture = create();
-      expect((fixture.nativeElement as HTMLElement).className).toContain('top-16');
+      const host = (fixture.nativeElement as HTMLElement).className;
+      expect(host).toContain('bottom-full');
+      expect(host).not.toContain('top-16');
     });
 
-    it('reads as a floating card, not a full-bleed strip', () => {
+    it('takes the other side when the composer is centred', () => {
+      // The empty state puts the greeting immediately above a centred
+      // composer, so `above` would float the pill over it — visibly so at
+      // narrow widths, where the greeting wraps.
+      bannerItem.set(makeAnnouncement());
+      const fixture = TestBed.createComponent(AnnouncementBannerComponent);
+      fixture.componentRef.setInput('placement', 'below');
+      fixture.detectChanges();
+
+      const host = (fixture.nativeElement as HTMLElement).className;
+      expect(host).toContain('top-full');
+      expect(host).not.toContain('bottom-full');
+    });
+
+    it('reads as a compact tab beside the quota warning, not a full-bleed strip', () => {
       bannerItem.set(makeAnnouncement());
       const fixture = create();
       const pill = strip(fixture)!;
 
       expect(pill.className).toContain('rounded-2xl');
-      expect(pill.className).toContain('shadow-lg');
-      expect(pill.className).toContain('max-w-2xl');
+      expect(pill.className).toContain('shadow-md');
+      // Shrink-to-fit, so it reads as a sibling of the quota tab rather than
+      // a bar spanning the composer.
+      expect(pill.className).toContain('inline-flex');
+      expect(pill.className).toContain('text-xs');
       // The old full-bleed look leaned on a bottom border instead.
       expect(pill.className).not.toContain('border-b');
     });

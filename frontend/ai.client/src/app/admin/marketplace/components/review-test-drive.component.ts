@@ -144,6 +144,7 @@ import { PreviewChatService } from '../../../assistants/assistant-form/services/
               [showSettingsControl]="false"
               [autoFocus]="false"
               [showAgentMentions]="false"
+              [showAnnouncements]="false"
               (messageSubmitted)="onMessageSubmitted($event)"
               (messageCancelled)="onMessageCancelled()"
             />
