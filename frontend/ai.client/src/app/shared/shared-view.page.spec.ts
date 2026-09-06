@@ -34,6 +34,7 @@ describe('SharedViewPage', () => {
   let mockRouter: any;
 
   const mockConversation: SharedConversationResponse = {
+    artifacts: [],
     shareId: 'share-001',
     title: 'Test Shared Conversation',
     accessLevel: 'public',

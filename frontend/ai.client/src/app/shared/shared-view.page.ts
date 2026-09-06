@@ -70,9 +70,16 @@ import { SpinnerComponent } from '../components/spinner/spinner.component';
 
         <!-- Messages -->
         <div class="mx-auto max-w-4xl px-4 pb-32">
+          <!-- Artifacts ride in on the conversation payload, pinned at
+               the versions the snapshot froze, and anchor under the same
+               turns the owner sees them under. They are passed in rather
+               than read from ArtifactStateService, which holds the
+               OWNER's live session state and has nothing to say here. -->
           <app-message-list
             [messages]="messages()"
             [embeddedMode]="true"
+            [sharedArtifacts]="conversation()!.artifacts"
+            [sharedArtifactShareId]="conversation()!.shareId"
           />
         </div>
 
