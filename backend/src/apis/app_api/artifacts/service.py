@@ -398,6 +398,9 @@ def get_render_token_service() -> RenderTokenService:
 # Frozen contract — the HEAD row + SessionIndex keys the artifact writer
 # (backend/src/agents/builtin_tools/artifacts/service.py) emits.
 _SESSION_INDEX = "SessionIndex"
+# Sparse index over HEAD rows only — read the block comment in
+# `list_for_user` before assuming a missing artifact is a query bug.
+_USER_INDEX = "UserArtifactsIndex"
 
 
 class ArtifactListService:
@@ -532,41 +535,73 @@ class ArtifactListService:
     def list_for_user(self, *, user_id: str) -> list[dict]:
         """Every artifact the user owns, at HEAD, newest-first.
 
-        One base-table Query, no index. The table is already partitioned
-        by user (`PK=USER#{uid}`), so ownership is enforced by the key
-        rather than re-checked per row the way `list_for_session` has to
-        be — a user-wide list is the query this schema was already
-        shaped for.
+        Served from `UserArtifactsIndex` (GSI2PK=USER#{uid},
+        GSI2SK=ARTIFACT#{updated_at}#{aid}) with
+        `ScanIndexForward=False`.
 
-        Deliberately not using a GSI. `SessionIndex` is partitioned by
-        session, not user, so it cannot serve this at all; the sparse
-        user index the writer stamps keys for (`GSI2PK`/`GSI2SK`) does
-        not exist yet, and is not needed while the heaviest partition
-        sits far under a 1MB page. See the writer's module docstring.
+        This was a base-table Query on the same partition until the
+        index existed. That worked, but read badly: HEAD and version
+        rows share the partition, so it spanned roughly 3x the rows it
+        returned and then date-sorted them in memory. Only HEAD rows
+        carry the GSI2 keys, so the index holds one row per artifact
+        already in newest-first order — the amplification and the sort
+        both go away, and the ordering comes from the store instead of
+        being recomputed per request.
 
-        Two consequences of reading the base table, both deliberate:
+        ############################################################
+        # This index is SPARSE. A HEAD row without GSI2PK is not stale
+        # in it, it is ABSENT from it — and silently, surfacing as a
+        # library that lists fewer artifacts than the user made.
+        #
+        # Two things keep it complete, and both must stay true:
+        #   * the writer stamps GSI2PK/GSI2SK on BOTH of its write
+        #     paths, and
+        #   * rows predating that (2026-09-04) were stamped by
+        #     `scripts/backfill_artifact_user_index_keys.py`.
+        #
+        # If an environment is ever found listing fewer artifacts than
+        # its table holds, re-run that script before looking anywhere
+        # else. It is idempotent.
+        ############################################################
 
-        * The Query spans version rows as well as HEAD rows, so it reads
-          roughly 3x what it returns. Filtering happens here rather than
-          in a FilterExpression because the obvious server-side
-          discriminator (`attribute_exists(GSI1PK)`) would couple "is
-          HEAD" to "is session-indexed" — two facts that only happen to
-          coincide today — and a FilterExpression saves payload, not
-          read capacity, so it buys nothing worth that coupling.
-        * The base table sorts by artifact id (a random uuid4), not by
-          time, so recency ordering is applied here in memory. This is
-          the part that would move server-side behind the user index.
+        Still returns the whole library in one response, paging the
+        index internally. Exposing pagination is a bigger change than it
+        looks: search and the type filter are applied in the SPA today,
+        and a filter that sees only the loaded page is worse than no
+        filter because it looks authoritative — both would have to move
+        server-side in the same change. The index makes that possible
+        whenever it is wanted; it is not wanted yet.
         """
         table = _table()
-        items: list[dict] = []
+        rows: list[dict] = []
         kwargs: dict = {
-            "KeyConditionExpression": Key("PK").eq(f"USER#{user_id}")
-            & Key("SK").begins_with("ARTIFACT#"),
+            "IndexName": _USER_INDEX,
+            "KeyConditionExpression": Key("GSI2PK").eq(f"USER#{user_id}"),
+            # GSI2SK leads with updated_at, so descending IS newest-first.
+            "ScanIndexForward": False,
         }
         try:
             while True:
                 resp = table.query(**kwargs)
-                items.extend(resp.get("Items", []))
+                for item in resp.get("Items", []):
+                    if not item.get("artifact_id"):
+                        continue
+                    rows.append(
+                        {
+                            "artifact_id": item.get("artifact_id", ""),
+                            "version": int(item.get("version", 0)),
+                            "title": item.get("title", ""),
+                            "content_type": item.get(
+                                "content_type", "text/html; charset=utf-8"
+                            ),
+                            # Rows written before these attributes existed
+                            # degrade to an empty string rather than
+                            # dropping out of the library.
+                            "created_at": item.get("created_at") or "",
+                            "updated_at": item.get("updated_at") or "",
+                            "session_id": item.get("session_id") or "",
+                        }
+                    )
                 last = resp.get("LastEvaluatedKey")
                 if not last:
                     break
@@ -574,33 +609,8 @@ class ArtifactListService:
         except ClientError as exc:
             raise ArtifactQueryError("artifact library query failed") from exc
 
-        heads = [
-            item for item in items
-            if str(item.get("SK", "")).endswith("#HEAD")
-        ]
-        rows = [
-            {
-                "artifact_id": item.get("artifact_id", ""),
-                "version": int(item.get("version", 0)),
-                "title": item.get("title", ""),
-                "content_type": item.get(
-                    "content_type", "text/html; charset=utf-8"
-                ),
-                # Rows written before these attributes existed degrade to
-                # an empty string rather than dropping out of the library.
-                "created_at": item.get("created_at") or "",
-                "updated_at": item.get("updated_at") or "",
-                "session_id": item.get("session_id") or "",
-            }
-            for item in heads
-            if item.get("artifact_id")
-        ]
-        # Newest-first. Undated legacy rows sort last rather than first,
-        # which an empty-string key would otherwise do.
-        rows.sort(
-            key=lambda row: (bool(row["updated_at"]), row["updated_at"]),
-            reverse=True,
-        )
+        # No sort here on purpose — the index supplied the order. Adding
+        # one back would silently mask a broken sort key.
         return rows
 
     @staticmethod
