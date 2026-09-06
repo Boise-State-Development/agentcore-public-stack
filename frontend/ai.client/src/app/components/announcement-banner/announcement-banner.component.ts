@@ -1,14 +1,10 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  DestroyRef,
-  ElementRef,
   computed,
   effect,
   inject,
-  signal,
 } from '@angular/core';
-import { DOCUMENT } from '@angular/common';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroCheckCircle,
@@ -45,12 +41,23 @@ import {
  * the POST fails, so a transient 500 cannot trap a user under an
  * undismissable strip.
  *
- * **It publishes its own height** as `--announcement-banner-height` on the
- * document root. The strip is a flex child of the shell's `<main>`, so the
- * scrolling content reflows on its own — but the chat topnav is
- * `position: fixed`, and would sit on top of the banner without that offset.
- * The value is measured rather than hardcoded because the line wraps on narrow
- * viewports.
+ * **It overlays rather than occupying space.** The host is positioned
+ * `absolute` inside the shell's `<main>`, so showing or dismissing it never
+ * reflows the page — an earlier version was a flex child, and dismissing it
+ * pulled the whole view up by its height. Overlaying also removes the reason
+ * three pieces of viewport-fixed chrome used to offset against a measured
+ * `--announcement-banner-height`: nothing has to move any more, so that
+ * variable, its `ResizeObserver`, and all three offsets are gone.
+ *
+ * `top-16` is not arbitrary. On a chat route it lands the pill immediately
+ * below the fixed topnav — the placement §D1 asks for — and everywhere else
+ * it clears the shell's floating sidenav controls, which sit at `top-4` and
+ * would otherwise be overlapped by a centred pill on any viewport narrow
+ * enough for the two to meet. One constant, no route awareness.
+ *
+ * The wrapper is `pointer-events-none` and only the pill itself takes events,
+ * so the full-width positioning strip cannot swallow clicks aimed at the
+ * topnav or the sidebar buttons underneath it.
  *
  * Body markdown is deliberately *not* rendered here: this surface is one line.
  * The full body lives in What's New, which is why `panel` is forced onto every
@@ -68,11 +75,16 @@ import {
       heroXMark,
     }),
   ],
-  host: { class: 'block' },
+  host: {
+    // The positioning strip. `pointer-events-none` here (and `auto` on the
+    // pill) keeps it from swallowing clicks meant for the chrome beneath.
+    class:
+      'pointer-events-none absolute inset-x-0 top-16 z-50 flex justify-center px-4',
+  },
   template: `
     @if (announcement(); as item) {
       <div
-        class="flex items-center gap-x-3 border-b px-4 py-2.5 sm:px-6"
+        class="pointer-events-auto flex w-full max-w-2xl items-center gap-x-3 rounded-2xl border px-4 py-2.5 shadow-lg sm:px-5"
         [class]="severityClass()"
         role="status"
         aria-live="polite"
@@ -112,12 +124,6 @@ import {
 })
 export class AnnouncementBannerComponent {
   private readonly announcements = inject(AnnouncementsService);
-  private readonly host: ElementRef<HTMLElement> = inject(ElementRef);
-  private readonly destroyRef = inject(DestroyRef);
-  private readonly document = inject(DOCUMENT);
-
-  /** The CSS custom property the shell's fixed chrome offsets against. */
-  private static readonly HEIGHT_VAR = '--announcement-banner-height';
 
   readonly announcement = computed<Announcement | null>(() =>
     this.announcements.bannerItem(),
@@ -175,41 +181,12 @@ export class AnnouncementBannerComponent {
     () => this.announcement()?.severity ?? 'info',
   );
 
-  /** Measured height of the strip, mirrored onto the document root. */
-  private readonly height = signal(0);
-
   constructor() {
     effect(() => {
       const item = this.announcement();
       if (!item || this.reportedSeen.has(item.announcement_id)) return;
       this.reportedSeen.add(item.announcement_id);
       void this.announcements.ack(item.announcement_id, 'seen', 'banner');
-    });
-
-    effect(() => {
-      const px = this.height();
-      this.document.documentElement.style.setProperty(
-        AnnouncementBannerComponent.HEIGHT_VAR,
-        `${px}px`,
-      );
-    });
-
-    // `ResizeObserver` rather than a one-shot measurement: the line wraps when
-    // the viewport narrows or the artifact pane opens, and the fixed topnav
-    // has to follow it down.
-    if (typeof ResizeObserver !== 'undefined') {
-      const observer = new ResizeObserver(entries => {
-        const next = entries[0]?.contentRect.height ?? 0;
-        this.height.set(Math.round(next));
-      });
-      observer.observe(this.host.nativeElement);
-      this.destroyRef.onDestroy(() => observer.disconnect());
-    }
-
-    this.destroyRef.onDestroy(() => {
-      this.document.documentElement.style.removeProperty(
-        AnnouncementBannerComponent.HEIGHT_VAR,
-      );
     });
   }
 
