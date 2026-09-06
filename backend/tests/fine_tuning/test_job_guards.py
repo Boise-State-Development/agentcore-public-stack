@@ -16,6 +16,7 @@ from apis.app_api.fine_tuning.routes import (
     _validate_dataset_format,
     _validate_instance_type,
     preflight_huggingface_model,
+    validate_huggingface_model_id,
 )
 
 TEXT_SPEC = task_types.get_task_spec(task_types.TEXT_CLASSIFICATION)
@@ -277,3 +278,57 @@ class TestHuggingFacePreflight:
             ),
         )
         await preflight_huggingface_model("someone/untagged", TEXT_SPEC)
+
+
+class TestValidateHuggingFaceModelId:
+    """The id reaches two sinks: a Hub URL path, and the training job's
+    ``model_name_or_path``. A length ceiling alone let a value carrying URL
+    structure change the meaning of both."""
+
+    @pytest.mark.parametrize(
+        "hf_id",
+        [
+            "bert-base-uncased",
+            "openai/clip-vit-base-patch32",
+            "meta-llama/Llama-3.2-1B",
+            "org/model.with.dots",
+            "org/model_with_underscores",
+        ],
+    )
+    def test_accepts_real_repo_ids(self, hf_id):
+        assert validate_huggingface_model_id(hf_id) == hf_id
+
+    def test_strips_surrounding_whitespace(self):
+        assert validate_huggingface_model_id("  org/model  ") == "org/model"
+
+    @pytest.mark.parametrize(
+        "hf_id",
+        [
+            "../../etc/passwd",
+            "org/../../admin",
+            "..%2f..%2fadmin",
+            "org/model?redirect=https://evil.example",
+            "org/model#frag",
+            "org/model/extra",
+            "//evil.example/path",
+            "https://evil.example/model",
+            "org model",
+            "org/mo\ndel",
+            "",
+            "   ",
+            "/leading-slash/model",
+        ],
+    )
+    def test_rejects_anything_carrying_url_structure(self, hf_id):
+        with pytest.raises(HTTPException) as excinfo:
+            validate_huggingface_model_id(hf_id)
+        assert excinfo.value.status_code == 400
+
+    def test_a_trailing_newline_is_stripped_not_smuggled(self):
+        """`$` would match before a trailing newline; the pattern uses `\\Z`."""
+        assert validate_huggingface_model_id("org/model\n") == "org/model"
+
+    def test_rejects_an_overlong_id(self):
+        with pytest.raises(HTTPException) as excinfo:
+            validate_huggingface_model_id("a" * 201)
+        assert excinfo.value.status_code == 400

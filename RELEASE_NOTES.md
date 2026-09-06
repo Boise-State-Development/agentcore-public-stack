@@ -1,3 +1,250 @@
+# Release Notes — v1.18.0
+
+**Release Date:** September 6, 2026
+**Previous Release:** v1.17.0 (September 2, 2026)
+
+---
+
+> 🏗️ **CDK deploy required.** One new DynamoDB table (`{prefix}-announcements`, **no GSIs**), new IAM grants for it, and `bedrock:CallWithBearerToken` on the inference-api role. `infrastructure/gsi-inventory.json` gains one entry with an empty index list — **no index operations on any existing table**, so this release is not subject to the one-GSI-per-`UpdateTable` split.
+>
+> ⚙️ **One new deploy variable: `CDK_ARTIFACT_SHARE_INBOX_ENABLED`.** It gates the artifact library's "Shared with you" tab and nothing else. Default off. Set it to `"true"` on an environment *before* the deploy to have the tab appear there; the pointer rows behind it are written regardless, so flipping it later is complete and instant with no backfill.
+>
+> ⚡ **Two things change on deploy with no flag:** an omitted `supported_param` is now treated as unsupported rather than passed through, and the prompt-cache TTL is derived from the serving model instead of assumed. Both are corrections, but both change behavior on the first turn after the deploy.
+
+---
+
+## Highlights
+
+A release about the things users *keep*, and about telling them what changed.
+
+**Artifacts became a place, not a side effect.** Before this release an artifact existed inside the conversation that made it and nowhere else. Now there is a library at `/artifacts` with live previews, rename and delete; artifacts can be **shared** with named recipients or the whole tenant and revoked at any time; and sharing a conversation shares the artifacts in it — which until now silently showed the recipient nothing where the owner saw cards. Eleven PRs, all verified live on dev, and **zero new tables and zero new indexes**: the `user-artifacts` table was already partitioned by user, and share records ride the same partition under a `SHARE#` prefix.
+
+**The platform can now tell users what shipped.** Feature announcements are admin-authored, role-targeted notices with a real lifecycle (draft → publish → revise → archive), per-user acknowledgements, a What's New panel, a floating banner beside the chat composer, a modal for the high-priority ones, and reach stats on the admin list so an author can see whether anyone actually read it.
+
+**A follow-up typed mid-turn no longer has to interrupt the turn.** Type while the model is working and the text is injected into the *running* turn at the next tool boundary, appended to the same user-role message that carries the tool results — so the agent reads it before choosing its next action, rather than after the turn it should have influenced has already finished. It is append-only against the cached prefix, so it costs nothing in prompt-cache terms.
+
+**The SPA is now rebrandable from one file.** `brand.config.ts` holds app name, page title, greeting text, logo paths and the brand colors; generators derive the entire theme — brand tokens, an OKLCH-banded neutral surface ramp, and favicons — at prestart and prebuild. This matters because this repo is forked: previously a fork had to hunt colors through components.
+
+**Cost correctness took another pass.** The GPT-5.6 family (Sol, Terra, Luna) is curated and every one of its rates is corrected — they had been derived from a 1000x-wrong multi-model blend when the model cards published them all along. Explicit prompt-cache breakpoints for GPT-5.6 were built, measured at **57% more expensive** than the provider's automatic caching, and shipped **off**.
+
+**Every open Dependabot alert (47) and 40 CodeQL findings are closed.**
+
+---
+
+## Artifacts: a library, and sharing
+
+The artifact feature shipped originally as a rendering surface attached to a conversation. This release makes it a user-level asset with an owner, a lifetime independent of the chat that produced it, and an access-control story.
+
+### The library
+
+`GET /artifacts/library` and a page at `/artifacts`, reachable from **Settings → Profile** next to My Files.
+
+**No new index was needed, and that was the finding that shaped the design.** `user-artifacts` is keyed `PK=USER#{uid}` / `SK=ARTIFACT#{aid}#HEAD|#V#{n}`, so a user's entire library is already one partition — ownership rides the partition key. Production was measured before deciding: 1,494 artifacts across 340 users, 4,129 rows, 2.3MB; the heaviest user holds 64 artifacts in ~110KB, about 14 RCU. The content mix (`text/markdown` 2,769 vs `text/html` 1,352) is why the library defaults to **list** while the Agents surface defaults to grid — most artifacts are documents, not visual pages.
+
+`GSI2PK`/`GSI2SK` are stamped on HEAD rows by a writer with **no index consuming them yet** (#940). A sparse GSI only ever contains rows that already carry its key attributes, so rows written before the attributes exist stay invisible to it forever — silently, as a library listing only post-deploy artifacts with no error anywhere. Stamping early shrinks the eventual backfill to the pre-#940 rows, and costs nothing until the index exists.
+
+- **Grid previews** (#967) render the artifact itself — the deployed render path in an iframe at `scale(cardWidth/1024)`, at a fixed 1024px virtual viewport so the miniature is a true reduction rather than a mobile reflow. Not a server-side screenshot, which would mean executing user HTML server-side in our own account. **Cost is the design constraint:** every mounted preview is a mint plus a render-Lambda invocation plus an S3 GetObject on a `CACHING_DISABLED` path, so previews mount lazily on intersection and a mounted one is never unmounted or re-minted. List stays the default deliberately — flipping it would put every user into the expensive view.
+- **Rename and delete** (#952, #957) via `PATCH` / `DELETE /artifacts/{id}` — hard-delete in DynamoDB, tag in S3, no IAM change. Available from the library, the docked panel and the inline message card.
+- **In-app viewer** (#958) — artifacts open in a docked panel rather than depending on a pop-up window. Render tokens are ~120-second bearer credentials, so a grid cannot pre-mint; the previous flow minted per click and any await before `window.open` cost the active gesture and got the pop-up blocked.
+
+### Sharing
+
+`POST /artifacts/{id}/shares` and friends, with two share types: `specific` (an email allowlist) and `public` (any authenticated tenant user). Recipients land on `/shared-artifact/{shareId}` — a minimal-chrome shell with no sidenav, since a recipient has no other business in the app.
+
+**Zero infrastructure.** A share is two rows on the existing artifacts table written in one `TransactWriteItems`: an owner row and a `SHARE#{id}`/`META` lookup row. No GSI, deliberately — the table's index budget stays free for the `UserArtifactsIndex` the writer is already stamping keys for. `TransactWriteItems` needs no IAM action of its own; it authorizes against the underlying Put/Delete.
+
+> ⚠️ **The mint sets the token's `sub` to the *owner's* user id, not the viewer's — and that is correct.** `sub` is the DynamoDB partition key the render Lambda builds (`PK = USER#{sub}`): an *address*, not an identity assertion. Setting it to the viewer points at the viewer's own partition and 404s. Viewer identity travels in the `vwr` claim and the grant in `shr`; the ACL check in app-api is what stands between sharing and reading any artifact by id. This is written down because it looks like a bug and "fixing" it would break the feature.
+
+The render Lambda was deliberately not modified — `_verify_token` has no extras rejection, so `vwr`/`shr` are forward-compatible with what is already deployed. A test imports `_verify_token` directly to keep that a verified fact rather than a reading, and it was confirmed against the live Lambda in dev.
+
+**Session-delete cascade** (#931, #932): deleting a conversation revokes the artifact shares created from it, on both the single and bulk delete routes. The lookup row is deleted **before** the owner row — the lookup row is the capability, so a half-finished cascade leaves an inert orphan rather than a live share the owner can no longer see to revoke. The test asserts the order, because both orders look identical when nothing fails.
+
+### The recipient inbox — the one flagged surface
+
+`GET /shared-artifacts` lists what has been shared *with* you, and the library grows **All / Yours / Shared with you** tabs (#968, #970).
+
+**A GSI cannot index a list attribute.** `allowed_emails` is a list, so no index can turn one share row into N recipient entries; any recipient lookup needs a row per (share, recipient) regardless, and the only real question is which partition it lives in. So: fan-out pointer rows at `PK=SHARED_WITH#{email_lower}` / `SK=SHARE#{createdAt}#{shareId}`, in the recipient's own partition. Still no GSI.
+
+Three properties hold it together. The row is a **pointer** — it carries no title, because copying one per recipient multiplies staleness by allowlist size. The read **never trusts it** — it resolves through the share lookup row and re-runs the access check, so a stranded pointer lists nothing and grants nothing. And fan-out is **discovery, never authorization**, which is what allows it to be written best-effort per item *outside* the two-row transaction — avoiding an allowlist cap of roughly 40 addresses that `TransactWriteItems`' 100-item limit would otherwise invent.
+
+> ⚠️ **`ARTIFACT_SHARE_INBOX_ENABLED` gates the READ only. The fan-out rows are written unconditionally.** That asymmetry is the point: if the writes were gated too, enabling the flag would reveal an inbox missing every share created while it was off — a wrong answer rather than an empty one, and one nobody can see is wrong. Do not "optimise" the write path by wrapping it in the flag.
+
+The SPA needs no flag of its own. It requests the inbox in parallel with the owned list; a 404 means the surface does not exist in this environment and it renders the tab-less library it always did. An inbox that 503s is allowed to fail on its own without blanking the artifacts the user owns.
+
+### Sharing a conversation shares its artifacts
+
+Closing §8 of the spec (#971, #973). A recipient of a shared conversation used to see **nothing** where the owner sees artifact cards, with no error and no explanation.
+
+**The conversation share *is* the grant** — no artifact share records are created. `create_share` pins the session's artifacts at their current versions into the S3 snapshot body, which simultaneously preserves point-in-time semantics and makes the snapshot the allowlist; `resolve_shared_artifact` checks the conversation ACL *and* snapshot membership before minting. Parallel artifact shares were rejected because each would need cascading on update, revoke and delete, and one missed cascade leaves an artifact readable after its conversation was locked down.
+
+The snapshot's `artifacts` key is **optional on read** — conversation sharing is already in production, so pre-existing bodies read as `[]`. No migration.
+
+The recipient UI is its own card and dialog rather than a mode of the owner's: the owner components carry download, share, rename, delete, version picker and code view, all keyed on endpoints a conversation-share recipient has no handle for. The shared layer is `ArtifactViewerComponent`, which absorbed a third mint path with **no change** — the sign the split was drawn in the right place.
+
+### Test coverage
+
+Over 6,700 lines of new tests across the share service, the cascade, the inbox fan-out, the library page and the recipient surfaces — including a test that pins the DynamoDB **API surface** the cascade may use, mutation-checked by reintroducing the bug and confirming it fails.
+
+---
+
+## Feature announcements
+
+Admins can now publish release notices to users, target them by role, and see whether anyone read them.
+
+### Backend
+
+- **`{prefix}-announcements`** — one table, two item shapes: announcement rows under a fixed `ANNOUNCEMENTS` partition and each user's ack rows under `USER#<id>`. No GSIs.
+- `/admin/announcements` — list, get, create, patch, `publish`, `archive`, `revise`, delete, and `{id}/stats` (#966, #972, #978).
+- `GET /announcements` + an acknowledgement endpoint for users (#969).
+- Gated by `ANNOUNCEMENTS_ENABLED`, **default on with a kill switch**. While off the routers are unmounted and the surface 404s; data and code remain intact.
+- **Who may author** is the delegable `admin.announcements` scope. **Who sees** a published announcement is the announcement's own `targetRoles` — a display filter, deliberately *not* an RBAC grant.
+
+### Frontend
+
+- **What's New panel** with the user's feed and ack state (#969).
+- **Banner** (#976, #979, #981) — floats rather than occupying layout, and sits beside the chat composer on the side the composer leaves free. Chat view only.
+- **Modal** for high-priority announcements, gated by the spec's §D8 rules (#977).
+- **Reach column** on the admin list, driven by ack funnel counters (#978).
+
+> ⚠️ Announcement ack counters are **incremented, never backfilled**. An announcement published before this release has no counters and will read as zero reach rather than as unknown.
+
+---
+
+## Mid-turn steering
+
+Type a follow-up while a turn is still streaming and it now lands *inside* that turn.
+
+The text is injected at the next tool boundary as a `{"text": ...}` block on the same user-role message that carries the tool results, so the agent reads it before choosing its next action. A new `steering_applied` SSE event is emitted after that batch's `tool_result` events, so the thread renders in the order the model will see.
+
+**The transport is the session's existing single-flight lease row** — `steerQueue` + `steerFor`, owner-scoped exactly like `cancelRequestedFor`, armed by `POST /sessions/{id}/steer` and deleted with the lease at turn end. No new table, no new stream.
+
+Consumption is **commit-on-append**: the hook peeks at `AfterToolsEvent` and clears the inbox entry only on the `MessageAddedEvent` for that same message. `AfterToolsEvent` fires from a `finally`, so it also fires on the interrupt path where the mutated message is discarded — a hook that consumed on read would destroy the user's words whenever a steer landed on the same tool batch as an OAuth consent.
+
+**Absence of the event is a fallback, not an error.** A turn that calls no tools has no boundary to inject at, and a steer can lose the race with the turn's end; in both cases the entry stays queued and is sent as a normal turn.
+
+It is **append-only against the cached prefix** — the injection lands inside the segment the message-level cachePoint covers — so it never rewrites the prefix and costs nothing in cache terms. A test locks that placement.
+
+Gated by `MID_TURN_STEERING_ENABLED`, default on with a kill switch; while off the steer endpoint 404s and the hook returns immediately. Spec: `docs/specs/mid-turn-steering.md`.
+
+Four defects were found by validating this on dev and fixed in the same release: a steer rendered once per sync tick instead of once (#930), a follow-up typed while a turn was *paused* was dropped rather than queued (#934), the steer bubble used a non-standard color (#935), and a user bubble's overflow was measured once and latched (#937).
+
+---
+
+## Single-file rebranding
+
+This repo is forked by institutions that are not Boise State, and until now rebranding meant hunting colors through components.
+
+`frontend/ai.client/src/branding/brand.config.ts` is now the only file to edit for every non-logo brand value: app name, page title, greeting templates and fallbacks, logo paths, brand colors, and surface anchors. Consumers never import it directly — they read through `BrandingService`, which normalizes and defends against missing or invalid values.
+
+- **Surface colors are validated, not merely accepted.** Each surface anchor must fall inside a per-role OKLCH band (`light` L≥0.90 / C≤0.04, `raised` L≥0.95 and above `light` / C≤0.03, `dark` L≤0.32 / C≤0.05) or it is rejected and reset to the default neutral for that role. The bands keep page and card backgrounds legible while still allowing a brand tint.
+- **Four generators** run at `prestart` and `prebuild`: brand theme, surface theme, surface colors, and favicons (`sharp` + `tsx` are new dev dependencies for this).
+- **Golden-file and parity specs** pin the generated output, including a spec that fails if the rebranding guide goes missing — documentation kept honest by test.
+- New token layers: `styles/tokens/identity.css` and `styles/tokens/state.css`, plus generated `brand-theme.css`, `surface-theme.css` and `surface-colors.ts`.
+
+---
+
+## Models and cost correctness
+
+### GPT-5.6 Sol, Terra and Luna
+
+Curated in the model catalog on the `bedrock-runtime` OpenAI-compatible endpoint (`us.openai.gpt-5.6-*`), with a new `provider="bedrock-responses"` transport (#949) and the IAM grant it turned out to need (#959).
+
+> ⚠️ **The OpenAI-compatible endpoint on `bedrock-runtime` authenticates under the `bedrock` service namespace, not `bedrock-mantle`.** Granting only `bedrock-mantle:CallWithBearerToken` returns `401 ... is not authorized to perform: bedrock:CallWithBearerToken`.
+
+**Every published GPT-5.6 rate in the catalog is corrected** (#980). They had been *derived* — from a blend across models that came out 1000x wrong — when AWS had published them in the model cards the whole time. The rates now come from the model cards; the derivation, where still used, reads a single-model day rather than a blend.
+
+### Explicit prompt-cache breakpoints: built, measured, shipped off
+
+GPT-5.6 supports explicit cache breakpoints. They were implemented (#954), measured, and came out **57% more expensive** than the provider's automatic caching, so the default is off (#956). The code stays for the next model family that prices it differently.
+
+Verified separately: GPT-5.6 caching **works** on the automatic path, at 10.6x on warm turns (#962).
+
+### Other cost fixes
+
+- **Prompt-cache TTL is derived from the serving model** rather than assumed, so `cacheStatus` stops misreading a hit as expired on models with a different TTL (#951).
+- **`supportsCaching` is forced on where the provider caches unconditionally** (#960), and **Mantle models expose the caching controls** they were previously denied (#963).
+- **OpenAI-family usage normalizes to disjoint buckets** (#945) — cached tokens were being counted inside the input total.
+- **The cache-write premium and the Global/Regional rate tier were both wrong** in cost derivation (#914).
+- **An omitted `supported_param` is now unsupported, not pass-through** (#915) — an empty `supportedParams` previously bypassed the guard entirely.
+
+---
+
+## Multi-modal fine-tuning
+
+The fine-tuning surface assumed text. A **task-type registry** replaces that assumption, adding image and image+text tasks through the API and the SPA, with a **dollar-denominated quota** rather than a job count (#944). Generative VLMs are excluded from the dual-encoder task, instance types are validated, and the dataset tests are no longer optional. `pandas==2.3.3` is pinned in the backend to exercise the dataset contract — 2.x is what the py3.10 SageMaker text DLC resolves to and the only line compatible with the existing numpy pin.
+
+---
+
+## 🐛 Bug fixes
+
+- **Artifact share links stayed live after their conversation was deleted.** The cascade used `table.batch_writer()`, and the app-api task role has no `dynamodb:BatchWriteItem` — it has the individual item actions, which is why the rest of the feature needed no IAM change (`TransactWriteItems` authorizes against those; `BatchWriteItem` does not). It failed closed in dev with an `AccessDeniedException` that reached no client, because the cascade runs in a never-raising background task after the 204. Fixed with per-row `DeleteItem`, which also isolates failures and keeps the zero-IAM-change property (#932).
+  > **The generalizable rule: moto proves *shape*, never *permission*.** All 14 cascade tests passed against a call the deployed role cannot make.
+- **An empty "Shared with you" tab claimed "No artifacts match your search"** — with an empty search box. The filtered-empty state gated on the *library* total, so any non-empty library made an empty *tab* look like a failed search. Now three ordered states: nothing anywhere > nothing in this tab > nothing matching the filter. The specs missed it because every empty-state test asserted which rows rendered, never which sentence appeared when none did (#975).
+- **"Pop-up blocked" was reported on every artifact open**, successful ones included (#953).
+- **A duplicate error toast** fired alongside the shared-artifact page's own inline 404 — share calls now set `SUPPRESS_ERROR_TOAST`. `listShares` deliberately keeps its toast, because it degrades silently and the toast is its only signal (#927).
+- **Artifact card actions overlapped the title** when the panel was docked and the chat column halved. Fixed with a **container query** — the card is sized by the chat column, not the viewport, so a media query is the wrong instrument — dropping labels to icons below 26rem with the labels visually hidden rather than removed (#927).
+- The library view toggle stretched on narrow screens, and the grid card footer overflowed its card (#955).
+- The new-announcement form's submit button could never enable (#974).
+- Knowledge-base retrievability is now confirmed with a filtered query, and `TEXT_INDEXED` is classified correctly (#908).
+
+---
+
+## 🔒 Security
+
+- **The custom HuggingFace model id reached a URL unvalidated.** The fine-tuning call site's comment has claimed to validate the id format since before this release; the code only checked non-empty and length. That was latent on `main` — the multi-modal work made it reachable by interpolating the value into a Hub request path, which CodeQL flags as a critical `py/partial-ssrf`. The host was always hard-coded, so this was never an arbitrary-host SSRF; what it allowed was a value carrying URL structure changing the meaning of two sinks — the pre-flight path, and `model_name_or_path` as forwarded to the training container. Now validated against an anchored repo-id pattern at **both** sinks, rather than one relying on the other's branch having run.
+  > The pattern uses `\Z`, not `$` — `$` also matches immediately before a trailing newline, so an otherwise-anchored pattern accepts `org/model\n`. A test pins that.
+- **All 47 open Dependabot alerts cleared** (#924), across the backend, the SPA, infrastructure, the docs site, and the backup/restore scripts. Notable: `cryptography` 48.0.1 → 50.0.1, `dompurify` ≥3.4.13, `undici` ≥7.29.0, `hono` ≥4.12.34, `brace-expansion` ≥5.0.9, `postcss` 8.5.12 → 8.5.28.
+- **CodeQL: 11 high, 20 medium and 9 note findings remediated** (#925) — principally log injection, across 18 backend modules and one SPA page. The nightly workflow is extended in the same pass.
+
+---
+
+## 🏗️ Infrastructure
+
+- **`{prefix}-announcements`** DynamoDB table, **no GSIs**, name published to SSM at `/{prefix}/admin/announcements-table-name`. App-api gains `AnnouncementsTableAccess` (`GetItem`/`PutItem`/`UpdateItem`/`DeleteItem`/`Query`/`Scan`).
+- **`bedrock:CallWithBearerToken`** on the inference-api role, for the `bedrock-runtime` OpenAI-compatible endpoint.
+- **`CDK_ARTIFACT_SHARE_INBOX_ENABLED`** deploy variable → `ARTIFACT_SHARE_INBOX_ENABLED` on the app-api container. Default off.
+- `infrastructure/gsi-inventory.json` gains `"announcements": []`. **No GSI operations on any existing table** — this release is not subject to the one-index-per-`UpdateTable` split.
+
+---
+
+## 📦 Dependencies
+
+| Component | Package | From | To |
+|---|---|---|---|
+| Backend | `cryptography` | 48.0.1 | 50.0.1 |
+| Backend | `aiohttp` | 3.14.1 | 3.14.3 |
+| Backend | `pandas` | — | 2.3.3 (added) |
+| Frontend | `@angular/*` | 21.2.17 | 21.2.19 |
+| Frontend | `mermaid` | 11.15.0 | 11.16.1 |
+| Frontend | `postcss` | 8.5.12 | 8.5.28 |
+| Frontend | `sharp` | — | 0.33.0 (added) |
+| Frontend | `tsx` | — | 4.23.12 (added) |
+| Frontend | `dompurify` | ≥3.4.0 | ≥3.4.13 |
+| Frontend | `undici` | ≥7.28.0 | ≥7.29.0 |
+| Frontend | `hono` | ≥4.12.25 | ≥4.12.34 |
+| Infrastructure | `aws-cdk-lib` | 2.262.0 | 2.265.0 |
+| Infrastructure | `brace-expansion` | — | ≥5.0.9 |
+
+---
+
+## 🚀 Deployment notes
+
+1. **Deploy order is `platform.yml` → `backend.yml` → `frontend-deploy.yml`.** This release changes `infrastructure/lib/constructs/**` and `config.ts`, so the push to `main` triggers `platform.yml` automatically. That order is **not enforced by the workflows** — they share a concurrency group and queue, but nothing guarantees CDK wins the slot. If `backend.yml` runs first, the announcements routes will 500 on a missing table until the CDK deploy lands. Watch both runs.
+
+2. **Decide `CDK_ARTIFACT_SHARE_INBOX_ENABLED` before the deploy, not after.** It reaches the running service only through a `platform.yml` deploy (CDK writes it into the ECS task definition), and `platform.yml` is path-filtered to infra changes — so a later backend- or frontend-only merge will *not* pick up a variable change. Set it now and it rides this release's CDK deploy; set it afterwards and you must dispatch `platform.yml` manually.
+   - Off (default): owner-side sharing, the library, previews, rename/delete and shared-conversation artifacts all ship. Only the "Shared with you" tab is absent, and its absence is silent by design.
+   - On: the tab appears, already populated — the pointer rows have been accumulating since a share was first created.
+
+3. **No data migration.** The conversation-share snapshot's `artifacts` key is optional on read, so pre-existing shares read as `[]`. `GSI2PK`/`GSI2SK` stamping is inert until an index consumes it — DynamoDB charges no index write when no index exists.
+
+4. **Two unflagged behavior changes.** An omitted `supported_param` is now treated as unsupported rather than passed through, and the prompt-cache TTL is derived from the serving model rather than assumed. Both are corrections; both take effect on the first turn after the deploy.
+
+5. **Announcement reach counters are not backfilled.** Anything published before this release reads as zero reach.
+
+6. **Post-deploy verification.** Open `/artifacts` and confirm the library lists and previews. Create a share, open it from a second account, then revoke it and confirm the link dies. Publish a test announcement and confirm the banner appears on the chat view. If the inbox flag is on, confirm the third tab appears and — with nothing shared — says "nothing in this tab" rather than "no artifacts match your search".
+
+---
+
 # Release Notes — v1.17.0
 
 **Release Date:** September 2, 2026
