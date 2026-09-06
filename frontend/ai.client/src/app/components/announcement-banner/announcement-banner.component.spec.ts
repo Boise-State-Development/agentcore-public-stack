@@ -28,30 +28,11 @@ function makeAnnouncement(overrides: Partial<Announcement> = {}): Announcement {
 describe('AnnouncementBannerComponent', () => {
   let bannerItem: ReturnType<typeof signal<Announcement | null>>;
   let ack: ReturnType<typeof vi.fn>;
-  let observed: Element[];
 
   beforeEach(() => {
     TestBed.resetTestingModule();
     bannerItem = signal<Announcement | null>(null);
     ack = vi.fn(async () => true);
-    observed = [];
-
-    // jsdom has no ResizeObserver. Stub one that records what it watches so
-    // the height-publishing path is actually exercised rather than skipped.
-    (globalThis as any).ResizeObserver = class {
-      constructor(private cb: ResizeObserverCallback) {}
-      observe(el: Element) {
-        observed.push(el);
-      }
-      disconnect() {}
-      unobserve() {}
-      emit(height: number) {
-        this.cb(
-          [{ contentRect: { height } } as unknown as ResizeObserverEntry],
-          this as unknown as ResizeObserver,
-        );
-      }
-    };
 
     // DI-token override rather than vi.mock, per house convention.
     TestBed.configureTestingModule({
@@ -63,7 +44,6 @@ describe('AnnouncementBannerComponent', () => {
 
   afterEach(() => {
     TestBed.resetTestingModule();
-    document.documentElement.style.removeProperty('--announcement-banner-height');
   });
 
   function create() {
@@ -204,29 +184,59 @@ describe('AnnouncementBannerComponent', () => {
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
-  it('publishes its measured height so the fixed topnav can clear it', () => {
-    bannerItem.set(makeAnnouncement());
-    const fixture = create();
+  describe('overlays rather than occupying space', () => {
+    it('positions the host absolutely, so dismissing it cannot reflow the page', () => {
+      // The regression: the banner used to be a flex child of the shell's
+      // <main>, so showing or hiding it pulled the whole view up or down by
+      // its height. It must never participate in flow.
+      bannerItem.set(makeAnnouncement());
+      const fixture = create();
+      const host = fixture.nativeElement as HTMLElement;
 
-    expect(observed).toHaveLength(1);
-    expect(observed[0]).toBe(fixture.nativeElement);
-  });
+      expect(host.className).toContain('absolute');
+      expect(host.className).not.toContain('block');
+    });
 
-  it('clears the height variable on destroy, so nothing is left offset', () => {
-    bannerItem.set(makeAnnouncement());
-    const fixture = create();
-    expect(
-      document.documentElement.style.getPropertyValue(
-        '--announcement-banner-height',
-      ),
-    ).not.toBe('');
+    it('lets clicks through the positioning strip to the chrome beneath', () => {
+      // The strip spans the full content width. Without this, it would
+      // swallow clicks aimed at the topnav and the sidebar buttons under it.
+      bannerItem.set(makeAnnouncement());
+      const fixture = create();
+      const host = fixture.nativeElement as HTMLElement;
 
-    fixture.destroy();
+      expect(host.className).toContain('pointer-events-none');
+      expect(strip(fixture)!.className).toContain('pointer-events-auto');
+    });
 
-    expect(
-      document.documentElement.style.getPropertyValue(
-        '--announcement-banner-height',
-      ),
-    ).toBe('');
+    it('clears the topnav and the floating sidenav controls', () => {
+      // `top-16` puts the pill just below a chat route's fixed topnav, and
+      // below the shell's `top-4` sidebar buttons everywhere else — one
+      // constant instead of route awareness.
+      bannerItem.set(makeAnnouncement());
+      const fixture = create();
+      expect((fixture.nativeElement as HTMLElement).className).toContain('top-16');
+    });
+
+    it('reads as a floating card, not a full-bleed strip', () => {
+      bannerItem.set(makeAnnouncement());
+      const fixture = create();
+      const pill = strip(fixture)!;
+
+      expect(pill.className).toContain('rounded-2xl');
+      expect(pill.className).toContain('shadow-lg');
+      expect(pill.className).toContain('max-w-2xl');
+      // The old full-bleed look leaned on a bottom border instead.
+      expect(pill.className).not.toContain('border-b');
+    });
+
+    it('sets no layout variable on the document — nothing offsets against it', () => {
+      bannerItem.set(makeAnnouncement());
+      create();
+      expect(
+        document.documentElement.style.getPropertyValue(
+          '--announcement-banner-height',
+        ),
+      ).toBe('');
+    });
   });
 });
