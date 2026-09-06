@@ -132,11 +132,32 @@ export class SessionList {
   });
 
   /**
-   * Computed signal for loading state.
+   * Computed signal for loading state — i.e. "we have nothing to draw yet".
+   *
+   * `value()` alone is not enough. The loader short-circuits to `null` while
+   * `sessionsRequest` is still false, and that is the ordinary cold-start path:
+   * `SessionService` is constructed during the APP_INITIALIZER pass (via
+   * `AnnouncementModalService` -> `MessageMapService`), and Angular runs every
+   * initializer synchronously before awaiting any of them — so the BFF
+   * `bootstrap()` promise is still in flight and `isAuthenticated()` is false.
+   * The eager-fetch branch in the constructor is skipped, the resource resolves
+   * `null`, and the auth effect only enables loading afterwards. `reload()`
+   * keeps the previous value, so `null` survives the entire real fetch: testing
+   * `=== undefined` reported "loaded, no sessions" and the sidebar rendered the
+   * "No Chats Yet" empty state instead of the skeleton.
+   *
+   * So: no API response yet (`undefined` before the first load resolves, `null`
+   * while it is short-circuited) means loading. An empty `sessions` array is a
+   * real response and must fall through to the empty state.
+   *
+   * `error()` is read first — reading `value()` on an errored resource throws.
    */
   readonly isLoading = computed(() => {
-    const value = this.sessionsResource.value();
-    return value === undefined;
+    if (this.sessionsResource.error()) return false;
+    if (this.sessionsResource.value() != null) return false;
+    // Locally created sessions can exist before the API answers; draw those
+    // rather than covering them with a skeleton.
+    return this.groupedSessions().length === 0;
   });
 
   /**
