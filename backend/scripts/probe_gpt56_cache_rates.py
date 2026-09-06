@@ -38,7 +38,14 @@ Usage:
 Then, once Cost Explorer has settled (~24h), recover the rates:
 
     AWS_PROFILE=dev-ai uv run python scripts/probe_gpt56_cache_rates.py \
-        --rates-only --since 2026-09-05
+        --rates-only --since 2026-09-05 \
+        --table dev-boisestateai-v2-sessions-metadata
+
+⚠️  Cost Explorer bills these models through AWS Marketplace, under usage types
+that name the token bucket and the service tier but NOT the model. Every
+OpenAI-family model in the account shares those four rows. A derived rate is
+therefore only a given model's rate on a day when it was the ONLY OpenAI-family
+model to run — which is what ``--table`` checks and prints.
 """
 
 from __future__ import annotations
@@ -47,6 +54,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -259,11 +267,90 @@ def print_verdicts(results: List[ArmResult]) -> None:
             print(f"   {key:<24} {ta.get(key,0):>9,}   {tb.get(key,0):>9,}")
 
 
-def derive_rates(since: str, until: Optional[str], region: str) -> int:
+# Cost Explorer names no model. OpenAI-family models on Bedrock bill through
+# AWS Marketplace, under usage types that carry the token bucket and the
+# service tier but NOT the model id — every OpenAI model in the account lands
+# in the same four rows. Verified 2026-09-06 against USAGE_TYPE grouped by
+# OPERATION and by BILLING_ENTITY; no finer dimension exists.
+_MARKETPLACE_TOKEN_USAGE = re.compile(
+    r"MP:\w+?_(?P<bucket>input_tokens|output_tokens|cache_read_tokens|cache_write_tokens)"
+    r"_(?P<tier>[A-Za-z0-9-]+)-Units$"
+)
+# The PascalCase twin is the Converse-family (Claude) naming. Matched only so a
+# run can SAY it saw them — attributing these to a GPT model is the exact
+# mistake this guard exists to prevent.
+_CONVERSE_TOKEN_USAGE = re.compile(r"MP:\w+?_(?:Cache(?:Read|Write)Input|Input|Output)TokenCount-Units$")
+
+_BUCKET_TO_USAGE_KEY = {
+    "input_tokens": "inputTokens",
+    "output_tokens": "outputTokens",
+    "cache_read_tokens": "cacheReadInputTokens",
+    "cache_write_tokens": "cacheWriteInputTokens",
+}
+
+
+def _is_openai_family(model_id: str) -> bool:
+    lowered = model_id.lower()
+    return "openai" in lowered or "gpt" in lowered
+
+
+def models_that_ran(table_name: str, region: str, since: str, until: str) -> Dict[str, Dict[str, float]]:
+    """Per-model token totals we recorded, for the same window.
+
+    This is the attribution guard. Cost Explorer cannot say which model spent
+    the money, so a derived rate is only trustworthy on a day when exactly one
+    OpenAI-family model ran.
+    """
+    import boto3
+
+    table = boto3.resource("dynamodb", region_name=region).Table(table_name)
+    totals: Dict[str, Dict[str, float]] = {}
+    kwargs: Dict[str, Any] = {
+        "FilterExpression": "begins_with(GSI_SK, :c) AND #ts BETWEEN :s AND :u",
+        "ExpressionAttributeValues": {":c": "C#", ":s": since, ":u": until},
+        "ExpressionAttributeNames": {"#ts": "timestamp"},
+        "ProjectionExpression": "modelInfo, tokenUsage",
+    }
+    start_key = None
+    while True:
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        response = table.scan(**kwargs)
+        for item in response.get("Items", []):
+            info = item.get("modelInfo") or {}
+            model_id = info.get("modelId") or info.get("model") or "(unknown)"
+            usage = item.get("tokenUsage") or {}
+            bucket = totals.setdefault(model_id, {"calls": 0.0})
+            bucket["calls"] += 1
+            for key in _BUCKET_TO_USAGE_KEY.values():
+                try:
+                    bucket[key] = bucket.get(key, 0.0) + float(usage.get(key) or 0)
+                except (TypeError, ValueError):
+                    continue
+        start_key = response.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    return totals
+
+
+def derive_rates(
+    since: str,
+    until: Optional[str],
+    region: str,
+    table_name: Optional[str] = None,
+) -> int:
     """Recover $/MTok per bucket from Cost Explorer usage + cost.
 
-    Rate = unblended cost / usage quantity, per usage type. This is the step the
-    Price List API cannot supply for these models.
+    Rate = unblended cost / usage quantity, per usage type. The Price List API
+    cannot supply this: there is no Marketplace service code in it at all
+    (checked 2026-09-06 — 269 service codes, none for Marketplace), and the
+    four Bedrock codes carry no commercial GPT-5.6 rows.
+
+    The unit is read from Cost Explorer's own ``Unit`` field rather than
+    assumed. Marketplace token rows report ``1M tokens``; the natively-billed
+    Bedrock rows (Nova, Titan, Mantle-served models) report ``1K tokens``. An
+    earlier version of this function assumed 1K for everything, which
+    overstated every Marketplace rate by 1000x.
     """
     import boto3
 
@@ -273,41 +360,111 @@ def derive_rates(since: str, until: Optional[str], region: str) -> int:
     ce = boto3.client("ce", region_name="us-east-1")
     resp = ce.get_cost_and_usage(
         TimePeriod={"Start": since, "End": end},
-        Granularity="MONTHLY",
+        Granularity="DAILY",
         Metrics=["UnblendedCost", "UsageQuantity"],
-        Filter={"Dimensions": {"Key": "SERVICE", "Values": ["Amazon Bedrock"]}},
         GroupBy=[{"Type": "DIMENSION", "Key": "USAGE_TYPE"}],
     )
 
-    rows = []
+    per_day: Dict[str, List[Dict[str, Any]]] = {}
+    converse_days: Dict[str, float] = {}
     for period in resp.get("ResultsByTime", []):
+        day = period["TimePeriod"]["Start"]
         for group in period.get("Groups", []):
             usage_type = group["Keys"][0]
-            if "gpt-5.6" not in usage_type.lower():
-                continue
             cost = float(group["Metrics"]["UnblendedCost"]["Amount"])
             qty = float(group["Metrics"]["UsageQuantity"]["Amount"])
-            rows.append((usage_type, qty, cost, (cost / qty) if qty else None))
+            if _CONVERSE_TOKEN_USAGE.search(usage_type):
+                converse_days[day] = converse_days.get(day, 0.0) + cost
+                continue
+            match = _MARKETPLACE_TOKEN_USAGE.search(usage_type)
+            if not match or not qty:
+                continue
+            unit = group["Metrics"]["UsageQuantity"].get("Unit", "")
+            per_mtok = _to_per_mtok(cost / qty, unit)
+            per_day.setdefault(day, []).append({
+                "bucket": match.group("bucket"),
+                "tier": match.group("tier"),
+                "usage_type": usage_type,
+                "qty": qty,
+                "unit": unit,
+                "cost": cost,
+                "per_mtok": per_mtok,
+            })
 
-    if not rows:
+    if not per_day:
         print(
-            f"No GPT-5.6 usage types in Cost Explorer for {since}..{end}.\n"
-            "Cost Explorer lags ~24h — if the turns ran today, try again tomorrow."
+            f"No Marketplace token usage types in Cost Explorer for {since}..{end}.\n"
+            "Marketplace line items settle slower than native AWS ones — allow "
+            "24-48h, not 24h."
         )
         return 1
 
-    print(f"\nGPT-5.6 usage, {since}..{end}")
-    print(f"{'usage type':<62} {'qty':>14} {'cost USD':>10} {'$/MTok':>10}")
-    for usage_type, qty, cost, rate in sorted(rows):
-        # Cost Explorer reports Bedrock token usage in units of 1K tokens.
-        per_mtok = f"{rate * 1000:.4f}" if rate is not None else "n/a"
-        print(f"{usage_type:<62} {qty:>14,.0f} {cost:>10.4f} {per_mtok:>10}")
+    for day in sorted(per_day):
+        print(f"\n▸ {day}")
+        attribution = _print_attribution(table_name, region, day)
+        print(f"   {'bucket':<20}{'tier':<10}{'unit':>12}{'qty':>14}{'cost USD':>11}{'$/MTok':>11}")
+        for row in sorted(per_day[day], key=lambda r: r["bucket"]):
+            rate = f"{row['per_mtok']:.4f}" if row["per_mtok"] is not None else "unit?"
+            print(
+                f"   {row['bucket']:<20}{row['tier']:<10}{row['unit']:>12}"
+                f"{row['qty']:>14,.6f}{row['cost']:>11.4f}{rate:>11}"
+            )
+        if converse_days.get(day):
+            print(
+                f"   (also ${converse_days[day]:.4f} of Converse-family "
+                "*TokenCount rows that day — Claude, not GPT; excluded)"
+            )
+        if attribution is False:
+            print(
+                "   ⚠️  NOT ATTRIBUTABLE. More than one OpenAI-family model ran "
+                "this day and Cost Explorer does not break the buckets down by "
+                "model. Re-run the probe on a day when only one model runs."
+            )
+
     print(
-        "\n⚠️  Confirm the usage UNIT before trusting $/MTok: the column above "
-        "assumes Cost Explorer reports these in 1K-token units. Cross-check one "
-        "row against the token totals this script printed when it ran the turns."
+        "\nMethod: these rows are model-agnostic, so a rate is only a given "
+        "model's rate on a day when that model was the only OpenAI-family "
+        "model to run. Check the attribution line above before using a number."
     )
     return 0
+
+
+def _to_per_mtok(rate_per_unit: float, unit: str) -> Optional[float]:
+    """Convert a $/unit rate to $/MTok using Cost Explorer's declared unit."""
+    normalized = (unit or "").strip().lower()
+    if normalized in ("1m tokens", "1m token"):
+        return rate_per_unit
+    if normalized in ("1k tokens", "1k token"):
+        return rate_per_unit * 1000
+    if normalized in ("tokens", "token"):
+        return rate_per_unit * 1_000_000
+    return None
+
+
+def _print_attribution(table_name: Optional[str], region: str, day: str) -> Optional[bool]:
+    """Print which models we recorded that day. Returns False if ambiguous."""
+    if not table_name:
+        print("   models that ran: unknown (pass --table to attribute)")
+        return None
+    from datetime import date, timedelta
+
+    nxt = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+    try:
+        ran = models_that_ran(table_name, region, day, nxt)
+    except Exception as exc:  # noqa: BLE001 - diagnostic only
+        print(f"   models that ran: lookup failed ({exc})")
+        return None
+
+    openai_models = sorted(m for m in ran if _is_openai_family(m))
+    others = sorted(m for m in ran if not _is_openai_family(m))
+    if not openai_models:
+        print("   models that ran: no OpenAI-family model recorded "
+              "(usage may be from a direct-transport probe, which is not recorded)")
+    else:
+        print(f"   models that ran: {', '.join(openai_models)}")
+    if others:
+        print(f"   (also non-OpenAI: {', '.join(others)} — billed separately)")
+    return len(openai_models) == 1
 
 
 async def main() -> int:
@@ -354,13 +511,19 @@ async def main() -> int:
         help="Skip the turns; just read Cost Explorer and derive rates.",
     )
     parser.add_argument("--since", default=None, help="YYYY-MM-DD for --rates-only")
+    parser.add_argument(
+        "--table",
+        default=None,
+        help="sessions-metadata table, for the --rates-only attribution guard "
+        "(e.g. dev-boisestateai-v2-sessions-metadata).",
+    )
     parser.add_argument("--until", default=None)
     args = parser.parse_args()
 
     if args.rates_only:
         if not args.since:
             parser.error("--rates-only requires --since YYYY-MM-DD")
-        return derive_rates(args.since, args.until, args.region)
+        return derive_rates(args.since, args.until, args.region, args.table)
 
     modes = ["explicit", "implicit"] if args.mode == "both" else [args.mode]
     approx_calls = args.turns * len(modes)

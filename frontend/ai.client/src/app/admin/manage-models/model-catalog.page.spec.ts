@@ -7,7 +7,11 @@ import { ModelCatalogPage } from './model-catalog.page';
 import { ManagedModelsService } from './services/managed-models.service';
 import { CuratedModelPrefillService } from './services/curated-model-prefill.service';
 import { AddCuratedModelDialogComponent } from './components/add-curated-model-dialog.component';
-import { CURATED_BEDROCK_MODELS, CURATED_MANTLE_MODELS } from './models/curated-models';
+import {
+  CURATED_BEDROCK_MODELS,
+  CURATED_BEDROCK_RESPONSES_MODELS,
+  CURATED_MANTLE_MODELS,
+} from './models/curated-models';
 
 function createMockManagedModelsService(overrides: Partial<{
   isModelAdded: (modelId: string) => boolean;
@@ -239,15 +243,19 @@ describe('ModelCatalogPage', () => {
   // named a `us.*` (Regional/CRIS) inference profile, which prices ~10% higher.
   // Nothing failed — the numbers were merely wrong, everywhere downstream.
   describe('curated Bedrock pricing', () => {
+    // The CRIS tier a model id resolves to drives its rate card, so the two
+    // must agree on every list that declares a tier — not just Bedrock's.
+    const tieredModels = [...CURATED_BEDROCK_MODELS, ...CURATED_BEDROCK_RESPONSES_MODELS];
+
     it('declares a pricingTier that matches the tier its modelId names', () => {
-      for (const model of CURATED_BEDROCK_MODELS) {
+      for (const model of tieredModels) {
         const expected = model.template.modelId.startsWith('global.') ? 'global' : 'regional';
         expect(`${model.key}:${model.pricingTier}`).toBe(`${model.key}:${expected}`);
       }
     });
 
     it('derives cache rates from base input at Bedrock\'s published multipliers', () => {
-      for (const model of CURATED_BEDROCK_MODELS) {
+      for (const model of tieredModels) {
         const t = model.template;
         if (!t.supportsCaching) continue;
         const input = t.inputPricePerMillionTokens;
@@ -255,5 +263,64 @@ describe('ModelCatalogPage', () => {
         expect(t.cacheReadPricePerMillionTokens).toBeCloseTo(input * 0.1, 6);
       }
     });
+  });
+
+  describe('curated bedrock-responses (GPT-5.6) entries', () => {
+    it('renders them on their own tab', () => {
+      const page = createComponent();
+      page.selectTab('bedrock-responses');
+
+      expect(page.visibleModels().map(m => m.key)).toEqual(
+        CURATED_BEDROCK_RESPONSES_MODELS.map(m => m.key),
+      );
+      expect(CURATED_BEDROCK_RESPONSES_MODELS.length).toBeGreaterThan(0);
+    });
+
+    it('never ships supportsCaching false — the provider forces it true', () => {
+      // `false` here is not a preference but a false statement: these models
+      // cache implicitly server-side and it cannot be turned off. Its only
+      // effect would be to clear the cache rates, pricing cached tokens at
+      // $0.00 while AWS bills them in full.
+      for (const model of CURATED_BEDROCK_RESPONSES_MODELS) {
+        expect(`${model.key}:${model.template.supportsCaching}`).toBe(`${model.key}:true`);
+      }
+    });
+
+    it('pins maxInputTokens to the 272K short-context boundary', () => {
+      // Load-bearing pricing, not just a cap: above 272K these models bill
+      // input at 2x and output at 1.5x, and a CuratedModel holds one flat rate
+      // per bucket. Raising this silently opens the second price card.
+      for (const model of CURATED_BEDROCK_RESPONSES_MODELS) {
+        expect(`${model.key}:${model.template.maxInputTokens}`).toBe(`${model.key}:272000`);
+      }
+    });
+
+    it('routes over the Responses API, which is the only surface that caches', () => {
+      for (const model of CURATED_BEDROCK_RESPONSES_MODELS) {
+        expect(`${model.key}:${model.template.apiMode}`).toBe(`${model.key}:responses`);
+        expect(`${model.key}:${model.template.provider}`).toBe(`${model.key}:bedrock-responses`);
+      }
+    });
+
+    it('declares no supportedParams rather than an invented one', () => {
+      // AWS publishes no parameter table for GPT-5.6. A declared spec flips the
+      // #915 guard from permissive to restrictive, so a guessed one would
+      // silently block params the model actually accepts.
+      for (const model of CURATED_BEDROCK_RESPONSES_MODELS) {
+        expect(model.template.supportedParams ?? null).toBeNull();
+      }
+    });
+  });
+
+  it('curates GPT-5.4 on Mantle with caching on and no write fee', () => {
+    // Its model card publishes a cache-read rate with an em dash for cache
+    // write. Inheriting mantleDefaults()' supportsCaching:false priced its
+    // cached tokens at $0.00 while AWS billed them — the bug that had to be
+    // fixed by hand in prod.
+    const gpt54 = CURATED_MANTLE_MODELS.find(m => m.key === 'gpt-5-4');
+
+    expect(gpt54?.template.supportsCaching).toBe(true);
+    expect(gpt54?.template.cacheReadPricePerMillionTokens).toBeCloseTo(0.275, 6);
+    expect(gpt54?.template.cacheWritePricePerMillionTokens).toBe(0);
   });
 });

@@ -31,6 +31,10 @@ interface ProviderTab {
 const PROVIDER_TABS: ProviderTab[] = [
   { id: 'bedrock', label: 'Bedrock' },
   { id: 'mantle', label: 'Bedrock Mantle' },
+  // The OpenAI Responses API on bedrock-runtime. A separate tab from 'openai'
+  // (which is direct-to-OpenAI and unpopulated) because the transport, not the
+  // vendor, is what differs — and it is the only surface where GPT-5.6 caches.
+  { id: 'bedrock-responses', label: 'Bedrock Responses' },
   { id: 'openai', label: 'OpenAI' },
   { id: 'gemini', label: 'Gemini' },
 ];
