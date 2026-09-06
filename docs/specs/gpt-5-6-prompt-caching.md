@@ -236,6 +236,20 @@ API-key `/chat/api-converse` handler. Don't fork the build logic.
 
 ### PR-3 — Catalog entry and pricing
 
+> **SHIPPED 2026-09-06.** `CURATED_BEDROCK_RESPONSES_MODELS` carries Sol, Terra
+> and Luna at their published Geo CRIS short-context rates, behind a new
+> "Bedrock Responses" catalog tab. `supportsCaching` is pinned true and
+> `maxInputTokens` to 272,000 by test, because both are pricing correctness
+> rather than preference. The curated `openai.gpt-5.4` Mantle entry was fixed in
+> the same pass — it inherited `mantleDefaults()`' `supportsCaching: false` and
+> so one-click-created exactly the mis-priced row that had to be repaired by
+> hand in prod. `supportedParams` is deliberately omitted: AWS publishes no
+> parameter table for GPT-5.6, and a declared spec flips the #915 guard
+> restrictive, so a guess would silently block valid params.
+>
+> The original plan below is kept for the reasoning; where it conflicts with
+> the RESOLVED section, the RESOLVED section is right.
+
 - Add GPT-5.6 to `CURATED_MANTLE_MODELS`' sibling set (or a new
   `CURATED_RUNTIME_OPENAI_MODELS` if the transport field warrants a separate tab).
 - `supportsCaching: true`, plus verified `cacheReadPricePerMillionTokens` and
