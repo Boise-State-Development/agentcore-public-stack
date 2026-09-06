@@ -229,13 +229,26 @@
       [attr.role]="sharedAvailable() ? 'tabpanel' : null"
       [attr.aria-labelledby]="sharedAvailable() ? 'artifact-tab-' + tab() : null"
     >
-    <!-- Empty: the filters excluded everything -->
+    <!-- Empty: the filters excluded everything in this tab -->
     @if (isFilteredEmpty()) {
       <div
         class="mt-6 rounded-2xl border border-dashed border-gray-300 bg-white p-10 text-center dark:border-gray-700 dark:bg-gray-800"
       >
         <p class="text-sm/6 text-gray-600 dark:text-gray-400">
           No artifacts match your search.
+        </p>
+      </div>
+    }
+
+    <!-- Empty: this tab holds nothing, but the library is not empty. A
+         distinct state from both of the above — saying "no match" to
+         someone who never searched is a wrong answer. -->
+    @if (isTabEmpty()) {
+      <div
+        class="mt-6 rounded-2xl border border-dashed border-gray-300 bg-white p-10 text-center dark:border-gray-700 dark:bg-gray-800"
+      >
+        <p class="mx-auto max-w-md text-sm/6 text-gray-600 dark:text-gray-400">
+          {{ emptyTabMessage() }}
         </p>
       </div>
     }
