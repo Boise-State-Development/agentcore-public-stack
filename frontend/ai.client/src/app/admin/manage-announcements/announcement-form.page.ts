@@ -485,6 +485,8 @@ export class AnnouncementFormPage implements OnInit {
   private readonly expiresAtSig = signal('');
   private readonly ctaLabelSig = signal('');
   private readonly ctaUrlSig = signal('');
+  // Form validity is not a signal on FormGroup, so mirror it like the rest.
+  private readonly formValid = signal(false);
 
   protected readonly modalSelected = this.modalSig.asReadonly();
   protected readonly allRolesSelected = this.allRolesSig.asReadonly();
@@ -519,16 +521,39 @@ export class AnnouncementFormPage implements OnInit {
 
   protected readonly roles = computed(() => this.rolesService.getRoles());
 
+  /**
+   * Whether the form can be submitted.
+   *
+   * ⚠️ **Every dependency is read unconditionally, and form validity comes from
+   * a signal.** Both details are load-bearing, and getting either wrong
+   * deadlocks the button.
+   *
+   * A `computed` tracks the signals actually read during its *last* execution,
+   * so an early `return` shortens its dependency set. This began as a chain of
+   * guard clauses with `if (this.form.invalid) return false` near the top —
+   * and `FormGroup.invalid` is a plain getter, not a signal. On the first
+   * evaluation the form was empty, so it returned there having read only
+   * `isSubmitting()`; nothing else was tracked, no later edit could schedule a
+   * recompute, and `isSubmitting` only changes inside `onSubmit`, which the
+   * disabled button prevented. The submit button could never enable.
+   *
+   * So: mirror validity into `formValid` (fed by `statusChanges`), read every
+   * input before combining them, and never guard-clause out of this computed.
+   */
   protected readonly canSubmit = computed(() => {
-    if (this.isSubmitting()) return false;
-    if (this.form.invalid) return false;
-    if (this.bodyOverLimit()) return false;
-    if (this.expiryMissing() || this.expiryBeforePublish()) return false;
-    if (this.ctaIncomplete()) return false;
-    if (!this.allRolesSig() && this.roles().length > 0 && this.selectedRoles().length === 0) {
-      return false;
-    }
-    return true;
+    const submitting = this.isSubmitting();
+    const formValid = this.formValid();
+    const overLimit = this.bodyOverLimit();
+    const missingExpiry = this.expiryMissing();
+    const badExpiry = this.expiryBeforePublish();
+    const badCta = this.ctaIncomplete();
+    const rolesChosen =
+      this.allRolesSig() || this.roles().length === 0 || this.selectedRoles().length > 0;
+
+    return (
+      !submitting && formValid && !overLimit && !missingExpiry && !badExpiry &&
+      !badCta && rolesChosen
+    );
   });
 
   async ngOnInit(): Promise<void> {
@@ -547,6 +572,8 @@ export class AnnouncementFormPage implements OnInit {
     c.expires_at.valueChanges.subscribe(v => this.expiresAtSig.set(v));
     c.cta_label.valueChanges.subscribe(v => this.ctaLabelSig.set(v));
     c.cta_url.valueChanges.subscribe(v => this.ctaUrlSig.set(v));
+    this.form.statusChanges.subscribe(status => this.formValid.set(status === 'VALID'));
+    this.formValid.set(this.form.valid);
 
     const id = this.route.snapshot.paramMap.get('id');
     if (!id) return;
