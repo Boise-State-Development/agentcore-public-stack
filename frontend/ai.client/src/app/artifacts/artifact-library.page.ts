@@ -383,15 +383,54 @@ export class ArtifactLibraryPage {
   );
 
   /**
-   * "Nothing matches" is a different message from "you have nothing", and
-   * conflating them tells a user with a full library that it is empty.
+   * "Nothing matches" is a different message from "you have nothing" —
+   * and once tabs exist there is a third: "nothing *here*".
+   *
+   * This gates on the count of the SELECTED TAB, not the library. It
+   * used to gate on the library total, which meant opening "Shared with
+   * you" with nothing shared told the user "No artifacts match your
+   * search" when they had not searched for anything — a wrong answer,
+   * and the exact conflation the previous version of this comment was
+   * written to prevent, reintroduced one level up. Found on dev, not by
+   * a test: the specs asserted which rows rendered, never which sentence
+   * appeared when none did.
    */
   protected readonly isFilteredEmpty = computed(
     () =>
       !this.loading() &&
-      this.totalCount() > 0 &&
+      this.tabCount() > 0 &&
       this.filtered().length === 0,
   );
+
+  /**
+   * The selected tab holds nothing, but the library is not empty — so
+   * neither "No artifacts yet" nor a search failure is true.
+   */
+  protected readonly isTabEmpty = computed(
+    () =>
+      !this.loading() &&
+      !this.error() &&
+      this.totalCount() > 0 &&
+      this.tabCount() === 0,
+  );
+
+  /**
+   * Copy for that state, which has to name the tab: "nothing here" is
+   * only useful if it says where "here" is.
+   */
+  protected readonly emptyTabMessage = computed(() => {
+    switch (this.tab()) {
+      case 'shared':
+        return 'Nothing has been shared with you yet. Artifacts other ' +
+          'people share with you directly will appear here.';
+      case 'yours':
+        return "You haven't made any artifacts yet.";
+      default:
+        // Unreachable while "All" is the union of the other two, but a
+        // silent blank panel is the worst way to find out that changed.
+        return 'Nothing to show here.';
+    }
+  });
 
   constructor() {
     void this.load();

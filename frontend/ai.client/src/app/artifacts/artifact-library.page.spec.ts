@@ -135,6 +135,8 @@ describe('ArtifactLibraryPage', () => {
       typeOptions: () => Array<{ value: string; label: string }>;
       isEmpty: () => boolean;
       isFilteredEmpty: () => boolean;
+      isTabEmpty: () => boolean;
+      emptyTabMessage: () => string;
       error: () => string | null;
       loading: () => boolean;
       search: { set: (v: string) => void };
@@ -519,6 +521,55 @@ describe('ArtifactLibraryPage', () => {
       // so it stays out of the accessibility tree rather than becoming a third
       // route to one destination.
       expect(thumbnail.closest('[aria-hidden="true"]')).not.toBeNull();
+    });
+
+    it('does not blame a search the user never made', async () => {
+      // Regression: opening "Shared with you" with nothing shared used to
+      // show "No artifacts match your search" because the empty-state
+      // gate read the LIBRARY total rather than the tab's. Found on dev.
+      mockHttp.listLibrary.mockResolvedValue([stubArtifact()]);
+      mockShares.listSharedWithMe.mockResolvedValue({
+        artifacts: [],
+        nextCursor: null,
+      });
+      const c = api(await createComponent());
+      c.setTab('shared');
+
+      expect(c.isFilteredEmpty()).toBe(false);
+      expect(c.isTabEmpty()).toBe(true);
+      expect(c.emptyTabMessage()).toContain('shared with you');
+    });
+
+    it('still blames the search when there really was one', async () => {
+      mockHttp.listLibrary.mockResolvedValue([
+        stubArtifact({ title: 'Budget model' }),
+      ]);
+      mockShares.listSharedWithMe.mockResolvedValue({
+        artifacts: [],
+        nextCursor: null,
+      });
+      const c = api(await createComponent());
+      c.setTab('yours');
+      c.search.set('nothing matches this');
+
+      expect(c.isTabEmpty()).toBe(false);
+      expect(c.isFilteredEmpty()).toBe(true);
+    });
+
+    it('reports an empty library ahead of an empty tab', async () => {
+      // With nothing anywhere, "No artifacts yet" is the true statement;
+      // a per-tab message would bury the one that matters.
+      mockHttp.listLibrary.mockResolvedValue([]);
+      mockShares.listSharedWithMe.mockResolvedValue({
+        artifacts: [],
+        nextCursor: null,
+      });
+      const c = api(await createComponent());
+      c.setTab('shared');
+
+      expect(c.isEmpty()).toBe(true);
+      expect(c.isTabEmpty()).toBe(false);
+      expect(c.isFilteredEmpty()).toBe(false);
     });
 
     it('falls back to a placeholder title and an undated label', async () => {
