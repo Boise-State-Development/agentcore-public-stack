@@ -191,6 +191,8 @@ The fine-tuning surface assumed text. A **task-type registry** replaces that ass
 
 ## 🔒 Security
 
+- **The custom HuggingFace model id reached a URL unvalidated.** The fine-tuning call site's comment has claimed to validate the id format since before this release; the code only checked non-empty and length. That was latent on `main` — the multi-modal work made it reachable by interpolating the value into a Hub request path, which CodeQL flags as a critical `py/partial-ssrf`. The host was always hard-coded, so this was never an arbitrary-host SSRF; what it allowed was a value carrying URL structure changing the meaning of two sinks — the pre-flight path, and `model_name_or_path` as forwarded to the training container. Now validated against an anchored repo-id pattern at **both** sinks, rather than one relying on the other's branch having run.
+  > The pattern uses `\Z`, not `$` — `$` also matches immediately before a trailing newline, so an otherwise-anchored pattern accepts `org/model\n`. A test pins that.
 - **All 47 open Dependabot alerts cleared** (#924), across the backend, the SPA, infrastructure, the docs site, and the backup/restore scripts. Notable: `cryptography` 48.0.1 → 50.0.1, `dompurify` ≥3.4.13, `undici` ≥7.29.0, `hono` ≥4.12.34, `brace-expansion` ≥5.0.9, `postcss` 8.5.12 → 8.5.28.
 - **CodeQL: 11 high, 20 medium and 9 note findings remediated** (#925) — principally log injection, across 18 backend modules and one SPA page. The nightly workflow is extended in the same pass.
 

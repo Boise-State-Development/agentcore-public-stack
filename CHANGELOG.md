@@ -59,6 +59,7 @@ Artifacts stop being a per-conversation curiosity and become a place users go. T
 ### 🔒 Security
 
 - **All 47 open Dependabot alerts cleared** across backend, frontend, infrastructure, docs-site and the backup/restore scripts (#924)
+- **The custom HuggingFace model id is validated against an anchored repo-id pattern** before it is interpolated into a Hub request path or forwarded to the training container as `model_name_or_path`. The call site's comment had claimed this validation since before the release; only non-empty and length were actually checked. The host was always hard-coded, so this was never an arbitrary-host SSRF — but a value carrying dot-segments, extra slashes, a query or a fragment could change the meaning of both sinks
 - **CodeQL alerts remediated: 11 high, 20 medium, 9 note** — log injection, unused imports and related findings across 18 backend modules and one SPA page. The nightly workflow is extended in the same pass (#925)
 
 ### 🏗️ Infrastructure
