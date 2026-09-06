@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.19.0] - 2026-09-06
+
+A correctness release for interrupted turns, plus the share inbox coming out of the dark. Two separate defects made a conversation misreport its own history: a completed response could be labelled **"Response interrupted"** with a Continue button, and an interrupted one could show the model-directed `<interruption_note>` in the user's own chat bubble — permanently. Both are fixed at the source rather than patched at the render. The artifact **"Shared with you" inbox now ships on by default** with a kill switch, so a fork gets the finished feature instead of having to discover a variable. Infrastructure adds `UserArtifactsIndex` to the existing `{prefix}-user-artifacts` table (one GSI operation) with a backfill for rows that predate it; nothing reads the index yet. **Requires a CDK deploy**, and two one-shot scripts are available post-deploy.
+
+### 🚀 Added
+
+- **Open the full announcement from the banner.** The banner text is now a control that opens the announcement's modal, so a notice too long for one line is readable without hunting for the What's New panel (#987)
+- **`UserArtifactsIndex`** on the existing `{prefix}-user-artifacts` table (`GSI2PK=USER#{uid}`, `GSI2SK=ARTIFACT#{updated_at}#{aid}`), sparse over HEAD rows, plus `scripts/backfill_artifact_user_index_keys.py` to stamp rows written before 2026-09-04. The artifact writer stamps the keys on both write paths. The library listing still reads the base table in this release (#982)
+- **`scripts/backfill_false_interrupted_markers.py`** — one-shot cleanup for the stale interrupted-turn markers left by the defect below. Dry-run by default; clears only `navigated_away` markers written more than 900s after the session's last message (#988)
+
+### ⚠️ Changed
+
+- **The artifact "Shared with you" inbox now defaults ON** with a kill switch (`ARTIFACT_SHARE_INBOX_ENABLED=false` to disable), reversing the opt-in default it shipped with in 1.18.0. The surface landed before the product decision did; that decision has now been made, and an opt-in default would silently cost every fork a finished feature (#986)
+
+### 🐛 Fixed
+
+- **Completed responses were being labelled "Response interrupted"**, with a Continue button that would resume an already-finished answer. The SPA released a session's `AbortController` only on the Stop button, never on normal stream teardown, so every finished turn still looked in-flight for the life of the tab and the next refresh or tab close attributed a `navigated_away` interruption to it — one departure marking every session streamed in that tab. The controller is now released on teardown, and `POST /sessions/{id}/interrupt` verifies a turn is genuinely in flight against the session's single-flight lease before recording a departure (#988)
+- **An interrupted turn showed the model-directed `<interruption_note>` in the user's own chat bubble.** `displayText` — the clean copy of what the user typed — was written only by the stream coordinator's success path, so any turn that was stopped, dropped, or errored left the augmented prompt as the only text the UI could render. It is now written on `MessageAddedEvent`, when the user's message enters history and before the model call, so every exit path has it. Affected every prompt augmentation (RAG context, attachment guidance, MCP App context), not just interruption notes, and every model (#990)
+- **The sidebar showed "No Chats Yet" while sessions were still loading.** The loading test read `value() === undefined`, but the resource short-circuits to `null` on the ordinary cold-start path — `SessionService` is constructed during `APP_INITIALIZER` before the BFF bootstrap resolves — and `reload()` preserves that `null` through the real fetch (#985)
+
+### 🏗️ Infrastructure
+
+- New `UserArtifactsIndex` GSI on `{prefix}-user-artifacts`. **One** index operation on an existing table, within the DynamoDB `UpdateTable` limit; `infrastructure/gsi-inventory.json` records it (#982)
+
 ## [1.18.0] - 2026-09-06
 
 Artifacts stop being a per-conversation curiosity and become a place users go. There is a library at `/artifacts` with previews, rename, delete and an in-app viewer; artifacts can be **shared** with named people or the whole tenant; and sharing a conversation now shares the artifacts in it, which previously left the recipient staring at nothing where the owner saw cards. Alongside it, two more surfaces the platform had no way to do at all: **feature announcements** — an admin-authored What's New feed with a banner, a modal and per-announcement reach stats — and **mid-turn steering**, which lets a follow-up typed while the model is still working land inside the running turn at the next tool boundary instead of interrupting it. The SPA gains a **single-file rebranding surface** so a fork can change app name, greeting, logo and the entire color system without touching a component. On the cost side the GPT-5.6 family (Sol / Terra / Luna) is curated with verified rates, and every published GPT-5.6 rate in the catalog is corrected. **Requires a CDK deploy** (new `{prefix}-announcements` table, new IAM grants); no GSI operations on any existing table.
