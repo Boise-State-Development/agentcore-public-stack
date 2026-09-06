@@ -72,7 +72,7 @@ export class AnnouncementsService {
     this.visibleOrNull(this.feed().banner),
   );
 
-  /** At most one, chosen by the server. Consumed by PR-5. */
+  /** At most one, chosen by the server. Rendered by `AnnouncementModalComponent`. */
   readonly modalItem = computed<Announcement | null>(() =>
     this.visibleOrNull(this.feed().modal),
   );

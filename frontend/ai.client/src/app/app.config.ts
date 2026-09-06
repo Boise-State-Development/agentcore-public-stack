@@ -10,6 +10,7 @@ import { MARKED_OPTIONS, MarkedOptions, MarkedRenderer, provideMarkdown } from '
 import { SessionService } from './auth/session.service';
 import { ThemeService } from './components/topnav/components/theme-toggle/theme.service';
 import { provideBuiltInToolRenderers } from './session/components/message-list/components/tool-use/built-in-renderers';
+import { AnnouncementModalService } from './services/announcements/announcement-modal.service';
 
 function markedOptionsFactory(): MarkedOptions {
   const renderer = new MarkedRenderer();
@@ -62,5 +63,11 @@ export const appConfig: ApplicationConfig = {
     // plus the migrated proof-point renderers) into the renderer registry
     // before the first message renders.
     provideBuiltInToolRenderers(),
+
+    // AnnouncementModalService owns the §D8 turn-safety gate and opens the
+    // announcement modal itself. It is started here rather than mounted in
+    // app.html because a CDK overlay is not a layout element — and because
+    // nothing else would ever inject it. Same pattern as ThemeService above.
+    provideAppInitializer(() => { inject(AnnouncementModalService); }),
   ]
 };
