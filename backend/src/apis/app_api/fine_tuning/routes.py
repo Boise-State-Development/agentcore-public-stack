@@ -2,6 +2,7 @@
 
 import math
 import os
+import re
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
@@ -230,6 +231,38 @@ async def search_huggingface_models(
     except httpx.HTTPError as e:
         logger.warning(f"HuggingFace API search failed: {e}")
         raise HTTPException(status_code=502, detail="Failed to search HuggingFace models")
+
+
+# A HuggingFace repo id is ``name`` or ``org/name``, each segment limited to
+# word characters, dots and hyphens. Anchored, single optional slash, no
+# percent-encoding and no dot-segments — which is what keeps an id out of the
+# URL structure when it is interpolated into a Hub request path below, and out
+# of ``model_name_or_path`` in the training job's hyperparameters.
+# ``\Z`` and not ``$`` — ``$`` also matches immediately before a trailing
+# newline, so "org/model\n" would pass an otherwise-anchored pattern.
+_HF_MODEL_ID = re.compile(
+    r"\A[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?\Z"
+)
+
+
+def validate_huggingface_model_id(raw: str) -> str:
+    """Return ``raw`` stripped, or raise 400 if it is not a repo id.
+
+    The length ceiling alone was never enough: the value is interpolated into
+    a Hub URL path and forwarded to SageMaker as ``model_name_or_path``, so a
+    value carrying ``/``-heavy or dot-segment structure changes the meaning of
+    both sinks rather than merely failing to resolve.
+    """
+    hf_id = raw.strip()
+    if not hf_id or len(hf_id) > 200 or not _HF_MODEL_ID.match(hf_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid HuggingFace model ID. Use 'model' or 'org/model' — "
+                "letters, digits, dots, hyphens and underscores only."
+            ),
+        )
+    return hf_id
 
 
 async def preflight_huggingface_model(hf_id: str, spec) -> None:
@@ -497,10 +530,7 @@ async def create_job(
         )
 
     if request.custom_huggingface_model_id:
-        # Validate the custom HuggingFace model ID format (org/model or just model)
-        hf_id = request.custom_huggingface_model_id.strip()
-        if not hf_id or len(hf_id) > 200:
-            raise HTTPException(status_code=400, detail="Invalid HuggingFace model ID.")
+        hf_id = validate_huggingface_model_id(request.custom_huggingface_model_id)
         # Ask the Hub whether this model can actually serve the task before a
         # GPU is provisioned for it.
         await preflight_huggingface_model(hf_id, spec)
@@ -521,7 +551,13 @@ async def create_job(
         # Custom HuggingFace model — fall back to the task's own defaults.
         instance_type = request.instance_type or spec.default_instance_type
         hyperparameters = {**spec.default_hyperparameters}
-        huggingface_id = request.custom_huggingface_model_id.strip()
+        # Re-validate rather than reuse the value from the pre-flight block:
+        # this is the sink that reaches the training container as
+        # `model_name_or_path`, and it should be safe on its own terms rather
+        # than because of where an earlier branch happened to run.
+        huggingface_id = validate_huggingface_model_id(
+            request.custom_huggingface_model_id
+        )
         model_name = huggingface_id
 
     _validate_instance_type(instance_type)
