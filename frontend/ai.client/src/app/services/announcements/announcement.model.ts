@@ -37,8 +37,8 @@ export interface Announcement {
 /**
  * `GET /announcements` — already filtered and capped by the server (§D5/§D7).
  *
- * `banner` and `modal` are populated from the backend today; no SPA surface
- * consumes them until PR-4 / PR-5.
+ * `banner` is rendered by `components/announcement-banner`; `modal` is
+ * populated from the backend but has no SPA surface until PR-5.
  */
 export interface AnnouncementFeed {
   panel: Announcement[];

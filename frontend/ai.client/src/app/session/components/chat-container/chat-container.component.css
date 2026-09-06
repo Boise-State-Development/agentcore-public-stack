@@ -8,7 +8,11 @@
 /* Topnav wrapper for full-page mode */
 .chat-topnav-wrapper {
   position: fixed;
-  top: 0;
+  /* Sits directly below the announcement strip when one is showing. The strip
+     is a flex child of the shell's <main>, so the scroll container already
+     starts below it — but this bar is fixed and would otherwise cover it.
+     The variable is published (and cleared) by app-announcement-banner. */
+  top: var(--announcement-banner-height, 0px);
   left: 0;
   right: 0;
   z-index: 40;
@@ -49,7 +53,13 @@
 /* Empty state container for full-page mode */
 .chat-container-empty.full-page {
   position: fixed;
-  inset: 0;
+  /* Not `inset: 0` — this overlay is viewport-fixed and opaque, so a flush
+     top would paint over the announcement strip that sits above the shell's
+     scroll container. Same offset the topnav takes. */
+  top: var(--announcement-banner-height, 0px);
+  right: 0;
+  bottom: 0;
+  left: 0;
   display: flex;
   align-items: center;
   justify-content: center;
