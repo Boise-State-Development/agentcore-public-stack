@@ -41,7 +41,9 @@
 
   <!-- Desktop controls (when sidenav collapsed) -->
   @if (sidenavService.isCollapsed() && !chromeHidden()) {
-    <div class="hidden lg:flex fixed top-4 left-4 z-50 gap-2">
+    <div
+      class="hidden lg:flex fixed left-4 z-50 gap-2"
+      [style.top]="'calc(1rem + var(--announcement-banner-height, 0px))'">
       <!-- Expand sidebar button -->
       <button
         type="button"
@@ -72,7 +74,9 @@
 
   <!-- Mobile controls (when header content hidden and sidenav not visible) -->
   @if (!headerService.showContent() && !sidenavService.isVisible() && !chromeHidden()) {
-    <div class="flex lg:hidden fixed top-4 left-4 z-50 gap-2">
+    <div
+      class="flex lg:hidden fixed left-4 z-50 gap-2"
+      [style.top]="'calc(1rem + var(--announcement-banner-height, 0px))'">
       <!-- Open sidenav button -->
       <button
         type="button"
@@ -108,6 +112,15 @@
     [class.lg:pl-0]="sidenavService.isCollapsed() || chromeHidden()"
     [class.artifact-pane-open]="artifactPanelOpen()">
     <main class="flex h-dvh flex-col">
+      <!-- Ambient announcement strip (spec §D1). A flex child rather than an
+           overlay, so the scrolling content below reflows instead of hiding
+           under it. It publishes its measured height as
+           --announcement-banner-height; the fixed chat topnav and the
+           floating sidenav controls offset against that. -->
+      @if (showAnnouncementBanner()) {
+        <app-announcement-banner />
+      }
+
       <!-- Scrollable Content. The id is a stable hook for code that reads
            or sets the scroll position (session scroll save/restore) — the
            window itself no longer scrolls now that this container is real. -->

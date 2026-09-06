@@ -7,6 +7,7 @@ import { Sidenav } from './components/sidenav/sidenav';
 import { ErrorToastComponent } from './components/error-toast/error-toast.component';
 import { ToastComponent } from './components/toast';
 import { BackgroundTaskToastsComponent } from './components/background-task-toasts/background-task-toasts.component';
+import { AnnouncementBannerComponent } from './components/announcement-banner/announcement-banner.component';
 import { SidenavService } from './services/sidenav/sidenav.service';
 import { HeaderService } from './services/header/header.service';
 import { TooltipDirective } from './components/tooltip/tooltip.directive';
@@ -24,6 +25,7 @@ import { BrandingService } from '../branding/branding.service';
     ErrorToastComponent,
     ToastComponent,
     BackgroundTaskToastsComponent,
+    AnnouncementBannerComponent,
     TooltipDirective
   ],
   templateUrl: './app.html',
@@ -70,6 +72,22 @@ export class App {
    */
   protected readonly chromeHidden = computed(
     () => this.sidenavService.isHidden() || this.minimalChrome(),
+  );
+
+  /**
+   * Whether the ambient announcement strip renders.
+   *
+   * Gated on the session, not just the chrome. `AnnouncementsService` loads
+   * its feed lazily on the first read of `bannerItem()`, and `resource()`
+   * loads exactly once — so instantiating the banner on the login screen
+   * would fire `GET /announcements` unauthenticated, take the 401's
+   * empty-feed fallback, and then never retry. The user would land in the
+   * app with announcements permanently missing for the life of the tab.
+   * Waiting for `isAuthenticated()` also keeps the server's role-based
+   * targeting honest: it needs the session to evaluate it.
+   */
+  protected readonly showAnnouncementBanner = computed(
+    () => this.session.isAuthenticated() && !this.minimalChrome(),
   );
 
   /** True while an artifact pane is docked — content reserves right-side

@@ -67,7 +67,7 @@ export class AnnouncementsService {
   /** Every announcement this user may browse, newest first. Uncapped. */
   readonly panelItems = computed<Announcement[]>(() => this.feed().panel);
 
-  /** At most one, chosen by the server. Consumed by PR-4. */
+  /** At most one, chosen by the server. Rendered by `AnnouncementBannerComponent`. */
   readonly bannerItem = computed<Announcement | null>(() =>
     this.visibleOrNull(this.feed().banner),
   );
