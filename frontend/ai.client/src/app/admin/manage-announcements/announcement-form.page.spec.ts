@@ -82,6 +82,52 @@ describe('AnnouncementFormPage', () => {
     });
   }
 
+  describe('submit gate reactivity', () => {
+    /**
+     * The regression that browser verification caught and the original specs
+     * missed: they only ever read `canSubmit()` *after* filling the form, so
+     * its first evaluation saw a valid form, tracked every signal, and stayed
+     * reactive. In the real page the first read happens while the form is
+     * empty — and an early `return` on the non-signal `form.invalid` shortened
+     * the computed's dependency set to `isSubmitting` alone. Nothing could
+     * re-enable the button afterwards.
+     *
+     * Reading it empty FIRST is the whole point of these tests.
+     */
+    it('enables once the form is filled, having first been read while empty', async () => {
+      const page = await createPage();
+
+      expect(page.canSubmit()).toBe(false); // first evaluation, empty form
+
+      fill(page, {});
+
+      expect(page.canSubmit()).toBe(true);
+    });
+
+    it('stays reactive to a later invalidation', async () => {
+      const page = await createPage();
+      expect(page.canSubmit()).toBe(false);
+
+      fill(page, {});
+      expect(page.canSubmit()).toBe(true);
+
+      // Clearing a required field must disable it again.
+      page.form.patchValue({ title: '' });
+      expect(page.canSubmit()).toBe(false);
+    });
+
+    it('re-enables after a blocking rule is satisfied, read empty first', async () => {
+      const page = await createPage();
+      expect(page.canSubmit()).toBe(false);
+
+      fill(page, { banner: true });
+      expect(page.canSubmit()).toBe(false); // banner with no expiry
+
+      page.form.patchValue({ expires_at: '2099-01-01T00:00' });
+      expect(page.canSubmit()).toBe(true);
+    });
+  });
+
   describe('surfaces', () => {
     it('always sends panel, even though the form has no panel checkbox', async () => {
       // The server forces it too (§D1), but sending it keeps the payload
