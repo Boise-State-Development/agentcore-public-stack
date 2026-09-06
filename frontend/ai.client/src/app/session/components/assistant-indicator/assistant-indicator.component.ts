@@ -134,8 +134,7 @@ import {
     </div>
   `,
   styles: [`
-    @import "tailwindcss";
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../../styles/theme.css";
 
     :host {
       display: inline-flex;
@@ -162,7 +161,7 @@ import {
       }
 
       &:focus-visible {
-        outline: 2px solid var(--color-blue-500);
+        outline: 2px solid var(--color-primary-accessible);
         outline-offset: 2px;
       }
     }
@@ -208,7 +207,7 @@ import {
       overflow: hidden;
 
       /* Card-like surface */
-      background: white;
+      background: var(--color-white);
       border: 1px solid var(--color-gray-200);
       box-shadow:
         0 1px 3px rgba(0, 0, 0, 0.06),
@@ -238,14 +237,14 @@ import {
       }
 
       &:focus-visible {
-        outline: 2px solid var(--color-blue-500);
+        outline: 2px solid var(--color-primary-accessible);
         outline-offset: 2px;
       }
     }
 
     /* Dark mode */
     :host-context(html.dark) .assistant-indicator {
-      background: rgb(30 41 59); /* slate-800 */
+      background: var(--color-gray-800);
       border-color: rgba(255, 255, 255, 0.1);
       box-shadow:
         0 1px 3px rgba(0, 0, 0, 0.2),
@@ -327,7 +326,7 @@ import {
       min-width: 11rem;
       padding: 0.25rem;
       border-radius: 0.75rem;
-      background: white;
+      background: var(--color-white);
       border: 1px solid var(--color-gray-200);
       box-shadow:
         0 4px 16px rgba(0, 0, 0, 0.1),
@@ -337,7 +336,7 @@ import {
     }
 
     :host-context(html.dark) .indicator-menu {
-      background: rgb(30 41 59);
+      background: var(--color-gray-800);
       border-color: rgba(255, 255, 255, 0.1);
       box-shadow:
         0 4px 16px rgba(0, 0, 0, 0.3),
@@ -374,7 +373,7 @@ import {
       }
 
       &:focus-visible {
-        outline: 2px solid var(--color-blue-500);
+        outline: 2px solid var(--color-primary-accessible);
         outline-offset: -2px;
       }
     }

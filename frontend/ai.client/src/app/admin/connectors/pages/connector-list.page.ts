@@ -32,11 +32,12 @@ import {
   ConfirmationDialogComponent,
   ConfirmationDialogData,
 } from '../../../components/confirmation-dialog';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-connector-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, FormsModule, NgIcon, TooltipDirective],
+  imports: [RouterLink, FormsModule, NgIcon, TooltipDirective, SpinnerComponent],
   providers: [
     provideIcons({
       heroPlus,
@@ -69,7 +70,7 @@ import {
           </div>
           <a
             routerLink="/admin/connectors/new"
-            class="inline-flex items-center justify-center gap-2 rounded-sm bg-blue-600 px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-sm bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50"
           >
             <ng-icon name="heroPlus" class="size-5" />
             Add Connector
@@ -87,7 +88,7 @@ import {
               type="text"
               [(ngModel)]="searchQuery"
               placeholder="Search connectors..."
-              class="w-full rounded-sm border border-gray-300 bg-white py-2.5 pl-10 pr-10 text-sm/6 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+              class="w-full rounded-sm border border-gray-300 bg-white py-2.5 pl-10 pr-10 text-sm/6 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
             />
             @if (searchQuery()) {
               <button
@@ -127,7 +128,7 @@ import {
           @if (hasActiveFilters()) {
             <button
               (click)="resetFilters()"
-              class="text-sm/6 font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+              class="text-sm/6 font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark"
             >
               Clear Filters
             </button>
@@ -138,9 +139,7 @@ import {
         @if (connectorsResource.isLoading() && connectors().length === 0) {
           <div class="flex h-64 items-center justify-center">
             <div class="flex flex-col items-center gap-4">
-              <div
-                class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-t-blue-400 dark:border-gray-600"
-              ></div>
+              <app-spinner size="xl" label="Loading connectors" />
               <p class="text-sm/6 text-gray-500 dark:text-gray-400">
                 Loading connectors...
               </p>
@@ -150,7 +149,7 @@ import {
 
         <!-- Error State -->
         @if (connectorsResource.error()) {
-          <div class="mb-6 rounded-sm border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+          <div class="mb-6 rounded-sm border border-state-danger-200 bg-state-danger-50 p-4 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
             <p class="font-medium">Failed to load connectors</p>
             <p class="mt-1 text-sm/6">Please check your connection and try again.</p>
             <button
@@ -248,7 +247,7 @@ import {
                     <!-- Access -->
                     <td class="hidden whitespace-nowrap px-3 py-4 sm:table-cell">
                       @if (connector.allowedRoles.length === 0 || connector.allowedRoles.includes('*')) {
-                        <span class="inline-flex items-center gap-1 text-sm/6 text-purple-600 dark:text-purple-400">
+                        <span class="inline-flex items-center gap-1 text-sm/6 text-category-accent-skills-600 dark:text-category-accent-skills-400">
                           <ng-icon name="heroShieldCheck" class="size-4" />
                           All Roles
                         </span>
@@ -266,7 +265,7 @@ import {
                     <!-- Status -->
                     <td class="whitespace-nowrap px-3 py-4">
                       @if (connector.enabled) {
-                        <span class="inline-flex items-center gap-1 rounded-xs bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300">
+                        <span class="inline-flex items-center gap-1 rounded-xs bg-state-success-100 px-2 py-0.5 text-xs font-medium text-state-success-800 dark:bg-state-success-900/30 dark:text-state-success-300">
                           <ng-icon name="heroCheck" class="size-3" />
                           Active
                         </span>
@@ -283,7 +282,7 @@ import {
                       <div class="flex items-center justify-end gap-2">
                         <a
                           [routerLink]="['/admin/connectors/edit', connector.providerId]"
-                          class="inline-flex items-center justify-center rounded-xs p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                          class="inline-flex items-center justify-center rounded-xs p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                           [appTooltip]="'Edit connector'"
                           appTooltipPosition="top"
                         >
@@ -291,7 +290,7 @@ import {
                         </a>
                         <button
                           (click)="deleteConnector(connector)"
-                          class="inline-flex items-center justify-center rounded-xs p-2 text-gray-500 hover:bg-red-50 hover:text-red-600 focus:outline-hidden focus:ring-3 focus:ring-red-500/50 dark:text-gray-400 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                          class="inline-flex items-center justify-center rounded-xs p-2 text-gray-500 hover:bg-state-danger-50 hover:text-state-danger-600 focus:outline-hidden focus:ring-3 focus:ring-state-danger-500/50 dark:text-gray-400 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                           [appTooltip]="'Delete connector'"
                           appTooltipPosition="top"
                         >
@@ -316,7 +315,7 @@ import {
                 <p class="mt-2 text-sm/6 text-gray-500 dark:text-gray-400">Try adjusting your search or filter criteria.</p>
                 <button
                   (click)="resetFilters()"
-                  class="mt-4 text-sm/6 font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                  class="mt-4 text-sm/6 font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark"
                 >
                   Clear all filters
                 </button>
@@ -327,7 +326,7 @@ import {
                 </p>
                 <a
                   routerLink="/admin/connectors/new"
-                  class="mt-6 inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2.5 text-sm/6 font-semibold text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50"
+                  class="mt-6 inline-flex items-center gap-2 rounded-sm bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50"
                 >
                   <ng-icon name="heroPlus" class="size-5" />
                   Add Connector
@@ -339,9 +338,9 @@ import {
 
         <!-- Info Section -->
         @if (connectors().length > 0) {
-          <div class="mt-8 rounded-sm border border-blue-200 bg-blue-50 p-6 dark:border-blue-800 dark:bg-blue-900/20">
-            <h2 class="text-lg/7 font-semibold text-blue-900 dark:text-blue-200">About Connectors</h2>
-            <div class="mt-3 space-y-2 text-sm/6 text-blue-800 dark:text-blue-300">
+          <div class="mt-8 rounded-sm border border-state-info-200 bg-state-info-50 p-6 dark:border-state-info-800 dark:bg-state-info-900/20">
+            <h2 class="text-lg/7 font-semibold text-state-info-900 dark:text-state-info-200">About Connectors</h2>
+            <div class="mt-3 space-y-2 text-sm/6 text-state-info-800 dark:text-state-info-300">
               <p>
                 <strong>Connector Types:</strong> Choose from common presets (Google, Microsoft, GitHub, Canvas) or configure a custom OAuth 2.0 connector.
               </p>
@@ -434,15 +433,17 @@ export class ConnectorListPage {
     const baseClasses = 'flex size-10 shrink-0 items-center justify-center rounded-sm';
     switch (type) {
       case 'google':
-        return `${baseClasses} bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400`;
+        // Matches the vendor-google mapping already established in
+        // settings/connectors-settings.page.ts for the same providerType.
+        return `${baseClasses} bg-vendor-google-100 text-vendor-google-600 dark:bg-vendor-google-900/30 dark:text-vendor-google-400`;
       case 'microsoft':
-        return `${baseClasses} bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400`;
+        return `${baseClasses} bg-vendor-microsoft-100 text-vendor-microsoft-600 dark:bg-vendor-microsoft-900/30 dark:text-vendor-microsoft-400`;
       case 'github':
         return `${baseClasses} bg-gray-800 text-white dark:bg-gray-700`;
       case 'canvas':
-        return `${baseClasses} bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400`;
+        return `${baseClasses} bg-vendor-canvas-100 text-vendor-canvas-600 dark:bg-vendor-canvas-900/30 dark:text-vendor-canvas-400`;
       default:
-        return `${baseClasses} bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400`;
+        return `${baseClasses} bg-vendor-generic-100 text-vendor-generic-600 dark:bg-vendor-generic-900/30 dark:text-vendor-generic-400`;
     }
   }
 
@@ -450,15 +451,15 @@ export class ConnectorListPage {
     const baseClasses = 'inline-flex items-center rounded-xs px-2 py-0.5 text-xs font-medium';
     switch (type) {
       case 'google':
-        return `${baseClasses} bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300`;
+        return `${baseClasses} bg-vendor-google-100 text-vendor-google-700 dark:bg-vendor-google-900/30 dark:text-vendor-google-300`;
       case 'microsoft':
-        return `${baseClasses} bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300`;
+        return `${baseClasses} bg-vendor-microsoft-100 text-vendor-microsoft-700 dark:bg-vendor-microsoft-900/30 dark:text-vendor-microsoft-400`;
       case 'github':
         return `${baseClasses} bg-gray-800 text-white dark:bg-gray-700`;
       case 'canvas':
-        return `${baseClasses} bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300`;
+        return `${baseClasses} bg-vendor-canvas-100 text-vendor-canvas-700 dark:bg-vendor-canvas-900/30 dark:text-vendor-canvas-300`;
       default:
-        return `${baseClasses} bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300`;
+        return `${baseClasses} bg-vendor-generic-100 text-vendor-generic-700 dark:bg-vendor-generic-900/30 dark:text-vendor-generic-300`;
     }
   }
 

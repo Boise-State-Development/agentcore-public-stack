@@ -11,11 +11,12 @@ import { heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt } f
 import { ModelService } from '../../../session/services/model/model.service';
 import { UserSettingsService } from '../../../services/user-settings.service';
 import { LocalSettingsService } from '../../../services/local-settings.service';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-chat-preferences-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink],
+  imports: [NgIcon, RouterLink, SpinnerComponent],
   providers: [
     provideIcons({ heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt }),
   ],
@@ -41,12 +42,12 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
           <div class="mt-4">
             @if (modelService.modelsLoading()) {
               <div class="flex items-center gap-2 text-sm/6 text-gray-500 dark:text-gray-400">
-                <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-t-blue-400"></div>
+                <app-spinner size="sm" label="Loading models" />
                 Loading models...
               </div>
             } @else {
               <select
-                class="block w-full rounded-sm border-0 bg-white py-1.5 pl-3 pr-10 text-sm/6 text-gray-900 shadow-xs ring-1 ring-gray-300 focus:ring-2 focus:ring-blue-600 dark:bg-white/5 dark:text-white dark:ring-white/10 dark:focus:ring-blue-500"
+                class="block w-full rounded-sm border-0 bg-white py-1.5 pl-3 pr-10 text-sm/6 text-gray-900 shadow-xs ring-1 ring-gray-300 focus:ring-2 focus:ring-primary-600 dark:bg-white/5 dark:text-white dark:ring-white/10 dark:focus:ring-primary-500"
                 aria-label="Default model"
                 (change)="onModelChange($event)"
               >
@@ -75,7 +76,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
               <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">Saving...</p>
             }
             @if (saveError()) {
-              <p class="mt-2 text-xs text-red-600 dark:text-red-400">{{ saveError() }}</p>
+              <p class="mt-2 text-xs text-state-danger-600 dark:text-state-danger-400">{{ saveError() }}</p>
             }
           </div>
         </div>
@@ -99,7 +100,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
           </div>
 
           <!-- Toggle -->
-          <div class="group relative inline-flex w-11 shrink-0 rounded-full bg-gray-200 p-0.5 inset-ring inset-ring-gray-900/5 outline-offset-2 outline-blue-600 transition-colors duration-200 ease-in-out has-checked:bg-blue-600 has-focus-visible:outline-2 dark:bg-white/5 dark:inset-ring-white/10 dark:outline-blue-500 dark:has-checked:bg-blue-500">
+          <div class="group relative inline-flex w-11 shrink-0 rounded-full bg-gray-200 p-0.5 inset-ring inset-ring-gray-900/5 outline-offset-2 outline-primary-600 transition-colors duration-200 ease-in-out has-checked:bg-primary-600 has-focus-visible:outline-2 dark:bg-white/5 dark:inset-ring-white/10 dark:outline-primary-500 dark:has-checked:bg-primary-500">
             <span class="size-5 rounded-full bg-white shadow-xs ring-1 ring-gray-900/5 transition-transform duration-200 ease-in-out group-has-checked:translate-x-5"></span>
             <input
               id="show-token-count"
@@ -131,7 +132,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
           </div>
 
           <!-- Toggle -->
-          <div class="group relative inline-flex w-11 shrink-0 rounded-full bg-gray-200 p-0.5 inset-ring inset-ring-gray-900/5 outline-offset-2 outline-blue-600 transition-colors duration-200 ease-in-out has-checked:bg-blue-600 has-focus-visible:outline-2 dark:bg-white/5 dark:inset-ring-white/10 dark:outline-blue-500 dark:has-checked:bg-blue-500">
+          <div class="group relative inline-flex w-11 shrink-0 rounded-full bg-gray-200 p-0.5 inset-ring inset-ring-gray-900/5 outline-offset-2 outline-primary-600 transition-colors duration-200 ease-in-out has-checked:bg-primary-600 has-focus-visible:outline-2 dark:bg-white/5 dark:inset-ring-white/10 dark:outline-primary-500 dark:has-checked:bg-primary-500">
             <span class="size-5 rounded-full bg-white shadow-xs ring-1 ring-gray-900/5 transition-transform duration-200 ease-in-out group-has-checked:translate-x-5"></span>
             <input
               id="show-debug-output"

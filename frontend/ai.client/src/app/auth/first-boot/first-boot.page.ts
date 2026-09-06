@@ -4,10 +4,12 @@ import { ReactiveFormsModule, FormBuilder, FormGroup, Validators, AbstractContro
 import { Router } from '@angular/router';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { SystemService, FirstBootError } from '../../services/system.service';
+import { BrandingService } from '../../../branding/branding.service';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-first-boot',
-  imports: [CommonModule, ReactiveFormsModule],
+  imports: [CommonModule, ReactiveFormsModule, SpinnerComponent],
   styleUrl: './first-boot.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -28,16 +30,16 @@ import { SystemService, FirstBootError } from '../../services/system.service';
       </div>
 
       <div class="relative w-full max-w-md px-4 py-12">
-        <!-- Logo -->
+        <!-- Logo (read through BrandingService, never from BRAND_CONFIG directly) -->
         <div class="mb-8 flex justify-center">
           <img
-            src="/img/logo-light.png"
-            alt="Logo"
-            class="size-16 dark:hidden">
+            [src]="branding.logo.light"
+            [alt]="branding.appName"
+            class="h-16 w-16 object-contain dark:hidden">
           <img
-            src="/img/logo-dark.png"
-            alt="Logo"
-            class="hidden size-16 dark:block">
+            [src]="branding.logo.dark"
+            [alt]="branding.appName"
+            class="hidden h-16 w-16 object-contain dark:block">
         </div>
 
         <div class="login-card rounded-2xl p-8">
@@ -53,12 +55,12 @@ import { SystemService, FirstBootError } from '../../services/system.service';
 
             <!-- Success message -->
             @if (successMessage()) {
-              <div class="w-full p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg" role="status">
+              <div class="w-full p-4 bg-state-success-50 dark:bg-state-success-900/20 border border-state-success-200 dark:border-state-success-800 rounded-lg" role="status">
                 <div class="flex items-start gap-3">
-                  <svg class="size-5 text-green-600 dark:text-green-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <svg class="size-5 text-state-success-600 dark:text-state-success-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                   </svg>
-                  <p class="text-sm text-green-800 dark:text-green-300">
+                  <p class="text-sm text-state-success-800 dark:text-state-success-300">
                     {{ successMessage() }}
                   </p>
                 </div>
@@ -67,12 +69,12 @@ import { SystemService, FirstBootError } from '../../services/system.service';
 
             <!-- Error message -->
             @if (errorMessage()) {
-              <div class="w-full p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg" role="alert">
+              <div class="w-full p-4 bg-state-danger-50 dark:bg-state-danger-900/20 border border-state-danger-200 dark:border-state-danger-800 rounded-lg" role="alert">
                 <div class="flex items-start gap-3">
-                  <svg class="size-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <svg class="size-5 text-state-danger-600 dark:text-state-danger-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <p class="text-sm text-red-800 dark:text-red-300">
+                  <p class="text-sm text-state-danger-800 dark:text-state-danger-300">
                     {{ errorMessage() }}
                   </p>
                 </div>
@@ -90,11 +92,11 @@ import { SystemService, FirstBootError } from '../../services/system.service';
                     type="text"
                     formControlName="username"
                     autocomplete="username"
-                    class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                     placeholder="admin"
                   />
                   @if (form.get('username')?.touched && form.get('username')?.errors) {
-                    <p class="mt-1 text-xs text-red-600 dark:text-red-400">
+                    <p class="mt-1 text-xs text-state-danger-600 dark:text-state-danger-400">
                       @if (form.get('username')?.errors?.['required']) {
                         Username is required
                       } @else if (form.get('username')?.errors?.['minlength']) {
@@ -112,11 +114,11 @@ import { SystemService, FirstBootError } from '../../services/system.service';
                     type="email"
                     formControlName="email"
                     autocomplete="email"
-                    class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                     placeholder="admin&#64;example.com"
                   />
                   @if (form.get('email')?.touched && form.get('email')?.errors) {
-                    <p class="mt-1 text-xs text-red-600 dark:text-red-400">
+                    <p class="mt-1 text-xs text-state-danger-600 dark:text-state-danger-400">
                       @if (form.get('email')?.errors?.['required']) {
                         Email is required
                       } @else if (form.get('email')?.errors?.['email']) {
@@ -134,11 +136,11 @@ import { SystemService, FirstBootError } from '../../services/system.service';
                     type="password"
                     formControlName="password"
                     autocomplete="new-password"
-                    class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                     placeholder="••••••••"
                   />
                   @if (form.get('password')?.touched && form.get('password')?.errors) {
-                    <p class="mt-1 text-xs text-red-600 dark:text-red-400">
+                    <p class="mt-1 text-xs text-state-danger-600 dark:text-state-danger-400">
                       @if (form.get('password')?.errors?.['required']) {
                         Password is required
                       } @else if (form.get('password')?.errors?.['passwordStrength']) {
@@ -149,11 +151,11 @@ import { SystemService, FirstBootError } from '../../services/system.service';
 
                   <!-- Password requirements -->
                   <ul class="mt-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5">
-                    <li [class.text-green-600]="passwordMeetsLength()" [class.dark:text-green-400]="passwordMeetsLength()">• At least 8 characters</li>
-                    <li [class.text-green-600]="passwordHasUppercase()" [class.dark:text-green-400]="passwordHasUppercase()">• One uppercase letter</li>
-                    <li [class.text-green-600]="passwordHasLowercase()" [class.dark:text-green-400]="passwordHasLowercase()">• One lowercase letter</li>
-                    <li [class.text-green-600]="passwordHasDigit()" [class.dark:text-green-400]="passwordHasDigit()">• One digit</li>
-                    <li [class.text-green-600]="passwordHasSymbol()" [class.dark:text-green-400]="passwordHasSymbol()">• One special character</li>
+                    <li [class.text-state-success-600]="passwordMeetsLength()" [class.dark:text-state-success-400]="passwordMeetsLength()">• At least 8 characters</li>
+                    <li [class.text-state-success-600]="passwordHasUppercase()" [class.dark:text-state-success-400]="passwordHasUppercase()">• One uppercase letter</li>
+                    <li [class.text-state-success-600]="passwordHasLowercase()" [class.dark:text-state-success-400]="passwordHasLowercase()">• One lowercase letter</li>
+                    <li [class.text-state-success-600]="passwordHasDigit()" [class.dark:text-state-success-400]="passwordHasDigit()">• One digit</li>
+                    <li [class.text-state-success-600]="passwordHasSymbol()" [class.dark:text-state-success-400]="passwordHasSymbol()">• One special character</li>
                   </ul>
                 </div>
 
@@ -165,11 +167,11 @@ import { SystemService, FirstBootError } from '../../services/system.service';
                     type="password"
                     formControlName="confirmPassword"
                     autocomplete="new-password"
-                    class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                     placeholder="••••••••"
                   />
                   @if (form.get('confirmPassword')?.touched && form.get('confirmPassword')?.errors) {
-                    <p class="mt-1 text-xs text-red-600 dark:text-red-400">
+                    <p class="mt-1 text-xs text-state-danger-600 dark:text-state-danger-400">
                       @if (form.get('confirmPassword')?.errors?.['required']) {
                         Please confirm your password
                       } @else if (form.get('confirmPassword')?.errors?.['passwordMismatch']) {
@@ -183,10 +185,10 @@ import { SystemService, FirstBootError } from '../../services/system.service';
                 <button
                   type="submit"
                   [disabled]="isSubmitting() || form.invalid"
-                  class="w-full mt-2 px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                  class="w-full mt-2 px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-primary-accessible hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   @if (isSubmitting()) {
-                    <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <app-spinner size="md" variant="on-solid" label="Creating account" />
                     <span>Creating account...</span>
                   } @else {
                     <span>Create Admin Account</span>
@@ -205,6 +207,7 @@ export class FirstBootPage implements OnInit, OnDestroy {
   private readonly systemService = inject(SystemService);
   private readonly router = inject(Router);
   private readonly fb = inject(FormBuilder);
+  protected readonly branding = inject(BrandingService);
 
   isSubmitting = signal(false);
   errorMessage = signal<string | null>(null);

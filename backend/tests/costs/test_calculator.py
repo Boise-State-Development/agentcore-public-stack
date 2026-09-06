@@ -280,3 +280,111 @@ class TestValidateUsage:
             "inputTokens": None,
             "outputTokens": 50,
         }) is False
+
+
+# GPT-5.6 Sol ($/Mtok), transcribed from the model card. Only the ratios are
+# load-bearing here: cache reads are a 90% discount off input, cache writes a
+# 1.25x premium. The absolute rates are re-verified against the Price List API
+# before any catalog row ships them.
+GPT_56_SOL_PRICING = {
+    "inputPricePerMtok": 4.40,
+    "outputPricePerMtok": 17.60,
+    "cacheReadPricePerMtok": 0.44,
+    "cacheWritePricePerMtok": 5.50,
+}
+
+
+class TestOpenAIFamilyCostAfterUsageNormalization:
+    """GPT-5.6 costs are only right once its usage buckets are disjoint.
+
+    OpenAI reports an *inclusive* ``input_tokens``; Strands forwards it as
+    ``inputTokens`` alongside ``cacheReadInputTokens``. Fed in raw, every
+    cached token is priced at the input rate AND the cache-read rate. The
+    normalization at apis/shared/models/usage_normalization.py is what makes
+    the numbers below correct — these tests pin the dollar consequence.
+    """
+
+    def test_fully_cached_call_costs_only_the_cache_read_rate(self):
+        # 30k-token stable prefix served entirely from cache, no new input.
+        normalized_usage = {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 30_000,
+        }
+
+        total_cost, breakdown = CostCalculator.calculate_message_cost(
+            normalized_usage, GPT_56_SOL_PRICING
+        )
+
+        assert total_cost == pytest.approx(30_000 / 1_000_000 * 0.44)
+        assert total_cost == pytest.approx(0.0132)
+        assert breakdown.input_cost == 0.0
+
+    def test_raw_openai_usage_would_double_bill_the_same_call(self):
+        """The regression guard: what the un-normalized dict costs."""
+        raw_usage = {
+            "inputTokens": 30_000,  # OpenAI's inclusive total
+            "outputTokens": 0,
+            "cacheReadInputTokens": 30_000,
+        }
+
+        double_billed, _ = CostCalculator.calculate_message_cost(
+            raw_usage, GPT_56_SOL_PRICING
+        )
+        correct, _ = CostCalculator.calculate_message_cost(
+            {**raw_usage, "inputTokens": 0}, GPT_56_SOL_PRICING
+        )
+
+        assert double_billed == pytest.approx(30_000 / 1_000_000 * (4.40 + 0.44))
+        # 11x the real cost — the cache discount is not merely lost, the
+        # cached tokens are charged twice over.
+        assert double_billed == pytest.approx(correct * 11.0)
+
+    def test_cache_write_premium_is_not_stacked_on_the_input_rate(self):
+        # A turn that writes a 30k prefix to cache: those tokens are inside
+        # OpenAI's input_tokens, so normalization subtracts them out and they
+        # are billed once, at 1.25x.
+        normalized_usage = {
+            "inputTokens": 100,
+            "outputTokens": 0,
+            "cacheWriteInputTokens": 30_000,
+        }
+
+        total_cost, breakdown = CostCalculator.calculate_message_cost(
+            normalized_usage, GPT_56_SOL_PRICING
+        )
+
+        assert breakdown.cache_write_cost == pytest.approx(30_000 / 1_000_000 * 5.50)
+        assert breakdown.input_cost == pytest.approx(100 / 1_000_000 * 4.40)
+        assert total_cost == pytest.approx(0.16544)
+
+    def test_mixed_read_write_call_prices_each_bucket_once(self):
+        # The realistic 5.6 turn: most of the prefix read from cache, a small
+        # increment written, a little genuinely new input. Buckets partition
+        # the 30,500 inclusive input tokens OpenAI reported.
+        normalized_usage = {
+            "inputTokens": 100,
+            "outputTokens": 120,
+            "cacheReadInputTokens": 30_000,
+            "cacheWriteInputTokens": 400,
+        }
+
+        total_cost, breakdown = CostCalculator.calculate_message_cost(
+            normalized_usage, GPT_56_SOL_PRICING
+        )
+
+        assert (
+            normalized_usage["inputTokens"]
+            + normalized_usage["cacheReadInputTokens"]
+            + normalized_usage["cacheWriteInputTokens"]
+        ) == 30_500
+        assert breakdown.input_cost == pytest.approx(100 / 1_000_000 * 4.40)
+        assert breakdown.cache_read_cost == pytest.approx(30_000 / 1_000_000 * 0.44)
+        assert breakdown.cache_write_cost == pytest.approx(400 / 1_000_000 * 5.50)
+        assert breakdown.output_cost == pytest.approx(120 / 1_000_000 * 17.60)
+        assert total_cost == pytest.approx(
+            breakdown.input_cost
+            + breakdown.output_cost
+            + breakdown.cache_read_cost
+            + breakdown.cache_write_cost
+        )

@@ -116,13 +116,13 @@ export class OverrideListComponent implements OnInit {
   getStatusClasses(status: string): string {
     switch (status) {
       case 'active':
-        return 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300';
+        return 'bg-state-success-100 text-state-success-800 dark:bg-state-success-900/50 dark:text-state-success-300';
       case 'expired':
         return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
       case 'upcoming':
-        return 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300';
+        return 'bg-state-info-100 text-state-info-800 dark:bg-state-info-900/50 dark:text-state-info-300';
       case 'disabled':
-        return 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300';
+        return 'bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/50 dark:text-state-danger-300';
       default:
         return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
     }

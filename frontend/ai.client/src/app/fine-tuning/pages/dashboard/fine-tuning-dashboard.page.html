@@ -27,7 +27,7 @@
         </button>
         <button
           (click)="navigateToNewTrainingJob()"
-          class="inline-flex items-center gap-1.5 rounded-sm bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+          class="inline-flex items-center gap-1.5 rounded-sm bg-primary-accessible px-3 py-2 text-sm font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
         >
           <ng-icon name="heroPlus" class="size-4" />
           New Training Job
@@ -37,32 +37,38 @@
   </div>
 
   <!-- About this tool -->
-  <details class="group mb-6 rounded-sm border border-blue-200 bg-blue-50/50 dark:border-blue-800/40 dark:bg-blue-950/20">
-    <summary class="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-blue-700 select-none dark:text-blue-300">
+  <details class="group mb-6 rounded-sm border border-state-info-200 bg-state-info-50/50 dark:border-state-info-800/40 dark:bg-state-info-950/20">
+    <summary class="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-state-info-700 select-none dark:text-state-info-300">
       <ng-icon name="heroInformationCircle" class="size-5 shrink-0" />
       What is fine-tuning and how can it help my research?
       <ng-icon name="heroChevronRight" class="ml-auto size-4 transition-transform group-open:rotate-90" />
     </summary>
-    <div class="border-t border-blue-200 px-4 py-3 text-sm/6 text-gray-700 dark:border-blue-800/40 dark:text-gray-300">
+    <div class="border-t border-state-info-200 px-4 py-3 text-sm/6 text-gray-700 dark:border-state-info-800/40 dark:text-gray-300">
       <p>
-        If you have a need for a language model to perform automatic coding or classification for your research, and the input is text, then this is a potentially useful option for you. Fine-tuning takes an existing small language model and helps it become better at coding/classification on the data that you provide.
+        If you need a model to perform automatic coding or classification for your research, this is a potentially useful option for you. Fine-tuning takes an existing pre-trained model and helps it become better at coding/classification on the data that you provide. Your input can be text, images, or images paired with text.
       </p>
       <p class="mt-2">
-        To get started, upload a <strong>.csv</strong> file with two columns: <strong>text</strong> (your input data) and <strong>label</strong> (the code/classification you want the model to predict). You can control the train/test split, and once fine-tuning is complete, download the model for your own use. We also provide the ability to run inference on any future data you collect.
+        For <strong>text classification</strong>, upload a <strong>.csv</strong> file with two columns: <strong>text</strong> (your input data) and <strong>label</strong> (the code/classification you want the model to predict).
+      </p>
+      <p class="mt-2">
+        For <strong>image</strong> or <strong>image + text classification</strong>, upload a <strong>.zip</strong> containing a manifest (CSV, JSONL, or JSON) plus the image files it references. The manifest needs an <strong>image</strong> column holding each file's path inside the archive, a <strong>label</strong> column, and — for image + text — a <strong>text</strong> column.
+      </p>
+      <p class="mt-2">
+        You can control the train/test split, and once fine-tuning is complete, download the model for your own use. We also provide the ability to run inference on any future data you collect.
       </p>
     </div>
   </details>
 
   <!-- Error display -->
   @if (state.error(); as errorMsg) {
-    <div class="mb-6 flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">
-      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-red-600 dark:text-red-400" />
+    <div class="mb-6 flex items-start gap-3 rounded-sm border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20" role="alert">
+      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" />
       <div class="flex-1">
-        <p class="text-sm/6 text-red-800 dark:text-red-200">{{ errorMsg }}</p>
+        <p class="text-sm/6 text-state-danger-800 dark:text-state-danger-200">{{ errorMsg }}</p>
       </div>
       <button
         (click)="state.clearError()"
-        class="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+        class="text-state-danger-500 hover:text-state-danger-700 dark:text-state-danger-400 dark:hover:text-state-danger-300"
         [appTooltip]="'Dismiss'"
         appTooltipPosition="left"
         aria-label="Dismiss error"
@@ -75,7 +81,7 @@
   <!-- Loading spinner (only when no data yet) -->
   @if (state.loading() && !state.access()) {
     <div class="flex items-center justify-center py-12">
-      <div class="size-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Loading"></div>
+      <app-spinner size="lg" label="Loading" />
     </div>
   }
 
@@ -103,24 +109,24 @@
       <section class="mb-8">
         <div class="mb-4 flex items-center gap-3">
           <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">In Progress</h2>
-          <span class="inline-flex items-center rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-semibold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
+          <span class="inline-flex items-center rounded-full bg-state-info-100 px-2.5 py-0.5 text-xs font-semibold text-state-info-700 dark:bg-state-info-900/40 dark:text-state-info-300">
             {{ state.activeTrainingJobs().length + state.activeInferenceJobs().length }}
           </span>
         </div>
 
         <div class="space-y-3">
           @for (job of state.activeTrainingJobs(); track job.job_id) {
-            <div class="flex items-center gap-4 rounded-lg border border-sky-200/70 bg-linear-to-r from-sky-50/60 to-white px-5 py-4 shadow-xs dark:border-sky-800/30 dark:from-sky-950/30 dark:to-gray-900">
+            <div class="flex items-center gap-4 rounded-lg border border-state-info-200/70 bg-linear-to-r from-state-info-50/60 to-white px-5 py-4 shadow-xs dark:border-state-info-800/30 dark:from-state-info-950/30 dark:to-gray-900">
               <span class="relative flex size-3 shrink-0">
-                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75"></span>
-                <span class="relative inline-flex size-3 rounded-full bg-sky-500"></span>
+                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-state-info-400 opacity-75"></span>
+                <span class="relative inline-flex size-3 rounded-full bg-state-info-500"></span>
               </span>
 
-              <span class="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Training</span>
+              <span class="rounded-full bg-state-info-100 px-2.5 py-0.5 text-xs font-medium text-state-info-700 dark:bg-state-info-900/40 dark:text-state-info-300">Training</span>
 
               <a
                 [routerLink]="'/fine-tuning/training/' + job.job_id"
-                class="min-w-0 truncate text-sm/6 font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                class="min-w-0 truncate text-sm/6 font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark"
               >
                 {{ job.model_name }}
               </a>
@@ -129,26 +135,26 @@
                 <div class="hidden items-center gap-2 sm:flex" role="progressbar" [attr.aria-valuenow]="job.training_progress" aria-valuemin="0" aria-valuemax="100">
                   <div class="h-1.5 w-24 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
                     <div
-                      class="h-full rounded-full bg-sky-500 transition-all"
+                      class="h-full rounded-full bg-state-info-500 transition-all"
                       [style.width.%]="job.training_progress"
                     ></div>
                   </div>
-                  <span class="text-xs font-semibold tabular-nums text-sky-700 dark:text-sky-300">{{ job.training_progress | number:'1.0-0' }}%</span>
+                  <span class="text-xs font-semibold tabular-nums text-state-info-700 dark:text-state-info-300">{{ job.training_progress | number:'1.0-0' }}%</span>
                 </div>
               }
 
-              <div class="ml-auto shrink-0 rounded-md bg-sky-100/80 px-3 py-1.5 text-center dark:bg-sky-900/30">
-                <div class="font-mono text-base/5 font-bold tracking-tight text-sky-700 dark:text-sky-300">{{ getElapsedTraining(job) }}</div>
-                <div class="mt-0.5 text-[10px] font-medium uppercase tracking-wider text-sky-500/80 dark:text-sky-400/60">elapsed</div>
+              <div class="ml-auto shrink-0 rounded-md bg-state-info-100/80 px-3 py-1.5 text-center dark:bg-state-info-900/30">
+                <div class="font-mono text-base/5 font-bold tracking-tight text-state-info-700 dark:text-state-info-300">{{ getElapsedTraining(job) }}</div>
+                <div class="mt-0.5 text-[10px] font-medium uppercase tracking-wider text-state-info-500/80 dark:text-state-info-400/60">elapsed</div>
               </div>
 
               <div class="shrink-0">
                 @if (confirmingStopTraining() === job.job_id) {
                   <div class="flex items-center gap-2">
-                    <span class="text-xs text-red-600 dark:text-red-400">Stop?</span>
+                    <span class="text-xs text-state-danger-600 dark:text-state-danger-400">Stop?</span>
                     <button
                       (click)="executeStopTraining(job.job_id)"
-                      class="rounded-sm bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+                      class="rounded-sm bg-state-danger-600 px-2 py-1 text-xs font-medium text-white hover:bg-state-danger-700"
                     >Yes</button>
                     <button
                       (click)="cancelStopTraining()"
@@ -158,7 +164,7 @@
                 } @else {
                   <button
                     (click)="confirmStopTraining(job.job_id)"
-                    class="inline-flex items-center gap-1.5 rounded-sm border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-red-300 hover:bg-red-50 hover:text-red-600 dark:border-gray-600 dark:text-gray-300 dark:hover:border-red-700 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                    class="inline-flex items-center gap-1.5 rounded-sm border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-state-danger-300 hover:bg-state-danger-50 hover:text-state-danger-600 dark:border-gray-600 dark:text-gray-300 dark:hover:border-state-danger-700 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                     [attr.aria-label]="'Stop training job ' + job.job_id"
                   >
                     <ng-icon name="heroStopSolid" class="size-3.5" />
@@ -170,33 +176,33 @@
           }
 
           @for (job of state.activeInferenceJobs(); track job.job_id) {
-            <div class="flex items-center gap-4 rounded-lg border border-sky-200/70 bg-linear-to-r from-sky-50/60 to-white px-5 py-4 shadow-xs dark:border-sky-800/30 dark:from-sky-950/30 dark:to-gray-900">
+            <div class="flex items-center gap-4 rounded-lg border border-state-info-200/70 bg-linear-to-r from-state-info-50/60 to-white px-5 py-4 shadow-xs dark:border-state-info-800/30 dark:from-state-info-950/30 dark:to-gray-900">
               <span class="relative flex size-3 shrink-0">
-                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75"></span>
-                <span class="relative inline-flex size-3 rounded-full bg-sky-500"></span>
+                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-state-info-400 opacity-75"></span>
+                <span class="relative inline-flex size-3 rounded-full bg-state-info-500"></span>
               </span>
 
-              <span class="rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">Inference</span>
+              <span class="rounded-full bg-category-accent-inference-100 px-2.5 py-0.5 text-xs font-medium text-category-accent-inference-700 dark:bg-category-accent-inference-900/40 dark:text-category-accent-inference-300">Inference</span>
 
               <a
                 [routerLink]="'/fine-tuning/inference/' + job.job_id"
-                class="min-w-0 truncate text-sm/6 font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                class="min-w-0 truncate text-sm/6 font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark"
               >
                 {{ job.model_name }}
               </a>
 
-              <div class="ml-auto shrink-0 rounded-md bg-sky-100/80 px-3 py-1.5 text-center dark:bg-sky-900/30">
-                <div class="font-mono text-base/5 font-bold tracking-tight text-sky-700 dark:text-sky-300">{{ getElapsedInference(job) }}</div>
-                <div class="mt-0.5 text-[10px] font-medium uppercase tracking-wider text-sky-500/80 dark:text-sky-400/60">elapsed</div>
+              <div class="ml-auto shrink-0 rounded-md bg-state-info-100/80 px-3 py-1.5 text-center dark:bg-state-info-900/30">
+                <div class="font-mono text-base/5 font-bold tracking-tight text-state-info-700 dark:text-state-info-300">{{ getElapsedInference(job) }}</div>
+                <div class="mt-0.5 text-[10px] font-medium uppercase tracking-wider text-state-info-500/80 dark:text-state-info-400/60">elapsed</div>
               </div>
 
               <div class="shrink-0">
                 @if (confirmingStopInference() === job.job_id) {
                   <div class="flex items-center gap-2">
-                    <span class="text-xs text-red-600 dark:text-red-400">Stop?</span>
+                    <span class="text-xs text-state-danger-600 dark:text-state-danger-400">Stop?</span>
                     <button
                       (click)="executeStopInference(job.job_id)"
-                      class="rounded-sm bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+                      class="rounded-sm bg-state-danger-600 px-2 py-1 text-xs font-medium text-white hover:bg-state-danger-700"
                     >Yes</button>
                     <button
                       (click)="cancelStopInference()"
@@ -206,7 +212,7 @@
                 } @else {
                   <button
                     (click)="confirmStopInference(job.job_id)"
-                    class="inline-flex items-center gap-1.5 rounded-sm border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-red-300 hover:bg-red-50 hover:text-red-600 dark:border-gray-600 dark:text-gray-300 dark:hover:border-red-700 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                    class="inline-flex items-center gap-1.5 rounded-sm border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-state-danger-300 hover:bg-state-danger-50 hover:text-state-danger-600 dark:border-gray-600 dark:text-gray-300 dark:hover:border-state-danger-700 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                     [attr.aria-label]="'Stop inference job ' + job.job_id"
                   >
                     <ng-icon name="heroStopSolid" class="size-3.5" />
@@ -251,12 +257,12 @@
                   <td class="whitespace-nowrap px-4 py-3 text-sm/6 font-medium">
                     <a
                       [routerLink]="'/fine-tuning/training/' + job.job_id"
-                      class="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                      class="text-primary-accessible hover:underline dark:text-primary-accessible-dark"
                     >
                       {{ job.model_name }}
                     </a>
                   </td>
-                  <td class="whitespace-nowrap px-4 py-3 text-sm/6" [class]="getRetentionDaysRemaining(job.created_at) <= 7 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'">
+                  <td class="whitespace-nowrap px-4 py-3 text-sm/6" [class]="getRetentionDaysRemaining(job.created_at) <= 7 ? 'text-state-warning-600 dark:text-state-warning-400' : 'text-gray-600 dark:text-gray-400'">
                     {{ getRetentionLabel(job.created_at) }}
                   </td>
                   <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-600 dark:text-gray-400">
@@ -265,7 +271,7 @@
                   <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-500 dark:text-gray-400">
                     <div>{{ job.created_at | date:'short' }}</div>
                     @if (canStopTraining(job.status)) {
-                      <div class="mt-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
+                      <div class="mt-0.5 text-xs font-medium text-state-info-600 dark:text-state-info-400">
                         {{ getElapsedTraining(job) }} elapsed
                       </div>
                     }
@@ -273,10 +279,10 @@
                   <td class="whitespace-nowrap px-4 py-3 text-right">
                     @if (confirmingStopTraining() === job.job_id) {
                       <div class="flex items-center justify-end gap-2">
-                        <span class="text-xs text-red-600 dark:text-red-400">Stop?</span>
+                        <span class="text-xs text-state-danger-600 dark:text-state-danger-400">Stop?</span>
                         <button
                           (click)="executeStopTraining(job.job_id)"
-                          class="rounded-sm bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+                          class="rounded-sm bg-state-danger-600 px-2 py-1 text-xs font-medium text-white hover:bg-state-danger-700"
                         >
                           Yes
                         </button>
@@ -290,7 +296,7 @@
                     } @else if (canStopTraining(job.status)) {
                       <button
                         (click)="confirmStopTraining(job.job_id)"
-                        class="rounded-sm p-1.5 text-gray-400 hover:text-red-600 dark:text-gray-500 dark:hover:text-red-400"
+                        class="rounded-sm p-1.5 text-gray-400 hover:text-state-danger-600 dark:text-gray-500 dark:hover:text-state-danger-400"
                         [appTooltip]="'Stop Job'"
                         appTooltipPosition="top"
                         [attr.aria-label]="'Stop training job ' + job.job_id"
@@ -300,7 +306,7 @@
                     } @else if (job.status === 'COMPLETED') {
                       <button
                         (click)="downloadTrainingArtifact(job.job_id)"
-                        class="rounded-sm p-1.5 text-gray-400 hover:text-green-600 dark:text-gray-500 dark:hover:text-green-400"
+                        class="rounded-sm p-1.5 text-gray-400 hover:text-state-success-600 dark:text-gray-500 dark:hover:text-state-success-400"
                         [appTooltip]="'Download Model'"
                         appTooltipPosition="top"
                         [attr.aria-label]="'Download model artifact for job ' + job.job_id"
@@ -321,7 +327,7 @@
           </p>
           <button
             (click)="navigateToNewTrainingJob()"
-            class="mt-3 inline-flex items-center gap-1.5 rounded-sm bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            class="mt-3 inline-flex items-center gap-1.5 rounded-sm bg-primary-accessible px-3 py-2 text-sm font-medium text-white hover:brightness-95"
           >
             <ng-icon name="heroPlus" class="size-4" />
             Create your first training job
@@ -361,12 +367,12 @@
                   <td class="whitespace-nowrap px-4 py-3 text-sm/6 font-medium">
                     <a
                       [routerLink]="'/fine-tuning/inference/' + job.job_id"
-                      class="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                      class="text-primary-accessible hover:underline dark:text-primary-accessible-dark"
                     >
                       {{ job.model_name }}
                     </a>
                   </td>
-                  <td class="whitespace-nowrap px-4 py-3 text-sm/6" [class]="getRetentionDaysRemaining(job.created_at) <= 7 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'">
+                  <td class="whitespace-nowrap px-4 py-3 text-sm/6" [class]="getRetentionDaysRemaining(job.created_at) <= 7 ? 'text-state-warning-600 dark:text-state-warning-400' : 'text-gray-600 dark:text-gray-400'">
                     {{ getRetentionLabel(job.created_at) }}
                   </td>
                   <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-600 dark:text-gray-400">
@@ -375,7 +381,7 @@
                   <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-500 dark:text-gray-400">
                     <div>{{ job.created_at | date:'short' }}</div>
                     @if (canStopInference(job.status)) {
-                      <div class="mt-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
+                      <div class="mt-0.5 text-xs font-medium text-state-info-600 dark:text-state-info-400">
                         {{ getElapsedInference(job) }} elapsed
                       </div>
                     }
@@ -383,10 +389,10 @@
                   <td class="whitespace-nowrap px-4 py-3 text-right">
                     @if (confirmingStopInference() === job.job_id) {
                       <div class="flex items-center justify-end gap-2">
-                        <span class="text-xs text-red-600 dark:text-red-400">Stop?</span>
+                        <span class="text-xs text-state-danger-600 dark:text-state-danger-400">Stop?</span>
                         <button
                           (click)="executeStopInference(job.job_id)"
-                          class="rounded-sm bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+                          class="rounded-sm bg-state-danger-600 px-2 py-1 text-xs font-medium text-white hover:bg-state-danger-700"
                         >
                           Yes
                         </button>
@@ -400,7 +406,7 @@
                     } @else if (canStopInference(job.status)) {
                       <button
                         (click)="confirmStopInference(job.job_id)"
-                        class="rounded-sm p-1.5 text-gray-400 hover:text-red-600 dark:text-gray-500 dark:hover:text-red-400"
+                        class="rounded-sm p-1.5 text-gray-400 hover:text-state-danger-600 dark:text-gray-500 dark:hover:text-state-danger-400"
                         [appTooltip]="'Stop Job'"
                         appTooltipPosition="top"
                         [attr.aria-label]="'Stop inference job ' + job.job_id"
@@ -410,7 +416,7 @@
                     } @else if (job.status === 'COMPLETED') {
                       <button
                         (click)="downloadInferenceResults(job.job_id)"
-                        class="rounded-sm p-1.5 text-gray-400 hover:text-green-600 dark:text-gray-500 dark:hover:text-green-400"
+                        class="rounded-sm p-1.5 text-gray-400 hover:text-state-success-600 dark:text-gray-500 dark:hover:text-state-success-400"
                         [appTooltip]="'Download Results'"
                         appTooltipPosition="top"
                         [attr.aria-label]="'Download results for job ' + job.job_id"

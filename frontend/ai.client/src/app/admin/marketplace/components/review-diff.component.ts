@@ -30,7 +30,7 @@ import { AgentVersionDiff, VersionFieldChange } from '../models/marketplace.mode
         (click)="toggle()"
         [attr.aria-expanded]="expanded()"
         [attr.aria-controls]="panelId()"
-        class="inline-flex items-center gap-1 rounded-2xl text-sm/6 font-medium text-blue-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400"
+        class="inline-flex items-center gap-1 rounded-2xl text-sm/6 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
       >
         <ng-icon
           [name]="expanded() ? 'heroChevronDown' : 'heroChevronRight'"
@@ -45,7 +45,7 @@ import { AgentVersionDiff, VersionFieldChange } from '../models/marketplace.mode
           @if (loading()) {
             <p class="text-gray-500 dark:text-gray-400">Loading changes…</p>
           } @else if (error(); as message) {
-            <p class="text-rose-700 dark:text-rose-400">{{ message }}</p>
+            <p class="text-state-danger-700 dark:text-state-danger-400">{{ message }}</p>
           } @else if (diff(); as d) {
             @if (d.firstSubmission) {
               <!-- Not "nothing changed" — there is simply nothing to compare against, and
@@ -103,7 +103,7 @@ export class ReviewDiffComponent {
 
   /** Behavior reads as attention; presentation reads as information. */
   protected readonly behaviorClasses =
-    'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300';
+    'bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/40 dark:text-state-warning-300';
   protected readonly presentationClasses =
     'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
 
@@ -135,10 +135,10 @@ export class ReviewDiffComponent {
       return 'text-gray-500 dark:text-gray-400';
     }
     if (line.startsWith('+')) {
-      return 'text-emerald-700 dark:text-emerald-400';
+      return 'text-state-success-700 dark:text-state-success-400';
     }
     if (line.startsWith('-')) {
-      return 'text-rose-700 dark:text-rose-400';
+      return 'text-state-danger-700 dark:text-state-danger-400';
     }
     return 'text-gray-600 dark:text-gray-300';
   }

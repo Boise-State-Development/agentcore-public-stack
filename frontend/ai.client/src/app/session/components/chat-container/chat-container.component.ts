@@ -6,6 +6,7 @@ import {
   input,
   output,
   computed,
+  signal,
   viewChild,
 } from '@angular/core';
 import { Message } from '../../services/models/message.model';
@@ -16,6 +17,7 @@ import { ParagraphSkeletonComponent } from '../../../components/paragraph-skelet
 import { Topnav } from '../../../components/topnav/topnav';
 import { SidenavService } from '../../../services/sidenav/sidenav.service';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
+import { BrandingService } from '../../../../branding/branding.service';
 import { Assistant } from '../../../assistants/models/assistant.model';
 import { Agent, AgentRunnability } from '../../../agents/models/agent.model';
 import {
@@ -83,6 +85,10 @@ export class ChatContainerComponent {
   private artifactState = inject(ArtifactStateService);
   private voiceChatService = inject(VoiceChatService);
   protected readonly isVoiceActive = this.voiceChatService.isVoiceActive;
+  protected branding = inject(BrandingService);
+
+  /** Whether the branding logo image failed to load (Requirement 2.8). */
+  protected logoLoadFailed = signal(false);
 
   // Child component reference for scroll functionality
   private messageListComponent = viewChild(MessageListComponent);
@@ -217,6 +223,30 @@ export class ChatContainerComponent {
    * remounting — a remount restarts the fixed wrapper's `left` transition,
    * which reads as the whole bar sweeping across the screen.
    */
+  /**
+   * Whether a composer in this container may float an announcement.
+   *
+   * Off in embedded mode: an agent preview or a marketplace test-drive is
+   * exercising one specific agent, and a platform-wide notice inside that
+   * pane reads as a bug. The real chat is the only place it belongs.
+   */
+  protected readonly showAnnouncements = computed(
+    () => !this.resolvedConfig().embeddedMode,
+  );
+
+  /**
+   * Which side of the composer an announcement takes, following the composer.
+   *
+   * The empty state centres the composer with the greeting immediately above
+   * it, so a pill placed above would float over the greeting — visibly so at
+   * narrow widths, where the greeting wraps. A conversation pins the composer
+   * to the bottom, where below would be off the edge. Same `isEmptyState()`
+   * that picks the layout branch picks the side, so the two cannot drift.
+   */
+  protected readonly announcementPlacement = computed<'above' | 'below'>(
+    () => (this.isEmptyState() ? 'below' : 'above'),
+  );
+
   protected readonly showChatTopnav = computed(
     () =>
       this.resolvedConfig().fullPageMode &&
@@ -301,5 +331,16 @@ export class ChatContainerComponent {
 
   onVoiceClosed() {
     this.voiceClosed.emit();
+  }
+
+  /**
+   * Handles a branding logo `<img>` failing to load (missing/broken asset at
+   * its documented path). Sets `logoLoadFailed`, which the template uses to
+   * hide the broken `<img>` elements and reveal a same-dimension placeholder
+   * with a visible "logo failed to load" indication, without collapsing the
+   * layout (Requirement 2.8).
+   */
+  onLogoError(_event: Event): void {
+    this.logoLoadFailed.set(true);
   }
 }

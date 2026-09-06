@@ -9,6 +9,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowPath, heroChevronDown } from '@ng-icons/heroicons/outline';
 
 import { SyncInterval, SyncPolicy } from '../models/sync-policy.model';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 /** The select's "no policy / turn sync off" sentinel. */
 export type SyncIntervalSelection = SyncInterval | 'manual';
@@ -30,7 +31,7 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
 @Component({
   selector: 'app-sync-policy-control',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, SpinnerComponent],
   providers: [provideIcons({ heroArrowPath, heroChevronDown })],
   template: `
     <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -40,7 +41,7 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
           [disabled]="busy()"
           [value]="selectValue()"
           (change)="onSelectChange($event)"
-          class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+          class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-700 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
         >
           <option value="manual">Don't auto-sync</option>
           <option value="daily">Sync daily</option>
@@ -61,7 +62,7 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
             (click)="runNow.emit()"
             [disabled]="busy()"
             [attr.aria-label]="'Sync ' + (sourceName() || 'this source') + ' now'"
-            class="inline-flex items-center gap-1 rounded-2xl px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+            class="inline-flex items-center gap-1 rounded-2xl px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
           >
             <ng-icon name="heroArrowPath" class="size-3.5" aria-hidden="true" />
             Sync now
@@ -71,7 +72,7 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
             (click)="pause.emit()"
             [disabled]="busy()"
             [attr.aria-label]="'Pause sync for ' + (sourceName() || 'this source')"
-            class="inline-flex items-center rounded-2xl px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+            class="inline-flex items-center rounded-2xl px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
           >
             Pause
           </button>
@@ -80,7 +81,7 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
             type="button"
             (click)="reconnect.emit()"
             [disabled]="busy()"
-            class="inline-flex items-center rounded-2xl px-2 py-1 text-xs/5 font-medium text-blue-600 hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+            class="inline-flex items-center rounded-2xl px-2 py-1 text-xs/5 font-medium text-primary-accessible hover:bg-primary-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-accessible-dark dark:hover:bg-primary-900/20"
           >
             Reconnect {{ reconnectLabel() || 'source' }}
           </button>
@@ -90,7 +91,7 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
             (click)="resume.emit()"
             [disabled]="busy()"
             [attr.aria-label]="'Resume sync for ' + (sourceName() || 'this source')"
-            class="inline-flex items-center rounded-2xl px-2 py-1 text-xs/5 font-medium text-blue-600 hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+            class="inline-flex items-center rounded-2xl px-2 py-1 text-xs/5 font-medium text-primary-accessible hover:bg-primary-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-accessible-dark dark:hover:bg-primary-900/20"
           >
             Resume
           </button>
@@ -99,25 +100,22 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
     </div>
     @if (busy()) {
       <p class="mt-1 flex items-center gap-1.5 text-xs/5 text-gray-500 dark:text-gray-400" role="status">
-        <span
-          class="size-3 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-          aria-hidden="true"
-        ></span>
+        <app-spinner size="sm" label="Saving" />
         Saving…
       </p>
     } @else if (statusText(); as text) {
       <p
         class="mt-1 flex items-center gap-1.5 text-xs/5"
-        [class.text-amber-600]="statusTone() === 'warn'"
-        [class.dark:text-amber-400]="statusTone() === 'warn'"
+        [class.text-state-warning-600]="statusTone() === 'warn'"
+        [class.dark:text-state-warning-400]="statusTone() === 'warn'"
         [class.text-gray-500]="statusTone() !== 'warn'"
         [class.dark:text-gray-400]="statusTone() !== 'warn'"
       >
         <span
           aria-hidden="true"
           class="size-1.5 shrink-0 rounded-full"
-          [class.bg-green-500]="statusDot() === 'ok'"
-          [class.bg-amber-500]="statusDot() === 'warn'"
+          [class.bg-state-success-500]="statusDot() === 'ok'"
+          [class.bg-state-warning-500]="statusDot() === 'warn'"
           [class.bg-gray-400]="statusDot() === 'idle'"
         ></span>
         {{ text }}

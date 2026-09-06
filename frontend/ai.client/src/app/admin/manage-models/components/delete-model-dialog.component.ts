@@ -53,10 +53,10 @@ export type DeleteModelDialogResult = true | undefined;
         <!-- Header -->
         <div class="flex items-start justify-between gap-3 px-6 pt-5">
           <div class="flex items-start gap-3 min-w-0">
-            <div class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-red-100 dark:bg-red-500/10">
+            <div class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-state-danger-100 dark:bg-state-danger-500/10">
               <ng-icon
                 name="heroExclamationTriangle"
-                class="size-5 text-red-600 dark:text-red-400"
+                class="size-5 text-state-danger-600 dark:text-state-danger-400"
                 aria-hidden="true"
               />
             </div>
@@ -74,7 +74,7 @@ export type DeleteModelDialogResult = true | undefined;
             type="button"
             (click)="onCancel()"
             aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
           </button>
@@ -102,7 +102,7 @@ export type DeleteModelDialogResult = true | undefined;
           <button
             type="button"
             (click)="onConfirm()"
-            class="inline-flex items-center gap-2 rounded-2xl bg-red-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:bg-red-500 dark:hover:bg-red-600"
+            class="inline-flex items-center gap-2 rounded-2xl bg-state-danger-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:bg-state-danger-500 dark:hover:bg-state-danger-600"
           >
             Delete model
           </button>
@@ -111,9 +111,8 @@ export type DeleteModelDialogResult = true | undefined;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;

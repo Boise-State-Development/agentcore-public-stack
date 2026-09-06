@@ -55,7 +55,7 @@
         @if (modelService.modelsLoading()) {
           <div class="mt-2 text-sm/6 text-gray-500 dark:text-gray-400">Loading models...</div>
         } @else if (modelService.modelsError()) {
-          <div class="mt-2 text-sm/6 text-red-600 dark:text-red-400" role="alert">
+          <div class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400" role="alert">
             {{ modelService.modelsError() }}
           </div>
         } @else if (modelService.agentModelLocked()) {
@@ -228,7 +228,7 @@
                   }
 
                   @if (row.unsatisfiable) {
-                    <p role="status" class="text-xs/5 italic text-amber-600 dark:text-amber-400">
+                    <p role="status" class="text-xs/5 italic text-state-warning-600 dark:text-state-warning-400">
                       {{ row.unsatisfiable.reason }}
                     </p>
                   }
@@ -237,7 +237,7 @@
                     <p
                       role="status"
                       aria-live="polite"
-                      class="text-xs/5 text-amber-600 dark:text-amber-400"
+                      class="text-xs/5 text-state-warning-600 dark:text-state-warning-400"
                     >
                       {{ clampNotices()[row.key] }}
                     </p>
@@ -410,7 +410,7 @@
             @if (skillService.loading()) {
               <div class="text-sm/6 text-gray-500 dark:text-gray-400">Loading skills...</div>
             } @else if (skillService.error()) {
-              <div class="text-sm/6 text-red-600 dark:text-red-400" role="alert">
+              <div class="text-sm/6 text-state-danger-600 dark:text-state-danger-400" role="alert">
                 {{ skillService.error() }}
               </div>
             } @else if (!skillService.hasSkills()) {
@@ -517,7 +517,7 @@
             @if (toolService.loading()) {
               <div class="text-sm/6 text-gray-500 dark:text-gray-400">Loading tools...</div>
             } @else if (toolService.error()) {
-              <div class="text-sm/6 text-red-600 dark:text-red-400" role="alert">
+              <div class="text-sm/6 text-state-danger-600 dark:text-state-danger-400" role="alert">
                 {{ toolService.error() }}
               </div>
             } @else if (toolService.tools().length === 0) {
@@ -682,7 +682,7 @@
                               }}
                             </button>
                             @if (discoverError()[tool.toolId]) {
-                              <span class="text-xs/5 text-red-600 dark:text-red-400">{{
+                              <span class="text-xs/5 text-state-danger-600 dark:text-state-danger-400">{{
                                 discoverError()[tool.toolId]
                               }}</span>
                             } @else {

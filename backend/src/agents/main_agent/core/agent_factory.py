@@ -12,7 +12,9 @@ from strands.tools.executors import SequentialToolExecutor
 from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider
 from agents.main_agent.config.constants import EnvVars
+from apis.shared.models.bedrock_responses import build_bedrock_responses_model
 from apis.shared.models.mantle import build_mantle_model
+from apis.shared.models.usage_normalization import usage_normalized
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,11 @@ class AgentFactory:
         client_args = {"api_key": api_key}
 
         logger.info(f"Creating OpenAI model with model_id={model_config.model_id}")
-        return OpenAIModel(client_args=client_args, **openai_config)
+        # Wrapped for Bedrock-Converse token-bucket semantics — OpenAI's
+        # `input_tokens` is inclusive of the cache buckets, which our cost and
+        # context-size math treats as disjoint. See
+        # apis/shared/models/usage_normalization.py.
+        return usage_normalized(OpenAIModel)(client_args=client_args, **openai_config)
 
     @staticmethod
     def _create_mantle_model(model_config: ModelConfig):
@@ -105,6 +111,43 @@ class AgentFactory:
             api_mode=model_config.mantle_api_mode,
             region=region,
             params=mantle_config.get("params"),
+        )
+
+    @staticmethod
+    def _create_bedrock_responses_model(model_config: ModelConfig):
+        """
+        Create an OpenAI Responses model on the bedrock-runtime endpoint
+
+        The only Bedrock path that serves prompt caching for GPT-5.6. Same
+        OpenAI wire protocol as Mantle, different host and model-id shape
+        (cross-Region inference profiles).
+
+        Args:
+            model_config: Model configuration
+
+        Returns:
+            OpenAIResponsesModel: Configured model targeting bedrock-runtime
+
+        Raises:
+            ValueError: If no AWS region can be resolved for the endpoint
+        """
+        # Same precedence as the Mantle path: model override, then AWS_REGION.
+        # Unlike Mantle, an unresolvable region raises rather than defaulting —
+        # the builder owns that, so both the URL and the token signature stay
+        # on one value.
+        region = model_config.mantle_region or os.getenv(EnvVars.AWS_REGION)
+        responses_config = model_config.to_bedrock_responses_config()
+        logger.info(
+            f"Creating bedrock-runtime Responses model "
+            f"with model_id={model_config.model_id} "
+            f"region={region or '<agent default>'}"
+        )
+        # Shared builder — also used by the API-key /chat/api-converse handler
+        # (apis/app_api) so the transport construction is never forked.
+        return build_bedrock_responses_model(
+            model_id=responses_config["model_id"],
+            region=region,
+            params=responses_config.get("params"),
         )
 
     @staticmethod
@@ -173,6 +216,8 @@ class AgentFactory:
             model = AgentFactory._create_openai_model(model_config)
         elif provider == ModelProvider.MANTLE:
             model = AgentFactory._create_mantle_model(model_config)
+        elif provider == ModelProvider.BEDROCK_RESPONSES:
+            model = AgentFactory._create_bedrock_responses_model(model_config)
         elif provider == ModelProvider.GEMINI:
             model = AgentFactory._create_gemini_model(model_config)
         else:

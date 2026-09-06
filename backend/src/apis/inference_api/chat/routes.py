@@ -8,7 +8,6 @@ These endpoints are at the root level to comply with AWS Bedrock AgentCore Runti
 """
 
 import asyncio
-import contextlib
 import json
 import logging
 from typing import AsyncGenerator, Optional, Union
@@ -26,7 +25,11 @@ from apis.shared.errors import (
     build_conversational_error_event,
 )
 from apis.inference_api.runtime_health import ping_payload
-from apis.shared.feature_flags import agents_enabled, skills_enabled
+from apis.shared.feature_flags import (
+    agents_enabled,
+    mid_turn_steering_enabled,
+    skills_enabled,
+)
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.models.managed_models import list_managed_models
 from apis.shared.quota import (
@@ -291,13 +294,32 @@ def _merge_inference_params(
       * supported with admin default -> use the default unless the request
         provides a value within bounds; out-of-bounds values are clamped.
 
-    Request keys for params the managed model says nothing about pass through
-    untouched — the per-provider translation table will drop unknowns.
+    **Omission means unsupported, for any model that declares a spec at all.**
+    A param the spec doesn't mention is dropped rather than passed through.
+    This inverts the original default, which forwarded any request key that
+    appeared in ``KNOWN_CANONICAL_PARAMS``. That was a latent turn-killer:
+    Anthropic deprecated ``temperature``/``top_p``/``top_k`` on Claude Opus 4.7
+    and later, where a non-default value returns a hard 400. Our curated
+    templates for those models correctly *omit* the params — but omitting is
+    not the same as declaring ``supported: false``, so a request that carried a
+    temperature reached Bedrock and killed the turn mid-stream. Inverting the
+    default closes the whole class instead of requiring every future template
+    to enumerate each newly-deprecated param and never miss one.
+
+    Models with **no** spec keep the permissive behavior: an admin who
+    hand-created a record without a ``supportedParams`` block hasn't declared
+    anything, so there is nothing to read an omission against. Every drop is
+    logged, which is what makes the inversion observable if it takes away a
+    param someone was relying on.
     """
     merged: dict = {}
     spec_map = {}
     if managed_model and managed_model.supported_params:
         spec_map = managed_model.supported_params.params or {}
+
+    # A non-empty spec is the signal that the admin described this model's
+    # params deliberately. An empty/absent one is silence, not a claim.
+    spec_is_authoritative = bool(spec_map)
 
     seen_keys: set[str] = set()
     for name, spec in spec_map.items():
@@ -347,14 +369,26 @@ def _merge_inference_params(
         elif spec.default is not None:
             merged[name] = spec.default
 
-    # Pass through request keys the admin spec doesn't mention, but only when
-    # they're in the canonical allow-list. Without this gate, a user could
-    # submit a future canonical key (or one a future provider mapping starts
-    # forwarding) and bypass the admin's per-model bounds entirely. Unknown
-    # keys are dropped here; the provider translation table is the second
-    # line of defense for ones it doesn't understand.
+    # Request keys the spec doesn't mention. For a model that declared a spec,
+    # silence means unsupported and the key is dropped. For one that declared
+    # nothing, fall back to the canonical allow-list: without that gate a user
+    # could submit a future canonical key (or one a future provider mapping
+    # starts forwarding) and bypass the admin's per-model bounds entirely.
+    # The provider translation table remains the second line of defense.
     for name, value in request_params.items():
         if name in seen_keys or value is None:
+            continue
+        if spec_is_authoritative:
+            # Logged at INFO on purpose: this is the inversion taking something
+            # away. If a param a caller depended on starts disappearing, this
+            # line is how it gets found — grep `omitted from its supportedParams`.
+            logger.info(
+                "Dropping inference param '%s' for model %s — omitted from its "
+                "supportedParams spec, which declares %d param(s)",
+                _sanitize_log(name),
+                _sanitize_log(getattr(managed_model, "model_id", "?")),
+                len(spec_map),
+            )
             continue
         if name not in KNOWN_CANONICAL_PARAMS:
             logger.info(
@@ -397,15 +431,16 @@ async def _resolve_model_settings(
 
     Returns ``(caching_enabled, inference_params, mantle_api_mode,
     mantle_region, provider)``. A single registry lookup drives all of them.
-    The Mantle fields are server-authoritative (recorded on the model):
+    The API-surface fields are server-authoritative (recorded on the model):
     ``mantle_api_mode`` selects Chat Completions vs the Responses API and
-    ``mantle_region`` optionally pins inference to a specific region; both
-    ``None`` for non-Mantle models. ``provider`` is the model's registered
-    provider (e.g. ``"mantle"``), returned so callers can recover it when the
-    request/binding didn't carry one — without it a Mantle model like
-    ``openai.gpt-5.4`` misroutes to Bedrock ConverseStream and fails with an
-    invalid-model-identifier error. Resolving these here keeps them off the
-    client request — the SPA can't override.
+    ``mantle_region`` optionally pins inference to a specific region. Both are
+    meaningful on either OpenAI-compatible Bedrock surface — ``"mantle"`` and
+    ``"bedrock-responses"`` — and ``None`` for every other provider.
+    ``provider`` is the model's registered provider, returned so callers can
+    recover it when the request/binding didn't carry one — without it a Mantle
+    model like ``openai.gpt-5.4`` misroutes to Bedrock ConverseStream and fails
+    with an invalid-model-identifier error. Resolving these here keeps them off
+    the client request — the SPA can't override.
     """
     request_params = dict(request_inference_params or {})
 
@@ -1880,7 +1915,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # answerable without knowing whether the turn ran an approved snapshot or a draft.
         logger.info(
             "Agent configuration for this turn: %s",
-            f"published version {resolved_version}" if resolved_version else "live record / draft",
+            f"published version {scrub_log(resolved_version)}" if resolved_version else "live record / draft",
         )
 
         # ⚠️ Both bookkeeping writes below are skipped for a reviewer preview, because a
@@ -2159,6 +2194,25 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     "Wait for it to finish before sending another message."
                 ),
             )
+
+        # Mid-turn steering, paused-turn path (docs/specs/mid-turn-steering.md).
+        # A turn paused for consent or approval had no running loop to steer,
+        # and the pause released its lease — inbox and all. Follow-ups the user
+        # queued meanwhile ride the resume request and are seeded onto the lease
+        # we just took, so the ordinary SteeringHook injects them at this turn's
+        # first tool boundary. One injection path, one ack path, whichever way
+        # the entry arrived. Best-effort: a failed seed degrades to the
+        # composer's end-of-turn flush.
+        if input_data.steering and mid_turn_steering_enabled():
+            try:
+                from apis.shared.sessions.session_lease import seed_steer_queue
+
+                await seed_steer_queue(
+                    session_lease,
+                    [{"id": entry.id, "text": entry.text} for entry in input_data.steering],
+                )
+            except Exception:
+                logger.warning("Failed to seed carried-over steering", exc_info=True)
 
     try:
         # Resume requests rebuild the agent from the persisted PausedTurnSnapshot
@@ -2598,6 +2652,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # cached and shared across turns, so per-turn state must never live on it
                 # (see #741/#751).
                 turn_agent_id=input_data.rag_assistant_id,
+                # This turn's lease doubles as the mid-turn steering inbox
+                # (docs/specs/mid-turn-steering.md). Passed per turn for the
+                # same reason as turn_agent_id — the agent is cached, the lease
+                # is not. None for preview sessions and the local
+                # no-DynamoDB path, where steering is simply inert.
+                turn_lease=session_lease,
             ):
                 yield event
                 # Interleave the finished title between agent events (same

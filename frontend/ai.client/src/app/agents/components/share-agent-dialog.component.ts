@@ -143,7 +143,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
             type="button"
             (click)="onCancel()"
             aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
           </button>
@@ -184,7 +184,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                     (ngModelChange)="onQueryChange($event)"
                     (keydown.enter)="addTypedEmails()"
                     placeholder="Name or email address"
-                    class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+                    class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
                 <div class="relative inline-flex shrink-0">
@@ -193,7 +193,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                     id="share-new-permission"
                     [ngModel]="newPermission()"
                     (ngModelChange)="newPermission.set($event)"
-                    class="appearance-none rounded-2xl border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                    class="appearance-none rounded-2xl border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                   >
                     <option value="viewer">Can view</option>
                     <option value="editor">Can edit</option>
@@ -215,9 +215,9 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                     <button
                       type="button"
                       (click)="addTypedEmails()"
-                      class="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm/6 text-gray-900 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 dark:text-white dark:hover:bg-gray-800"
+                      class="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm/6 text-gray-900 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary-500 dark:text-white dark:hover:bg-gray-800"
                     >
-                      <ng-icon name="heroPlus" class="size-4 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                      <ng-icon name="heroPlus" class="size-4 shrink-0 text-primary-accessible dark:text-primary-accessible-dark" aria-hidden="true" />
                       <span class="truncate">
                         Add
                         {{ count === 1 ? typedEmails()[0] : count + ' email addresses' }}
@@ -245,7 +245,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                             [attr.aria-selected]="isEmailShared(user.email)"
                             [disabled]="isEmailShared(user.email)"
                             (click)="addUserFromSearch(user)"
-                            class="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm/6 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-gray-800"
+                            class="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm/6 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-gray-800"
                           >
                             <span class="min-w-0 flex-1">
                               <span class="block truncate font-medium text-gray-900 dark:text-white">{{ user.name }}</span>
@@ -304,7 +304,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                           [id]="'share-perm-' + entry.email"
                           [ngModel]="entry.permission"
                           (ngModelChange)="setPermission(entry.email, $event)"
-                          class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                          class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                         >
                           <option value="viewer">Can view</option>
                           <option value="editor">Can edit</option>
@@ -319,7 +319,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                         type="button"
                         (click)="removeEmail(entry.email)"
                         [attr.aria-label]="'Remove ' + entry.email"
-                        class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                        class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                       >
                         <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                       </button>
@@ -367,12 +367,12 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                 type="text"
                 readonly
                 [value]="shareableUrl()"
-                class="min-w-0 flex-1 rounded-2xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm/6 text-gray-600 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300"
+                class="min-w-0 flex-1 rounded-2xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm/6 text-gray-600 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300"
               />
               <button
                 type="button"
                 (click)="copyUrl()"
-                class="inline-flex shrink-0 items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                class="inline-flex shrink-0 items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
               >
                 <ng-icon name="heroLink" class="size-4" aria-hidden="true" />
                 {{ copied() ? 'Copied' : 'Copy' }}
@@ -396,7 +396,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
               </p>
 
               @if (listingError(); as message) {
-                <p role="alert" class="mt-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300">
+                <p role="alert" class="mt-2 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-2.5 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300">
                   {{ message }}
                 </p>
               }
@@ -422,7 +422,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                           type="button"
                           (click)="onSubmitListing()"
                           [disabled]="listingBusy()"
-                          class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                          class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                         >
                           {{ submitLabel() }}
                         </button>
@@ -431,7 +431,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                         <button
                           type="button"
                           (click)="onViewInStore()"
-                          class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                          class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                         >
                           View in store
                         </button>
@@ -441,7 +441,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                           type="button"
                           (click)="onWithdrawListing()"
                           [disabled]="listingBusy()"
-                          class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+                          class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
                         >
                           {{ listingBusy() ? 'Working…' : withdrawLabel() }}
                         </button>
@@ -454,7 +454,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
           }
 
           @if (error(); as message) {
-            <p role="alert" class="mt-4 rounded-2xl bg-red-50 px-4 py-2.5 text-sm/6 text-red-800 dark:bg-red-900/20 dark:text-red-400">
+            <p role="alert" class="mt-4 rounded-2xl bg-state-danger-50 px-4 py-2.5 text-sm/6 text-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-400">
               {{ message }}
             </p>
           }
@@ -474,7 +474,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
               type="button"
               (click)="onSave()"
               [disabled]="saving() || !hasPendingChanges()"
-              class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+              class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 "
             >
               {{ saving() ? 'Saving…' : 'Save changes' }}
             </button>
@@ -484,9 +484,8 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;
@@ -592,7 +591,7 @@ export class ShareAgentDialogComponent {
 
   protected readonly accessIconClass = computed(() =>
     this.visibility() === 'PUBLIC'
-      ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'
+      ? 'bg-state-success-50 text-state-success-600 dark:bg-state-success-500/10 dark:text-state-success-400'
       : 'bg-gray-100 text-gray-500 dark:bg-white/5 dark:text-gray-400',
   );
 

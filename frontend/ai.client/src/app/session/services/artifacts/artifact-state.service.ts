@@ -136,6 +136,55 @@ export class ArtifactStateService {
     for (const a of list) this.upsert(a);
   }
 
+  /**
+   * Drop every version of an artifact from the registry.
+   *
+   * The conversation's inline cards and the docked panel both read this
+   * registry, so one call clears both — a deleted artifact must not
+   * leave a card behind that 404s when clicked. Closes the panel too if
+   * it happens to be showing the artifact that just went.
+   *
+   * Local bookkeeping only: the caller owns the HTTP delete and must
+   * have seen it succeed first. Removing optimistically would put the
+   * card back on the next session load if the request failed.
+   */
+  remove(artifactId: string): void {
+    this.byKey.update((m) => {
+      const next = new Map(m);
+      for (const key of m.keys()) {
+        if (next.get(key)?.artifactId === artifactId) next.delete(key);
+      }
+      return next;
+    });
+    if (this.openRef()?.artifactId === artifactId) {
+      this.closeArtifactPanel();
+    }
+  }
+
+  /**
+   * Apply a new title to every known version of an artifact.
+   *
+   * Every version, not just the open one, because the backend renames
+   * every version row — leaving older cards on the old title would
+   * invent a disagreement that does not exist on the server. The open
+   * panel ref carries its own copy of the title, so it is updated too.
+   */
+  rename(artifactId: string, title: string): void {
+    this.byKey.update((m) => {
+      const next = new Map(m);
+      for (const [key, artifact] of m) {
+        if (artifact.artifactId === artifactId) {
+          next.set(key, { ...artifact, title });
+        }
+      }
+      return next;
+    });
+    const open = this.openRef();
+    if (open?.artifactId === artifactId) {
+      this.openRef.set({ ...open, title });
+    }
+  }
+
   openArtifactPanel(ref: OpenArtifactRef): void {
     // Collapse the side nav to make room for the docked pane. Only capture
     // the prior state on a genuine closed -> open transition: switching

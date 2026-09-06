@@ -14,10 +14,11 @@ import { FineTuningStateService } from '../../services/fine-tuning-state.service
 import { StatusBadgeComponent } from '../../components/status-badge.component';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
 import { parseIso } from '../../../utils/date';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-inference-job-detail',
-  imports: [RouterLink, DatePipe, NgIcon, StatusBadgeComponent, TooltipDirective],
+  imports: [RouterLink, DatePipe, NgIcon, StatusBadgeComponent, TooltipDirective, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowLeft,

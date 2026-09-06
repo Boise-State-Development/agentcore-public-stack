@@ -17,6 +17,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { ShareService, ShareResponse } from '../../services/share/share.service';
 import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 export interface ShareModalData {
   sessionId: string;
@@ -28,7 +29,7 @@ type AccessLevel = 'public' | 'specific';
 @Component({
   selector: 'app-share-modal',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, FormsModule, NgIcon],
+  imports: [DialogDismissDirective, FormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({ heroXMark, heroClipboard, heroArrowUpOnSquare, heroCheck }),
   ],
@@ -152,8 +153,8 @@ type AccessLevel = 'public' | 'specific';
 
         <!-- Existing shares info -->
         @if (existingShares().length > 0 && !shareResult()) {
-          <div class="mt-4 rounded-md bg-blue-50 p-3 dark:bg-blue-500/10">
-            <p class="text-xs text-blue-700 dark:text-blue-300">
+          <div class="mt-4 rounded-md bg-state-info-50 p-3 dark:bg-state-info-500/10">
+            <p class="text-xs text-state-info-700 dark:text-state-info-300">
               This conversation has {{ existingShares().length }} existing share{{ existingShares().length > 1 ? 's' : '' }}.
               Creating a new share will add another snapshot.
             </p>
@@ -162,15 +163,15 @@ type AccessLevel = 'public' | 'specific';
 
         <!-- Share result -->
         @if (shareResult()) {
-          <div class="mt-4 rounded-md bg-green-50 p-3 dark:bg-green-500/10">
-            <p class="text-sm font-medium text-green-800 dark:text-green-300 mb-2">Chat shared</p>
-            <p class="text-xs text-green-600 dark:text-green-400 mb-2">Future messages aren't included in the share.</p>
+          <div class="mt-4 rounded-md bg-state-success-50 p-3 dark:bg-state-success-500/10">
+            <p class="text-sm font-medium text-state-success-800 dark:text-state-success-300 mb-2">Chat shared</p>
+            <p class="text-xs text-state-success-600 dark:text-state-success-400 mb-2">Future messages aren't included in the share.</p>
             <div class="flex items-center gap-2">
               <input
                 type="text"
                 readonly
                 [value]="shareUrl()"
-                class="flex-1 rounded-md border border-green-200 bg-white px-2.5 py-1.5 text-xs text-gray-700 dark:border-green-700 dark:bg-gray-700 dark:text-gray-300"
+                class="flex-1 rounded-md border border-state-success-200 bg-white px-2.5 py-1.5 text-xs text-gray-700 dark:border-state-success-700 dark:bg-gray-700 dark:text-gray-300"
                 (click)="$event.target"
               />
               <button
@@ -187,8 +188,8 @@ type AccessLevel = 'public' | 'specific';
 
         <!-- Error -->
         @if (error()) {
-          <div class="mt-4 rounded-md bg-red-50 p-3 dark:bg-red-500/10">
-            <p class="text-sm text-red-700 dark:text-red-300">{{ error() }}</p>
+          <div class="mt-4 rounded-md bg-state-danger-50 p-3 dark:bg-state-danger-500/10">
+            <p class="text-sm text-state-danger-700 dark:text-state-danger-300">{{ error() }}</p>
           </div>
         }
 
@@ -210,7 +211,7 @@ type AccessLevel = 'public' | 'specific';
               class="inline-flex items-center gap-1.5 rounded-md bg-primary-600 px-3 py-2 text-sm/6 font-semibold text-white shadow-xs hover:bg-primary-500 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-primary-500 dark:shadow-none dark:hover:bg-primary-400"
             >
               @if (isSubmitting()) {
-                <span class="size-4 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden="true"></span>
+                <app-spinner size="sm" variant="on-solid" label="Creating share link" />
               }
               Create share link
             </button>
@@ -220,8 +221,7 @@ type AccessLevel = 'public' | 'specific';
     </div>
   `,
   styles: `
-    @import "tailwindcss";
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../../styles/theme.css";
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;

@@ -8,8 +8,8 @@ import type { JobResponse, InferenceJobResponse, FineTuningAccessResponse } from
 
 const mockAccess: FineTuningAccessResponse = {
   has_access: true,
-  monthly_quota_hours: 10,
-  current_month_usage_hours: 3,
+  monthly_quota_usd: 10,
+  current_month_usage_usd: 3,
   quota_period: '2026-03',
 };
 
@@ -19,6 +19,7 @@ const mockTrainingJob: JobResponse = {
   email: 'test@example.com',
   model_id: 'model-1',
   model_name: 'Test Model',
+  task_type: 'text-classification',
   status: 'TRAINING',
   dataset_s3_key: 's3://bucket/data.jsonl',
   output_s3_prefix: null,

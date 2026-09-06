@@ -121,3 +121,96 @@ class TestEffortAllowedGating:
         model = _model(effort=spec)
         merged = _merge_inference_params(model, {"effort": "max"})
         assert "effort" not in merged
+
+
+class TestOmissionMeansUnsupported:
+    """A spec that declares *any* param is authoritative: silence about a param
+    means unsupported, not "pass it through".
+
+    The original default forwarded any request key in ``KNOWN_CANONICAL_PARAMS``
+    that the spec didn't mention. Anthropic deprecated ``temperature`` /
+    ``top_p`` / ``top_k`` on Claude Opus 4.7 and later — a non-default value
+    returns a hard 400 — and our curated templates for those models *omit*
+    those params rather than declaring ``supported: false``. So the permissive
+    default let a temperature reach Bedrock and kill the turn mid-stream.
+
+    Note the SPA already behaved this way: `model-settings.ts` renders a row
+    only for a param the spec declares AND marks supported, so omission was
+    already "unsupported" in the UI. The backend was the surface that disagreed.
+    """
+
+    # Opus 4.7 / Sonnet 5 shape: max_tokens + effort declared, sampling params
+    # deliberately absent because the model 400s on them.
+    def _opus_47_spec(self) -> SimpleNamespace:
+        return _model(
+            max_tokens=ModelParamSpec(supported=True, min=1, max=64000, default=32000),
+            effort=ModelParamSpec(
+                supported=True, allowed=["low", "medium", "high"], default="medium"
+            ),
+        )
+
+    def test_omitted_param_is_dropped_when_a_spec_is_declared(self):
+        merged = _merge_inference_params(self._opus_47_spec(), {"temperature": 0.9})
+        assert "temperature" not in merged
+
+    def test_every_deprecated_sampling_param_is_dropped(self):
+        merged = _merge_inference_params(
+            self._opus_47_spec(),
+            {"temperature": 0.9, "top_p": 0.5, "top_k": 40},
+        )
+        assert merged.keys() == {"max_tokens", "effort"}
+
+    def test_declared_params_still_merge_normally(self):
+        """The inversion must not disturb the params the spec does declare."""
+        merged = _merge_inference_params(
+            self._opus_47_spec(), {"max_tokens": 4096, "effort": "high"}
+        )
+        assert merged["max_tokens"] == 4096
+        assert merged["effort"] == "high"
+
+    def test_drop_is_logged_with_the_model_id(self, caplog):
+        """The drop-log is the mitigation for taking a param away — without it
+        the inversion is silent and unfalsifiable in production."""
+        import logging
+
+        with caplog.at_level(logging.INFO):
+            _merge_inference_params(self._opus_47_spec(), {"temperature": 0.9})
+        assert any(
+            "omitted from its supportedParams" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_model_with_no_spec_stays_permissive(self):
+        """A hand-created record that declares nothing hasn't made a claim, so
+        there is no omission to read. Keep the canonical allow-list behavior."""
+        no_spec = SimpleNamespace(model_id="hand-made", supported_params=None)
+        merged = _merge_inference_params(no_spec, {"temperature": 0.7})
+        assert merged["temperature"] == 0.7
+
+    def test_model_with_empty_spec_stays_permissive(self):
+        empty = _model()  # SupportedParams(params={})
+        merged = _merge_inference_params(empty, {"temperature": 0.7})
+        assert merged["temperature"] == 0.7
+
+    def test_unrecognized_key_is_still_dropped_without_a_spec(self):
+        no_spec = SimpleNamespace(model_id="hand-made", supported_params=None)
+        merged = _merge_inference_params(no_spec, {"not_a_real_param": 1})
+        assert merged == {}
+
+    def test_explicit_unsupported_still_wins(self):
+        """Declaring `supported: false` keeps working — the inversion only
+        changes what *silence* means."""
+        model = _model(temperature=ModelParamSpec(supported=False))
+        merged = _merge_inference_params(model, {"temperature": 0.9})
+        assert "temperature" not in merged
+
+    def test_stale_persisted_override_can_no_longer_reach_the_provider(self):
+        """The SPA persists overrides per model id in localStorage and sends
+        them verbatim, unfiltered by the current spec. So an override set while
+        a param was declared outlives the spec that justified it. Before the
+        inversion that stale value reached Bedrock; now it is dropped."""
+        merged = _merge_inference_params(
+            self._opus_47_spec(), {"temperature": 1.0, "max_tokens": 8192}
+        )
+        assert merged == {"max_tokens": 8192, "effort": "medium"}
+

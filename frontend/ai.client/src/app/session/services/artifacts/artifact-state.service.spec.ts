@@ -230,4 +230,62 @@ describe('ArtifactStateService', () => {
     expect(svc.hasArtifacts()).toBe(false);
     expect(svc.openArtifact()).toBeNull();
   });
+
+  describe('remove', () => {
+    it('drops every version of the artifact', () => {
+      // The conversation renders one card per version, so removing only
+      // the newest would leave older cards pointing at nothing.
+      svc.recordLive(ev({ version: 1 }));
+      svc.recordLive(ev({ version: 2 }));
+      svc.remove('art-1');
+      expect(svc.versionsFor('art-1')).toEqual([]);
+      expect(svc.hasArtifacts()).toBe(false);
+    });
+
+    it('leaves other artifacts alone', () => {
+      svc.recordLive(ev({ artifactId: 'art-1' }));
+      svc.recordLive(ev({ artifactId: 'art-2' }));
+      svc.remove('art-1');
+      expect(svc.get('art-2')).toBeDefined();
+    });
+
+    it('closes the panel when it is showing the deleted artifact', () => {
+      svc.recordLive(ev());
+      expect(svc.openArtifact()?.artifactId).toBe('art-1');
+      svc.remove('art-1');
+      expect(svc.openArtifact()).toBeNull();
+    });
+
+    it('leaves a panel open on a different artifact', () => {
+      svc.recordLive(ev({ artifactId: 'art-1' }));
+      svc.recordLive(ev({ artifactId: 'art-2' }));
+      svc.remove('art-1');
+      expect(svc.openArtifact()?.artifactId).toBe('art-2');
+    });
+  });
+
+  describe('rename', () => {
+    it('retitles every version, matching what the backend writes', () => {
+      svc.recordLive(ev({ version: 1 }));
+      svc.recordLive(ev({ version: 2 }));
+      svc.rename('art-1', 'Renamed');
+      expect(svc.versionsFor('art-1').map((a) => a.title)).toEqual([
+        'Renamed',
+        'Renamed',
+      ]);
+    });
+
+    it('retitles the open panel ref, which holds its own copy', () => {
+      svc.recordLive(ev());
+      svc.rename('art-1', 'Renamed');
+      expect(svc.openArtifact()?.title).toBe('Renamed');
+    });
+
+    it('leaves other artifacts alone', () => {
+      svc.recordLive(ev({ artifactId: 'art-1', title: 'One' }));
+      svc.recordLive(ev({ artifactId: 'art-2', title: 'Two' }));
+      svc.rename('art-1', 'Renamed');
+      expect(svc.get('art-2')?.title).toBe('Two');
+    });
+  });
 });

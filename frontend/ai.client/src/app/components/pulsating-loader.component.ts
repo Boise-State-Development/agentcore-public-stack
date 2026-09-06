@@ -74,7 +74,7 @@ const LOADING_PHRASES = [
         <span
           class="text-base/6 font-medium"
           [class]="notice()
-            ? 'text-amber-700 dark:text-amber-400'
+            ? 'text-state-warning-700 dark:text-state-warning-400'
             : 'text-secondary-600 dark:text-secondary-400'"
         >
           {{ displayText() }}
@@ -133,11 +133,11 @@ const LOADING_PHRASES = [
          swapping just the text leaves the indicator looking routine. */
       .pulsing-circle.is-notice::before,
       .pulsing-circle.is-notice::after {
-        background-color: var(--color-amber-500);
+        background-color: var(--color-state-warning-500);
       }
 
       .pulsing-circle.is-notice::after {
-        box-shadow: 0 0 8px var(--color-amber-500);
+        box-shadow: 0 0 8px var(--color-state-warning-500);
       }
 
       @keyframes pulse-ring {

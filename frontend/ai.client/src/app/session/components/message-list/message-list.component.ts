@@ -14,6 +14,8 @@ import { CompactionSummaryComponent } from './components/compaction-summary/comp
 import { ArtifactCardComponent } from './components/artifact/artifact-card.component';
 import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
+import { SharedArtifactCardComponent } from '../../../shared/artifact/shared-artifact-card.component';
+import type { SharedConversationArtifact } from '../../services/share/share.service';
 import { McpAppCardComponent } from './components/mcp-app-card/mcp-app-card.component';
 import { AgentFeedbackLinkComponent } from '../../../agents/components/agent-feedback-link.component';
 import { McpAppCardStateService } from '../../services/mcp-apps/mcp-app-card-state.service';
@@ -44,6 +46,7 @@ import { StreamParserService } from '../../services/chat/stream-parser.service';
     CompactionSummaryComponent,
     ArtifactCardComponent,
     ArtifactPanelComponent,
+    SharedArtifactCardComponent,
     McpAppCardComponent,
     AgentFeedbackLinkComponent,
   ],
@@ -83,6 +86,21 @@ export class MessageListComponent {
   isChatLoading = input<boolean>(false);
   streamingMessageId = input<string | null>(null);
   embeddedMode = input<boolean>(false);
+  /**
+   * Artifacts pinned into a shared conversation's snapshot, plus the
+   * share that grants them — set only by the shared view.
+   *
+   * An input rather than a second read of `ArtifactStateService`,
+   * because that service is the *owner's* session state: it is
+   * populated by live SSE events and owner-scoped hydration, neither of
+   * which a recipient has. Feeding it recipient rows would put another
+   * user's artifacts into the signal the real session view reads.
+   *
+   * When set, these render in place of the owner cards. Null is the
+   * normal session view.
+   */
+  sharedArtifacts = input<SharedConversationArtifact[] | null>(null);
+  sharedArtifactShareId = input<string | null>(null);
 
   /**
    * The published marketplace agent behind this conversation, when there is one — the
@@ -314,6 +332,51 @@ export class MessageListComponent {
     return this.artifactsByMessageIndex().get(n) ?? [];
   }
 
+  // ----------------------------------------------------------------
+  // Shared-conversation artifacts (recipient view)
+  // ----------------------------------------------------------------
+
+  /** Shared artifacts grouped by the turn that produced them. Uses only
+   *  `producedByMessageIndex` — a snapshot has no live producing message
+   *  id, because nothing streamed into it. */
+  private readonly sharedArtifactsByMessageIndex = computed<
+    ReadonlyMap<number, SharedConversationArtifact[]>
+  >(() => {
+    const loaded = this.loadedMessageIndices();
+    const map = new Map<number, SharedConversationArtifact[]>();
+    for (const a of this.sharedArtifacts() ?? []) {
+      const idx = a.producedByMessageIndex;
+      if (idx == null || !loaded.has(idx)) continue;
+      const list = map.get(idx);
+      if (list) list.push(a);
+      else map.set(idx, [a]);
+    }
+    return map;
+  });
+
+  /** Shared artifacts with no usable anchor — kept visible in the
+   *  end-of-conversation strip, for the same reason the owner's orphans
+   *  are: an artifact that silently vanishes is worse than one in the
+   *  wrong place. */
+  protected readonly orphanSharedArtifacts = computed<
+    SharedConversationArtifact[]
+  >(() => {
+    const loaded = this.loadedMessageIndices();
+    return (this.sharedArtifacts() ?? []).filter(
+      (a) =>
+        a.producedByMessageIndex == null ||
+        !loaded.has(a.producedByMessageIndex),
+    );
+  });
+
+  protected sharedArtifactsForMessageId(
+    id: string,
+  ): SharedConversationArtifact[] {
+    const n = this.parseMessageIndex(id);
+    if (n === null) return [];
+    return this.sharedArtifactsByMessageIndex().get(n) ?? [];
+  }
+
   /** Single end-of-conversation compaction summary inputs. Sourced from
    *  live SSE events plus session-metadata hydration on load. The fade-in
    *  animation only fires on live events; reload-hydrated totals appear
@@ -357,7 +420,13 @@ export class MessageListComponent {
   protected readonly turns = computed<{ key: string; messages: Message[] }[]>(() => {
     const groups: { key: string; messages: Message[] }[] = [];
     for (const m of this.messages()) {
-      if (m.role === 'user' || groups.length === 0) {
+      // A mid-turn steer is a user message that does NOT start a turn: the
+      // user sent it *into* the response already streaming, so it belongs to
+      // that turn's group. Breaking here instead would split one response into
+      // two groups and move the last group's scroll reserve out from under a
+      // response still streaming into it. See docs/specs/mid-turn-steering.md.
+      const startsTurn = m.role === 'user' && !m.steering;
+      if (startsTurn || groups.length === 0) {
         groups.push({ key: m.id, messages: [m] });
       } else {
         groups[groups.length - 1].messages.push(m);

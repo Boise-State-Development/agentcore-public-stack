@@ -1,0 +1,37 @@
+/**
+ * Shared Tailwind theme entry — the single source of truth for Tailwind's
+ * theme across BOTH the global stylesheet (src/styles.css) and every
+ * component stylesheet.
+ *
+ * Why this file exists
+ * --------------------
+ * In Angular, each component stylesheet is compiled independently. A
+ * component sheet that does its own `@import "tailwindcss";` regenerates
+ * Tailwind's theme + utilities from Tailwind's DEFAULT palette, with no
+ * knowledge of the brand/surface overrides in
+ * `styles/generated/*.css`. At `Default_Surfaces` those overrides are
+ * byte-identical to Tailwind's stock neutrals, so the divergence was
+ * invisible — but once `brand.config.ts`'s `surfaces` are set to a
+ * genuinely non-default value, those components keep rendering the stock
+ * gray/white ramp (e.g. a white sidebar/toolbar on a pink page). See the
+ * `brand-surface-colors-not-applied` bugfix.
+ *
+ * The fix: this file imports Tailwind AND the generated brand/surface
+ * theme overrides once. `styles.css` imports it (emitting the global
+ * utilities), and every component stylesheet `@reference`s it — so each
+ * component resolves `dark:`, theme variables, and the `--spacing()`
+ * function against the SAME overridden theme, without re-emitting a
+ * second, stock-palette copy of Tailwind.
+ *
+ * Keep this file limited to Tailwind + theme context (no global element
+ * rules): `@reference` parses it for context but never emits its rules,
+ * and global element rules belong in `styles.css`.
+ */
+@import "tailwindcss";
+@import "./generated/brand-theme.css";
+@import "./generated/surface-theme.css";
+/* Non-rebrandable color tokens. See each file's header for the split:
+   state.css = status meaning, identity.css = category identity. */
+@import "./tokens/state.css";
+@import "./tokens/identity.css";
+@custom-variant dark (&:where(.dark, .dark *));

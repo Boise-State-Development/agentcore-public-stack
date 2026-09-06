@@ -96,7 +96,7 @@ import { MentionableAgent } from '../../../agents/services/agent-mention.service
       <button
         type="button"
         (mousedown)="onBrowseAll($event)"
-        class="flex w-full items-center justify-between gap-2 border-t border-gray-200 px-4 py-2.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700/50"
+        class="flex w-full items-center justify-between gap-2 border-t border-gray-200 px-4 py-2.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700/50"
       >
         Browse all agents
         <ng-icon name="heroArrowRight" class="size-4" aria-hidden="true" />

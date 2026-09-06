@@ -13,11 +13,12 @@ import { SessionService } from '../session/services/session/session.service';
 import { UserService } from '../auth/user.service';
 import { SidenavService } from '../services/sidenav/sidenav.service';
 import { Message } from '../session/services/models/message.model';
+import { SpinnerComponent } from '../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-shared-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, DatePipe, MessageListComponent],
+  imports: [NgIcon, DatePipe, MessageListComponent, SpinnerComponent],
   providers: [provideIcons({ heroLockClosed, heroExclamationTriangle, heroChatBubbleLeftRight })],
   template: `
     <div class="min-h-screen bg-white dark:bg-gray-900">
@@ -39,7 +40,7 @@ import { Message } from '../session/services/models/message.model';
       @if (isLoading()) {
         <div class="flex items-center justify-center py-20">
           <div class="text-center">
-            <div class="mx-auto size-8 animate-spin rounded-full border-2 border-gray-300 border-t-primary-500"></div>
+            <app-spinner size="lg" label="Loading shared conversation" />
             <p class="mt-3 text-sm text-gray-500 dark:text-gray-400">Loading shared conversation...</p>
           </div>
         </div>
@@ -69,9 +70,16 @@ import { Message } from '../session/services/models/message.model';
 
         <!-- Messages -->
         <div class="mx-auto max-w-4xl px-4 pb-32">
+          <!-- Artifacts ride in on the conversation payload, pinned at
+               the versions the snapshot froze, and anchor under the same
+               turns the owner sees them under. They are passed in rather
+               than read from ArtifactStateService, which holds the
+               OWNER's live session state and has nothing to say here. -->
           <app-message-list
             [messages]="messages()"
             [embeddedMode]="true"
+            [sharedArtifacts]="conversation()!.artifacts"
+            [sharedArtifactShareId]="conversation()!.shareId"
           />
         </div>
 
@@ -84,7 +92,7 @@ import { Message } from '../session/services/models/message.model';
             class="pointer-events-auto inline-flex items-center gap-2 rounded-full bg-primary-500 px-6 py-3 text-sm font-semibold text-white shadow-lg ring-1 ring-primary-500 transition-all hover:bg-primary-400 hover:shadow-xl hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 dark:bg-primary-400 dark:ring-primary-400 dark:hover:bg-primary-300"
           >
             @if (isExporting()) {
-              <span class="size-5 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden="true"></span>
+              <app-spinner size="md" variant="on-solid" label="Exporting" />
               <span>Exporting...</span>
             } @else {
               <ng-icon name="heroChatBubbleLeftRight" class="size-5" aria-hidden="true" />

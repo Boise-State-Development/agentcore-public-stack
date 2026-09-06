@@ -37,7 +37,7 @@ import { UserMenuLink } from './models/user-menu-link.model';
           </div>
           <a
             routerLink="/admin/manage-user-menu-links/new"
-            class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex items-center gap-2 rounded-sm bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-primary-500"
           >
             <ng-icon name="heroPlus" class="size-5" />
             New link
@@ -45,7 +45,7 @@ import { UserMenuLink } from './models/user-menu-link.model';
         </div>
 
         @if (loadError()) {
-          <div class="mb-4 rounded-sm border border-red-300 bg-red-50 p-4 text-sm/6 text-red-700 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300">
+          <div class="mb-4 rounded-sm border border-state-danger-300 bg-state-danger-50 p-4 text-sm/6 text-state-danger-700 dark:border-state-danger-700 dark:bg-state-danger-900/20 dark:text-state-danger-300">
             Failed to load links. {{ loadError() }}
           </div>
         }
@@ -55,7 +55,7 @@ import { UserMenuLink } from './models/user-menu-link.model';
             <p class="text-base/7 text-gray-500 dark:text-gray-400">No user-menu links yet.</p>
             <a
               routerLink="/admin/manage-user-menu-links/new"
-              class="mt-4 inline-flex items-center gap-2 text-sm/6 font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+              class="mt-4 inline-flex items-center gap-2 text-sm/6 font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark"
             >
               Add the first one →
             </a>
@@ -75,7 +75,7 @@ import { UserMenuLink } from './models/user-menu-link.model';
                       @if (!link.enabled) {
                         <span class="shrink-0 rounded-sm bg-gray-100 px-2 py-0.5 text-xs/5 font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">Disabled</span>
                       }
-                      <span class="shrink-0 rounded-sm bg-blue-100 px-2 py-0.5 text-xs/5 font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                      <span class="shrink-0 rounded-sm bg-state-info-100 px-2 py-0.5 text-xs/5 font-medium text-state-info-700 dark:bg-state-info-900/40 dark:text-state-info-300">
                         {{ link.kind === 'external' ? 'External' : 'Modal' }}
                       </span>
                     </div>
@@ -99,7 +99,7 @@ import { UserMenuLink } from './models/user-menu-link.model';
                   <button
                     type="button"
                     (click)="onDelete(link)"
-                    class="inline-flex items-center gap-1 rounded-sm border border-red-300 bg-white px-2.5 py-1.5 text-sm/6 font-medium text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500 dark:border-red-500 dark:bg-gray-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                    class="inline-flex items-center gap-1 rounded-sm border border-state-danger-300 bg-white px-2.5 py-1.5 text-sm/6 font-medium text-state-danger-700 hover:bg-state-danger-50 focus:outline-none focus:ring-2 focus:ring-state-danger-500 dark:border-state-danger-500 dark:bg-gray-700 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
                     [attr.aria-label]="'Delete ' + link.label"
                   >
                     <ng-icon name="heroTrash" class="size-4" />

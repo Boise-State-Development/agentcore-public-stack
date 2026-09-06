@@ -261,7 +261,19 @@ DOC_STATUS_NOT_FOUND = "NOT_FOUND"
 #: a slow success into a permanent failure in dev — three redeliveries each
 #: re-ingested, and the document only reached INDEXED 54 s after the last attempt
 #: had already been dead-lettered.
-DOC_STATUSES_IN_FLIGHT = frozenset({"STARTING", "PENDING", "IN_PROGRESS"})
+#:
+#: ⚠️ ``TEXT_INDEXED`` is **not in the packaged service model's DocumentStatus
+#: enum** — the live service returns statuses the SDK does not declare. Observed in
+#: dev on a document with image extraction enabled: it reported ``TEXT_INDEXED``
+#: (text searchable, media still processing) and later became ``INDEXED``. It is
+#: treated as in-flight rather than as done, because marking a document complete at
+#: that point would tell the user an image-only page is ready while the vision
+#: model has not finished — precisely the "upload worked but the assistant cannot
+#: see it" report this module exists to prevent. Do not derive this set from the
+#: SDK enum; it is deliberately wider.
+DOC_STATUSES_IN_FLIGHT = frozenset(
+    {"STARTING", "PENDING", "IN_PROGRESS", "TEXT_INDEXED"}
+)
 
 #: Terminal and unusable. Worth failing the document rather than retrying forever.
 DOC_STATUSES_FAILED = frozenset({"FAILED", "METADATA_UPDATE_FAILED"})
@@ -344,10 +356,34 @@ def wait_until_indexed(
 
     deadline = time.monotonic() + timeout_seconds
     status, updated_at = document_status(backend, kb_ref, document_id)
-    while status in DOC_STATUSES_IN_FLIGHT and time.monotonic() < deadline:
+    while _still_working(status, document_id) and time.monotonic() < deadline:
         sleep(interval_seconds)
         status, updated_at = document_status(backend, kb_ref, document_id)
     return status, updated_at
+
+
+def _still_working(status: str, document_id: str) -> bool:
+    """Whether to keep waiting on ``status``.
+
+    Anything not recognised counts as still working, deliberately. The live service
+    already returns at least one status the packaged model does not declare
+    (``TEXT_INDEXED``), so treating unknown values as terminal would dead-letter
+    documents the day AWS adds another. Waiting is bounded by the caller's deadline,
+    so the cost of guessing wrong here is one poll budget rather than a lost
+    document — and the log line names the value so it can be classified properly.
+    """
+    if status in DOC_STATUSES_IN_FLIGHT:
+        return True
+    if status in (DOC_STATUS_INDEXED, DOC_STATUS_NOT_FOUND, *DOC_STATUSES_PARTIAL):
+        return False
+    if status in DOC_STATUSES_FAILED:
+        return False
+    logger.warning(
+        f"document {document_id} reported unrecognised status {status!r}; treating "
+        f"it as still indexing. If this is terminal, add it to the appropriate set "
+        f"in ingestion_consumer.py"
+    )
+    return True
 
 
 def wait_until_retrievable(
@@ -358,12 +394,34 @@ def wait_until_retrievable(
     interval_seconds: Optional[float] = None,
     sleep: Any = time.sleep,
 ) -> Optional[str]:
-    """Poll until a retrieval actually returns ``document_id``.
+    """Confirm a retrieval really returns ``document_id``, filtered to that document.
 
-    Returns the timestamp at which it first became retrievable, or ``None`` on
-    timeout. A probe that itself errors is treated as "not yet", not as a document
-    failure: the document is usually fine and merely slow, and failing it would fail
-    uploads that are about to work.
+    Returns the timestamp at which it was first confirmed, or ``None`` on timeout.
+    A probe that itself errors is treated as "not yet", not as a document failure:
+    the document is usually fine and merely slow, and failing it would fail uploads
+    that are about to work.
+
+    THE FILTER IS THE WHOLE POINT
+    An earlier version searched for the document *id as the query text* and checked
+    whether that document appeared in the top 5 results. A document id carries no
+    meaning to an embedding model, so the search returned whatever the reranker
+    liked best — measured in dev with two documents in the knowledge base, querying
+    ``DOC-40e985680a63`` returned five chunks and every one of them belonged to a
+    *different* document. The probe reported "not retrievable" for a document that
+    was perfectly retrievable.
+
+    That failure scales the wrong way: the more documents a knowledge base holds,
+    the less likely the target appears in an unfiltered top-5, so every upload to a
+    mature knowledge base would burn its full poll budget and then dead-letter. It
+    only ever worked when the knowledge base held a single document, where anything
+    returned was necessarily the right thing.
+
+    An ``equals`` filter on ``document_id`` makes the question exact: chunks come
+    back only for this document, so a non-empty result *is* proof of retrievability
+    and an empty one is a true negative. Verified against dev: each document
+    returned 5 of its own chunks, and a fabricated id returned none. ``equals`` is
+    in ``ISOLATION_SAFE_FILTER_OPERATORS``, so it passes the adapter's filter
+    validation.
 
     The timeouts default to ``None`` and are resolved from the module constants *at
     call time*, rather than being bound as default arguments. Default arguments are
@@ -378,14 +436,23 @@ def wait_until_retrievable(
     if interval_seconds is None:
         interval_seconds = RETRIEVABLE_POLL_INTERVAL_SECONDS
 
+    # Exact-match only. A prefix or substring operator would let `DOC-1` match
+    # `DOC-10` and confirm the wrong document as retrievable.
+    document_filter = {"equals": {"key": "document_id", "value": document_id}}
+
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         try:
-            chunks = asyncio.run(backend.search(kb_ref, document_id, 5))
+            chunks = asyncio.run(
+                backend.search(kb_ref, document_id, 5, retrieval_filter=document_filter)
+            )
         except Exception as exc:  # noqa: BLE001 - a probe failure is not a document failure
             logger.warning(f"retrievability probe for {document_id} failed: {exc}")
             chunks = []
 
+        # The filter already restricts the result set to this document, so anything
+        # coming back is the answer. The per-chunk check stays as a belt-and-braces
+        # guard against a filter that is silently ignored by a future API change.
         for chunk in chunks or []:
             metadata = getattr(chunk, "metadata", None) or {}
             if metadata.get("document_id") == document_id:
@@ -463,17 +530,38 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
         return {"routed": "managed", "ingested": False, "document_id": document_id,
                 "status": status}
 
-    if status in DOC_STATUSES_IN_FLIGHT:
-        # Already being indexed. Do NOT ingest again — that would discard the
-        # progress this invocation is waiting on. Leave it non-terminal so the
-        # event source brings us back, by which time Bedrock may have finished.
+    if status == DOC_STATUS_NOT_FOUND:
+        # Bedrock has never heard of it, so this is the first delivery. Submit.
+        try:
+            asyncio.run(backend.ingest(assistant_id, source))
+        except Exception as exc:
+            logger.error(f"direct ingestion of {document_id} failed: {exc}", exc_info=True)
+            set_document_terminal(assistant_id, document_id, STATUS_FAILED, error=str(exc))
+            raise
+    else:
+        # Already submitted — a redelivery, or a document still being worked on.
+        # Do NOT ingest again: re-submitting discards the progress this invocation
+        # is about to wait for, which is what turned a slow success into a
+        # permanent failure in dev.
         logger.info(
-            f"document {document_id} is {status} in the knowledge base; not "
-            f"re-ingesting, waiting for redelivery"
+            f"document {document_id} is already {status} in the knowledge base; "
+            f"not re-ingesting"
         )
-        raise IngestionRoutingError(
-            f"document {document_id} is still {status}; leaving it for redelivery"
+
+    # One wait, whichever way we arrived. Both "just submitted" and "found it
+    # mid-flight" need the same thing: give Bedrock time, bounded by a budget that
+    # fits inside this Lambda, because redelivery is capped at 2 retries.
+    if _still_working(status, document_id) or status == DOC_STATUS_NOT_FOUND:
+        status, bedrock_updated_at = wait_until_indexed(backend, assistant_id, document_id)
+
+    if status in DOC_STATUSES_FAILED:
+        logger.error(f"document {document_id} became {status} during indexing")
+        set_document_terminal(
+            assistant_id, document_id, STATUS_FAILED,
+            error=f"the knowledge base reports this document as {status}",
         )
+        return {"routed": "managed", "ingested": True, "document_id": document_id,
+                "status": status}
 
     if status in DOC_STATUSES_PARTIAL:
         logger.warning(
@@ -481,37 +569,14 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
             f"content or metadata did not index"
         )
 
-    already_indexed = status == DOC_STATUS_INDEXED or status in DOC_STATUSES_PARTIAL
-
-    if not already_indexed:
-        try:
-            asyncio.run(backend.ingest(assistant_id, source))
-        except Exception as exc:
-            logger.error(f"direct ingestion of {document_id} failed: {exc}", exc_info=True)
-            set_document_terminal(assistant_id, document_id, STATUS_FAILED, error=str(exc))
-            raise
-
-        # Submitted. Wait briefly for indexing so a small document finishes in this
-        # one invocation, then hand the slow ones back to redelivery.
-        status, bedrock_updated_at = wait_until_indexed(backend, assistant_id, document_id)
-
-        if status in DOC_STATUSES_FAILED:
-            logger.error(f"document {document_id} became {status} during indexing")
-            set_document_terminal(
-                assistant_id, document_id, STATUS_FAILED,
-                error=f"the knowledge base reports this document as {status}",
-            )
-            return {"routed": "managed", "ingested": True, "document_id": document_id,
-                    "status": status}
-
-        if status not in (DOC_STATUS_INDEXED, *DOC_STATUSES_PARTIAL):
-            # Still indexing. Deliberately NOT marked terminal, and deliberately
-            # not given an invented timestamp — the next delivery will find it
-            # INDEXED and record Bedrock's own.
-            raise IngestionRoutingError(
-                f"document {document_id} is {status} after submission; leaving it "
-                f"for redelivery to confirm indexing"
-            )
+    if status not in (DOC_STATUS_INDEXED, *DOC_STATUSES_PARTIAL):
+        # Still not done inside our budget. Deliberately NOT marked terminal, and
+        # deliberately not given an invented timestamp — a later delivery will find
+        # it INDEXED and record Bedrock's own.
+        raise IngestionRoutingError(
+            f"document {document_id} is {status} after waiting; leaving it for "
+            f"redelivery to confirm indexing"
+        )
 
     # INDEXED. `indexedAt` is Bedrock's OWN timestamp, not this process's clock —
     # an earlier version recorded `_now_iso()` immediately after the ingest call

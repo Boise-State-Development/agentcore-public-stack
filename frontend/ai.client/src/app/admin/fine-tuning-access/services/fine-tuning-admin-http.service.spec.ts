@@ -36,8 +36,8 @@ describe('FineTuningAdminHttpService', () => {
           email: 'user@example.com',
           granted_by: 'admin@example.com',
           granted_at: '2026-03-01T00:00:00Z',
-          monthly_quota_hours: 10,
-          current_month_usage_hours: 3,
+          monthly_quota_usd: 10,
+          current_month_usage_usd: 3,
           quota_period: '2026-03',
         },
       ],
@@ -58,8 +58,8 @@ describe('FineTuningAdminHttpService', () => {
       email: 'new@example.com',
       granted_by: 'admin@example.com',
       granted_at: '2026-03-01T00:00:00Z',
-      monthly_quota_hours: 20,
-      current_month_usage_hours: 0,
+      monthly_quota_usd: 20,
+      current_month_usage_usd: 0,
       quota_period: '2026-03',
     };
 
@@ -69,7 +69,7 @@ describe('FineTuningAdminHttpService', () => {
 
     const req = httpMock.expectOne('http://localhost:8000/admin/fine-tuning/access');
     expect(req.request.method).toBe('POST');
-    expect(req.request.body).toEqual({ email: 'new@example.com', monthly_quota_hours: 20 });
+    expect(req.request.body).toEqual({ email: 'new@example.com', monthly_quota_usd: 20 });
     req.flush(mockGrant);
   });
 
@@ -78,8 +78,8 @@ describe('FineTuningAdminHttpService', () => {
       email: 'user@example.com',
       granted_by: 'admin@example.com',
       granted_at: '2026-03-01T00:00:00Z',
-      monthly_quota_hours: 50,
-      current_month_usage_hours: 3,
+      monthly_quota_usd: 50,
+      current_month_usage_usd: 3,
       quota_period: '2026-03',
     };
 
@@ -89,7 +89,7 @@ describe('FineTuningAdminHttpService', () => {
 
     const req = httpMock.expectOne('http://localhost:8000/admin/fine-tuning/access/user%40example.com');
     expect(req.request.method).toBe('PUT');
-    expect(req.request.body).toEqual({ monthly_quota_hours: 50 });
+    expect(req.request.body).toEqual({ monthly_quota_usd: 50 });
     req.flush(mockGrant);
   });
 

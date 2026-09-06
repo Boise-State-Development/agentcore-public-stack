@@ -31,12 +31,12 @@
                 (click)="setViewMode('grid')"
                 [appTooltip]="'Grid view'"
                 appTooltipPosition="top"
-                class="grid size-8 place-items-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                class="grid size-8 place-items-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                 [class]="
                   viewMode() === 'grid'
                     ? 'bg-white text-gray-900 shadow-xs dark:bg-gray-900 dark:text-white'
                     : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'
-                "
+               "
               >
                 <ng-icon name="heroSquares2x2" class="size-4" aria-hidden="true" />
                 <span class="sr-only">Grid view</span>
@@ -48,12 +48,12 @@
                 (click)="setViewMode('list')"
                 [appTooltip]="'List view'"
                 appTooltipPosition="top"
-                class="grid size-8 place-items-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                class="grid size-8 place-items-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                 [class]="
                   viewMode() === 'list'
                     ? 'bg-white text-gray-900 shadow-xs dark:bg-gray-900 dark:text-white'
                     : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'
-                "
+               "
               >
                 <ng-icon name="heroBars3" class="size-4" aria-hidden="true" />
                 <span class="sr-only">List view</span>
@@ -93,12 +93,12 @@
         </div>
       } @else if (error()) {
         <div class="flex flex-col items-center justify-center py-16 text-center">
-          <div class="flex size-16 items-center justify-center rounded-2xl bg-red-50 dark:bg-red-900/20">
-            <svg class="size-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <div class="flex size-16 items-center justify-center rounded-2xl bg-state-danger-50 dark:bg-state-danger-900/20">
+            <svg class="size-8 text-state-danger-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
             </svg>
           </div>
-          <p class="mt-4 text-sm font-medium text-red-600 dark:text-red-400">{{ error() }}</p>
+          <p class="mt-4 text-sm font-medium text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
         </div>
       } @else if (agents().length === 0) {
         <div class="flex flex-col items-center justify-center rounded-2xl border border-dashed border-gray-300 py-16 text-center dark:border-gray-700">
@@ -124,7 +124,7 @@
           @for (agent of agents(); track agent.agentId) {
             <li class="px-4 py-3">
               <div class="flex items-center gap-4">
-                <button type="button" (click)="onEdit(agent)" class="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">
+                <button type="button" (click)="onEdit(agent)" class="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500">
                   <app-agent-icon
                     [agentId]="agent.agentId"
                     [iconUrl]="agent.iconUrl"
@@ -135,7 +135,7 @@
                     <span class="flex items-center gap-2">
                       <span class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">{{ agent.name }}</span>
                       @if (agent.status === 'DRAFT') {
-                        <span class="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs/5 font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Draft</span>
+                        <span class="shrink-0 rounded-full bg-state-warning-100 px-2 py-0.5 text-xs/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-400">Draft</span>
                       }
                     </span>
                     <span class="mt-0.5 block truncate text-sm/6 text-gray-500 dark:text-gray-400">{{ agent.description || 'No description' }}</span>
@@ -155,7 +155,7 @@
                     <button (click)="onShare(agent)" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Share'" appTooltipPosition="top">
                       <ng-icon name="heroShare" class="size-4" aria-hidden="true" />
                     </button>
-                    <button (click)="onDelete(agent)" class="rounded-md p-1.5 text-gray-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20" [appTooltip]="'Delete'" appTooltipPosition="top">
+                    <button (click)="onDelete(agent)" class="rounded-md p-1.5 text-gray-400 transition hover:bg-state-danger-50 hover:text-state-danger-600 dark:hover:bg-state-danger-900/20" [appTooltip]="'Delete'" appTooltipPosition="top">
                       <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                     </button>
                   }
@@ -180,7 +180,7 @@
                   <div class="flex items-center gap-2">
                     <h3 class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">{{ agent.name }}</h3>
                     @if (agent.status === 'DRAFT') {
-                      <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs/5 font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Draft</span>
+                      <span class="rounded-full bg-state-warning-100 px-2 py-0.5 text-xs/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-400">Draft</span>
                     }
                   </div>
                   <p class="mt-0.5 line-clamp-2 text-xs/5 text-gray-500 dark:text-gray-400">{{ agent.description || 'No description' }}</p>
@@ -206,7 +206,7 @@
                     <button (click)="onShare(agent)" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Share'" appTooltipPosition="top">
                       <ng-icon name="heroShare" class="size-4" aria-hidden="true" />
                     </button>
-                    <button (click)="onDelete(agent)" class="rounded-md p-1.5 text-gray-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20" [appTooltip]="'Delete'" appTooltipPosition="top">
+                    <button (click)="onDelete(agent)" class="rounded-md p-1.5 text-gray-400 transition hover:bg-state-danger-50 hover:text-state-danger-600 dark:hover:bg-state-danger-900/20" [appTooltip]="'Delete'" appTooltipPosition="top">
                       <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                     </button>
                   }

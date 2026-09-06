@@ -4,6 +4,87 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.18.0] - 2026-09-06
+
+Artifacts stop being a per-conversation curiosity and become a place users go. There is a library at `/artifacts` with previews, rename, delete and an in-app viewer; artifacts can be **shared** with named people or the whole tenant; and sharing a conversation now shares the artifacts in it, which previously left the recipient staring at nothing where the owner saw cards. Alongside it, two more surfaces the platform had no way to do at all: **feature announcements** — an admin-authored What's New feed with a banner, a modal and per-announcement reach stats — and **mid-turn steering**, which lets a follow-up typed while the model is still working land inside the running turn at the next tool boundary instead of interrupting it. The SPA gains a **single-file rebranding surface** so a fork can change app name, greeting, logo and the entire color system without touching a component. On the cost side the GPT-5.6 family (Sol / Terra / Luna) is curated with verified rates, and every published GPT-5.6 rate in the catalog is corrected. **Requires a CDK deploy** (new `{prefix}-announcements` table, new IAM grants); no GSI operations on any existing table.
+
+### 🚀 Added
+
+- **Artifact sharing** — owners can share an artifact with specific email addresses or with any authenticated tenant user, and revoke at any time. Share records live on the existing `{prefix}-user-artifacts` table under a `SHARE#` prefix (two rows in one `TransactWriteItems`); no new table and no GSI. Recipients open a minimal-chrome `/shared-artifact/{shareId}` view that renders the pinned version and never touches an owner endpoint (#919, #920, #922, #927, #928)
+- **"Shared with you" inbox** — `GET /shared-artifacts` lists artifacts shared with the caller, backed by fan-out pointer rows in the recipient's own partition (`PK=SHARED_WITH#{email}`). **Gated by `ARTIFACT_SHARE_INBOX_ENABLED`, default off.** The fan-out rows are written regardless of the flag, so turning it on shows a complete inbox with no backfill (#968)
+- **All / Yours / Shared with you tabs** on the artifact library. The SPA discovers the inbox by calling it — a 404 means "no inbox in this environment" and it renders the tab-less library it always did, so no separate frontend flag exists (#970)
+- **Artifact library page** at `/artifacts` — every artifact a user owns, list or grid, backed by `GET /artifacts/library`. No new index was needed: `user-artifacts` is already partitioned by user (#940, #950)
+- **Grid-card previews** — library grid cards render a live, scaled-down iframe of the artifact through the deployed render path at a fixed 1024px virtual viewport. Previews mount lazily on intersection and are never re-minted, because each one costs a mint plus a render-Lambda invocation (#967)
+- **Rename and delete** for artifacts, from the library, the docked panel and the inline card. `PATCH /artifacts/{id}` and `DELETE /artifacts/{id}` (#952, #957)
+- **In-app artifact viewer** — artifacts open in a docked panel instead of depending on a pop-up window (#958)
+- **Shared-conversation artifacts** — sharing a conversation now shares the artifacts in it. `create_share` pins the session's artifacts at their current versions into the S3 snapshot body, which makes the snapshot both the point-in-time record and the allowlist; no artifact share records are created (#971, #973)
+- **Session-delete cascade** — deleting a conversation revokes the artifact shares created from it, on both the single and bulk delete routes (#931)
+- **Feature announcements** — admin-authored release notices with a full lifecycle (draft → publish → revise → archive), targeting by role, and per-user acknowledgements. New `{prefix}-announcements` table (no GSIs), `GET /announcements` + ack endpoint for users, and `/admin/announcements` CRUD (#948, #966, #969, #972)
+- **What's New surfaces** — a panel, a floating banner beside the chat composer, and a modal for high-priority announcements gated by the spec's §D8 rules (#976, #977, #979, #981)
+- **Announcement reach stats** — `GET /admin/announcements/{id}/stats` and a reach column on the admin list, driven by ack funnel counters (#978)
+- **Mid-turn steering** — a follow-up typed while a turn is still streaming is injected into that running turn at the next tool boundary, appended to the same user-role message that carries the tool results, so the agent reads it before choosing its next action. New `steering_applied` SSE event and `POST /sessions/{id}/steer`; transport is the session's existing single-flight lease row. Gated by `MID_TURN_STEERING_ENABLED` (default on) (#916, #921)
+- **Single-file rebranding** — `frontend/ai.client/src/branding/brand.config.ts` is now the only file to edit to change app name, page title, greeting text, logo paths and the brand color system. Prestart/prebuild generators derive the full theme (brand tokens, an OKLCH-banded neutral surface ramp, and favicons) from it, with golden-file and parity specs pinning the output (#933)
+- **GPT-5.6 Sol, Terra and Luna** curated in the model catalog on the `bedrock-runtime` OpenAI-compatible endpoint (#980)
+- **`bedrock-runtime` OpenAI Responses transport** (`provider="bedrock-responses"`) with the `bedrock:CallWithBearerToken` grant it needs (#949, #959)
+- **Multi-modal fine-tuning** — a task-type registry replaces the text-only assumption, adding image and image+text tasks in the API and the SPA, with a dollar-denominated quota (#944)
+- Response-feedback spec (`docs/specs/`), a prompt-caching convergence watch, and the mid-turn steering spec (#942, #961, #921)
+
+### ✨ Improved
+
+- **Prompt-cache TTL is derived from the serving model** rather than assumed, so `cacheStatus` no longer misreads a hit as expired on models with a different TTL (#951)
+- **Mantle models expose the caching controls** they were previously denied in the admin catalog (#963)
+- **`supportsCaching` is forced on for providers that cache unconditionally**, so a model whose provider always caches is no longer reported as uncached (#960)
+- **OpenAI-family token usage normalizes to disjoint buckets**, ending the double-count where cached tokens were included in the input total (#945)
+- The library view toggle no longer stretches on narrow screens, and the grid card footer no longer overflows its card (#955)
+
+### ⚠️ Changed
+
+- **Explicit GPT-5.6 prompt-cache breakpoints ship OFF.** They were built, measured, and found **57% more expensive** than the provider's automatic caching, so the code stays and the default is off (#954, #956)
+- An omitted `supported_param` is now treated as **unsupported**, not as pass-through — an empty `supportedParams` previously bypassed the parameter guard entirely (#915)
+
+### 🐛 Fixed
+
+- **Artifact share cascade used `BatchWriteItem`, which the app-api task role cannot call** — it failed closed in dev, leaving share links live after their conversation was deleted. `TransactWriteItems` authorizes against the underlying item actions; `BatchWriteItem` is its own IAM action. Replaced with per-row `DeleteItem` (#932)
+- **An empty "Shared with you" tab said "No artifacts match your search"** with an empty search box, because the filtered-empty state gated on the library total rather than the tab's (#975)
+- **"Pop-up blocked" was reported on every artifact open**, including successful ones (#953)
+- A mid-turn steer rendered once per sync tick instead of once (#930), a follow-up typed while a turn was paused was dropped instead of queued (#934), and a steer bubble used a non-standard color (#935)
+- A user bubble's overflow was measured once and latched; it is now re-measured (#937)
+- A duplicate error toast fired alongside the shared-artifact page's own inline 404, and the artifact card's actions overlapped its title when the panel was docked — fixed with a container query, since the card is sized by the chat column and not the viewport (#927)
+- The new-announcement form's submit button could never enable (#974)
+- **GPT-5.6 rates were wrong three ways**: derived from a 1000x-wrong multi-model blend, then published in the model cards all along. Every rate in the catalog is corrected (#980, and the derivation method in the same PR)
+- The cache-write premium and the Global/Regional rate tier were both wrong in cost derivation (#914)
+- Knowledge-base retrievability is confirmed with a filtered query and `TEXT_INDEXED` is classified correctly (#908)
+- Generative VLMs are excluded from the dual-encoder fine-tuning task, and instance types are validated (#944)
+
+### 🔒 Security
+
+- **All 47 open Dependabot alerts cleared** across backend, frontend, infrastructure, docs-site and the backup/restore scripts (#924)
+- **The custom HuggingFace model id is validated against an anchored repo-id pattern** before it is interpolated into a Hub request path or forwarded to the training container as `model_name_or_path`. The call site's comment had claimed this validation since before the release; only non-empty and length were actually checked. The host was always hard-coded, so this was never an arbitrary-host SSRF — but a value carrying dot-segments, extra slashes, a query or a fragment could change the meaning of both sinks
+- **CodeQL alerts remediated: 11 high, 20 medium, 9 note** — log injection, unused imports and related findings across 18 backend modules and one SPA page. The nightly workflow is extended in the same pass (#925)
+
+### 🏗️ Infrastructure
+
+- **New `{prefix}-announcements` table** — one table, two item shapes (announcement rows under a fixed `ANNOUNCEMENTS` partition, per-user ack rows under `USER#<id>`). **No GSIs.** Table name published to SSM at `/{prefix}/admin/announcements-table-name` (#966)
+- **`CDK_ARTIFACT_SHARE_INBOX_ENABLED`** — new deploy variable, default off, threaded to the app-api container as `ARTIFACT_SHARE_INBOX_ENABLED`. Gates the inbox read only (#968)
+- **`bedrock:CallWithBearerToken`** granted to the inference-api role. The `bedrock-runtime` OpenAI-compatible endpoint authenticates under the `bedrock` service namespace, not `bedrock-mantle` — granting only the Mantle action returns a 401 (#959)
+- `infrastructure/gsi-inventory.json` gains `announcements` with an empty index list. **No index operations on any existing table.**
+
+### 📦 Dependencies
+
+- Backend: `cryptography` 48.0.1 → 50.0.1, `aiohttp` 3.14.1 → 3.14.3, `pandas` 2.3.3 added (fine-tuning dataset contract)
+- Frontend: Angular 21.2.17 → 21.2.19, `mermaid` 11.15.0 → 11.16.1, `postcss` 8.5.12 → 8.5.28, `sharp` 0.33.0 and `tsx` 4.23.12 added (branding generators), `dompurify` ≥3.4.13, `undici` ≥7.29.0, `hono` ≥4.12.34
+- Infrastructure: `aws-cdk-lib` 2.262.0 → 2.265.0, `brace-expansion` ≥5.0.9
+
+### 🔧 CI/CD
+
+- The SPA `prestart` and `prebuild` scripts now run the four branding generators (brand theme, surface theme, surface colors, favicons) before the app builds (#933)
+- Nightly workflow extended alongside the CodeQL remediation (#925)
+
+### 📚 Docs
+
+- GPT-5.6 live verification, model-family findings, the prod gpt-5.4 cache-rate closure, and the corrected `global.*` SCP finding (dev only — prod is unaffected) (#962, #964, #965)
+- Kaizen research and review-prep for 2026-09-04, and a prompt-caching convergence watch (#929, #961)
+
 ## [1.17.0] - 2026-09-02
 
 Reliability, security and observability. Every CloudWatch alarm in the stack now notifies somebody — before this the stack had 13 alarms and **none of them were routed**, two of which watched metric names that exist in no namespace and had read as healthy since the day they were created. A production outage post-mortem (session `5f34d2b0`) drives four chat-path changes: Bedrock's transient faults are retried, a retry and a long silence are both visible to the user, and attachments a failed turn never delivered are re-sent. Four security findings are closed, including a High-severity OIDC login CSRF in the BFF auth flow and a privilege-escalating stored XSS in skill resources. The Bedrock Managed Knowledge Base migration — still off by default — gets eleven defects fixed from its first real runs in dev. **Requires a CDK deploy**, and one manual step after it: subscribe your team to the new alarm topic (see [step-05-verify](.github/docs/deploy/step-05-verify.md#6-subscribe-to-platform-alarms-required--not-automated)).

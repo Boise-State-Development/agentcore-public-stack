@@ -8,5 +8,5 @@ bedrock-agentcore==1.21.0
 # whose cookie.py needs cryptography (AESGCM) and cache.py needs cachetools
 # (TTLCache). Kept in sync with the dispatcher requirements.txt, which is the
 # file Dockerfile.scheduled-runs actually installs for the shared image.
-cryptography==48.0.1
+cryptography==50.0.1
 cachetools==6.2.4

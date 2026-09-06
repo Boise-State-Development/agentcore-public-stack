@@ -7,9 +7,34 @@
 
 export interface FineTuningAccessResponse {
   has_access: boolean;
-  monthly_quota_hours: number | null;
-  current_month_usage_hours: number | null;
+  monthly_quota_usd: number | null;
+  current_month_usage_usd: number | null;
   quota_period: string | null;
+}
+
+// ── Task Types ──────────────────────────────────────────────────────────
+
+/**
+ * The kinds of fine-tuning the platform supports. The chosen task determines
+ * the dataset contract, the accepted upload formats and the model list, so it
+ * is the first thing the create-job form asks for.
+ */
+export type FineTuningTaskType =
+  | 'text-classification'
+  | 'image-classification'
+  | 'image-text-classification';
+
+export const DEFAULT_TASK_TYPE: FineTuningTaskType = 'text-classification';
+
+export interface TaskTypeResponse {
+  task_type: FineTuningTaskType;
+  display_name: string;
+  description: string;
+  required_columns: string[];
+  upload_extensions: string[];
+  requires_archive: boolean;
+  inference_upload_extensions: string[];
+  default_instance_type: string;
 }
 
 // ── Model Catalog ───────────────────────────────────────────────────────
@@ -19,6 +44,7 @@ export interface AvailableModel {
   model_name: string;
   huggingface_model_id: string;
   description: string;
+  task_type: FineTuningTaskType;
   default_instance_type: string;
   default_hyperparameters: Record<string, string>;
 }
@@ -28,6 +54,7 @@ export interface AvailableModel {
 export interface PresignRequest {
   filename: string;
   content_type: string;
+  task_type?: FineTuningTaskType;
 }
 
 export interface PresignResponse {
@@ -43,6 +70,7 @@ export type TrainingJobStatus = 'PENDING' | 'TRAINING' | 'COMPLETED' | 'FAILED' 
 export interface CreateJobRequest {
   model_id: string;
   dataset_s3_key: string;
+  task_type?: FineTuningTaskType;
   instance_type?: string;
   hyperparameters?: Record<string, string>;
   max_runtime_seconds?: number;
@@ -55,6 +83,7 @@ export interface JobResponse {
   email: string;
   model_id: string;
   model_name: string;
+  task_type: FineTuningTaskType;
   status: TrainingJobStatus;
   dataset_s3_key: string;
   output_s3_prefix: string | null;
@@ -124,6 +153,7 @@ export interface TrainedModelResponse {
   training_job_id: string;
   model_id: string;
   model_name: string;
+  task_type: FineTuningTaskType;
   model_s3_path: string;
   instance_type: string;
   completed_at: string | null;

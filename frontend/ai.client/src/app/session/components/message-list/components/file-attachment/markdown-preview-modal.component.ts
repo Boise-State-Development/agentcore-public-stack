@@ -12,6 +12,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark, heroArrowTopRightOnSquare } from '@ng-icons/heroicons/outline';
 import { MarkdownComponent } from 'ngx-markdown';
 import { FileUploadService } from '../../../../../services/file-upload';
+import { SpinnerComponent } from '../../../../../components/spinner/spinner.component';
 
 /** Hard cap on how much of the file we render in the modal. */
 const MAX_PREVIEW_BYTES = 1024 * 1024;
@@ -24,7 +25,7 @@ const MAX_PREVIEW_BYTES = 1024 * 1024;
 @Component({
   selector: 'app-markdown-preview-modal',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, MarkdownComponent],
+  imports: [NgIcon, MarkdownComponent, SpinnerComponent],
   providers: [provideIcons({ heroXMark, heroArrowTopRightOnSquare })],
   host: {
     '(document:keydown)': 'onKeydown($event)',
@@ -84,18 +85,14 @@ const MAX_PREVIEW_BYTES = 1024 * 1024;
             @case ('loading') {
               <div
                 class="flex h-full min-h-[200px] items-center justify-center text-sm text-gray-500 dark:text-gray-400"
-                role="status"
               >
-                <span
-                  class="size-5 animate-spin rounded-full border-2 border-gray-300 border-t-primary-500"
-                  aria-hidden="true"
-                ></span>
+                <app-spinner size="md" label="Loading preview" />
                 <span class="ml-3">Loading preview…</span>
               </div>
             }
             @case ('error') {
               <div
-                class="flex h-full min-h-[200px] items-center justify-center text-sm text-red-600 dark:text-red-400"
+                class="flex h-full min-h-[200px] items-center justify-center text-sm text-state-danger-600 dark:text-state-danger-400"
                 role="alert"
               >
                 Couldn't load the markdown preview.
@@ -104,7 +101,7 @@ const MAX_PREVIEW_BYTES = 1024 * 1024;
             @case ('ready') {
               @if (truncated()) {
                 <p
-                  class="mb-4 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                  class="mb-4 rounded-md bg-state-warning-50 px-3 py-2 text-xs text-state-warning-800 dark:bg-state-warning-950/40 dark:text-state-warning-200"
                 >
                   Showing the first {{ formattedLimit }} of this file. Open in a
                   new tab for the full source.

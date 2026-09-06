@@ -9,11 +9,13 @@ Endpoints under test:
 - DELETE /sessions/{session_id}           → 204
 - POST   /sessions/bulk-delete            → 200 with deletion results
 - GET    /sessions/{session_id}/messages  → 200 with message history
+- POST   /sessions/{session_id}/steer      → 200 (mid-turn steering)
+- DELETE /sessions/{session_id}/steer/{id} → 204
 
 Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8
 """
 
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock, call
 
 import pytest
 from fastapi import FastAPI
@@ -602,6 +604,79 @@ class TestDeleteSession:
         # Background task should have been called with the session id
         mock_share_service.delete_shares_for_session.assert_called_once_with("sess-001")
 
+    def test_queues_artifact_share_cleanup_on_delete(
+        self, app, make_user, authenticated_client
+    ):
+        """Artifacts outlive the chat that produced them, so deleting a
+        conversation must also revoke the share links pointing at its
+        artifacts — otherwise they keep resolving forever."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        mock_service.delete_session = AsyncMock(return_value=True)
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
+        mock_artifact_shares = MagicMock()
+        mock_artifact_shares.delete_for_session = MagicMock(return_value=1)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_artifact_share_service",
+            return_value=mock_artifact_shares,
+        ):
+            resp = client.delete("/sessions/sess-001")
+
+        assert resp.status_code == 204
+        # Scoped to the caller: SessionIndex is not user-partitioned, so
+        # the owner id is what keeps the cascade off other users' shares.
+        mock_artifact_shares.delete_for_session.assert_called_once_with(
+            "sess-001", user.user_id
+        )
+
+    def test_artifact_share_cleanup_failure_does_not_break_delete(
+        self, app, make_user, authenticated_client
+    ):
+        """The cascade runs after the 204 is sent. A raising task would
+        surface as an unhandled background-task error, so the service
+        swallows failures — this pins that the route still succeeds."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        mock_service.delete_session = AsyncMock(return_value=True)
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
+        mock_artifact_shares = MagicMock()
+        mock_artifact_shares.delete_for_session = MagicMock(return_value=0)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_artifact_share_service",
+            return_value=mock_artifact_shares,
+        ):
+            resp = client.delete("/sessions/sess-001")
+
+        assert resp.status_code == 204
+
 
 # ---------------------------------------------------------------------------
 # Requirement 3.7: POST /sessions/bulk-delete returns 200
@@ -700,6 +775,95 @@ class TestBulkDeleteSessions:
 
         assert resp.status_code == 200
         assert mock_share_service.delete_shares_for_session.call_count == 2
+
+    def test_bulk_delete_queues_artifact_share_cleanup(
+        self, app, make_user, authenticated_client
+    ):
+        """Bulk delete must cascade artifact shares too, per session.
+
+        The single-delete path has its own test; this is the one that
+        catches the bulk path being wired wrong or not at all — the
+        failure mode being live share links surviving the conversations
+        that produced them.
+        """
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        mock_service.delete_session = AsyncMock(side_effect=[True, True])
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
+        mock_artifact_shares = MagicMock()
+        mock_artifact_shares.delete_for_session = MagicMock(return_value=1)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_artifact_share_service",
+            return_value=mock_artifact_shares,
+        ):
+            resp = client.post(
+                "/sessions/bulk-delete",
+                json={"sessionIds": ["sess-001", "sess-002"]},
+            )
+
+        assert resp.status_code == 200
+        # Once per session, each scoped to the caller — SessionIndex is
+        # not user-partitioned, so the owner id is what keeps the cascade
+        # off other users' shares.
+        assert mock_artifact_shares.delete_for_session.call_args_list == [
+            call("sess-001", user.user_id),
+            call("sess-002", user.user_id),
+        ]
+
+    def test_bulk_delete_skips_artifact_cleanup_for_failed_deletes(
+        self, app, make_user, authenticated_client
+    ):
+        """A session that wasn't deleted keeps its artifacts, so revoking
+        its share links would destroy live links to a conversation the
+        user still has."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        # Second session doesn't exist.
+        mock_service.delete_session = AsyncMock(side_effect=[True, False])
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
+        mock_artifact_shares = MagicMock()
+        mock_artifact_shares.delete_for_session = MagicMock(return_value=0)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_artifact_share_service",
+            return_value=mock_artifact_shares,
+        ):
+            resp = client.post(
+                "/sessions/bulk-delete",
+                json={"sessionIds": ["sess-001", "sess-missing"]},
+            )
+
+        assert resp.status_code == 200
+        assert mock_artifact_shares.delete_for_session.call_args_list == [
+            call("sess-001", user.user_id)
+        ]
 
     def test_rejects_empty_list(self, app, make_user, authenticated_client):
         """Req 3.7: Should return 422 for empty session_ids list."""
@@ -919,6 +1083,156 @@ class TestSignalTurnInterrupted:
             json={"reason": "user_stopped"},
         )
         assert resp.status_code == 401
+
+
+class TestSteerRunningTurn:
+    """POST /sessions/{session_id}/steer — mid-turn steering.
+
+    See docs/specs/mid-turn-steering.md. On app-api, not inference-api, for
+    the same reason ``/interrupt`` is: the AgentCore Runtime data plane
+    proxies only ``/invocations`` and ``/ping``. Cookie-auth via
+    get_current_user_from_session per the app-api auth rule.
+    """
+
+    def test_queues_the_follow_up_against_the_live_turn(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        steer = AsyncMock(return_value=True)
+        with patch("apis.shared.sessions.session_lease.request_session_steer", steer):
+            resp = client.post(
+                "/sessions/sess-001/steer",
+                json={"text": "use the other file", "entryId": "e1"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"queued": True, "entryId": "e1"}
+        steer.assert_awaited_once_with(
+            "sess-001",
+            user.user_id,
+            text="use the other file",
+            entry_id="e1",
+        )
+
+    def test_reports_not_queued_when_no_turn_is_running(self, app, make_user, authenticated_client):
+        """The turn ended between the user typing and this landing.
+
+        Not an error: the SPA leaves the entry in its queue and PR #916's
+        end-of-turn flush sends it as a normal turn. 200 either way so the
+        client never has to tell a lost race apart from a failure.
+        """
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.shared.sessions.session_lease.request_session_steer",
+            AsyncMock(return_value=False),
+        ):
+            resp = client.post(
+                "/sessions/sess-001/steer",
+                json={"text": "too late", "entryId": "e1"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["queued"] is False
+
+    def test_returns_429_when_the_inbox_is_full(self, app, make_user, authenticated_client):
+        from apis.shared.sessions.session_lease import SteerQueueFullError
+
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.shared.sessions.session_lease.request_session_steer",
+            AsyncMock(side_effect=SteerQueueFullError("sess-001")),
+        ):
+            resp = client.post(
+                "/sessions/sess-001/steer",
+                json={"text": "one too many", "entryId": "e6"},
+            )
+
+        assert resp.status_code == 429
+
+    def test_rejects_empty_text(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        steer = AsyncMock(return_value=True)
+        with patch("apis.shared.sessions.session_lease.request_session_steer", steer):
+            resp = client.post(
+                "/sessions/sess-001/steer",
+                json={"text": "", "entryId": "e1"},
+            )
+
+        assert resp.status_code == 422
+        steer.assert_not_awaited()
+
+    def test_404_when_the_flag_is_off(self, app, make_user, authenticated_client, monkeypatch):
+        monkeypatch.setenv("MID_TURN_STEERING_ENABLED", "false")
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        steer = AsyncMock(return_value=True)
+        with patch("apis.shared.sessions.session_lease.request_session_steer", steer):
+            resp = client.post(
+                "/sessions/sess-001/steer",
+                json={"text": "hi", "entryId": "e1"},
+            )
+
+        assert resp.status_code == 404
+        steer.assert_not_awaited()
+
+    def test_returns_401_for_unauthenticated(self, app, unauthenticated_client):
+        client = unauthenticated_client(app)
+        resp = client.post(
+            "/sessions/sess-001/steer",
+            json={"text": "hi", "entryId": "e1"},
+        )
+        assert resp.status_code == 401
+
+
+class TestWithdrawSteer:
+    """DELETE /sessions/{session_id}/steer/{entry_id} — the user un-queued it."""
+
+    def test_withdraws_the_entry(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        remove = AsyncMock(return_value=True)
+        with patch("apis.shared.sessions.session_lease.remove_steer_entry", remove):
+            resp = client.delete("/sessions/sess-001/steer/e1")
+
+        assert resp.status_code == 204
+        remove.assert_awaited_once_with("sess-001", user.user_id, "e1")
+
+    def test_unknown_entry_still_returns_204(self, app, make_user, authenticated_client):
+        """The user's intent — don't send that — is satisfied either way."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.shared.sessions.session_lease.remove_steer_entry",
+            AsyncMock(return_value=False),
+        ):
+            resp = client.delete("/sessions/sess-001/steer/nope")
+
+        assert resp.status_code == 204
+
+    def test_a_failed_withdrawal_is_not_a_500(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.shared.sessions.session_lease.remove_steer_entry",
+            AsyncMock(side_effect=RuntimeError("dynamo down")),
+        ):
+            resp = client.delete("/sessions/sess-001/steer/e1")
+
+        assert resp.status_code == 204
+
+    def test_returns_401_for_unauthenticated(self, app, unauthenticated_client):
+        client = unauthenticated_client(app)
+        assert client.delete("/sessions/sess-001/steer/e1").status_code == 401
 
 
 class TestMarkSessionRead:

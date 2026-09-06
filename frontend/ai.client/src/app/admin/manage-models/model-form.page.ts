@@ -14,6 +14,12 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowLeft, heroChevronDown, heroChevronRight } from '@ng-icons/heroicons/outline';
 import {
   AVAILABLE_PROVIDERS,
+  CACHING_CAPABLE_PROVIDERS,
+  CACHING_FORCED_PROVIDERS,
+  defaultSupportsCaching,
+  supportsCachingForProvider,
+  OPENAI_SURFACE_PROVIDERS,
+  PROVIDER_LABELS,
   KNOWN_PARAMS,
   KnownParamMeta,
   MANTLE_API_MODES,
@@ -27,6 +33,7 @@ import {
 import { ManagedModelsService } from './services/managed-models.service';
 import { CuratedModelPrefillService } from './services/curated-model-prefill.service';
 import { AppRolesService } from '../roles/services/app-roles.service';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 interface ParamRowGroup {
   /**
@@ -240,7 +247,7 @@ interface ModelFormGroup {
 
 @Component({
   selector: 'app-model-form-page',
-  imports: [ReactiveFormsModule, RouterLink, NgIcon],
+  imports: [ReactiveFormsModule, RouterLink, NgIcon, SpinnerComponent],
   providers: [provideIcons({ heroArrowLeft, heroChevronDown, heroChevronRight })],
   templateUrl: './model-form.page.html',
   styleUrl: './model-form.page.css',
@@ -262,12 +269,35 @@ export class ModelFormPage implements OnInit {
 
   /**
    * Tracks the selected provider as a signal so the template can show/hide
-   * the Mantle-only API-mode/region fields and suppress the caching controls
-   * (Mantle open-weight models never cache). Kept in sync with the form
-   * control in ngOnInit + its valueChanges subscription.
+   * the API-mode/region fields and the caching controls. Kept in sync with the
+   * form control in ngOnInit + its valueChanges subscription.
    */
   readonly selectedProvider = signal<ModelProvider>('bedrock');
   readonly isMantle = computed(() => this.selectedProvider() === 'mantle');
+  readonly isBedrockResponses = computed(() => this.selectedProvider() === 'bedrock-responses');
+  /**
+   * Either OpenAI-compatible Bedrock surface. Both carry a region override and
+   * a bearer-token transport; only the API surface differs, and only Mantle
+   * lets an admin choose it.
+   */
+  readonly isOpenAiSurface = computed(() =>
+    OPENAI_SURFACE_PROVIDERS.includes(this.selectedProvider()),
+  );
+  readonly providerLabels = PROVIDER_LABELS;
+  /** Providers whose models can prompt-cache — drives the caching form block. */
+  readonly supportsCachingControls = computed(() =>
+    CACHING_CAPABLE_PROVIDERS.includes(this.selectedProvider()),
+  );
+  /**
+   * Whether caching is a fact rather than a choice for the selected provider.
+   *
+   * When true the template states it instead of offering a checkbox: the
+   * service caches regardless, so the only thing unchecking would achieve is
+   * clearing the cache rates and pricing cached tokens at $0.
+   */
+  readonly cachingIsForced = computed(() =>
+    CACHING_FORCED_PROVIDERS.includes(this.selectedProvider()),
+  );
 
   /**
    * Model-id suggestions for the Mantle escape-hatch form, sourced from the
@@ -329,7 +359,12 @@ export class ModelFormPage implements OnInit {
     cacheWritePricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
-    supportsCaching: this.fb.control(false, { nonNullable: true }),
+    // Seeded for the form's initial provider ('bedrock') and re-derived on
+    // every provider switch. A hardcoded `false` here disagreed with the
+    // `?? true` used when loading an existing model or a curated template,
+    // so the same model got a different answer depending on how you reached
+    // the form.
+    supportsCaching: this.fb.control(true, { nonNullable: true }),
     mantleApiMode: this.fb.control<MantleApiMode>('chat', { nonNullable: true }),
     mantleRegion: this.fb.control('', { nonNullable: true }),
     inferenceParams: this.fb.array<FormGroup<ParamRowGroup>>([], {
@@ -444,6 +479,18 @@ export class ModelFormPage implements OnInit {
       if (provider === 'mantle') {
         this.loadMantleModelIdOptions();
       }
+      if (provider === 'bedrock-responses') {
+        // Not admin-selectable on this transport; keep the control's value
+        // truthful so a later provider switch doesn't carry 'chat' back in.
+        this.modelForm.controls.mantleApiMode.setValue('responses');
+      }
+      // Caching support is a property of the provider, so re-derive it on a
+      // provider switch rather than carrying the previous provider's answer
+      // over. Without this the form's hardcoded `false` silently wins for
+      // every caching-capable model an admin adds.
+      this.modelForm.controls.supportsCaching.setValue(
+        defaultSupportsCaching(provider),
+      );
     });
 
     // Keep the max_tokens row pinned to the model's output ceiling: pre-fill
@@ -987,11 +1034,16 @@ export class ModelFormPage implements OnInit {
         cacheWritePricePerMillionTokens: v.cacheWritePricePerMillionTokens,
         cacheReadPricePerMillionTokens: v.cacheReadPricePerMillionTokens,
         knowledgeCutoffDate: v.knowledgeCutoffDate,
-        supportsCaching: v.supportsCaching,
-        // Only meaningful for Mantle; null elsewhere so the backend stores
-        // nothing for other providers. An empty region means "app's region".
-        apiMode: v.provider === 'mantle' ? v.mantleApiMode : null,
-        region: v.provider === 'mantle' ? (v.mantleRegion?.trim() || null) : null,
+        supportsCaching: supportsCachingForProvider(v.provider, v.supportsCaching),
+        // Only meaningful on an OpenAI-compatible Bedrock surface; null
+        // elsewhere so the backend stores nothing for other providers. An
+        // empty region means "app's region". The bedrock-runtime transport
+        // has no API-surface choice — it exists because GPT-5.6 caches only
+        // over Responses — so it is pinned rather than read from the form.
+        apiMode: this.apiModeForProvider(v.provider),
+        region: OPENAI_SURFACE_PROVIDERS.includes(v.provider)
+          ? (v.mantleRegion?.trim() || null)
+          : null,
         supportedParams: this.collectSupportedParams(),
       };
 
@@ -1014,6 +1066,21 @@ export class ModelFormPage implements OnInit {
     } finally {
       this.isSubmitting.set(false);
     }
+  }
+
+  /**
+   * The API surface to persist for a provider.
+   *
+   * Mantle is the only provider where this is a real choice. The
+   * bedrock-runtime transport is pinned to `responses` — the same
+   * normalization the backend applies when the record is written — because a
+   * model silently downgraded to Chat Completions there would lose prompt
+   * caching, which is the only reason to use that transport.
+   */
+  private apiModeForProvider(provider: ModelProvider): MantleApiMode | null {
+    if (provider === 'bedrock-responses') return 'responses';
+    if (provider === 'mantle') return this.modelForm.value.mantleApiMode ?? 'chat';
+    return null;
   }
 
   /**

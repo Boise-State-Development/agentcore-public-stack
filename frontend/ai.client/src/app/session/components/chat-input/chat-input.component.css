@@ -1,6 +1,4 @@
-@import "tailwindcss";
-
-@custom-variant dark (&:where(.dark, .dark *));
+@reference "../../../../styles/theme.css";
 
 .input-wrapper {
   transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;

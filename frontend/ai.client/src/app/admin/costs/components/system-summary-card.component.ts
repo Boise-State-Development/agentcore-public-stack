@@ -67,17 +67,17 @@ export type SummaryCardIcon =
           @if (trend()! > 0) {
             <ng-icon
               name="heroArrowTrendingUp"
-              class="size-4 text-green-500"
+              class="size-4 text-state-success-500"
             />
-            <span class="text-sm text-green-600 dark:text-green-400">
+            <span class="text-sm text-state-success-600 dark:text-state-success-400">
               +{{ trend() | number : '1.1-1' }}%
             </span>
           } @else if (trend()! < 0) {
             <ng-icon
               name="heroArrowTrendingDown"
-              class="size-4 text-red-500"
+              class="size-4 text-state-danger-500"
             />
-            <span class="text-sm text-red-600 dark:text-red-400">
+            <span class="text-sm text-state-danger-600 dark:text-state-danger-400">
               {{ trend() | number : '1.1-1' }}%
             </span>
           } @else {
@@ -99,19 +99,24 @@ export class SystemSummaryCardComponent {
   trend = input<number | null>(null);
   icon = input<SummaryCardIcon>('heroCurrencyDollar');
 
+  // Decorative per-metric icon colors (Total Cost/Active Users/Cache
+  // Savings/Avg Cost per User) — purely to keep the summary cards visually
+  // distinguishable from each other, not a status or vendor identity. Uses
+  // the meaning-agnostic accent tokens rather than state-* or vendor-*,
+  // matching the memory-dashboard tag-palette precedent in identity.css.
   iconBackgroundClass = computed(() => {
     const iconName = this.icon();
     switch (iconName) {
       case 'heroCurrencyDollar':
-        return 'bg-green-100 dark:bg-green-900/30';
+        return 'bg-accent-3-100 dark:bg-accent-3-900/30';
       case 'heroChartBar':
-        return 'bg-blue-100 dark:bg-blue-900/30';
+        return 'bg-vendor-microsoft-100 dark:bg-vendor-microsoft-900/30';
       case 'heroUsers':
-        return 'bg-purple-100 dark:bg-purple-900/30';
+        return 'bg-accent-1-100 dark:bg-accent-1-900/30';
       case 'heroBolt':
-        return 'bg-amber-100 dark:bg-amber-900/30';
+        return 'bg-accent-4-100 dark:bg-accent-4-900/30';
       case 'heroUserCircle':
-        return 'bg-indigo-100 dark:bg-indigo-900/30';
+        return 'bg-accent-7-100 dark:bg-accent-7-900/30';
       default:
         return 'bg-gray-100 dark:bg-gray-900/30';
     }
@@ -121,15 +126,15 @@ export class SystemSummaryCardComponent {
     const iconName = this.icon();
     switch (iconName) {
       case 'heroCurrencyDollar':
-        return 'text-green-600 dark:text-green-400';
+        return 'text-accent-3-700 dark:text-accent-3-300';
       case 'heroChartBar':
-        return 'text-blue-600 dark:text-blue-400';
+        return 'text-vendor-microsoft-600 dark:text-vendor-microsoft-400';
       case 'heroUsers':
-        return 'text-purple-600 dark:text-purple-400';
+        return 'text-accent-1-700 dark:text-accent-1-300';
       case 'heroBolt':
-        return 'text-amber-600 dark:text-amber-400';
+        return 'text-accent-4-700 dark:text-accent-4-300';
       case 'heroUserCircle':
-        return 'text-indigo-600 dark:text-indigo-400';
+        return 'text-accent-7-700 dark:text-accent-7-300';
       default:
         return 'text-gray-600 dark:text-gray-400';
     }

@@ -135,10 +135,17 @@ async def acquire_session_lease(
         # lease item, so a prior turn's cancel request can't bleed into this
         # one. (Owner-scoping already protects — the new owner token won't match
         # the old cancelRequestedFor — but clearing keeps the row honest.)
+        #
+        # The steering inbox is cleared for a stronger reason than tidiness.
+        # Owner-scoping hides a stale queue from ``peek_steer_queue``, but
+        # ``seed_steer_queue`` stamps ``steerFor`` to OUR owner — which would
+        # make a previous turn's leftovers suddenly visible and inject them
+        # into this turn. Clearing here is what makes seeding safe.
         "UpdateExpression": (
             "SET leaseOwner = :owner, leaseExpiresAt = :exp, "
             "#ttl = :ttl, updatedAt = :updated "
-            "REMOVE cancelRequestedFor, cancelRequestedAt"
+            "REMOVE cancelRequestedFor, cancelRequestedAt, "
+            "steerFor, steerQueue, steerRequestedAt"
         ),
         "ExpressionAttributeNames": {"#ttl": "ttl"},
         "ExpressionAttributeValues": {
@@ -351,3 +358,346 @@ async def request_session_cancel(session_id: str, user_id: str) -> bool:
             return False
         logger.warning("Session cancel arm failed for %s: %s", session_id, e)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Mid-turn steering inbox
+# ---------------------------------------------------------------------------
+#
+# The same lease item doubles as a one-turn inbox for mid-turn steering
+# (docs/specs/mid-turn-steering.md). A follow-up typed while a turn is
+# streaming is appended to ``steerQueue`` and stamped with ``steerFor =
+# <current leaseOwner>``; the container running the turn peeks the queue at
+# each tool boundary and injects the text into the tool-result message.
+#
+# Riding the lease row rather than a new item buys three properties for free:
+#
+# * **Owner-scoping.** Exactly the ``cancelRequestedFor`` property — a steer
+#   names the owner that was live when it was armed, so if the turn ended and
+#   another started, the new turn ignores it.
+# * **No GC.** ``release_session_lease`` deletes the whole row at turn end, so
+#   an unconsumed inbox cannot outlive its turn.
+# * **No new table, no new key derivation.** Same deterministic key.
+#
+# Consumption is commit-on-append, never commit-on-read: ``AfterToolsEvent``
+# fires from a ``finally`` and so also fires on the interrupt path, where the
+# mutated message is discarded. A hook that cleared on read would destroy the
+# user's words whenever a steer landed on the same tool batch as an OAuth
+# consent. So the hook peeks, and clears only once the message is confirmed in
+# history.
+
+# Cap on the inbox so a pathological client cannot grow the lease row toward
+# the 400 KB item limit. Composer text is small and the row is deleted per
+# turn, so these are guards, not budgets.
+STEER_QUEUE_MAX_ENTRIES = 5
+STEER_QUEUE_MAX_CHARS = 8000
+
+
+class SteerQueueFullError(Exception):
+    """Raised when a steer would exceed the inbox's entry or size cap.
+
+    The caller (``POST /sessions/{id}/steer``) maps this to HTTP 429; the SPA
+    leaves the entry queued for the end-of-turn flush.
+    """
+
+
+def _steer_entries(item: Optional[dict], owner: Optional[str] = None) -> list:
+    """Return the inbox entries on a lease item, owner-scoped when asked.
+
+    Returns ``[]`` for a missing item, a missing/foreign ``steerFor``, or a
+    malformed queue — every read path treats "no entries" as the safe answer.
+    """
+    if not item:
+        return []
+    if owner is not None and item.get("steerFor") != owner:
+        return []
+    queue = item.get("steerQueue")
+    if not isinstance(queue, list):
+        return []
+    return [e for e in queue if isinstance(e, dict) and e.get("id") and e.get("text")]
+
+
+async def request_session_steer(
+    session_id: str,
+    user_id: str,
+    *,
+    text: str,
+    entry_id: str,
+) -> bool:
+    """Queue a follow-up for injection into the turn holding this session's lease.
+
+    Called from app-api (any container), mirroring ``request_session_cancel``:
+    read the lease's current ``leaseOwner``, then conditionally append to the
+    inbox naming that same owner. The condition is the whole safety property —
+    if the turn ended between the read and the write, the append is rejected
+    and the caller falls back to sending the text as a normal turn.
+
+    Returns ``True`` if the entry was queued against an active lease. ``False``
+    when there is no active turn (no lease item), the turn ended mid-flight, or
+    the guard is inactive (table unconfigured) — all of which mean "nothing
+    running to steer", and all of which the SPA handles the same way.
+
+    Raises:
+        SteerQueueFullError: the inbox is at its entry or character cap.
+    """
+    table = _table()
+    if table is None:
+        return False
+
+    from botocore.exceptions import ClientError
+
+    try:
+        resp = table.get_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"LEASE#{session_id}"}
+        )
+    except ClientError as e:
+        logger.warning("Session steer lookup failed for %s: %s", session_id, e)
+        return False
+
+    item = resp.get("Item")
+    owner = item.get("leaseOwner") if item else None
+    if not owner:
+        # No lease → no turn is streaming server-side for this session.
+        return False
+
+    existing = _steer_entries(item, owner)
+    if len(existing) >= STEER_QUEUE_MAX_ENTRIES:
+        raise SteerQueueFullError(session_id)
+    if sum(len(str(e.get("text", ""))) for e in existing) + len(text) > STEER_QUEUE_MAX_CHARS:
+        raise SteerQueueFullError(session_id)
+
+    entry = {
+        "id": entry_id,
+        "text": text,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"LEASE#{session_id}"},
+            UpdateExpression=(
+                "SET steerFor = :owner, steerRequestedAt = :ts, "
+                "steerQueue = list_append(if_not_exists(steerQueue, :empty), :entry)"
+            ),
+            # Only arm if that same owner still holds the lease — otherwise the
+            # turn already ended/rotated and there is nothing to steer.
+            ConditionExpression="leaseOwner = :owner",
+            ExpressionAttributeValues={
+                ":owner": owner,
+                ":ts": entry["at"],
+                ":empty": [],
+                ":entry": [entry],
+            },
+        )
+        logger.info("Queued steer for session %s (owner=%s)", session_id, owner)
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            # The turn ended or rotated between the read and the write. The
+            # correct outcome, not an error: the caller sends a normal turn.
+            return False
+        logger.warning("Session steer arm failed for %s: %s", session_id, e)
+        return False
+
+
+async def seed_steer_queue(
+    lease: Optional[SessionLease],
+    entries: list,
+) -> int:
+    """Install carried-over follow-ups on a turn that is just starting.
+
+    The resume path's reason for existing (docs/specs/mid-turn-steering.md,
+    "Paused turns"). A turn paused for OAuth consent or tool approval has no
+    running loop to steer, and its lease — inbox and all — is released when the
+    paused stream closes. The follow-ups the user typed meanwhile are still in
+    their composer, so the resume request carries them and they are seeded here
+    against the *resumed* turn's lease.
+
+    Deliberately reusing the inbox rather than prepending to the resume prompt:
+    that prompt is Strands' interrupt-response list, and text in it would stop
+    it being recognised as a resume at all. Seeding means one injection path and
+    one ack path for every steer, however it arrived.
+
+    ``SET``, not ``list_append``: this runs at turn start on a lease we just
+    acquired, so there is nothing legitimate to append to. Returns the number of
+    entries installed, or 0 when there is nothing to do or the write failed —
+    best-effort, because a lost seed degrades to the composer's end-of-turn
+    flush rather than losing the text.
+    """
+    if lease is None or not entries:
+        return 0
+    table = _table()
+    if table is None:
+        return 0
+
+    from botocore.exceptions import ClientError
+
+    now = datetime.now(timezone.utc).isoformat()
+    normalized = []
+    total_chars = 0
+    for entry in entries[:STEER_QUEUE_MAX_ENTRIES]:
+        text = str(entry.get("text", ""))
+        entry_id = str(entry.get("id", ""))
+        if not text or not entry_id:
+            continue
+        total_chars += len(text)
+        if total_chars > STEER_QUEUE_MAX_CHARS:
+            break
+        normalized.append({"id": entry_id, "text": text, "at": now})
+
+    if not normalized:
+        return 0
+
+    try:
+        table.update_item(
+            Key={"PK": lease.pk, "SK": lease.sk},
+            UpdateExpression=(
+                "SET steerFor = :owner, steerRequestedAt = :ts, steerQueue = :entries"
+            ),
+            ConditionExpression="leaseOwner = :owner",
+            ExpressionAttributeValues={
+                ":owner": lease.owner,
+                ":ts": now,
+                ":entries": normalized,
+            },
+        )
+        logger.info(
+            "Seeded %d carried-over steer(s) for session %s",
+            len(normalized),
+            lease.session_id,
+        )
+        return len(normalized)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return 0
+        logger.warning("Steer seed failed for %s: %s", lease.session_id, e)
+        return 0
+
+
+async def peek_steer_queue(lease: Optional[SessionLease]) -> list:
+    """Read the inbox entries armed for *our* lease, without consuming them.
+
+    Called from the steering hook at each tool boundary. Deliberately a peek:
+    the entry is cleared only once the message carrying it is confirmed in
+    history (``clear_steer_entry``), so an injection discarded by the interrupt
+    path is re-delivered rather than lost.
+
+    Best-effort in the safe direction: an unconfigured table, a missing row, a
+    foreign ``steerFor``, or any DynamoDB error all return ``[]``.
+    """
+    if lease is None:
+        return []
+    table = _table()
+    if table is None:
+        return []
+
+    from botocore.exceptions import ClientError
+
+    try:
+        resp = table.get_item(Key={"PK": lease.pk, "SK": lease.sk})
+    except ClientError as e:
+        logger.warning("Steer queue read failed for %s: %s", lease.session_id, e)
+        return []
+
+    return _steer_entries(resp.get("Item"), lease.owner)
+
+
+def _remove_entry_by_id(
+    table,
+    pk: str,
+    sk: str,
+    entry_id: str,
+    *,
+    owner: Optional[str] = None,
+) -> bool:
+    """Conditionally remove one inbox entry by id. Idempotent, best-effort.
+
+    DynamoDB removes list elements by index, so we read to find the entry's
+    position and then guard the write on that index still holding that id (and,
+    when given, on the lease still being ours). A concurrent removal that
+    shifted the list fails the condition rather than deleting the wrong entry —
+    a re-delivery is recoverable, deleting someone's words is not.
+    """
+    from botocore.exceptions import ClientError
+
+    try:
+        resp = table.get_item(Key={"PK": pk, "SK": sk})
+    except ClientError as e:
+        logger.warning("Steer entry lookup failed: %s", e)
+        return False
+
+    item = resp.get("Item")
+    if not item:
+        return False
+    if owner is not None and item.get("leaseOwner") != owner:
+        return False
+
+    queue = item.get("steerQueue")
+    if not isinstance(queue, list):
+        return False
+    index = next(
+        (
+            i
+            for i, e in enumerate(queue)
+            if isinstance(e, dict) and e.get("id") == entry_id
+        ),
+        None,
+    )
+    if index is None:
+        # Already cleared — the caller's intent is satisfied.
+        return False
+
+    values = {":id": entry_id}
+    condition = f"steerQueue[{index}].id = :id"
+    if owner is not None:
+        condition += " AND leaseOwner = :owner"
+        values[":owner"] = owner
+
+    try:
+        table.update_item(
+            Key={"PK": pk, "SK": sk},
+            UpdateExpression=f"REMOVE steerQueue[{index}]",
+            ConditionExpression=condition,
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            # The list shifted under us, or the lease rotated. Leaving the entry
+            # in place is the safe failure: worst case it is re-injected once.
+            return False
+        logger.warning("Steer entry clear failed: %s", e)
+        return False
+
+
+async def clear_steer_entry(lease: Optional[SessionLease], entry_id: str) -> bool:
+    """Consume one inbox entry, once its injection is committed to history.
+
+    The second half of commit-on-append: called from the steering hook's
+    ``MessageAddedEvent`` handler, which is the first point at which the
+    injected text is really in the conversation. Owner-scoped and conditional
+    on the entry id, so a re-delivery after a lost ack is idempotent rather
+    than duplicated.
+    """
+    if lease is None:
+        return False
+    table = _table()
+    if table is None:
+        return False
+    return _remove_entry_by_id(table, lease.pk, lease.sk, entry_id, owner=lease.owner)
+
+
+async def remove_steer_entry(session_id: str, user_id: str, entry_id: str) -> bool:
+    """Withdraw a queued steer on the user's behalf (composer entry removed).
+
+    The client-facing counterpart of ``clear_steer_entry``: no lease owner in
+    hand, and none needed — the user is deleting their own words from their own
+    session's inbox, and the ``USER#`` partition already scopes that. Returns
+    ``False`` for an unknown id or an ended turn; the caller answers 204 either
+    way, since the user's intent is satisfied in both cases.
+    """
+    table = _table()
+    if table is None:
+        return False
+    return _remove_entry_by_id(
+        table, f"USER#{user_id}", f"LEASE#{session_id}", entry_id
+    )

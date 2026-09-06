@@ -13,6 +13,7 @@ import {
 import { MemoryService } from './services/memory.service';
 import { MemoriesResponse } from './models/memory.model';
 import { parseIso } from '../utils/date';
+import { SpinnerComponent } from '../components/spinner/spinner.component';
 
 /**
  * Represents a parsed preference with structured display
@@ -94,7 +95,7 @@ export class ParsePreferencePipe implements PipeTransform {
 @Component({
   selector: 'app-memory-dashboard-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon, ParsePreferencePipe],
+  imports: [FormsModule, NgIcon, ParsePreferencePipe, SpinnerComponent],
   providers: [
     provideIcons({
       heroSparkles,
@@ -121,21 +122,21 @@ export class ParsePreferencePipe implements PipeTransform {
         @if (memoryStatus.isLoading()) {
           <div class="flex items-center justify-center py-12">
             <div class="text-center">
-              <div class="mb-4 inline-block size-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent"></div>
+              <app-spinner size="lg" label="Checking memory status" />
               <p class="text-base/7 text-gray-600 dark:text-gray-400">Checking memory status...</p>
             </div>
           </div>
         } @else if (!isMemoryAvailable()) {
           <!-- Memory Unavailable State -->
-          <div class="rounded-lg border border-yellow-200 bg-yellow-50 p-6 dark:border-yellow-800 dark:bg-yellow-900/20">
+          <div class="rounded-lg border border-state-warning-200 bg-state-warning-50 p-6 dark:border-state-warning-800 dark:bg-state-warning-900/20">
             <div class="flex items-start gap-4">
-              <ng-icon name="heroExclamationTriangle" size="24" color="var(--color-yellow-600)" class="shrink-0" />
+              <ng-icon name="heroExclamationTriangle" size="24" color="var(--color-state-warning-600)" class="shrink-0" />
               <div>
-                <h3 class="text-base/7 font-semibold text-yellow-800 dark:text-yellow-200">Memory Not Available</h3>
-                <p class="mt-2 text-sm/6 text-yellow-700 dark:text-yellow-300">
+                <h3 class="text-base/7 font-semibold text-state-warning-800 dark:text-state-warning-200">Memory Not Available</h3>
+                <p class="mt-2 text-sm/6 text-state-warning-700 dark:text-state-warning-300">
                   AgentCore Memory is not configured. Memory features require cloud mode with AGENTCORE_MEMORY_ID configured.
                 </p>
-                <p class="mt-2 text-sm/6 text-yellow-600 dark:text-yellow-400">
+                <p class="mt-2 text-sm/6 text-state-warning-600 dark:text-state-warning-400">
                   Current mode: {{ memoryStatus.value()?.mode || 'unknown' }}
                 </p>
               </div>
@@ -145,10 +146,10 @@ export class ParsePreferencePipe implements PipeTransform {
           <!-- Memory Available - Show Content -->
 
           <!-- Info Banner -->
-          <div class="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+          <div class="mb-6 rounded-lg border border-state-info-200 bg-state-info-50 p-4 dark:border-state-info-800 dark:bg-state-info-900/20">
             <div class="flex items-start gap-3">
-              <ng-icon name="heroInformationCircle" size="20" color="var(--color-blue-600)" class="shrink-0" />
-              <p class="text-sm/6 text-blue-700 dark:text-blue-300">
+              <ng-icon name="heroInformationCircle" size="20" color="var(--color-state-info-600)" class="shrink-0" />
+              <p class="text-sm/6 text-state-info-700 dark:text-state-info-300">
                 These memories are automatically extracted from your conversations to personalize responses.
                 They help the AI remember your preferences and context across sessions.
               </p>
@@ -170,13 +171,13 @@ export class ParsePreferencePipe implements PipeTransform {
                 (input)="searchQuery.set($any($event.target).value)"
                 (keyup.enter)="performSearch()"
                 placeholder="Search your memories..."
-                class="w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-4 text-sm/6 text-gray-900 placeholder-gray-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-400 dark:focus:border-blue-400 dark:focus:ring-blue-400"
+                class="w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-4 text-sm/6 text-gray-900 placeholder-gray-500 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-400 dark:focus:border-primary-400 dark:focus:ring-primary-400"
               />
             </div>
             <button
               type="button"
               (click)="performSearch()"
-              class="rounded-lg bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white transition-colors hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+              class="rounded-lg bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white transition-colors hover:brightness-95"
             >
               Search
             </button>
@@ -196,9 +197,9 @@ export class ParsePreferencePipe implements PipeTransform {
               <button
                 type="button"
                 (click)="activeTab.set('all')"
-                [class.border-blue-500]="activeTab() === 'all'"
-                [class.text-blue-600]="activeTab() === 'all'"
-                [class.dark:text-blue-400]="activeTab() === 'all'"
+                [class.border-primary-500]="activeTab() === 'all'"
+                [class.text-primary-accessible]="activeTab() === 'all'"
+                [class.dark:text-primary-accessible-dark]="activeTab() === 'all'"
                 [class.border-transparent]="activeTab() !== 'all'"
                 [class.text-gray-500]="activeTab() !== 'all'"
                 [class.dark:text-gray-400]="activeTab() !== 'all'"
@@ -209,9 +210,9 @@ export class ParsePreferencePipe implements PipeTransform {
               <button
                 type="button"
                 (click)="activeTab.set('preferences')"
-                [class.border-blue-500]="activeTab() === 'preferences'"
-                [class.text-blue-600]="activeTab() === 'preferences'"
-                [class.dark:text-blue-400]="activeTab() === 'preferences'"
+                [class.border-primary-500]="activeTab() === 'preferences'"
+                [class.text-primary-accessible]="activeTab() === 'preferences'"
+                [class.dark:text-primary-accessible-dark]="activeTab() === 'preferences'"
                 [class.border-transparent]="activeTab() !== 'preferences'"
                 [class.text-gray-500]="activeTab() !== 'preferences'"
                 [class.dark:text-gray-400]="activeTab() !== 'preferences'"
@@ -222,9 +223,9 @@ export class ParsePreferencePipe implements PipeTransform {
               <button
                 type="button"
                 (click)="activeTab.set('facts')"
-                [class.border-blue-500]="activeTab() === 'facts'"
-                [class.text-blue-600]="activeTab() === 'facts'"
-                [class.dark:text-blue-400]="activeTab() === 'facts'"
+                [class.border-primary-500]="activeTab() === 'facts'"
+                [class.text-primary-accessible]="activeTab() === 'facts'"
+                [class.dark:text-primary-accessible-dark]="activeTab() === 'facts'"
                 [class.border-transparent]="activeTab() !== 'facts'"
                 [class.text-gray-500]="activeTab() !== 'facts'"
                 [class.dark:text-gray-400]="activeTab() !== 'facts'"
@@ -245,14 +246,14 @@ export class ParsePreferencePipe implements PipeTransform {
                 <button
                   type="button"
                   (click)="clearSearch()"
-                  class="text-sm/6 font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                  class="text-sm/6 font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark"
                 >
                   Clear search
                 </button>
               </div>
               @if (searchResults()!.memories.length > 0) {
-                <div class="overflow-hidden rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/20">
-                  <ul class="divide-y divide-blue-200 dark:divide-blue-800">
+                <div class="overflow-hidden rounded-lg border border-state-info-200 bg-state-info-50 dark:border-state-info-800 dark:bg-state-info-900/20">
+                  <ul class="divide-y divide-state-info-200 dark:divide-state-info-800">
                     @for (memory of searchResults()!.memories; track memory.recordId || $index) {
                       <li class="group flex items-start gap-3 px-4 py-3">
                         <div class="min-w-0 grow">
@@ -261,7 +262,7 @@ export class ParsePreferencePipe implements PipeTransform {
                           }
                           <p class="text-sm/6 text-gray-900 dark:text-white">{{ memory.content }}</p>
                           @if (memory.relevanceScore) {
-                            <p class="mt-1 text-xs/5 text-blue-600 dark:text-blue-400">
+                            <p class="mt-1 text-xs/5 text-state-info-600 dark:text-state-info-400">
                               {{ formatScore(memory.relevanceScore) }} match
                             </p>
                           }
@@ -271,11 +272,11 @@ export class ParsePreferencePipe implements PipeTransform {
                             type="button"
                             (click)="deleteMemory(memory.recordId)"
                             [disabled]="deletingMemoryId() === memory.recordId"
-                            class="shrink-0 rounded p-1 text-gray-400 opacity-0 transition-opacity hover:bg-blue-100 hover:text-red-500 group-hover:opacity-100 dark:hover:bg-blue-800 dark:hover:text-red-400"
+                            class="shrink-0 rounded p-1 text-gray-400 opacity-0 transition-opacity hover:bg-state-info-100 hover:text-state-danger-500 group-hover:opacity-100 dark:hover:bg-state-info-800 dark:hover:text-state-danger-400"
                             [class.opacity-100]="deletingMemoryId() === memory.recordId"
                           >
                             @if (deletingMemoryId() === memory.recordId) {
-                              <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-red-500"></div>
+                              <app-spinner size="sm" variant="danger" label="Deleting" />
                             } @else {
                               <ng-icon name="heroTrash" size="16" />
                             }
@@ -299,7 +300,7 @@ export class ParsePreferencePipe implements PipeTransform {
           @if (allMemories.isLoading() || isSearching()) {
             <div class="flex items-center justify-center py-12">
               <div class="text-center">
-                <div class="mb-4 inline-block size-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent"></div>
+                <app-spinner size="lg" label="Loading memories" />
                 <p class="text-base/7 text-gray-600 dark:text-gray-400">
                   {{ isSearching() ? 'Searching memories...' : 'Loading memories...' }}
                 </p>
@@ -307,9 +308,9 @@ export class ParsePreferencePipe implements PipeTransform {
             </div>
           } @else if (allMemories.error()) {
             <!-- Error State -->
-            <div class="rounded-lg bg-red-50 p-6 dark:bg-red-900/20">
-              <h3 class="text-base/7 font-semibold text-red-800 dark:text-red-200">Error Loading Memories</h3>
-              <p class="mt-2 text-sm/6 text-red-700 dark:text-red-300">
+            <div class="rounded-lg bg-state-danger-50 p-6 dark:bg-state-danger-900/20">
+              <h3 class="text-base/7 font-semibold text-state-danger-800 dark:text-state-danger-200">Error Loading Memories</h3>
+              <p class="mt-2 text-sm/6 text-state-danger-700 dark:text-state-danger-300">
                 {{ allMemories.error() }}
               </p>
             </div>
@@ -322,7 +323,7 @@ export class ParsePreferencePipe implements PipeTransform {
                 @if (preferences().length > 0) {
                   <section>
                     <h2 class="mb-4 flex items-center gap-2 text-lg/7 font-semibold text-gray-900 dark:text-white">
-                      <ng-icon name="heroSparkles" size="20" color="var(--color-purple-500)" />
+                      <ng-icon name="heroSparkles" size="20" color="var(--color-category-accent-skills-500)" />
                       Preferences
                     </h2>
                     <div class="overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
@@ -358,11 +359,11 @@ export class ParsePreferencePipe implements PipeTransform {
                                 type="button"
                                 (click)="deleteMemory(memory.recordId)"
                                 [disabled]="deletingMemoryId() === memory.recordId"
-                                class="shrink-0 rounded p-1 text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-red-500 group-hover:opacity-100 dark:hover:bg-gray-700 dark:hover:text-red-400"
+                                class="shrink-0 rounded p-1 text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-state-danger-500 group-hover:opacity-100 dark:hover:bg-gray-700 dark:hover:text-state-danger-400"
                                 [class.opacity-100]="deletingMemoryId() === memory.recordId"
                               >
                                 @if (deletingMemoryId() === memory.recordId) {
-                                  <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-red-500"></div>
+                                  <app-spinner size="sm" variant="danger" label="Deleting" />
                                 } @else {
                                   <ng-icon name="heroTrash" size="16" />
                                 }
@@ -379,7 +380,7 @@ export class ParsePreferencePipe implements PipeTransform {
                 @if (facts().length > 0) {
                   <section>
                     <h2 class="mb-4 flex items-center gap-2 text-lg/7 font-semibold text-gray-900 dark:text-white">
-                      <ng-icon name="heroLightBulb" size="20" color="var(--color-yellow-500)" />
+                      <ng-icon name="heroLightBulb" size="20" color="var(--color-accent-4-700)" />
                       Facts
                     </h2>
                     <div class="overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
@@ -402,11 +403,11 @@ export class ParsePreferencePipe implements PipeTransform {
                                 type="button"
                                 (click)="deleteMemory(memory.recordId)"
                                 [disabled]="deletingMemoryId() === memory.recordId"
-                                class="shrink-0 rounded p-1 text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-red-500 group-hover:opacity-100 dark:hover:bg-gray-700 dark:hover:text-red-400"
+                                class="shrink-0 rounded p-1 text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-state-danger-500 group-hover:opacity-100 dark:hover:bg-gray-700 dark:hover:text-state-danger-400"
                                 [class.opacity-100]="deletingMemoryId() === memory.recordId"
                               >
                                 @if (deletingMemoryId() === memory.recordId) {
-                                  <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-red-500"></div>
+                                  <app-spinner size="sm" variant="danger" label="Deleting" />
                                 } @else {
                                   <ng-icon name="heroTrash" size="16" />
                                 }
@@ -438,7 +439,7 @@ export class ParsePreferencePipe implements PipeTransform {
                     @for (memory of preferences(); track memory.recordId || $index) {
                       @let parsed = memory.content | parsePreference;
                       <li class="group flex items-start gap-3 px-4 py-3">
-                        <ng-icon name="heroSparkles" size="16" color="var(--color-purple-500)" class="mt-0.5 shrink-0" />
+                        <ng-icon name="heroSparkles" size="16" color="var(--color-category-accent-skills-500)" class="mt-0.5 shrink-0" />
                         <div class="min-w-0 grow">
                           @if (memory.createdAt) {
                             <p class="mb-1 text-xs/4 text-gray-400 dark:text-gray-500">{{ formatRelativeTime(memory.createdAt) }}</p>
@@ -467,11 +468,11 @@ export class ParsePreferencePipe implements PipeTransform {
                             type="button"
                             (click)="deleteMemory(memory.recordId)"
                             [disabled]="deletingMemoryId() === memory.recordId"
-                            class="shrink-0 rounded p-1 text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-red-500 group-hover:opacity-100 dark:hover:bg-gray-700 dark:hover:text-red-400"
+                            class="shrink-0 rounded p-1 text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-state-danger-500 group-hover:opacity-100 dark:hover:bg-gray-700 dark:hover:text-state-danger-400"
                             [class.opacity-100]="deletingMemoryId() === memory.recordId"
                           >
                             @if (deletingMemoryId() === memory.recordId) {
-                              <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-red-500"></div>
+                              <app-spinner size="sm" variant="danger" label="Deleting" />
                             } @else {
                               <ng-icon name="heroTrash" size="16" />
                             }
@@ -497,7 +498,7 @@ export class ParsePreferencePipe implements PipeTransform {
                   <ul class="divide-y divide-gray-200 dark:divide-gray-700">
                     @for (memory of facts(); track memory.recordId || $index) {
                       <li class="group flex items-start gap-3 px-4 py-3">
-                        <ng-icon name="heroLightBulb" size="16" color="var(--color-yellow-500)" class="mt-0.5 shrink-0" />
+                        <ng-icon name="heroLightBulb" size="16" color="var(--color-accent-4-700)" class="mt-0.5 shrink-0" />
                         <div class="min-w-0 grow">
                           @if (memory.createdAt) {
                             <p class="mb-1 text-xs/4 text-gray-400 dark:text-gray-500">{{ formatRelativeTime(memory.createdAt) }}</p>
@@ -514,11 +515,11 @@ export class ParsePreferencePipe implements PipeTransform {
                             type="button"
                             (click)="deleteMemory(memory.recordId)"
                             [disabled]="deletingMemoryId() === memory.recordId"
-                            class="shrink-0 rounded p-1 text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-red-500 group-hover:opacity-100 dark:hover:bg-gray-700 dark:hover:text-red-400"
+                            class="shrink-0 rounded p-1 text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-state-danger-500 group-hover:opacity-100 dark:hover:bg-gray-700 dark:hover:text-state-danger-400"
                             [class.opacity-100]="deletingMemoryId() === memory.recordId"
                           >
                             @if (deletingMemoryId() === memory.recordId) {
-                              <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-red-500"></div>
+                              <app-spinner size="sm" variant="danger" label="Deleting" />
                             } @else {
                               <ng-icon name="heroTrash" size="16" />
                             }
@@ -652,17 +653,22 @@ export class MemoryDashboardPage {
   /**
    * Color palette for category badges - works well in both light and dark modes
    */
+  // Generic accent-* identity tokens (styles/tokens/identity.css) — ten
+  // hues with no fixed meaning, purely to keep hash-adjacent categories
+  // visually distinct. Not vendor/state/filetype tokens: this rotation's
+  // slots don't stand for anything, so it gets its own token family rather
+  // than borrowing one whose name implies a meaning it doesn't carry.
   private readonly categoryColors = [
-    { bg: 'bg-purple-100 dark:bg-purple-900/30', text: 'text-purple-700 dark:text-purple-300' },
-    { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-300' },
-    { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-700 dark:text-green-300' },
-    { bg: 'bg-amber-100 dark:bg-amber-900/30', text: 'text-amber-700 dark:text-amber-300' },
-    { bg: 'bg-rose-100 dark:bg-rose-900/30', text: 'text-rose-700 dark:text-rose-300' },
-    { bg: 'bg-cyan-100 dark:bg-cyan-900/30', text: 'text-cyan-700 dark:text-cyan-300' },
-    { bg: 'bg-indigo-100 dark:bg-indigo-900/30', text: 'text-indigo-700 dark:text-indigo-300' },
-    { bg: 'bg-teal-100 dark:bg-teal-900/30', text: 'text-teal-700 dark:text-teal-300' },
-    { bg: 'bg-orange-100 dark:bg-orange-900/30', text: 'text-orange-700 dark:text-orange-300' },
-    { bg: 'bg-pink-100 dark:bg-pink-900/30', text: 'text-pink-700 dark:text-pink-300' },
+    { bg: 'bg-accent-1-100 dark:bg-accent-1-900/30', text: 'text-accent-1-700 dark:text-accent-1-300' },
+    { bg: 'bg-accent-2-100 dark:bg-accent-2-900/30', text: 'text-accent-2-700 dark:text-accent-2-300' },
+    { bg: 'bg-accent-3-100 dark:bg-accent-3-900/30', text: 'text-accent-3-700 dark:text-accent-3-300' },
+    { bg: 'bg-accent-4-100 dark:bg-accent-4-900/30', text: 'text-accent-4-700 dark:text-accent-4-300' },
+    { bg: 'bg-accent-5-100 dark:bg-accent-5-900/30', text: 'text-accent-5-700 dark:text-accent-5-300' },
+    { bg: 'bg-accent-6-100 dark:bg-accent-6-900/30', text: 'text-accent-6-700 dark:text-accent-6-300' },
+    { bg: 'bg-accent-7-100 dark:bg-accent-7-900/30', text: 'text-accent-7-700 dark:text-accent-7-300' },
+    { bg: 'bg-accent-8-100 dark:bg-accent-8-900/30', text: 'text-accent-8-700 dark:text-accent-8-300' },
+    { bg: 'bg-accent-9-100 dark:bg-accent-9-900/30', text: 'text-accent-9-700 dark:text-accent-9-300' },
+    { bg: 'bg-accent-10-100 dark:bg-accent-10-900/30', text: 'text-accent-10-700 dark:text-accent-10-300' },
   ];
 
   /**

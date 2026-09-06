@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
+
 
 class VisualDisplayState(BaseModel):
     """Display state for a single promoted visual (inline tool result)"""
@@ -367,6 +369,50 @@ class SessionInterruptRequest(BaseModel):
     reason: Literal["user_stopped", "navigated_away"] = Field(
         description="Interruption reason. Only client-attested reasons are accepted",
     )
+
+
+class SessionSteerRequest(BaseModel):
+    """Request body for a mid-turn steer (POST /sessions/{id}/steer).
+
+    A follow-up the user typed while a response was still streaming. The
+    client mints `entry_id` so the whole round trip is idempotent: it is the
+    id the SPA holds on the queued composer entry, the id the runtime clears
+    once the injection is committed to history, and the id the
+    `steering_applied` SSE event names back. See docs/specs/mid-turn-steering.md.
+
+    `text` is the user's words verbatim — the same string that would have been
+    sent as a normal turn had the queue flushed at end of turn instead.
+    """
+
+    text: str = Field(
+        min_length=1,
+        max_length=STEER_QUEUE_MAX_CHARS,
+        description="The follow-up to inject at the running turn's next tool boundary",
+    )
+    entry_id: str = Field(
+        min_length=1,
+        max_length=128,
+        alias="entryId",
+        description="Client-minted id for this queue entry; echoed back on steering_applied",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SessionSteerResponse(BaseModel):
+    """Result of arming a mid-turn steer.
+
+    `queued=False` is not an error: it means the turn ended between the user
+    typing and this request landing, and the SPA should send the text as a
+    normal turn instead (which is exactly what its end-of-turn flush already
+    does). The endpoint answers 200 either way so the SPA never has to
+    distinguish a lost race from a failure.
+    """
+
+    queued: bool = Field(description="Whether the entry was armed against a live turn")
+    entry_id: str = Field(alias="entryId", description="The client-minted entry id")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class SessionMetadataResponse(BaseModel):

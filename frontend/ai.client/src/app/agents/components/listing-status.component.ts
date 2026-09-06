@@ -143,7 +143,7 @@ export class ListingStatusComponent {
   readonly noteClass = computed(() => {
     const state = this.listing()?.state;
     return state === 'changes_requested' || state === 'taken_down' || state === 'rejected'
-      ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-200'
+      ? 'border-state-danger-200 bg-state-danger-50 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-200'
       : 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300';
   });
 

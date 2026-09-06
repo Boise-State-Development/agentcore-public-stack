@@ -17,6 +17,7 @@ import { UserService } from '../auth/user.service';
 import { ChatHttpService } from './services/chat/chat-http.service';
 import { StreamParserService } from './services/chat/stream-parser.service';
 import { CompactionSummaryService } from './services/chat/compaction-summary.service';
+import { SteeringService } from './services/chat/steering.service';
 import { ArtifactStateService } from './services/artifacts/artifact-state.service';
 import { ArtifactHttpService } from './services/artifacts/artifact-http.service';
 import { McpAppStateService } from './services/mcp-apps/mcp-app-state.service';
@@ -38,6 +39,7 @@ import {
 import { VoiceChatService } from './services/voice';
 import { SystemPromptsService } from '../services/system-prompts/system-prompts.service';
 import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.service';
+import { GreetingProvider } from '../../branding/greeting.provider';
 
 @Component({
   selector: 'app-session-page',
@@ -58,6 +60,7 @@ export class ConversationPage implements OnDestroy {
   private chatHttpService = inject(ChatHttpService);
   private streamParserService = inject(StreamParserService);
   private compactionSummary = inject(CompactionSummaryService);
+  private steering = inject(SteeringService);
   private artifactState = inject(ArtifactStateService);
   private mcpAppState = inject(McpAppStateService);
   private mcpAppCardState = inject(McpAppCardStateService);
@@ -73,6 +76,7 @@ export class ConversationPage implements OnDestroy {
   private dialog = inject(Dialog);
   private voiceChatService = inject(VoiceChatService);
   private systemPromptsService = inject(SystemPromptsService);
+  private greetingProvider = inject(GreetingProvider);
   private scrollPositions = inject(ScrollPositionService);
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
@@ -151,35 +155,10 @@ export class ConversationPage implements OnDestroy {
     return user?.firstName || null;
   });
 
-  // Greeting message templates (use {name} as placeholder for first name)
-  private greetingTemplates = [
-    'How can I help you today, {name}?',
-    'What would you like to know, {name}?',
-    'Ready to assist you, {name}!',
-    'What can I do for you, {name}?',
-    "Let's get started, {name}!",
-  ];
-
-  // Fallback greetings when user name is not available
-  private fallbackGreetings = [
-    'How can I help you today?',
-    'What would you like to know?',
-    'Ready to assist you!',
-    'What can I do for you?',
-    "Let's get started!",
-  ];
-
-  // Store the selected template index for consistency
-  private selectedGreetingIndex = Math.floor(Math.random() * this.greetingTemplates.length);
-
-  // Computed greeting message that reacts to user changes
-  greetingMessage = computed(() => {
-    const name = this.firstName();
-    if (name) {
-      return this.greetingTemplates[this.selectedGreetingIndex].replace('{name}', name);
-    }
-    return this.fallbackGreetings[this.selectedGreetingIndex];
-  });
+  // Computed greeting message that reacts to user changes. Delegates
+  // selection and `{name}` substitution to GreetingProvider, which reads
+  // the greeting templates/fallbacks from BrandingService.
+  greetingMessage = computed(() => this.greetingProvider.resolveGreeting(this.firstName()));
 
   private routeSubscription?: Subscription;
   private queryParamSubscription?: Subscription;
@@ -428,6 +407,12 @@ export class ConversationPage implements OnDestroy {
       // bleed in. The hydration effect above will reseed from
       // currentSession.totalSummarizedTurns once the metadata fetch lands.
       this.compactionSummary.reset();
+
+      // Mid-turn steering acks and the "this turn uses tools" flag are both
+      // per-conversation. A stale ack would clear a queued follow-up in the
+      // conversation the user just moved to, whose composer minted a
+      // different entry id — a no-op today, but only by luck.
+      this.steering.reset();
 
       // Artifacts are session-scoped — clear before the next session
       // loads so a prior session's cards don't bleed in, then re-hydrate

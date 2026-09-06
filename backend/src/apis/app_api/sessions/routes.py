@@ -9,6 +9,8 @@ import logging
 from apis.shared.sessions.models import (
     UpdateSessionMetadataRequest,
     SessionInterruptRequest,
+    SessionSteerRequest,
+    SessionSteerResponse,
     SessionMetadataResponse,
     SessionMetadata,
     SessionPreferences,
@@ -31,7 +33,9 @@ from apis.shared.sessions.metadata import (
 )
 from .services.session_service import SessionService
 from apis.app_api.shares.service import get_share_service
+from apis.app_api.artifacts.service import get_artifact_share_service
 from apis.shared.auth.dependencies import get_current_user_from_session
+from apis.shared.feature_flags import mid_turn_steering_enabled
 from apis.shared.auth.models import User
 from apis.shared.system_prompts.service import get_system_prompts_service
 
@@ -453,6 +457,17 @@ async def delete_session_endpoint(
             session_id
         )
 
+        # 4. Revoke artifact shares from this session. Artifacts outlive
+        # the chat that produced them, so without this a deleted
+        # conversation leaves live links to its artifacts. Best-effort
+        # and never-raising, like the conversation cascade above — and a
+        # no-op when artifacts aren't enabled for this environment.
+        background_tasks.add_task(
+            get_artifact_share_service().delete_for_session,
+            session_id,
+            user_id
+        )
+
         logger.info("Successfully deleted session")
 
         return Response(status_code=204)
@@ -513,6 +528,7 @@ async def bulk_delete_sessions_endpoint(
     try:
         service = SessionService()
         share_service = get_share_service()
+        artifact_share_service = get_artifact_share_service()
 
         for session_id in session_ids:
             try:
@@ -535,6 +551,11 @@ async def bulk_delete_sessions_endpoint(
                     background_tasks.add_task(
                         share_service.delete_shares_for_session,
                         session_id
+                    )
+                    background_tasks.add_task(
+                        artifact_share_service.delete_for_session,
+                        session_id,
+                        user_id
                     )
                     results.append(BulkDeleteSessionResult(
                         session_id=session_id,
@@ -715,6 +736,102 @@ async def signal_turn_interrupted_endpoint(
             status_code=500,
             detail="Failed to record interruption",
         )
+
+
+@router.post("/{session_id}/steer", response_model=SessionSteerResponse, response_model_by_alias=True)
+async def steer_running_turn_endpoint(
+    session_id: str,
+    body: SessionSteerRequest,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Queue a follow-up for injection into the turn that is streaming right now.
+
+    Mid-turn steering (docs/specs/mid-turn-steering.md). PR #916 made Enter
+    mean "say this" while a response streams, but the follow-up sat in the
+    composer until the turn ended — so a user who saw the agent open the wrong
+    file could only wait or Stop-and-resend, and the second discards a partial
+    generation and re-establishes the prefix. This endpoint arms the text on
+    the session's single-flight lease row; the container running the turn
+    peeks it at its next tool boundary and appends it to the tool-result
+    message, so the agent reads it before choosing its next action.
+
+    Lives on app-api, not inference-api, for the same reason ``/interrupt``
+    does: the AgentCore Runtime data plane proxies only ``/invocations`` and
+    ``/ping``, so a steer route on inference-api would 404 in cloud. The lease
+    row is the cross-container side channel — exactly the mechanism the Stop
+    path already proves — and it is owner-scoped, so a steer armed against a
+    turn that has since ended is ignored rather than misdelivered to the next
+    one.
+
+    Returns 200 with ``queued=false`` when there is no live turn to steer, or
+    when the turn ended between the user typing and this request landing. That
+    race resolving to "not queued" is the correct outcome, not an error: the
+    SPA leaves the entry in its queue and the existing end-of-turn flush sends
+    it as a normal turn. 429 when the inbox is at its cap (same fallback).
+    """
+    if not mid_turn_steering_enabled():
+        raise HTTPException(status_code=404, detail="Mid-turn steering is not enabled")
+
+    user_id = current_user.user_id
+
+    logger.info("POST /sessions/.../steer")
+
+    from apis.shared.sessions.session_lease import (
+        SteerQueueFullError,
+        request_session_steer,
+    )
+
+    try:
+        queued = await request_session_steer(
+            session_id,
+            user_id,
+            text=body.text,
+            entry_id=body.entry_id,
+        )
+    except SteerQueueFullError:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many follow-ups are already queued for this turn",
+        )
+    except Exception:
+        logger.error("Error queueing a mid-turn steer", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to queue the follow-up")
+
+    return SessionSteerResponse(queued=queued, entry_id=body.entry_id)
+
+
+@router.delete("/{session_id}/steer/{entry_id}", status_code=204)
+async def withdraw_steer_endpoint(
+    session_id: str,
+    entry_id: str,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Withdraw a queued follow-up the user removed from the composer.
+
+    Best-effort and idempotent: an unknown id, an already-consumed entry, and
+    a turn that has since ended all answer 204, because the user's intent —
+    "don't send that" — is satisfied in every one of those cases. Only the
+    caller's own session's inbox is reachable, since the lease row is keyed
+    under ``USER#{user_id}``.
+    """
+    if not mid_turn_steering_enabled():
+        raise HTTPException(status_code=404, detail="Mid-turn steering is not enabled")
+
+    user_id = current_user.user_id
+
+    logger.info("DELETE /sessions/.../steer/...")
+
+    try:
+        from apis.shared.sessions.session_lease import remove_steer_entry
+
+        await remove_steer_entry(session_id, user_id, entry_id)
+    except Exception:
+        # The entry is either still queued (and will be injected, which the
+        # SPA can render) or already gone. Neither is worth a 500 on a
+        # withdrawal the user has already seen disappear from their composer.
+        logger.warning("Failed to withdraw a queued steer", exc_info=True)
+
+    return Response(status_code=204)
 
 
 @router.delete("/{session_id}/pending-interrupts/{interrupt_id:path}", status_code=204)

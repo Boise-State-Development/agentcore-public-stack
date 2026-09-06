@@ -43,6 +43,7 @@ import {
   requiresDiscovery,
 } from '../models/connector.model';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 interface ConnectorFormGroup {
   providerId: FormControl<string>;
@@ -92,7 +93,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
 @Component({
   selector: 'app-connector-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReactiveFormsModule, NgIcon, TooltipDirective],
+  imports: [ReactiveFormsModule, NgIcon, TooltipDirective, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -135,21 +136,21 @@ const ICON_ACCEPTED_MIME_TYPES = [
         @if (loading()) {
           <div class="flex h-64 items-center justify-center">
             <div class="flex flex-col items-center gap-4">
-              <div class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-t-blue-400 dark:border-gray-600"></div>
+              <app-spinner size="xl" label="Loading connector" />
               <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading connector...</p>
             </div>
           </div>
         } @else if (createdConnector(); as created) {
           <!-- Success screen after Create: show callback URL for vendor console -->
           <div class="space-y-6">
-            <div class="rounded-sm border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-900/20">
+            <div class="rounded-sm border border-state-success-200 bg-state-success-50 p-4 dark:border-state-success-800 dark:bg-state-success-900/20">
               <div class="flex gap-3">
-                <ng-icon name="heroCheckCircle" class="size-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                <ng-icon name="heroCheckCircle" class="size-5 shrink-0 text-state-success-600 dark:text-state-success-400" />
                 <div>
-                  <h3 class="text-sm/6 font-medium text-emerald-800 dark:text-emerald-200">
+                  <h3 class="text-sm/6 font-medium text-state-success-800 dark:text-state-success-200">
                     Connector created
                   </h3>
-                  <p class="mt-1 text-sm/6 text-emerald-700 dark:text-emerald-300">
+                  <p class="mt-1 text-sm/6 text-state-success-700 dark:text-state-success-300">
                     "{{ created.displayName }}" is registered with AgentCore Identity.
                   </p>
                 </div>
@@ -175,7 +176,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                 <button
                   type="button"
                   (click)="copyCallbackUrl(created.callbackUrl || '')"
-                  class="inline-flex items-center gap-2 rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                  class="inline-flex items-center gap-2 rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                   [appTooltip]="callbackCopied() ? 'Copied!' : 'Copy to clipboard'"
                 >
                   <ng-icon [name]="callbackCopied() ? 'heroClipboardDocumentCheck' : 'heroClipboard'" class="size-5" />
@@ -187,7 +188,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
               <button
                 type="button"
                 (click)="goBack()"
-                class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-6 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                class="inline-flex items-center gap-2 rounded-sm bg-primary-accessible px-6 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50"
               >
                 Done
               </button>
@@ -208,9 +209,9 @@ const ICON_ACCEPTED_MIME_TYPES = [
                       type="button"
                       (click)="selectConnectorType(preset.type)"
                       [class.ring-3]="connectorForm.controls.providerType.value === preset.type"
-                      [class.ring-blue-500]="connectorForm.controls.providerType.value === preset.type"
-                      [class.border-blue-500]="connectorForm.controls.providerType.value === preset.type"
-                      class="flex flex-col items-center gap-2 rounded-sm border border-gray-200 bg-white p-4 text-center transition-all hover:border-gray-300 hover:shadow-xs focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-500"
+                      [class.ring-primary-500]="connectorForm.controls.providerType.value === preset.type"
+                      [class.border-primary-500]="connectorForm.controls.providerType.value === preset.type"
+                      class="flex flex-col items-center gap-2 rounded-sm border border-gray-200 bg-white p-4 text-center transition-all hover:border-gray-300 hover:shadow-xs focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-500"
                     >
                       <div [class]="getPresetIconClasses(preset.type)">
                         <ng-icon [name]="preset.iconName" class="size-5" />
@@ -230,7 +231,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
               <div class="space-y-5">
                 <div>
                   <label for="providerId" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Connector ID <span class="text-red-600">*</span>
+                    Connector ID <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     type="text"
@@ -238,14 +239,14 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     formControlName="providerId"
                     placeholder="e.g., google-workspace, github-enterprise"
                     [readonly]="isEditMode()"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 read-only:cursor-not-allowed read-only:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:read-only:bg-gray-600"
-                    [class.border-red-500]="connectorForm.controls.providerId.invalid && connectorForm.controls.providerId.touched"
+                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 read-only:cursor-not-allowed read-only:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:read-only:bg-gray-600"
+                    [class.border-state-danger-500]="connectorForm.controls.providerId.invalid && connectorForm.controls.providerId.touched"
                   />
                   <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
                     Unique identifier. Lowercase letters, numbers, and hyphens only.
                   </p>
                   @if (connectorForm.controls.providerId.invalid && connectorForm.controls.providerId.touched) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                       @if (connectorForm.controls.providerId.errors?.['required']) { Connector ID is required }
                       @else if (connectorForm.controls.providerId.errors?.['pattern']) { Must be lowercase letters, numbers, and hyphens only }
                       @else if (connectorForm.controls.providerId.errors?.['maxlength']) { Must be at most 64 characters }
@@ -255,18 +256,18 @@ const ICON_ACCEPTED_MIME_TYPES = [
 
                 <div>
                   <label for="displayName" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Display Name <span class="text-red-600">*</span>
+                    Display Name <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     type="text"
                     id="displayName"
                     formControlName="displayName"
                     placeholder="e.g., Google Workspace, GitHub Enterprise"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                    [class.border-red-500]="connectorForm.controls.displayName.invalid && connectorForm.controls.displayName.touched"
+                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    [class.border-state-danger-500]="connectorForm.controls.displayName.invalid && connectorForm.controls.displayName.touched"
                   />
                   @if (connectorForm.controls.displayName.invalid && connectorForm.controls.displayName.touched) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Display name is required</p>
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Display name is required</p>
                   }
                 </div>
 
@@ -293,7 +294,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     </div>
                     <div class="flex flex-wrap items-center gap-2">
                       <label
-                        class="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus-within:outline-hidden focus-within:ring-3 focus-within:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                        class="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus-within:outline-hidden focus-within:ring-3 focus-within:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                       >
                         {{ connectorForm.controls.iconData.value ? 'Replace' : 'Upload' }}
                         <input
@@ -318,7 +319,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     PNG, JPEG, GIF, WebP, or SVG. Max 100KB. Falls back to the default icon when no image is uploaded.
                   </p>
                   @if (iconUploadError(); as iconErr) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">{{ iconErr }}</p>
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ iconErr }}</p>
                   }
                 </div>
 
@@ -327,7 +328,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     type="checkbox"
                     id="enabled"
                     formControlName="enabled"
-                    class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                    class="size-4 rounded-xs border-gray-300 text-primary-600 focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700"
                   />
                   <label for="enabled" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Connector Enabled</label>
                 </div>
@@ -351,7 +352,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                       <button
                         type="button"
                         (click)="copyCallbackUrl(loaded.callbackUrl || '')"
-                        class="inline-flex items-center gap-2 rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                        class="inline-flex items-center gap-2 rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                         [appTooltip]="callbackCopied() ? 'Copied!' : 'Copy to clipboard'"
                       >
                         <ng-icon [name]="callbackCopied() ? 'heroClipboardDocumentCheck' : 'heroClipboard'" class="size-5" />
@@ -387,7 +388,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                 <div>
                   <label for="clientId" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                     Client ID
-                    @if (!isEditMode()) { <span class="text-red-600">*</span> }
+                    @if (!isEditMode()) { <span class="text-state-danger-600">*</span> }
                   </label>
                   <input
                     type="text"
@@ -395,15 +396,15 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     formControlName="clientId"
                     autocomplete="off"
                     placeholder="Your OAuth client ID"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                    [class.border-red-500]="connectorForm.controls.clientId.invalid && connectorForm.controls.clientId.touched"
+                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    [class.border-state-danger-500]="connectorForm.controls.clientId.invalid && connectorForm.controls.clientId.touched"
                   />
                 </div>
 
                 <div>
                   <label for="clientSecret" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                     Client Secret
-                    @if (!isEditMode()) { <span class="text-red-600">*</span> }
+                    @if (!isEditMode()) { <span class="text-state-danger-600">*</span> }
                   </label>
                   <div class="relative">
                     <input
@@ -412,7 +413,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                       formControlName="clientSecret"
                       autocomplete="off"
                       [placeholder]="isEditMode() ? 'Leave blank to keep existing' : 'Your OAuth client secret'"
-                      class="block w-full rounded-sm border border-gray-300 bg-white py-2.5 pl-3 pr-10 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                      class="block w-full rounded-sm border border-gray-300 bg-white py-2.5 pl-3 pr-10 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                     />
                     <button
                       type="button"
@@ -426,21 +427,21 @@ const ICON_ACCEPTED_MIME_TYPES = [
                 </div>
 
                 @if (credentialPairError()) {
-                  <p class="text-sm/6 text-red-600 dark:text-red-400">{{ credentialPairError() }}</p>
+                  <p class="text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ credentialPairError() }}</p>
                 }
 
                 @if (needsDiscovery()) {
                   <div>
                     <label for="oauthDiscoveryUrl" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                      OIDC Discovery URL <span class="text-red-600">*</span>
+                      OIDC Discovery URL <span class="text-state-danger-600">*</span>
                     </label>
                     <input
                       type="url"
                       id="oauthDiscoveryUrl"
                       formControlName="oauthDiscoveryUrl"
                       placeholder="https://example.com/.well-known/openid-configuration"
-                      class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                      [class.border-red-500]="connectorForm.controls.oauthDiscoveryUrl.invalid && connectorForm.controls.oauthDiscoveryUrl.touched"
+                      class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                      [class.border-state-danger-500]="connectorForm.controls.oauthDiscoveryUrl.invalid && connectorForm.controls.oauthDiscoveryUrl.touched"
                     />
                     <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
                       AgentCore fetches this URL to resolve authorization and token endpoints.
@@ -455,7 +456,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     id="scopes"
                     formControlName="scopes"
                     [placeholder]="scopesPlaceholder()"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                   <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
                     Comma-separated list of OAuth scopes to request during authorization.
@@ -473,7 +474,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     rows="3"
                     [placeholder]="customParametersPlaceholder()"
                     spellcheck="false"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   ></textarea>
                   <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
                     One <code class="rounded-xs bg-gray-100 px-1 py-0.5 dark:bg-gray-700">key=value</code> pair per line, forwarded to AgentCore Identity as <code class="rounded-xs bg-gray-100 px-1 py-0.5 dark:bg-gray-700">customParameters</code>.
@@ -496,7 +497,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     id="grantAllRoles"
                     formControlName="grantAllRoles"
                     (change)="onGrantAllRolesChange()"
-                    class="size-4 rounded-xs border-gray-300 text-purple-600 focus:ring-3 focus:ring-purple-500/50 dark:border-gray-600 dark:bg-gray-700"
+                    class="size-4 rounded-xs border-gray-300 text-primary-600 focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700"
                   />
                   <label for="grantAllRoles" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                     Allow all roles (unrestricted access)
@@ -506,8 +507,9 @@ const ICON_ACCEPTED_MIME_TYPES = [
                 @if (!connectorForm.controls.grantAllRoles.value) {
                   @if (rolesResource.isLoading() || rolesResource.value() === undefined) {
                     <div class="flex items-center gap-2">
-                      <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-purple-600"></div>
+                      <app-spinner size="sm" variant="brand" label="Loading roles" />
                       <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading roles...</p>
+                      <!-- phase-3-outlier-colors: converted from border-t-purple-600 to app-spinner brand variant (removed copy-paste color drift) -->
                     </div>
                   } @else if (availableRoles().length > 0) {
                     <div class="flex flex-wrap gap-2">
@@ -515,14 +517,14 @@ const ICON_ACCEPTED_MIME_TYPES = [
                         <button
                           type="button"
                           (click)="toggleRole(role.roleId)"
-                          [class.bg-purple-600]="isRoleSelected(role.roleId)"
+                          [class.bg-primary-600]="isRoleSelected(role.roleId)"
                           [class.text-white]="isRoleSelected(role.roleId)"
                           [class.bg-gray-100]="!isRoleSelected(role.roleId)"
                           [class.text-gray-700]="!isRoleSelected(role.roleId)"
-                          [class.dark:bg-purple-500]="isRoleSelected(role.roleId)"
+                          [class.dark:bg-primary-500]="isRoleSelected(role.roleId)"
                           [class.dark:bg-gray-700]="!isRoleSelected(role.roleId)"
                           [class.dark:text-gray-300]="!isRoleSelected(role.roleId)"
-                          class="rounded-sm px-3 py-1.5 text-sm/6 font-medium transition-colors hover:opacity-80 focus:outline-hidden focus:ring-3 focus:ring-purple-500/50"
+                          class="rounded-sm px-3 py-1.5 text-sm/6 font-medium transition-colors hover:opacity-80 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50"
                           [appTooltip]="role.description || 'No description'"
                         >
                           {{ role.displayName }}
@@ -555,7 +557,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                   <select
                     id="fileSourceAdapterId"
                     formControlName="fileSourceAdapterId"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                   >
                     <option value="">Not a file source</option>
                     @for (adapter of compatibleAdapters(); track adapter.key) {
@@ -567,10 +569,10 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     for any user allowed to use it.
                   </p>
                   @if (scopeCoverageWarning(); as warning) {
-                    <div class="mt-3 rounded-sm border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+                    <div class="mt-3 rounded-sm border border-state-warning-200 bg-state-warning-50 p-3 dark:border-state-warning-800 dark:bg-state-warning-900/20">
                       <div class="flex gap-2">
-                        <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
-                        <p class="text-sm/6 text-amber-700 dark:text-amber-300">{{ warning }}</p>
+                        <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
+                        <p class="text-sm/6 text-state-warning-700 dark:text-state-warning-300">{{ warning }}</p>
                       </div>
                     </div>
                   }
@@ -596,7 +598,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                   <select
                     id="exportTargetAdapterId"
                     formControlName="exportTargetAdapterId"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                   >
                     <option value="">Not an export target</option>
                     @for (adapter of compatibleExportAdapters(); track adapter.key) {
@@ -608,10 +610,10 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     dialog for any user allowed to use it.
                   </p>
                   @if (exportScopeCoverageWarning(); as warning) {
-                    <div class="mt-3 rounded-sm border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+                    <div class="mt-3 rounded-sm border border-state-warning-200 bg-state-warning-50 p-3 dark:border-state-warning-800 dark:bg-state-warning-900/20">
                       <div class="flex gap-2">
-                        <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
-                        <p class="text-sm/6 text-amber-700 dark:text-amber-300">{{ warning }}</p>
+                        <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
+                        <p class="text-sm/6 text-state-warning-700 dark:text-state-warning-300">{{ warning }}</p>
                       </div>
                     </div>
                   }
@@ -624,12 +626,12 @@ const ICON_ACCEPTED_MIME_TYPES = [
             </div>
 
             @if (isEditMode()) {
-              <div class="rounded-sm border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+              <div class="rounded-sm border border-state-warning-200 bg-state-warning-50 p-4 dark:border-state-warning-800 dark:bg-state-warning-900/20">
                 <div class="flex gap-3">
-                  <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400" />
                   <div>
-                    <h3 class="text-sm/6 font-medium text-amber-800 dark:text-amber-200">Security Notice</h3>
-                    <p class="mt-1 text-sm/6 text-amber-700 dark:text-amber-300">
+                    <h3 class="text-sm/6 font-medium text-state-warning-800 dark:text-state-warning-200">Security Notice</h3>
+                    <p class="mt-1 text-sm/6 text-state-warning-700 dark:text-state-warning-300">
                       Changing scopes forces connected users to re-consent on their next tool call.
                       Rotating credentials requires re-entering both Client ID and Client Secret.
                     </p>
@@ -642,10 +644,10 @@ const ICON_ACCEPTED_MIME_TYPES = [
               <button
                 type="submit"
                 [disabled]="isSubmitting() || connectorForm.invalid || !!credentialPairError()"
-                class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-6 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                class="inline-flex items-center gap-2 rounded-sm bg-primary-accessible px-6 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 @if (isSubmitting()) {
-                  <div class="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
+                  <app-spinner size="sm" variant="on-solid" label="Saving" />
                   Saving...
                 } @else {
                   <ng-icon name="heroCheckCircle" class="size-5" />
@@ -1006,21 +1008,21 @@ export class ConnectorFormPage implements OnInit {
     const base = 'flex size-10 items-center justify-center rounded-sm';
     switch (type) {
       case 'google':
-        return `${base} bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400`;
+        return `${base} bg-vendor-google-100 text-vendor-google-600 dark:bg-vendor-google-900/30 dark:text-vendor-google-400`;
       case 'microsoft':
-        return `${base} bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400`;
+        return `${base} bg-vendor-microsoft-100 text-vendor-microsoft-600 dark:bg-vendor-microsoft-900/30 dark:text-vendor-microsoft-400`;
       case 'github':
         return `${base} bg-gray-800 text-white dark:bg-gray-600`;
       case 'slack':
-        return `${base} bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-300`;
+        return `${base} bg-vendor-slack-100 text-vendor-slack-700 dark:bg-vendor-slack-900/30 dark:text-vendor-slack-300`;
       case 'salesforce':
-        return `${base} bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300`;
+        return `${base} bg-vendor-salesforce-100 text-vendor-salesforce-700 dark:bg-vendor-salesforce-900/30 dark:text-vendor-salesforce-300`;
       case 'zoom':
-        return `${base} bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300`;
+        return `${base} bg-vendor-zoom-100 text-vendor-zoom-700 dark:bg-vendor-zoom-900/30 dark:text-vendor-zoom-400`;
       case 'canvas':
-        return `${base} bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400`;
+        return `${base} bg-vendor-canvas-100 text-vendor-canvas-600 dark:bg-vendor-canvas-900/30 dark:text-vendor-canvas-400`;
       default:
-        return `${base} bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400`;
+        return `${base} bg-vendor-generic-100 text-vendor-generic-600 dark:bg-vendor-generic-900/30 dark:text-vendor-generic-400`;
     }
   }
 

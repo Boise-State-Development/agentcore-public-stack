@@ -7,8 +7,11 @@ import logging
 
 from apis.shared.observability import (
     CACHE_TTL_SECONDS,
+    DEFAULT_CACHE_TTL_SECONDS,
+    OPENAI_RESPONSES_CACHE_TTL_SECONDS,
     PARTIAL_MISS_WRITE_READ_RATIO,
     CacheStatus,
+    cache_ttl_seconds_for,
     classify_cache_status,
     compute_wasted_usd,
     emit_prompt_cache_metrics,
@@ -513,3 +516,142 @@ class TestIncidentReplay:
             if status is CacheStatus.HIT:
                 assert wasted == 0.0
         assert any(status is CacheStatus.PARTIAL_MISS for status, _ in self._replay())
+
+
+class TestCacheTtlResolution:
+    """The TTL is a property of the model, not of the module.
+
+    Bedrock/Anthropic prompt caching is a ~5-minute sliding window; the OpenAI
+    Responses API on bedrock-runtime holds entries for 30 minutes. A single
+    hardcoded 300s was wrong by 6x for GPT-5.6 — and wrong in the direction
+    that hides waste.
+    """
+
+    def test_bedrock_responses_gets_the_thirty_minute_window(self):
+        assert (
+            cache_ttl_seconds_for(provider="bedrock-responses")
+            == OPENAI_RESPONSES_CACHE_TTL_SECONDS
+            == 1800
+        )
+
+    def test_provider_match_is_case_insensitive(self):
+        assert cache_ttl_seconds_for(provider="Bedrock-Responses") == 1800
+
+    def test_bedrock_keeps_the_five_minute_window(self):
+        assert cache_ttl_seconds_for(provider="bedrock") == DEFAULT_CACHE_TTL_SECONDS == 300
+
+    def test_mantle_is_deliberately_not_widened(self):
+        """openai.gpt-5.4 on Mantle is implicit-only; AWS documents no 30m TTL.
+
+        Guessing here would over-report waste — the opposite error, but the
+        same class of mistake.
+        """
+        assert cache_ttl_seconds_for(provider="mantle") == DEFAULT_CACHE_TTL_SECONDS
+
+    def test_unknown_provider_falls_back_to_the_default(self):
+        assert cache_ttl_seconds_for(provider="something-new") == DEFAULT_CACHE_TTL_SECONDS
+        assert cache_ttl_seconds_for() == DEFAULT_CACHE_TTL_SECONDS
+
+    def test_model_id_fallback_for_rows_written_before_provider_existed(self):
+        assert cache_ttl_seconds_for(model_id="us.openai.gpt-5.6-sol") == 1800
+        assert cache_ttl_seconds_for(model_id="global.openai.gpt-5.6-luna") == 1800
+        assert (
+            cache_ttl_seconds_for(model_id="us.anthropic.claude-haiku-4-5")
+            == DEFAULT_CACHE_TTL_SECONDS
+        )
+
+    def test_provider_wins_over_the_model_id_fallback(self):
+        # An explicit provider is authoritative; the id sniff is only for rows
+        # that predate the field.
+        assert (
+            cache_ttl_seconds_for(provider="bedrock", model_id="us.openai.gpt-5.6-sol")
+            == DEFAULT_CACHE_TTL_SECONDS
+        )
+
+
+class TestTtlAwareClassification:
+    """The dollars-visible consequence of the TTL being right."""
+
+    GAP = 900  # 15 min: past the Bedrock window, inside the OpenAI one.
+
+    def test_gap_inside_the_openai_ttl_is_avoidable_waste(self):
+        assert (
+            classify_cache_status(
+                0,
+                30_000,
+                previous_call_exists=True,
+                gap_seconds=self.GAP,
+                previous_cached_prefix_tokens=30_000,
+                ttl_seconds=OPENAI_RESPONSES_CACHE_TTL_SECONDS,
+            )
+            is CacheStatus.MISS_AVOIDABLE
+        )
+
+    def test_the_same_gap_under_the_old_constant_looked_unavoidable(self):
+        """This is the bug: a live entry reported as a legitimate expiry."""
+        assert (
+            classify_cache_status(
+                0,
+                30_000,
+                previous_call_exists=True,
+                gap_seconds=self.GAP,
+                previous_cached_prefix_tokens=30_000,
+                ttl_seconds=DEFAULT_CACHE_TTL_SECONDS,
+            )
+            is CacheStatus.MISS_TTL_EXPIRED
+        )
+
+    def test_partial_miss_survives_a_gap_inside_the_openai_ttl(self):
+        assert (
+            classify_cache_status(
+                11_000,
+                190_000,
+                previous_call_exists=True,
+                gap_seconds=self.GAP,
+                ttl_seconds=OPENAI_RESPONSES_CACHE_TTL_SECONDS,
+            )
+            is CacheStatus.PARTIAL_MISS
+        )
+
+    def test_partial_miss_degrades_to_hit_under_the_wrong_ttl(self):
+        """The compaction-spiral shape, mislabelled — wastedUsd goes to $0."""
+        assert (
+            classify_cache_status(
+                11_000,
+                190_000,
+                previous_call_exists=True,
+                gap_seconds=self.GAP,
+                ttl_seconds=DEFAULT_CACHE_TTL_SECONDS,
+            )
+            is CacheStatus.HIT
+        )
+
+    def test_beyond_the_openai_ttl_is_still_a_real_expiry(self):
+        assert (
+            classify_cache_status(
+                0,
+                30_000,
+                previous_call_exists=True,
+                gap_seconds=OPENAI_RESPONSES_CACHE_TTL_SECONDS + 1,
+                previous_cached_prefix_tokens=30_000,
+                ttl_seconds=OPENAI_RESPONSES_CACHE_TTL_SECONDS,
+            )
+            is CacheStatus.MISS_TTL_EXPIRED
+        )
+
+    def test_default_is_unchanged_for_every_existing_caller(self):
+        """Omitting ttl_seconds must behave exactly as before this change."""
+        for gap, expected in (
+            (CACHE_TTL_SECONDS, CacheStatus.MISS_AVOIDABLE),
+            (CACHE_TTL_SECONDS + 1, CacheStatus.MISS_TTL_EXPIRED),
+        ):
+            assert (
+                classify_cache_status(
+                    0,
+                    5_000,
+                    previous_call_exists=True,
+                    gap_seconds=gap,
+                    previous_cached_prefix_tokens=5_000,
+                )
+                is expected
+            )

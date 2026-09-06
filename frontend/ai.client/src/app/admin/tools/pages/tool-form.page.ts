@@ -22,6 +22,7 @@ import {
   heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
 import { AdminToolService } from '../services/admin-tool.service';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { ConnectorsService } from '../../connectors/services/connectors.service';
 import {
   TOOL_CATEGORIES,
@@ -45,7 +46,7 @@ import {
 @Component({
   selector: 'app-tool-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, ReactiveFormsModule, NgIcon],
+  imports: [RouterLink, ReactiveFormsModule, NgIcon, SpinnerComponent],
   providers: [provideIcons({ heroArrowLeft, heroServer, heroUserGroup, heroLink, heroShieldCheck, heroPlus, heroTrash, heroExclamationTriangle })],
   template: `
     <div class="min-h-dvh">
@@ -72,7 +73,7 @@ import {
         <!-- Loading State -->
         @if (loading()) {
           <div class="flex h-64 items-center justify-center">
-            <div class="size-10 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-700 dark:border-t-blue-500"></div>
+            <app-spinner size="lg" label="Loading" />
           </div>
         } @else {
           <!-- Form -->
@@ -85,18 +86,18 @@ import {
               @if (!isEditMode()) {
                 <div>
                   <label for="toolId" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Tool ID <span class="text-red-600">*</span>
+                    Tool ID <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     id="toolId"
                     type="text"
                     formControlName="toolId"
                     placeholder="e.g., my_custom_tool"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                    [class.border-red-500]="form.get('toolId')?.invalid && form.get('toolId')?.touched"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                    [class.border-state-danger-500]="form.get('toolId')?.invalid && form.get('toolId')?.touched"
                   />
                   @if (form.get('toolId')?.invalid && form.get('toolId')?.touched) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                       Tool ID must be 3-50 characters, lowercase letters, numbers, and underscores only.
                     </p>
                   }
@@ -106,18 +107,18 @@ import {
               <!-- Display Name -->
               <div>
                 <label for="displayName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                  Display Name <span class="text-red-600">*</span>
+                  Display Name <span class="text-state-danger-600">*</span>
                 </label>
                 <input
                   id="displayName"
                   type="text"
                   formControlName="displayName"
                   placeholder="e.g., My Custom Tool"
-                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                  [class.border-red-500]="form.get('displayName')?.invalid && form.get('displayName')?.touched"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-state-danger-500]="form.get('displayName')?.invalid && form.get('displayName')?.touched"
                 />
                 @if (form.get('displayName')?.invalid && form.get('displayName')?.touched) {
-                  <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                     Display name is required (1-100 characters).
                   </p>
                 }
@@ -126,18 +127,18 @@ import {
               <!-- Description -->
               <div>
                 <label for="description" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                  Description <span class="text-red-600">*</span>
+                  Description <span class="text-state-danger-600">*</span>
                 </label>
                 <textarea
                   id="description"
                   formControlName="description"
                   rows="3"
                   placeholder="Describe what this tool does..."
-                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                  [class.border-red-500]="form.get('description')?.invalid && form.get('description')?.touched"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-state-danger-500]="form.get('description')?.invalid && form.get('description')?.touched"
                 ></textarea>
                 @if (form.get('description')?.invalid && form.get('description')?.touched) {
-                  <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                     Description is required (max 500 characters).
                   </p>
                 }
@@ -152,7 +153,7 @@ import {
                   <select
                     id="category"
                     formControlName="category"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   >
                     @for (cat of categories; track cat.value) {
                       <option [value]="cat.value">{{ cat.label }}</option>
@@ -167,7 +168,7 @@ import {
                   <select
                     id="protocol"
                     formControlName="protocol"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   >
                     @for (proto of protocols; track proto.value) {
                       <option [value]="proto.value">{{ proto.label }}</option>
@@ -186,21 +187,21 @@ import {
             @if (selectedProtocol() === 'mcp_external') {
               <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
                 <div class="flex items-center gap-2">
-                  <ng-icon name="heroServer" class="size-5 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                  <ng-icon name="heroServer" class="size-5 text-gray-400 dark:text-gray-500" aria-hidden="true" />
                   <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">MCP server configuration</h2>
                 </div>
 
                 <!-- Server URL -->
                 <div>
                   <label for="mcpServerUrl" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Server URL <span class="text-red-600">*</span>
+                    Server URL <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     id="mcpServerUrl"
                     type="url"
                     formControlName="mcpServerUrl"
                     placeholder="https://xxx.lambda-url.us-west-2.on.aws/"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                   />
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     Lambda Function URL or API Gateway endpoint
@@ -216,7 +217,7 @@ import {
                     <select
                       id="mcpTransport"
                       formControlName="mcpTransport"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                     >
                       @for (transport of mcpTransports; track transport.value) {
                         <option [value]="transport.value">{{ transport.label }}</option>
@@ -231,7 +232,7 @@ import {
                     <select
                       id="mcpAuthType"
                       formControlName="mcpAuthType"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                     >
                       @for (auth of mcpAuthTypes; track auth.value) {
                         <option [value]="auth.value">{{ auth.label }}</option>
@@ -251,7 +252,7 @@ import {
                       type="text"
                       formControlName="mcpAwsRegion"
                       placeholder="us-west-2 (auto-detected from URL if blank)"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                     />
                   </div>
                 }
@@ -268,7 +269,7 @@ import {
                         type="text"
                         formControlName="mcpApiKeyHeader"
                         placeholder="x-api-key"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                       />
                     </div>
                     <div>
@@ -280,7 +281,7 @@ import {
                         type="text"
                         formControlName="mcpSecretArn"
                         placeholder="arn:aws:secretsmanager:..."
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                       />
                     </div>
                   </div>
@@ -297,14 +298,14 @@ import {
                         type="button"
                         (click)="discoverMcpTools()"
                         [disabled]="discovering() || !form.get('mcpServerUrl')?.value"
-                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-primary-50 hover:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-accessible-dark dark:hover:bg-primary-900/20"
                       >
                         {{ discovering() ? 'Discovering…' : 'Discover from server' }}
                       </button>
                       <button
                         type="button"
                         (click)="addMcpTool()"
-                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-primary-50 hover:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-primary-900/20"
                       >
                         <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
                         Add Tool
@@ -312,7 +313,7 @@ import {
                     </div>
                   </div>
                   @if (discoverError()) {
-                    <p class="mb-2 text-sm/6 text-red-600 dark:text-red-400">
+                    <p class="mb-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                       {{ discoverError() }}
                     </p>
                   }
@@ -331,14 +332,14 @@ import {
                               formControlName="name"
                               placeholder="tool_name"
                               [attr.aria-label]="'Tool name ' + ($index + 1)"
-                              class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                              class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                             />
                           </div>
                           <label class="flex items-center gap-1.5 whitespace-nowrap pt-1.5 text-xs/5 text-gray-700 dark:text-gray-300">
                             <input
                               type="checkbox"
                               formControlName="needsApproval"
-                              class="size-4 rounded border-gray-300 text-amber-600 focus:ring-2 focus:ring-amber-500 dark:border-gray-600 dark:bg-gray-800"
+                              class="size-4 rounded border-gray-300 text-state-warning-600 focus:ring-2 focus:ring-state-warning-500 dark:border-gray-600 dark:bg-gray-800"
                             />
                             <span>Needs approval</span>
                           </label>
@@ -346,7 +347,7 @@ import {
                             type="button"
                             (click)="removeMcpTool($index)"
                             [attr.aria-label]="'Remove tool ' + ($index + 1)"
-                            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                           >
                             <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                           </button>
@@ -364,7 +365,7 @@ import {
                   <input
                     type="checkbox"
                     formControlName="mcpHealthCheckEnabled"
-                    class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
                   />
                   <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                     Enable health checks
@@ -375,7 +376,7 @@ import {
               <!-- Forward App Authentication Token -->
               <section class="space-y-3 border-t border-gray-200 pt-8 dark:border-gray-700">
                 <div class="flex items-center gap-2">
-                  <ng-icon name="heroShieldCheck" class="size-5 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+                  <ng-icon name="heroShieldCheck" class="size-5 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
                   <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Forward app authentication token</h2>
                 </div>
 
@@ -383,7 +384,7 @@ import {
                   <input
                     type="checkbox"
                     formControlName="forwardAuthToken"
-                    class="mt-0.5 size-4 rounded border-gray-300 text-amber-600 focus:ring-2 focus:ring-amber-500 dark:border-gray-600 dark:bg-gray-800"
+                    class="mt-0.5 size-4 rounded border-gray-300 text-state-warning-600 focus:ring-2 focus:ring-state-warning-500 dark:border-gray-600 dark:bg-gray-800"
                   />
                   <span class="flex-1">
                     <span class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
@@ -397,11 +398,11 @@ import {
                 </label>
 
                 @if (form.get('forwardAuthToken')?.value) {
-                  <div class="rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
-                    <p class="mb-1 text-sm/6 font-medium text-amber-900 dark:text-amber-100">
+                  <div class="rounded-2xl border border-state-warning-300 bg-state-warning-50 p-4 dark:border-state-warning-700 dark:bg-state-warning-900/30">
+                    <p class="mb-1 text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-100">
                       Security notice
                     </p>
-                    <p class="text-sm/6 text-amber-800 dark:text-amber-200">
+                    <p class="text-sm/6 text-state-warning-800 dark:text-state-warning-200">
                       Only enable this for MCP servers you control. The user's authentication token will be sent
                       in the Authorization header. The MCP server should validate the JWT signature and extract
                       user identity from the token claims. Set the MCP Authentication Type to "None" above.
@@ -428,17 +429,17 @@ import {
                   />
 
                   @if (form.get('tokenExchangeAudience')?.value) {
-                    <div class="mt-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
-                      <p class="mb-1 text-sm/6 font-medium text-amber-900 dark:text-amber-100">
+                    <div class="mt-3 rounded-2xl border border-state-warning-300 bg-state-warning-50 p-4 dark:border-state-warning-700 dark:bg-state-warning-900/30">
+                      <p class="mb-1 text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-100">
                         Requires configuration
                       </p>
-                      <p class="text-sm/6 text-amber-800 dark:text-amber-200">
+                      <p class="text-sm/6 text-state-warning-800 dark:text-state-warning-200">
                         The platform must be deployed with a token exchange endpoint configured, and this
                         deployment's client secret populated, or these tools will not load. Set the MCP
                         Authentication Type to "None" above — the exchanged token uses the Authorization header,
                         so it cannot be combined with SigV4.
                       </p>
-                      <p class="mt-2 text-sm/6 text-amber-800 dark:text-amber-200">
+                      <p class="mt-2 text-sm/6 text-state-warning-800 dark:text-state-warning-200">
                         Tool discovery below does not exchange tokens, so a server that requires
                         authentication to list its tools will return nothing here.
                       </p>
@@ -450,7 +451,7 @@ import {
               <!-- User OAuth Connector -->
               <section class="space-y-3 border-t border-gray-200 pt-8 dark:border-gray-700">
                 <div class="flex items-center gap-2">
-                  <ng-icon name="heroLink" class="size-5 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+                  <ng-icon name="heroLink" class="size-5 text-accent-3-700 dark:text-accent-3-300" aria-hidden="true" />
                   <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">User OAuth connector</h2>
                 </div>
                 <p class="text-sm/6 text-gray-600 dark:text-gray-400">
@@ -464,7 +465,7 @@ import {
                   <select
                     id="requiresOauthProvider"
                     formControlName="requiresOauthProvider"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   >
                     <option [value]="''">None - No user OAuth required</option>
                     @for (provider of oauthProviders(); track provider.providerId) {
@@ -473,7 +474,7 @@ import {
                   </select>
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     Users must connect this connector before using the tool. Manage connectors in
-                    <a routerLink="/admin/connectors" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">Connectors</a>.
+                    <a routerLink="/admin/connectors" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Connectors</a>.
                   </p>
                 </div>
               </section>
@@ -483,7 +484,7 @@ import {
             @if (selectedProtocol() === 'mcp') {
               <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
                 <div class="flex items-center gap-2">
-                  <ng-icon name="heroServer" class="size-5 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                  <ng-icon name="heroServer" class="size-5 text-gray-400 dark:text-gray-500" aria-hidden="true" />
                   <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Gateway target configuration</h2>
                 </div>
                 <p class="text-sm/6 text-gray-600 dark:text-gray-400">
@@ -494,14 +495,14 @@ import {
                 <!-- Target name and endpoint -->
                 <div>
                   <label for="gwTargetName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Target name <span class="text-red-600">*</span>
+                    Target name <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     id="gwTargetName"
                     type="text"
                     formControlName="gwTargetName"
                     placeholder="weather-search"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                   />
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     Unique name for the target on the gateway.
@@ -510,14 +511,14 @@ import {
 
                 <div>
                   <label for="gwEndpointUrl" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Endpoint URL <span class="text-red-600">*</span>
+                    Endpoint URL <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     id="gwEndpointUrl"
                     type="url"
                     formControlName="gwEndpointUrl"
                     placeholder="https://your-mcp-server.example.com/mcp"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                   />
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     The external MCP server endpoint the Gateway will call.
@@ -534,7 +535,7 @@ import {
                       id="gwListingMode"
                       formControlName="gwListingMode"
                       [attr.disabled]="form.get('gwCredentialType')?.value === 'oauth' ? '' : null"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                     >
                       @for (mode of gatewayListingModes; track mode.value) {
                         <option [value]="mode.value">{{ mode.label }}</option>
@@ -556,7 +557,7 @@ import {
                     <select
                       id="gwCredentialType"
                       formControlName="gwCredentialType"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                     >
                       @for (cred of gatewayCredentialTypes; track cred.value) {
                         <option [value]="cred.value">{{ cred.label }}</option>
@@ -566,7 +567,7 @@ import {
                       How the Gateway authenticates to the target endpoint.
                     </p>
                     @if (showIamRecommendation()) {
-                      <p class="mt-1 flex items-start gap-1.5 text-xs/5 text-amber-700 dark:text-amber-400">
+                      <p class="mt-1 flex items-start gap-1.5 text-xs/5 text-state-warning-700 dark:text-state-warning-400">
                         <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
                         <span>This looks like an AWS-hosted endpoint (Lambda / API Gateway /
                         AgentCore). It likely requires IAM — pick <strong>Gateway IAM Role
@@ -582,14 +583,14 @@ import {
                   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                       <label for="gwAwsService" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                        AWS service <span class="text-red-600">*</span>
+                        AWS service <span class="text-state-danger-600">*</span>
                       </label>
                       <input
                         id="gwAwsService"
                         type="text"
                         formControlName="gwAwsService"
                         placeholder="lambda, execute-api, bedrock-agentcore"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                       />
                       <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                         Auto-detected from the endpoint URL for Lambda / API Gateway /
@@ -605,7 +606,7 @@ import {
                         type="text"
                         formControlName="gwAwsRegion"
                         placeholder="defaults to the gateway's region"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                       />
                       <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                         Optional — auto-detected from the endpoint URL; AWS defaults it
@@ -617,14 +618,14 @@ import {
                   @if (isLambdaUrlEndpoint()) {
                     <div>
                       <label for="gwLambdaFunctionName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                        Lambda function name <span class="text-red-600">*</span>
+                        Lambda function name <span class="text-state-danger-600">*</span>
                       </label>
                       <input
                         id="gwLambdaFunctionName"
                         type="text"
                         formControlName="gwLambdaFunctionName"
                         placeholder="mcp-class-search-dev"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                       />
                       <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                         The Lambda behind this Function URL. We grant the gateway
@@ -640,18 +641,18 @@ import {
                 @if (form.get('gwCredentialType')?.value === 'oauth' || form.get('gwCredentialType')?.value === 'api_key') {
                   <div>
                     <label for="gwCredentialProviderArn" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                      Credential provider ARN <span class="text-red-600">*</span>
+                      Credential provider ARN <span class="text-state-danger-600">*</span>
                     </label>
                     <input
                       id="gwCredentialProviderArn"
                       type="text"
                       formControlName="gwCredentialProviderArn"
                       placeholder="arn:aws:bedrock-agentcore:...:token-vault/default/oauth2credentialprovider/..."
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                     />
                     <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                       An existing AgentCore credential provider. Provisioning providers is out of scope here — manage them in
-                      <a routerLink="/admin/connectors" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">Connectors</a>.
+                      <a routerLink="/admin/connectors" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Connectors</a>.
                     </p>
                   </div>
                 }
@@ -668,7 +669,7 @@ import {
                         type="text"
                         formControlName="gwOauthScopes"
                         placeholder="openid profile email"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                       />
                       <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                         Space- or comma-separated.
@@ -681,7 +682,7 @@ import {
                       <select
                         id="gwGrantType"
                         formControlName="gwGrantType"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                       >
                         @for (grant of gatewayOauthGrantTypes; track grant.value) {
                           <option [value]="grant.value">{{ grant.label }}</option>
@@ -705,14 +706,14 @@ import {
                         type="button"
                         (click)="discoverGatewayTools()"
                         [disabled]="discovering() || !form.get('gwEndpointUrl')?.value"
-                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-primary-50 hover:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-accessible-dark dark:hover:bg-primary-900/20"
                       >
                         {{ discovering() ? 'Discovering…' : 'Discover from server' }}
                       </button>
                       <button
                         type="button"
                         (click)="addGwTool()"
-                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-primary-50 hover:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-primary-900/20"
                       >
                         <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
                         Add Tool
@@ -720,7 +721,7 @@ import {
                     </div>
                   </div>
                   @if (discoverError()) {
-                    <p class="mb-2 text-sm/6 text-red-600 dark:text-red-400">
+                    <p class="mb-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                       {{ discoverError() }}
                     </p>
                   }
@@ -739,14 +740,14 @@ import {
                               formControlName="name"
                               placeholder="tool_name"
                               [attr.aria-label]="'Gateway tool name ' + ($index + 1)"
-                              class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                              class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                             />
                           </div>
                           <label class="flex items-center gap-1.5 whitespace-nowrap pt-1.5 text-xs/5 text-gray-700 dark:text-gray-300">
                             <input
                               type="checkbox"
                               formControlName="needsApproval"
-                              class="size-4 rounded border-gray-300 text-amber-600 focus:ring-2 focus:ring-amber-500 dark:border-gray-600 dark:bg-gray-800"
+                              class="size-4 rounded border-gray-300 text-state-warning-600 focus:ring-2 focus:ring-state-warning-500 dark:border-gray-600 dark:bg-gray-800"
                             />
                             <span>Needs approval</span>
                           </label>
@@ -754,7 +755,7 @@ import {
                             type="button"
                             (click)="removeGwTool($index)"
                             [attr.aria-label]="'Remove gateway tool ' + ($index + 1)"
-                            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                           >
                             <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                           </button>
@@ -765,7 +766,7 @@ import {
                   <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
                     Note: per-tool approval flags are stored but not yet enforced for Gateway tools (tracked separately).
                     For OAuth targets, users connect the provider via
-                    <a routerLink="/admin/connectors" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">Connectors</a>.
+                    <a routerLink="/admin/connectors" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Connectors</a>.
                   </p>
                 </div>
               </section>
@@ -775,21 +776,21 @@ import {
             @if (selectedProtocol() === 'a2a') {
               <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
                 <div class="flex items-center gap-2">
-                  <ng-icon name="heroUserGroup" class="size-5 text-purple-600 dark:text-purple-400" aria-hidden="true" />
+                  <ng-icon name="heroUserGroup" class="size-5 text-accent-1-700 dark:text-accent-1-300" aria-hidden="true" />
                   <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Agent-to-agent configuration</h2>
                 </div>
 
                 <!-- Agent URL -->
                 <div>
                   <label for="a2aAgentUrl" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Agent URL <span class="text-red-600">*</span>
+                    Agent URL <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     id="a2aAgentUrl"
                     type="url"
                     formControlName="a2aAgentUrl"
                     placeholder="https://agent-endpoint.example.com/"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -804,7 +805,7 @@ import {
                       type="text"
                       formControlName="a2aAgentId"
                       placeholder="AgentCore Runtime ID (optional)"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                     />
                   </div>
 
@@ -815,7 +816,7 @@ import {
                     <select
                       id="a2aAuthType"
                       formControlName="a2aAuthType"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                     >
                       @for (auth of a2aAuthTypes; track auth.value) {
                         <option [value]="auth.value">{{ auth.label }}</option>
@@ -835,7 +836,7 @@ import {
                       type="text"
                       formControlName="a2aAwsRegion"
                       placeholder="us-west-2"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                     />
                   </div>
                 }
@@ -850,7 +851,7 @@ import {
                     formControlName="a2aCapabilities"
                     rows="3"
                     placeholder="report_generation&#10;data_analysis&#10;document_creation"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                   ></textarea>
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     One capability per line
@@ -869,7 +870,7 @@ import {
                       formControlName="a2aTimeoutSeconds"
                       min="1"
                       max="600"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                     />
                   </div>
                   <div>
@@ -882,7 +883,7 @@ import {
                       formControlName="a2aMaxRetries"
                       min="0"
                       max="10"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                     />
                   </div>
                 </div>
@@ -900,7 +901,7 @@ import {
                 <select
                   id="status"
                   formControlName="status"
-                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                 >
                   @for (stat of statuses; track stat.value) {
                     <option [value]="stat.value">{{ stat.label }}</option>
@@ -913,7 +914,7 @@ import {
                   <input
                     type="checkbox"
                     formControlName="isPublic"
-                    class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
                   />
                   <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                     Public tool
@@ -929,7 +930,7 @@ import {
                   <input
                     type="checkbox"
                     formControlName="enabledByDefault"
-                    class="size-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
                   />
                   <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                     Enabled by default
@@ -944,17 +945,17 @@ import {
             <!-- Form Actions -->
             <div class="flex flex-col gap-4 border-t border-gray-200 pt-6 dark:border-gray-700">
               @if (error()) {
-                <div class="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm/6 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+                <div class="rounded-2xl border border-state-danger-200 bg-state-danger-50 p-4 text-sm/6 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
                   {{ error() }}
                 </div>
               }
 
               @if (form.invalid) {
-                <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
-                  <p class="text-sm/6 font-medium text-amber-800 dark:text-amber-200">
+                <div class="rounded-2xl border border-state-warning-200 bg-state-warning-50 p-4 dark:border-state-warning-800 dark:bg-state-warning-900/20">
+                  <p class="text-sm/6 font-medium text-state-warning-800 dark:text-state-warning-200">
                     Please fix the following before saving:
                   </p>
-                  <ul class="mt-1 list-inside list-disc text-sm/6 text-amber-700 dark:text-amber-300">
+                  <ul class="mt-1 list-inside list-disc text-sm/6 text-state-warning-700 dark:text-state-warning-300">
                     @if (form.get('toolId')?.invalid && !isEditMode()) {
                       <li>Tool ID is required (3-50 chars, lowercase, numbers, underscores)</li>
                     }
@@ -972,7 +973,7 @@ import {
                 <button
                   type="submit"
                   [disabled]="form.invalid || saving()"
-                  class="inline-flex items-center justify-center rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  class="inline-flex items-center justify-center rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:brightness-110"
                 >
                   {{ saving() ? 'Saving…' : (isEditMode() ? 'Update Tool' : 'Create Tool') }}
                 </button>

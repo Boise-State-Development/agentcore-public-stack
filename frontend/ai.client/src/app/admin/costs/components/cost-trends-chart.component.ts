@@ -9,6 +9,11 @@ import {
 } from '@angular/core';
 import { Chart, ChartConfiguration, ChartData } from 'chart.js/auto';
 import { CostTrend } from '../models';
+import {
+  CHART_SERIES_COLORS,
+  CHART_FILL_COLORS,
+  getChromeColorsForMode,
+} from '../../../shared/constants/chart-colors.constants';
 
 /**
  * Cost trends line chart component.
@@ -25,13 +30,16 @@ import { CostTrend } from '../models';
         <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
           Cost Trends
         </h3>
+        <!-- intentional: legend dots mirror the Chart.js dataset borderColor
+             values from CHART_SERIES_COLORS constants (#3b82f6/#10b981), which are
+             exempt from token migration per identity.css's chart-series note -->
         <div class="flex items-center gap-4 text-sm">
           <div class="flex items-center gap-2">
-            <span class="size-3 rounded-full bg-blue-500"></span>
+            <span class="size-3 rounded-full" [style.background-color]="CHART_SERIES_COLORS.cost"></span>
             <span class="text-gray-600 dark:text-gray-400">Cost</span>
           </div>
           <div class="flex items-center gap-2">
-            <span class="size-3 rounded-full bg-emerald-500"></span>
+            <span class="size-3 rounded-full" [style.background-color]="CHART_SERIES_COLORS.requests"></span>
             <span class="text-gray-600 dark:text-gray-400">Requests</span>
           </div>
         </div>
@@ -82,6 +90,9 @@ import { CostTrend } from '../models';
 export class CostTrendsChartComponent {
   data = input.required<CostTrend[]>();
 
+  // Export constant for template access
+  protected readonly CHART_SERIES_COLORS = CHART_SERIES_COLORS;
+
   private chartCanvas = viewChild<ElementRef<HTMLCanvasElement>>('chartCanvas');
   private chart: Chart | null = null;
 
@@ -125,8 +136,7 @@ export class CostTrendsChartComponent {
     const maxRequests = Math.max(...requestsData);
 
     const isDarkMode = document.documentElement.classList.contains('dark');
-    const gridColor = isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
-    const textColor = isDarkMode ? '#9ca3af' : '#6b7280';
+    const chromeColors = getChromeColorsForMode(isDarkMode);
 
     const chartData: ChartData<'line'> = {
       labels,
@@ -134,8 +144,8 @@ export class CostTrendsChartComponent {
         {
           label: 'Cost ($)',
           data: costData,
-          borderColor: '#3b82f6',
-          backgroundColor: 'rgba(59, 130, 246, 0.1)',
+          borderColor: CHART_SERIES_COLORS.cost,
+          backgroundColor: CHART_FILL_COLORS.cost,
           fill: true,
           tension: 0.3,
           yAxisID: 'y',
@@ -145,8 +155,8 @@ export class CostTrendsChartComponent {
         {
           label: 'Requests',
           data: requestsData,
-          borderColor: '#10b981',
-          backgroundColor: 'rgba(16, 185, 129, 0.1)',
+          borderColor: CHART_SERIES_COLORS.requests,
+          backgroundColor: CHART_FILL_COLORS.requests,
           fill: false,
           tension: 0.3,
           yAxisID: 'y1',
@@ -171,10 +181,10 @@ export class CostTrendsChartComponent {
             display: false,
           },
           tooltip: {
-            backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-            titleColor: isDarkMode ? '#ffffff' : '#111827',
-            bodyColor: isDarkMode ? '#d1d5db' : '#4b5563',
-            borderColor: isDarkMode ? '#374151' : '#e5e7eb',
+            backgroundColor: chromeColors.background,
+            titleColor: chromeColors.titleText,
+            bodyColor: chromeColors.bodyText,
+            borderColor: chromeColors.border,
             borderWidth: 1,
             padding: 12,
             callbacks: {
@@ -192,10 +202,10 @@ export class CostTrendsChartComponent {
         scales: {
           x: {
             grid: {
-              color: gridColor,
+              color: chromeColors.gridLine,
             },
             ticks: {
-              color: textColor,
+              color: chromeColors.axisText,
               maxRotation: 45,
               minRotation: 0,
             },
@@ -207,13 +217,13 @@ export class CostTrendsChartComponent {
             title: {
               display: true,
               text: 'Cost ($)',
-              color: textColor,
+              color: chromeColors.axisText,
             },
             grid: {
-              color: gridColor,
+              color: chromeColors.gridLine,
             },
             ticks: {
-              color: textColor,
+              color: chromeColors.axisText,
               callback: value => this.formatCurrencyShort(Number(value)),
             },
             suggestedMin: 0,
@@ -226,13 +236,13 @@ export class CostTrendsChartComponent {
             title: {
               display: true,
               text: 'Requests',
-              color: textColor,
+              color: chromeColors.axisText,
             },
             grid: {
               drawOnChartArea: false,
             },
             ticks: {
-              color: textColor,
+              color: chromeColors.axisText,
               callback: value => this.formatNumberShort(Number(value)),
             },
             suggestedMin: 0,

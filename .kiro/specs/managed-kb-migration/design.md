@@ -7,6 +7,13 @@ Amazon S3 Vectors) with **Amazon Bedrock Managed Knowledge Base**, one knowledge
 base at a time, behind a single abstraction seam, with rollback available at every
 step.
 
+> **READ `HANDOFF.md` FIRST for current state.** This document is the design as
+> intended. Sixteen defects were found only by *running* it, and several of them
+> were caused by figures and claims in this document being applied to situations
+> they did not describe — the inline ⚠️ notes mark the ones known to have misled.
+> `HANDOFF.md` §5 carries the measurements that superseded them, and §6 carries
+> what is still open. Where the two disagree, HANDOFF.md is the newer evidence.
+
 The shape of the change is a **strangler fig**. There are exactly two retrieval
 call sites today, both routed through
 `search_assistant_knowledgebase_with_formatting`. That function becomes a thin
@@ -45,7 +52,7 @@ in one place because they are the reason the design has the shape it does.
 | Per-KB cold first ingest | ~68 s, remarkably constant (68.296/68.232/68.334 s) | A fixed cost of the *knowledge base*, not the document; pay it once, in background |
 | Warm ingest, small text | ~2.5 s | Comparable to today; bulk migration is feasible |
 | Warm ingest, 50 KiB PDF | 68–264 s | Long tail; ingestion timeouts ≥300 s, treated as background work |
-| INDEXED → actually retrievable | 0.75–1.03 s | Two distinct timestamps; poll for retrievable, not indexed |
+| INDEXED → actually retrievable | 0.75–1.03 s | Two distinct timestamps. ⚠️ This is the gap AFTER indexing finishes — NOT a budget for `ingest → retrievable`, which is 37–264 s for PDFs (evaluation §5.1) and reached 5 m 30 s in dev. Sizing a wait from this number caused §5.30 and §5.37. Poll Bedrock's document STATUS first, then confirm retrievability with a `document_id`-filtered query |
 | `Retrieve` p50 / p95 | 662–695 ms / 762–800 ms | +405 ms p50, +538 ms p95 vs today; acceptable but real TTFT cost |
 | `StartIngestionJob` | 0.1 RPS, account-wide, **not adjustable** | Direct ingestion only; never per-document sync jobs |
 | `IngestKnowledgeBaseDocuments` | **10 documents max**, server-enforced | Batch at 10, not the 25 the user guide claims |
@@ -58,7 +65,7 @@ in one place because they are the reason the design has the shape it does.
 | Empty/idle KB | $0.00000203 measured for the month | No per-KB floor; count pressure is near zero |
 | KB deletion | 2–6 minutes, async | Poll `ListKnowledgeBases`; "accepted" ≠ "gone" |
 | Filter operators | fail **closed** (measured 0 results) | A mistyped filter yields nothing rather than leaking — but see the isolation note below |
-| Managed reranking | separates scores 0.89/0.38/0.25/0.21/0.19 vs flat 1.00/0.84/0.78/0.77/0.77 | The reranker is what makes a 2,000-char cap defensible |
+| Managed reranking | separates scores 0.89/0.38/0.25/0.21/0.19 vs flat 1.00/0.84/0.78/0.77/0.77 | ⚠️ The separation is real, but the cap is NOT defensible on the managed path as built: Bedrock's chunks are ~3× Docling's, so only ~1 chunk clears 2,000 characters and four of reranking's five results never reach the model. Measured, with a wrong answer to show for it — HANDOFF.md §5.40 |
 
 ---
 
@@ -536,8 +543,32 @@ sequenceDiagram
 
 - **Routing is exclusive.** A document is indexed on exactly one backend outside a
   deliberate migration or dual-read pilot, so no double-indexing.
+
+  > **Implemented on both sides as of 2026-09-01, and it was not before.** The
+  > ingestion consumer always stood down for a legacy document, but the legacy
+  > pipeline had no engine gate at all and its S3 notification is still live, so
+  > every document added to a promoted knowledge base was handled twice — and both
+  > pipelines wrote `DOC#` status, so "ready" was decided by whichever finished
+  > last. See HANDOFF.md §5.32 and §5.34. Deletion was the mirror gap: it removed
+  > the legacy vectors and never touched the managed corpus (§5.36).
 - **Two timestamps, not one.** `indexedAt` and `retrievableAt` are recorded
-  separately; the gap measured 0.75–1.03 s and is a real, distinct event.
+  separately, because they are genuinely distinct events.
+
+  > ⚠️ **The figure that used to appear here — "the gap measured 0.75–1.03 s" — is
+  > correct for `INDEXED → retrievable` and WRONG as a budget for anything else. It
+  > caused two defects.** Both `verify` (§5.30) and the ingestion consumer (§5.37)
+  > used it to size a wait that actually had to cover
+  > `ingest → INDEXED → retrievable`, which the evaluation's §5.1 measured at
+  > 37–264 s for PDFs and which reached **5 m 30 s** on a 1.5 MB file in dev. The
+  > second occurrence happened because the first fix was applied to `verify` only
+  > and nobody grepped for the constant's other homes.
+  >
+  > Two further corrections earned by measurement: `indexedAt` must be Bedrock's own
+  > `updatedAt`, not local time after the ingest call returns — that call is
+  > fire-and-forget, and recording local time made the field a fabrication that a
+  > truthiness assertion could not catch. And retrievability must be confirmed with
+  > a `document_id`-filtered retrieval; querying the id as free text cannot find its
+  > own document once a knowledge base holds more than one (§5.38).
 - **Timeouts ≥300 s.** A 50 KiB PDF has been observed at 264 s.
 - **No chunk-key bookkeeping.** `customDocumentIdentifier = document_id` gives a
   1:1 mapping, which retires the whole `{doc_id}#{chunk_index}` scheme including

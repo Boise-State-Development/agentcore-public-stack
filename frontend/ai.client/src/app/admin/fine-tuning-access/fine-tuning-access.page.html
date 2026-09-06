@@ -4,12 +4,12 @@
     <div>
       <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Fine-Tuning Access</h1>
       <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-        Manage which users can create fine-tuning and inference jobs. Each user gets a monthly GPU-hour quota.
+        Manage which users can create fine-tuning and inference jobs. Each user gets a monthly spending quota in US dollars.
       </p>
     </div>
     <button
       (click)="state.toggleGrantForm()"
-      class="inline-flex items-center gap-1.5 rounded-sm bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+      class="inline-flex items-center gap-1.5 rounded-sm bg-primary-accessible px-3 py-2 text-sm font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600"
     >
       <ng-icon name="heroPlus" class="size-4" />
       Grant Access
@@ -18,8 +18,8 @@
 
   <!-- Inline grant form -->
   @if (state.showGrantForm()) {
-    <div class="mb-6 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
-      <h2 class="mb-3 text-sm/6 font-semibold text-blue-900 dark:text-blue-200">Grant Fine-Tuning Access</h2>
+    <div class="mb-6 rounded-sm border border-primary-200 bg-primary-50 p-4 dark:border-primary-800 dark:bg-primary-900/20">
+      <h2 class="mb-3 text-sm/6 font-semibold text-primary-accessible dark:text-primary-accessible-dark">Grant Fine-Tuning Access</h2>
       <form (ngSubmit)="submitGrant()" class="flex flex-wrap items-end gap-3">
         <div class="flex-1">
           <label for="grant-email" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Email address</label>
@@ -30,11 +30,11 @@
             [(ngModel)]="newEmail"
             name="email"
             placeholder="user@example.com"
-            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
           />
         </div>
         <div class="w-36">
-          <label for="grant-quota" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Monthly hours</label>
+          <label for="grant-quota" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Monthly quota (USD)</label>
           <input
             id="grant-quota"
             type="number"
@@ -43,13 +43,13 @@
             step="1"
             [(ngModel)]="newQuota"
             name="quota"
-            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
           />
         </div>
         <div class="flex gap-2">
           <button
             type="submit"
-            class="inline-flex items-center gap-1 rounded-sm bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+            class="inline-flex items-center gap-1 rounded-sm bg-primary-accessible px-3 py-2 text-sm font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600"
           >
             <ng-icon name="heroCheck" class="size-4" />
             Submit
@@ -68,14 +68,14 @@
 
   <!-- Error display -->
   @if (state.hasError()) {
-    <div class="mb-4 flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">
-      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-red-600 dark:text-red-400" />
+    <div class="mb-4 flex items-start gap-3 rounded-sm border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20" role="alert">
+      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" />
       <div class="flex-1">
-        <p class="text-sm/6 text-red-800 dark:text-red-200">{{ state.error() }}</p>
+        <p class="text-sm/6 text-state-danger-800 dark:text-state-danger-200">{{ state.error() }}</p>
       </div>
       <button
         (click)="state.clearError()"
-        class="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+        class="text-state-danger-500 hover:text-state-danger-700 dark:text-state-danger-400 dark:hover:text-state-danger-300"
         [appTooltip]="'Dismiss'"
         appTooltipPosition="left"
         aria-label="Dismiss error"
@@ -88,7 +88,7 @@
   <!-- Loading spinner (only when no data yet) -->
   @if (state.loading() && state.grantCount() === 0) {
     <div class="flex items-center justify-center py-12">
-      <div class="size-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Loading"></div>
+      <app-spinner size="lg" label="Loading" />
     </div>
   }
 
@@ -123,13 +123,13 @@
                       step="1"
                       [(ngModel)]="editQuota"
                       [ngModelOptions]="{standalone: true}"
-                      class="w-20 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                      aria-label="Monthly quota hours"
+                      class="w-20 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      aria-label="Monthly quota in US dollars"
                     />
-                    <span class="text-gray-500 dark:text-gray-400">hrs</span>
+                    <span class="text-gray-500 dark:text-gray-400">USD</span>
                     <button
                       type="submit"
-                      class="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300"
+                      class="text-state-success-600 hover:text-state-success-800 dark:text-state-success-400 dark:hover:text-state-success-300"
                       [appTooltip]="'Save'"
                       appTooltipPosition="top"
                       aria-label="Save quota"
@@ -148,7 +148,7 @@
                     </button>
                   </form>
                 } @else {
-                  {{ grant.monthly_quota_hours }} hrs
+                  ${{ grant.monthly_quota_usd.toFixed(2) }}
                 }
               </td>
 
@@ -156,15 +156,15 @@
               <td class="px-4 py-3">
                 <div class="flex items-center gap-3">
                   <div class="w-24">
-                    <div class="h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700" role="progressbar" [attr.aria-valuenow]="usagePercent(grant.current_month_usage_hours, grant.monthly_quota_hours)" aria-valuemin="0" aria-valuemax="100">
+                    <div class="h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700" role="progressbar" [attr.aria-valuenow]="usagePercent(grant.current_month_usage_usd, grant.monthly_quota_usd)" aria-valuemin="0" aria-valuemax="100">
                       <div
-                        [class]="'h-full rounded-full transition-all ' + usageBarColor(grant.current_month_usage_hours, grant.monthly_quota_hours)"
-                        [style.width.%]="usagePercent(grant.current_month_usage_hours, grant.monthly_quota_hours)"
+                        [class]="'h-full rounded-full transition-all ' + usageBarColor(grant.current_month_usage_usd, grant.monthly_quota_usd)"
+                        [style.width.%]="usagePercent(grant.current_month_usage_usd, grant.monthly_quota_usd)"
                       ></div>
                     </div>
                   </div>
                   <span class="whitespace-nowrap text-sm/6 text-gray-600 dark:text-gray-400">
-                    {{ grant.current_month_usage_hours.toFixed(1) }} / {{ grant.monthly_quota_hours }} hrs
+                    {{ grant.current_month_usage_usd.toFixed(1) }} / ${{ grant.monthly_quota_usd.toFixed(2) }}
                   </span>
                 </div>
               </td>
@@ -178,10 +178,10 @@
               <td class="whitespace-nowrap px-4 py-3 text-right">
                 @if (confirmingRevoke() === grant.email) {
                   <div class="flex items-center justify-end gap-2">
-                    <span class="text-xs text-red-600 dark:text-red-400">Revoke?</span>
+                    <span class="text-xs text-state-danger-600 dark:text-state-danger-400">Revoke?</span>
                     <button
                       (click)="executeRevoke(grant.email)"
-                      class="rounded-sm bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+                      class="rounded-sm bg-state-danger-600 px-2 py-1 text-xs font-medium text-white hover:bg-state-danger-700"
                     >
                       Yes
                     </button>
@@ -195,8 +195,8 @@
                 } @else {
                   <div class="flex items-center justify-end gap-1">
                     <button
-                      (click)="startEdit(grant.email, grant.monthly_quota_hours)"
-                      class="rounded-sm p-1.5 text-gray-400 hover:text-blue-600 dark:text-gray-500 dark:hover:text-blue-400"
+                      (click)="startEdit(grant.email, grant.monthly_quota_usd)"
+                      class="rounded-sm p-1.5 text-gray-400 hover:text-primary-accessible dark:text-gray-500 dark:hover:text-primary-accessible-dark"
                       [appTooltip]="'Edit Quota'"
                       appTooltipPosition="top"
                       aria-label="Edit quota for {{ grant.email }}"
@@ -205,7 +205,7 @@
                     </button>
                     <button
                       (click)="confirmRevoke(grant.email)"
-                      class="rounded-sm p-1.5 text-gray-400 hover:text-red-600 dark:text-gray-500 dark:hover:text-red-400"
+                      class="rounded-sm p-1.5 text-gray-400 hover:text-state-danger-600 dark:text-gray-500 dark:hover:text-state-danger-400"
                       [appTooltip]="'Revoke Access'"
                       appTooltipPosition="top"
                       aria-label="Revoke access for {{ grant.email }}"

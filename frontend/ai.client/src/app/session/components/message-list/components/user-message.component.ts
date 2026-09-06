@@ -7,8 +7,11 @@ import {
   ElementRef,
   viewChild,
   AfterViewInit,
+  OnDestroy,
   inject,
 } from '@angular/core';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import { heroArrowTurnDownRight } from '@ng-icons/heroicons/outline';
 import { ContentBlock, Message, FileAttachmentData } from '../../../services/models/message.model';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
 import { MentionTextComponent } from './mention-text.component';
@@ -24,7 +27,8 @@ const MAX_HEIGHT_PX = 200;
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent, MentionTextComponent],
+  imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon],
+  viewProviders: [provideIcons({ heroArrowTurnDownRight })],
   template: `
     @if (hasTextContent() || hasFileAttachments()) {
       <div class="group relative flex w-full flex-col items-end gap-2">
@@ -38,8 +42,28 @@ const MAX_HEIGHT_PX = 200;
           </span>
         }
 
+        <!--
+          Mid-turn steer: the user sent this INTO a response that was still
+          streaming, and the agent picked it up at its next step. Labelled
+          because the bubble alone reads as the start of a new turn, which is
+          exactly what it isn't — the reply above and below it is one response.
+        -->
+        @if (message().steering) {
+          <span class="flex items-center gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
+            <ng-icon name="heroArrowTurnDownRight" class="size-3.5" aria-hidden="true" />
+            Sent while responding
+          </span>
+        }
+
         <!-- Text content (message bubble) -->
         @if (hasTextContent()) {
+          <!--
+            A mid-turn steer uses the SAME bubble as any other user message.
+            It IS an ordinary thing the user said; only its timing is unusual,
+            and the "Sent while responding" caption above already carries that.
+            A second visual treatment made it read as a different kind of
+            object, which it isn't.
+          -->
           <div
             class="max-w-[80%] rounded-2xl bg-primary-500 px-4 py-3 text-base/6 text-white/90"
           >
@@ -101,7 +125,7 @@ const MAX_HEIGHT_PX = 200;
     }
   `,
 })
-export class UserMessageComponent implements AfterViewInit {
+export class UserMessageComponent implements AfterViewInit, OnDestroy {
   message = input.required<Message>();
 
   contentWrapper = viewChild<ElementRef<HTMLDivElement>>('contentWrapper');
@@ -188,8 +212,35 @@ export class UserMessageComponent implements AfterViewInit {
     this.fileAttachments().filter((a) => !isImageMimeType(a.mimeType)),
   );
 
+  /** Re-measures whenever the bubble's box settles. See {@link ngAfterViewInit}. */
+  private resizeObserver?: ResizeObserver;
+
   ngAfterViewInit(): void {
+    const wrapper = this.contentWrapper()?.nativeElement;
+    if (!wrapper) {
+      return;
+    }
+
+    // Measure whenever the box settles, not once and for all.
+    //
+    // A single `ngAfterViewInit` reading can land before layout has settled,
+    // and it latched: a one-line mid-turn steer measured its 40 characters as
+    // dozens of wrapped lines in a not-yet-widened container, set
+    // `isOverflowing`, and rendered a "Show more" plus a fade dimming its own
+    // single line — permanently, because nothing ever measured again.
+    // Observed live on dev.
+    //
+    // The observed element is the inner wrapper, whose box is pinned by
+    // `max-height` and unaffected by the fade (absolutely positioned) and the
+    // button (a sibling outside it), so reacting here cannot feed back into a
+    // resize loop.
+    this.resizeObserver = new ResizeObserver(() => this.checkOverflow());
+    this.resizeObserver.observe(wrapper);
     this.checkOverflow();
+  }
+
+  ngOnDestroy(): void {
+    this.resizeObserver?.disconnect();
   }
 
   toggleExpanded(): void {

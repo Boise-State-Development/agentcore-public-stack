@@ -53,7 +53,7 @@ export type EntryDialogResult = { action: 'saved' | 'deleted' } | undefined;
           <button
             type="button"
             (click)="onCancel()"
-            class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
             aria-label="Close dialog"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
@@ -61,8 +61,8 @@ export type EntryDialogResult = { action: 'saved' | 'deleted' } | undefined;
         </div>
 
         <div class="sm:flex sm:items-start">
-          <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-2xl bg-blue-100 sm:mx-0 sm:size-10 dark:bg-blue-500/10">
-            <ng-icon name="heroDocumentText" class="size-6 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+          <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary-100 sm:mx-0 sm:size-10 dark:bg-primary-500/10">
+            <ng-icon name="heroDocumentText" class="size-6 text-primary-accessible dark:text-primary-accessible-dark" aria-hidden="true" />
           </div>
           <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
             <h3 id="entry-dialog-title" class="text-base/7 font-semibold text-gray-900 dark:text-white">
@@ -85,7 +85,7 @@ export type EntryDialogResult = { action: 'saved' | 'deleted' } | undefined;
                   [ngModel]="slug()"
                   (ngModelChange)="slug.set($event)"
                   placeholder="e.g. jane-doe"
-                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                 />
               </div>
               <div>
@@ -95,7 +95,7 @@ export type EntryDialogResult = { action: 'saved' | 'deleted' } | undefined;
                     id="entry-type"
                     [ngModel]="type()"
                     (ngModelChange)="type.set($event)"
-                    class="block w-full appearance-none rounded-2xl border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    class="block w-full appearance-none rounded-2xl border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   >
                     <option value="fact">Fact</option>
                     <option value="entity">Entity</option>
@@ -113,7 +113,7 @@ export type EntryDialogResult = { action: 'saved' | 'deleted' } | undefined;
                 [ngModel]="description()"
                 (ngModelChange)="description.set($event)"
                 placeholder="One-line summary shown in the index"
-                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
               />
             </div>
           }
@@ -129,14 +129,14 @@ export type EntryDialogResult = { action: 'saved' | 'deleted' } | undefined;
                 (ngModelChange)="body.set($event)"
                 [readonly]="!canEdit"
                 rows="12"
-                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 read-only:bg-gray-50 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:read-only:bg-gray-900/40"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 read-only:bg-gray-50 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:read-only:bg-gray-900/40"
                 placeholder="# Markdown body"
               ></textarea>
             }
           </div>
 
           @if (error()) {
-            <div class="rounded-2xl bg-red-50 px-3 py-2 text-sm/6 text-red-800 dark:bg-red-900/20 dark:text-red-400" role="alert">
+            <div class="rounded-2xl bg-state-danger-50 px-3 py-2 text-sm/6 text-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-400" role="alert">
               {{ error() }}
             </div>
           }
@@ -155,7 +155,7 @@ export type EntryDialogResult = { action: 'saved' | 'deleted' } | undefined;
               type="button"
               (click)="onSave()"
               [disabled]="saving() || !slug().trim()"
-              class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+              class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {{ saving() ? 'Saving…' : 'Save entry' }}
             </button>
@@ -165,8 +165,7 @@ export type EntryDialogResult = { action: 'saved' | 'deleted' } | undefined;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../styles/theme.css";
     .dialog-backdrop { animation: backdrop-fade-in 200ms ease-out; }
     @keyframes backdrop-fade-in { from { opacity: 0; } to { opacity: 1; } }
     .dialog-panel { animation: dialog-fade-in-up 200ms ease-out; }

@@ -22,7 +22,8 @@ describe('DynamoDB per-table alarms', () => {
       infrastructureHostedZoneDomain: 'example.com',
       certificateArn: cert,
       frontend: { cloudFrontPriceClass: 'PriceClass_100', certificateArn: cert },
-      artifacts: { retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
+      artifacts: {
+        shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
       mcpSandbox: { extraFrameAncestors: [], certificateArn: cert },
       fineTuning: { enabled: true, defaultQuotaHours: 0 },
     });
@@ -40,8 +41,8 @@ describe('DynamoDB per-table alarms', () => {
 
   // Tied to the real table count, so a new table without an alarm fails here.
   it('covers every table in the stack — one throttle alarm each', () => {
-    expect(tableCount).toBe(26);
-    // 26 per-table throttle alarms + 1 account-level UserErrors alarm.
+    expect(tableCount).toBe(27);
+    // 27 per-table throttle alarms + 1 account-level UserErrors alarm.
     expect(ddbAlarmNames()).toHaveLength(tableCount + 1);
   });
 

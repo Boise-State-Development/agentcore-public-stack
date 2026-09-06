@@ -204,6 +204,7 @@ from apis.app_api.system.routes import router as system_router
 from apis.app_api.shares.routes import conversations_share_router, shares_router, shared_view_router
 from apis.app_api.voice import router as voice_router
 from apis.app_api.user_menu_links.routes import router as user_menu_links_router
+from apis.app_api.announcements.routes import router as announcements_router
 from apis.app_api.system_prompts.routes import router as system_prompts_router
 from apis.app_api.runs.routes import router as runs_router
 from apis.app_api.schedules.routes import router as schedules_router
@@ -242,6 +243,7 @@ app.include_router(shares_router)  # Share management (update, revoke, export)
 app.include_router(shared_view_router)  # Shared conversation read-only view
 app.include_router(voice_router)  # Cookie-authenticated WS proxy for Nova Sonic voice mode (#211)
 app.include_router(user_menu_links_router)  # Public read of admin-managed user-menu links
+app.include_router(announcements_router)  # Feature announcements feed + ack; 404s while ANNOUNCEMENTS_ENABLED off
 app.include_router(system_prompts_router)   # Public read of admin-managed system prompts
 app.include_router(runs_router)  # Headless "Run now" + grant lifecycle (scheduled-runs PR-1; SCHEDULED_RUNS_ENABLED + RBAC gated at runtime)
 app.include_router(schedules_router)  # Schedule CRUD (scheduled-runs B1; inert — SCHEDULED_RUNS_ENABLED + RBAC gated, nothing fires yet)
@@ -264,8 +266,17 @@ if skills_enabled():
 # environment, so its presence is the enablement signal.
 if os.environ.get("ARTIFACTS_RENDER_TOKEN_SECRET_ARN"):
     from apis.app_api.artifacts.routes import router as artifacts_router
+    from apis.app_api.artifacts.shares import (
+        artifact_shares_router,
+        shared_artifacts_router,
+    )
     app.include_router(artifacts_router)
-    logger.info("Artifact render-token routes enabled")
+    # Artifact sharing rides the same enablement signal: a share is only
+    # ever consumed by minting a render token, so it cannot be useful
+    # without the artifacts feature being on.
+    app.include_router(artifact_shares_router)
+    app.include_router(shared_artifacts_router)
+    logger.info("Artifact render-token and sharing routes enabled")
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)

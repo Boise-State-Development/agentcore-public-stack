@@ -47,14 +47,14 @@ const FILE_TYPE_ICONS: Record<string, string> = {
  */
 const FILE_TYPE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   'application/pdf': {
-    bg: 'bg-rose-100 dark:bg-rose-900/60',
-    text: 'text-rose-600 dark:text-rose-300',
-    border: 'border-rose-300 dark:border-rose-700'
+    bg: 'bg-filetype-pdf-100 dark:bg-filetype-pdf-900/60',
+    text: 'text-filetype-pdf-600 dark:text-filetype-pdf-300',
+    border: 'border-filetype-pdf-300 dark:border-filetype-pdf-700'
   },
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': {
-    bg: 'bg-blue-100 dark:bg-blue-900/60',
-    text: 'text-blue-600 dark:text-blue-300',
-    border: 'border-blue-300 dark:border-blue-700'
+    bg: 'bg-filetype-doc-100 dark:bg-filetype-doc-900/60',
+    text: 'text-filetype-doc-600 dark:text-filetype-doc-300',
+    border: 'border-filetype-doc-300 dark:border-filetype-doc-700'
   },
   'text/plain': {
     bg: 'bg-gray-100 dark:bg-gray-600',
@@ -62,50 +62,50 @@ const FILE_TYPE_COLORS: Record<string, { bg: string; text: string; border: strin
     border: 'border-gray-300 dark:border-gray-500'
   },
   'text/html': {
-    bg: 'bg-orange-100 dark:bg-orange-900/60',
-    text: 'text-orange-600 dark:text-orange-300',
-    border: 'border-orange-300 dark:border-orange-700'
+    bg: 'bg-filetype-code-100 dark:bg-filetype-code-900/60',
+    text: 'text-filetype-code-600 dark:text-filetype-code-300',
+    border: 'border-filetype-code-300 dark:border-filetype-code-700'
   },
   'text/csv': {
-    bg: 'bg-green-100 dark:bg-green-900/60',
-    text: 'text-green-600 dark:text-green-300',
-    border: 'border-green-300 dark:border-green-700'
+    bg: 'bg-filetype-sheet-100 dark:bg-filetype-sheet-900/60',
+    text: 'text-filetype-sheet-600 dark:text-filetype-sheet-300',
+    border: 'border-filetype-sheet-300 dark:border-filetype-sheet-700'
   },
   'application/vnd.ms-excel': {
-    bg: 'bg-green-100 dark:bg-green-900/60',
-    text: 'text-green-600 dark:text-green-300',
-    border: 'border-green-300 dark:border-green-700'
+    bg: 'bg-filetype-sheet-100 dark:bg-filetype-sheet-900/60',
+    text: 'text-filetype-sheet-600 dark:text-filetype-sheet-300',
+    border: 'border-filetype-sheet-300 dark:border-filetype-sheet-700'
   },
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
-    bg: 'bg-green-100 dark:bg-green-900/60',
-    text: 'text-green-600 dark:text-green-300',
-    border: 'border-green-300 dark:border-green-700'
+    bg: 'bg-filetype-sheet-100 dark:bg-filetype-sheet-900/60',
+    text: 'text-filetype-sheet-600 dark:text-filetype-sheet-300',
+    border: 'border-filetype-sheet-300 dark:border-filetype-sheet-700'
   },
   'text/markdown': {
-    bg: 'bg-purple-100 dark:bg-purple-900/60',
-    text: 'text-purple-600 dark:text-purple-300',
-    border: 'border-purple-300 dark:border-purple-700'
+    bg: 'bg-filetype-markdown-100 dark:bg-filetype-markdown-900/60',
+    text: 'text-filetype-markdown-600 dark:text-filetype-markdown-300',
+    border: 'border-filetype-markdown-300 dark:border-filetype-markdown-700'
   },
   // Image types
   'image/png': {
-    bg: 'bg-indigo-100 dark:bg-indigo-900/60',
-    text: 'text-indigo-600 dark:text-indigo-300',
-    border: 'border-indigo-300 dark:border-indigo-700'
+    bg: 'bg-filetype-image-100 dark:bg-filetype-image-900/60',
+    text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    border: 'border-filetype-image-300 dark:border-filetype-image-700'
   },
   'image/jpeg': {
-    bg: 'bg-indigo-100 dark:bg-indigo-900/60',
-    text: 'text-indigo-600 dark:text-indigo-300',
-    border: 'border-indigo-300 dark:border-indigo-700'
+    bg: 'bg-filetype-image-100 dark:bg-filetype-image-900/60',
+    text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    border: 'border-filetype-image-300 dark:border-filetype-image-700'
   },
   'image/gif': {
-    bg: 'bg-indigo-100 dark:bg-indigo-900/60',
-    text: 'text-indigo-600 dark:text-indigo-300',
-    border: 'border-indigo-300 dark:border-indigo-700'
+    bg: 'bg-filetype-image-100 dark:bg-filetype-image-900/60',
+    text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    border: 'border-filetype-image-300 dark:border-filetype-image-700'
   },
   'image/webp': {
-    bg: 'bg-indigo-100 dark:bg-indigo-900/60',
-    text: 'text-indigo-600 dark:text-indigo-300',
-    border: 'border-indigo-300 dark:border-indigo-700'
+    bg: 'bg-filetype-image-100 dark:bg-filetype-image-900/60',
+    text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    border: 'border-filetype-image-300 dark:border-filetype-image-700'
   },
 };
 
@@ -168,7 +168,7 @@ const DEFAULT_COLORS = {
         [class]="iconContainerClass()"
       >
         @if (isError()) {
-          <ng-icon name="heroExclamationTriangle" class="size-6 text-red-500" aria-hidden="true" />
+          <ng-icon name="heroExclamationTriangle" class="size-6 text-state-danger-500" aria-hidden="true" />
         } @else if (isUploading()) {
           <ng-icon name="heroArrowPath" class="size-6 animate-spin" [class]="iconClass()" aria-hidden="true" />
         } @else if (isImage() && imagePreviewUrl()) {
@@ -190,7 +190,7 @@ const DEFAULT_COLORS = {
         </p>
         <p class="text-xs text-gray-500 dark:text-gray-400">
           @if (isError()) {
-            <span class="text-red-500 dark:text-red-400">{{ errorMessage() }}</span>
+            <span class="text-state-danger-500 dark:text-state-danger-400">{{ errorMessage() }}</span>
           } @else if (isUploading()) {
             Uploading... {{ progress() }}%
           } @else if (isCompleting()) {
@@ -231,7 +231,7 @@ const DEFAULT_COLORS = {
         <button
           type="button"
           (click)="onRemoveClick($event)"
-          class="flex size-6 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700 dark:hover:text-red-400"
+          class="flex size-6 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700 dark:hover:text-state-danger-400"
           [appTooltip]="removeTooltip()"
           appTooltipPosition="top"
         >
@@ -365,7 +365,7 @@ export class FileCardComponent {
 
   protected readonly containerClass = computed(() => {
     if (this.isError()) {
-      return 'border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/30';
+      return 'border-state-danger-200 bg-state-danger-50 dark:border-state-danger-800 dark:bg-state-danger-950/30';
     }
     return 'border-gray-200 bg-gray-50 dark:border-gray-600 dark:bg-gray-800';
   });
@@ -373,7 +373,7 @@ export class FileCardComponent {
   protected readonly iconContainerClass = computed(() => {
     const colors = this.colors();
     if (this.isError()) {
-      return 'bg-red-100 border-red-300 dark:bg-red-900/50 dark:border-red-700';
+      return 'bg-state-danger-100 border-state-danger-300 dark:bg-state-danger-900/50 dark:border-state-danger-700';
     }
     return `${colors.bg} ${colors.border}`;
   });
@@ -381,7 +381,7 @@ export class FileCardComponent {
   protected readonly iconClass = computed(() => {
     const colors = this.colors();
     if (this.isError()) {
-      return 'text-red-500 dark:text-red-400';
+      return 'text-state-danger-500 dark:text-state-danger-400';
     }
     return colors.text;
   });

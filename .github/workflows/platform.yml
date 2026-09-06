@@ -99,6 +99,15 @@ jobs:
       # http://localhost:4200 for a local SPA pointed at this deployment.
       # Empty on prod. Mirrors CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS below.
       CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS: ${{ vars.CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS }}
+      # "Shared with you" inbox on the artifact library. Default OFF,
+      # opt-in — the reverse of the flags above, because the surface ships
+      # ahead of the product decision about it. Unset resolves to an empty
+      # string, which config.ts treats as off; set the
+      # `CDK_ARTIFACT_SHARE_INBOX_ENABLED` variable to "true" in an
+      # environment to reveal it there. The fan-out rows the inbox reads are
+      # written regardless of this flag, so turning it on shows a complete
+      # inbox with no backfill.
+      CDK_ARTIFACT_SHARE_INBOX_ENABLED: ${{ vars.CDK_ARTIFACT_SHARE_INBOX_ENABLED }}
       CDK_FRONTEND_CERTIFICATE_ARN: ${{ vars.CDK_FRONTEND_CERTIFICATE_ARN }}
       # MCP Apps sandbox-proxy origin (mcp-sandbox.{domain}). Without the
       # cert ARN the construct silently falls back to the CloudFront default

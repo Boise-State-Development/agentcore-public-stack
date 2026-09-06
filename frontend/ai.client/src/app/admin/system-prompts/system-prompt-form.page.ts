@@ -27,7 +27,7 @@ const MAX_PROMPT_TEXT = 8000;
       </h1>
 
       @if (loadError()) {
-        <div class="mb-4 rounded-sm border border-red-300 bg-red-50 p-4 text-sm/6 text-red-700 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300">
+        <div class="mb-4 rounded-sm border border-state-danger-300 bg-state-danger-50 p-4 text-sm/6 text-state-danger-700 dark:border-state-danger-700 dark:bg-state-danger-900/20 dark:text-state-danger-300">
           {{ loadError() }}
         </div>
       }
@@ -37,7 +37,7 @@ const MAX_PROMPT_TEXT = 8000;
         <!-- Name -->
         <div>
           <label for="name" class="mb-1.5 block text-sm/6 font-medium text-gray-900 dark:text-white">
-            Name <span aria-hidden="true" class="text-red-500">*</span>
+            Name <span aria-hidden="true" class="text-state-danger-500">*</span>
           </label>
           <input
             id="name"
@@ -45,19 +45,19 @@ const MAX_PROMPT_TEXT = 8000;
             formControlName="name"
             maxlength="128"
             placeholder="e.g. Guided Learning"
-            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-            [class.border-red-500]="form.controls.name.invalid && form.controls.name.touched"
+            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+            [class.border-state-danger-500]="form.controls.name.invalid && form.controls.name.touched"
             aria-describedby="name-error"
           />
           @if (form.controls.name.invalid && form.controls.name.touched) {
-            <p id="name-error" class="mt-1 text-xs/5 text-red-600 dark:text-red-400" role="alert">Name is required (max 128 characters).</p>
+            <p id="name-error" class="mt-1 text-xs/5 text-state-danger-600 dark:text-state-danger-400" role="alert">Name is required (max 128 characters).</p>
           }
         </div>
 
         <!-- Description -->
         <div>
           <label for="description" class="mb-1.5 block text-sm/6 font-medium text-gray-900 dark:text-white">
-            Description <span aria-hidden="true" class="text-red-500">*</span>
+            Description <span aria-hidden="true" class="text-state-danger-500">*</span>
           </label>
           <input
             id="description"
@@ -65,19 +65,19 @@ const MAX_PROMPT_TEXT = 8000;
             formControlName="description"
             maxlength="512"
             placeholder="Shown to users in the conversation settings panel"
-            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-            [class.border-red-500]="form.controls.description.invalid && form.controls.description.touched"
+            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+            [class.border-state-danger-500]="form.controls.description.invalid && form.controls.description.touched"
             aria-describedby="desc-error"
           />
           @if (form.controls.description.invalid && form.controls.description.touched) {
-            <p id="desc-error" class="mt-1 text-xs/5 text-red-600 dark:text-red-400" role="alert">Description is required (max 512 characters).</p>
+            <p id="desc-error" class="mt-1 text-xs/5 text-state-danger-600 dark:text-state-danger-400" role="alert">Description is required (max 512 characters).</p>
           }
         </div>
 
         <!-- Prompt Text -->
         <div>
           <label for="prompt_text" class="mb-1.5 block text-sm/6 font-medium text-gray-900 dark:text-white">
-            Prompt Text <span aria-hidden="true" class="text-red-500">*</span>
+            Prompt Text <span aria-hidden="true" class="text-state-danger-500">*</span>
           </label>
           <p class="mb-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
             These instructions are appended to the base system prompt. Users never see this text — only the name and description above.
@@ -88,13 +88,13 @@ const MAX_PROMPT_TEXT = 8000;
             rows="12"
             [maxlength]="maxPromptLength"
             placeholder="Write instructions here..."
-            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-            [class.border-red-500]="form.controls.prompt_text.invalid && form.controls.prompt_text.touched"
+            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+            [class.border-state-danger-500]="form.controls.prompt_text.invalid && form.controls.prompt_text.touched"
             aria-describedby="prompt-error prompt-count"
           ></textarea>
           <div class="mt-1 flex items-start justify-between gap-4">
             @if (form.controls.prompt_text.invalid && form.controls.prompt_text.touched) {
-              <p id="prompt-error" class="text-xs/5 text-red-600 dark:text-red-400" role="alert">Prompt text is required (max {{ maxPromptLength }} characters).</p>
+              <p id="prompt-error" class="text-xs/5 text-state-danger-600 dark:text-state-danger-400" role="alert">Prompt text is required (max {{ maxPromptLength }} characters).</p>
             } @else {
               <span></span>
             }
@@ -110,7 +110,7 @@ const MAX_PROMPT_TEXT = 8000;
           <select
             id="status"
             formControlName="status"
-            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
           >
             <option value="enabled">Enabled — visible to users</option>
             <option value="disabled">Disabled — hidden from users</option>
@@ -118,7 +118,7 @@ const MAX_PROMPT_TEXT = 8000;
         </div>
 
         @if (submitError()) {
-          <div class="rounded-sm border border-red-300 bg-red-50 p-3 text-sm/6 text-red-700 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300" role="alert">
+          <div class="rounded-sm border border-state-danger-300 bg-state-danger-50 p-3 text-sm/6 text-state-danger-700 dark:border-state-danger-700 dark:bg-state-danger-900/20 dark:text-state-danger-300" role="alert">
             {{ submitError() }}
           </div>
         }
@@ -127,7 +127,7 @@ const MAX_PROMPT_TEXT = 8000;
           <button
             type="submit"
             [disabled]="form.invalid || saving()"
-            class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex items-center gap-2 rounded-sm bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {{ saving() ? 'Saving…' : (isEdit() ? 'Save changes' : 'Create prompt') }}
           </button>

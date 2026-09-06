@@ -99,9 +99,8 @@ import { ToastService, ToastType } from '../../services/toast/toast.service';
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     /* Toast enter animation */
     [role="alert"] {
@@ -161,10 +160,10 @@ export class ToastComponent {
    */
   protected getIconClass(type: ToastType): string {
     const classes: Record<ToastType, string> = {
-      success: 'text-green-500 dark:text-green-400',
-      error: 'text-red-500 dark:text-red-400',
-      warning: 'text-yellow-500 dark:text-yellow-400',
-      info: 'text-blue-500 dark:text-blue-400'
+      success: 'text-state-success-500 dark:text-state-success-400',
+      error: 'text-state-danger-500 dark:text-state-danger-400',
+      warning: 'text-state-warning-500 dark:text-state-warning-400',
+      info: 'text-state-info-500 dark:text-state-info-400'
     };
     return classes[type];
   }
@@ -189,10 +188,10 @@ export class ToastComponent {
   protected getDismissButtonClass(type: ToastType): string {
     const baseClass = 'text-gray-400 hover:text-gray-500 dark:text-gray-500 dark:hover:text-gray-400';
     const focusClasses: Record<ToastType, string> = {
-      success: 'focus:outline-green-500',
-      error: 'focus:outline-red-500',
-      warning: 'focus:outline-yellow-500',
-      info: 'focus:outline-blue-500'
+      success: 'focus:outline-state-success-500',
+      error: 'focus:outline-state-danger-500',
+      warning: 'focus:outline-state-warning-500',
+      info: 'focus:outline-state-info-500'
     };
     return `${baseClass} ${focusClasses[type]}`;
   }

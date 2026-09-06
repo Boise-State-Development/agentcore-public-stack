@@ -10,8 +10,8 @@ const mockGrant: FineTuningGrant = {
   email: 'user@example.com',
   granted_by: 'admin@example.com',
   granted_at: '2026-03-01T00:00:00Z',
-  monthly_quota_hours: 10,
-  current_month_usage_hours: 3,
+  monthly_quota_usd: 10,
+  current_month_usage_usd: 3,
   quota_period: '2026-03',
 };
 
@@ -153,10 +153,10 @@ describe('FineTuningAccessPage', () => {
 
   it('should return correct usage bar color', () => {
     const component = createComponent();
-    expect(component.usageBarColor(3, 10)).toBe('bg-blue-500'); // 30%
-    expect(component.usageBarColor(7, 10)).toBe('bg-amber-500'); // 70%
-    expect(component.usageBarColor(8, 10)).toBe('bg-amber-500'); // 80%
-    expect(component.usageBarColor(9, 10)).toBe('bg-red-500'); // 90%
-    expect(component.usageBarColor(10, 10)).toBe('bg-red-500'); // 100%
+    expect(component.usageBarColor(3, 10)).toBe('bg-state-info-500'); // 30%
+    expect(component.usageBarColor(7, 10)).toBe('bg-state-warning-500'); // 70%
+    expect(component.usageBarColor(8, 10)).toBe('bg-state-warning-500'); // 80%
+    expect(component.usageBarColor(9, 10)).toBe('bg-state-danger-500'); // 90%
+    expect(component.usageBarColor(10, 10)).toBe('bg-state-danger-500'); // 100%
   });
 });

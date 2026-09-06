@@ -5,7 +5,23 @@
 export interface UserConnector {
   providerId: string;
   displayName: string;
-  providerType: 'google' | 'microsoft' | 'github' | 'canvas' | 'custom';
+  /**
+   * Mirrors the admin-side `ConnectorType` union
+   * (admin/connectors/models/connector.model.ts). Kept as a literal union
+   * rather than an import to avoid coupling the user-facing settings model
+   * to the admin feature. Any type added there must be added here too,
+   * otherwise connectors of that type arrive mistyped and fall through to
+   * the generic/unknown-vendor styling.
+   */
+  providerType:
+    | 'google'
+    | 'microsoft'
+    | 'github'
+    | 'slack'
+    | 'salesforce'
+    | 'zoom'
+    | 'canvas'
+    | 'custom';
   iconName: string;
   /** Optional admin-uploaded icon (base64 data URL). Wins over `iconName`. */
   iconData?: string | null;

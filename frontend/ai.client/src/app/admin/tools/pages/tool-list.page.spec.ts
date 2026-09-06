@@ -36,14 +36,14 @@ describe('gatewayBadgeFor', () => {
     const badge = gatewayBadgeFor(status({ status: 'READY', healthy: true }));
     expect(badge?.label).toBe('Ready');
     expect(badge?.failed).toBe(false);
-    expect(badge?.cls).toContain('green');
+    expect(badge?.cls).toContain('state-success');
   });
 
   it('maps a still-syncing target to Syncing', () => {
     const badge = gatewayBadgeFor(status({ status: 'CREATING', healthy: false }));
     expect(badge?.label).toBe('Syncing');
     expect(badge?.failed).toBe(false);
-    expect(badge?.cls).toContain('blue');
+    expect(badge?.cls).toContain('state-info');
   });
 
   it('maps a FAILED target to a red Failed badge carrying the reason in the title', () => {
@@ -53,7 +53,7 @@ describe('gatewayBadgeFor', () => {
     );
     expect(badge?.label).toBe('Failed');
     expect(badge?.failed).toBe(true);
-    expect(badge?.cls).toContain('red');
+    expect(badge?.cls).toContain('state-danger');
     expect(badge?.title).toBe(reason);
   });
 

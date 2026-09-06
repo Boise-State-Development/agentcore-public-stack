@@ -7,11 +7,17 @@ import { CreateTrainingJobPage } from './create-training-job.page';
 import { FineTuningStateService } from '../../services/fine-tuning-state.service';
 import { FineTuningHttpService } from '../../services/fine-tuning-http.service';
 import { FineTuningUploadService } from '../../services/fine-tuning-upload.service';
-import type { AvailableModel, JobResponse, PresignResponse } from '../../models/fine-tuning.models';
+import type {
+  AvailableModel,
+  JobResponse,
+  PresignResponse,
+  TaskTypeResponse,
+} from '../../models/fine-tuning.models';
 
 const mockModel: AvailableModel = {
   model_id: 'model-1',
   model_name: 'Test Model',
+  task_type: 'text-classification',
   huggingface_model_id: 'test/model',
   description: 'A test model',
   default_instance_type: 'ml.g5.xlarge',
@@ -38,6 +44,7 @@ const mockJobResponse: JobResponse = {
   email: 'test@example.com',
   model_id: 'model-1',
   model_name: 'Test Model',
+  task_type: 'text-classification',
   status: 'PENDING',
   dataset_s3_key: 'uploads/data.jsonl',
   output_s3_prefix: null,
@@ -67,10 +74,34 @@ function createMockState() {
   };
 }
 
+const mockTaskTypes: TaskTypeResponse[] = [
+  {
+    task_type: 'text-classification',
+    display_name: 'Text classification',
+    description: 'Assign a label to a piece of text.',
+    required_columns: ['text', 'label'],
+    upload_extensions: ['.csv', '.jsonl', '.json'],
+    requires_archive: false,
+    inference_upload_extensions: ['.txt', '.csv', '.jsonl', '.json'],
+    default_instance_type: 'ml.g5.xlarge',
+  },
+  {
+    task_type: 'image-classification',
+    display_name: 'Image classification',
+    description: 'Assign a label to an image.',
+    required_columns: ['image', 'label'],
+    upload_extensions: ['.zip'],
+    requires_archive: true,
+    inference_upload_extensions: ['.zip'],
+    default_instance_type: 'ml.g6.xlarge',
+  },
+];
+
 function createMockHttp() {
   return {
     presignDatasetUpload: vi.fn().mockReturnValue(of(mockPresignResponse)),
     searchHuggingFaceModels: vi.fn().mockReturnValue(of([])),
+    listTaskTypes: vi.fn().mockReturnValue(of(mockTaskTypes)),
   };
 }
 
@@ -155,6 +186,9 @@ describe('CreateTrainingJobPage', () => {
     expect(mockHttp.presignDatasetUpload).toHaveBeenCalledWith({
       filename: 'data.jsonl',
       content_type: 'application/jsonl',
+      // The presign is task-scoped: the backend validates the upload format
+      // against the task before minting a URL.
+      task_type: 'text-classification',
     });
     expect(mockUpload.uploadFile).toHaveBeenCalled();
     expect(component.uploadState()?.status).toBe('complete');
@@ -173,6 +207,7 @@ describe('CreateTrainingJobPage', () => {
     expect(mockHttp.presignDatasetUpload).toHaveBeenCalledWith({
       filename: 'data.jsonl',
       content_type: 'application/octet-stream',
+      task_type: 'text-classification',
     });
   });
 
@@ -404,6 +439,10 @@ describe('CreateTrainingJobPage', () => {
     const call = mockState.createTrainingJob.mock.calls[0][0];
     expect(call.model_id).toBe('custom');
     expect(call.custom_huggingface_model_id).toBe('bert-base-multilingual-cased');
-    expect(call.instance_type).toBe('ml.g5.xlarge');
+    // A custom model has no catalog entry to take an instance type from, so
+    // the field is omitted and the backend resolves it from the task
+    // registry rather than the SPA guessing.
+    expect(call.instance_type).toBeUndefined();
+    expect(call.task_type).toBe('text-classification');
   });
 });

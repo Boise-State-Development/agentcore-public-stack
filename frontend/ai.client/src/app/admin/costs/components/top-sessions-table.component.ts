@@ -43,7 +43,7 @@ import { TopSessionCost } from '../models';
           type="button"
           (click)="load.emit()"
           [disabled]="loading()"
-          class="shrink-0 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+          class="shrink-0 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {{ loading() ? 'Loading…' : hasLoaded() ? 'Refresh' : 'Load' }}
         </button>
@@ -118,7 +118,7 @@ import { TopSessionCost } from '../models';
                   </td>
                   <td class="px-4 py-3 text-right text-sm tabular-nums">
                     @if (session.partialMissUsd) {
-                      <span class="font-medium text-amber-600 dark:text-amber-400">
+                      <span class="font-medium text-metric-cost-700 dark:text-metric-cost-300">
                         {{ '$' + (session.partialMissUsd | number: '1.2-2') }}
                       </span>
                     } @else {

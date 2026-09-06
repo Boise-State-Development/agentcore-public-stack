@@ -54,8 +54,8 @@
 
           <!-- Assistant Error Message -->
           @if (assistantError()) {
-            <div class="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-              <p class="text-sm text-red-800 dark:text-red-200">{{ assistantError() }}</p>
+            <div class="mb-4 p-3 bg-state-danger-50 dark:bg-state-danger-900/20 border border-state-danger-200 dark:border-state-danger-800 rounded-lg">
+              <p class="text-sm text-state-danger-800 dark:text-state-danger-200">{{ assistantError() }}</p>
             </div>
           }
         </div>
@@ -64,6 +64,8 @@
       <!-- Fixed input at bottom for embedded empty state -->
       <div class="chat-input-footer embedded">
         <app-chat-input
+          [showAnnouncements]="showAnnouncements()"
+          [announcementPlacement]="announcementPlacement()"
           [sessionId]="sessionId()"
           [isChatLoading]="isChatLoading()"
           [showFileControls]="resolvedConfig().showFileControls"
@@ -123,6 +125,8 @@
       [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="mx-auto px-4 max-w-[720px]">
           <app-chat-input
+            [showAnnouncements]="showAnnouncements()"
+          [announcementPlacement]="announcementPlacement()"
             [sessionId]="sessionId()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
@@ -157,8 +161,8 @@
 
           <!-- Assistant Error Message -->
           @if (assistantError()) {
-            <div class="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-              <p class="text-sm text-red-800 dark:text-red-200">{{ assistantError() }}</p>
+            <div class="mb-4 p-3 bg-state-danger-50 dark:bg-state-danger-900/20 border border-state-danger-200 dark:border-state-danger-800 rounded-lg">
+              <p class="text-sm text-state-danger-800 dark:text-state-danger-200">{{ assistantError() }}</p>
             </div>
           }
         </div>
@@ -171,6 +175,8 @@
       [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="mx-auto px-4 max-w-[720px]">
           <app-chat-input
+            [showAnnouncements]="showAnnouncements()"
+          [announcementPlacement]="announcementPlacement()"
             [sessionId]="sessionId()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
@@ -192,14 +198,24 @@
       [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="w-full max-w-[720px] animate-fade-in px-4 -mt-20 relative">
           <div class="mb-8 flex items-center justify-center gap-4 relative" data-testid="greeting-message">
-            <img
-              src="/img/logo-light.png"
-              alt="Logo"
-              class="size-14 shrink-0 dark:hidden">
-            <img
-              src="/img/logo-dark.png"
-              alt="Logo"
-              class="hidden size-14 shrink-0 dark:block">
+            @if (!logoLoadFailed()) {
+              <img
+                [src]="branding.logo.light"
+                [alt]="branding.appName"
+                (error)="onLogoError($event)"
+                class="h-14 w-auto shrink-0 object-contain dark:hidden">
+              <img
+                [src]="branding.logo.dark"
+                [alt]="branding.appName"
+                (error)="onLogoError($event)"
+                class="hidden h-14 w-auto shrink-0 object-contain dark:block">
+            } @else {
+              <div class="flex size-14 shrink-0 items-center justify-center rounded-md bg-gray-200 text-gray-500 dark:bg-white/10 dark:text-gray-400" role="img" [attr.aria-label]="branding.appName + ' (logo failed to load)'">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="size-6" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Z" />
+                </svg>
+              </div>
+            }
             <div>
               <app-animated-text [text]="greetingMessage()" [speed]="50" />
             </div>
@@ -207,13 +223,15 @@
 
           <!-- Assistant Error Message -->
           @if (assistantError()) {
-            <div class="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-              <p class="text-sm text-red-800 dark:text-red-200">{{ assistantError() }}</p>
+            <div class="mb-4 p-3 bg-state-danger-50 dark:bg-state-danger-900/20 border border-state-danger-200 dark:border-state-danger-800 rounded-lg">
+              <p class="text-sm text-state-danger-800 dark:text-state-danger-200">{{ assistantError() }}</p>
             </div>
           }
 
           <div class="relative">
             <app-chat-input
+              [showAnnouncements]="showAnnouncements()"
+          [announcementPlacement]="announcementPlacement()"
               [sessionId]="sessionId()"
               [isChatLoading]="isChatLoading()"
               [showFileControls]="resolvedConfig().showFileControls"
@@ -237,8 +255,8 @@
     <div class="chat-embedded-wrapper">
       <!-- Assistant Error Message -->
       @if (assistantError()) {
-        <div class="mx-4 mt-2 mb-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-          <p class="text-sm text-red-800 dark:text-red-200">{{ assistantError() }}</p>
+        <div class="mx-4 mt-2 mb-2 p-3 bg-state-danger-50 dark:bg-state-danger-900/20 border border-state-danger-200 dark:border-state-danger-800 rounded-lg">
+          <p class="text-sm text-state-danger-800 dark:text-state-danger-200">{{ assistantError() }}</p>
         </div>
       }
 
@@ -284,6 +302,8 @@
           </div>
         }
         <app-chat-input
+          [showAnnouncements]="showAnnouncements()"
+          [announcementPlacement]="announcementPlacement()"
           [sessionId]="sessionId()"
           [isChatLoading]="isChatLoading()"
           [showFileControls]="resolvedConfig().showFileControls"
@@ -302,8 +322,8 @@
 
     <!-- Assistant Error Message -->
     @if (assistantError()) {
-      <div class="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-        <p class="text-sm text-red-800 dark:text-red-200">{{ assistantError() }}</p>
+      <div class="mb-4 p-3 bg-state-danger-50 dark:bg-state-danger-900/20 border border-state-danger-200 dark:border-state-danger-800 rounded-lg">
+        <p class="text-sm text-state-danger-800 dark:text-state-danger-200">{{ assistantError() }}</p>
       </div>
     }
 
@@ -329,6 +349,8 @@
           <app-session-cost-badge />
         </div>
         <app-chat-input
+          [showAnnouncements]="showAnnouncements()"
+          [announcementPlacement]="announcementPlacement()"
           [sessionId]="sessionId()"
           [isChatLoading]="isChatLoading()"
           [showFileControls]="resolvedConfig().showFileControls"

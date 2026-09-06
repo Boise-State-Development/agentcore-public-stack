@@ -22,11 +22,12 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { AuthProvidersService } from '../services/auth-providers.service';
 import { AuthProvider } from '../models/auth-provider.model';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-auth-provider-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, FormsModule, NgIcon],
+  imports: [RouterLink, FormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroPlus,
@@ -54,7 +55,7 @@ import { AuthProvider } from '../models/auth-provider.model';
       </div>
       <a
         routerLink="/admin/auth-providers/new"
-        class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
+        class="inline-flex items-center gap-2 rounded-xs bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50"
       >
         <ng-icon name="heroPlus" class="size-5" />
         Add Provider
@@ -72,7 +73,7 @@ import { AuthProvider } from '../models/auth-provider.model';
           type="text"
           [(ngModel)]="searchQuery"
           placeholder="Search by name or ID..."
-          class="w-full rounded-sm border border-gray-300 bg-white py-2 pl-10 pr-10 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-500 dark:bg-gray-800 dark:text-white dark:placeholder-gray-400"
+          class="w-full rounded-xs border border-gray-300 bg-white py-2 pl-10 pr-10 focus:border-primary-500 focus:ring-2 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-800 dark:text-white dark:placeholder-gray-400"
         />
         @if (searchQuery()) {
           <button
@@ -87,7 +88,7 @@ import { AuthProvider } from '../models/auth-provider.model';
       <select
         [ngModel]="enabledFilter()"
         (ngModelChange)="enabledFilter.set($event)"
-        class="rounded-sm border border-gray-300 bg-white px-3 py-2 dark:border-gray-500 dark:bg-gray-800 dark:text-white"
+        class="rounded-xs border border-gray-300 bg-white px-3 py-2 dark:border-gray-500 dark:bg-gray-800 dark:text-white"
       >
         <option value="">All Providers</option>
         <option value="enabled">Enabled Only</option>
@@ -97,7 +98,7 @@ import { AuthProvider } from '../models/auth-provider.model';
       @if (hasActiveFilters()) {
         <button
           (click)="resetFilters()"
-          class="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+          class="text-sm text-primary-accessible hover:underline dark:text-primary-accessible-dark"
         >
           Clear Filters
         </button>
@@ -108,9 +109,7 @@ import { AuthProvider } from '../models/auth-provider.model';
     @if (providersResource.isLoading() && providers().length === 0) {
       <div class="flex h-64 items-center justify-center">
         <div class="flex flex-col items-center gap-4">
-          <div
-            class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-t-blue-400 dark:border-gray-600"
-          ></div>
+          <app-spinner size="xl" label="Loading providers" />
           <p class="text-sm text-gray-500 dark:text-gray-400">
             Loading providers...
           </p>
@@ -120,7 +119,7 @@ import { AuthProvider } from '../models/auth-provider.model';
 
     <!-- Error State -->
     @if (providersResource.error()) {
-      <div class="mb-6 rounded-sm border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+      <div class="mb-6 rounded-xs border border-state-danger-200 bg-state-danger-50 p-4 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
         <p>Failed to load authentication providers. Please try again.</p>
         <button
           (click)="authProvidersService.reload()"
@@ -136,7 +135,7 @@ import { AuthProvider } from '../models/auth-provider.model';
       <div class="space-y-3">
         @for (provider of filteredProviders(); track provider.provider_id) {
           <div
-            class="rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
+            class="rounded-xs border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
           >
             <div class="p-4">
               <div class="flex items-start justify-between gap-4">
@@ -145,7 +144,7 @@ import { AuthProvider } from '../models/auth-provider.model';
                   <div class="mb-1 flex items-center gap-2">
                     <span class="text-lg/7 font-medium">{{ provider.display_name }}</span>
                     @if (provider.enabled) {
-                      <span class="inline-flex items-center gap-1 rounded-xs bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300">
+                      <span class="inline-flex items-center gap-1 rounded-xs bg-state-success-100 px-2 py-0.5 text-xs font-medium text-state-success-800 dark:bg-state-success-900/30 dark:text-state-success-300">
                         <ng-icon name="heroCheckCircle" class="size-3" />
                         Enabled
                       </span>
@@ -155,7 +154,7 @@ import { AuthProvider } from '../models/auth-provider.model';
                         Disabled
                       </span>
                     }
-                    <span class="rounded-xs bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                    <span class="rounded-xs bg-state-info-100 px-2 py-0.5 text-xs font-medium text-state-info-800 dark:bg-state-info-900/30 dark:text-state-info-300">
                       {{ provider.provider_type.toUpperCase() }}
                     </span>
                   </div>
@@ -206,7 +205,7 @@ import { AuthProvider } from '../models/auth-provider.model';
                   <button
                     (click)="testProvider(provider)"
                     [disabled]="testing() === provider.provider_id"
-                    class="rounded-sm p-2 text-gray-500 hover:bg-gray-100 hover:text-green-600 disabled:opacity-50 dark:hover:bg-gray-700 dark:hover:text-green-400"
+                    class="rounded-xs p-2 text-gray-500 hover:bg-gray-100 hover:text-state-success-600 disabled:opacity-50 dark:hover:bg-gray-700 dark:hover:text-state-success-400"
                     title="Test connectivity"
                   >
                     <ng-icon
@@ -217,14 +216,14 @@ import { AuthProvider } from '../models/auth-provider.model';
                   </button>
                   <a
                     [routerLink]="['/admin/auth-providers/edit', provider.provider_id]"
-                    class="rounded-sm p-2 text-gray-500 hover:bg-gray-100 hover:text-blue-600 dark:hover:bg-gray-700 dark:hover:text-blue-400"
+                    class="rounded-xs p-2 text-gray-500 hover:bg-gray-100 hover:text-primary-accessible dark:hover:bg-gray-700 dark:hover:text-primary-accessible-dark"
                     title="Edit provider"
                   >
                     <ng-icon name="heroPencilSquare" class="size-5" />
                   </a>
                   <button
                     (click)="deleteProvider(provider)"
-                    class="rounded-sm p-2 text-gray-500 hover:bg-gray-100 hover:text-red-600 dark:hover:bg-gray-700 dark:hover:text-red-400"
+                    class="rounded-xs p-2 text-gray-500 hover:bg-gray-100 hover:text-state-danger-600 dark:hover:bg-gray-700 dark:hover:text-state-danger-400"
                     title="Delete provider"
                   >
                     <ng-icon name="heroTrash" class="size-5" />
@@ -248,7 +247,7 @@ import { AuthProvider } from '../models/auth-provider.model';
             <p class="mb-4 text-sm/6">Add your first OIDC provider to enable user authentication</p>
             <a
               routerLink="/admin/auth-providers/new"
-              class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700"
+              class="inline-flex items-center gap-2 rounded-xs bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95"
             >
               <ng-icon name="heroPlus" class="size-5" />
               Add Provider

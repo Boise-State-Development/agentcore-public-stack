@@ -355,7 +355,7 @@ async def list_bindable_endpoint(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error listing bindable '{kind}': {e}", exc_info=True)
+        logger.error(f"Error listing bindable '{scrub_log(kind)}': {scrub_log(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list bindable '{kind}': {str(e)}")
 
 

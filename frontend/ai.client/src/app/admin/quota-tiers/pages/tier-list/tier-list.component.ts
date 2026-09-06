@@ -3,10 +3,11 @@ import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { DatePipe } from '@angular/common';
 import { QuotaStateService } from '../../services/quota-state.service';
+import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-tier-list',
-  imports: [RouterLink, FormsModule, DatePipe],
+  imports: [RouterLink, FormsModule, DatePipe, SpinnerComponent],
   templateUrl: './tier-list.component.html',
   styleUrl: './tier-list.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,

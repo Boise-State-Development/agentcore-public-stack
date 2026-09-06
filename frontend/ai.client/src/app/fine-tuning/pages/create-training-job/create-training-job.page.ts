@@ -20,11 +20,20 @@ import { debounceTime, distinctUntilChanged, switchMap, takeUntil, filter, tap, 
 import { FineTuningStateService } from '../../services/fine-tuning-state.service';
 import { FineTuningHttpService } from '../../services/fine-tuning-http.service';
 import { FineTuningUploadService } from '../../services/fine-tuning-upload.service';
-import { AvailableModel, FileUploadState, CreateJobRequest, HuggingFaceModelResult } from '../../models/fine-tuning.models';
+import {
+  AvailableModel,
+  CreateJobRequest,
+  DEFAULT_TASK_TYPE,
+  FileUploadState,
+  FineTuningTaskType,
+  HuggingFaceModelResult,
+  TaskTypeResponse,
+} from '../../models/fine-tuning.models';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-create-training-job',
-  imports: [RouterLink, ReactiveFormsModule, NgIcon, DecimalPipe],
+  imports: [RouterLink, ReactiveFormsModule, NgIcon, DecimalPipe, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -58,6 +67,34 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
 
   /** Track drag enter/leave depth to handle nested elements. */
   private dragCounter = 0;
+
+  /** Task types offered by the platform, loaded from the backend. */
+  readonly taskTypes = signal<TaskTypeResponse[]>([]);
+
+  /** The task being fine-tuned for. Drives the dataset contract, the accepted
+   * upload formats and the model list, so changing it resets all three. */
+  readonly selectedTaskType = signal<FineTuningTaskType>(DEFAULT_TASK_TYPE);
+
+  /** Spec for the selected task, or null before the task list has loaded. */
+  readonly selectedTaskSpec = computed(
+    () => this.taskTypes().find((t) => t.task_type === this.selectedTaskType()) ?? null,
+  );
+
+  /** Catalog models trainable for the selected task. */
+  readonly modelsForTask = computed(() =>
+    this.state.availableModels().filter((m) => m.task_type === this.selectedTaskType()),
+  );
+
+  /** `accept` attribute for the dataset file input, per the selected task. */
+  readonly uploadAccept = computed(
+    () => this.selectedTaskSpec()?.upload_extensions.join(',') ?? '.csv,.jsonl,.json',
+  );
+
+  /** Whether the selected task expects a .zip bundling images with a manifest. */
+  readonly requiresArchive = computed(() => this.selectedTaskSpec()?.requires_archive ?? false);
+
+  /** Columns a record must carry, for the upload hint. */
+  readonly requiredColumns = computed(() => this.selectedTaskSpec()?.required_columns ?? []);
 
   /** Currently selected model (catalog or custom). */
   readonly selectedModel = signal<AvailableModel | null>(null);
@@ -121,11 +158,13 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
     weightDecay: ['0.01'],
     seed: ['42'],
     contextLength: ['512'],
+    imageSize: ['224'],
     maxRuntimeHours: [24, [Validators.required, Validators.min(1), Validators.max(120)]],
   });
 
   ngOnInit(): void {
     this.state.loadAvailableModels();
+    this.loadTaskTypes();
     this.splitSlider.valueChanges.subscribe((v) => this.splitPercent.set(v));
 
     // Set up debounced HuggingFace model search
@@ -135,7 +174,7 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
       filter((query) => query.trim().length >= 2),
       tap(() => this.searchingModels.set(true)),
       switchMap((query) =>
-        this.http.searchHuggingFaceModels(query, this.compatibleOnly()).pipe(
+        this.http.searchHuggingFaceModels(query, this.compatibleOnly(), this.selectedTaskType()).pipe(
           catchError(() => of([])),
         ),
       ),
@@ -149,6 +188,35 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
+  }
+
+  /** Load the supported task types. */
+  private async loadTaskTypes(): Promise<void> {
+    try {
+      this.taskTypes.set(await firstValueFrom(this.http.listTaskTypes()));
+    } catch {
+      // Leave the list empty; the form falls back to text-classification
+      // defaults so the page stays usable.
+    }
+  }
+
+  /**
+   * Switch the task being fine-tuned for.
+   *
+   * Clears the model and the uploaded dataset: a model trained for one task
+   * cannot serve another, and the dataset contract differs between them, so
+   * carrying either across would submit a job that fails on the backend.
+   */
+  selectTaskType(taskType: FineTuningTaskType): void {
+    if (taskType === this.selectedTaskType()) return;
+
+    this.selectedTaskType.set(taskType);
+    this.selectedModel.set(null);
+    this.selectedHfModel.set(null);
+    this.customHuggingFaceId.set('');
+    this.hfSearchResults.set([]);
+    this.uploadState.set(null);
+    this.submitError.set(null);
   }
 
   /** Handle file selection from the file input. */
@@ -174,6 +242,7 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
         this.http.presignDatasetUpload({
           filename: file.name,
           content_type: file.type || 'application/octet-stream',
+          task_type: this.selectedTaskType(),
         }),
       );
 
@@ -326,6 +395,7 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
       weightDecay: hp['weight_decay'] ?? '0.01',
       seed: hp['seed'] ?? '42',
       contextLength: hp['context_length'] ?? '512',
+      imageSize: hp['image_size'] ?? '224',
     });
 
     // Sync slider from model defaults (e.g. "0.8" → 80)
@@ -372,6 +442,7 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
       if (formValues.weightDecay) hyperparameters['weight_decay'] = formValues.weightDecay;
       if (formValues.seed) hyperparameters['seed'] = formValues.seed;
       if (formValues.contextLength) hyperparameters['context_length'] = formValues.contextLength;
+      if (formValues.imageSize) hyperparameters['image_size'] = formValues.imageSize;
 
       // Convert slider percentage (e.g. 80) to decimal string (e.g. "0.8")
       hyperparameters['split_ratio'] = (this.splitSlider.value / 100).toString();
@@ -379,7 +450,12 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
       const request: CreateJobRequest = {
         model_id: isCustom ? 'custom' : model!.model_id,
         dataset_s3_key: upload.s3Key,
-        instance_type: isCustom ? 'ml.g5.xlarge' : model!.default_instance_type,
+        task_type: this.selectedTaskType(),
+        // A catalog model carries its own instance type. A custom model has
+        // no catalog entry, so the field is omitted and the backend resolves
+        // it from the task registry — the single source of that default,
+        // rather than a copy of it here that can disagree.
+        ...(isCustom ? {} : { instance_type: model!.default_instance_type }),
         hyperparameters,
         max_runtime_seconds: (formValues.maxRuntimeHours ?? 24) * 3600,
         ...(isCustom ? { custom_huggingface_model_id: customHfId } : {}),

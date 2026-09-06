@@ -1,3 +1,11 @@
+<!-- Ambient announcement (spec §D1), floated above the composer rather than
+     stacked in flow: dismissing it must not move the composer under the
+     user's cursor. Sits above the quota tabs, which stay attached to the
+     input itself. -->
+@if (showAnnouncements()) {
+  <app-announcement-banner [placement]="announcementPlacement()" />
+}
+
 <!-- Cost quota warning indicator -->
 <app-quota-warning-banner />
 
@@ -25,6 +33,62 @@
           </svg>
           <span class="text-sm font-medium">Drop files here</span>
         </div>
+      </div>
+    }
+
+    <!--
+      Queued follow-ups. The user typed these while a response was still
+      streaming; they send one at a time as each turn finishes. Shown inside the
+      composer shell rather than in the message list because they have not
+      entered the conversation yet and can still be taken back.
+    -->
+    @if (queuedMessages().length > 0) {
+      <div class="border-b border-gray-200 dark:border-gray-700 px-4 py-2">
+        <!--
+          A queue held behind a consent / approval prompt looks stuck without
+          this line: the turn is not streaming, so nothing else on screen
+          explains why Enter did not send.
+        -->
+        @if (queueHeld()) {
+          <p class="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
+            Waiting for your answer above — this goes to the agent when the turn resumes.
+          </p>
+        }
+        <ul class="flex flex-col gap-1.5" aria-live="polite">
+          @for (queued of queuedMessages(); track queued.id) {
+            <li class="flex items-start gap-2 rounded-lg bg-gray-100 px-3 py-2 dark:bg-white/5">
+              <!--
+                An armed entry is one the backend will hand to the agent at its
+                next step; an unarmed one waits for the turn to end. Different
+                promises, so different icons — and the arrow is the same one the
+                delivered message carries in the thread.
+              -->
+              <ng-icon
+                [name]="queued.armed ? 'heroArrowTurnDownRight' : 'heroClock'"
+                class="mt-0.5 size-4 shrink-0 text-gray-500 dark:text-gray-400"
+                aria-hidden="true"
+              />
+              <span class="min-w-0 flex-1 truncate text-sm text-gray-700 dark:text-gray-300">
+                @if (queueHeld()) {
+                  <span class="sr-only">Queued, goes to the agent once you answer the prompt above: </span>
+                } @else if (queued.armed) {
+                  <span class="sr-only">Queued, goes to the agent at its next step: </span>
+                } @else {
+                  <span class="sr-only">Queued, sends when the current response finishes: </span>
+                }
+                {{ queued.content }}
+              </span>
+              <button
+                type="button"
+                (click)="removeQueuedMessage($index)"
+                class="shrink-0 rounded-sm p-0.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                [attr.aria-label]="'Remove queued message: ' + queued.content"
+              >
+                <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+              </button>
+            </li>
+          }
+        </ul>
       </div>
     }
 
@@ -76,7 +140,7 @@
         (click)="onTextareaCaretMove($event)"
         (focus)="onFocus()"
         (blur)="onBlur()"
-        placeholder="How can I help you today?"
+        [attr.placeholder]="placeholder()"
         role="combobox"
         aria-autocomplete="list"
         [attr.aria-expanded]="isMentionMenuOpen()"
@@ -141,22 +205,19 @@
             @if (voiceStatus() === 'listening') {
               <!-- Pulsing dot indicator for listening -->
               <span class="relative flex size-3">
-                <span class="absolute inline-flex size-full animate-ping rounded-full bg-red-400 opacity-75"></span>
-                <span class="relative inline-flex size-3 rounded-full bg-red-500"></span>
+                <span class="absolute inline-flex size-full animate-ping rounded-full bg-state-danger-400 opacity-75"></span>
+                <span class="relative inline-flex size-3 rounded-full bg-state-danger-500"></span>
               </span>
             } @else if (voiceStatus() === 'speaking') {
               <!-- Wave bars for speaking -->
               <span class="flex items-center gap-0.5" aria-hidden="true">
-                <span class="h-3 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 0ms;"></span>
-                <span class="h-4 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 150ms;"></span>
-                <span class="h-3 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 300ms;"></span>
+                <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 0ms;"></span>
+                <span class="h-4 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 150ms;"></span>
+                <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 300ms;"></span>
               </span>
             } @else if (voiceStatus() === 'connecting') {
               <!-- Spinner for connecting -->
-              <svg class="size-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-              </svg>
+              <app-spinner size="md" label="Connecting" />
             } @else {
               <!-- Mic icon for idle -->
               <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
@@ -171,7 +232,7 @@
           -->
           @if (mentionedAgent(); as agent) {
             <div
-              class="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 pl-2.5 pr-1 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+              class="flex items-center gap-1 rounded-full border border-state-success-200 bg-state-success-50 pl-2.5 pr-1 py-1 text-xs font-medium text-state-success-700 dark:border-state-success-700 dark:bg-state-success-900/30 dark:text-state-success-300"
               role="status"
               [attr.aria-label]="'This message goes to ' + agent.name"
             >
@@ -179,7 +240,7 @@
               <button
                 type="button"
                 (click)="clearMention()"
-                class="flex size-4 shrink-0 items-center justify-center rounded-full text-emerald-500 transition-colors hover:bg-emerald-200 hover:text-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-500 dark:text-emerald-400 dark:hover:bg-emerald-700 dark:hover:text-emerald-200"
+                class="flex size-4 shrink-0 items-center justify-center rounded-full text-state-success-500 transition-colors hover:bg-state-success-200 hover:text-state-success-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-state-success-500 dark:text-state-success-400 dark:hover:bg-state-success-700 dark:hover:text-state-success-200"
                 aria-label="Send this message to the assistant instead"
               >
                 <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
@@ -215,10 +276,10 @@
           <!-- Submit/Stop Button -->
           <button
             type="button"
-            (click)="onSubmit()"
+            (click)="onPrimaryButtonClick()"
             [disabled]="!isLoading() && hasActivePendingUploads()"
             [class]="isLoading()
-              ? 'flex size-10 items-center justify-center rounded-full bg-red-500 text-white shadow-sm transition-all hover:bg-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500'
+              ? 'flex size-10 items-center justify-center rounded-full bg-state-danger-500 text-white shadow-sm transition-all hover:bg-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500'
               : 'flex size-10 items-center justify-center rounded-full bg-secondary-500 text-white shadow-sm transition-all hover:bg-secondary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary-500'"
             [attr.aria-label]="isLoading() ? 'Stop generation' : (hasActivePendingUploads() ? 'Upload in progress' : 'Submit message')"
           >

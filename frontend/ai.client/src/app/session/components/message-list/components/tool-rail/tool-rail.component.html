@@ -61,8 +61,8 @@
   <div>
     <div
       class="pl-4 space-y-3 mt-2 border-l-2"
-      [class.border-blue-600/20]="hasSummaries()"
-      [class.dark:border-blue-500/20]="hasSummaries()"
+      [class.border-primary-500/20]="hasSummaries()"
+      [class.dark:border-primary-400/20]="hasSummaries()"
       [class.border-gray-300/50]="!hasSummaries()"
       [class.dark:border-gray-600/50]="!hasSummaries()"
     >
@@ -107,7 +107,7 @@
                   <span class="text-xs text-gray-400 dark:text-gray-500 shrink-0 mt-1">output:</span>
                   <div class="w-full">
                     <div class="flex items-center gap-1.5 mb-1 text-xs text-gray-400 dark:text-gray-500">
-                      <span class="status-dot bg-amber-400 shimmer"></span>
+                      <span class="status-dot bg-state-warning-400 shimmer"></span>
                       <span>Generating output…</span>
                     </div>
                     <pre
@@ -125,8 +125,8 @@
                   <span class="text-xs shrink-0 mt-1"
                     [class.text-gray-400]="call.result.status !== 'error'"
                     [class.dark:text-gray-500]="call.result.status !== 'error'"
-                    [class.text-red-500]="call.result.status === 'error'"
-                    [class.dark:text-red-400]="call.result.status === 'error'"
+                    [class.text-state-danger-500]="call.result.status === 'error'"
+                    [class.dark:text-state-danger-400]="call.result.status === 'error'"
                   >result:</span>
                   <div class="result-block text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700/30 rounded-xs px-2 py-1.5 w-full overflow-hidden">
                     @if (isResultExpanded(call.id)) {
@@ -147,7 +147,7 @@
                       <button
                         type="button"
                         (click)="toggleFullResult(call.id)"
-                        class="text-blue-600 dark:text-blue-400 hover:underline mt-1 block text-xs cursor-pointer"
+                        class="text-primary-accessible dark:text-primary-accessible-dark hover:underline mt-1 block text-xs cursor-pointer"
                       >
                         {{ isResultExpanded(call.id) ? 'Show less' : 'Show full result' }}
                       </button>

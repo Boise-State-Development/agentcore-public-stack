@@ -14,7 +14,8 @@ import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowLeft, heroChevronDown } from '@ng-icons/heroicons/outline';
 import { AdminCostHttpService } from '../services/admin-cost-http.service';
-import { CacheStatus, SessionCallRow } from '../models';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import { CacheStatus } from '../models';
 import {
   AnatomyRow,
   FINGERPRINT_KEYS,
@@ -39,7 +40,7 @@ import {
  */
 @Component({
   selector: 'app-session-cost-anatomy',
-  imports: [RouterLink, NgIcon, DatePipe],
+  imports: [RouterLink, NgIcon, DatePipe, SpinnerComponent],
   providers: [provideIcons({ heroArrowLeft, heroChevronDown })],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -47,7 +48,7 @@ import {
       <!-- Back link -->
       <a
         routerLink="/admin/costs"
-        class="mb-6 inline-flex items-center gap-2 rounded-2xl text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+        class="mb-6 inline-flex items-center gap-2 rounded-2xl text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:text-white"
       >
         <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
         Back to Cost Analytics
@@ -65,9 +66,7 @@ import {
         <!-- Loading State -->
         <div class="flex h-64 items-center justify-center">
           <div class="flex flex-col items-center gap-4">
-            <div
-              class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
+            <app-spinner size="xl" label="Loading session cost anatomy" />
             <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading session cost anatomy…</p>
           </div>
         </div>
@@ -85,7 +84,7 @@ import {
       } @else if (anatomyResource.error()) {
         <!-- Error State -->
         <div
-          class="rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200"
+          class="rounded-2xl border border-state-danger-200 bg-state-danger-50 p-4 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200"
         >
           <p class="text-sm/6">Failed to load session cost anatomy. Please try again.</p>
           <button
@@ -123,7 +122,7 @@ import {
               class="mt-1 text-lg/7 font-semibold"
               [class]="
                 unexplainedMisses() > 0
-                  ? 'text-red-600 dark:text-red-400'
+                  ? 'text-state-danger-600 dark:text-state-danger-400'
                   : 'text-gray-900 dark:text-white'
               "
             >
@@ -150,7 +149,7 @@ import {
               class="mt-1 text-lg/7 font-semibold"
               [class]="
                 anatomyResource.value().wastedUsd > 0
-                  ? 'text-red-600 dark:text-red-400'
+                  ? 'text-state-danger-600 dark:text-state-danger-400'
                   : 'text-gray-900 dark:text-white'
               "
             >
@@ -216,10 +215,10 @@ import {
                 @for (row of rows(); track row.index) {
                   <tr
                     class="text-sm/6 text-gray-700 dark:text-gray-300"
-                    [class.bg-red-50]="row.call.cacheStatus === 'miss_avoidable'"
-                    [class.dark:bg-red-900/10]="row.call.cacheStatus === 'miss_avoidable'"
-                    [class.bg-orange-50]="row.call.cacheStatus === 'partial_miss'"
-                    [class.dark:bg-orange-900/10]="row.call.cacheStatus === 'partial_miss'"
+                    [class.bg-state-danger-50]="row.call.cacheStatus === 'miss_avoidable'"
+                    [class.dark:bg-state-danger-900/10]="row.call.cacheStatus === 'miss_avoidable'"
+                    [class.bg-category-accent-partial-miss-50]="row.call.cacheStatus === 'partial_miss'"
+                    [class.dark:bg-category-accent-partial-miss-900/10]="row.call.cacheStatus === 'partial_miss'"
                   >
                     <td class="px-3 py-2 sm:pl-4">
                       <button
@@ -228,7 +227,7 @@ import {
                         [attr.aria-expanded]="isExpanded(row.index)"
                         [attr.aria-controls]="'call-detail-' + row.index"
                         [attr.aria-label]="(isExpanded(row.index) ? 'Hide' : 'Show') + ' details for call ' + (row.index + 1)"
-                        class="flex size-7 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                        class="flex size-7 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                       >
                         <ng-icon
                           name="heroChevronDown"
@@ -247,10 +246,10 @@ import {
                     <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                       {{ formatTokens(row.call.inputTokens) }}
                     </td>
-                    <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums text-green-700 dark:text-green-400">
+                    <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums text-state-success-700 dark:text-state-success-400">
                       {{ formatTokens(row.call.cacheReadTokens) }}
                     </td>
-                    <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums text-blue-700 dark:text-blue-400">
+                    <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums text-state-info-700 dark:text-state-info-400">
                       {{ formatTokens(row.call.cacheWriteTokens) }}
                     </td>
                     <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">
@@ -282,8 +281,8 @@ import {
                     </td>
                     <td
                       class="whitespace-nowrap px-3 py-2 text-right tabular-nums"
-                      [class.text-red-600]="row.call.wastedUsd > 0"
-                      [class.dark:text-red-400]="row.call.wastedUsd > 0"
+                      [class.text-state-danger-600]="row.call.wastedUsd > 0"
+                      [class.dark:text-state-danger-400]="row.call.wastedUsd > 0"
                     >
                       {{ row.call.wastedUsd > 0 ? formatCurrency(row.call.wastedUsd, 4) : '—' }}
                     </td>
@@ -342,14 +341,14 @@ import {
                               <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
                                 {{ fingerprintLabels[key] }} Hash
                                 @if (isChanged(row, key)) {
-                                  <span class="ml-1 normal-case text-red-600 dark:text-red-400">(changed)</span>
+                                  <span class="ml-1 normal-case text-state-danger-600 dark:text-state-danger-400">(changed)</span>
                                 }
                               </dt>
                               <dd
                                 class="mt-0.5 break-all font-mono text-xs/5"
                                 [class]="
                                   isChanged(row, key)
-                                    ? 'text-red-600 dark:text-red-400'
+                                    ? 'text-state-danger-600 dark:text-state-danger-400'
                                     : 'text-gray-700 dark:text-gray-300'
                                 "
                               >
@@ -437,7 +436,7 @@ export class SessionCostAnatomyPage {
   getFingerprintClass(row: AnatomyRow, key: FingerprintKey): string {
     const base = 'inline-flex items-center rounded-2xl px-2 py-0.5 font-mono text-xs/5';
     if (this.isChanged(row, key)) {
-      return `${base} bg-red-100 font-semibold text-red-700 ring-1 ring-inset ring-red-300 dark:bg-red-900/40 dark:text-red-300 dark:ring-red-700`;
+      return `${base} bg-state-danger-100 font-semibold text-state-danger-700 ring-1 ring-inset ring-state-danger-300 dark:bg-state-danger-900/40 dark:text-state-danger-300 dark:ring-state-danger-700`;
     }
     return `${base} bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400`;
   }
@@ -446,15 +445,15 @@ export class SessionCostAnatomyPage {
     const base = 'inline-flex items-center rounded-2xl px-2.5 py-0.5 text-xs/5 font-medium';
     switch (status) {
       case 'hit':
-        return `${base} bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300`;
+        return `${base} bg-state-success-100 text-state-success-800 dark:bg-state-success-900/30 dark:text-state-success-300`;
       case 'first_write':
-        return `${base} bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300`;
+        return `${base} bg-state-info-100 text-state-info-800 dark:bg-state-info-900/30 dark:text-state-info-300`;
       case 'miss_ttl_expired':
-        return `${base} bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300`;
+        return `${base} bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/30 dark:text-state-warning-300`;
       case 'miss_avoidable':
-        return `${base} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`;
+        return `${base} bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/30 dark:text-state-danger-300`;
       case 'partial_miss':
-        return `${base} bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300`;
+        return `${base} bg-category-accent-partial-miss-100 text-category-accent-partial-miss-800 dark:bg-category-accent-partial-miss-900/30 dark:text-category-accent-partial-miss-300`;
       case 'uncached':
       default:
         return `${base} bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300`;

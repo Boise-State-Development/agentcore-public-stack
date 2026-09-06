@@ -74,7 +74,7 @@ export type RollbackDialogResult = { version: number; reason: string } | undefin
             type="button"
             (click)="onCancel()"
             aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
           </button>
@@ -84,7 +84,7 @@ export type RollbackDialogResult = { version: number; reason: string } | undefin
           @if (loading()) {
             <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading versions…</p>
           } @else if (error()) {
-            <p role="alert" class="text-sm/6 text-rose-700 dark:text-rose-400">{{ error() }}</p>
+            <p role="alert" class="text-sm/6 text-state-danger-700 dark:text-state-danger-400">{{ error() }}</p>
           } @else if (selectable().length === 0) {
             <p class="text-sm/6 text-gray-600 dark:text-gray-400">
               This agent has only ever had one approved version, so there is nothing else to
@@ -101,7 +101,7 @@ export type RollbackDialogResult = { version: number; reason: string } | undefin
               id="rollback-version"
               [value]="version()"
               (change)="onVersionChange($event)"
-              class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+              class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
             >
               <option value="" disabled>Choose a version…</option>
               @for (v of selectable(); track v.version) {
@@ -126,7 +126,7 @@ export type RollbackDialogResult = { version: number; reason: string } | undefin
               [value]="reason()"
               (input)="onReasonInput($event)"
               placeholder="Be specific — this is the whole message the author receives."
-              class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+              class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
             ></textarea>
           }
         </div>
@@ -137,7 +137,7 @@ export type RollbackDialogResult = { version: number; reason: string } | undefin
           <button
             type="button"
             (click)="onCancel()"
-            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
           >
             Cancel
           </button>
@@ -145,7 +145,7 @@ export type RollbackDialogResult = { version: number; reason: string } | undefin
             type="button"
             [disabled]="!canSubmit()"
             (click)="onSubmit()"
-            class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Publish this version
           </button>

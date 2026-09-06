@@ -10,20 +10,26 @@ import {
 } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { HttpErrorResponse } from '@angular/common/http';
-import { NgTemplateOutlet } from '@angular/common';
+import { firstValueFrom } from 'rxjs';
+import { Dialog } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroXMark,
   heroArrowPath,
-  heroExclamationTriangle,
   heroArrowDownTray,
+  heroArrowUpOnSquare,
   heroEye,
   heroCodeBracket,
   heroClipboard,
   heroCheck,
   heroChevronUpDown,
+  heroPencilSquare,
+  heroTrash,
 } from '@ng-icons/heroicons/outline';
-import type { Artifact } from '../../../../services/artifacts/artifact.model';
+import type {
+  Artifact,
+  OpenArtifactRef,
+} from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 import {
   ArtifactHttpService,
@@ -31,7 +37,23 @@ import {
 } from '../../../../services/artifacts/artifact-http.service';
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
 import { SessionService } from '../../../../services/session/session.service';
-import { ArtifactSourceComponent } from './artifact-source.component';
+import { ArtifactViewerComponent } from './artifact-viewer.component';
+import {
+  ArtifactShareModalComponent,
+  type ArtifactShareModalData,
+} from './artifact-share-modal.component';
+import { UserService } from '../../../../../auth/user.service';
+import { TooltipDirective } from '../../../../../components/tooltip/tooltip.directive';
+import { ToastService } from '../../../../../services/toast/toast.service';
+import {
+  ConfirmationDialogComponent,
+  type ConfirmationDialogData,
+} from '../../../../../components/confirmation-dialog';
+import {
+  RenameArtifactDialogComponent,
+  type RenameArtifactDialogData,
+  type RenameArtifactDialogResult,
+} from '../../../../../artifacts/components/rename-artifact-dialog.component';
 
 /**
  * Right-docked pane that renders one artifact version in a sandboxed
@@ -53,18 +75,20 @@ import { ArtifactSourceComponent } from './artifact-source.component';
 @Component({
   selector: 'app-artifact-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, NgTemplateOutlet, ArtifactSourceComponent],
+  imports: [NgIcon, ArtifactViewerComponent, TooltipDirective],
   providers: [
     provideIcons({
       heroXMark,
       heroArrowPath,
-      heroExclamationTriangle,
       heroArrowDownTray,
+      heroArrowUpOnSquare,
       heroEye,
       heroCodeBracket,
       heroClipboard,
       heroCheck,
       heroChevronUpDown,
+      heroPencilSquare,
+      heroTrash,
     }),
   ],
   host: {
@@ -96,7 +120,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
         >
           <span
             aria-hidden="true"
-            class="h-12 w-1 rounded-full bg-gray-300 transition-colors group-hover:bg-blue-500 group-focus-visible:bg-blue-500 dark:bg-gray-600 dark:group-hover:bg-blue-400"
+            class="h-12 w-1 rounded-full bg-gray-300 transition-colors group-hover:bg-primary-500 group-focus-visible:bg-primary-500 dark:bg-gray-600 dark:group-hover:bg-primary-400"
           ></span>
         </div>
         <header
@@ -112,7 +136,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
               <div #versionControl class="relative">
                 <button
                   type="button"
-                  class="-ml-1 flex items-center gap-0.5 rounded px-1 py-0.5 text-xs text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:text-gray-100"
+                  class="-ml-1 flex items-center gap-0.5 rounded px-1 py-0.5 text-xs text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-400 dark:hover:text-gray-100"
                   aria-haspopup="menu"
                   [attr.aria-expanded]="menuOpen()"
                   aria-controls="artifact-version-menu"
@@ -145,7 +169,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
                         type="button"
                         role="menuitemradio"
                         [attr.aria-checked]="v.version === ref.version"
-                        class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+                        class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
                         [class]="
                           v.version === ref.version
                             ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-gray-100'
@@ -171,7 +195,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
                         </span>
                         @if (v.version === latestVersion()) {
                           <span
-                            class="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-500/15 dark:text-blue-300"
+                            class="shrink-0 rounded bg-primary-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-accessible dark:bg-primary-500/15 dark:text-primary-accessible-dark"
                             >Latest</span
                           >
                         }
@@ -193,7 +217,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
           >
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
               [class]="
                 view() === 'preview'
                   ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
@@ -208,7 +232,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
             </button>
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
               [class]="
                 view() === 'code'
                   ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
@@ -229,7 +253,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
           @if (view() === 'code') {
             <button
               type="button"
-              class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+              class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
               [attr.aria-label]="copied() ? 'Copied' : 'Copy code'"
               [disabled]="!source()"
               (click)="copy()"
@@ -237,14 +261,54 @@ import { ArtifactSourceComponent } from './artifact-source.component';
               <ng-icon
                 [name]="copied() ? 'heroCheck' : 'heroClipboard'"
                 class="text-lg"
-                [class.text-green-600]="copied()"
+                [class.text-state-success-600]="copied()"
                 aria-hidden="true"
               />
             </button>
           }
           <button
             type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            [attr.aria-label]="'Share artifact, version ' + ref.version"
+            [appTooltip]="'Share version ' + ref.version"
+            appTooltipPosition="bottom"
+            (click)="share(ref)"
+          >
+            <ng-icon
+              name="heroArrowUpOnSquare"
+              class="text-lg"
+              aria-hidden="true"
+            />
+          </button>
+          <button
+            type="button"
+            class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            [attr.aria-label]="'Rename artifact'"
+            [appTooltip]="'Rename'"
+            appTooltipPosition="bottom"
+            [disabled]="mutating()"
+            (click)="rename(ref)"
+          >
+            <ng-icon
+              name="heroPencilSquare"
+              class="text-lg"
+              aria-hidden="true"
+            />
+          </button>
+          <button
+            type="button"
+            class="flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-state-danger-500/10 dark:hover:text-state-danger-400"
+            [attr.aria-label]="'Delete artifact'"
+            [appTooltip]="'Delete'"
+            appTooltipPosition="bottom"
+            [disabled]="mutating()"
+            (click)="confirmDelete(ref)"
+          >
+            <ng-icon name="heroTrash" class="text-lg" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
             [attr.aria-label]="
               downloading() ? 'Downloading artifact…' : 'Download artifact'
             "
@@ -261,7 +325,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
           </button>
           <button
             type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
             aria-label="Close artifact"
             (click)="close()"
           >
@@ -269,158 +333,25 @@ import { ArtifactSourceComponent } from './artifact-source.component';
           </button>
         </header>
 
-        <div class="relative min-h-0 flex-1">
-          @if (view() === 'code') {
-            @if (sourceError()) {
-              <div
-                class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
-                role="alert"
-              >
-                <ng-icon
-                  name="heroExclamationTriangle"
-                  class="text-3xl text-amber-500"
-                  aria-hidden="true"
-                />
-                <p class="text-sm text-gray-700 dark:text-gray-300">
-                  {{ sourceError() }}
-                </p>
-                <button
-                  type="button"
-                  class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
-                  (click)="retrySource()"
-                >
-                  Try again
-                </button>
-              </div>
-            } @else if (source(); as src) {
-              <app-artifact-source
-                [content]="src.content"
-                [contentType]="src.contentType"
-              />
-            } @else {
-              <ng-container
-                [ngTemplateOutlet]="skeleton"
-                [ngTemplateOutletContext]="{ label: 'Building source view…' }"
-              />
-            }
-          } @else {
-            @if (error()) {
-              <div
-                class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
-                role="alert"
-              >
-                <ng-icon
-                  name="heroExclamationTriangle"
-                  class="text-3xl text-amber-500"
-                  aria-hidden="true"
-                />
-                <p class="text-sm text-gray-700 dark:text-gray-300">
-                  {{ error() }}
-                </p>
-                <button
-                  type="button"
-                  class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
-                  (click)="retry()"
-                >
-                  Try again
-                </button>
-              </div>
-            } @else {
-              @if (safeUrl(); as url) {
-                <iframe
-                  [src]="url"
-                  class="h-full w-full border-0 bg-white"
-                  [class.pointer-events-none]="dragging()"
-                  [title]="ref.title || 'Artifact'"
-                  sandbox="allow-scripts"
-                  referrerpolicy="no-referrer"
-                  loading="lazy"
-                  (load)="onIframeLoad()"
-                ></iframe>
-              }
-              @if (!previewReady()) {
-                <ng-container
-                  [ngTemplateOutlet]="skeleton"
-                  [ngTemplateOutletContext]="{ label: 'Rendering artifact…' }"
-                />
-              }
-            }
-          }
-        </div>
+        <app-artifact-viewer
+          [safeUrl]="safeUrl()"
+          [title]="ref.title"
+          [view]="view()"
+          [source]="source()"
+          [error]="error()"
+          [sourceError]="sourceError()"
+          [previewReady]="previewReady()"
+          [inert]="dragging()"
+          (retry)="retry()"
+          (retrySource)="retrySource()"
+          (iframeLoad)="onIframeLoad()"
+        />
       </aside>
-      <ng-template #skeleton let-label="label">
-        <div
-          class="absolute inset-0 overflow-hidden bg-white p-8 dark:bg-gray-900"
-          role="status"
-          [attr.aria-label]="label"
-        >
-          <div aria-hidden="true" class="mx-auto flex max-w-2xl flex-col gap-6">
-            <div class="flex flex-col gap-3">
-              <div
-                class="skeleton-shimmer h-8 w-1/2 rounded-lg bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-4 w-1/4 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-            </div>
-            <div class="flex flex-col gap-3">
-              <div
-                class="skeleton-shimmer h-3.5 w-full rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-11/12 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-4/5 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-            </div>
-            <div
-              class="skeleton-shimmer h-48 w-full rounded-xl bg-gray-200 dark:bg-gray-700"
-            ></div>
-            <div class="flex flex-col gap-3">
-              <div
-                class="skeleton-shimmer h-3.5 w-full rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-10/12 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-              <div
-                class="skeleton-shimmer h-3.5 w-2/3 rounded bg-gray-200 dark:bg-gray-700"
-              ></div>
-            </div>
-          </div>
-          <span class="sr-only">{{ label }}</span>
-        </div>
-      </ng-template>
     }
   `,
   styles: `
     :host {
       display: contents;
-    }
-    .skeleton-shimmer {
-      background-image: linear-gradient(
-        90deg,
-        transparent 0%,
-        rgba(255, 255, 255, 0.45) 50%,
-        transparent 100%
-      );
-      background-size: 220% 100%;
-      background-repeat: no-repeat;
-      animation: artifact-skeleton-shimmer 1.5s ease-in-out infinite;
-    }
-    @keyframes artifact-skeleton-shimmer {
-      0% {
-        background-position: 130% 0;
-      }
-      100% {
-        background-position: -130% 0;
-      }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .skeleton-shimmer {
-        animation: none;
-      }
     }
   `,
 })
@@ -430,12 +361,17 @@ export class ArtifactPanelComponent {
   private sessionService = inject(SessionService);
   private sanitizer = inject(DomSanitizer);
   private artifactDownload = inject(ArtifactDownloadService);
+  private dialog = inject(Dialog);
+  private userService = inject(UserService);
+  private toast = inject(ToastService);
 
   protected readonly open = this.artifactState.openArtifact;
 
   protected readonly safeUrl = signal<SafeResourceUrl | null>(null);
   protected readonly error = signal<string | null>(null);
   protected readonly downloading = signal(false);
+  /** A rename or delete is in flight, so both buttons wait. */
+  protected readonly mutating = signal(false);
 
   /** Flips when the preview iframe fires `load` — the document has
    *  actually painted, not merely that the render token was minted. */
@@ -770,6 +706,96 @@ export class ArtifactPanelComponent {
     this.sourceLoading.set(false);
     this.copied.set(false);
     this.loadedSourceKey = null;
+  }
+
+  /** Open the share dialog for the version currently on screen.
+   *
+   *  `ref` is the panel's open-artifact ref, so switching versions in
+   *  the header menu switches what gets shared — a share pins one
+   *  immutable version and never follows HEAD. */
+  protected share(ref: OpenArtifactRef): void {
+    this.dialog.open(ArtifactShareModalComponent, {
+      data: {
+        artifactId: ref.artifactId,
+        version: ref.version,
+        title: ref.title,
+        ownerEmail: this.userService.currentUser()?.email ?? '',
+      } as ArtifactShareModalData,
+    });
+  }
+
+  /**
+   * Rename the open artifact.
+   *
+   * Renames the artifact, not the version on screen: the backend writes
+   * the title to every version row, so the local registry is updated the
+   * same way. Anything less would leave the version picker listing the
+   * same artifact under two names.
+   */
+  protected async rename(ref: OpenArtifactRef): Promise<void> {
+    const data: RenameArtifactDialogData = { title: ref.title };
+    const dialogRef = this.dialog.open<RenameArtifactDialogResult>(
+      RenameArtifactDialogComponent,
+      { data },
+    );
+    const title = await firstValueFrom(dialogRef.closed);
+    if (!title) return;
+
+    this.mutating.set(true);
+    try {
+      const updated = await this.artifactHttp.renameArtifact(
+        ref.artifactId,
+        title,
+      );
+      this.artifactState.rename(ref.artifactId, updated.title);
+    } catch {
+      this.toast.error(
+        'Could not rename artifact',
+        'The change was not saved. Try again in a moment.',
+      );
+    } finally {
+      this.mutating.set(false);
+    }
+  }
+
+  /**
+   * Delete the open artifact after confirmation.
+   *
+   * Removing it from the registry closes this panel *and* clears the
+   * inline cards in the conversation, which read the same registry — a
+   * deleted artifact must not leave a card behind that 404s on click.
+   * That only happens once the request succeeds: an optimistic removal
+   * would silently come back on the next session load.
+   */
+  protected async confirmDelete(ref: OpenArtifactRef): Promise<void> {
+    const data: ConfirmationDialogData = {
+      title: 'Delete this artifact?',
+      message:
+        `"${ref.title || 'Untitled artifact'}" will be deleted permanently, ` +
+        'along with every version of it and any share links you have created. ' +
+        'This cannot be undone.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      destructive: true,
+    };
+    const dialogRef = this.dialog.open<boolean>(ConfirmationDialogComponent, {
+      data,
+    });
+    const confirmed = await firstValueFrom(dialogRef.closed);
+    if (!confirmed) return;
+
+    this.mutating.set(true);
+    try {
+      await this.artifactHttp.deleteArtifact(ref.artifactId);
+      this.artifactState.remove(ref.artifactId);
+    } catch {
+      this.toast.error(
+        'Could not delete artifact',
+        'Nothing was removed. Try again in a moment.',
+      );
+    } finally {
+      this.mutating.set(false);
+    }
   }
 
   protected async download(): Promise<void> {

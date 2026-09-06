@@ -56,10 +56,11 @@ export type ToolRoleDialogResult = string[] | undefined;
       >
         <!-- Close button (top-right) -->
         <div class="absolute top-0 right-0 hidden pt-4 pr-4 sm:block">
+          <!-- intentional: shared dialog-convention indigo focus outline, tracked in phase-3-outlier-colors-and-icon-spinners.md, not this doc -->
           <button
             type="button"
             (click)="onCancel()"
-            class="rounded-md bg-white text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-600 dark:bg-gray-800 dark:hover:text-gray-300 dark:focus:outline-white"
+            class="rounded-md bg-white text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-primary-600 dark:bg-gray-800 dark:hover:text-gray-300 dark:focus:outline-white"
             aria-label="Close dialog"
           >
             <span class="sr-only">Close</span>
@@ -69,8 +70,8 @@ export type ToolRoleDialogResult = string[] | undefined;
 
         <!-- Header with Icon -->
         <div class="sm:flex sm:items-start">
-          <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-full bg-indigo-100 sm:mx-0 sm:size-10 dark:bg-indigo-500/10">
-            <ng-icon name="heroUserGroup" class="size-6 text-indigo-600 dark:text-indigo-400" aria-hidden="true" />
+          <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-full bg-primary-100 sm:mx-0 sm:size-10 dark:bg-primary-500/10">
+            <ng-icon name="heroUserGroup" class="size-6 text-primary-accessible dark:text-primary-accessible-dark" aria-hidden="true" />
           </div>
           <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
             <h3 id="dialog-title" class="text-base font-semibold text-gray-900 dark:text-white">
@@ -88,12 +89,12 @@ export type ToolRoleDialogResult = string[] | undefined;
         <div id="dialog-description" class="mt-4 max-h-72 overflow-y-auto">
           @if (loading()) {
             <div class="flex items-center justify-center py-8">
-              <div class="animate-spin rounded-full size-8 border-4 border-gray-300 dark:border-gray-600 border-t-indigo-600"></div>
+              <div class="animate-spin rounded-full size-8 border-4 border-gray-300 dark:border-gray-600 border-t-primary-600"></div>
             </div>
           } @else {
             @if (data.tool.isPublic) {
-              <div class="mb-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-md">
-                <p class="text-sm text-green-800 dark:text-green-200">
+              <div class="mb-4 p-3 bg-state-success-50 dark:bg-state-success-900/20 border border-state-success-200 dark:border-state-success-800 rounded-md">
+                <p class="text-sm text-state-success-800 dark:text-state-success-200">
                   This tool is marked as public and is available to all authenticated users.
                 </p>
               </div>
@@ -103,16 +104,16 @@ export type ToolRoleDialogResult = string[] | undefined;
               @for (role of allRoles(); track role.roleId) {
                 <label
                   class="flex items-center gap-3 p-3 border rounded-md hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors dark:border-gray-600"
-                  [class.border-indigo-500]="selectedRoleIds().has(role.roleId)"
-                  [class.dark:border-indigo-400]="selectedRoleIds().has(role.roleId)"
-                  [class.bg-indigo-50]="selectedRoleIds().has(role.roleId)"
-                  [class.dark:bg-indigo-900/20]="selectedRoleIds().has(role.roleId)"
+                  [class.border-primary-500]="selectedRoleIds().has(role.roleId)"
+                  [class.dark:border-primary-400]="selectedRoleIds().has(role.roleId)"
+                  [class.bg-primary-50]="selectedRoleIds().has(role.roleId)"
+                  [class.dark:bg-primary-900/20]="selectedRoleIds().has(role.roleId)"
                 >
                   <input
                     type="checkbox"
                     [checked]="selectedRoleIds().has(role.roleId)"
                     (change)="toggleRole(role.roleId)"
-                    class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-gray-500 dark:bg-gray-700"
+                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700"
                   />
                   <div class="flex-1 min-w-0">
                     <div class="font-medium text-gray-900 dark:text-white">{{ role.displayName }}</div>
@@ -134,7 +135,7 @@ export type ToolRoleDialogResult = string[] | undefined;
             }
 
             <!-- Info notice -->
-            <p class="mt-4 text-xs text-amber-600 dark:text-amber-400">
+            <p class="mt-4 text-xs text-state-warning-600 dark:text-state-warning-400">
               Changes take effect within 5-10 minutes.
             </p>
           }
@@ -146,7 +147,7 @@ export type ToolRoleDialogResult = string[] | undefined;
             type="button"
             (click)="save()"
             [disabled]="saving() || loading()"
-            class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 sm:ml-3 sm:w-auto dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="inline-flex w-full justify-center rounded-md bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-primary-500 sm:ml-3 sm:w-auto dark:bg-primary-500 dark:shadow-none dark:hover:bg-primary-400 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {{ saving() ? 'Saving...' : 'Save Changes' }}
           </button>
@@ -162,9 +163,8 @@ export type ToolRoleDialogResult = string[] | undefined;
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     /* Backdrop fade-in animation */
     .dialog-backdrop {
@@ -277,3 +277,4 @@ export class ToolRoleDialogComponent implements OnInit {
     this.dialogRef.close(undefined);
   }
 }
+

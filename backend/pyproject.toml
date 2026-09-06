@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentcore-stack"
-version = "1.17.0"
+version = "1.18.0"
 requires-python = ">=3.10"
 description = "Multi-agent conversational AI system with AWS Bedrock AgentCore"
 readme = "README.md"
@@ -36,9 +36,9 @@ dependencies = [
 
     # Security: pin transitive deps to fix Dependabot alerts
     "pillow==12.3.0",
-    "cryptography==48.0.1",
+    "cryptography==50.0.1",
     "python-multipart==0.0.31",
-    "aiohttp==3.14.1",
+    "aiohttp==3.14.3",
     "urllib3==2.7.0",
     "idna==3.15",
     "pyasn1==0.6.4",
@@ -93,6 +93,12 @@ dev = [
     "types-aiofiles==25.1.0.20260409",
     "tiktoken==0.12.0",
     "numpy==2.2.6",
+    # Exercises the fine-tuning dataset contract (manifest reading, label
+    # normalisation, the image-archive path). The SageMaker containers install
+    # their own unpinned pandas; 2.x is what the py3.10 text DLC resolves to,
+    # and it is the only line compatible with the numpy pin above — pandas 3.x
+    # requires numpy>=2.3.3 on py3.14+.
+    "pandas==2.3.3",
 ]
 
 # All dependencies (convenience)

@@ -73,7 +73,7 @@ const EXPIRY_SKEW_MS = 30_000;
             />
           } @else if (item.state.status === 'error') {
             <div
-              class="flex size-full flex-col items-center justify-center gap-1 bg-red-50 p-2 text-red-500 dark:bg-red-950/30 dark:text-red-400"
+              class="flex size-full flex-col items-center justify-center gap-1 bg-state-danger-50 p-2 text-state-danger-500 dark:bg-state-danger-950/30 dark:text-state-danger-400"
             >
               <ng-icon name="heroExclamationTriangle" class="size-6" aria-hidden="true" />
               <span class="px-2 text-center text-xs">Preview unavailable</span>

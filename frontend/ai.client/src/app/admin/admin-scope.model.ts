@@ -26,6 +26,7 @@ export const ADMIN_SCOPE_IDS = [
   'admin.users',
   'admin.system_prompts',
   'admin.user_menu_links',
+  'admin.announcements',
   'admin.roles',
   'admin.auth_providers',
   'admin.audit',

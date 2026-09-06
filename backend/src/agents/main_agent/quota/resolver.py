@@ -6,6 +6,7 @@ import logging
 from apis.shared.auth.models import User
 from .models import QuotaTier, QuotaAssignment, ResolvedQuota
 from .repository import QuotaRepository
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +209,7 @@ class QuotaResolver:
             keys_to_remove = [k for k in self._cache.keys() if k.startswith(f"{user_id}:")]
             for key in keys_to_remove:
                 del self._cache[key]
-            logger.info(f"Invalidated cache for user {user_id}")
+            logger.info(f"Invalidated cache for user {scrub_log(user_id)}")
         else:
             # Clear entire cache
             self._cache.clear()

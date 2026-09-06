@@ -23,7 +23,7 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-from .models import SYSTEM_OWNER_ID, SkillDefinition, SkillStatus, UserSkillPreference
+from .models import SkillDefinition, SkillStatus, UserSkillPreference
 
 logger = logging.getLogger(__name__)
 

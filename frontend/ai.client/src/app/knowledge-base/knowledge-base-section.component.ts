@@ -30,6 +30,7 @@ import {
   PROCESSING_STATUSES,
   STALE_DOCUMENT_THRESHOLD_MS,
 } from '../assistants/models/document.model';
+import { SpinnerComponent } from '../components/spinner/spinner.component';
 import {
   FileSourceBrowserDialogComponent,
   FileSourceBrowserDialogData,
@@ -81,7 +82,7 @@ import { parseIso } from '../utils/date';
   selector: 'app-knowledge-base-section',
   templateUrl: './knowledge-base-section.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, SyncPolicyControlComponent],
+  imports: [NgIcon, SyncPolicyControlComponent, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowDownTray,

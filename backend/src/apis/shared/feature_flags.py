@@ -151,3 +151,76 @@ def agent_marketplace_enabled() -> bool:
     is now this flag alone.
     """
     return os.environ.get("AGENT_MARKETPLACE_ENABLED", "").strip().lower() != "false"
+
+
+def mid_turn_steering_enabled() -> bool:
+    """Whether a follow-up may be injected into a turn that is still running.
+
+    Covers the lease-row steering inbox, the runtime ``SteeringHook`` that
+    injects at each tool boundary, the app-api ``/sessions/{id}/steer``
+    endpoint, and the ``steering_applied`` SSE event (see
+    ``docs/specs/mid-turn-steering.md``). **Default ON with a kill switch**
+    (house style, mirroring ``scheduled_runs_enabled``): unset or empty
+    resolves to enabled; only the literal ``"false"`` (case-insensitive)
+    disables.
+
+    While off, the hook is still registered but returns immediately, the steer
+    endpoint 404s, and the SPA never POSTs — leaving exactly PR #916's
+    behaviour, where a follow-up typed mid-stream is queued in the composer
+    and flushed on the turn's falling edge. That fallback is permanent, not
+    transitional: a turn that calls no tools has no boundary to inject at.
+    """
+    return os.environ.get("MID_TURN_STEERING_ENABLED", "").strip().lower() != "false"
+
+
+def announcements_enabled() -> bool:
+    """Whether the feature-announcement system is enabled for this environment.
+
+    Covers the admin authoring surface (``/admin/announcements``) today, and
+    the user-facing ``GET /announcements`` + ack endpoint and the panel /
+    banner / modal surfaces as those land. **Default ON with a kill switch**
+    (house style, mirroring ``scheduled_runs_enabled``): unset or empty
+    resolves to enabled; only the literal ``"false"`` (case-insensitive)
+    disables.
+
+    While off, the admin router is unmounted so the surface 404s; the data and
+    code remain intact. There is no separate RBAC capability on this axis —
+    *who* may author is the delegable ``admin.announcements`` scope, and *who
+    sees* a published announcement is the announcement's own ``targetRoles``
+    display filter (which is deliberately **not** an RBAC grant; see
+    ``docs/specs/feature-announcements.md`` §D9).
+    """
+    return os.environ.get("ANNOUNCEMENTS_ENABLED", "").strip().lower() != "false"
+
+
+def artifact_share_inbox_enabled() -> bool:
+    """Whether a recipient can *discover* artifacts shared with them.
+
+    Covers the ``GET /shared-artifacts`` inbox endpoint and, through it,
+    the library page's "Shared with you" tab. **Default OFF, opt-in**
+    (the deferred-feature pattern, mirroring the long-deleted
+    ``FINE_TUNING_ENABLED``): only the literal ``"true"``
+    (case-insensitive) enables it. Every other flag in this module ships
+    default-on with a kill switch; this one is deliberately the other
+    way round, because the surface it gates lands before the product
+    decision about it does.
+
+    ############################################################
+    # This flag gates the READ ONLY. The recipient fan-out rows the
+    # inbox reads are written UNCONDITIONALLY, by every share write,
+    # whether or not this is on.
+    #
+    # That asymmetry is the whole point. If the writes were gated too,
+    # turning this on would expose an inbox missing every share created
+    # while it was off — a wrong answer rather than an empty one, and
+    # one nobody can see is wrong. Writing the pointer rows regardless
+    # costs one small row per recipient and makes the flip complete and
+    # instant, with no backfill to sequence.
+    #
+    # So: do not "optimise" the write path by wrapping it in this flag.
+    ############################################################
+    """
+    return (
+        os.environ.get("ARTIFACT_SHARE_INBOX_ENABLED", "").strip().lower()
+        == "true"
+    )

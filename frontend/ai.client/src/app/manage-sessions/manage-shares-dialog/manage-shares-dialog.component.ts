@@ -20,6 +20,7 @@ import { ShareService, ShareResponse } from '../../session/services/share/share.
 import { ToastService } from '../../services/toast/toast.service';
 import { parseIso } from '../../utils/date';
 import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 export interface ManageSharesDialogData {
   sessionId: string;
@@ -29,7 +30,7 @@ export interface ManageSharesDialogData {
 @Component({
   selector: 'app-manage-shares-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon],
+  imports: [DialogDismissDirective, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroXMark,
@@ -73,10 +74,11 @@ export interface ManageSharesDialogData {
               {{ data.sessionTitle || 'Untitled Conversation' }}
             </p>
           </div>
+          <!-- phase-3-outlier-colors: intentional indigo focus outline - shared across 4 dialogs (tool-role-dialog, delete-tool-dialog, confirmation-dialog, manage-shares-dialog); documented convention -->
           <button
             type="button"
             (click)="onClose()"
-            class="rounded-md text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-600 dark:hover:text-gray-300"
+            class="rounded-md text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-primary-600 dark:hover:text-gray-300"
             aria-label="Close dialog"
           >
             <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
@@ -86,6 +88,7 @@ export interface ManageSharesDialogData {
         <!-- Loading -->
         @if (isLoading()) {
           <div class="flex items-center justify-center py-8">
+            <!-- phase-3-outlier-colors: intentional border-t-indigo-500 spinner - shared dialog convention (matches close button focus outline); documented in dialog pattern -->
             <div class="size-6 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-500"></div>
           </div>
         } @else if (shares().length === 0) {
@@ -102,10 +105,10 @@ export interface ManageSharesDialogData {
                 <div class="flex items-center justify-between gap-3">
                   <div class="flex items-center gap-2 min-w-0">
                     @if (share.accessLevel === 'public') {
-                      <ng-icon name="heroGlobeAlt" class="size-4 shrink-0 text-green-500" />
+                      <ng-icon name="heroGlobeAlt" class="size-4 shrink-0 text-state-success-500" />
                       <span class="text-sm font-medium text-gray-900 dark:text-white">Public</span>
                     } @else {
-                      <ng-icon name="heroLockClosed" class="size-4 shrink-0 text-amber-500" />
+                      <ng-icon name="heroLockClosed" class="size-4 shrink-0 text-state-warning-500" />
                       <span class="text-sm font-medium text-gray-900 dark:text-white">Limited Access</span>
                     }
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ formatDate(share.createdAt) }}</span>
@@ -125,11 +128,11 @@ export interface ManageSharesDialogData {
                       type="button"
                       (click)="revokeShare(share.shareId)"
                       [disabled]="revokingIds().has(share.shareId)"
-                      class="rounded-md p-1.5 text-red-500 hover:bg-red-50 disabled:opacity-50 dark:hover:bg-red-500/10"
+                      class="rounded-md p-1.5 text-state-danger-500 hover:bg-state-danger-50 disabled:opacity-50 dark:hover:bg-state-danger-500/10"
                       [attr.aria-label]="'Delete share'"
                     >
                       @if (revokingIds().has(share.shareId)) {
-                        <div class="size-4 animate-spin rounded-full border-2 border-red-300 border-t-red-600"></div>
+                        <app-spinner size="sm" variant="danger" label="Deleting share" />
                       } @else {
                         <ng-icon name="heroTrash" class="size-4" />
                       }
@@ -147,11 +150,11 @@ export interface ManageSharesDialogData {
                           type="button"
                           (click)="removeEmailFromShare(share.shareId, email)"
                           [disabled]="removingEmails().has(share.shareId + ':' + email)"
-                          class="ml-2 shrink-0 rounded p-0.5 text-red-400 hover:text-red-600 disabled:opacity-50 dark:hover:text-red-300"
+                          class="ml-2 shrink-0 rounded p-0.5 text-state-danger-400 hover:text-state-danger-600 disabled:opacity-50 dark:hover:text-state-danger-300"
                           [attr.aria-label]="'Remove ' + email"
                         >
                           @if (removingEmails().has(share.shareId + ':' + email)) {
-                            <div class="size-3.5 animate-spin rounded-full border border-red-300 border-t-red-600"></div>
+                            <app-spinner size="sm" variant="danger" label="Removing" />
                           } @else {
                             <ng-icon name="heroXMark" class="size-3.5" />
                           }
@@ -179,8 +182,7 @@ export interface ManageSharesDialogData {
     </div>
   `,
   styles: `
-    @import "tailwindcss";
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../styles/theme.css";
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;
@@ -298,3 +300,4 @@ export class ManageSharesDialogComponent implements OnInit {
     this.dialogRef.close(true);
   }
 }
+

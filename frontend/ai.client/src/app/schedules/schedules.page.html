@@ -16,7 +16,7 @@
           <button
             type="button"
             (click)="onCreateNew()"
-            class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
           >
             <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
             New schedule
@@ -35,10 +35,10 @@
     } @else {
       <!-- Enablement banner -->
       @if (!loading() && needsEnablement()) {
-        <div class="mb-6 flex flex-col gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-blue-900/40 dark:bg-blue-900/10">
+        <div class="mb-6 flex flex-col gap-3 rounded-2xl border border-state-info-200 bg-state-info-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-state-info-900/40 dark:bg-state-info-900/10">
           <div>
-            <p class="text-sm/6 font-medium text-blue-900 dark:text-blue-200">Scheduled runs are not enabled</p>
-            <p class="mt-0.5 text-xs/5 text-blue-800/80 dark:text-blue-300/80">
+            <p class="text-sm/6 font-medium text-state-info-900 dark:text-state-info-200">Scheduled runs are not enabled</p>
+            <p class="mt-0.5 text-xs/5 text-state-info-800/80 dark:text-state-info-300/80">
               Turn this on to let your active schedules run unattended, even when you're logged out.
             </p>
           </div>
@@ -46,7 +46,7 @@
             type="button"
             (click)="onEnableScheduledRuns()"
             [disabled]="grantBusy()"
-            class="inline-flex shrink-0 items-center justify-center rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex shrink-0 items-center justify-center rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {{ grantBusy() ? 'Enabling…' : 'Enable scheduled runs' }}
           </button>
@@ -94,7 +94,7 @@
                     @if (schedule.lastRunSessionId) {
                       <a
                         [routerLink]="['/s', schedule.lastRunSessionId]"
-                        class="font-medium text-blue-600 hover:underline dark:text-blue-400"
+                        class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark"
                       >{{ lastRunLabel(schedule) }}</a>
                     } @else {
                       {{ lastRunLabel(schedule) }}
@@ -102,33 +102,33 @@
                   </p>
 
                   @if (needsReauth(schedule)) {
-                    <div class="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 dark:bg-amber-900/10">
-                      <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
-                      <span class="text-xs/5 text-amber-800 dark:text-amber-300">Your access expired.</span>
+                    <div class="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-state-warning-50 px-3 py-2 dark:bg-state-warning-900/10">
+                      <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
+                      <span class="text-xs/5 text-state-warning-800 dark:text-state-warning-300">Your access expired.</span>
                       <button
                         type="button"
                         (click)="onReauthenticate(schedule)"
                         [disabled]="isBusy(schedule.scheduleId)"
-                        class="text-xs/5 font-semibold text-amber-900 underline hover:no-underline disabled:opacity-50 dark:text-amber-200"
+                        class="text-xs/5 font-semibold text-state-warning-900 underline hover:no-underline disabled:opacity-50 dark:text-state-warning-200"
                       >
                         Log in and re-enable
                       </button>
                     </div>
                   } @else if (needsOAuthReconnect(schedule)) {
-                    <div class="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 dark:bg-amber-900/10">
-                      <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
-                      <span class="text-xs/5 text-amber-800 dark:text-amber-300">
+                    <div class="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-state-warning-50 px-3 py-2 dark:bg-state-warning-900/10">
+                      <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
+                      <span class="text-xs/5 text-state-warning-800 dark:text-state-warning-300">
                         A connected tool needs to be reconnected before this can resume.
                       </span>
                       <a
                         routerLink="/settings/connectors"
-                        class="text-xs/5 font-semibold text-amber-900 underline hover:no-underline dark:text-amber-200"
+                        class="text-xs/5 font-semibold text-state-warning-900 underline hover:no-underline dark:text-state-warning-200"
                       >
                         Reconnect a tool
                       </a>
                     </div>
                   } @else if (schedule.state === 'paused_error' && schedule.lastError) {
-                    <p class="mt-2 text-xs/5 text-amber-700 dark:text-amber-400">{{ schedule.lastError }}</p>
+                    <p class="mt-2 text-xs/5 text-state-warning-700 dark:text-state-warning-400">{{ schedule.lastError }}</p>
                   }
                 </div>
 
@@ -147,7 +147,7 @@
                       type="button"
                       (click)="onResume(schedule)"
                       [disabled]="isBusy(schedule.scheduleId)"
-                      class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                      class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-primary-accessible hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-accessible-dark dark:hover:bg-primary-900/20"
                     >
                       Resume
                     </button>
@@ -163,7 +163,7 @@
                     type="button"
                     (click)="onDelete(schedule)"
                     [disabled]="isBusy(schedule.scheduleId)"
-                    class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-900/20"
+                    class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-state-danger-600 hover:bg-state-danger-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
                   >
                     Delete
                   </button>

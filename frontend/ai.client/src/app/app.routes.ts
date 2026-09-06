@@ -25,6 +25,22 @@ export const routes: Routes = [
         loadComponent: () => import('./shared/shared-view.page').then(m => m.SharedViewPage),
         canActivate: [authGuard],
     },
+    // Recipient view for a shared artifact. Behind authGuard like every
+    // other share surface: "public" means any authenticated tenant user,
+    // never anonymous. The share's own ACL is enforced server-side on
+    // top of this.
+    {
+        path: 'shared-artifact/:shareId',
+        loadComponent: () =>
+            import('./shared/artifact/shared-artifact-view.page').then(
+                m => m.SharedArtifactViewPage,
+            ),
+        canActivate: [authGuard],
+        // A recipient opened a link to view one thing. Drop the sidenav
+        // and the centred content box so the artifact fills the shell —
+        // the app reads this in `app.html`.
+        data: { chrome: 'minimal' },
+    },
     {
         path: 'auth/login',
         loadComponent: () => import('./auth/login/login.page').then(m => m.LoginPage),
@@ -167,6 +183,26 @@ export const routes: Routes = [
     {
         path: 'files',
         loadComponent: () => import('./files/file-browser.page').then(m => m.FileBrowserPage),
+        canActivate: [authGuard],
+    },
+    {
+        // Declared before the list route so the viewer owns the two-segment
+        // path; Angular matches in order.
+        path: 'artifacts/:artifactId',
+        loadComponent: () => import('./artifacts/artifact-view.page').then(m => m.ArtifactViewPage),
+        canActivate: [authGuard],
+        // Minimal chrome, same as the shared-artifact viewer. Not cosmetic:
+        // the padded content box has no definite height, so a viewer laid
+        // out with `h-full` inside it collapses — measured at 150px of
+        // iframe in a 720px viewport. The minimal branch is `h-full` of the
+        // scroll container, which is `flex-1` of an `h-dvh` main, so the
+        // artifact finally gets the whole shell. It costs the sidenav,
+        // which is why the header carries a labelled way back.
+        data: { chrome: 'minimal' },
+    },
+    {
+        path: 'artifacts',
+        loadComponent: () => import('./artifacts/artifact-library.page').then(m => m.ArtifactLibraryPage),
         canActivate: [authGuard],
     },
     {

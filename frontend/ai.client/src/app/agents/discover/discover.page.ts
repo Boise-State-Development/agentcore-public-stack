@@ -16,6 +16,7 @@ import { AgentsTabsComponent } from '../components/agents-tabs.component';
 import { AgentIconComponent } from '../components/agent-icon.component';
 import { AgentStoreTileComponent } from '../components/agent-store-tile.component';
 import { AgentSpotlightComponent } from '../components/agent-spotlight.component';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 /**
  * Discover — the browse surface over published Agents (D4, D10, Phases 2 and 5).
@@ -59,6 +60,7 @@ const PINNED_STRIP_LIMIT = 8;
     AgentIconComponent,
     AgentStoreTileComponent,
     AgentSpotlightComponent,
+    SpinnerComponent,
   ],
   providers: [provideIcons({ heroMagnifyingGlass, heroSparkles })],
   template: `
@@ -86,7 +88,7 @@ const PINNED_STRIP_LIMIT = 8;
             [value]="query()"
             (input)="onSearch($event)"
             placeholder="Search agents…"
-            class="block w-full rounded-full border border-gray-300 bg-white py-2.5 pl-10 pr-4 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+            class="block w-full rounded-full border border-gray-300 bg-white py-2.5 pl-10 pr-4 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
           />
         </div>
 
@@ -100,12 +102,12 @@ const PINNED_STRIP_LIMIT = 8;
                 type="button"
                 (click)="onCategory(chip.id)"
                 [attr.aria-pressed]="activeCategory() === chip.id"
-                class="rounded-full border px-3.5 py-1 text-sm/6 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                class="rounded-full border px-3.5 py-1 text-sm/6 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                 [class]="
                   activeCategory() === chip.id
                     ? 'border-gray-900 bg-gray-900 text-white dark:border-white dark:bg-white dark:text-gray-900'
                     : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:text-white'
-                "
+               "
               >
                 {{ chip.label }}
               </button>
@@ -116,7 +118,7 @@ const PINNED_STRIP_LIMIT = 8;
         @if (error()) {
           <div
             role="alert"
-            class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mt-6 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
@@ -128,7 +130,7 @@ const PINNED_STRIP_LIMIT = 8;
         @if (pinError()) {
           <div
             role="alert"
-            class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mt-6 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ pinError() }}
           </div>
@@ -136,10 +138,7 @@ const PINNED_STRIP_LIMIT = 8;
 
         @if (loading()) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading agents</span>
+            <app-spinner size="lg" label="Loading agents" />
           </div>
         } @else if (isEmpty()) {
           <div
@@ -192,7 +191,7 @@ const PINNED_STRIP_LIMIT = 8;
                   </h2>
                   <a
                     routerLink="/agents/pinned"
-                    class="text-sm/6 font-semibold text-blue-700 hover:text-blue-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:text-blue-400 dark:hover:text-blue-300"
+                    class="text-sm/6 font-semibold text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
                   >
                     See all
                   </a>
@@ -205,7 +204,7 @@ const PINNED_STRIP_LIMIT = 8;
                     <li class="shrink-0">
                       <a
                         [routerLink]="['/agents', pin.agentId]"
-                        class="flex w-64 items-center gap-3 rounded-2xl border border-gray-200 bg-white p-2.5 hover:border-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600"
+                        class="flex w-64 items-center gap-3 rounded-2xl border border-gray-200 bg-white p-2.5 hover:border-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600"
                       >
                         <app-agent-icon
                           [agentId]="pin.agentId"

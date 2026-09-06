@@ -69,6 +69,11 @@ class CostCalculator:
         # - cacheReadInputTokens: tokens read from cache
         # - cacheWriteInputTokens: tokens written to cache
         # Total input = inputTokens + cacheReadInputTokens + cacheWriteInputTokens
+        #
+        # That is the Bedrock Converse convention. The OpenAI family reports an
+        # *inclusive* inputTokens instead, so its usage is rewritten to this
+        # shape at the model seam — see apis/shared/models/usage_normalization.py.
+        # Feeding raw OpenAI usage in here bills every cached token twice.
 
         # Calculate costs (per million tokens)
         input_cost = (input_tokens / 1_000_000) * input_price

@@ -10,7 +10,7 @@
       </div>
       <a
         routerLink="/admin/manage-models/catalog"
-        class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+        class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:brightness-110"
       >
         <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
         Add Model
@@ -32,7 +32,7 @@
           [ngModel]="searchQuery()"
           (ngModelChange)="searchQuery.set($event)"
           placeholder="Search by name, ID, or provider…"
-          class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+          class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
         />
       </div>
 
@@ -41,7 +41,7 @@
         id="provider"
         [ngModel]="providerFilter()"
         (ngModelChange)="providerFilter.set($event)"
-        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
       >
         <option value="">All providers</option>
         @for (provider of availableProviders(); track provider) {
@@ -54,7 +54,7 @@
         id="enabled"
         [ngModel]="enabledFilter()"
         (ngModelChange)="enabledFilter.set($event)"
-        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
       >
         <option value="">All statuses</option>
         <option value="enabled">Enabled</option>
@@ -78,9 +78,9 @@
       </p>
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span class="text-gray-400 dark:text-gray-500">Add from catalog:</span>
-        <a routerLink="/admin/bedrock/models" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">Bedrock</a>
-        <a routerLink="/admin/gemini/models" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">Gemini</a>
-        <a routerLink="/admin/openai/models" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">OpenAI</a>
+        <a routerLink="/admin/bedrock/models" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Bedrock</a>
+        <a routerLink="/admin/gemini/models" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Gemini</a>
+        <a routerLink="/admin/openai/models" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">OpenAI</a>
       </div>
     </div>
 
@@ -88,24 +88,20 @@
     @if (isInitialLoad()) {
       <div class="flex h-64 items-center justify-center rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
         <div class="flex flex-col items-center gap-4">
-          <div
-            class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            role="status"
-            aria-label="Loading models"
-          ></div>
+          <app-spinner size="xl" label="Loading models" />
           <p class="text-sm/6 text-gray-500 dark:text-gray-400">
             Loading models…
           </p>
         </div>
       </div>
     } @else if (modelsResource.error()) {
-      <div class="rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+      <div class="rounded-2xl border border-state-danger-200 bg-state-danger-50 p-4 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
         <p class="font-medium">Failed to load models</p>
         <p class="mt-1 text-sm/6">Please check your connection and try again.</p>
         <button
           type="button"
           (click)="modelsResource.reload()"
-          class="mt-3 text-sm/6 font-medium underline hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500"
+          class="mt-3 text-sm/6 font-medium underline hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500"
         >
           Retry
         </button>
@@ -129,7 +125,7 @@
                 [attr.aria-expanded]="isExpanded(model.id)"
                 [attr.aria-controls]="'model-detail-' + model.id"
                 [attr.aria-label]="(isExpanded(model.id) ? 'Hide' : 'Show') + ' details for ' + model.modelName"
-                class="flex size-7 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                class="flex size-7 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
               >
                 <ng-icon
                   name="heroChevronDown"
@@ -148,7 +144,7 @@
                   @if (model.isDefault) {
                     <ng-icon
                       name="heroStarSolid"
-                      class="size-4 shrink-0 text-amber-500 dark:text-amber-400"
+                      class="size-4 shrink-0 text-star-500 dark:text-star-400"
                       aria-label="Default model"
                     />
                   }
@@ -167,7 +163,7 @@
               <div class="flex shrink-0 items-center gap-2">
                 <span
                   class="hidden w-14 text-right text-xs/5 font-medium sm:inline-block"
-                  [class]="model.enabled ? 'text-green-700 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'"
+                  [class]="model.enabled ? 'text-state-success-700 dark:text-state-success-400' : 'text-gray-500 dark:text-gray-400'"
                 >
                   {{ model.enabled ? 'Enabled' : 'Disabled' }}
                 </span>
@@ -178,8 +174,8 @@
                   [attr.aria-label]="(model.enabled ? 'Disable' : 'Enable') + ' ' + model.modelName"
                   [disabled]="isToggling(model.id)"
                   (click)="toggleEnabled(model)"
-                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-2xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  [class]="model.enabled ? 'bg-green-600 dark:bg-green-500' : 'bg-gray-300 dark:bg-gray-600'"
+                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-2xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  [class]="model.enabled ? 'bg-state-success-600 dark:bg-state-success-500' : 'bg-gray-300 dark:bg-gray-600'"
                 >
                   <span
                     class="inline-block size-5 transform rounded-full bg-white shadow transition-transform duration-150"
@@ -194,7 +190,7 @@
                   [routerLink]="['/admin/manage-models/edit', model.id]"
                   [attr.aria-label]="'Edit ' + model.modelName"
                   [title]="'Edit ' + model.modelName"
-                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                 >
                   <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                 </a>
@@ -204,7 +200,7 @@
                   [disabled]="isDeleting(model.id)"
                   [attr.aria-label]="'Delete ' + model.modelName"
                   [title]="'Delete ' + model.modelName"
-                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                 >
                   <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                 </button>
@@ -248,7 +244,7 @@
                       @if (model.allowedAppRoles && model.allowedAppRoles.length > 0) {
                         @for (roleId of model.allowedAppRoles; track roleId) {
                           <span
-                            class="inline-flex items-center rounded-2xl bg-purple-100 px-2 py-0.5 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
+                            class="inline-flex items-center rounded-2xl bg-category-accent-skills-100 px-2 py-0.5 text-xs/5 text-category-accent-skills-700 dark:bg-category-accent-skills-900/50 dark:text-category-accent-skills-300"
                             [title]="roleId"
                           >
                             {{ getRoleDisplayName(roleId) }}

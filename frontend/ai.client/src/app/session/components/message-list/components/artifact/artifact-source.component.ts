@@ -60,6 +60,12 @@ function mimeToPrismLang(contentType: string): string {
 @Component({
   selector: 'app-artifact-source',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  // `bg-[#272822]` below (x2) is the Prism okaidia theme's canonical
+  // background (loaded globally via angular.json), fixed regardless of
+  // app light/dark mode by design — like most code editors, code blocks
+  // stay dark for legibility/convention. It is intentionally NOT wired to
+  // any Brand_Surface anchor; see the Rebranding_Documentation README's
+  // surfaces section for this documented exception.
   template: `
     <div
       class="h-full w-full overflow-auto bg-[#272822] text-[13px]"

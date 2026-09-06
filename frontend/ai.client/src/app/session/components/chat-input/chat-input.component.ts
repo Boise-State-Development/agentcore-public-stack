@@ -7,25 +7,30 @@ import {
   computed,
   viewChild,
   effect,
+  untracked,
   afterNextRender,
   ElementRef,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { v4 as uuidv4 } from 'uuid';
 import { Router } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPlus,
   heroAdjustmentsHorizontal,
+  heroArrowTurnDownRight,
   heroClock,
   heroMicrophone,
   heroXMark,
 } from '@ng-icons/heroicons/outline';
 import { heroPaperAirplaneSolid, heroStopSolid } from '@ng-icons/heroicons/solid';
 import { ModelDropdownComponent } from '../../../components/model-dropdown/model-dropdown.component';
+import { AnnouncementBannerComponent } from '../../../components/announcement-banner/announcement-banner.component';
 import { QuotaWarningBannerComponent } from '../../../components/quota-warning-banner/quota-warning-banner.component';
 import { TooltipDirective } from '../../../components/tooltip';
 import { FileCardComponent } from '../../../components/file-card';
 import { StorageQuotaBannerComponent } from '../../../components/storage-quota-banner';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import {
   FileUploadService,
   PendingUpload,
@@ -43,6 +48,7 @@ import {
   MentionableAgent,
 } from '../../../agents/services/agent-mention.service';
 import { AgentMentionMenuComponent } from './agent-mention-menu.component';
+import { SteeringService } from '../../services/chat/steering.service';
 
 // Must stay in sync with the inline min-height/max-height on the textarea in
 // chat-input.component.html.
@@ -60,6 +66,38 @@ interface Message {
   mentionAgentId?: string;
 }
 
+/**
+ * A follow-up the user sent while a response was still streaming. Carries
+ * everything a real send carries except the timestamp, which is stamped at
+ * flush time: the message enters the conversation when it is actually sent, and
+ * stamping it at queue time would sort it ahead of the assistant reply that was
+ * still streaming when the user typed it.
+ */
+interface QueuedMessage {
+  /**
+   * Client-minted id, and the whole reason mid-turn steering can be
+   * idempotent: it is the id armed on the backend, the id the runtime clears
+   * once the injection is committed, and the id `steering_applied` names back.
+   */
+  id: string;
+  content: string;
+  fileUploadIds?: string[];
+  mentionAgentId?: string;
+  /**
+   * True once the backend has confirmed this entry is armed against the
+   * running turn, so it may land at the agent's next tool boundary rather than
+   * waiting for the turn to end.
+   *
+   * Armed is not delivered. If the ack never arrives — the turn ended first,
+   * the stream dropped — the entry flushes on the falling edge exactly as an
+   * unarmed one does. That can double-send text the agent already read if an
+   * ack was lost in flight, which is the deliberate trade: a visible duplicate
+   * the user can see and work around, over silently swallowing something they
+   * said.
+   */
+  armed?: boolean;
+}
+
 /** The `@…` the caret is currently sitting in, and where it starts in the text. */
 interface MentionToken {
   query: string;
@@ -68,11 +106,15 @@ interface MentionToken {
 
 @Component({
   selector: 'app-chat-input',
-  imports: [FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent],
+  imports: [AnnouncementBannerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SpinnerComponent],
+  // `relative` is the anchor the announcement banner floats against — it sits
+  // `bottom-full` of this host, above the quota tabs and clear of the composer.
+  host: { class: 'relative block' },
   providers: [
     provideIcons({
       heroPlus,
       heroAdjustmentsHorizontal,
+      heroArrowTurnDownRight,
       heroClock,
       heroMicrophone,
       heroXMark,
@@ -87,6 +129,7 @@ export class ChatInputComponent {
   // Service injection
   private readonly fileUploadService = inject(FileUploadService);
   private readonly toastService = inject(ToastService);
+  private readonly steering = inject(SteeringService);
   private readonly toolService = inject(ToolService);
   private readonly voiceChatService = inject(VoiceChatService);
   protected readonly systemPromptsService = inject(SystemPromptsService);
@@ -118,6 +161,24 @@ export class ChatInputComponent {
   // running the Agent being edited.
   readonly showAgentMentions = input<boolean>(true);
 
+  /**
+   * Whether an announcement banner may float above this composer.
+   *
+   * True for the real chat and false for the embedded preview panes — an
+   * agent-preview or a marketplace test-drive is exercising one specific
+   * agent, and a platform-wide "new models are available" notice appearing
+   * inside that small pane reads as a bug rather than an announcement.
+   * Follows the same opt-out shape as the `show*` controls above.
+   */
+  readonly showAnnouncements = input<boolean>(true);
+
+  /**
+   * Which side of this composer an announcement takes. Supplied by the
+   * container, which knows whether the composer is centred (empty state) or
+   * pinned to the bottom (a conversation).
+   */
+  readonly announcementPlacement = input<'above' | 'below'>('above');
+
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
 
   // Use the input directly - parent controls loading state
@@ -128,8 +189,26 @@ export class ChatInputComponent {
   isFocused = signal(false);
   isDraggingOver = signal(false);
 
+  /**
+   * Follow-ups typed while a response was streaming, oldest first.
+   *
+   * Enter used to mean Stop mid-stream, so a follow-up typed out of habit
+   * killed the response the user was waiting on — and a send that raced the
+   * single-flight guard cleared the composer before the 409 came back, eating
+   * the text outright. Queueing removes both: the draft is never destroyed, so
+   * there is nothing to recover, and the guard becomes unreachable for
+   * user-typed follow-ups rather than merely survivable.
+   *
+   * A list rather than one slot, because a queue that silently drops the second
+   * entry is the same bug in a smaller box.
+   */
+  readonly queuedMessages = signal<QueuedMessage[]>([]);
+
   // Track drag enter/leave depth to handle nested elements
   private dragCounter = 0;
+
+  /** Whether a turn has been observed in flight since the last queue flush. */
+  private turnInFlight = false;
 
   // Output events
   fileAttached = output<File>();
@@ -144,6 +223,49 @@ export class ChatInputComponent {
 
   // Computed: show file attachments area
   readonly showFileAttachments = computed(() => this.pendingUploads().length > 0);
+
+  /**
+   * Whether a follow-up typed right now could land *inside* the running turn.
+   *
+   * True once the turn has called at least one tool, because a tool boundary is
+   * the only place an injection can go — a pure-text turn has none, which is
+   * why PR #916's end-of-turn flush is a permanent fallback rather than a
+   * transitional one. See docs/specs/mid-turn-steering.md (D5).
+   */
+  protected readonly canSteer = computed(
+    () => this.isLoading() && this.steering.canSteer(this.sessionId()),
+  );
+
+  /**
+   * The composer stays usable mid-stream, so the placeholder is the only place
+   * the queueing behaviour announces itself before the user tries it — and the
+   * two behaviours make different promises, so it has to say which one is on
+   * offer. Overstating this is the failure that matters: a user told their
+   * follow-up lands at the next step, who then watches it sit until the turn
+   * ends, learns not to trust the affordance.
+   */
+  protected readonly placeholder = computed(() => {
+    // A prompt awaiting an answer holds the queue, and the turn is NOT
+    // streaming while it does — so the idle placeholder would be the most
+    // wrong of the three: it promises immediate delivery on the one path that
+    // waits the longest.
+    if (this.queueHeld()) {
+      return 'Send a follow-up — it goes in when you answer above';
+    }
+    if (!this.isLoading()) return 'How can I help you today?';
+    return this.canSteer()
+      ? 'Send a follow-up — it goes in at the next step'
+      : 'Send a follow-up — it goes out when this response finishes';
+  });
+
+  /**
+   * Whether this conversation's queue is waiting on a consent / approval
+   * prompt rather than on a running turn. Read by the placeholder and the
+   * queued chips so a held follow-up explains itself instead of looking stuck.
+   */
+  protected readonly queueHeld = computed(() =>
+    this.steering.shouldHoldQueue(this.sessionId()),
+  );
 
   // Computed: can submit (has content or ready files)
   readonly canSubmit = computed(() => {
@@ -166,11 +288,11 @@ export class ChatInputComponent {
     const base = 'flex size-10 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]';
     switch (status) {
       case 'listening':
-        return `${base} bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 animate-pulse`;
+        return `${base} bg-state-danger-100 text-state-danger-600 dark:bg-state-danger-900/30 dark:text-state-danger-400 animate-pulse`;
       case 'speaking':
-        return `${base} bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400`;
+        return `${base} bg-state-success-100 text-state-success-600 dark:bg-state-success-900/30 dark:text-state-success-400`;
       case 'connecting':
-        return `${base} bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400`;
+        return `${base} bg-state-warning-100 text-state-warning-600 dark:bg-state-warning-900/30 dark:text-state-warning-400`;
       default:
         return `${base} text-gray-500 dark:text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300`;
     }
@@ -258,6 +380,82 @@ export class ChatInputComponent {
       this.sessionId();
       this.focusInput();
     });
+
+    // Mirror the queue into SteeringService so the resume path can carry it
+    // into the turn it restarts without reaching into this component.
+    effect(() => {
+      const sessionId = this.sessionId();
+      const queue = this.queuedMessages();
+      untracked(() =>
+        this.steering.publishQueue(
+          sessionId,
+          queue.map(q => ({ id: q.id, text: q.content })),
+        ),
+      );
+    });
+
+    // Drop entries the backend confirmed it injected mid-turn.
+    //
+    // This is what keeps the two delivery paths from both firing: once
+    // `steering_applied` lands, the text is in conversation history and the
+    // falling-edge flush below must not send it again. It runs on the ack, not
+    // on the falling edge, precisely so it wins that race — the ack is emitted
+    // ahead of `done`, and `isChatLoading` only falls after the stream closes.
+    effect(() => {
+      const applied = this.steering.applied();
+      if (applied.length === 0) return;
+      untracked(() => {
+        const queue = this.queuedMessages();
+        for (const entryId of applied) {
+          // Consume regardless of whether we hold the entry: an ack for
+          // another composer's entry (or one already removed) is finished
+          // business either way, and leaving it would grow the list forever.
+          this.steering.consumeApplied(entryId);
+        }
+        const appliedIds = new Set(applied);
+        const remaining = queue.filter(q => !appliedIds.has(q.id));
+        if (remaining.length !== queue.length) {
+          this.queuedMessages.set(remaining);
+        }
+      });
+    });
+
+    // Send one queued follow-up per completed turn.
+    //
+    // Edge-triggered on loading going true -> false, not level-triggered on
+    // "idle with something waiting". The parent only raises `isChatLoading`
+    // after `messageSubmitted` round-trips through the chat service, so a level
+    // check sees itself as still-idle immediately after emitting and drains the
+    // whole queue in one pass — straight into the single-flight guard that
+    // rejects the second turn. Consuming the edge is what holds it to one.
+    //
+    // The parent cannot tell us *how* the turn ended, and it doesn't need to:
+    // done, aborted and errored all land on the same falling edge, which is
+    // what makes the three paths symmetric without three code paths.
+    effect(() => {
+      if (this.isLoading()) {
+        this.turnInFlight = true;
+        return;
+      }
+      if (!this.turnInFlight) return;
+      // Hold while a consent / approval prompt for this conversation is
+      // waiting on the user. Flushing here would start a new turn that
+      // abandons the paused one they are in the middle of answering, and can
+      // race the resume that follows into the single-flight guard. Answering
+      // the prompt carries the queue into the resumed turn; dismissing it
+      // clears the prompt, which re-runs this effect and flushes normally —
+      // so the hold is always bounded by an action the user already has.
+      // See docs/specs/mid-turn-steering.md ("Paused turns").
+      if (this.steering.shouldHoldQueue(this.sessionId())) return;
+      const [next, ...rest] = untracked(() => this.queuedMessages());
+      if (!next) return;
+      // Consume the edge before emitting: the next message waits for the next
+      // turn to start and finish. If the parent never starts one, the follow-up
+      // stays visible and removable rather than being fired into a rejection.
+      this.turnInFlight = false;
+      this.queuedMessages.set(rest);
+      this.messageSubmitted.emit({ ...next, timestamp: new Date() });
+    });
   }
 
   private focusInput(): void {
@@ -266,12 +464,127 @@ export class ChatInputComponent {
     }
   }
 
+  /**
+   * Enter (and the send affordance when idle). While a response is streaming
+   * this **queues** rather than stopping: Enter always means "say this".
+   *
+   * Stopping stays on the button, deliberately. Making Enter ambiguous — send
+   * when idle, abort when busy — is what let a reflex keystroke kill a run the
+   * user was waiting on, and stopping is the rarer, more destructive of the two.
+   *
+   * `queueHeld()` is the second reason to queue, and it is NOT covered by
+   * `isLoading()`: a turn paused for consent or approval has already closed its
+   * stream, so loading is false while the prompt sits there waiting. Gating on
+   * loading alone sent the follow-up as a brand-new turn — abandoning the
+   * paused turn the user was mid-answer on — while the placeholder promised it
+   * would go in when they answered. See docs/specs/mid-turn-steering.md
+   * ("Paused turns").
+   */
   onSubmit() {
-    if (this.isLoading()) {
-      this.cancelChatRequest();
+    if (this.isLoading() || this.queueHeld()) {
+      this.queueChatRequest();
     } else {
       this.submitChatRequest();
     }
+  }
+
+  /**
+   * The round button on the right. Unlike Enter it keeps its old meaning while
+   * streaming — it is the only Stop affordance, and taking that away to make
+   * room for a second Send would leave a user with text typed unable to stop.
+   */
+  onPrimaryButtonClick() {
+    if (this.isLoading()) {
+      this.cancelChatRequest();
+    } else {
+      // Not streaming, so this is Send — but it must make the same decision
+      // Enter does, or the two disagree while a prompt is holding the queue.
+      this.onSubmit();
+    }
+  }
+
+  /**
+   * Capture the composer's contents as a pending follow-up and clear it, so the
+   * user can keep typing. Mirrors `submitChatRequest`'s validation exactly —
+   * anything that would not have been sendable is not queueable either.
+   */
+  private queueChatRequest(): void {
+    const content = this.userInput().trim();
+    const fileUploadIds = this.readyUploadIds();
+
+    if (!content && fileUploadIds.length === 0) {
+      return;
+    }
+
+    if (this.hasActivePendingUploads()) {
+      this.toastService.warning('Upload in Progress', 'Please wait for file uploads to complete.');
+      return;
+    }
+
+    const entry: QueuedMessage = {
+      id: uuidv4(),
+      content,
+      fileUploadIds: fileUploadIds.length > 0 ? [...fileUploadIds] : undefined,
+      mentionAgentId: this.mentionedAgent()?.agentId,
+    };
+    this.queuedMessages.update(queue => [...queue, entry]);
+
+    // Mid-turn steering: try to land this inside the running turn rather than
+    // after it. Fire-and-forget — the queue entry is already visible and the
+    // end-of-turn flush already covers it, so nothing here needs to be awaited
+    // and no failure needs to be surfaced.
+    void this.armSteering(entry);
+
+    // Clear exactly what a real send clears — the queued copy already owns the
+    // upload ids, so releasing them here is what lets the next message attach
+    // its own files.
+    this.userInput.set('');
+    this.mentionedAgent.set(null);
+    this.closeMentionMenu();
+    this.resetTextareaHeight();
+    this.fileUploadService.clearReadyUploads();
+  }
+
+  /**
+   * Ask the backend to inject this follow-up at the running turn's next tool
+   * boundary. See docs/specs/mid-turn-steering.md.
+   *
+   * Text only, and no `@`-mention. An injection is a text block appended to the
+   * tool-result message, so it cannot carry file attachments; and a mention
+   * picks the Agent that runs a *turn*, which a mid-turn injection cannot
+   * change. Both must go as a normal turn, and skipping the round trip here is
+   * what makes that automatic rather than a backend rejection.
+   */
+  private async armSteering(entry: QueuedMessage): Promise<void> {
+    const sessionId = this.sessionId();
+    if (!sessionId) return;
+    if (entry.fileUploadIds?.length || entry.mentionAgentId) return;
+    // A paused turn released its lease when the stream closed, so there is no
+    // inbox to arm against. This entry rides the resume request instead.
+    if (this.queueHeld()) return;
+
+    const armed = await this.steering.arm(sessionId, entry.id, entry.content);
+    if (!armed) return;
+
+    // Re-read rather than closing over the entry: the user may have removed it
+    // while the request was in flight, in which case it must stay removed (the
+    // withdrawal below already raced us to the backend).
+    this.queuedMessages.update(queue =>
+      queue.map(q => (q.id === entry.id ? { ...q, armed: true } : q)),
+    );
+  }
+
+  /** Drop a pending follow-up before it is sent. */
+  removeQueuedMessage(index: number): void {
+    const entry = this.queuedMessages()[index];
+    const sessionId = this.sessionId();
+    // Withdraw unconditionally when we have a session: the arm may still be in
+    // flight, so "not armed yet" is not the same as "nothing to withdraw", and
+    // the endpoint is idempotent by design.
+    if (entry && sessionId) {
+      void this.steering.withdraw(sessionId, entry.id);
+    }
+    this.queuedMessages.update(queue => queue.filter((_, i) => i !== index));
   }
 
   submitChatRequest() {

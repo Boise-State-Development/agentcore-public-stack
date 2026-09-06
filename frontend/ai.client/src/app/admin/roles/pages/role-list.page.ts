@@ -23,11 +23,12 @@ import {
 import { AppRolesService } from '../services/app-roles.service';
 import { AppRole } from '../models/app-role.model';
 import { ToolsService } from '../../tools/services/tools.service';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-role-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, FormsModule, NgIcon],
+  imports: [RouterLink, FormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroPlus,
@@ -56,7 +57,7 @@ import { ToolsService } from '../../tools/services/tools.service';
       </div>
       <a
         routerLink="/admin/roles/new"
-        class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
+        class="inline-flex items-center gap-2 rounded-sm bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50"
       >
         <ng-icon name="heroPlus" class="size-5" />
         Create Role
@@ -74,7 +75,7 @@ import { ToolsService } from '../../tools/services/tools.service';
           type="text"
           [(ngModel)]="searchQuery"
           placeholder="Search by name or ID..."
-          class="w-full pl-10 pr-10 py-2 bg-white border border-gray-300 rounded-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-800 dark:border-gray-500 dark:text-white dark:placeholder-gray-400"
+          class="w-full pl-10 pr-10 py-2 bg-white border border-gray-300 rounded-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 dark:bg-gray-800 dark:border-gray-500 dark:text-white dark:placeholder-gray-400"
         />
         @if (searchQuery()) {
           <button
@@ -99,7 +100,7 @@ import { ToolsService } from '../../tools/services/tools.service';
       @if (hasActiveFilters()) {
         <button
           (click)="resetFilters()"
-          class="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+          class="text-sm text-primary-accessible hover:underline dark:text-primary-accessible-dark"
         >
           Clear Filters
         </button>
@@ -110,9 +111,7 @@ import { ToolsService } from '../../tools/services/tools.service';
     @if (rolesResource.isLoading() && roles().length === 0) {
       <div class="flex items-center justify-center h-64">
         <div class="flex flex-col items-center gap-4">
-          <div
-            class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400"
-          ></div>
+          <app-spinner size="xl" label="Loading roles" />
           <p class="text-sm text-gray-500 dark:text-gray-400">
             Loading roles...
           </p>
@@ -122,7 +121,7 @@ import { ToolsService } from '../../tools/services/tools.service';
 
     <!-- Error State -->
     @if (rolesResource.error()) {
-      <div class="mb-6 p-4 bg-red-50 border border-red-200 rounded-sm text-red-800 dark:bg-red-900/20 dark:border-red-800 dark:text-red-200">
+      <div class="mb-6 p-4 bg-state-danger-50 border border-state-danger-200 rounded-sm text-state-danger-800 dark:bg-state-danger-900/20 dark:border-state-danger-800 dark:text-state-danger-200">
         <p>Failed to load roles. Please try again.</p>
         <button
           (click)="appRolesService.reload()"
@@ -148,7 +147,7 @@ import { ToolsService } from '../../tools/services/tools.service';
                     <span class="font-medium text-lg/7">{{ role.displayName }}</span>
                     @if (role.isSystemRole) {
                       <span
-                        class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-xs bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
+                        class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-xs bg-state-info-100 text-state-info-800 dark:bg-state-info-900/30 dark:text-state-info-300"
                         title="System roles cannot be deleted"
                       >
                         <ng-icon name="heroShieldCheck" class="size-3" />
@@ -157,7 +156,7 @@ import { ToolsService } from '../../tools/services/tools.service';
                     }
                     @if (adminAccessBadge(role); as badge) {
                       <span
-                        class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-xs bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200"
+                        class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-xs bg-state-warning-100 text-state-warning-900 dark:bg-state-warning-900/30 dark:text-state-warning-200"
                         [title]="badge.title"
                       >
                         <ng-icon name="heroKey" class="size-3" />
@@ -187,7 +186,7 @@ import { ToolsService } from '../../tools/services/tools.service';
                       <div class="mt-1 flex flex-wrap gap-1">
                         @if (role.jwtRoleMappings.length > 0) {
                           @for (jwt of role.jwtRoleMappings.slice(0, 3); track jwt) {
-                            <span class="px-1.5 py-0.5 text-xs rounded-xs bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                            <span class="px-1.5 py-0.5 text-xs rounded-xs bg-state-info-100 text-state-info-800 dark:bg-state-info-900/30 dark:text-state-info-300">
                               {{ jwt }}
                             </span>
                           }
@@ -208,12 +207,12 @@ import { ToolsService } from '../../tools/services/tools.service';
                       <div class="mt-1 flex flex-wrap gap-1">
                         @if (role.grantedTools.length > 0) {
                           @if (role.grantedTools.includes('*')) {
-                            <span class="px-1.5 py-0.5 text-xs rounded-xs bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300">
+                            <span class="px-1.5 py-0.5 text-xs rounded-xs bg-state-success-100 text-state-success-800 dark:bg-state-success-900/30 dark:text-state-success-300">
                               All Tools
                             </span>
                           } @else {
                             @for (tool of role.grantedTools.slice(0, 2); track tool) {
-                              <span class="px-1.5 py-0.5 text-xs rounded-xs bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300">
+                              <span class="px-1.5 py-0.5 text-xs rounded-xs bg-state-success-100 text-state-success-800 dark:bg-state-success-900/30 dark:text-state-success-300">
                                 {{ getToolDisplayName(tool) }}
                               </span>
                             }
@@ -234,12 +233,12 @@ import { ToolsService } from '../../tools/services/tools.service';
                       <span class="font-medium text-gray-700 dark:text-gray-300">Admin Access:</span>
                       <div class="mt-1 flex flex-wrap gap-1">
                         @if (role.isSystemRole && role.roleId === 'system_admin') {
-                          <span class="px-1.5 py-0.5 text-xs rounded-xs bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200">
+                          <span class="px-1.5 py-0.5 text-xs rounded-xs bg-state-warning-100 text-state-warning-900 dark:bg-state-warning-900/30 dark:text-state-warning-200">
                             All Areas
                           </span>
                         } @else if (role.grantedAdminScopes.length > 0) {
                           @for (scope of role.grantedAdminScopes.slice(0, 2); track scope) {
-                            <span class="px-1.5 py-0.5 text-xs rounded-xs bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200">
+                            <span class="px-1.5 py-0.5 text-xs rounded-xs bg-state-warning-100 text-state-warning-900 dark:bg-state-warning-900/30 dark:text-state-warning-200">
                               {{ getAdminScopeLabel(scope) }}
                             </span>
                           }
@@ -268,7 +267,7 @@ import { ToolsService } from '../../tools/services/tools.service';
                 <div class="flex items-center gap-2 shrink-0">
                   <a
                     [routerLink]="['/admin/roles/edit', role.roleId]"
-                    class="p-2 text-gray-500 hover:text-blue-600 hover:bg-gray-100 rounded-sm dark:hover:bg-gray-700 dark:hover:text-blue-400"
+                    class="p-2 text-gray-500 hover:text-primary-accessible hover:bg-gray-100 rounded-sm dark:hover:bg-gray-700 dark:hover:text-primary-accessible-dark"
                     title="Edit role"
                   >
                     <ng-icon name="heroPencilSquare" class="size-5" />
@@ -276,7 +275,7 @@ import { ToolsService } from '../../tools/services/tools.service';
                   @if (!role.isSystemRole) {
                     <button
                       (click)="deleteRole(role)"
-                      class="p-2 text-gray-500 hover:text-red-600 hover:bg-gray-100 rounded-sm dark:hover:bg-gray-700 dark:hover:text-red-400"
+                      class="p-2 text-gray-500 hover:text-state-danger-600 hover:bg-gray-100 rounded-sm dark:hover:bg-gray-700 dark:hover:text-state-danger-400"
                       title="Delete role"
                     >
                       <ng-icon name="heroTrash" class="size-5" />
@@ -285,7 +284,7 @@ import { ToolsService } from '../../tools/services/tools.service';
                   <button
                     (click)="syncPermissions(role)"
                     [disabled]="syncing() === role.roleId"
-                    class="p-2 text-gray-500 hover:text-green-600 hover:bg-gray-100 rounded-sm dark:hover:bg-gray-700 dark:hover:text-green-400 disabled:opacity-50"
+                    class="p-2 text-gray-500 hover:text-state-success-600 hover:bg-gray-100 rounded-sm dark:hover:bg-gray-700 dark:hover:text-state-success-400 disabled:opacity-50"
                     title="Sync permissions"
                   >
                     <ng-icon
@@ -313,7 +312,7 @@ import { ToolsService } from '../../tools/services/tools.service';
             <p class="text-sm/6 mb-4">Create your first application role to get started</p>
             <a
               routerLink="/admin/roles/new"
-              class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700"
+              class="inline-flex items-center gap-2 rounded-sm bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95"
             >
               <ng-icon name="heroPlus" class="size-5" />
               Create Role

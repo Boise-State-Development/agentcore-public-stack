@@ -52,6 +52,7 @@ EXPECTED_MODULE_SCOPES = {
     "file_sources/routes.py": "admin.file_sources",
     "export_targets/routes.py": "admin.export_targets",
     "user_menu_links/routes.py": "admin.user_menu_links",
+    "announcements/routes.py": "admin.announcements",
     "system_prompts/routes.py": "admin.system_prompts",
     "fine_tuning/routes.py": "admin.fine_tuning",
 }

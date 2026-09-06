@@ -99,6 +99,21 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Announcements (admin-authored notices + per-user acks) ──
+  // One table, two item shapes: the announcement rows under the fixed
+  // `ANNOUNCEMENTS` partition, and each user's ack rows under `USER#<id>`.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'AnnouncementsTableAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+        'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
+      ],
+      resources: [props.refs.announcementsTable.tableArn, `${props.refs.announcementsTable.tableArn}/index/*`],
+    }),
+  );
+
   // ── System prompts (Conversation Modes catalog) ──
   // Admin-managed CRUD; per-user reads (name + description) go through
   // the user-facing `/system-prompts` endpoint, which uses the same
@@ -485,6 +500,13 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   //     across regions, so foundation-model must be granted on ALL regions
   //     (`bedrock:*::`), and the inference-profile resource itself is the
   //     account-level ARN in this region.
+  //
+  // ⚠️ The account-scoped resource is also what authorizes the
+  // `bedrock-runtime` OpenAI-compatible endpoint (provider="bedrock-responses",
+  // reached from api-converse), which additionally requires
+  // `bedrock:InvokeModel` on the account's DEFAULT PROJECT —
+  // `arn:aws:bedrock:<region>:<account>:project/default`, already matched by
+  // the `:*` suffix. Do not narrow this to `inference-profile/*`.
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
       sid: 'BedrockInvokeModel',
@@ -537,6 +559,28 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       sid: 'BedrockMantleCallWithBearerToken',
       effect: iam.Effect.ALLOW,
       actions: ['bedrock-mantle:CallWithBearerToken'],
+      resources: ['*'],
+    }),
+  );
+
+  // ── bedrock-runtime OpenAI bearer token ──
+  // The OpenAI-compatible endpoint on `bedrock-runtime`
+  // (provider="bedrock-responses") authenticates with the SAME short-term
+  // bearer token construction as Mantle, but authorizes it under a DIFFERENT
+  // IAM service namespace: `bedrock:CallWithBearerToken`, not
+  // `bedrock-mantle:CallWithBearerToken`. Granting only the Mantle one gets:
+  //
+  //   401 ... is not authorized to perform: bedrock:CallWithBearerToken
+  //   on resource: * because no identity-based policy allows the action
+  //
+  // Caught end-to-end in dev on 2026-09-05 — it does not show up in unit
+  // tests, and it does not show up when a developer drives the transport with
+  // their own SSO credentials, only under the runtime/task role.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'BedrockRuntimeCallWithBearerToken',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:CallWithBearerToken'],
       resources: ['*'],
     }),
   );

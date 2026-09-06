@@ -23,6 +23,7 @@ import {
 import { WebSourceError, WebSourceService } from '../services/web-source.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 /** Data passed in when the assistant editor opens the dialog. */
 export interface WebSourceDialogData {
@@ -44,7 +45,7 @@ export interface WebSourceDialogData {
 @Component({
   selector: 'app-web-source-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, FormsModule, NgIcon],
+  imports: [DialogDismissDirective, FormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroExclamationTriangle,
@@ -58,9 +59,8 @@ export interface WebSourceDialogData {
   },
   templateUrl: './web-source-dialog.component.html',
   styles: `
-    @import 'tailwindcss';
+    @reference "../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;
