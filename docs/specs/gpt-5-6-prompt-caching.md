@@ -1,6 +1,6 @@
 # Plan: prompt caching for OpenAI GPT-5.6 on Bedrock
 
-**Status:** Shipped and VERIFIED LIVE 2026-09-05 — PR-1 (#945), PR-2 (#949), PR-5 (#951), PR-4 (#954, shipped OFF via #956) and the IAM fix (#959). Caching confirmed working end-to-end through the agent loop: warm turns cost 10.6x less than cold. PR-3 (catalog rates) remains BLOCKED, but the blocker changed on 2026-09-06: these models bill through AWS Marketplace, which no pricing API covers, so no amount of waiting will publish them. The empirical route is open instead — Cost Explorer carries the dollars but names no model, so rates are only attributable on a single-model day. First controlled window claimed 2026-09-06 (Sol). Dollar figures stay provisional until it is read.
+**Status:** Shipped and VERIFIED LIVE 2026-09-05 — PR-1 (#945), PR-2 (#949), PR-5 (#951), PR-4 (#954, shipped OFF via #956) and the IAM fix (#959). Caching confirmed working end-to-end through the agent loop: warm turns cost 10.6x less than cold. PR-3 (catalog rates) is UNBLOCKED as of 2026-09-06: the rates are published on each model's card in the Bedrock User Guide — they are absent from the pricing APIs, which is what the earlier BLOCKED finding was actually measuring. All three dev GPT-5.6 rows were wrong and over-charged by exactly 20% (Terra and Luna carried GovCloud rates; Sol's output came from an inferred 6x ratio that is really 5x); corrected 2026-09-06T15:59Z. The tier/long-context modelling gap is resolved too: Priority and Flex are not supported for these models, and `maxInputTokens: 272000` pins us inside short-context pricing.
 **Author:** (drafted with Claude)
 **Date:** 2026-09-04
 **Related:** `agents/main_agent/core/model_config.py`, `agents/main_agent/core/agent_factory.py`,
@@ -247,7 +247,79 @@ API-key `/chat/api-converse` handler. Don't fork the build logic.
   $0 rather than inventing waste.
 - Re-verify every rate against the Price List API, per the ⚠️ above.
 
-#### ⛔ BLOCKED — the Price List API does not publish these rates
+#### ✅ RESOLVED 2026-09-06 — the rates were published all along, in the model cards
+
+Everything below this section was written while looking for these rates in
+*pricing APIs*. They are not there, and that finding stands. But they are
+published, in prose, on each model's card in the Bedrock User Guide:
+
+- [GPT-5.6 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html)
+- [GPT-5.6 Terra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-terra.html)
+- [GPT-5.6 Luna](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html)
+- [GPT-5.4](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html)
+
+**Published rates, Geo CRIS, Short Context (272K)** — Geo CRIS is the row that
+applies to the `us.*` inference profiles we actually call. All figures $/MTok.
+
+| model | input | 30m cache write | cache read | output |
+|---|---:|---:|---:|---:|
+| `us.openai.gpt-5.6-sol` | 4.40 | 5.50 | 0.44 | 22.00 |
+| `us.openai.gpt-5.6-terra` | 2.20 | 2.75 | 0.22 | 13.20 |
+| `us.openai.gpt-5.6-luna` | 0.22 | 0.275 | 0.022 | 1.32 |
+| `openai.gpt-5.4` (Mantle, In-Region) | 2.75 | — (no write fee) | 0.275 | 16.50 |
+
+**Every dev row was wrong, and every error over-charged by exactly 20%.**
+Corrected in the dev catalog 2026-09-06T15:59Z:
+
+| model | field | was | now |
+|---|---|---:|---:|
+| sol | output | 26.40 | **22.00** |
+| terra | input / output / cache read / cache write | 2.64 / 15.84 / 0.264 / 3.30 | **2.20 / 13.20 / 0.22 / 2.75** |
+| luna | input / output / cache read / cache write | 0.264 / 1.584 / 0.0264 / 0.33 | **0.22 / 1.32 / 0.022 / 0.275** |
+
+The `1.2x` is not a coincidence: Terra and Luna had been sourced wholesale from
+the **GovCloud** Price List rows, which are exactly 1.2x commercial. Sol's
+output was the one number with no source at all — it came from a `6x` input
+ratio inferred from GovCloud, and the real ratio is `5x`. `openai.gpt-5.4` was
+already correct, including the empty cache-write cell.
+
+**The modelling gap is resolved, not merely downgraded.**
+
+- **Service tiers do not apply.** Every card states it outright: *"Priority and
+  Flex tiers are not supported for this model."* Only Standard exists, so the
+  0.5x/2x tier dimension `CuratedModel` cannot represent is not a dimension for
+  these models at all.
+- **Long context is real, and the earlier "2x twin" was wrong.** The threshold
+  is 272K (the models' own window is 1M). Above it, **input is 2x but output is
+  only 1.5x** — Sol 4.40→8.80 and 22.00→33.00, and the same 2x/1.5x split holds
+  for Terra and Luna. A flat 2x assumption would have over-priced long-context
+  output by a third.
+- **We do not reach it.** All four rows carry `maxInputTokens: 272000`, pinned
+  at the short-context boundary, and compaction runs at 100K. Short-context
+  rates are therefore the correct single rate for our traffic, and the cap is
+  what keeps that true — do not raise it without also modelling the second
+  price card.
+
+**For prod: use Global CRIS.** `global.openai.gpt-5.6-*` prices **9.1% below**
+the `us.*` Geo CRIS rates across every bucket (Sol 4.00 / 5.00 / 0.40 / 20.00).
+Prod already runs Claude on `global.*`; dev cannot, because of the dev-only SCP.
+So the prod rows should be `global.*` ids with the Global CRIS rate card — not
+copies of the dev rows.
+
+**What this means for the empirical work below.** It is no longer the source of
+truth, but it is not wasted: it is now the *audit* of these published numbers,
+and the tooling fixes it produced (the 1000x unit bug, daily-vs-monthly, the
+attribution guard) are what make that audit trustworthy. The 2026-09-06 Sol
+window still reads on schedule; it should now reproduce 4.40 / 0.44 / 5.50 /
+22.00 rather than discover them.
+
+**Process lesson.** The search was run entirely against pricing *APIs* — Price
+List, then Marketplace Catalog — and concluded "no source exists" without ever
+checking the model's own documentation page. Check the model card first; it is
+the primary source for rates, caching support, context windows, service tiers,
+and endpoint/API support, and it is where AWS documents all of them together.
+
+#### ⛔ SUPERSEDED — the Price List API does not publish these rates
 
 Checked 2026-09-05 against dev-ai (490617140655) with SSO credentials, across
 every Bedrock service code:
@@ -282,13 +354,13 @@ Options when it is picked back up, in preference order:
 Option 2 was run against dev-ai. It is viable, but only under a constraint the
 plan above did not anticipate, and it closed off Option 1 in the process.
 
-**Option 1 is not a waiting game.** These models bill through **AWS
-Marketplace**, and the Price List API has no Marketplace service code — all 269
-service codes were enumerated on 2026-09-06 and none covers Marketplace. The
-Marketplace Catalog API is seller-side and returns nothing for a subscriber.
-So the earlier "not published yet" reading was wrong: there is no pricing API
-that *could* carry these rates while they bill this way. Waiting will not
-produce them.
+⚠️ **The conclusion this paragraph originally drew was wrong — see the RESOLVED
+section above.** What holds: these models bill through **AWS Marketplace**, the
+Price List API has no Marketplace service code (all 269 enumerated 2026-09-06),
+and the Marketplace Catalog API is seller-side and returns nothing for a
+subscriber. What does not hold is the inference drawn from that — "therefore no
+source exists, derive them empirically." The rates were published in the model
+cards the whole time. Absence from an API is not absence from the docs.
 
 **Cost Explorer has the dollars, but names no model.** Usage types look like
 `USW2-MP:USW2_cache_read_tokens_standard-Units` — they carry the token bucket
@@ -321,13 +393,12 @@ price cards, cache read is exactly `0.1x` input and cache write exactly
 `1.25x`. This is commercial-region billing data, and it corroborates the
 GovCloud ratio finding below from a completely different source.
 
-**Bearing on the modelling gap.** Every row observed is `_standard`; no
-`-long-ctx` usage type has ever appeared in this account. So the 0.5x/2x tier
-and 2x long-context dimensions are not currently being billed against us, and a
-flat standard rate is correct *for our present traffic*. That downgrades the
-gap from "silently mis-prices" to "mis-prices only if traffic changes, and Cost
-Explorer will show a new usage type when it does" — which is a monitorable
-condition rather than a blocking unknown.
+**Bearing on the modelling gap.** Every row observed is `_standard` and no
+`-long-ctx` usage type has ever appeared in this account. The model cards
+explain why: Priority and Flex are *not supported* for these models, so
+`_standard` is the only tier that can appear; and our `maxInputTokens: 272000`
+keeps every request inside the short-context price card. The billing data and
+the cards agree.
 
 **Controlled window claimed: 2026-09-06, `us.openai.gpt-5.6-sol` only.** Dev
 had zero recorded model calls that day before the probe. Expected totals, to be
@@ -346,7 +417,7 @@ buckets, and a 600-token prefix over 6 turns — deliberately under the
 accumulate as the rate anchor. Read it once Marketplace settles (allow 24-48h,
 not 24h) and Terra and Luna need their own single-model days.
 
-**What the read will actually settle.** The dev rows currently carry:
+**What the read was expected to settle.** The dev rows carried, at the time this was written (all since corrected — see the RESOLVED section above):
 
 | model | input | output | cache read | cache write |
 |---|---:|---:|---:|---:|
@@ -365,7 +436,7 @@ confirmed from two independent sources. The risk is concentrated in two places:
   from GovCloud Price List rows; `sol` is absent from the Price List entirely,
   so `4.40` came from the model card.
 
-The single-model day yields input and output directly, which settles both.
+Both were settled by the model cards instead (Sol output is `22.00`, not `26.40`; every Terra and Luna figure was a GovCloud rate). The single-model day now serves as an audit of the published numbers rather than the source of them.
 
 What the GovCloud rows *do* establish, and can be relied on:
 
