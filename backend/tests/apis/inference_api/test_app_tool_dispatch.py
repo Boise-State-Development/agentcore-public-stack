@@ -193,3 +193,71 @@ async def test_dict_shaped_result_keeps_its_content(monkeypatch):
 
     assert payload["result"]["content"] == [{"text": '{"lists": []}'}]
     assert payload["result"]["isError"] is False
+
+
+class _SessionClient(_FakeClient):
+    """Client that tracks its MCP session the way Strands' MCPClient does.
+
+    `start()` raises if the session is already running, matching upstream, so
+    a test fails loudly if the dispatch tries to revive a live session.
+    """
+
+    def __init__(self, active: bool, result=None) -> None:
+        super().__init__(result)
+        self.active = active
+        self.starts = 0
+        self.stops = 0
+        self.active_during_call: bool | None = None
+
+    def _is_session_active(self) -> bool:
+        return self.active
+
+    def start(self):
+        if self.active:
+            raise AssertionError("start() on an already-running session")
+        self.active = True
+        self.starts += 1
+        return self
+
+    def stop(self, exc_type, exc_val, exc_tb) -> None:
+        self.active = False
+        self.stops += 1
+
+    def call_tool_sync(self, tool_use_id, name, arguments=None):
+        self.active_during_call = self.active
+        return super().call_tool_sync(tool_use_id, name, arguments)
+
+
+@pytest.mark.asyncio
+async def test_revives_a_torn_down_client_session(monkeypatch):
+    """An app call between turns must reconnect rather than 502.
+
+    The agent is served from cache, so Strands has already torn down its MCP
+    client sessions; the catalog still holds the client. Calling straight
+    through raised MCPClientInitializationError, which surfaced to the App as
+    a 502 Bad Gateway.
+    """
+    client = _SessionClient(active=False)
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+
+    payload = await _call(session_id="disp-revive")
+
+    assert payload["result"]["isError"] is False
+    assert client.starts == 1
+    assert client.active_during_call is True
+    # Restored to how we found it — the revival is scoped to this one call.
+    assert client.stops == 1
+    assert client.active is False
+
+
+@pytest.mark.asyncio
+async def test_leaves_a_live_client_session_alone(monkeypatch):
+    """Mid-stream the session belongs to the running turn — don't touch it."""
+    client = _SessionClient(active=True)
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+
+    await _call(session_id="disp-live")
+
+    assert client.starts == 0
+    assert client.stops == 0
+    assert client.active is True
