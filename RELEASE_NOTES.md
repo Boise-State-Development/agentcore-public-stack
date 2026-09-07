@@ -1,3 +1,62 @@
+# Release Notes — v1.19.1
+
+**Release Date:** September 7, 2026
+**Previous Release:** v1.19.0 (September 6, 2026)
+
+---
+
+> 🏗️ **No CDK deploy required.** No infrastructure changed in this release — `infrastructure/gsi-inventory.json` is byte-identical to `main`, and no table gains or loses an index.
+>
+> ⚠️ **One prerequisite carried forward from 1.19.0, now mandatory.** `UserArtifactsIndex` shipped in 1.19.0 with nothing reading it. This release puts it on the artifact library's read path. Before deploying, the index must report `ACTIVE` **and** `backfill_artifact_user_index_keys.py` must have been applied — an unstamped row is absent from a sparse index, which means an artifact missing from its owner's library. See Deployment notes.
+
+---
+
+## Highlights
+
+A patch release with two MCP Apps fixes and one performance change. Both defects had the same shape — the tool behind an App really ran, and the App showed nothing for it. One relayed an empty result to the iframe because the MCP client returns a dict where the code expected an object; the other hit a torn-down MCP session on any call made between turns and surfaced as an intermittent 502. Separately, the artifact library listing moves off the base table onto `UserArtifactsIndex`, retiring the read amplification and the per-request sort that the index was added to remove.
+
+## 🐛 Bug fixes
+
+- **An MCP App could issue a tool call, have it succeed, and render nothing.** `_serialize_content` read the tool result's content with `getattr`, but Strands' `MCPToolResult` extends `ToolResult` — a `TypedDict`, so what `call_tool_sync` returns at runtime is a plain dict and the attribute lookup found nothing. Every app-initiated `tools/call` therefore relayed `content: []`. Nothing in the chain reported a problem: app-api returned 200, inference-api returned 200, and the MCP server had genuinely run the tool, so a write took effect while the App received nothing to show for it — any App that re-reads state after an edit simply appeared frozen. The dict shape is now handled alongside the attribute one, mirroring the branch `_is_error` already had. The existing dispatch-test fakes were objects carrying a `.content` attribute, which is exactly why the attribute-only path looked correct; the new test uses the dict shape the client really returns (#993)
+- **App-initiated tool calls between turns failed with a 502 that looked intermittent.** Such a call arrives after the turn that built the agent has ended. `routes.py` rebuilds the conversation's agent, but with `cache_write=False` it reads a *cached* agent — and Strands tears that agent's MCP client sessions down when its turn ends. `_resolve_client` then handed back a client whose session was no longer running, `call_tool_sync` raised `MCPClientInitializationError`, and that became an `AppToolCallError(502)` reaching the App as a Bad Gateway. The intermittence was the tell: a call made while the turn was still streaming found the session alive and worked. The call is now wrapped so the client is reconnected for its duration and left as it was found. A session already live belongs to an in-flight turn and is used as-is, never stopped here, and overlapping app calls against the same client share one revived session through a refcount, so no call has the connection closed underneath it. The fix is deliberately kept at the dispatch boundary — resolving the live client from the freshly built agent is the deeper fix, but it reaches into how tool providers are held and cached (#994)
+
+## ⚡ Performance
+
+**The artifact library listing now serves from `UserArtifactsIndex`.** 1.19.0 added the index and deliberately left it unread; this release switches the read over. `list_for_user` queries `GSI2PK=USER#{uid}` with `GSI2SK` descending instead of querying the base table.
+
+The base partition holds both HEAD and version rows, so the old Query spanned roughly three times the rows it returned and then date-sorted them in memory on every request. Only HEAD rows carry the GSI2 keys, so the index holds one row per artifact and already in newest-first order — both the amplification and the sort go away, and the ordering comes from the store rather than being recomputed per call.
+
+The endpoint still returns the whole library in one response, paging the index internally. Exposing pagination is a larger change than it looks: search and the type filter live in the SPA today, and a filter that can only see the loaded page is worse than no filter because it looks authoritative — both would have to move server-side in the same change. The index makes that possible whenever it is wanted.
+
+### Two things this turned up
+
+**The library tests were passing against the old code path.** The test fixture declared no `GlobalSecondaryIndexes` at all, so a suite that should have required an index went green without one. The fixture now declares it, which makes moto raise `ResourceNotFoundException` if the query ever stops using the index — the tests exercise the index rather than silently falling back.
+
+**Undated rows would have vanished.** A sparse index omits any HEAD row without `GSI2PK`, permanently and silently. Rows predating `updated_at` cannot carry a real timestamp, and the original backfill reported them rather than stamping them — correct while nothing read the index, and a silent data-loss path the moment something did. They are now stamped with an empty timestamp segment (`ARTIFACT##{aid}`): not a fabricated time, but a key that sorts below every digit and so reads last when the index is read descending — exactly where the old in-memory sort put it. Neither dev nor prod holds such a row today; this is the defensive branch, and it preserves a contract `test_undated_legacy_rows_are_returned_and_sort_last` already asserted.
+
+### Test Coverage
+
+Backend suites for app_api, architecture and the artifact writer pass at 942 tests, with the library fixture now index-backed. The MCP Apps fixes add dispatch tests using the dict result shape the MCP client actually returns and covering session revival, reuse of an already-live session, and refcounted overlap.
+
+## 🚀 Deployment notes
+
+**No CDK deploy is required** — this release changes no infrastructure. `backend.yml` and `frontend-deploy.yml` are sufficient.
+
+**Before deploying, confirm the 1.19.0 index groundwork is complete.** The artifact library now reads `UserArtifactsIndex`, so two things that were optional last release are prerequisites now:
+
+1. The index reports `ACTIVE` — `UPDATE_COMPLETE` on the stack is not the same thing:
+
+   ```bash
+   aws dynamodb describe-table --table-name <prefix>-user-artifacts \
+     --query 'Table.GlobalSecondaryIndexes[].{Name:IndexName,Status:IndexStatus}'
+   ```
+
+2. `backend/scripts/backfill_artifact_user_index_keys.py` has been applied. The index is sparse: an unstamped HEAD row is *absent* from it, not stale, so an artifact written before 2026-09-04 and never backfilled disappears from its owner's library after this deploy. The script is dry-run unless given `--apply`.
+
+**Re-run the backfill if the 1.19.0 version reported any undated rows.** That version counted rows with no `updated_at` and left them unstamped; this version stamps them with an empty timestamp segment so they sort last instead of dropping out. A re-run is idempotent and skips rows already stamped.
+
+---
+
 # Release Notes — v1.19.0
 
 **Release Date:** September 6, 2026
