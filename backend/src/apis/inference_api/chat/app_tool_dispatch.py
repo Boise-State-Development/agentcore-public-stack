@@ -24,7 +24,9 @@ rejected as not app-visible.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import threading
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -56,6 +58,12 @@ def _serialize_content(result: Any) -> List[Dict[str, Any]]:
     block so a quirky server response still round-trips.
     """
     content = getattr(result, "content", None)
+    if content is None and isinstance(result, dict):
+        # Strands' MCPToolResult extends ToolResult, a TypedDict — so a result
+        # is a plain dict at runtime and `getattr` finds nothing. Without this
+        # every app-initiated tools/call returned `content: []`, leaving the
+        # App with no data to render. Mirrors `_is_error`'s dict handling.
+        content = result.get("content")
     blocks: List[Dict[str, Any]] = []
     if isinstance(content, list):
         for item in content:
@@ -79,6 +87,77 @@ def _is_error(result: Any) -> bool:
     if val is None and isinstance(result, dict):
         val = result.get("isError") or result.get("is_error")
     return bool(val)
+
+
+# Guards the start/stop refcount below. Sessions are cheap to hold but must
+# not be torn down under a concurrent call, so overlapping app calls against
+# the same client share one revived session.
+_revive_lock = threading.Lock()
+_revived_users: Dict[int, int] = {}
+
+
+def _session_is_active(client: Any) -> bool:
+    """Whether `client` currently has a live MCP session.
+
+    Strands exposes this only as a private predicate; treat an unexpected
+    client shape as "active" so we never start a session we cannot own.
+    """
+    probe = getattr(client, "_is_session_active", None)
+    if not callable(probe):
+        return True
+    try:
+        return bool(probe())
+    except Exception:  # noqa: BLE001 - a broken probe must not block the call
+        return True
+
+
+@contextlib.contextmanager
+def _active_session(client: Any):
+    """Ensure `client` can serve one out-of-band tools/call, then restore it.
+
+    An app-initiated call arrives *between* turns: the agent it belongs to is
+    served from cache, and Strands tore that agent's MCP client sessions down
+    when the turn that built them ended. The catalog still holds the client
+    object, so calling straight through raises
+    `MCPClientInitializationError("the client session is not running")` and the
+    App sees a 502.
+
+    Reconnect for the duration of the call and leave the client as we found
+    it. A session that is already live — the mid-stream case, where the turn
+    is still running — is used as-is and never stopped here, because it
+    belongs to that turn.
+    """
+    key = id(client)
+    started_here = False
+
+    with _revive_lock:
+        if _revived_users.get(key):
+            # Another app call already revived it; join that session.
+            _revived_users[key] += 1
+        elif _session_is_active(client):
+            pass  # Live session owned by an in-flight turn — use, don't touch.
+        else:
+            client.start()
+            _revived_users[key] = 1
+            started_here = True
+
+    try:
+        yield client
+    finally:
+        if started_here or _revived_users.get(key):
+            with _revive_lock:
+                remaining = _revived_users.get(key, 0) - 1
+                if remaining > 0:
+                    _revived_users[key] = remaining
+                else:
+                    _revived_users.pop(key, None)
+                    try:
+                        client.stop(None, None, None)
+                    except Exception:  # noqa: BLE001 - best-effort teardown
+                        logger.warning(
+                            "failed to stop a revived MCP client session",
+                            exc_info=True,
+                        )
 
 
 def _resolve_client(agent: Any, tool_name: str):
@@ -136,10 +215,14 @@ async def dispatch_app_tool_call(
     synth_id = f"app-{tool_use_id}-{uuid.uuid4().hex[:8]}"
     args = dict(arguments or {})
 
+    def _invoke() -> Any:
+        # `start()` blocks on the handshake, so revive inside the worker
+        # thread rather than on the event loop.
+        with _active_session(client):
+            return client.call_tool_sync(synth_id, tool_name, args)
+
     try:
-        result = await asyncio.to_thread(
-            client.call_tool_sync, synth_id, tool_name, args
-        )
+        result = await asyncio.to_thread(_invoke)
     except Exception as exc:  # noqa: BLE001 - surfaced to the App as an error
         logger.warning(
             "app tools/call dispatch failed (tool=%s session=%s): %s",

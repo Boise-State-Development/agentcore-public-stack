@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.19.1] - 2026-09-07
+
+A patch release. Two MCP Apps defects made an App look broken while the tool behind it had really run: an app-initiated `tools/call` relayed an empty result back to the iframe, and a call made between turns hit a torn-down MCP session and came back as a 502. Both are fixed at the dispatch boundary. The artifact library listing now serves from `UserArtifactsIndex` instead of the base table, which retires the ~3x read amplification and the per-request in-memory sort. **No CDK deploy and no infrastructure change** — but the index that 1.19.0 shipped as groundwork is now on the read path, so its backfill has moved from optional to **required before deploying**.
+
+### ⚡ Performance
+
+- **The artifact library listing reads `UserArtifactsIndex`.** `list_for_user` queries the index (`GSI2PK=USER#{uid}`, `GSI2SK` descending) rather than the base table. HEAD and version rows share a base partition, so the old Query scanned roughly 3x the rows it returned and then date-sorted them in memory; only HEAD rows carry the GSI2 keys, so the index holds one row per artifact already newest-first. Ordering now comes from the store instead of being recomputed per request. The response still returns the whole library in one payload, paging the index internally (#989)
+
+### 🐛 Fixed
+
+- **App-initiated `tools/call` returned empty content to the iframe.** `_serialize_content` read the result with `getattr`, but Strands' `MCPToolResult` extends `ToolResult`, a `TypedDict` — so `call_tool_sync` returns a plain dict at runtime and the attribute lookup found nothing. The failure was silent end to end: app-api returned 200, inference-api returned 200, and the MCP server had really run the tool, so a write took effect while the App received nothing to render. Any MCP App that re-reads state after an edit appeared frozen (#993)
+- **App-initiated tool calls between turns failed with an intermittent 502.** A call arriving after a turn ended resolved to a cached agent whose MCP client sessions Strands had already torn down, raising `MCPClientInitializationError` — which surfaced as `AppToolCallError(502)` in the App. It looked intermittent because a call made while the turn was still streaming found the session alive. The client is now reconnected for the duration of the call and left as it was found; a session already live belongs to an in-flight turn and is used as-is, never stopped, and overlapping calls against the same client share one revived session through a refcount (#994)
+
+### ⚠️ Changed
+
+- **`backfill_artifact_user_index_keys.py` now stamps undated rows instead of reporting them.** A HEAD row with no `updated_at` was previously counted and named but left unstamped, on the grounds that a fabricated timestamp would sort wrongly forever. With the index on the read path that choice would drop the artifact from a sparse index — and from its owner's library — silently and permanently. Such a row is now stamped with an empty timestamp segment (`ARTIFACT##{aid}`), which sorts below every real timestamp and so reads last, exactly where the previous in-memory sort put it. **Re-run the script if you ran the 1.19.0 version and it reported any undated rows** (#989)
+
 ## [1.19.0] - 2026-09-06
 
 A correctness release for interrupted turns, plus the share inbox coming out of the dark. Two separate defects made a conversation misreport its own history: a completed response could be labelled **"Response interrupted"** with a Continue button, and an interrupted one could show the model-directed `<interruption_note>` in the user's own chat bubble — permanently. Both are fixed at the source rather than patched at the render. The artifact **"Shared with you" inbox now ships on by default** with a kill switch, so a fork gets the finished feature instead of having to discover a variable. Infrastructure adds `UserArtifactsIndex` to the existing `{prefix}-user-artifacts` table (one GSI operation) with a backfill for rows that predate it; nothing reads the index yet. **Requires a CDK deploy**, and two one-shot scripts are available post-deploy.

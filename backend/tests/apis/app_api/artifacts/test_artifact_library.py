@@ -53,8 +53,24 @@ def client(monkeypatch: pytest.MonkeyPatch):
             AttributeDefinitions=[
                 {"AttributeName": "PK", "AttributeType": "S"},
                 {"AttributeName": "SK", "AttributeType": "S"},
+                {"AttributeName": "GSI2PK", "AttributeType": "S"},
+                {"AttributeName": "GSI2SK", "AttributeType": "S"},
             ],
             BillingMode="PAY_PER_REQUEST",
+            # The library endpoint reads this index, so the fixture must
+            # have it. moto raises ResourceNotFoundException without it —
+            # correct, and worth keeping: it is what makes these tests
+            # exercise the index instead of a base-table read.
+            GlobalSecondaryIndexes=[
+                {
+                    "IndexName": "UserArtifactsIndex",
+                    "KeySchema": [
+                        {"AttributeName": "GSI2PK", "KeyType": "HASH"},
+                        {"AttributeName": "GSI2SK", "KeyType": "RANGE"},
+                    ],
+                    "Projection": {"ProjectionType": "ALL"},
+                }
+            ],
         )
         monkeypatch.setenv("DYNAMODB_ARTIFACTS_TABLE_NAME", TABLE)
 
@@ -116,8 +132,12 @@ def _put_artifact(
     if updated_at is not None:
         head["updated_at"] = updated_at
         head["GSI1SK"] = f"ARTIFACT#{updated_at}#{artifact}"
-        head["GSI2PK"] = f"USER#{user_id}"
-        head["GSI2SK"] = f"ARTIFACT#{updated_at}#{artifact}"
+    # GSI2 keys are stamped either way — the post-backfill state of the
+    # table. An undated row carries an empty timestamp segment, which
+    # sorts below every real one, so it reads last instead of dropping
+    # out of the sparse index entirely.
+    head["GSI2PK"] = f"USER#{user_id}"
+    head["GSI2SK"] = f"ARTIFACT#{updated_at or ''}#{artifact}"
     table.put_item(Item=head)
 
 
@@ -242,7 +262,13 @@ def test_library_route_is_not_shadowed_by_the_artifact_id_route(client) -> None:
 def test_paginates_a_partition_larger_than_one_page(client) -> None:
     """The Query loop must drain `LastEvaluatedKey`. Asserted with a
     stub rather than 1MB of fixture rows, since moto pages on real byte
-    size and a realistic partition is far under the limit."""
+    size and a realistic partition is far under the limit.
+
+    Page 1 carries the NEWER row, because that is what the index does:
+    GSI2SK leads with `updated_at` and is read descending. So the
+    service must preserve page order rather than re-sort — a
+    client-side sort would pass here either way and hide a broken sort
+    key."""
     calls: list[dict] = []
 
     class Paged:
@@ -253,14 +279,14 @@ def test_paginates_a_partition_larger_than_one_page(client) -> None:
                     "Items": [
                         {
                             "PK": f"USER#{USER_ID}",
-                            "SK": "ARTIFACT#a1#HEAD",
-                            "artifact_id": "a1",
+                            "SK": "ARTIFACT#a2#HEAD",
+                            "artifact_id": "a2",
                             "version": 1,
-                            "title": "One",
+                            "title": "Two",
                             "content_type": "text/markdown",
-                            "created_at": "2026-05-01T09:00:00+00:00",
-                            "updated_at": "2026-05-01T09:00:00+00:00",
-                            "session_id": "s1",
+                            "created_at": "2026-05-02T09:00:00+00:00",
+                            "updated_at": "2026-05-02T09:00:00+00:00",
+                            "session_id": "s2",
                         }
                     ],
                     "LastEvaluatedKey": {"PK": "x", "SK": "y"},
@@ -269,14 +295,14 @@ def test_paginates_a_partition_larger_than_one_page(client) -> None:
                 "Items": [
                     {
                         "PK": f"USER#{USER_ID}",
-                        "SK": "ARTIFACT#a2#HEAD",
-                        "artifact_id": "a2",
+                        "SK": "ARTIFACT#a1#HEAD",
+                        "artifact_id": "a1",
                         "version": 1,
-                        "title": "Two",
+                        "title": "One",
                         "content_type": "text/markdown",
-                        "created_at": "2026-05-02T09:00:00+00:00",
-                        "updated_at": "2026-05-02T09:00:00+00:00",
-                        "session_id": "s2",
+                        "created_at": "2026-05-01T09:00:00+00:00",
+                        "updated_at": "2026-05-01T09:00:00+00:00",
+                        "session_id": "s1",
                     }
                 ]
             }
