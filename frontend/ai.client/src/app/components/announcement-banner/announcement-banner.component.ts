@@ -14,6 +14,7 @@ import {
   heroXMark,
 } from '@ng-icons/heroicons/outline';
 import { AnnouncementsService } from '../../services/announcements/announcements.service';
+import { AnnouncementModalService } from '../../services/announcements/announcement-modal.service';
 import {
   Announcement,
   AnnouncementSeverity,
@@ -80,6 +81,22 @@ import {
  * Body markdown is deliberately *not* rendered here: this surface is one line.
  * The full body lives in What's New, which is why `panel` is forced onto every
  * announcement server-side.
+ *
+ * **The text is a button, and clicking it opens the full announcement.**
+ * Without it the only affordances on the pill are ✕ and an optional CTA, which
+ * trains people to dismiss unread — and What's New, the only other way to the
+ * body, is buried in the user menu. It opens the single-announcement dialog
+ * rather than the What's New list on purpose: the pill named one thing, so
+ * handing back a list to search is a worse answer than the thing itself. From
+ * there the dialog owns the ack, and any of its exits retires the pill
+ * durably (see `onOpenDetail`).
+ *
+ * **A `requiresAck` announcement gets no ✕ here.** `dismissed` and
+ * `acknowledged` are both at or above `SUPPRESSING_RANK`, and suppression
+ * applies to the banner *and* modal slots alike — so with a ✕ on the strip, a
+ * user could retire a compliance notice from the pill and the blocking modal
+ * would never fire, leaving no `acknowledged` record anywhere. On those, the
+ * only way out is to open it and press the button.
  */
 @Component({
   selector: 'app-announcement-banner',
@@ -117,9 +134,19 @@ import {
           aria-hidden="true"
         />
 
-        <p class="min-w-0 truncate font-medium">
-          {{ bannerText() }}
-        </p>
+        <button
+          type="button"
+          (click)="onOpenDetail()"
+          [attr.title]="item.title"
+          class="min-w-0 cursor-pointer truncate text-left font-medium underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current"
+        >
+          <!-- Not an aria-label: that would replace the visible text with a
+               string the summary may not contain, and WCAG 2.5.3 (Label in
+               Name) wants the visible label inside the accessible name — a
+               voice-control user says what they can see. Prefixing keeps
+               both. -->
+          <span class="sr-only">Read more: </span>{{ bannerText() }}
+        </button>
 
         @if (item.cta_url && item.cta_label) {
           <a
@@ -132,20 +159,23 @@ import {
           </a>
         }
 
-        <button
-          type="button"
-          (click)="onDismiss()"
-          [attr.aria-label]="'Dismiss announcement: ' + item.title"
-          class="-mr-1 flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-black/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current dark:hover:bg-white/10"
-        >
-          <ng-icon name="heroXMark" class="size-3.5" aria-hidden="true" />
-        </button>
+        @if (!item.requires_ack) {
+          <button
+            type="button"
+            (click)="onDismiss()"
+            [attr.aria-label]="'Dismiss announcement: ' + item.title"
+            class="-mr-1 flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-black/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current dark:hover:bg-white/10"
+          >
+            <ng-icon name="heroXMark" class="size-3.5" aria-hidden="true" />
+          </button>
+        }
       </div>
     }
   `,
 })
 export class AnnouncementBannerComponent {
   private readonly announcements = inject(AnnouncementsService);
+  private readonly modals = inject(AnnouncementModalService);
 
   /**
    * Which side of the composer to take. `'above'` suits a bottom-pinned
@@ -221,7 +251,24 @@ export class AnnouncementBannerComponent {
 
   protected onDismiss(): void {
     const item = this.announcement();
-    if (!item) return;
+    if (!item || item.requires_ack) return;
     void this.announcements.ack(item.announcement_id, 'dismissed', 'banner');
+  }
+
+  /**
+   * Open the full announcement, attributing whatever the user does there to
+   * the banner.
+   *
+   * The dialog owns the ack from here: any of its exits writes `dismissed`
+   * (or `acknowledged`), which outranks the `seen` this strip already wrote
+   * and retires the pill on every device. That is the intent — having read
+   * the body is a stronger signal of consumption than clicking ✕ on a
+   * one-line strip, and leaving the pill up afterwards would just ask the
+   * user to dismiss something they have already dealt with.
+   */
+  protected onOpenDetail(): void {
+    const item = this.announcement();
+    if (!item) return;
+    this.modals.openFor(item, 'banner');
   }
 }

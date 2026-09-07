@@ -1036,6 +1036,9 @@ class TestSignalTurnInterrupted:
         with patch(
             "apis.app_api.sessions.routes.set_interrupted_turn",
             recorder,
+        ), patch(
+            "apis.shared.sessions.session_lease.is_session_lease_held",
+            AsyncMock(return_value=True),
         ):
             resp = client.post(
                 "/sessions/sess-001/interrupt",
@@ -1049,6 +1052,76 @@ class TestSignalTurnInterrupted:
             reason="navigated_away",
             source="client_signal",
         )
+
+    def test_ignores_navigated_away_when_no_turn_is_in_flight(
+        self, app, make_user, authenticated_client
+    ):
+        """A departure can only interrupt a turn that is actually running.
+
+        The SPA decides "is a turn in flight" from its own transport state,
+        and that has been wrong: a controller left behind after a completed
+        stream made every finished turn in the tab eligible, so a later
+        refresh marked complete answers as interrupted. The lease is the
+        server's own answer to the same question, and old tabs keep running
+        the old SPA long after a client fix ships — so assert it here.
+        """
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        recorder = AsyncMock()
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            recorder,
+        ), patch(
+            "apis.shared.sessions.session_lease.is_session_lease_held",
+            AsyncMock(return_value=False),
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "navigated_away"},
+            )
+
+        # Still 204: the client never waits on this and a dropped signal is
+        # not an error it can act on.
+        assert resp.status_code == 204
+        recorder.assert_not_awaited()
+
+    def test_user_stopped_is_not_gated_on_the_lease(self, app, make_user, authenticated_client):
+        """Stop is never withheld on a lease read.
+
+        The button only exists while a response is streaming, and the same
+        request arms distributed cancellation — which must still reach a turn
+        whose lease read fails or fails open (`is_session_lease_held` reports
+        False for an unconfigured table and for any DynamoDB error).
+        """
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        recorder = AsyncMock()
+        cancel = AsyncMock(return_value=True)
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            recorder,
+        ), patch(
+            "apis.shared.sessions.session_lease.is_session_lease_held",
+            AsyncMock(return_value=False),
+        ), patch(
+            "apis.shared.sessions.session_lease.request_session_cancel",
+            cancel,
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "user_stopped"},
+            )
+
+        assert resp.status_code == 204
+        recorder.assert_awaited_once_with(
+            "sess-001",
+            user.user_id,
+            reason="user_stopped",
+            source="client_signal",
+        )
+        cancel.assert_awaited_once_with("sess-001", user.user_id)
 
     def test_navigated_away_does_not_cancel_the_turn(self, app, make_user, authenticated_client):
         """Attribution, not instruction.
@@ -1064,6 +1137,11 @@ class TestSignalTurnInterrupted:
         with patch(
             "apis.app_api.sessions.routes.set_interrupted_turn",
             AsyncMock(),
+        ), patch(
+            # Held, so the departure is genuinely mid-turn — otherwise this
+            # would assert nothing beyond the gate above.
+            "apis.shared.sessions.session_lease.is_session_lease_held",
+            AsyncMock(return_value=True),
         ), patch(
             "apis.shared.sessions.session_lease.request_session_cancel",
             cancel,

@@ -10,7 +10,7 @@ Frozen cross-PR contract (must stay in sync with the render Lambda
                 + GSI1PK=SESSION#{session_id}
                 + GSI1SK=ARTIFACT#{updated_at}#{aid}   (SessionIndex)
                 + GSI2PK=USER#{user_id}
-                + GSI2SK=ARTIFACT#{updated_at}#{aid}   (index NOT YET CREATED)
+                + GSI2SK=ARTIFACT#{updated_at}#{aid}   (UserArtifactsIndex)
   S3 layout   : {user_id}/{aid}/v{n}/index.html
 
 Versions are immutable (no DeleteObject grant in inference-api) — an
@@ -27,20 +27,19 @@ HEAD and on every version row, deliberately touching neither `version`
 (the optimistic lock below) nor `updated_at` (embedded in the GSI sort
 keys, which only this module maintains).
 
-GSI2PK/GSI2SK are written ahead of the index that will consume them.
-Nothing queries them today — a user-wide artifact list is served by a
-base-table Query on PK=USER#{uid}, which is adequate while the heaviest
-user holds well under a 1MB page. They are stamped now because a sparse
-GSI only ever contains rows that already carry its key attributes: rows
-written before the attributes exist stay invisible to it forever unless
-a migration script backfills them, and that omission fails silently (a
-library page that lists only artifacts created after the deploy, with no
-error anywhere). Writing them from now on means the eventual
-`UserArtifactsIndex` — GSI2PK hash, GSI2SK range, queried with
-ScanIndexForward=False for newest-first — backfills every row stamped
-since this change, shrinking the manual backfill to the rows that
-predate it. Until then they are inert ordinary attributes: DynamoDB
-charges no index write when no index consumes them.
+GSI2PK/GSI2SK feed `UserArtifactsIndex` — GSI2PK hash, GSI2SK range,
+queried with ScanIndexForward=False for newest-first. They were stamped
+here for two weeks before that index existed, deliberately: a sparse GSI
+only ever contains rows that already carry its key attributes, so rows
+written before the attributes exist stay invisible to it forever, and
+that omission fails silently (a library page listing only artifacts
+created after the deploy, with no error anywhere). Stamping early shrank
+the manual backfill to the rows predating 2026-09-04, which
+`backend/scripts/backfill_artifact_user_index_keys.py` then stamped.
+
+**Both write paths below must keep stamping them.** A HEAD row that
+loses these attributes on its next update drops out of the index — and
+out of the owner's library — with nothing to indicate it.
 
 Stamped on HEAD rows only, deliberately: one indexed row per artifact
 rather than one per version. Both write paths below must stamp them, or

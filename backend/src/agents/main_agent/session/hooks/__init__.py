@@ -1,6 +1,7 @@
 """Hooks for Main Agent"""
 
 from agents.main_agent.session.hooks.context_attribution import ContextAttributionHook
+from agents.main_agent.session.hooks.display_text import DisplayTextHook
 from agents.main_agent.session.hooks.oauth_consent import OAuthConsentHook
 from agents.main_agent.session.hooks.prefix_fingerprint import PrefixFingerprintHook
 from agents.main_agent.session.hooks.steering import SteeringHook
@@ -9,6 +10,7 @@ from agents.main_agent.session.hooks.tool_approval import MCPExternalApprovalHoo
 
 __all__ = [
     "ContextAttributionHook",
+    "DisplayTextHook",
     "OAuthConsentHook",
     "PrefixFingerprintHook",
     "SteeringHook",

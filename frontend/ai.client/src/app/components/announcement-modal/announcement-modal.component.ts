@@ -10,10 +10,24 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark } from '@ng-icons/heroicons/outline';
 import { DialogDismissDirective } from '../dialog/dialog-dismiss.directive';
 import { AnnouncementsService } from '../../services/announcements/announcements.service';
-import { Announcement } from '../../services/announcements/announcement.model';
+import {
+  Announcement,
+  AnnouncementSurface,
+} from '../../services/announcements/announcement.model';
 
 export interface AnnouncementModalData {
   announcement: Announcement;
+  /**
+   * Which surface the user came from, for ack attribution.
+   *
+   * Defaults to `'modal'` — the §D8 interruption, where the dialog *is* the
+   * surface. The banner passes `'banner'` when the user clicks its text to
+   * read the body, because the ack row's `surface` is the only record of what
+   * actually drove the dismissal, and "the banner earned a read" is the one
+   * number this interaction exists to produce. The funnel counters key on
+   * action alone, so attribution never distorts them.
+   */
+  sourceSurface?: AnnouncementSurface;
 }
 
 /**
@@ -147,6 +161,9 @@ export class AnnouncementModalComponent {
   protected readonly titleId = `announcement-modal-title-${crypto.randomUUID()}`;
   protected readonly announcement = this.data.announcement;
 
+  /** Where every ack from this dialog is attributed. See `AnnouncementModalData`. */
+  private readonly surface: AnnouncementSurface = this.data.sourceSurface ?? 'modal';
+
   protected readonly requiresAck = computed(
     () => this.announcement.requires_ack,
   );
@@ -168,7 +185,7 @@ export class AnnouncementModalComponent {
     void this.announcements.ack(
       this.announcement.announcement_id,
       'seen',
-      'modal',
+      this.surface,
     );
   }
 
@@ -177,7 +194,7 @@ export class AnnouncementModalComponent {
     void this.announcements.ack(
       this.announcement.announcement_id,
       this.requiresAck() ? 'acknowledged' : 'dismissed',
-      'modal',
+      this.surface,
     );
     this.dialogRef.close();
   }
@@ -187,7 +204,7 @@ export class AnnouncementModalComponent {
     void this.announcements.ack(
       this.announcement.announcement_id,
       'dismissed',
-      'modal',
+      this.surface,
     );
     this.dialogRef.close();
   }

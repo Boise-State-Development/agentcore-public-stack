@@ -464,11 +464,27 @@ def test_inbox_404s_while_the_flag_is_off(
     env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     make_client, ddb = env
-    monkeypatch.delenv("ARTIFACT_SHARE_INBOX_ENABLED", raising=False)
+    monkeypatch.setenv("ARTIFACT_SHARE_INBOX_ENABLED", "false")
     _put_version(ddb)
     _share_with(make_client(), [FRIEND_EMAIL])
 
     assert make_client(_friend()).get("/shared-artifacts").status_code == 404
+
+
+def test_inbox_is_on_when_the_flag_is_unset(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of the default-on flip.
+
+    A fork that never sets ``CDK_ARTIFACT_SHARE_INBOX_ENABLED`` should get
+    the finished feature, not lose it silently and have to discover a
+    variable to get it back."""
+    make_client, ddb = env
+    monkeypatch.delenv("ARTIFACT_SHARE_INBOX_ENABLED", raising=False)
+    _put_version(ddb)
+    _share_with(make_client(), [FRIEND_EMAIL])
+
+    assert len(_inbox(make_client(_friend()))["artifacts"]) == 1
 
 
 def test_fan_out_rows_are_written_while_the_flag_is_off(
@@ -492,22 +508,25 @@ def test_fan_out_rows_are_written_while_the_flag_is_off(
     assert len(_inbox(make_client(_friend()))["artifacts"]) == 1
 
 
-def test_only_the_literal_true_enables_the_inbox(
+def test_only_the_literal_false_disables_the_inbox(
     env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Opt-in, not a kill switch. An unset GitHub Actions variable
-    forwards an empty string, which must resolve to off rather than
-    revealing the surface by accident."""
+    """A kill switch, not opt-in — and the empty string is the case that
+    matters. An unset GitHub Actions variable forwards ``""``, which must
+    resolve to ON. Getting this backwards is how a default-on flag ships
+    silently disabled to every fork that never sets the variable."""
     make_client, ddb = env
     _put_version(ddb)
     _share_with(make_client(), [FRIEND_EMAIL])
     friend = make_client(_friend())
 
-    for value in ("", "  ", "false", "1", "yes", "TRUE!"):
+    for value in ("false", "FALSE", " False "):
         monkeypatch.setenv("ARTIFACT_SHARE_INBOX_ENABLED", value)
         assert friend.get("/shared-artifacts").status_code == 404, value
 
-    for value in ("true", "TRUE", " True "):
+    # Everything else — including the empty string, and including junk —
+    # leaves the feature on. A typo must not silently disable a surface.
+    for value in ("", "  ", "true", "TRUE", " True ", "1", "yes", "FALSE!"):
         monkeypatch.setenv("ARTIFACT_SHARE_INBOX_ENABLED", value)
         assert friend.get("/shared-artifacts").status_code == 200, value
 

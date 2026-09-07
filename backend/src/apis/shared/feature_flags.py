@@ -197,13 +197,23 @@ def artifact_share_inbox_enabled() -> bool:
     """Whether a recipient can *discover* artifacts shared with them.
 
     Covers the ``GET /shared-artifacts`` inbox endpoint and, through it,
-    the library page's "Shared with you" tab. **Default OFF, opt-in**
-    (the deferred-feature pattern, mirroring the long-deleted
-    ``FINE_TUNING_ENABLED``): only the literal ``"true"``
-    (case-insensitive) enables it. Every other flag in this module ships
-    default-on with a kill switch; this one is deliberately the other
-    way round, because the surface it gates lands before the product
-    decision about it does.
+    the library page's "Shared with you" tab. **Default ON with a kill
+    switch** (house style, mirroring ``announcements_enabled`` and
+    ``scheduled_runs_enabled``): unset or empty resolves to enabled; only
+    the literal ``"false"`` (case-insensitive) disables.
+
+    It shipped the other way round — default off, opt-in — because the
+    surface landed before the product decision about it did. That
+    decision was made in 1.18.0 and the inbox went live; carrying an
+    opt-in default past it would mean every institution forking this
+    repo silently loses a finished feature, and has to discover a
+    variable to get it back. Default-on is the right answer for a fork,
+    and ``"false"`` still turns it off for anyone who wants it dark.
+
+    Note the empty-string case is load-bearing in the *opposite*
+    direction now: an unset GitHub Actions variable forwards ``""``,
+    which under this flag means **on**. That is deliberate — a fork that
+    never sets the variable is exactly who this default is for.
 
     ############################################################
     # This flag gates the READ ONLY. The recipient fan-out rows the
@@ -222,5 +232,5 @@ def artifact_share_inbox_enabled() -> bool:
     """
     return (
         os.environ.get("ARTIFACT_SHARE_INBOX_ENABLED", "").strip().lower()
-        == "true"
+        != "false"
     )

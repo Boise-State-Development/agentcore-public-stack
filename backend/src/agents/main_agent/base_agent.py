@@ -13,6 +13,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from agents.main_agent.core import ModelConfig, SystemPromptBuilder, AgentFactory
 from agents.main_agent.session import SessionFactory
 from agents.main_agent.session.hooks import (
+    DisplayTextHook,
     SteeringHook,
     StopHook,
     OAuthConsentHook,
@@ -276,6 +277,9 @@ class BaseAgent(ABC):
         - StopHook: Always enabled, cancels tool execution on user stop
         - SteeringHook: Injects a follow-up queued mid-turn at the next tool
           boundary
+        - DisplayTextHook: Stores the user's original message for UI display
+          as soon as their turn is appended, so an augmented prompt is never
+          what the UI renders for an interrupted turn
         - OAuthConsentHook: Pauses the agent (Strands interrupt) when an
           OAuth-gated MCP tool is about to run without a cached token
         - Approval hooks: Gate dangerous operations for user confirmation
@@ -299,6 +303,15 @@ class BaseAgent(ABC):
         # read off the session manager every boundary.
         self.steering_hook = SteeringHook(self.session_manager)
         hooks.append(self.steering_hook)
+
+        # Persist the user's own words (`displayText`) the moment their turn
+        # enters history, so an augmented prompt — RAG context, attachment
+        # guidance, an `<interruption_note>` — never becomes what the UI shows
+        # for a turn that doesn't finish. Held on the wrapper so the stream
+        # coordinator can arm it per turn and skip its own end-of-turn write
+        # once this has done it.
+        self.display_text_hook = DisplayTextHook()
+        hooks.append(self.display_text_hook)
 
         # OAuth consent gate for external MCP tools. Registered unconditionally;
         # the hook is a no-op for tools that don't have a registered provider.

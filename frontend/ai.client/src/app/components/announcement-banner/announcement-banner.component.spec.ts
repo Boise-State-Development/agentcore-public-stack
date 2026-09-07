@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { AnnouncementsService } from '../../services/announcements/announcements.service';
+import { AnnouncementModalService } from '../../services/announcements/announcement-modal.service';
 import { Announcement } from '../../services/announcements/announcement.model';
 import { AnnouncementBannerComponent } from './announcement-banner.component';
 
@@ -28,16 +29,19 @@ function makeAnnouncement(overrides: Partial<Announcement> = {}): Announcement {
 describe('AnnouncementBannerComponent', () => {
   let bannerItem: ReturnType<typeof signal<Announcement | null>>;
   let ack: ReturnType<typeof vi.fn>;
+  let openFor: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
     bannerItem = signal<Announcement | null>(null);
     ack = vi.fn(async () => true);
+    openFor = vi.fn();
 
     // DI-token override rather than vi.mock, per house convention.
     TestBed.configureTestingModule({
       providers: [
         { provide: AnnouncementsService, useValue: { bannerItem, ack } },
+        { provide: AnnouncementModalService, useValue: { openFor } },
       ],
     });
   });
@@ -127,12 +131,11 @@ describe('AnnouncementBannerComponent', () => {
     const fixture = create();
     ack.mockClear();
 
+    // By label, not "the first button" — the text is a button too now.
     const dismiss = (fixture.nativeElement as HTMLElement).querySelector(
-      'button',
+      'button[aria-label="Dismiss announcement: Skills are here"]',
     ) as HTMLButtonElement;
-    expect(dismiss.getAttribute('aria-label')).toBe(
-      'Dismiss announcement: Skills are here',
-    );
+    expect(dismiss).not.toBeNull();
     dismiss.click();
 
     expect(ack).toHaveBeenCalledWith('a1', 'dismissed', 'banner');
@@ -173,6 +176,7 @@ describe('AnnouncementBannerComponent', () => {
     TestBed.configureTestingModule({
       providers: [
         { provide: AnnouncementsService, useValue: { bannerItem, ack } },
+        { provide: AnnouncementModalService, useValue: { openFor } },
       ],
     });
     bannerItem.set(
@@ -182,6 +186,103 @@ describe('AnnouncementBannerComponent', () => {
     const link = (fixture.nativeElement as HTMLElement).querySelector('a')!;
     expect(link.getAttribute('href')).toBe('https://example.edu');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  describe('the text opens the full announcement', () => {
+    function readMore(fixture: ReturnType<typeof create>) {
+      // By `title`, which carries the untruncated headline — the ✕ is the one
+      // with an aria-label.
+      return (fixture.nativeElement as HTMLElement).querySelector(
+        'button[title="Skills are here"]',
+      ) as HTMLButtonElement | null;
+    }
+
+    it('hands the announcement to the modal service, attributed to the banner', () => {
+      // The pill renders no body, so without this the only affordances on it
+      // are ✕ and an optional CTA — which trains people to dismiss unread.
+      bannerItem.set(makeAnnouncement());
+      const fixture = create();
+
+      readMore(fixture)!.click();
+
+      expect(openFor).toHaveBeenCalledWith(
+        expect.objectContaining({ announcement_id: 'a1' }),
+        'banner',
+      );
+    });
+
+    it('writes no ack of its own — the dialog owns that', () => {
+      // Acking `dismissed` here as well would be a second, racing write for
+      // the same gesture, and would retire the pill before the user has read
+      // a word of the body.
+      bannerItem.set(makeAnnouncement());
+      const fixture = create();
+      ack.mockClear();
+
+      readMore(fixture)!.click();
+
+      expect(ack).not.toHaveBeenCalled();
+    });
+
+    it('keeps the visible text inside the accessible name (WCAG 2.5.3)', () => {
+      // `bannerText()` may be the summary, so an aria-label built from the
+      // title would leave a voice-control user saying a phrase that is not
+      // the button's name. The visible words have to survive.
+      bannerItem.set(makeAnnouncement({ summary: 'Short version' }));
+      const fixture = create();
+      const button = readMore(fixture)!;
+
+      expect(button.getAttribute('aria-label')).toBeNull();
+      expect(button.textContent).toContain('Short version');
+      expect(button.textContent).toContain('Read more');
+      // The untruncated headline is still reachable on hover.
+      expect(button.getAttribute('title')).toBe('Skills are here');
+    });
+  });
+
+  describe('a requiresAck announcement cannot be retired from the strip', () => {
+    it('offers no ✕', () => {
+      // `dismissed` and `acknowledged` both sit at or above SUPPRESSING_RANK,
+      // and suppression covers the banner AND modal slots — so a ✕ here would
+      // let a user kill a compliance notice before the blocking modal ever
+      // fired, leaving no `acknowledged` record anywhere.
+      bannerItem.set(makeAnnouncement({ requires_ack: true }));
+      const fixture = create();
+
+      expect(
+        (fixture.nativeElement as HTMLElement).querySelector(
+          'button[aria-label^="Dismiss announcement"]',
+        ),
+      ).toBeNull();
+    });
+
+    it('still opens on click — that is the only way out', () => {
+      bannerItem.set(makeAnnouncement({ requires_ack: true }));
+      const fixture = create();
+
+      (
+        (fixture.nativeElement as HTMLElement).querySelector(
+          'button[title="Skills are here"]',
+        ) as HTMLButtonElement
+      ).click();
+
+      expect(openFor).toHaveBeenCalledWith(
+        expect.objectContaining({ requires_ack: true }),
+        'banner',
+      );
+    });
+
+    it('writes no `dismissed` even if onDismiss is reached some other way', () => {
+      bannerItem.set(makeAnnouncement({ requires_ack: true }));
+      const fixture = create();
+      ack.mockClear();
+
+      (
+        fixture.componentInstance as unknown as { onDismiss(): void }
+      ).onDismiss();
+
+      expect(ack).not.toHaveBeenCalled();
+    });
   });
 
   describe('overlays rather than occupying space', () => {

@@ -29,9 +29,9 @@ describe('ChatHttpService', () => {
         // and lets cookie auth ride along with the request rather than
         // attaching a Bearer manually.
         { provide: BffSessionService, useValue: { csrfHeaders: vi.fn().mockReturnValue({}), handleUnauthorized: vi.fn() } },
-        { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn(), getSessionMetadata: vi.fn().mockResolvedValue({}) } },
+        { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn(), getSessionMetadata: vi.fn().mockResolvedValue({}), isNewSession: vi.fn().mockReturnValue(false) } },
         { provide: StreamParserService, useValue: { getCurrentStreamId: vi.fn().mockReturnValue('stream-1'), parseEventSourceMessage: vi.fn() } },
-        { provide: ChatStateService, useValue: { abortRequest: vi.fn(), setChatLoading: vi.fn(), setLastTurnInterrupted: vi.fn(), seedSessionAggregates: vi.fn(), createAbortController: vi.fn().mockReturnValue(new AbortController()), streamingSessionIds: vi.fn().mockReturnValue([]) } },
+        { provide: ChatStateService, useValue: { abortRequest: vi.fn(), setChatLoading: vi.fn(), setLastTurnInterrupted: vi.fn(), seedSessionAggregates: vi.fn(), createAbortController: vi.fn().mockReturnValue(new AbortController()), releaseAbortController: vi.fn(), streamingSessionIds: vi.fn().mockReturnValue([]) } },
         { provide: MessageMapService, useValue: { endStreaming: vi.fn() } },
         { provide: ErrorService, useValue: { handleHttpError: vi.fn(), addError: vi.fn() } },
       ],
@@ -142,6 +142,28 @@ describe('ChatHttpService', () => {
       contextWindow: 200000,
     });
     vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('releases the session controller when a stream finishes normally', async () => {
+    // Without this the controller outlives its stream for the life of the
+    // tab, so `streamingSessionIds()` keeps reporting a finished turn and the
+    // next page-hide attributes it to `navigated_away` — a "Response
+    // interrupted" chip on a complete answer.
+    const controller = new AbortController();
+    chatStateService.createAbortController.mockReturnValue(controller);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('event: done\ndata: {}\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    );
+
+    await service.sendChatRequest({ session_id: 's1', message: 'hi' });
+
+    expect(chatStateService.releaseAbortController).toHaveBeenCalledWith('s1', controller);
+    // Released, not aborted — the turn completed on its own.
+    expect(controller.signal.aborted).toBe(false);
     vi.restoreAllMocks();
   });
 

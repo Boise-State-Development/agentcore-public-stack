@@ -182,11 +182,11 @@ export class AppApiServiceConstruct extends Construct {
     environment['DYNAMODB_ARTIFACTS_TABLE_NAME'] = props.refs.artifactsTable.tableName;
     environment['ARTIFACTS_ORIGIN'] = props.artifactsOrigin;
     environment['ARTIFACTS_RENDER_TOKEN_SECRET_ARN'] = props.refs.artifactRenderTokenSecret.secretArn;
-    // "Shared with you" inbox. Default off; read by
+    // "Shared with you" inbox. Default on with a kill switch; read by
     // apis/shared/feature_flags.py::artifact_share_inbox_enabled, which gates
     // the GET /shared-artifacts route ONLY. The recipient fan-out rows are
-    // written by every share regardless, so flipping this on reveals a
-    // complete inbox rather than one that begins at the flip.
+    // written by every share regardless, so toggling this never reveals an
+    // inbox that begins at the flip.
     environment['ARTIFACT_SHARE_INBOX_ENABLED'] = config.artifacts.shareInboxEnabled ? 'true' : 'false';
 
     // Skill reference-file bucket (admin-managed Skills, PR-4). Read by

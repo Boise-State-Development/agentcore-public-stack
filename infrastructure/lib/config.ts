@@ -106,10 +106,9 @@ export interface ArtifactsConfig {
   extraFrameAncestors: string[];
   // Whether recipients can *discover* artifacts shared with them (the
   // library's "Shared with you" tab, backed by GET /shared-artifacts).
-  // Default OFF and opt-in, unlike the kill-switch flags elsewhere in this
-  // file: the surface lands before the product decision about it. Gates the
-  // read only — the fan-out rows behind it are written unconditionally, so
-  // enabling this never needs a backfill.
+  // Default ON with a kill switch, like the other flags in this file.
+  // Gates the read only — the fan-out rows behind it are written
+  // unconditionally, so toggling this never needs a backfill.
   shareInboxEnabled: boolean;
 }
 
@@ -821,14 +820,18 @@ export function loadConfig(scope: cdk.App): AppConfig {
         .map((s) => s.trim()).filter(Boolean)
         || scope.node.tryGetContext('artifacts')?.extraFrameAncestors
         || [],
-      // Default OFF, opt-in — the inverse of the kill-switch ternary used by
-      // scheduledRuns/memorySpaces/skills above. Only the literal "true"
-      // enables, so the empty string an unset GitHub Actions variable
-      // forwards resolves to off, which is the intended default rather than
-      // an accident.
+      // Default ON with a kill switch: the recipient inbox is a complete
+      // feature and ships enabled for every deployer (opt-out, not opt-in).
+      // It shipped opt-in in 1.18.0 because the surface landed ahead of the
+      // product decision; that decision is made, so a fork should get the
+      // finished feature without having to discover a variable.
+      // The workflow forwards `${{ vars.CDK_ARTIFACT_SHARE_INBOX_ENABLED }}`,
+      // which is an EMPTY STRING when the variable is unset — so treat
+      // empty/unset as "use the default (on)" and only the literal "false"
+      // as the off switch. (Same ternary as scheduledRuns above — keep in sync.)
       shareInboxEnabled: process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED
-        ? process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED === 'true'
-        : scope.node.tryGetContext('artifacts')?.shareInboxEnabled ?? false,
+        ? process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED !== 'false'
+        : scope.node.tryGetContext('artifacts')?.shareInboxEnabled ?? true,
     },
     mcpSandbox: {
       certificateArn: process.env.CDK_MCP_SANDBOX_CERTIFICATE_ARN || scope.node.tryGetContext('mcpSandbox')?.certificateArn,

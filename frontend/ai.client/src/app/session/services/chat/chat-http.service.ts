@@ -134,6 +134,11 @@ export class ChatHttpService {
       if (!isCurrentStream()) return;
       this.messageMapService.endStreaming(sessionId);
       this.chatStateService.setChatLoading(sessionId, false);
+      // Release the transport handle too. `streamingSessionIds()` reads it
+      // to decide which turns a page departure interrupted, so a controller
+      // left behind here makes every completed turn in this tab eligible for
+      // a `navigated_away` marker on the next refresh / tab close.
+      this.chatStateService.releaseAbortController(sessionId, abortController);
     };
 
     try {

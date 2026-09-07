@@ -173,18 +173,22 @@ consumed by minting a render token, so it cannot be useful without artifacts
 being on.
 
 The "Shared with you" inbox has a flag of its own: `ARTIFACT_SHARE_INBOX_ENABLED`
-(CDK: `CDK_ARTIFACT_SHARE_INBOX_ENABLED`). Unlike the kill-switch flags elsewhere
-in the platform it is **default off and opt-in** — only the literal `"true"`
-enables it — because the surface shipped ahead of the product decision about it.
-While off, `GET /shared-artifacts` 404s and the SPA renders the library without
-tabs.
+(CDK: `CDK_ARTIFACT_SHARE_INBOX_ENABLED`). Like the other flags in the platform
+it is **default on with a kill switch** — only the literal `"false"` disables it,
+and an unset variable resolves to on. While off, `GET /shared-artifacts` 404s and
+the SPA renders the library without tabs.
+
+It shipped default-off and opt-in in 1.18.0, because the surface landed ahead of
+the product decision about it. That decision was made and the inbox went live, so
+the default flipped: a deployment that never sets the variable should get the
+finished feature rather than silently lose it.
 
 The flag gates the **read only**. Fan-out rows are written by every share
 regardless of it. That asymmetry is deliberate: if the writes were gated too,
 turning the flag on would reveal an inbox missing every share created while it
 was off — a wrong answer rather than an empty one, and one nobody could see was
-wrong. Writing the rows regardless makes the flip complete and instant, with no
-backfill to sequence.
+wrong. Writing the rows regardless makes the toggle complete and instant in
+either direction, with no backfill to sequence.
 
 ## Artifacts inside a shared conversation
 

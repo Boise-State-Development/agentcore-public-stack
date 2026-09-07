@@ -9,6 +9,7 @@ import {
   AnnouncementModalComponent,
   AnnouncementModalData,
 } from '../../components/announcement-modal/announcement-modal.component';
+import { Announcement, AnnouncementSurface } from './announcement.model';
 import { SessionService } from '../../auth/session.service';
 import { MessageMapService } from '../../session/services/session/message-map.service';
 import { ToolApprovalService } from '../tool-approval/tool-approval.service';
@@ -95,22 +96,54 @@ export class AnnouncementModalService {
       untracked(() => {
         if (this.shown.has(item.announcement_id)) return;
         if (!this.canInterrupt()) return;
-
-        this.shown.add(item.announcement_id);
-        this.openRef = this.dialog.open<void, AnnouncementModalData>(
-          AnnouncementModalComponent,
-          {
-            data: { announcement: item },
-            hasBackdrop: false, // the dialog component owns its own backdrop
-            // The only exit from a `requiresAck` announcement is its button.
-            disableClose: item.requires_ack,
-            panelClass: 'announcement-modal',
-          },
-        );
-        this.openRef.closed.subscribe(() => {
-          this.openRef = null;
-        });
+        this.open(item, 'modal');
       });
+    });
+  }
+
+  /**
+   * Open the detail dialog for one announcement **because the user asked**.
+   *
+   * The banner calls this when its text is clicked: the pill is one line and
+   * renders no body, so without a way in, the only affordances on it are ✕ and
+   * an optional CTA — which is how you train people to dismiss unread.
+   *
+   * Two things it deliberately does *not* do. It does not consult
+   * `canInterrupt()`: that gate exists to stop us throwing a dialog at someone
+   * mid-thought, and a click is not an interruption — the user is the one
+   * asking. It *does* respect `openRef`, because two stacked dialogs is a bug
+   * whoever opened them.
+   *
+   * It also marks the announcement `shown`, so the §D8 effect cannot re-open
+   * the same item as an interruption after the user has already read it here.
+   */
+  openFor(
+    announcement: Announcement,
+    sourceSurface: AnnouncementSurface = 'modal',
+  ): void {
+    if (this.openRef !== null) return;
+    this.open(announcement, sourceSurface);
+  }
+
+  /** The single place a dialog is constructed, so `openRef` cannot drift. */
+  private open(
+    announcement: Announcement,
+    sourceSurface: AnnouncementSurface,
+  ): void {
+    this.shown.add(announcement.announcement_id);
+    this.openRef = this.dialog.open<void, AnnouncementModalData>(
+      AnnouncementModalComponent,
+      {
+        data: { announcement, sourceSurface },
+        hasBackdrop: false, // the dialog component owns its own backdrop
+        // The only exit from a `requiresAck` announcement is its button —
+        // including when the user opened it themselves from the banner.
+        disableClose: announcement.requires_ack,
+        panelClass: 'announcement-modal',
+      },
+    );
+    this.openRef.closed.subscribe(() => {
+      this.openRef = null;
     });
   }
 

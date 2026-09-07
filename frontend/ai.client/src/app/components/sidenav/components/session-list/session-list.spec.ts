@@ -31,7 +31,7 @@ describe('SessionList', () => {
       mergedSessionsResource: signal({ sessions: [mockSession], nextToken: null }),
       currentSession: signal(mockSession),
       deleteSession: vi.fn().mockResolvedValue(undefined),
-      sessionsResource: { value: vi.fn().mockReturnValue(null), error: vi.fn().mockReturnValue(null), isPending: vi.fn().mockReturnValue(false) },
+      sessionsResource: { value: vi.fn().mockReturnValue({ sessions: [mockSession], nextToken: null }), error: vi.fn().mockReturnValue(null), isPending: vi.fn().mockReturnValue(false) },
       isLocallyRead: vi.fn().mockReturnValue(false),
       markSessionRead: vi.fn().mockResolvedValue(undefined),
       markSessionUnread: vi.fn().mockResolvedValue(undefined),
@@ -61,6 +61,53 @@ describe('SessionList', () => {
     const { SessionList } = await import('./session-list');
     return TestBed.runInInjectionContext(() => new SessionList());
   }
+
+  describe('isLoading', () => {
+    it('stays loading while the resource has not produced a response', async () => {
+      // Cold start: the loader short-circuits to `null` because sessions
+      // loading is not enabled until the BFF bootstrap resolves — and
+      // `reload()` keeps that `null` for the whole real fetch. With nothing
+      // cached to draw, that must read as loading (skeleton), never as
+      // "no conversations".
+      mockSessionService.mergedSessionsResource.set({ sessions: [], nextToken: null });
+      mockSessionService.sessionsResource.value.mockReturnValue(null);
+      const component = await createComponent();
+
+      expect(component.isLoading()).toBe(true);
+
+      // Before the first load resolves at all.
+      mockSessionService.sessionsResource.value.mockReturnValue(undefined);
+      expect(component.isLoading()).toBe(true);
+    });
+
+    it('is not loading once the API answers, even with zero sessions', async () => {
+      mockSessionService.mergedSessionsResource.set({ sessions: [], nextToken: null });
+      mockSessionService.sessionsResource.value.mockReturnValue({ sessions: [], nextToken: null });
+      const component = await createComponent();
+
+      // A real empty response is the empty state, not a skeleton.
+      expect(component.isLoading()).toBe(false);
+    });
+
+    it('renders locally cached sessions instead of a skeleton', async () => {
+      mockSessionService.sessionsResource.value.mockReturnValue(null);
+      const component = await createComponent();
+
+      expect(component.isLoading()).toBe(false);
+    });
+
+    it('defers to the error state without reading the resource value', async () => {
+      mockSessionService.mergedSessionsResource.set({ sessions: [], nextToken: null });
+      mockSessionService.sessionsResource.error.mockReturnValue(new Error('boom'));
+      // Angular's resource throws from `value()` when the load errored.
+      mockSessionService.sessionsResource.value.mockImplementation(() => {
+        throw new Error('should not be read');
+      });
+      const component = await createComponent();
+
+      expect(component.isLoading()).toBe(false);
+    });
+  });
 
   it('should compute sessions from merged resource', async () => {
     const component = await createComponent();

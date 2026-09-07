@@ -235,11 +235,34 @@ export class ChatStateService {
     }
 
     /**
+     * Release a session's controller once its stream has finished.
+     *
+     * The counterpart to `createAbortController`, and what makes
+     * `streamingSessionIds()` honest: without it a controller outlives its
+     * stream for the life of the tab, so every completed turn keeps looking
+     * in-flight and the page-hide attribution below marks turns that
+     * finished minutes (or days) earlier as `navigated_away`. That is a
+     * false "Response interrupted" chip on a complete answer, and a false
+     * interruption note prepended to the session's next prompt.
+     *
+     * Identity-checked: a superseded stream's late teardown must not clear
+     * the controller of the stream that replaced it (`createAbortController`
+     * installs the replacement before the old stream's abort unwinds).
+     */
+    releaseAbortController(sessionId: string, controller: AbortController): void {
+        const state = this.states().get(sessionId);
+        if (state && state.abortController === controller) {
+            state.abortController = null;
+        }
+    }
+
+    /**
      * Session ids with a stream in flight right now.
      *
      * Read at page-hide time to attribute a departure to the turns it
      * actually interrupted. A live controller is the truthful test: it is
-     * created per request and nulled on abort, so it tracks the transport
+     * created per request and released on abort (`abortRequest`) or on
+     * stream teardown (`releaseAbortController`), so it tracks the transport
      * rather than the `loading` flag, which other code also drives.
      */
     streamingSessionIds(): string[] {

@@ -456,6 +456,49 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Artifact share inbox feature flag — default ON with a kill switch
+  // (flipped from opt-in once the surface shipped; the empty workflow
+  //  var is the case that matters — see the 1.18.0 release notes)
+  // ============================================================
+
+  describe('Artifact share inbox feature flag', () => {
+    test('defaults to enabled when CDK_ARTIFACT_SHARE_INBOX_ENABLED is unset', () => {
+      delete process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED;
+
+      expect(loadConfig(app).artifacts.shareInboxEnabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      // `${{ vars.CDK_ARTIFACT_SHARE_INBOX_ENABLED }}` renders to "" when
+      // unset. Under the previous opt-in default this resolved to OFF; the
+      // whole point of the flip is that a fork which never sets the variable
+      // now gets the finished feature.
+      process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED = '';
+
+      expect(loadConfig(app).artifacts.shareInboxEnabled).toBe(true);
+    });
+
+    test('CDK_ARTIFACT_SHARE_INBOX_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED = 'false';
+
+      expect(loadConfig(app).artifacts.shareInboxEnabled).toBe(false);
+    });
+
+    test('CDK_ARTIFACT_SHARE_INBOX_ENABLED="true" stays enabled', () => {
+      process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED = 'true';
+
+      expect(loadConfig(app).artifacts.shareInboxEnabled).toBe(true);
+    });
+
+    test('cdk.json context artifacts.shareInboxEnabled=false disables when env is unset', () => {
+      delete process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED;
+      app.node.setContext('artifacts', { shareInboxEnabled: false });
+
+      expect(loadConfig(app).artifacts.shareInboxEnabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Memory Spaces feature flag — default ON with a kill switch
   // (complete feature; ships enabled for forkers, empty var must not disable)
   // ============================================================

@@ -685,7 +685,9 @@ async def signal_turn_interrupted_endpoint(
         user left; they did not reject anything. **Recorded only** — the
         running turn is deliberately left alone, matching today's behaviour
         where a refresh lets the turn finish server-side and the reload
-        offers to continue it.
+        offers to continue it. Recorded only while the session's
+        single-flight lease is held: "mid-turn" is a claim this endpoint
+        verifies rather than takes from the client (see the gate below).
 
     Lives on app-api, not inference-api: the AgentCore Runtime data plane
     only proxies ``/invocations`` + ``/ping``, so a custom inference-api
@@ -703,6 +705,29 @@ async def signal_turn_interrupted_endpoint(
     logger.info("POST /sessions/.../interrupt (reason=%s)", body.reason)
 
     try:
+        # A departure can only interrupt a turn that is actually running.
+        # The SPA decides that from its own transport state, which has been
+        # wrong before: a controller left behind after a completed stream
+        # made every finished turn in the tab eligible, so a later refresh
+        # marked complete answers as interrupted (a false "Response
+        # interrupted" chip, and a false interruption note on the session's
+        # next prompt). The single-flight lease is the server's own answer to
+        # "is a turn in flight", so assert it here rather than trusting the
+        # client — old tabs keep running the old SPA long after the fix ships.
+        #
+        # `user_stopped` is deliberately NOT gated: the Stop button only
+        # exists while streaming, and it also arms cancellation below, which
+        # must reach a turn whose lease read fails for any reason.
+        if body.reason == "navigated_away":
+            from apis.shared.sessions.session_lease import is_session_lease_held
+
+            if not await is_session_lease_held(session_id, user_id):
+                logger.info(
+                    "Ignoring navigated_away for session %s — no turn in flight",
+                    session_id,
+                )
+                return Response(status_code=204)
+
         await set_interrupted_turn(
             session_id,
             user_id,
