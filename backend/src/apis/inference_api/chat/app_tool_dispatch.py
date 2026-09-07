@@ -56,6 +56,12 @@ def _serialize_content(result: Any) -> List[Dict[str, Any]]:
     block so a quirky server response still round-trips.
     """
     content = getattr(result, "content", None)
+    if content is None and isinstance(result, dict):
+        # Strands' MCPToolResult extends ToolResult, a TypedDict — so a result
+        # is a plain dict at runtime and `getattr` finds nothing. Without this
+        # every app-initiated tools/call returned `content: []`, leaving the
+        # App with no data to render. Mirrors `_is_error`'s dict handling.
+        content = result.get("content")
     blocks: List[Dict[str, Any]] = []
     if isinstance(content, list):
         for item in content:
