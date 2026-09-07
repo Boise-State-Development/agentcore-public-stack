@@ -165,3 +165,31 @@ async def test_success_returns_result_and_publishes_thread_events(monkeypatch):
     assert events[0]["data"]["tool_use"]["name"] == "widget_tool"
     assert events[0]["data"]["tool_use"]["origin"] == "mcp_app"
     assert events[1]["data"]["tool_result"]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_dict_shaped_result_keeps_its_content(monkeypatch):
+    """A dict-shaped tool result must round-trip its content blocks.
+
+    Strands' `MCPToolResult` extends `ToolResult`, a TypedDict — so what
+    `call_tool_sync` returns is a plain dict at runtime, and the `getattr`
+    lookup in `_serialize_content` finds nothing on it. That regression sent
+    `content: []` back for every app-initiated tools/call, leaving embedded
+    Apps with no data to render while every layer still reported 200/success.
+
+    The other fakes in this module are objects with a `.content` attribute,
+    which is why the attribute path alone looked correct.
+    """
+    result = {
+        "toolUseId": "mcp-1",
+        "status": "success",
+        # Strands content blocks are untagged: `text`/`json`, no `type`.
+        "content": [{"text": '{"lists": []}'}],
+    }
+    client = _FakeClient(result)
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+
+    payload = await _call(session_id="disp-dict")
+
+    assert payload["result"]["content"] == [{"text": '{"lists": []}'}]
+    assert payload["result"]["isError"] is False
