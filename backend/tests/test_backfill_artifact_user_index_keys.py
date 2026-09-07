@@ -165,18 +165,24 @@ def test_spans_every_user(table):
 # ------------------------------------------------------------------
 
 
-def test_refuses_to_fabricate_a_sort_key(table):
-    """A HEAD row with no `updated_at` is reported, never guessed at.
+def test_encodes_a_missing_timestamp_instead_of_inventing_one(table):
+    """A HEAD row with no `updated_at` is still indexed, with an EMPTY
+    timestamp segment.
 
-    GSI2SK is what the library orders by; inventing a timestamp would
-    sort that artifact wrongly for the rest of its life, invisibly."""
+    Leaving it unstamped would drop the artifact out of a sparse index —
+    and out of its owner's library — silently. An empty segment sorts
+    below every real timestamp, so descending it reads last, exactly
+    where the previous in-memory sort put undated rows."""
     put_head(table, updated_at=None)
 
     stats = backfill_mod.backfill(table, apply=True)
 
-    assert stats["skipped"] == 1
-    assert stats["stamped"] == 0
-    assert "GSI2PK" not in row(table)
+    assert stats["stamped"] == 1
+    assert stats["skipped"] == 0
+    item = row(table)
+    assert item["GSI2SK"] == "ARTIFACT##a1"
+    # "#" is below every digit, so this sorts under any real timestamp.
+    assert item["GSI2SK"] < "ARTIFACT#2026-01-01T00:00:00+00:00#a1"
 
 
 def test_dry_run_writes_nothing(table):

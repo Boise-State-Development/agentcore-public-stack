@@ -43,9 +43,12 @@ SAFETY
   left alone.
 * **Never resurrects a deleted row.** ``attribute_exists(SK)`` on every
   update, matching the writer's own write-back rule.
-* **Reports what it cannot fix** rather than guessing — a HEAD row with
-  no ``updated_at`` is counted and named, not stamped with a fabricated
-  timestamp that would sort wrongly forever.
+* **Encodes a missing ``updated_at`` rather than inventing one.** Such a
+  row is stamped with an empty timestamp segment
+  (``ARTIFACT##{aid}``), which sorts below every real timestamp and so
+  reads last — where the previous in-memory sort put it. Leaving it
+  unstamped would drop the artifact from a sparse index, and from its
+  owner's library, silently.
 
 Run against dev first, then prod::
 
@@ -113,16 +116,27 @@ def plan_row(item: Dict[str, Any]) -> Dict[str, Any] | None:
         return {"skip": f"unexpected PK {pk!r}"}
     if not artifact_id:
         return {"skip": "no artifact_id attribute"}
-    if not updated_at:
-        # Deliberately not falling back to created_at or "now": GSI2SK is
-        # the sort key the library orders by, and a fabricated timestamp
-        # would order this artifact wrongly for the rest of its life.
-        # Better to name it and let a human decide.
-        return {"skip": "no updated_at attribute"}
-
+    # A row with no `updated_at` is stamped with an EMPTY timestamp
+    # segment, not a fabricated one. Two things make that the right
+    # answer rather than a fudge:
+    #
+    #   * Leaving it unstamped would drop the artifact out of a sparse
+    #     index — and so out of its owner's library — permanently and
+    #     silently. Dropping somebody's oldest artifacts is worse than
+    #     showing them undated.
+    #   * "ARTIFACT##{aid}" sorts BELOW every real timestamp ("#" < any
+    #     digit), so read descending it lands last — exactly where the
+    #     old in-memory sort put undated rows. It encodes "no timestamp"
+    #     honestly instead of inventing one that would sort wrongly
+    #     forever.
+    #
+    # Neither dev nor prod had such a row when this was written; this is
+    # the defensive branch, and it preserves a contract the library's
+    # tests already assert.
     return {
         "gsi2pk": pk,  # GSI2PK is exactly the base PK — USER#{user_id}
         "gsi2sk": f"ARTIFACT#{updated_at}#{artifact_id}",
+        "undated": not updated_at,
     }
 
 
@@ -145,7 +159,11 @@ def backfill(table: Any, apply: bool) -> Dict[str, int]:
             continue
 
         logger.info(
-            "stamp %s %s -> GSI2SK=%s", item.get("PK"), sk, plan["gsi2sk"]
+            "stamp %s %s -> GSI2SK=%s%s",
+            item.get("PK"),
+            sk,
+            plan["gsi2sk"],
+            "  (no updated_at — sorts last)" if plan.get("undated") else "",
         )
         if not apply:
             stats["stamped"] += 1
