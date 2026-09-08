@@ -792,7 +792,15 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       tabular answers from it are not established.
     - _HANDOFF §5.41_
 
-  - [ ] 16.3 Make the document-status filter fail closed on its one open path
+  - [x] 16.3 Make the document-status filter fail closed on its one open path
+    - **RESOLVED (§5.33).** `_filter_vectors_by_document_status`'s `if not doc_ids:
+      return vectors` now fails closed: a non-empty batch where no chunk carries a
+      `document_id` returns `[]` and emits `METRIC_STATUS_FILTER_FAIL_CLOSED`, like
+      every other unprovable path. An empty input stays an empty result with no
+      metric (an ordinary "no match", not a degradation). Guard
+      `test_filter_fails_closed_when_no_chunk_carries_a_document_id` in
+      `tests/shared/test_search_filtering.py`, mutation-tested (reverting to
+      `return vectors` fails it). Branch `fix/kb-status-filter-fail-closed`.
     - `_filter_vectors_by_document_status` opens with `if not doc_ids: return
       vectors`. Every other unprovable path in that function returns `[]` and emits
       `METRIC_STATUS_FILTER_FAIL_CLOSED`. Predates this feature; not firing today.
