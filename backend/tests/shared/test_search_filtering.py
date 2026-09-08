@@ -244,3 +244,36 @@ def test_filter_empty_vectors(mock_boto3_resource):
     assert result == []
     # boto3.resource should not be called for empty input
     mock_boto3_resource.assert_not_called()
+
+
+# -----------------------------------------------------------------------
+# managed-kb-migration §5.33 / task 16.3: chunks present but NONE carry a
+# document_id → fail closed. This was the one fail-OPEN line left in an
+# otherwise fail-closed function (`if not doc_ids: return vectors`): it served
+# chunks whose parent document could never be confirmed `complete` — including
+# deleted content — whenever `_document_id` resolved to "" for the whole batch.
+# Reverting the fix (back to `return vectors`) makes this test fail.
+# -----------------------------------------------------------------------
+
+
+@patch("apis.shared.assistants.rag_service.emit_count")
+@patch("boto3.resource")
+@patch.dict("os.environ", ENV_PATCH)
+def test_filter_fails_closed_when_no_chunk_carries_a_document_id(mock_boto3_resource, mock_emit):
+    """Non-empty batch where no chunk has a document_id — drop them all."""
+    from apis.shared.assistants.rag_service import _filter_vectors_by_document_status
+
+    # One chunk missing the key entirely, one with an empty id (the exact input
+    # `_document_id` produces when location + both metadata mirrors are absent).
+    vectors = [
+        {"key": "k0", "distance": 0.5, "metadata": {"text": "orphan chunk 0"}},
+        {"key": "k1", "distance": 0.6, "metadata": {"document_id": "", "text": "orphan chunk 1"}},
+    ]
+
+    result = _filter_vectors_by_document_status(vectors, ASSISTANT_ID)
+
+    assert result == [], "chunks with no confirmable document_id must not leak"
+    # The degradation is reported, distinguishing this from an ordinary "no match".
+    mock_emit.assert_called_once()
+    # Nothing to look up, so DynamoDB is never contacted.
+    mock_boto3_resource.assert_not_called()

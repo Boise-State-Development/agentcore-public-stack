@@ -308,7 +308,22 @@ def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_
             doc_ids.add(doc_id)
 
     if not doc_ids:
-        return vectors
+        # FAIL CLOSED (Requirement 5; §5.33). Reaching here with vectors present
+        # means not one chunk carried a `document_id`, so not one can be confirmed
+        # `complete` — the same unprovable state the branches below drop to `[]`.
+        # The old `return vectors` was the single fail-OPEN line left in an
+        # otherwise fail-closed function: it served chunks whose parent document
+        # was never verified (including content a user may have deleted) whenever
+        # `_document_id` resolved to "" for the whole batch. An *empty* input stays
+        # an empty result with no metric — that is an ordinary "no match", logged
+        # at INFO by the caller, not a degradation.
+        if vectors:
+            logger.error(
+                "Document status filter: chunks present but none carry a "
+                "document_id; dropping all because status cannot be confirmed"
+            )
+            emit_count(METRIC_STATUS_FILTER_FAIL_CLOSED)
+        return []
 
     # Look up document status in DynamoDB
     valid_doc_ids: Set[str] = set()
