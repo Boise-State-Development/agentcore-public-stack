@@ -279,12 +279,19 @@ async def get_upgrade_status(
     record = await asyncio.to_thread(r.get_kb_record, assistant_id, assistant_id)
     state = str((record or {}).get("migrationState") or "")
 
+    # The badge's engine, resolved from the SAME record every phase below reads,
+    # so a "Managed" badge can never sit next to a phase derived from a legacy
+    # record (task 16.4). Absent/legacy ⇒ "classic", matching the retrieval
+    # resolver's absence-means-legacy default.
+    engine = "managed" if (record and r.resolve_engine(record) == r.ENGINE_MANAGED) else "classic"
+
     if record and r.resolve_engine(record) == r.ENGINE_MANAGED:
         # Already upgraded. The only thing owed is the one-time notice, and only
         # until it is dismissed — never a permanent badge (Requirement 23.4).
         pending = not record.get("upgradeNoticeDismissedAt")
         return UpgradeStatusResponse(
             phase="succeeded",
+            engine=engine,
             canUpgrade=False,
             noticePending=bool(pending and can_edit),
             progress=_progress_of(record),
@@ -293,6 +300,7 @@ async def get_upgrade_status(
     if state in (r.SHADOW, r.VERIFY, r.PROMOTE):
         return UpgradeStatusResponse(
             phase="in_progress",
+            engine=engine,
             canUpgrade=False,
             progress=_progress_of(record or {}),
         )
@@ -302,19 +310,20 @@ async def get_upgrade_status(
         # editors; the phase itself is not hidden (Requirement 23.5).
         return UpgradeStatusResponse(
             phase="failed",
+            engine=engine,
             canUpgrade=can_edit,
             reason=_failure_reason(record or {}),
             progress=_progress_of(record or {}),
         )
 
     if not (can_edit and migration_enabled()):
-        return UpgradeStatusResponse(phase="none", canUpgrade=False)
+        return UpgradeStatusResponse(phase="none", engine=engine, canUpgrade=False)
 
     items = await asyncio.to_thread(_document_items, assistant_id)
     if not items:
         # An empty knowledge base has nothing to carry across, so there is no
         # action to take and therefore nothing to show (Requirement 23.1).
-        return UpgradeStatusResponse(phase="none", canUpgrade=False)
+        return UpgradeStatusResponse(phase="none", engine=engine, canUpgrade=False)
 
     carried, stranded = _partition_documents(items)
     if not carried:
@@ -323,12 +332,14 @@ async def get_upgrade_status(
         # what this owner needs to see (Requirement 21.3).
         return UpgradeStatusResponse(
             phase="none",
+            engine=engine,
             canUpgrade=False,
             documentsNotCarried=stranded,
         )
 
     return UpgradeStatusResponse(
         phase="available",
+        engine=engine,
         canUpgrade=True,
         progress=UpgradeProgress(completed=0, total=carried, skipped=len(stranded)),
         documentsNotCarried=stranded,

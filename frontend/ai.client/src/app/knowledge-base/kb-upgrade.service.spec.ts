@@ -46,6 +46,7 @@ describe('KbUpgradeService', () => {
       expect(request.request.method).toBe('GET');
       request.flush({
         phase: 'available',
+        engine: 'classic',
         canUpgrade: true,
         progress: { completed: 0, total: 3, skipped: 1 },
         reason: null,
@@ -77,6 +78,28 @@ describe('KbUpgradeService', () => {
       const status = await pending;
       expect(status.documentsNotCarried).toEqual([]);
       expect(status.noticePending).toBe(false);
+    });
+
+    it('reads the engine when the server sends it', async () => {
+      // Drives the Managed/Classic badge (task 16.4).
+      const pending = service.getStatus(ENTITY);
+      http.expectOne(BASE).flush({ phase: 'succeeded', canUpgrade: false, engine: 'managed' });
+
+      expect((await pending).engine).toBe('managed');
+    });
+
+    it('defaults engine to classic when the server omits it', async () => {
+      const pending = service.getStatus(ENTITY);
+      http.expectOne(BASE).flush({ phase: 'available', canUpgrade: true });
+
+      expect((await pending).engine).toBe('classic');
+    });
+
+    it('defaults engine to classic when the request fails', async () => {
+      const pending = service.getStatus(ENTITY);
+      http.expectOne(BASE).flush('boom', { status: 500, statusText: 'Server Error' });
+
+      expect((await pending).engine).toBe('classic');
     });
   });
 
