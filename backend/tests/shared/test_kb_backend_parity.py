@@ -26,8 +26,10 @@ import pytest
 
 from apis.shared.assistants.kb_access import granted
 from apis.shared.assistants.rag_service import (
+    MANAGED_MAX_CONTEXT_CHARS,
     MAX_CONTEXT_CHARS,
     augment_prompt_with_context,
+    resolve_context_cap,
     search_assistant_knowledgebase_with_formatting,
 )
 from apis.shared.kb_backend.protocol import (
@@ -173,6 +175,53 @@ def test_managed_path_requests_top_k_five(managed_kb):
 
     assert backend.calls, "the managed backend was never reached"
     assert backend.calls[0]["top_k"] == DEFAULT_TOP_K
+
+
+# ---------------------------------------------------------------------------
+# Requirement 3.2 — the context cap is engine-aware (amended 2026-09-04, §5.40)
+# ---------------------------------------------------------------------------
+#
+# The cap is NO LONGER identical across backends, and that is the fix, not a
+# regression. Bedrock's chunks are ~3x the Docling chunks 2,000 was sized for, so
+# a single character cap silently admitted 4 legacy chunks and 1 managed chunk —
+# top_k=5 became top_k=1 at the model, with wrong answers to show for it. The cap
+# is now per engine, and these guards pin the two values apart. Measured before/
+# after on the KINES advising corpus (dev ast-1d51df6ea532): at 2,000 the model
+# described 1 of 4 emphasis areas and guessed the rest from outside knowledge;
+# at 8,000 all four came from the documents.
+
+
+def test_managed_gets_the_eight_thousand_char_cap():
+    """A managed knowledge base's context cap is 8,000.
+
+    Pinned to the literal, not to ``MANAGED_MAX_CONTEXT_CHARS`` — that number is a
+    property of Bedrock's chunk sizing measured on a real corpus (eval §13.6,
+    HANDOFF §5.40), so a silent edit to the constant must fail here rather than
+    follow it (HANDOFF §4: never assert a constant against itself).
+    """
+    assert resolve_context_cap(ASSISTANT_ID, record={"retrievalEngine": ENGINE_MANAGED}) == 8000
+
+
+def test_legacy_keeps_the_two_thousand_char_cap():
+    """An absent/legacy record resolves to the historical 2,000 cap, unchanged."""
+    assert resolve_context_cap(ASSISTANT_ID, record={}) == 2000
+
+
+def test_the_managed_and_legacy_caps_are_distinct():
+    """Guard against the two caps collapsing to one value — the mutation that
+    reintroduces §5.40 by making managed inherit the 2,000 figure again."""
+    assert MANAGED_MAX_CONTEXT_CHARS == 8000
+    assert MAX_CONTEXT_CHARS == 2000
+    assert MANAGED_MAX_CONTEXT_CHARS != MAX_CONTEXT_CHARS
+
+
+def test_context_cap_keys_on_the_same_kb_record_read_as_the_backend():
+    """With no record passed, the cap reads the KB_Record itself and gets 8,000
+    for a managed assistant — the SAME read ``resolve_backend`` uses, so the cap
+    and the served engine can never disagree."""
+    boto_patch, _ = _patch_record_and_statuses({})
+    with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
+        assert resolve_context_cap(ASSISTANT_ID) == 8000
     assert DEFAULT_TOP_K == 5, "the parity contract pins top_k at 5"
 
 

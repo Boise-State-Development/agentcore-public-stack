@@ -1709,6 +1709,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         from apis.shared.assistants.kb_access import granted
         from apis.shared.assistants.rag_service import (
             augment_prompt_with_context,
+            resolve_context_cap,
             search_assistant_knowledgebase_with_formatting,
         )
         from apis.shared.assistants.service import (
@@ -1989,7 +1990,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
             # 4. Augment message with context
             if context_chunks:
-                augmented_message = augment_prompt_with_context(user_message=input_data.message, context_chunks=context_chunks)
+                # Engine-aware cap (Requirement 3.2): managed gets 8,000 so
+                # reranking's top_k chunks actually reach the model; legacy keeps
+                # 2,000. See rag_service.resolve_context_cap / HANDOFF §5.40.
+                cap = resolve_context_cap(input_data.rag_assistant_id)
+                augmented_message = augment_prompt_with_context(user_message=input_data.message, context_chunks=context_chunks, max_context_length=cap)
                 logger.info(
                     f"Augmented message with {len(context_chunks)} context chunks"
                 )

@@ -53,7 +53,7 @@ from apis.shared.assistants.service import (
     update_share_permission,
 )
 from apis.shared.assistants.kb_access import granted
-from apis.shared.assistants.rag_service import augment_prompt_with_context, search_assistant_knowledgebase_with_formatting
+from apis.shared.assistants.rag_service import augment_prompt_with_context, resolve_context_cap, search_assistant_knowledgebase_with_formatting
 
 logger = logging.getLogger(__name__)
 
@@ -532,8 +532,10 @@ async def test_chat_endpoint(assistant_id: str, request: AssistantTestChatReques
             access=granted(assistant_id, user_id, permission),
         )
 
-        # 5. Augment user message with retrieved context
-        augmented_message = augment_prompt_with_context(user_message=request.message, context_chunks=context_chunks)
+        # 5. Augment user message with retrieved context (engine-aware cap:
+        # managed 8,000, legacy 2,000 — Requirement 3.2 / HANDOFF §5.40).
+        cap = resolve_context_cap(assistant_id)
+        augmented_message = augment_prompt_with_context(user_message=request.message, context_chunks=context_chunks, max_context_length=cap)
 
         # 6. Create agent with assistant's instructions as system prompt
         agent = await get_agent(

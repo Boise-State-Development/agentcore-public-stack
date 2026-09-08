@@ -69,11 +69,15 @@ The following are explicitly **not** in scope, each for a stated reason:
   > shape as Requirement 8.5, which was also validated under conditions that
   > excluded the real failure.
   >
-  > This exclusion stands for now, because the cap is a parity control and moving
-  > it forfeits attributability (§9, §13.5). It is no longer justified by "no
-  > correctness change", which is false. Resolving it requires either accepting a
-  > managed-only cap and declaring the asymmetry, or re-running §13.6 on a corpus
-  > where section context sits outside the top chunk. See HANDOFF.md §5.40.
+  > **RESOLVED 2026-09-04:** the cap is now **engine-aware** — legacy stays 2,000,
+  > managed becomes 8,000 (`rag_service.resolve_context_cap`), which restores parity
+  > in chunks-reaching-the-model rather than characters and is sized from §13.6
+  > itself (8,000 = all five managed chunks fit, ~966 extra input tokens/turn). This
+  > does **not** forfeit attributability — the single-character cap had *already*
+  > broken it (~4 legacy chunks vs ~1 managed). Confirmed on the KINES advising
+  > corpus in dev (1 of 4 emphasis areas answered from the documents at 2,000; all
+  > four at 8,000). Raising the cap on the *legacy* path remains out of scope. See
+  > Requirement 3.2 (amended) and HANDOFF.md §5.40.
 - **0..N agent-to-KB bindings (F4).** §10.6 requires that the engine swap and the
   binding-cardinality change not be coupled, because a joint failure is
   unattributable. This spec lands the `KnowledgeBase` entity record while
@@ -199,15 +203,26 @@ the upgrade.
 #### Acceptance Criteria
 
 1. THE system SHALL request `top_k = 5` on both backends.
-2. THE system SHALL apply a context cap of **2,000 characters** on both backends,
-   unchanged from today's `max_context_length` default.
+2. THE system SHALL apply an **engine-aware** context cap — **2,000 characters**
+   on the Legacy_Backend and **8,000 characters** on the Managed_Backend —
+   resolved by `rag_service.resolve_context_cap` from the knowledge base's
+   Retrieval_Engine, the same value the backend resolver keys on, so the cap and
+   the served engine can never disagree.
 
-   > ⚠️ Identical characters is **not** identical behaviour. Bedrock's chunks are
-   > ~3× Docling's, so this same number admits ~4 legacy chunks and ~1 managed
-   > chunk, making `top_k = 5` above effectively `top_k = 1` on the managed path.
-   > This is parity on the constant, not on the effect. Measured, with a wrong
-   > answer to show for it — see the amendment in the out-of-scope list above and
-   > HANDOFF.md §5.40 before treating this requirement as satisfied.
+   > ⚠️ **Amended 2026-09-04 by measurement (was: 2,000 on both backends).**
+   > Identical characters is **not** identical behaviour. Bedrock's chunks are ~3×
+   > Docling's, so a single 2,000 cap admitted ~4 legacy chunks but only ~1 managed
+   > chunk — making `top_k = 5` (3.1) effectively `top_k = 1` on the managed path,
+   > and it produced materially wrong answers (a Major-Core course described as an
+   > elective; on the KINES advising corpus, only 1 of 4 emphasis areas described
+   > from the documents with the rest guessed from outside knowledge the assistant
+   > was told not to use). 8,000 is the evaluation's own §13.6 sizing: the point at
+   > which all five managed chunks fit, ~966 extra input tokens/turn. The
+   > managed-only asymmetry is **deliberate and restores parity in the unit that
+   > matters** — chunks reaching the model, not characters. §13.6's "no correctness
+   > change 2,000→20,000" covered single-fact lookups only and flagged multi-chunk
+   > synthesis — the case that broke — as untested. See HANDOFF.md §5.40. Guarded by
+   > `tests/shared/test_kb_backend_parity.py` (mutation-tested).
 3. THE system SHALL retain the Doc_Status_Filter on **both** backends during
    parity, even though Managed_Backend makes it redundant.
 4. THE system SHALL build citations from the same `context_chunks` structure on
