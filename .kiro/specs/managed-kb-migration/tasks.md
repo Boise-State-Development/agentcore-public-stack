@@ -766,7 +766,16 @@ All three flags — managed-default, migration, and reconciler arming — ship *
 
 - [ ] 16. Post-implementation findings (opened by running it — see `HANDOFF.md` §5)
 
-  - [ ] 16.1 Resolve the 2,000-character context cap on the managed path
+  - [x] 16.1 Resolve the 2,000-character context cap on the managed path
+    - **RESOLVED 2026-09-04 (Option A: engine-aware cap).** `rag_service.resolve_context_cap`
+      returns 2,000 for legacy, 8,000 for managed, keyed on the same `resolve_engine_for`
+      the backend resolver uses. Both call sites (`inference_api/chat/routes.py`,
+      `app_api/assistants/routes.py`) pass it. Requirement 3.2 amended; out-of-scope
+      note updated. Guard in `tests/shared/test_kb_backend_parity.py`, mutation-tested
+      (dropping the managed branch fails two named tests). Measured end-to-end on a
+      prod-derived KINES advising corpus re-created in dev (`ast-1d51df6ea532`): at
+      2,000 the model described 1 of 4 emphasis areas from the docs and guessed the
+      rest; at 8,000 all four came from the documents. Branch `fix/kb-managed-context-cap`.
     - **The most consequential open item.** Bedrock's chunks are ~3× Docling's, so
       only ~1 chunk clears the cap and four of reranking's five results never reach
       the model. Measured: legacy 388/130/1035/106 chars (4 fit) vs managed
