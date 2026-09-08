@@ -28,6 +28,13 @@ DocumentIssueKind = Literal[
     "being_removed",
 ]
 
+#: The UI-facing engine name for the ``Managed``/``Classic`` badge (task 16.4,
+#: HANDOFF §6). Deliberately NOT the record's internal ``retrievalEngine`` values
+#: (``managed`` / ``s3vectors``): the client should render a friendly word and
+#: never learn the storage engine's name. Absence-means-legacy collapses to
+#: ``classic`` here, the same way it resolves to the legacy backend everywhere.
+KbEngine = Literal["managed", "classic"]
+
 
 class UpgradeProgress(BaseModel):
     """Non-blocking progress for the ``in_progress`` phase (Requirement 23.3)."""
@@ -68,6 +75,12 @@ class UpgradeStatusResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     phase: UpgradePhase
+    #: The engine currently serving this knowledge base, for the badge (task
+    #: 16.4). Present on every phase — including ``none`` — because the badge is
+    #: engine visibility, not upgrade state, and must render on a settled legacy
+    #: knowledge base too. Defaults to ``classic``: an unread or absent record is
+    #: legacy, the same default the retrieval resolver applies.
+    engine: KbEngine = "classic"
     #: True only for an owner/editor looking at an ``available`` knowledge base.
     #: The client hides the control on this alone; the server re-checks on write,
     #: so a client that ignores it gains nothing (Requirement 23.7).

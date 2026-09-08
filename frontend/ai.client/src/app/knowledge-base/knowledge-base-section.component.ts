@@ -27,6 +27,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { DocumentService, DocumentUploadError } from '../assistants/services/document.service';
 import {
   Document,
+  DocumentStatus,
   PROCESSING_STATUSES,
   STALE_DOCUMENT_THRESHOLD_MS,
 } from '../assistants/models/document.model';
@@ -214,6 +215,73 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
    * case — an unread status is indistinguishable from nothing to say.
    */
   readonly upgradePhase = computed(() => this.upgradeStatus()?.phase ?? 'none');
+
+  // ── Engine visibility (task 16.4, HANDOFF §6) ───────────────────────────
+  //
+  // Two surfaces, one source: the server-derived engine on the upgrade status.
+  // The badge names the engine, and the per-document status vocabulary follows
+  // it — because a managed knowledge base no longer emits chunking/embedding
+  // (PR #900), so its documents must not be described with legacy words.
+
+  /** The engine serving this knowledge base; `classic` until a status is read. */
+  readonly kbEngine = computed(() => this.upgradeStatus()?.engine ?? 'classic');
+
+  /** True when this knowledge base is served by the managed backend. */
+  readonly isManagedEngine = computed(() => this.kbEngine() === 'managed');
+
+  /** The `Managed`/`Classic` badge label. */
+  readonly engineBadgeLabel = computed(() => (this.isManagedEngine() ? 'Managed' : 'Classic'));
+
+  /**
+   * Whether to show the engine badge at all.
+   *
+   * Only for an existing knowledge base that actually has documents — a badge on
+   * an empty or not-yet-created section would label a store with nothing in it.
+   * Engine is not sensitive, so this is not permission-gated.
+   */
+  readonly showEngineBadge = computed(
+    () => this.mode() === 'edit' && this.uploadedDocuments().length > 0,
+  );
+
+  /**
+   * The user-facing label for a document's processing status, in the vocabulary
+   * of the knowledge base's engine (task 16.4, HANDOFF §6).
+   *
+   * Managed knowledge bases no longer emit `chunking`/`embedding` (PR #900): the
+   * managed ingestion consumer writes only `uploading` then `complete`, so the
+   * whole indexing wait showed as the literal word "Uploading". Managed therefore
+   * reads `uploading → processing → ready` (+ `failed`); legacy assistants keep
+   * the finer-grained words they still emit. The word "vector" appears nowhere,
+   * per Requirement 23.6.
+   */
+  statusLabel(docStatus: DocumentStatus): string {
+    if (this.isManagedEngine()) {
+      switch (docStatus) {
+        case 'complete':
+          return 'Ready';
+        case 'failed':
+          return 'Failed';
+        default:
+          // `uploading` — and any legacy word a mid-migration record might still
+          // carry — reads as the honest "still working on it" on the managed path.
+          return 'Processing';
+      }
+    }
+    switch (docStatus) {
+      case 'uploading':
+        return 'Uploading';
+      case 'chunking':
+        return 'Chunking';
+      case 'embedding':
+        return 'Embedding';
+      case 'complete':
+        return 'Complete';
+      case 'failed':
+        return 'Failed';
+      default:
+        return docStatus;
+    }
+  }
 
   /** Requirement 23.2 — the opt-in card. Only ever for owners and editors. */
   readonly showUpgradeOffer = computed(

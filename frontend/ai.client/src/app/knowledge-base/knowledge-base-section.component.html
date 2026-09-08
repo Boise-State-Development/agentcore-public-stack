@@ -469,7 +469,33 @@
   <!-- Uploaded Documents List -->
   @if (uploadedDocuments().length > 0) {
     <div>
-      <h3 class="mb-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Uploaded Documents</h3>
+      <div class="mb-2 flex items-center gap-2">
+        <h3 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Uploaded Documents</h3>
+        @if (showEngineBadge()) {
+          <!-- Engine visibility (task 16.4, HANDOFF §6): names which backend
+               serves this knowledge base. This feature's whole risk profile is
+               silent regressions, so "Managed" vs "Classic" is surfaced rather
+               than left readable only in the KB record. -->
+          <span
+            class="inline-flex items-center rounded-full px-2 py-0.5 text-xs/4 font-medium"
+            [class.bg-primary-50]="isManagedEngine()"
+            [class.text-primary-accessible]="isManagedEngine()"
+            [class.dark:bg-primary-500/10]="isManagedEngine()"
+            [class.dark:text-primary-accessible-dark]="isManagedEngine()"
+            [class.bg-gray-100]="!isManagedEngine()"
+            [class.text-gray-600]="!isManagedEngine()"
+            [class.dark:bg-gray-700]="!isManagedEngine()"
+            [class.dark:text-gray-300]="!isManagedEngine()"
+            [title]="
+              isManagedEngine()
+                ? 'This knowledge base is served by the managed engine.'
+                : 'This knowledge base is served by the classic engine.'
+            "
+          >
+            {{ engineBadgeLabel() }}
+          </span>
+        }
+      </div>
       <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
         @for (doc of uploadedDocuments(); track doc.documentId) {
           <li class="flex items-start gap-3 px-3 py-2.5 sm:px-4">
@@ -495,7 +521,7 @@
                   <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ formatBytes(doc.sizeBytes) }}</span>
                   <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
                   <span
-                    class="text-xs/5 font-medium capitalize"
+                    class="text-xs/5 font-medium"
                     [class.text-state-info-600]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
                     [class.dark:text-state-info-400]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
                     [class.text-state-success-600]="doc.status === 'complete'"
@@ -505,7 +531,7 @@
                     [class.text-gray-500]="doc.status !== 'complete' && doc.status !== 'failed' && doc.status !== 'uploading' && doc.status !== 'chunking' && doc.status !== 'embedding'"
                     [class.dark:text-gray-400]="doc.status !== 'complete' && doc.status !== 'failed' && doc.status !== 'uploading' && doc.status !== 'chunking' && doc.status !== 'embedding'"
                   >
-                    {{ doc.status }}
+                    {{ statusLabel(doc.status) }}
                   </span>
                   @if (doc.chunkCount) {
                     <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>

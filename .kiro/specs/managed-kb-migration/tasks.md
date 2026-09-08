@@ -815,7 +815,26 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       `METRIC_STATUS_FILTER_FAIL_CLOSED`. Predates this feature; not firing today.
     - _HANDOFF §5.33 · Requirements: 5.1, 5.2_
 
-  - [ ] 16.4 Give the UI one vocabulary and show which engine served a query
+  - [x] 16.4 Give the UI one vocabulary and show which engine served a query
+    - **RESOLVED (task 16.4).** Two surfaces, one source (the server-derived
+      engine on the upgrade status). (1) **Status vocabulary** is now
+      engine-aware: `KnowledgeBaseSectionComponent.statusLabel` reads
+      `uploading → processing → ready` (+ `failed`) for a managed knowledge base
+      and keeps `uploading/chunking/embedding/complete/failed` for legacy
+      assistants, which still emit them. Fixes the card showing `Uploading` for
+      the whole managed indexing wait (managed writes only `uploading` then
+      `complete`, PR #900). (2) **Engine visibility**: `rag_service`'s facade
+      logs exactly one INFO line per query naming the served engine
+      (`engine=managed (Managed)` / `engine=s3vectors (Classic)`), read from the
+      same KB_Record `resolve_backend` uses so it cannot disagree; and a
+      `Managed`/`Classic` badge renders beside the document list, fed by a new
+      `engine` field on `UpgradeStatusResponse` (defaults `classic`,
+      absence-means-legacy). Mutation-tested guards in
+      `tests/shared/test_kb_backend_parity.py` (log line + content),
+      `tests/routes/test_kb_upgrade.py::TestEngineBadge`,
+      `kb-upgrade.service.spec.ts` and
+      `knowledge-base-section.component.spec.ts`; no user-facing string says
+      "vector" (Req 23.6). Branch `feat/kb-engine-visibility`.
     - Document status is now written only by the owning engine (PR #900), so the
       legacy `chunking`/`embedding` words never appear for a promoted knowledge
       base — but nothing replaced them, so the card shows `Uploading` for the whole

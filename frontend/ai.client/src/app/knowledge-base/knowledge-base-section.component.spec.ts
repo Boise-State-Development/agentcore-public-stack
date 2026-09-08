@@ -5,6 +5,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { KnowledgeBaseSectionComponent } from './knowledge-base-section.component';
 import { KbUpgradeService, UpgradeStatus, DocumentNotCarried } from './kb-upgrade.service';
+import { Document } from '../assistants/models/document.model';
 import { ConfigService } from '../services/config.service';
 import { ToastService } from '../services/toast/toast.service';
 import { DocumentService } from '../assistants/services/document.service';
@@ -30,6 +31,7 @@ import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.ser
 function status(overrides: Partial<UpgradeStatus> = {}): UpgradeStatus {
   return {
     phase: 'none',
+    engine: 'classic',
     canUpgrade: false,
     progress: null,
     reason: null,
@@ -505,6 +507,88 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe('engine visibility (task 16.4)', () => {
+    /** A minimal complete Document row for the list. */
+    function doc(overrides: Partial<Document> = {}): Document {
+      return {
+        documentId: 'doc-1',
+        assistantId: 'ast-1',
+        filename: 'notes.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1234,
+        status: 'complete',
+        createdAt: '2026-09-01T00:00:00Z',
+        updatedAt: '2026-09-01T00:00:00Z',
+        ...overrides,
+      } as Document;
+    }
+
+    describe('status vocabulary', () => {
+      it('reads managed documents as processing → ready, never chunking/embedding', async () => {
+        await render(status({ phase: 'succeeded', engine: 'managed' }));
+        const c = fixture.componentInstance;
+        expect(c.statusLabel('uploading')).toBe('Processing');
+        expect(c.statusLabel('complete')).toBe('Ready');
+        expect(c.statusLabel('failed')).toBe('Failed');
+        // A mid-migration record might still carry a legacy word; it must not
+        // surface the legacy vocabulary on the managed path.
+        expect(c.statusLabel('chunking')).toBe('Processing');
+        expect(c.statusLabel('embedding')).toBe('Processing');
+      });
+
+      it('keeps the finer-grained words for a classic knowledge base', async () => {
+        await render(status({ phase: 'none', engine: 'classic' }));
+        const c = fixture.componentInstance;
+        expect(c.statusLabel('uploading')).toBe('Uploading');
+        expect(c.statusLabel('chunking')).toBe('Chunking');
+        expect(c.statusLabel('embedding')).toBe('Embedding');
+        expect(c.statusLabel('complete')).toBe('Complete');
+        expect(c.statusLabel('failed')).toBe('Failed');
+      });
+
+      it('shows "Processing", not "Uploading", for a managed doc still indexing', async () => {
+        await render(status({ phase: 'succeeded', engine: 'managed' }));
+        fixture.componentInstance.uploadedDocuments.set([doc({ status: 'uploading' })]);
+        fixture.detectChanges();
+        expect(text()).toContain('Processing');
+        expect(text()).not.toContain('Uploading');
+      });
+    });
+
+    describe('the Managed/Classic badge', () => {
+      it('labels a managed knowledge base "Managed"', async () => {
+        await render(status({ phase: 'succeeded', engine: 'managed' }));
+        expect(fixture.componentInstance.isManagedEngine()).toBe(true);
+        expect(fixture.componentInstance.engineBadgeLabel()).toBe('Managed');
+      });
+
+      it('labels a legacy knowledge base "Classic"', async () => {
+        await render(status({ phase: 'none', engine: 'classic' }));
+        expect(fixture.componentInstance.isManagedEngine()).toBe(false);
+        expect(fixture.componentInstance.engineBadgeLabel()).toBe('Classic');
+      });
+
+      it('defaults to classic when no status has been read', () => {
+        expect(fixture.componentInstance.engineBadgeLabel()).toBe('Classic');
+      });
+
+      it('renders the badge next to the document list when documents exist', async () => {
+        await render(status({ phase: 'succeeded', engine: 'managed' }));
+        fixture.componentInstance.uploadedDocuments.set([doc()]);
+        fixture.detectChanges();
+        expect(fixture.componentInstance.showEngineBadge()).toBe(true);
+        expect(text()).toContain('Managed');
+      });
+
+      it('hides the badge when the knowledge base has no documents', async () => {
+        await render(status({ phase: 'succeeded', engine: 'managed' }));
+        fixture.componentInstance.uploadedDocuments.set([]);
+        fixture.detectChanges();
+        expect(fixture.componentInstance.showEngineBadge()).toBe(false);
+      });
     });
   });
 });

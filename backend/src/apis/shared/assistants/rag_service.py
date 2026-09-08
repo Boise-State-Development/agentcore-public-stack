@@ -180,6 +180,21 @@ async def search_assistant_knowledgebase_with_formatting(
         record = load_record(assistant_id)
         backend = resolve_backend(assistant_id, record=record)
 
+        # Engine visibility (task 16.4, HANDOFF §6): exactly one INFO line per
+        # query naming the engine that served it. The resolver logs only on
+        # failure, so before this the question "is the managed backend actually
+        # serving?" could be answered only by reading the KB_Record out of band —
+        # and this feature's whole risk profile is silent regressions. Read from
+        # the SAME record ``resolve_backend`` just used (no extra DynamoDB round
+        # trip), so the logged engine can never disagree with the one that ran.
+        engine = resolve_engine_for(assistant_id, record=record)
+        logger.info(
+            "knowledge base retrieval for assistant %s served by engine=%s (%s)",
+            assistant_id,
+            engine,
+            "Managed" if engine == ENGINE_MANAGED else "Classic",
+        )
+
         # Clamp before dispatch, so both backends receive an identically-shaped
         # query (Requirement 4.2). Managed KB rejects anything over 10,000
         # characters outright and the quota is not adjustable, so clamping only

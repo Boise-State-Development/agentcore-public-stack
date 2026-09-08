@@ -287,6 +287,52 @@ class TestStatus:
             await s.get_upgrade_status(ASSISTANT_ID, can_edit=True)
 
 
+# ── Engine visibility (task 16.4, HANDOFF §6) ────────────────────────────────
+class TestEngineBadge:
+    """Every status response carries the engine the badge renders.
+
+    Present on ``none`` too, because the badge is engine visibility, not upgrade
+    state — a settled legacy knowledge base still shows "Classic". Absent/legacy
+    collapses to ``classic``, matching the retrieval resolver's default.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_promoted_kb_reports_engine_managed(self, table):
+        table.item = _kb_record(
+            retrievalEngine=r.ENGINE_MANAGED, migrationState=r.RETAIN
+        )
+        status = await s.get_upgrade_status(ASSISTANT_ID, can_edit=True)
+        assert status.engine == "managed"
+
+    @pytest.mark.asyncio
+    async def test_a_legacy_kb_with_documents_reports_engine_classic(self, table):
+        table.docs = [_doc("d1")]
+        status = await s.get_upgrade_status(ASSISTANT_ID, can_edit=True)
+        assert status.phase == "available"
+        assert status.engine == "classic"
+
+    @pytest.mark.asyncio
+    async def test_an_in_progress_migration_is_still_classic_until_promoted(self, table):
+        # The record exists but has not been promoted, so it is still served by
+        # the classic engine — the badge must not jump ahead of the promotion.
+        table.item = _kb_record(migrationState=r.SHADOW)
+        status = await s.get_upgrade_status(ASSISTANT_ID, can_edit=True)
+        assert status.phase == "in_progress"
+        assert status.engine == "classic"
+
+    @pytest.mark.asyncio
+    async def test_an_absent_record_reports_engine_classic(self, table):
+        table.item = None
+        table.docs = []
+        status = await s.get_upgrade_status(ASSISTANT_ID, can_edit=True)
+        assert status.phase == "none"
+        assert status.engine == "classic"
+
+    def test_engine_defaults_to_classic_on_the_wire_model(self):
+        """A response built without an engine is classic, not blank."""
+        assert m.UpgradeStatusResponse(phase="none").engine == "classic"
+
+
 # ── Stranded documents (Requirement 21) ──────────────────────────────────────
 class TestStrandedDocuments:
     def test_complete_documents_are_not_flagged(self):
@@ -673,6 +719,7 @@ class TestWireContract:
         assert "canUpgrade" in payload
         assert "noticePending" in payload
         assert "documentsNotCarried" in payload
+        assert payload["engine"] == "classic"
 
     def test_stranded_document_serialises_camel_case(self):
         payload = m.DocumentNotCarried(

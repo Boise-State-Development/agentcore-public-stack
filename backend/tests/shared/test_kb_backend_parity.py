@@ -19,6 +19,7 @@ Requirements: 3.1, 3.2, 3.3, 3.4
 """
 
 import asyncio
+import logging
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 
@@ -667,3 +668,74 @@ def test_existing_record_without_an_engine_attribute_resolves_to_legacy():
 
 def test_fake_managed_backend_conforms_to_protocol():
     assert isinstance(FakeManagedBackend([]), KnowledgeBaseBackend)
+
+
+# ---------------------------------------------------------------------------
+# Engine visibility (task 16.4, HANDOFF §6) — one INFO line per query naming
+# the engine that served it. The resolver otherwise logs only on failure, so
+# without this line "is the managed backend actually serving?" is answerable
+# only from the KB record. These pin the line's presence and its content, so
+# deleting it or mislabelling the engine fails a named test.
+# ---------------------------------------------------------------------------
+
+_RAG_LOGGER = "apis.shared.assistants.rag_service"
+
+
+def _engine_log_lines(caplog) -> List[str]:
+    return [r.getMessage() for r in caplog.records if "served by engine=" in r.getMessage()]
+
+
+def test_managed_query_logs_the_serving_engine(managed_kb, caplog):
+    """A managed query emits exactly one INFO line naming ``managed`` / Managed."""
+    managed_kb([_managed_chunk("doc-a", 0)])
+    boto_patch, _ = _patch_record_and_statuses({"doc-a": "complete"})
+
+    with (
+        patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}),
+        boto_patch,
+        caplog.at_level(logging.INFO, logger=_RAG_LOGGER),
+    ):
+        asyncio.run(
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
+        )
+
+    lines = _engine_log_lines(caplog)
+    assert len(lines) == 1, f"expected exactly one engine line, got {lines}"
+    assert "engine=managed" in lines[0]
+    assert "(Managed)" in lines[0]
+    assert ASSISTANT_ID in lines[0]
+
+
+def test_legacy_query_logs_the_serving_engine(caplog):
+    """A legacy (absent-record) query names ``s3vectors`` / Classic."""
+    boto_patch, _ = _patch_legacy_record_and_statuses({"doc-a": "complete"})
+
+    with (
+        patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}),
+        boto_patch,
+        patch(
+            "apis.shared.embeddings.bedrock_embeddings.search_assistant_knowledgebase",
+            return_value=_s3_response(
+                [{"key": "doc-a#0", "distance": 0.2, "metadata": {"document_id": "doc-a", "text": "legacy"}}]
+            ),
+        ),
+        caplog.at_level(logging.INFO, logger=_RAG_LOGGER),
+    ):
+        asyncio.run(
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
+        )
+
+    lines = _engine_log_lines(caplog)
+    assert len(lines) == 1, f"expected exactly one engine line, got {lines}"
+    assert "engine=s3vectors" in lines[0]
+    assert "(Classic)" in lines[0]
+
+
+def test_the_engine_line_is_not_emitted_when_access_is_denied(caplog):
+    """No grant ⇒ no backend contacted ⇒ no engine line, since none served."""
+    with caplog.at_level(logging.INFO, logger=_RAG_LOGGER):
+        results = asyncio.run(
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=None)
+        )
+    assert results == []
+    assert _engine_log_lines(caplog) == []
