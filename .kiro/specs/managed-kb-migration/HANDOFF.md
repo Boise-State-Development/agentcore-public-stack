@@ -20,13 +20,14 @@ Four things invalidate earlier versions of this document:
    deployed clean. They are §5 items 25–41 and they are the most useful part of
    this document. Three clusters: 32–36 trace to the two engines never being made
    exclusive (PR #900); 37–39 to the ingestion consumer never actually knowing when
-   a document was ready (PRs #901, #908); and **40–41 are about answer quality and
-   are both still OPEN** — the managed backend currently gives a *worse* answer than
-   legacy on a question it retrieves *better*. Start there. §5.33 is also open.
+   a document was ready (PRs #901, #908); of the two answer-quality items **40 (the
+   context cap) is now RESOLVED (PR #997, task 16.1) and 41 (diagram answer quality)
+   remains OPEN** — §5.41, where the managed backend gives a *worse* answer than
+   legacy. §5.33 is also RESOLVED (PR #998, task 16.3).
 3. **The `document_id` "known unknown" was a false alarm** and is now resolved with
    measurements — see §6. An earlier revision listed it as the top open risk. The
    probe was reading facade keys that have never existed. Two genuine findings came
-   out of checking it (§5.32, §5.33), both still open.
+   out of checking it (§5.32, §5.33), since resolved (§5.32 in PR #900, §5.33 in PR #998).
 4. **Iterate locally, but do not trust it for IAM.**
    `scripts/local-dev/run-kb-migration.py` drives the whole state machine
    in-process against dev with your SSO credentials. Three of the
@@ -688,7 +689,7 @@ the managed engine at all. Every symptom below follows from that.
     misleading. The bootstrap copy is a 33-line no-op placeholder that indexes
     nothing and needs no gate.
 
-33. ⚠️ **STILL OPEN. The document-status filter has one fail-*open* line in an
+33. ✅ **RESOLVED (PR #998, task 16.3). The document-status filter had one fail-*open* line in an
     otherwise fail-closed function.** `_filter_vectors_by_document_status` opens
     with `if not doc_ids: return vectors` — so a batch of chunks carrying no
     `document_id` at all bypasses the DynamoDB check entirely and is served
@@ -879,7 +880,7 @@ These two are different in kind from everything above. Nothing is broken, no
 error is raised, every test passes — and the managed backend gives a **worse
 answer than legacy** on a question it retrieves *better*. Both are open.
 
-40. ⚠️ **OPEN, and the most consequential item in this document. The
+40. ✅ **RESOLVED (PR #997, task 16.1). Was the most consequential open item. The
     2,000-character context cap silently reduces `top_k=5` to `top_k=1` on the
     managed backend.** Bedrock's chunks are roughly 3× larger than Docling's, and
     `MAX_CONTEXT_CHARS` was sized for Docling's. Measured on one query:
@@ -964,9 +965,9 @@ answer than legacy** on a question it retrieves *better*. Both are open.
 
 | Group | Notes |
 |---|---|
-| **§5.40** the 2,000-char cap — START HERE | Managed's chunks are ~3× Docling's, so only ONE reaches the model and reranking's other four results are discarded. It produced a materially wrong answer (a required course described as an elective). Needs measurement, not a constant bump: the cap is a parity control (§9, §13.5). Options are managed-only asymmetry, or re-running §13.6 on a corpus where section context sits outside the top chunk |
+| ~~**§5.40** the 2,000-char cap~~ ✅ DONE (PR #997) | Engine-aware cap: managed **8,000**, legacy 2,000 (`rag_service.resolve_context_cap`, keyed on `resolve_engine_for`). Requirement 3.2 amended; validated end-to-end on the KINES advising corpus in dev; mutation-tested |
 | **§5.41** diagram answers | Column-structured diagrams give confident wrong answers because chunks carry no coordinates. Understand the shape before promising anything about tabular image content |
-| **§5.33** the one fail-open line | The only finding from 2026-08-31 still open. `if not doc_ids: return vectors` in `_filter_vectors_by_document_status`. Make it fail closed with `METRIC_STATUS_FILTER_FAIL_CLOSED` like every other unprovable path in that function, and pin it with a test that mutation-fails. Lower stakes now that §5.36 removes deleted content from the managed engine, but still the one silent-serving path left |
+| ~~**§5.33** the one fail-open line~~ ✅ DONE (PR #998) | `if not doc_ids: return vectors` now returns `[]` + `METRIC_STATUS_FILTER_FAIL_CLOSED` when a non-empty batch carries no `document_id`; an empty input stays an empty result with no metric. Guard `test_filter_fails_closed_when_no_chunk_carries_a_document_id`, mutation-tested |
 | **engine visibility** | Nothing logs *which* engine served a query — the resolver only logs on failure — so "is the new one actually working?" can only be answered from the KB record. One INFO line in the facade, plus a `Managed`/`Classic` badge in the knowledge base section, both unbuilt. Wanted before a wide rollout, because this feature's whole risk profile is silent regressions |
 | **14.4** one-click document retry | Req 21.2. Ingestion is S3-event-triggered and there is no reprocess endpoint, so this needs new backend against a live pipeline. The card currently directs the user to re-upload, which works today. Close it by building the endpoint **or** by amending Req 21.2 to accept re-upload |
 | **14.5** admin surface | not started. Filter by engine, stored bytes, document counts, bulk migrate, per-KB retry |
