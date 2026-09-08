@@ -4,6 +4,7 @@ import { provideMarkdown, MarkdownService } from 'ngx-markdown';
 import { AssistantMessageComponent } from './assistant-message.component';
 import { Message, ContentBlock } from '../../../services/models/message.model';
 import { McpAppStateService } from '../../../services/mcp-apps/mcp-app-state.service';
+import { ChatStateService } from '../../../services/chat/chat-state.service';
 import { UiResourceEvent } from '../../../../shared/utils/stream-parser/stream-parser-types';
 
 function makeMessage(content: ContentBlock[]): Message {
@@ -52,6 +53,8 @@ function makePromotedVisualToolBlock(name: string): ContentBlock {
     },
   };
 }
+
+const VIEWED_SESSION = 'sess-viewed';
 
 describe('AssistantMessageComponent', () => {
   let fixture: ComponentFixture<AssistantMessageComponent>;
@@ -254,7 +257,9 @@ describe('AssistantMessageComponent', () => {
         toolUseId: 'tooluse_mcp_app_1',
         result: { status: 'success', content: [{ text: 'Diagram displayed!' }] },
       });
-      mcpAppState.recordLive(makeUiResource('tooluse_mcp_app_1'));
+      // Resources are held per conversation and read against the viewed one.
+      TestBed.inject(ChatStateService).setViewedSession(VIEWED_SESSION);
+      mcpAppState.recordLive(VIEWED_SESSION, makeUiResource('tooluse_mcp_app_1'));
 
       fixture.componentRef.setInput('message', makeMessage([tool]));
       fixture.detectChanges();
@@ -281,6 +286,8 @@ describe('AssistantMessageComponent', () => {
         result: { status: 'success', content: [{ text: 'Diagram displayed!' }] },
       });
 
+      TestBed.inject(ChatStateService).setViewedSession(VIEWED_SESSION);
+
       // Initial render: ui_resource hasn't arrived yet → tool folded into group.
       fixture.componentRef.setInput('message', makeMessage([tool]));
       fixture.detectChanges();
@@ -289,7 +296,7 @@ describe('AssistantMessageComponent', () => {
       // ui_resource arrives ~40ms after tool_result on the wire. The
       // displayBlocks computed must re-run on the McpAppStateService signal
       // update, or the tool stays folded forever.
-      mcpAppState.recordLive(makeUiResource('tooluse_mcp_app_2'));
+      mcpAppState.recordLive(VIEWED_SESSION, makeUiResource('tooluse_mcp_app_2'));
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();

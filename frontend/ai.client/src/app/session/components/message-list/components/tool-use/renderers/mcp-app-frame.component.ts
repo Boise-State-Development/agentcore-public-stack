@@ -440,7 +440,9 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   /** The UI resource for this tool invocation (undefined ⇒ render nothing). */
   protected readonly resource = computed(() => {
     const id = this.toolUseId();
-    return id ? this.mcpAppState.get(id) : undefined;
+    return id
+      ? this.mcpAppState.get(this.chatState.viewedSessionId(), id)
+      : undefined;
   });
 
   /** Whether the header's server icon `<img>` failed to load (→ glyph). */
@@ -534,7 +536,9 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    */
   protected readonly partialInput = computed(() => {
     const id = this.toolUseId();
-    return id ? this.mcpAppState.getPartialInput(id) : undefined;
+    return id
+      ? this.mcpAppState.getPartialInput(this.chatState.viewedSessionId(), id)
+      : undefined;
   });
 
   /**
