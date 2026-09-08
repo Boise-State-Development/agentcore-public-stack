@@ -261,3 +261,228 @@ async def test_leaves_a_live_client_session_alone(monkeypatch):
     assert client.starts == 0
     assert client.stops == 0
     assert client.active is True
+
+
+class _FakeIntegration:
+    """Stands in for the process-wide `ExternalMCPIntegration` singleton."""
+
+    def __init__(self, provider_id=None) -> None:
+        self._provider_id = provider_id
+
+    def provider_for_client(self, _client):
+        return self._provider_id
+
+
+class _FakeDisconnectRepo:
+    def __init__(self, disconnected: bool = False) -> None:
+        self._disconnected = disconnected
+        self.calls: list = []
+
+    async def is_disconnected(self, user_id, provider_id) -> bool:
+        self.calls.append((user_id, provider_id))
+        return self._disconnected
+
+
+def _patch_oauth(
+    monkeypatch,
+    *,
+    provider_id="google-tasks",
+    resolved=None,
+    disconnected=False,
+):
+    """Wire the OAuth collaborators `_ensure_oauth_token` reaches for.
+
+    Each is imported lazily inside the dispatch module, so patching the
+    owning module's attribute is what the call actually resolves.
+    """
+    from agents.main_agent.integrations import external_mcp_client
+    from apis.shared.oauth import disconnect_repository, token_resolution
+
+    monkeypatch.setattr(
+        external_mcp_client,
+        "get_external_mcp_integration",
+        lambda: _FakeIntegration(provider_id),
+    )
+    repo = _FakeDisconnectRepo(disconnected)
+    monkeypatch.setattr(
+        disconnect_repository, "get_disconnect_repository", lambda: repo
+    )
+
+    calls: list = []
+
+    async def _resolve(pid, uid, *, force_authentication=False):
+        calls.append((pid, uid, force_authentication))
+        return resolved
+
+    monkeypatch.setattr(token_resolution, "resolve_token_or_consent_url", _resolve)
+    return calls
+
+
+@pytest.fixture
+def token_cache():
+    """The OAuth token cache is process-global — isolate each test."""
+    from agents.main_agent.integrations import oauth_token_cache
+
+    oauth_token_cache.clear_user("u1")
+    yield oauth_token_cache
+    oauth_token_cache.clear_user("u1")
+
+
+@pytest.mark.asyncio
+async def test_warms_a_cold_token_cache_from_the_vault(monkeypatch, token_cache):
+    """The reported bug: an App's tool calls fail after a page reload.
+
+    `OAuthConsentHook` warms the token cache on `BeforeToolCallEvent` — an
+    event this path never raises. On any container that has not run a
+    model-driven turn for this (user, provider) the cache is cold, the lazy
+    token provider returns None, and the call goes out with no Authorization
+    header. A server that allows an unauthenticated `tools/list` still lists
+    the tool, so the App renders and then every button answers with the
+    server's own "you aren't connected" text.
+    """
+    client = _FakeClient()
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+    calls = _patch_oauth(monkeypatch, resolved={"token": "tok-1", "url": None})
+
+    payload = await _call(session_id="disp-oauth-cold")
+
+    assert payload["result"]["isError"] is False
+    # Resolved before the tool ran, so the request carries a Bearer token.
+    assert calls == [("google-tasks", "u1", False)]
+    assert token_cache.get("u1", "google-tasks") == "tok-1"
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_skips_the_vault(monkeypatch, token_cache):
+    client = _FakeClient()
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+    calls = _patch_oauth(monkeypatch, resolved={"token": "fresh", "url": None})
+    token_cache.set("u1", "google-tasks", "already-warm")
+
+    await _call(session_id="disp-oauth-warm")
+
+    assert calls == []
+    assert token_cache.get("u1", "google-tasks") == "already-warm"
+
+
+@pytest.mark.asyncio
+async def test_consent_required_surfaces_as_409(monkeypatch, token_cache):
+    """No vaulted token means the user really hasn't connected the account.
+
+    409, not 401: the SPA's error interceptor reads any 401 as an expired
+    BFF session and redirects to login, so a 401 here would sign the user
+    out over an unconnected connector.
+    """
+    client = _FakeClient()
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+    _patch_oauth(
+        monkeypatch, resolved={"token": None, "url": "https://consent.example"}
+    )
+
+    with pytest.raises(AppToolCallError) as ei:
+        await _call(session_id="disp-oauth-consent")
+
+    assert ei.value.code == 409
+    assert "google-tasks" in ei.value.message
+    # Never dispatched — there was no token to dispatch with.
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_provider_still_dispatches(monkeypatch, token_cache):
+    """`None` means "couldn't ask AgentCore", not "user must consent".
+
+    Prompting on it would tell a connected user to connect. Let the call go
+    out instead — the server's own error is a truer report than a guess.
+    """
+    client = _FakeClient()
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+    _patch_oauth(monkeypatch, resolved=None)
+
+    payload = await _call(session_id="disp-oauth-unresolved")
+
+    assert payload["result"]["isError"] is False
+    assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_disconnected_user_bypasses_the_cached_token(monkeypatch, token_cache):
+    """A disconnect must reach an App frame that is still open on screen.
+
+    Without this the App keeps working off the cached token for the rest of
+    its TTL after the user presses Disconnect.
+    """
+    client = _FakeClient()
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+    _patch_oauth(
+        monkeypatch,
+        resolved={"token": None, "url": "https://consent.example"},
+        disconnected=True,
+    )
+    token_cache.set("u1", "google-tasks", "stale-post-disconnect")
+
+    with pytest.raises(AppToolCallError) as ei:
+        await _call(session_id="disp-oauth-disconnected")
+
+    assert ei.value.code == 409
+    assert token_cache.get("u1", "google-tasks") is None
+
+
+@pytest.mark.asyncio
+async def test_forces_reauth_when_disconnected(monkeypatch, token_cache):
+    client = _FakeClient()
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+    calls = _patch_oauth(
+        monkeypatch,
+        resolved={"token": "re-consented", "url": None},
+        disconnected=True,
+    )
+
+    await _call(session_id="disp-oauth-force")
+
+    assert calls == [("google-tasks", "u1", True)]
+
+
+@pytest.mark.asyncio
+async def test_auth_shaped_failure_clears_the_cached_token(monkeypatch, token_cache):
+    """A rejected token must not stay cached for the rest of its TTL.
+
+    Cleared, not retried: an app-initiated call is whatever button the user
+    pressed, so re-firing a mutation off a regex match could apply the side
+    effect twice.
+    """
+    client = _FakeClient(_FakeResult("401 Unauthorized", is_error=True))
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+    _patch_oauth(monkeypatch, resolved={"token": "revoked", "url": None})
+
+    payload = await _call(session_id="disp-oauth-401")
+
+    assert payload["result"]["isError"] is True
+    assert token_cache.get("u1", "google-tasks") is None
+    # One call only — no automatic retry of a possibly-mutating tool.
+    assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ordinary_tool_error_keeps_the_cached_token(monkeypatch, token_cache):
+    """Only auth-shaped failures invalidate the token."""
+    client = _FakeClient(_FakeResult("Task not found", is_error=True))
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+    _patch_oauth(monkeypatch, resolved={"token": "tok-1", "url": None})
+
+    await _call(session_id="disp-oauth-plain-error")
+
+    assert token_cache.get("u1", "google-tasks") == "tok-1"
+
+
+@pytest.mark.asyncio
+async def test_non_oauth_client_never_asks_agentcore(monkeypatch, token_cache):
+    """A SigV4 / unauthenticated MCP server has no provider to resolve."""
+    client = _FakeClient()
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+    calls = _patch_oauth(monkeypatch, provider_id=None, resolved=None)
+
+    payload = await _call(session_id="disp-oauth-none")
+
+    assert payload["result"]["isError"] is False
+    assert calls == []

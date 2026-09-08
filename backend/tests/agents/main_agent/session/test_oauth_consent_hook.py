@@ -19,10 +19,8 @@ from apis.shared.oauth.agentcore_identity import (
     TokenResult,
     WorkloadTokenUnavailableError,
 )
-from agents.main_agent.session.hooks.oauth_consent import (
-    OAuthConsentHook,
-    _looks_like_auth_failure,
-)
+from apis.shared.oauth.auth_failure import looks_like_auth_failure
+from agents.main_agent.session.hooks.oauth_consent import OAuthConsentHook
 
 
 @pytest.fixture(autouse=True)
@@ -809,7 +807,7 @@ class TestLooksLikeAuthFailure:
         ],
     )
     def test_matches_genuine_auth_errors(self, text):
-        assert _looks_like_auth_failure(self._err(text)) is True
+        assert looks_like_auth_failure(self._err(text)) is True
 
     @pytest.mark.parametrize(
         "text",
@@ -842,22 +840,22 @@ class TestLooksLikeAuthFailure:
         ],
     )
     def test_avoids_false_positives(self, text):
-        assert _looks_like_auth_failure(self._err(text)) is False
+        assert looks_like_auth_failure(self._err(text)) is False
 
     def test_ignores_non_error_status(self):
         # Even an auth-shaped body doesn't count if status is success.
-        assert _looks_like_auth_failure(self._ok("401 Unauthorized")) is False
+        assert looks_like_auth_failure(self._ok("401 Unauthorized")) is False
 
     def test_ignores_non_dict_result(self):
-        assert _looks_like_auth_failure("HTTP 401 Unauthorized") is False
-        assert _looks_like_auth_failure(None) is False
-        assert _looks_like_auth_failure(["401"]) is False
+        assert looks_like_auth_failure("HTTP 401 Unauthorized") is False
+        assert looks_like_auth_failure(None) is False
+        assert looks_like_auth_failure(["401"]) is False
 
     def test_ignores_missing_content(self):
-        assert _looks_like_auth_failure({"status": "error"}) is False
-        assert _looks_like_auth_failure({"status": "error", "content": None}) is False
-        assert _looks_like_auth_failure({"status": "error", "content": []}) is False
+        assert looks_like_auth_failure({"status": "error"}) is False
+        assert looks_like_auth_failure({"status": "error", "content": None}) is False
+        assert looks_like_auth_failure({"status": "error", "content": []}) is False
 
     def test_ignores_non_dict_content_blocks(self):
         result = {"status": "error", "content": ["401 Unauthorized"]}
-        assert _looks_like_auth_failure(result) is False
+        assert looks_like_auth_failure(result) is False
