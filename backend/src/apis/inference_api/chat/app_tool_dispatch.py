@@ -321,6 +321,120 @@ def _invalidate_oauth_token(user_id: str, provider_id: str, tool_name: str) -> N
     oauth_token_cache.clear_user_provider(user_id, provider_id)
 
 
+# --- opportunistic UI-resource revalidation ---------------------------------
+# The App HTML the SPA re-mounts on reload is whatever `resources/read`
+# returned when the tool first ran, replayed verbatim from the `UIRES#` row. So
+# a server that ships a new App version — or tightens the CSP its App runs
+# under — never reaches conversations that already exist.
+#
+# Re-reading needs a live MCP client, and the only path to one is a built
+# agent, so revalidating on every conversation open would add a full agent
+# rebuild (76% of sessions bypass the agent cache) to a page load that runs no
+# model turn. Instead we piggyback: an app-initiated tools/call ALREADY built
+# the agent and revived the client, so the read is nearly free here. The
+# refreshed shell lands on the NEXT load rather than this one — that is the
+# trade, and it converges for the Apps people actually use.
+_refresh_lock = threading.Lock()
+_refreshed_resources: set = set()
+_refresh_tasks: set = set()
+# One refresh per resource per process; a chatty App must not re-read its own
+# shell on every button press.
+_MAX_REFRESHED = 512
+
+
+def _claim_refresh(session_id: str, tool_use_id: str) -> bool:
+    """Whether this process should refresh this resource (once only)."""
+    key = f"{session_id}#{tool_use_id}"
+    with _refresh_lock:
+        if key in _refreshed_resources:
+            return False
+        if len(_refreshed_resources) >= _MAX_REFRESHED:
+            _refreshed_resources.clear()
+        _refreshed_resources.add(key)
+        return True
+
+
+def _refresh_ui_resource(user_id: str, session_id: str, tool_use_id: str) -> None:
+    """Re-read this App's `ui://` resource and overwrite its stored copy.
+
+    Best-effort and silent: this runs after the App already has its answer,
+    so nothing here may raise or slow the call down.
+    """
+    from apis.shared.mcp_apps.ui_resource_store import get_ui_resource_store
+
+    store = get_ui_resource_store()
+    provenance = store.get_provenance(user_id=user_id, tool_use_id=tool_use_id)
+    if not provenance:
+        return
+    # The tool that PRODUCED the frame, which is not the tool the App just
+    # called — the resourceUri hangs off the producing tool's catalog entry.
+    producing_tool = provenance.get("toolName")
+    if not producing_tool:
+        return
+
+    from agents.main_agent.integrations.mcp_apps import fetch_ui_resource
+
+    _, client = _resolve_client(None, producing_tool)
+    if client is None:
+        return
+    # `fetch_ui_resource` calls `read_resource_sync` straight through, and
+    # between turns Strands has already stopped the client's session — the
+    # same reason an app-initiated call needs this wrapper.
+    with _active_session(client):
+        payload = fetch_ui_resource(producing_tool, tool_use_id)
+    if not payload or not payload.get("html"):
+        return
+
+    store.store(
+        user_id=user_id,
+        session_id=session_id,
+        tool_use_id=tool_use_id,
+        resource_uri=payload.get("resourceUri", ""),
+        html=payload["html"],
+        mime_type=payload.get("mimeType", ""),
+        csp=payload.get("csp") or {},
+        permissions=payload.get("permissions") or {},
+        sandbox_origin=payload.get("sandboxOrigin", ""),
+        server_name=payload.get("serverName", ""),
+        icon=payload.get("icon", ""),
+        tool_name=producing_tool,
+        # Preserved: the anchor belongs to the producing turn, and a refresh
+        # must not renumber where the frame sits in the thread.
+        produced_by_message_index=provenance.get("producedByMessageIndex"),
+    )
+    logger.info(
+        "mcp-apps: revalidated UI resource (session=%s, toolUseId=%s)",
+        scrub_log(session_id),
+        scrub_log(tool_use_id),
+    )
+
+
+def _schedule_ui_resource_refresh(
+    user_id: str, session_id: str, tool_use_id: str
+) -> None:
+    """Fire the refresh off the response path; never fail the tool call."""
+    if not _claim_refresh(session_id, tool_use_id):
+        return
+
+    async def _run() -> None:
+        try:
+            await asyncio.to_thread(
+                _refresh_ui_resource, user_id, session_id, tool_use_id
+            )
+        except Exception:  # noqa: BLE001 - revalidation is best-effort
+            logger.warning(
+                "mcp-apps: UI resource revalidation failed (session=%s)",
+                scrub_log(session_id),
+                exc_info=True,
+            )
+
+    task = asyncio.create_task(_run())
+    # Hold a reference: asyncio only weakly references running tasks, so
+    # without this the refresh can be garbage-collected mid-flight.
+    _refresh_tasks.add(task)
+    task.add_done_callback(_refresh_tasks.discard)
+
+
 async def dispatch_app_tool_call(
     agent: Any,
     *,
@@ -419,6 +533,10 @@ async def dispatch_app_tool_call(
             },
         },
     )
+
+    # The agent is built and the client revived right now — the one moment
+    # re-reading this App's shell costs almost nothing. See the note above.
+    _schedule_ui_resource_refresh(user_id, session_id, tool_use_id)
 
     return {
         "toolUseId": tool_use_id,

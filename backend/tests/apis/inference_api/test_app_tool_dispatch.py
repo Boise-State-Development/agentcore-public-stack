@@ -8,6 +8,7 @@ synthesized tool_use/tool_result into the per-session broker.
 
 import pytest
 
+from apis.inference_api.chat import app_tool_dispatch as dispatch_mod
 from apis.inference_api.chat.app_tool_dispatch import (
     AppToolCallError,
     dispatch_app_tool_call,
@@ -486,3 +487,111 @@ async def test_non_oauth_client_never_asks_agentcore(monkeypatch, token_cache):
 
     assert payload["result"]["isError"] is False
     assert calls == []
+
+# --- opportunistic UI-resource revalidation ---------------------------------
+
+
+class _FakeResourceStore:
+    """Stand-in for the `UIRES#` store: one provenance row, capture writes."""
+
+    def __init__(self, provenance=None):
+        self._provenance = provenance
+        self.stored: list = []
+
+    def get_provenance(self, *, user_id, tool_use_id):
+        return self._provenance
+
+    def store(self, **kwargs):
+        self.stored.append(kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _clear_refresh_claims():
+    """The once-per-process claim set is module state — reset per test."""
+    dispatch_mod._refreshed_resources.clear()
+    yield
+    dispatch_mod._refreshed_resources.clear()
+
+
+def test_claim_refresh_is_once_per_resource():
+    assert dispatch_mod._claim_refresh("s1", "tu1") is True
+    # A chatty App presses buttons all day; the shell is read exactly once.
+    assert dispatch_mod._claim_refresh("s1", "tu1") is False
+    # A different frame in the same conversation is its own resource.
+    assert dispatch_mod._claim_refresh("s1", "tu2") is True
+
+
+def test_claim_refresh_bounds_its_memory():
+    for i in range(dispatch_mod._MAX_REFRESHED):
+        dispatch_mod._claim_refresh("s", f"tu{i}")
+    assert len(dispatch_mod._refreshed_resources) == dispatch_mod._MAX_REFRESHED
+    dispatch_mod._claim_refresh("s", "overflow")
+    assert len(dispatch_mod._refreshed_resources) == 1
+
+
+def test_refresh_rereads_the_producing_tool_and_preserves_the_anchor(monkeypatch):
+    store = _FakeResourceStore(
+        {"toolName": "view_task_board", "producedByMessageIndex": 4}
+    )
+    monkeypatch.setattr(
+        "apis.shared.mcp_apps.ui_resource_store.get_ui_resource_store",
+        lambda: store,
+    )
+    monkeypatch.setattr(
+        dispatch_mod, "_resolve_client", lambda agent, name: (object(), _FakeClient())
+    )
+    seen = {}
+
+    def _fetch(tool_name, tool_use_id):
+        seen["tool_name"] = tool_name
+        return {
+            "resourceUri": "ui://tasks/board",
+            "html": "<html>fresh</html>",
+            "mimeType": "text/html",
+            "csp": {"connect-src": ["'self'"]},
+            "permissions": {},
+            "sandboxOrigin": "https://sandbox.example",
+            "serverName": "Google Tasks",
+            "icon": "",
+        }
+
+    monkeypatch.setattr(mcp_apps_mod, "fetch_ui_resource", _fetch)
+
+    dispatch_mod._refresh_ui_resource("u1", "s1", "tu1")
+
+    # Re-read is keyed on the tool that PRODUCED the frame, not whatever the
+    # App just called — the resourceUri hangs off the producing tool.
+    assert seen["tool_name"] == "view_task_board"
+    assert len(store.stored) == 1
+    written = store.stored[0]
+    assert written["html"] == "<html>fresh</html>"
+    assert written["csp"] == {"connect-src": ["'self'"]}
+    assert written["tool_name"] == "view_task_board"
+    # The anchor is the producing turn's; a refresh must not renumber it.
+    assert written["produced_by_message_index"] == 4
+
+
+def test_refresh_no_ops_without_a_stored_row(monkeypatch):
+    store = _FakeResourceStore(None)
+    monkeypatch.setattr(
+        "apis.shared.mcp_apps.ui_resource_store.get_ui_resource_store",
+        lambda: store,
+    )
+    dispatch_mod._refresh_ui_resource("u1", "s1", "tu1")
+    assert store.stored == []
+
+
+def test_refresh_keeps_the_old_copy_when_the_read_returns_nothing(monkeypatch):
+    """A server that is down must not blank an App that still works."""
+    store = _FakeResourceStore({"toolName": "view_task_board"})
+    monkeypatch.setattr(
+        "apis.shared.mcp_apps.ui_resource_store.get_ui_resource_store",
+        lambda: store,
+    )
+    monkeypatch.setattr(
+        dispatch_mod, "_resolve_client", lambda agent, name: (object(), _FakeClient())
+    )
+    monkeypatch.setattr(mcp_apps_mod, "fetch_ui_resource", lambda *a: None)
+
+    dispatch_mod._refresh_ui_resource("u1", "s1", "tu1")
+    assert store.stored == []
