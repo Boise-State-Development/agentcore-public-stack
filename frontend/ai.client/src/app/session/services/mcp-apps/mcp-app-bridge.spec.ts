@@ -529,16 +529,97 @@ describe('McpAppBridge', () => {
     expect(h.proxy.byId('p1').result).toEqual({});
   });
 
-  it('dispose() sends resource-teardown after init and detaches the listener', () => {
+  it('dispose() sends resource-teardown and stays attached through the grace window', async () => {
     handshake(h);
     h.host.deliver(
       { jsonrpc: '2.0', method: 'ui/notifications/initialized', nonce: NONCE },
       h.proxy,
     );
-    h.bridge.dispose('bye');
+    const settled = h.bridge.dispose('bye', 5);
     const td = h.proxy.byMethod('ui/resource-teardown');
     expect(td).toHaveLength(1);
     expect(td[0].params).toEqual({ reason: 'bye' });
+    // Still listening: the App has been told it is going away and may answer
+    // by saving its state, and detaching here would drop that message.
+    expect(h.host.attached).toBe(true);
+
+    await settled;
+    expect(h.host.attached).toBe(false);
+  });
+
+  it('dispose() detaches immediately when the View never initialized', async () => {
+    handshake(h);
+    await h.bridge.dispose('bye', 10_000);
+    // Nothing to notify and nothing to wait for — no teardown, no grace.
+    expect(h.proxy.byMethod('ui/resource-teardown')).toHaveLength(0);
+    expect(h.host.attached).toBe(false);
+  });
+
+  it('dispose() resolves on the ack without burning the whole grace window', async () => {
+    handshake(h);
+    h.host.deliver(
+      { jsonrpc: '2.0', method: 'ui/notifications/initialized', nonce: NONCE },
+      h.proxy,
+    );
+    // A grace window long enough that only the ack can finish this test.
+    const settled = h.bridge.dispose('bye', 60_000);
+    const id = h.proxy.byMethod('ui/resource-teardown')[0].id;
+    h.host.deliver({ jsonrpc: '2.0', id, nonce: NONCE, result: {} }, h.proxy);
+
+    await settled;
+    expect(h.host.attached).toBe(false);
+  });
+
+  it('still proxies a tools/call the App makes in response to teardown', async () => {
+    handshake(h);
+    h.host.deliver(
+      { jsonrpc: '2.0', method: 'ui/notifications/initialized', nonce: NONCE },
+      h.proxy,
+    );
+    h.proxyToolCall.mockResolvedValue({ content: [], isError: false });
+
+    const settled = h.bridge.dispose('conversation-change', 50);
+    // This is the whole point of the grace window: an App that answers
+    // teardown by flushing its state must still reach its server.
+    h.host.deliver(
+      {
+        jsonrpc: '2.0',
+        id: 'save-1',
+        method: 'tools/call',
+        nonce: NONCE,
+        params: { name: 'save_board', arguments: { dirty: true } },
+      },
+      h.proxy,
+    );
+    expect(h.proxyToolCall).toHaveBeenCalledWith('save_board', { dirty: true });
+
+    await settled;
+    // ...and once the window closes, late messages are ignored.
+    h.proxyToolCall.mockClear();
+    h.host.deliver(
+      {
+        jsonrpc: '2.0',
+        id: 'save-2',
+        method: 'tools/call',
+        nonce: NONCE,
+        params: { name: 'save_board', arguments: {} },
+      },
+      h.proxy,
+    );
+    expect(h.proxyToolCall).not.toHaveBeenCalled();
+  });
+
+  it('repeat dispose() calls share the first teardown window', async () => {
+    handshake(h);
+    h.host.deliver(
+      { jsonrpc: '2.0', method: 'ui/notifications/initialized', nonce: NONCE },
+      h.proxy,
+    );
+    const first = h.bridge.dispose('nav', 5);
+    const second = h.bridge.dispose('component-destroyed', 5);
+    // One notification, not two — a second reason must not re-arm the window.
+    expect(h.proxy.byMethod('ui/resource-teardown')).toHaveLength(1);
+    await Promise.all([first, second]);
     expect(h.host.attached).toBe(false);
   });
 

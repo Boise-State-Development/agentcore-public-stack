@@ -71,6 +71,13 @@ import {
   isRequest,
 } from './mcp-app-protocol';
 
+/**
+ * How long the bridge keeps listening after sending `ui/resource-teardown`.
+ * Long enough for the View to ack and post a save call, short enough that a
+ * dead App never holds up a navigation that awaits it.
+ */
+export const DEFAULT_TEARDOWN_GRACE_MS = 1500;
+
 /** Minimal window surface the bridge needs (eases testing). */
 export interface BridgeHostWindow {
   addEventListener(
@@ -172,6 +179,10 @@ export class McpAppBridge {
   /** Set on the View's `ui/notifications/initialized`. */
   private viewInitialized = false;
   private disposed = false;
+  /** Set once the listener is gone; `disposed` only means teardown began. */
+  private detached = false;
+  /** In-flight teardown, so repeat dispose() calls await the same window. */
+  private teardownSettled: Promise<void> | null = null;
 
   /** Notifications deferred until the View reports `initialized`. */
   private readonly preInitQueue: Array<{ method: string; params: unknown }> = [];
@@ -211,16 +222,46 @@ export class McpAppBridge {
   }
 
   /**
-   * Tear down: best-effort `ui/resource-teardown` toward the View, then
-   * detach. Safe to call multiple times.
+   * Tear down: `ui/resource-teardown` toward the View, then detach.
+   * Safe to call multiple times. Resolves when the View acks or the grace
+   * window expires — callers that can afford to wait (navigation) should
+   * await it; `onDestroy` cannot, and doesn't.
+   *
+   * The spec's teardown notification exists so the App can flush state to
+   * its server before it dies (SEP-1865: the host SHOULD wait for a
+   * response "to prevent data loss"). Detaching in the same tick as the
+   * send defeated exactly that: the ack landed on a removed listener, and
+   * an App that answered teardown by calling a save tool had its
+   * postMessage dropped on the floor. So we keep listening through the
+   * grace window — the App's flush is proxied over HTTP from the *host*
+   * page, so once its message is in, the request outlives the iframe.
    */
-  dispose(reason = 'host-teardown'): void {
-    if (this.disposed) return;
+  dispose(reason = 'host-teardown', graceMs = DEFAULT_TEARDOWN_GRACE_MS): Promise<void> {
+    if (this.disposed) return this.teardownSettled ?? Promise.resolve();
     this.disposed = true;
-    if (this.viewInitialized) {
-      // Fire-and-forget: we're going away regardless of the ack.
-      this.sendRequest(M_RESOURCE_TEARDOWN, { reason }).catch(() => undefined);
+
+    if (!this.viewInitialized) {
+      this.detach();
+      return Promise.resolve();
     }
+
+    const acked = this.sendRequest(M_RESOURCE_TEARDOWN, { reason }).then(
+      () => undefined,
+      () => undefined,
+    );
+    this.teardownSettled = Promise.race([
+      acked,
+      new Promise<void>((resolve) => setTimeout(resolve, graceMs)),
+    ]).then(() => {
+      this.detach();
+    });
+    return this.teardownSettled;
+  }
+
+  /** Remove the listener and fail anything still in flight. */
+  private detach(): void {
+    if (this.detached) return;
+    this.detached = true;
     if (this.listener) {
       this.d.hostWindow.removeEventListener('message', this.listener);
       this.listener = null;
@@ -239,7 +280,11 @@ export class McpAppBridge {
   // --- inbound ------------------------------------------------------------
 
   private onMessage(ev: MessageEvent): void {
-    if (this.disposed) return;
+    // Gated on `detached`, NOT `disposed`: between dispose() and the end of
+    // the teardown grace window the bridge is still live on purpose, so the
+    // App's teardown ack — and any save call it makes in response — are
+    // still served.
+    if (this.detached) return;
     const proxyWindow = this.d.getProxyWindow();
     // Source + origin gate. The proxy page is served from sandboxOrigin, so
     // its window's origin is a real URL (the null-origin inner frame only
