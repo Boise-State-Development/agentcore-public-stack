@@ -16,9 +16,13 @@ import { ArtifactPanelComponent } from './components/artifact/artifact-panel.com
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
 import { SharedArtifactCardComponent } from '../../../shared/artifact/shared-artifact-card.component';
 import type { SharedConversationArtifact } from '../../services/share/share.service';
-import { McpAppCardComponent } from './components/mcp-app-card/mcp-app-card.component';
+import { McpAppActionsComponent } from './components/mcp-app-actions/mcp-app-actions.component';
+import { McpAppStateService } from '../../services/mcp-apps/mcp-app-state.service';
 import { AgentFeedbackLinkComponent } from '../../../agents/components/agent-feedback-link.component';
-import { McpAppCardStateService } from '../../services/mcp-apps/mcp-app-card-state.service';
+import {
+  McpAppCardStateService,
+  type McpAppCard,
+} from '../../services/mcp-apps/mcp-app-card-state.service';
 import {
   OAuthConsentRequest,
   OAuthConsentService,
@@ -47,7 +51,7 @@ import { StreamParserService } from '../../services/chat/stream-parser.service';
     ArtifactCardComponent,
     ArtifactPanelComponent,
     SharedArtifactCardComponent,
-    McpAppCardComponent,
+    McpAppActionsComponent,
     AgentFeedbackLinkComponent,
   ],
   templateUrl: './message-list.component.html',
@@ -122,6 +126,7 @@ export class MessageListComponent {
   private compactionSummary = inject(CompactionSummaryService);
   private artifactState = inject(ArtifactStateService);
   private mcpAppCardState = inject(McpAppCardStateService);
+  private mcpAppState = inject(McpAppStateService);
   private chatStateService = inject(ChatStateService);
   private streamParser = inject(StreamParserService);
 
@@ -202,9 +207,28 @@ export class MessageListComponent {
     () => this.retryNotice() ?? this.stallNotice(),
   );
 
-  /** Persisted app-initiated tool cards, hydrated on reload (PR #6). */
-  protected mcpAppCards = this.mcpAppCardState.cards;
-  protected hasMcpAppCards = this.mcpAppCardState.hasCards;
+  /**
+   * Persisted app-initiated tool cards (PR #6) that have nowhere better to
+   * go. Normally these surface behind their own App frame's header, keyed
+   * by the originating tool-use id — that's the whole point of the frame's
+   * actions chip. But a frame only renders once its `ui_resource` carries a
+   * `sandboxOrigin` (no mcp-sandbox stack → no frame), and without this
+   * fallback those cards would vanish silently. Provenance for a tool an
+   * app ran against the user's account is not something to drop on the
+   * floor, so orphans get a standalone box — still summarized, never a card
+   * apiece.
+   */
+  protected orphanedMcpAppCards = computed<McpAppCard[]>(() =>
+    this.mcpAppCardState
+      .cards()
+      .filter(
+        (card) =>
+          !this.mcpAppState.get(
+            this.chatStateService.viewedSessionId(),
+            card.toolUseId,
+          )?.sandboxOrigin,
+      ),
+  );
 
   /**
    * The feedback link needs something to give feedback *about*, so it waits for a turn to

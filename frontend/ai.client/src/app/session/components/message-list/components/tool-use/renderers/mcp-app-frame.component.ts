@@ -24,6 +24,8 @@ import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-m
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
 import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
+import { McpAppActionsComponent } from '../../mcp-app-actions/mcp-app-actions.component';
+import { McpAppCardStateService } from '../../../../../services/mcp-apps/mcp-app-card-state.service';
 import { JsonSyntaxHighlightPipe } from '../json-syntax-highlight.pipe';
 import type { DisplayMode } from '../../../../../services/mcp-apps/mcp-app-protocol';
 import { ChatRequestService } from '../../../../../services/chat/chat-request.service';
@@ -43,14 +45,25 @@ import { SessionService } from '../../../../../services/session/session.service'
  *
  * The whole surface is dark until the backend host flag is flipped (PR #7),
  * so in practice no `ui_resource` arrives and the registry never resolves
- * here. When it has no resource for its `toolUseId` (e.g. after a reload —
- * the inline event doesn't re-hydrate) it renders nothing and the tool-use
- * card falls back to the default renderer path.
+ * here. When it has no resource for its `toolUseId` it renders nothing and
+ * the tool-use card falls back to the default renderer path — in practice
+ * that means an environment with no mcp-sandbox origin, since resources
+ * themselves DO survive a reload via the `GET /messages` `uiResources`
+ * sidecar (`McpAppStateService.seedFromHydration`).
+ *
+ * Because the frame comes back on reload, it also owns the record of what
+ * the App ran while it was up: the header's actions chip discloses the
+ * persisted provenance cards for this `toolUseId` (see
+ * `McpAppActionsComponent`).
  */
 @Component({
   selector: 'app-mcp-app-frame',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [McpAppConsentPromptComponent, JsonSyntaxHighlightPipe],
+  imports: [
+    McpAppConsentPromptComponent,
+    McpAppActionsComponent,
+    JsonSyntaxHighlightPipe,
+  ],
   styles: `
     :host {
       display: block;
@@ -231,32 +244,66 @@ import { SessionService } from '../../../../../services/session/session.service'
               Exit fullscreen
             </button>
           } @else {
-            <button
-              type="button"
-              class="ml-auto shrink-0 rounded-sm p-1 text-gray-500 hover:bg-gray-200 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-              [attr.aria-expanded]="detailsExpanded()"
-              [attr.aria-label]="
-                detailsExpanded() ? 'Hide request and response' : 'Show request and response'
-              "
-              (click)="toggleDetails()"
-            >
-              <svg
-                class="size-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                aria-hidden="true"
+            <div class="ml-auto flex shrink-0 items-center gap-1">
+              <!--
+                Actions this App ran on the user's behalf (PR #6 provenance
+                cards). A count chip rather than a card apiece: an
+                interactive App runs a tool on nearly every gesture, so the
+                per-call history belongs behind a disclosure, not stacked in
+                the thread. Hidden entirely when the App ran nothing.
+              -->
+              @if (appActions().length) {
+                <button
+                  type="button"
+                  class="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs hover:bg-gray-200 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:hover:bg-gray-700"
+                  [class]="appActionsChipClasses()"
+                  [attr.aria-expanded]="actionsExpanded()"
+                  [attr.aria-label]="appActionsLabel()"
+                  (click)="toggleActions()"
+                >
+                  {{ appActionsChipText() }}
+                </button>
+              }
+              <button
+                type="button"
+                class="shrink-0 rounded-sm p-1 text-gray-500 hover:bg-gray-200 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                [attr.aria-expanded]="detailsExpanded()"
+                [attr.aria-label]="
+                  detailsExpanded() ? 'Hide request and response' : 'Show request and response'
+                "
+                (click)="toggleDetails()"
               >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M8 9l-4 3 4 3m8-6l4 3-4 3"
-                />
-              </svg>
-            </button>
+                <svg
+                  class="size-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  aria-hidden="true"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M8 9l-4 3 4 3m8-6l4 3-4 3"
+                  />
+                </svg>
+              </button>
+            </div>
           }
         </div>
+
+        @if (
+          displayMode() !== 'fullscreen' && actionsExpanded() && appActions().length
+        ) {
+          <div
+            class="border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+          >
+            <div class="mb-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+              Run by this app
+            </div>
+            <app-mcp-app-actions [cards]="appActions()" />
+          </div>
+        }
 
         @if (displayMode() !== 'fullscreen' && detailsExpanded()) {
           <div
@@ -372,6 +419,7 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   readonly toolName = input<string>('');
 
   private readonly mcpAppState = inject(McpAppStateService);
+  private readonly appCardState = inject(McpAppCardStateService);
   private readonly mcpAppProxy = inject(McpAppProxyService);
   private readonly mcpAppMessage = inject(McpAppMessageService);
   private readonly mcpAppConsent = inject(McpAppConsentService);
@@ -451,6 +499,44 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   /** Whether the request/response details strip is expanded (the `</>` toggle). */
   protected readonly detailsExpanded = signal(false);
 
+  /** Whether the app-run actions strip is expanded (the count chip). */
+  protected readonly actionsExpanded = signal(false);
+
+  /**
+   * Tool calls this App ran on the user's behalf, persisted by PR #6's
+   * card store and keyed by the *originating* tool-use id — i.e. this
+   * frame. Only ever populated after a reload: live app-initiated calls
+   * already surface through the in-memory broker as ordinary tool rows,
+   * and the store isn't re-read mid-conversation.
+   */
+  protected readonly appActions = computed(() =>
+    this.appCardState.cardsFor(this.toolUseId()),
+  );
+
+  private readonly appActionFailures = computed(
+    () => this.appActions().filter((card) => card.isError).length,
+  );
+
+  /** `3 actions` / `3 actions · 1 failed` — the chip's glanceable summary. */
+  protected readonly appActionsChipText = computed(() => {
+    const total = this.appActions().length;
+    const failed = this.appActionFailures();
+    const base = `${total} ${total === 1 ? 'action' : 'actions'}`;
+    return failed ? `${base} · ${failed} failed` : base;
+  });
+
+  protected readonly appActionsLabel = computed(() => {
+    const verb = this.actionsExpanded() ? 'Hide' : 'Show';
+    return `${verb} the ${this.appActionsChipText()} run by this app`;
+  });
+
+  /** Danger tint only when something failed; otherwise a quiet chip. */
+  protected readonly appActionsChipClasses = computed(() =>
+    this.appActionFailures()
+      ? 'text-state-danger-600 dark:text-state-danger-400'
+      : 'text-gray-500 dark:text-gray-400',
+  );
+
   /**
    * Server display name for the header. Prefers the backend-resolved
    * `serverName` on the resource (serverInfo title/name → `ui://` authority),
@@ -511,6 +597,10 @@ export class McpAppFrameComponent implements ToolResultRenderer {
 
   protected toggleDetails(): void {
     this.detailsExpanded.update((v) => !v);
+  }
+
+  protected toggleActions(): void {
+    this.actionsExpanded.update((v) => !v);
   }
 
   /**
