@@ -20,7 +20,6 @@ import { CompactionSummaryService } from './services/chat/compaction-summary.ser
 import { SteeringService } from './services/chat/steering.service';
 import { ArtifactStateService } from './services/artifacts/artifact-state.service';
 import { ArtifactHttpService } from './services/artifacts/artifact-http.service';
-import { McpAppStateService } from './services/mcp-apps/mcp-app-state.service';
 import { McpAppCardStateService } from './services/mcp-apps/mcp-app-card-state.service';
 import { McpAppCardHttpService } from './services/mcp-apps/mcp-app-card-http.service';
 import { McpAppConsentService } from './services/mcp-apps/mcp-app-consent.service';
@@ -62,7 +61,6 @@ export class ConversationPage implements OnDestroy {
   private compactionSummary = inject(CompactionSummaryService);
   private steering = inject(SteeringService);
   private artifactState = inject(ArtifactStateService);
-  private mcpAppState = inject(McpAppStateService);
   private mcpAppCardState = inject(McpAppCardStateService);
   private mcpAppCardHttp = inject(McpAppCardHttpService);
   private mcpAppConsent = inject(McpAppConsentService);
@@ -419,12 +417,15 @@ export class ConversationPage implements OnDestroy {
       // from the app-api list endpoint below.
       this.artifactState.reset();
 
-      // MCP App frames persist for the conversation's lifetime per the
-      // scoping doc; teardown is on conversation change. Clear before the
-      // next load — loadMessagesForSession re-seeds from the persisted
-      // `uiResources` sidecar on the messages response so frames survive a
-      // refresh (the inline `ui_resource` event itself only arrives live).
-      this.mcpAppState.reset();
+      // MCP App UI resources are deliberately NOT cleared here. They are
+      // held per conversation in McpAppStateService and retained for the
+      // SPA session, mirroring the message cache: the only server-side
+      // replay is the `uiResources` sidecar on `GET /messages`, and
+      // loadMessagesForSession skips that request once a conversation's
+      // messages are already in memory — so a reset on navigation had no
+      // way back and dropped every frame to a plain tool card until a hard
+      // refresh. The iframes themselves still tear down with the message
+      // list components on conversation change.
 
       // Option A (PR #6): app-initiated tool cards DO re-hydrate (the
       // broker is in-memory). Any open consent prompt for the prior
