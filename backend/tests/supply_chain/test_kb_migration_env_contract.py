@@ -57,14 +57,6 @@ OPTIONAL_OVERRIDES = {
     "MANAGED_KB_ORPHAN_MIN_AGE_HOURS",
     "MANAGED_KB_RECONCILER_MAX_DELETIONS",
     "MANAGED_KB_RECONCILER_MAX_SCANNED",
-    # Document-reconciler arming flag (task 16.5). Report-only by default and an
-    # empty string reads as off, so the module is correct with the variable unset.
-    # The document reconciler's own Lambda + schedule + arming are a deliberate
-    # deploy-gated follow-up (not wired in the PR that added document_reconciler.py),
-    # so the construct is not yet required to set it. When that Lambda is added,
-    # this exemption should go and the construct should set the flag (off), the way
-    # MANAGED_KB_RECONCILER_ARMED is spot-pinned below.
-    "MANAGED_KB_DOC_RECONCILER_ARMED",
     # Throttle for the last-retrieved write, defaulted in idleness.py.
     "KB_LAST_RETRIEVED_THROTTLE_HOURS",
     # Namespace override; metrics.py derives one from the project prefix.
@@ -202,6 +194,7 @@ class TestTheConstructSetsWhatTheHandlersRead:
         [
             "MANAGED_KB_MIGRATION_ENABLED",
             "MANAGED_KB_RECONCILER_ARMED",
+            "MANAGED_KB_DOC_RECONCILER_ARMED",
             "MANAGED_KB_SERVICE_ROLE_ARN",
             "S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME",
         ],

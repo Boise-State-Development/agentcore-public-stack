@@ -38,6 +38,7 @@ describe('Lambda and DLQ alarms', () => {
         newDefault: true,
         migrationEnabled: true,
         reconcilerArmed: true,
+        docReconcilerArmed: true,
         perOwnerDefaultBytes: 100 * 1024 * 1024,
         perOwnerElevatedBytes: 1024 * 1024 * 1024,
         perKnowledgeBaseCeilingBytes: 500 * 1024 * 1024,

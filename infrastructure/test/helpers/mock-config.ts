@@ -106,6 +106,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       newDefault: false,
       migrationEnabled: false,
       reconcilerArmed: false,
+      docReconcilerArmed: false,
       perOwnerDefaultBytes: MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
       perOwnerElevatedBytes: MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
       perKnowledgeBaseCeilingBytes: MANAGED_KB_PER_KB_CEILING_BYTES,

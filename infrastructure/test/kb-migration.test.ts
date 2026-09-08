@@ -45,6 +45,7 @@ const HANDLERS = {
   dispatcher: 'apis.app_api.kb_migration.dispatcher.lambda_handler',
   worker: 'apis.app_api.kb_migration.worker.lambda_handler',
   reconciler: 'apis.app_api.kb_migration.reconciler.lambda_handler',
+  documentReconciler: 'apis.app_api.kb_migration.document_reconciler.lambda_handler',
   ingestionConsumer: 'apis.app_api.kb_migration.ingestion_consumer.lambda_handler',
 } as const;
 
@@ -177,15 +178,15 @@ describe('KbMigrationConstruct — Lambdas and image sharing', () => {
     t = synth();
   });
 
-  it('creates exactly four DockerImage Lambdas, one per handler', () => {
-    expect(migrationLambdas(t)).toHaveLength(4);
+  it('creates exactly five DockerImage Lambdas, one per handler', () => {
+    expect(migrationLambdas(t)).toHaveLength(5);
     for (const handler of Object.values(HANDLERS)) {
       const p = lambdaFor(t, handler);
       expect(p.PackageType).toBe('Image');
     }
   });
 
-  it('all four functions share ONE image asset', () => {
+  it('all five functions share ONE image asset', () => {
     // The whole point of the ImageConfig.Command override pattern: one
     // build, one ECR push, one out-of-band `update-function-code` per
     // deploy. Pointing any function at a second build context would work
@@ -193,7 +194,7 @@ describe('KbMigrationConstruct — Lambdas and image sharing', () => {
     // while leaving that function on a stale image forever after —
     // because the backend workflow only ships one.
     const imageUris = migrationLambdas(t).map((p) => JSON.stringify(p.Code?.ImageUri));
-    expect(imageUris).toHaveLength(4);
+    expect(imageUris).toHaveLength(5);
     for (const uri of imageUris) {
       expect(uri).not.toBe('undefined');
     }
@@ -210,8 +211,8 @@ describe('KbMigrationConstruct — Lambdas and image sharing', () => {
     }
   });
 
-  it('publishes all four generated function names to SSM under /kb-migration/', () => {
-    for (const slug of ['dispatcher', 'worker', 'reconciler', 'ingestion-consumer']) {
+  it('publishes all five generated function names to SSM under /kb-migration/', () => {
+    for (const slug of ['dispatcher', 'worker', 'reconciler', 'document-reconciler', 'ingestion-consumer']) {
       t.hasResourceProperties('AWS::SSM::Parameter', {
         Name: `/test-project/kb-migration/${slug}-function-name`,
       });
@@ -233,6 +234,7 @@ describe('kb-migration bootstrap asset', () => {
     expect(entries).toEqual([
       'Dockerfile',
       'dispatcher.py',
+      'document_reconciler.py',
       'ingestion_consumer.py',
       'reconciler.py',
       'worker.py',
@@ -283,9 +285,9 @@ describe('kb-migration bootstrap asset', () => {
 // ============================================================
 
 describe('KbMigrationConstruct — schedules', () => {
-  it('creates exactly two schedule rules plus the documents rule', () => {
+  it('creates exactly three schedule rules plus the documents rule', () => {
     const rules = Object.values(synth().findResources('AWS::Events::Rule'));
-    expect(rules).toHaveLength(3);
+    expect(rules).toHaveLength(4);
   });
 
   it('dispatcher runs on a rate() schedule and targets the dispatcher', () => {
@@ -305,6 +307,29 @@ describe('KbMigrationConstruct — schedules', () => {
       Targets: Match.arrayWith([
         Match.objectLike({ Arn: { 'Fn::GetAtt': [Match.stringLikeRegexp('KbMigrationReconcilerLambda'), 'Arn'] } }),
       ]),
+    });
+  });
+
+  it('document reconciler runs nightly on a fixed cron and targets the document reconciler', () => {
+    // A fixed off-peak hour (09:00 UTC ≈ 02:00-03:00 America/Denver) rather than
+    // rate(1 day), so "nightly" means night, not "24h after each deploy".
+    const t = synth();
+    t.hasResourceProperties('AWS::Events::Rule', {
+      ScheduleExpression: 'cron(0 9 * * ? *)',
+      Targets: Match.arrayWith([
+        Match.objectLike({ Arn: { 'Fn::GetAtt': [Match.stringLikeRegexp('KbDocumentReconcilerLambda'), 'Arn'] } }),
+      ]),
+    });
+  });
+
+  it('document reconciler rule is ENABLED even with every flag off, because report-only is the point', () => {
+    // Same inverted convention as the KB reconciler: it ships report-only
+    // (MANAGED_KB_DOC_RECONCILER_ARMED off), report-only is read-only, and the
+    // audit period only happens if the schedule actually runs.
+    const t = synth({ newDefault: false, migrationEnabled: false, reconcilerArmed: false, docReconcilerArmed: false });
+    t.hasResourceProperties('AWS::Events::Rule', {
+      ScheduleExpression: 'cron(0 9 * * ? *)',
+      State: 'ENABLED',
     });
   });
 
@@ -443,14 +468,15 @@ describe('KbMigrationConstruct — ingestion consumer (task 2.2)', () => {
 // ============================================================
 
 describe('KbMigrationConstruct — flags reach every function', () => {
-  it('all three flags are "false" on all four functions by default', () => {
+  it('all flags are "false" on all five functions by default', () => {
     const t = synth();
     const fns = migrationLambdas(t);
-    expect(fns).toHaveLength(4);
+    expect(fns).toHaveLength(5);
     for (const p of fns) {
       expect(env(p).MANAGED_KB_NEW_DEFAULT).toBe('false');
       expect(env(p).MANAGED_KB_MIGRATION_ENABLED).toBe('false');
       expect(env(p).MANAGED_KB_RECONCILER_ARMED).toBe('false');
+      expect(env(p).MANAGED_KB_DOC_RECONCILER_ARMED).toBe('false');
     }
   });
 
@@ -467,6 +493,14 @@ describe('KbMigrationConstruct — flags reach every function', () => {
     const p2 = lambdaFor(t2, HANDLERS.reconciler);
     expect(env(p2).MANAGED_KB_NEW_DEFAULT).toBe('false');
     expect(env(p2).MANAGED_KB_RECONCILER_ARMED).toBe('true');
+    expect(env(p2).MANAGED_KB_DOC_RECONCILER_ARMED).toBe('false');
+
+    // Arming the document reconciler must not arm the deleting KB reconciler,
+    // and vice versa — they are separate blast radii.
+    const t3 = synth({ reconcilerArmed: false, docReconcilerArmed: true });
+    const p3 = lambdaFor(t3, HANDLERS.documentReconciler);
+    expect(env(p3).MANAGED_KB_DOC_RECONCILER_ARMED).toBe('true');
+    expect(env(p3).MANAGED_KB_RECONCILER_ARMED).toBe('false');
   });
 
   it('gives the dispatcher the worker function name the Python actually reads', () => {
@@ -524,6 +558,7 @@ describe('loadConfig — managedKb flag resolution (Requirements 19.5, 19.8)', (
     'CDK_MANAGED_KB_NEW_DEFAULT',
     'CDK_MANAGED_KB_MIGRATION_ENABLED',
     'CDK_MANAGED_KB_RECONCILER_ARMED',
+    'CDK_MANAGED_KB_DOC_RECONCILER_ARMED',
   ] as const;
 
   let app: cdk.App;
@@ -571,6 +606,7 @@ describe('loadConfig — managedKb flag resolution (Requirements 19.5, 19.8)', (
     expect(config.managedKb.newDefault).toBe(false);
     expect(config.managedKb.migrationEnabled).toBe(false);
     expect(config.managedKb.reconcilerArmed).toBe(false);
+    expect(config.managedKb.docReconcilerArmed).toBe(false);
   });
 
   it('resolves an EMPTY STRING to false, not to true', () => {
@@ -586,6 +622,7 @@ describe('loadConfig — managedKb flag resolution (Requirements 19.5, 19.8)', (
     expect(config.managedKb.newDefault).toBe(false);
     expect(config.managedKb.migrationEnabled).toBe(false);
     expect(config.managedKb.reconcilerArmed).toBe(false);
+    expect(config.managedKb.docReconcilerArmed).toBe(false);
   });
 
   it('honours an explicit "true" per flag, independently', () => {
@@ -852,11 +889,30 @@ describe('KbMigrationConstruct — IAM', () => {
     expect(holders.some((id) => /IngestionConsumerLambdaServiceRole/.test(id))).toBe(false);
   });
 
-  it('reuses the task 1.2 direct-ingestion grant for the worker and ingestion consumer', () => {
+  it('reuses the task 1.2 direct-ingestion grant for the worker, ingestion consumer and document reconciler', () => {
     const holders = roleIdsWithSid('ManagedKbDirectIngestion');
-    expect(holders).toHaveLength(2);
+    expect(holders).toHaveLength(3);
     expect(holders.some((id) => /WorkerLambdaServiceRole/.test(id))).toBe(true);
     expect(holders.some((id) => /IngestionConsumerLambdaServiceRole/.test(id))).toBe(true);
+    // The document reconciler re-ingests NOT_FOUND documents and probes
+    // GetKnowledgeBaseDocuments, both under this grant.
+    expect(holders.some((id) => /DocumentReconcilerLambdaServiceRole/.test(id))).toBe(true);
+  });
+
+  it('gives the document reconciler ingestion + retrieval but NOT provisioning or PassRole', () => {
+    // Its footprint is deliberately narrower than the KB reconciler beside it:
+    // it reads KB_Records from DynamoDB (not ListKnowledgeBases) and never
+    // creates or deletes a knowledge base, so it must hold neither the
+    // provisioning CRUD grant nor the iam:PassRole grant.
+    const ingesters = roleIdsWithSid('ManagedKbDirectIngestion');
+    const retrievers = roleIdsWithSid('ManagedKbRetrieve');
+    const provisioners = roleIdsWithSid('ManagedKbProvisionCrud');
+    const passRole = roleIdsWithSid('ManagedKbPassServiceRole');
+    const isDocReconciler = (id: string) => /DocumentReconcilerLambdaServiceRole/.test(id);
+    expect(ingesters.some(isDocReconciler)).toBe(true);
+    expect(retrievers.some(isDocReconciler)).toBe(true);
+    expect(provisioners.some(isDocReconciler)).toBe(false);
+    expect(passRole.some(isDocReconciler)).toBe(false);
   });
 
   it('gives both ingesting roles bedrock:StartIngestionJob, not just the Ingest action', () => {
@@ -866,13 +922,12 @@ describe('KbMigrationConstruct — IAM', () => {
     // matching name deploys and reviews clean, then returns
     // AccessDeniedException on the first document.
     //
-    // Both roles are checked because both call
+    // All THREE ingesting roles are checked because all call
     // `ingest_knowledge_base_documents`: the ingestion consumer surfaced it,
-    // and the worker had the identical gap — invisible until now only
-    // because every migration so far was driven locally under a broader SSO
-    // identity than the Lambda role.
+    // the worker had the identical gap, and the document reconciler re-ingests
+    // NOT_FOUND documents the same way.
     const statements = allStatements(t).filter((s) => s.Sid === 'ManagedKbDirectIngestion');
-    expect(statements).toHaveLength(2);
+    expect(statements).toHaveLength(3);
     for (const s of statements) {
       expect(s.Action).toContain('bedrock:StartIngestionJob');
       expect(s.Action).toContain('bedrock:IngestKnowledgeBaseDocuments');
@@ -997,8 +1052,8 @@ describe('KbMigration wiring on PlatformStack', () => {
     t = Template.fromStack(stack);
   });
 
-  it('creates all four migration Lambdas in the platform stack', () => {
-    expect(migrationLambdas(t)).toHaveLength(4);
+  it('creates all five migration Lambdas in the platform stack', () => {
+    expect(migrationLambdas(t)).toHaveLength(5);
   });
 
   it('keeps the existing rag-ingestion ObjectCreated notification intact', () => {
@@ -1030,8 +1085,8 @@ describe('KbMigration wiring on PlatformStack', () => {
     expect(cfg.EventBridgeConfiguration).toBeDefined();
   });
 
-  it('publishes the four kb-migration function names for the code-deploy step', () => {
-    for (const slug of ['dispatcher', 'worker', 'reconciler', 'ingestion-consumer']) {
+  it('publishes the five kb-migration function names for the code-deploy step', () => {
+    for (const slug of ['dispatcher', 'worker', 'reconciler', 'document-reconciler', 'ingestion-consumer']) {
       t.hasResourceProperties('AWS::SSM::Parameter', {
         Name: `/test-project/kb-migration/${slug}-function-name`,
       });
