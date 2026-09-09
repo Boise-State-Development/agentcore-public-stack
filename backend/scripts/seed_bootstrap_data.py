@@ -403,6 +403,23 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        "toolId": "browse_web",
+        "displayName": "Web Browser",
+        "description": (
+            "Browse the web in a real Chrome browser: navigate pages, read "
+            "JavaScript-rendered content, fill forms, and click through "
+            "multi-step flows."
+        ),
+        "category": "browser",
+        # Deliberately off by default. Each session bills an AgentCore Browser
+        # session on top of model tokens, and a browsing transcript is a large
+        # per-turn payload — this is opt-in per user, granted per role.
+        "enabledByDefault": False,
+        "protocol": "local",
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
         "toolId": "generate_diagram_and_validate",
         "displayName": "Code Interpreter",
         "description": "Generate diagrams, charts, and visualizations using Python code in a sandboxed environment.",
