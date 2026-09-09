@@ -9,6 +9,7 @@ on:
       - 'infrastructure/lib/platform-stack.ts'
       - 'infrastructure/lib/constructs/**'
       - 'infrastructure/lib/config.ts'
+      - 'infrastructure/cdk.context.json'
       - 'infrastructure/bin/infrastructure.ts'
       - 'infrastructure/bootstrap-assets/**'
       - 'scripts/platform/**'
@@ -63,6 +64,25 @@ jobs:
       # teardown looked for 'dev' — matching nothing and reporting success.
       CDK_TAG_ENVIRONMENT: ${{ vars.CDK_TAG_ENVIRONMENT }}
       CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
+      # App API Fargate sizing. Per-environment because dev and prod have
+      # nothing in common here: prod must hold a resident burst (a 250-student
+      # section opening the app at once is ~5k requests in 30s, and a 60s
+      # scale-out cooldown cannot answer that — the headroom has to already be
+      # running), while dev only has to be correct.
+      #
+      # Leave a var unset to inherit the committed default in
+      # infrastructure/cdk.context.json — an unset var arrives as '' and
+      # parseIntEnv maps '' to undefined, so it falls through cleanly.
+      #
+      # cpu/memory must be a valid Fargate pair (1024 -> 2048..8192,
+      # 2048 -> 4096..16384). CFN rejects an invalid combination at deploy.
+      # Keep desiredCount >= 2 in every environment that matters: the shared
+      # BFF cookie key path (bff-cookie-key-construct.ts) only gets exercised
+      # with more than one task, and that is where a 'bad seal' 401 storm hid.
+      CDK_APP_API_CPU: ${{ vars.CDK_APP_API_CPU }}
+      CDK_APP_API_MEMORY: ${{ vars.CDK_APP_API_MEMORY }}
+      CDK_APP_API_DESIRED_COUNT: ${{ vars.CDK_APP_API_DESIRED_COUNT }}
+      CDK_APP_API_MAX_CAPACITY: ${{ vars.CDK_APP_API_MAX_CAPACITY }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).

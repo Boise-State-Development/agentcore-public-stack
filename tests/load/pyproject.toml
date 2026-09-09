@@ -1,0 +1,35 @@
+[project]
+# Deliberately a separate project from `backend/`. Locust is a load-testing
+# tool, not an application dependency — adding it to backend/pyproject.toml
+# (even as an optional extra) would land it in backend/uv.lock, which CI
+# verifies and the release sync script regenerates, and would drag it into
+# the app-api / inference-api image dependency resolution.
+name = "agentcore-load"
+version = "0.1.0"
+description = "Locust load tests for the AgentCore platform BFF chat path"
+requires-python = ">=3.13"
+
+dependencies = [
+    "locust==2.46.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==8.4.2",
+    "ruff==0.14.5",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+# `agentcore_load` is imported from the project root, which is how Locust
+# resolves it too (it puts the locustfile's directory on sys.path). Mirroring
+# that here keeps the tests importing exactly what a real run imports, with no
+# install step.
+pythonpath = ["."]
+testpaths = ["tests"]

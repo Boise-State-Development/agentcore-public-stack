@@ -1,0 +1,27 @@
+# Prompts for the production-representative profile.
+#
+# Chosen to satisfy two constraints at once:
+#
+#  1. Elicit a LONG answer. Production averages ~1,372 output tokens per turn;
+#     the built-in prompts average ~139, which understates TPM by 10x on the
+#     output side alone. Each prompt below explicitly asks for detail.
+#  2. Be answerable WITHOUT calling a tool. The representative profile enables a
+#     realistic tool set because tool schemas are what inflate the cached prompt
+#     prefix, but actually invoking them at 300-1300x concurrency would put real
+#     load on Canvas, Salesforce, PeopleSoft, Brave Search and arXiv. These are
+#     general-knowledge questions a model answers from its own weights.
+#
+# One prompt per line. Blank lines and lines starting with # are ignored.
+
+Explain the difference between processes and threads in an operating system. Cover memory isolation, context-switching cost, and when you would choose one over the other. Give concrete examples.
+Walk me through how HTTPS establishes a secure connection, from DNS resolution through certificate validation to symmetric key exchange. Explain what each step protects against.
+Describe the main causes of database index fragmentation, how it affects query performance, and the tradeoffs of different remedies. Be thorough.
+Explain the CAP theorem and why it constrains distributed database design. Give a worked example of a system choosing consistency and one choosing availability.
+Compare supervised, unsupervised, and reinforcement learning. For each, describe the training signal, a typical algorithm, and a realistic application. Explain the failure modes.
+Explain how garbage collection works in a managed runtime. Cover generational collection, mark-and-sweep, and why pause times matter for latency-sensitive services.
+Describe the layers of the TCP/IP model and what each contributes. Explain how a packet is encapsulated on the way out and decapsulated on the way in.
+Explain what a race condition is, why it is hard to reproduce, and four distinct strategies for preventing one. Include the tradeoffs of each strategy.
+Explain the tradeoffs between normalized and denormalized data models. Describe when each is appropriate and what problems each creates at scale.
+Describe how public-key cryptography enables digital signatures. Explain the role of hashing, why the private key never leaves the signer, and how trust is established.
+Explain what causes cache invalidation problems in a distributed system, and compare write-through, write-back, and write-around strategies in detail.
+Describe the phases of a compiler from source text to machine code. Explain what each phase produces and what class of error each can detect.
