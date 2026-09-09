@@ -75,6 +75,15 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         icon="calculator",
     ),
 
+    # --- Built-in Tools (Browser) ---
+    "browse_web": ToolMetadata(
+        tool_id="browse_web",
+        name="Web Browser",
+        description="Browse the web in a real Chrome browser: navigate pages, read JavaScript-rendered content, fill forms, and click through multi-step flows.",
+        category=ToolCategory.SEARCH,
+        icon="globe-alt",
+    ),
+
     # --- Built-in Tools (Code Interpreter) ---
     "generate_diagram_and_validate": ToolMetadata(
         tool_id="generate_diagram_and_validate",
