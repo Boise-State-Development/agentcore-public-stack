@@ -22,6 +22,7 @@ import { ArtifactStateService } from './services/artifacts/artifact-state.servic
 import { ArtifactHttpService } from './services/artifacts/artifact-http.service';
 import { McpAppCardStateService } from './services/mcp-apps/mcp-app-card-state.service';
 import { McpAppCardHttpService } from './services/mcp-apps/mcp-app-card-http.service';
+import { McpAppTeardownService } from './services/mcp-apps/mcp-app-teardown.service';
 import { McpAppConsentService } from './services/mcp-apps/mcp-app-consent.service';
 import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
@@ -63,6 +64,7 @@ export class ConversationPage implements OnDestroy {
   private artifactState = inject(ArtifactStateService);
   private mcpAppCardState = inject(McpAppCardStateService);
   private mcpAppCardHttp = inject(McpAppCardHttpService);
+  private mcpAppTeardown = inject(McpAppTeardownService);
   private mcpAppConsent = inject(McpAppConsentService);
   private oauthConsent = inject(OAuthConsentService);
   private artifactHttp = inject(ArtifactHttpService);
@@ -416,6 +418,18 @@ export class ConversationPage implements OnDestroy {
       // loads so a prior session's cards don't bleed in, then re-hydrate
       // from the app-api list endpoint below.
       this.artifactState.reset();
+
+      // Tell every open MCP App it is going away BEFORE its iframe
+      // unmounts with the message list (SEP-1865: the host sends
+      // `ui/resource-teardown` for any teardown, so the App can flush state
+      // to its own server — the host is deliberately not the store of
+      // record for App state). Fired, not awaited: this effect is
+      // synchronous, and the value is in the timing, not the wait — the
+      // notification goes out while the Views are still alive, and each
+      // bridge keeps listening through its grace window so a save call the
+      // App makes in response is still proxied. A truly blocking wait would
+      // need a route guard; see the follow-up note in the teardown service.
+      void this.mcpAppTeardown.teardownAll('conversation-change');
 
       // MCP App UI resources are deliberately NOT cleared here. They are
       // held per conversation in McpAppStateService and retained for the

@@ -22,6 +22,7 @@ import { McpAppBridge } from '../../../../../services/mcp-apps/mcp-app-bridge';
 import { McpAppProxyService } from '../../../../../services/mcp-apps/mcp-app-proxy.service';
 import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-message.service';
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
+import { McpAppTeardownService } from '../../../../../services/mcp-apps/mcp-app-teardown.service';
 import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
 import { McpAppActionsComponent } from '../../mcp-app-actions/mcp-app-actions.component';
@@ -423,6 +424,7 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   private readonly mcpAppProxy = inject(McpAppProxyService);
   private readonly mcpAppMessage = inject(McpAppMessageService);
   private readonly mcpAppConsent = inject(McpAppConsentService);
+  private readonly mcpAppTeardown = inject(McpAppTeardownService);
   private readonly chatRequest = inject(ChatRequestService);
   private readonly chatState = inject(ChatStateService);
   private readonly conversation = inject(SessionService);
@@ -482,6 +484,8 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   );
 
   private bridge: McpAppBridge | null = null;
+  /** Deregisters this frame's bridge from the navigation teardown registry. */
+  private unregisterBridge: (() => void) | null = null;
   private readonly nonce =
     this.win?.crypto?.randomUUID?.() ?? `n-${Math.random().toString(36).slice(2)}`;
 
@@ -883,7 +887,12 @@ export class McpAppFrameComponent implements ToolResultRenderer {
         this.doc.body.style.overflow = this.lockedBodyOverflow;
         this.lockedBodyOverflow = null;
       }
-      this.bridge?.dispose('component-destroyed');
+      // Deregister first: a navigation-driven teardownAll() already fired
+      // the notification while this iframe was alive, and re-firing here
+      // would only reset a grace window whose View is already gone.
+      this.unregisterBridge?.();
+      this.unregisterBridge = null;
+      void this.bridge?.dispose('component-destroyed');
     });
   }
 
@@ -953,6 +962,7 @@ export class McpAppFrameComponent implements ToolResultRenderer {
         return resulting;
       },
     });
+    this.unregisterBridge = this.mcpAppTeardown.register(this.bridge);
     this.bridge.onSizeChanged((_w, h) => {
       if (h > 0) this.frameHeight.set(Math.ceil(h));
     });

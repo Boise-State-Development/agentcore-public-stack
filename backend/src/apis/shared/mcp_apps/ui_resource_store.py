@@ -236,6 +236,39 @@ class UiResourceStore:
                 exc_info=True,
             )
 
+    def get_provenance(
+        self, *, user_id: str, tool_use_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """The producing tool name + message anchor for one persisted row.
+
+        Deliberately projects only the two attributes a revalidation needs
+        and NOT `htmlGz` — the caller is about to replace the HTML anyway,
+        and pulling a ~130KB blob back just to overwrite it would make the
+        opportunistic refresh cost more than the read it saves.
+
+        Returns None when the row is absent, the table isn't configured, or
+        the read fails; every caller treats that as "nothing to refresh".
+        """
+        if self._table is None:
+            return None
+        try:
+            resp = self._table.get_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"UIRES#{tool_use_id}"},
+                ProjectionExpression="toolName, producedByMessageIndex",
+            )
+        except Exception:  # noqa: BLE001 - refresh is best-effort
+            logger.warning(
+                "mcp-apps ui-resource store: provenance read failed "
+                "(toolUseId=%s)",
+                tool_use_id,
+                exc_info=True,
+            )
+            return None
+        item = resp.get("Item")
+        if not item:
+            return None
+        return _decimal_to_native(item)
+
     def list_for_session(
         self, *, session_id: str, user_id: str
     ) -> List[Dict[str, Any]]:
