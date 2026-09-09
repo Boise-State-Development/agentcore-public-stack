@@ -13,6 +13,7 @@ sys.path.insert(
 )
 
 from seed_bootstrap_data import (  # noqa: E402
+    DEFAULT_TOOLS,
     EXAMPLE_SKILL_ID,
     seed_default_role,
     seed_example_skills,
@@ -131,7 +132,7 @@ class TestSeedDefaultTools:
         """Creates the default tool entries."""
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 9
+        assert result.created == len(DEFAULT_TOOLS)
         assert result.failed == 0
 
         # Verify fetch_url_content
@@ -230,6 +231,21 @@ class TestSeedDefaultTools:
         assert item["GSI1PK"] == "CATEGORY#document"
         assert item["GSI1SK"] == "TOOL#workspace_files"
 
+        # Verify browse_web. enabledByDefault MUST stay False: each session
+        # bills an AgentCore Browser session on top of model tokens, so this
+        # is opt-in per user and granted per role.
+        resp = dynamodb_table.get_item(
+            Key={"PK": "TOOL#browse_web", "SK": "METADATA"}
+        )
+        item = resp["Item"]
+        assert item["toolId"] == "browse_web"
+        assert item["displayName"] == "Web Browser"
+        assert item["category"] == "browser"
+        assert item["protocol"] == "local"
+        assert item["enabledByDefault"] is False
+        assert item["GSI1PK"] == "CATEGORY#browser"
+        assert item["GSI1SK"] == "TOOL#browse_web"
+
         # Verify create_excel_spreadsheet (single toggle for the whole Excel toolset)
         resp = dynamodb_table.get_item(
             Key={"PK": "TOOL#create_excel_spreadsheet", "SK": "METADATA"}
@@ -264,7 +280,7 @@ class TestSeedDefaultTools:
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.skipped == 9
+        assert result.skipped == len(DEFAULT_TOOLS)
         assert result.created == 0
 
     def test_partial_skip(self, dynamodb_table):
@@ -278,7 +294,7 @@ class TestSeedDefaultTools:
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 8
+        assert result.created == len(DEFAULT_TOOLS) - 1
         assert result.skipped == 1
 
 
