@@ -855,4 +855,27 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       both needed manual repair.
     - Overlaps task 14.4 (one-click retry) and the report-only reconciler, which
       already knows how to join Bedrock's view against ours.
+    - **Backend built (report-only), branch `feat/kb-deadletter-reconcile`.**
+      `kb_migration/document_reconciler.py` is the missing second writer of `DOC#`
+      status: once a day it finds rows stuck non-terminal (`uploading`/`chunking`/
+      `embedding`) past a 60-minute grace gate, asks Bedrock the ground truth per
+      document, and — the §5.37 case — drives a stranded-but-**retrievable** document
+      to `complete`. It reuses the consumer's own probes (`document_status`, the
+      `equals`-on-`document_id` retrievability search, its status-set constants, and
+      `set_document_terminal`) so §5.37/§5.38/§5.39 live in one place, not four. A
+      `FAILED` document is driven to `failed`; a `NOT_FOUND` one (dead-lettered before
+      ingest) is **re-ingested** from the S3 bytes — the scheduled form of 14.4's
+      one-click retry. Modelled on `reconciler.py`: **ships disarmed**
+      (`MANAGED_KB_DOC_RECONCILER_ARMED`, empty ⇒ off), per-run action limit applies
+      in both modes so the report is trustworthy, grace gate is a pure function of the
+      row's own `updatedAt` and fails closed. `terminal`/`deleting` rows are never
+      candidates (a soft-deleted doc must not be resurrected). Guards in
+      `tests/lambdas/test_kb_document_reconciler.py`, mutation-verified (neutering the
+      retrievability gate fails `test_indexed_but_not_retrievable_is_left_short_of_complete`;
+      widening `NON_TERMINAL_STATUSES` fails `test_terminal_and_deleting_rows_are_never_candidates`).
+    - **Remaining (deploy-gated follow-up, not in this PR):** wire the reconciler's
+      own Lambda + EventBridge schedule + IAM in `kb-migration-construct.ts`, then set
+      and eventually flip `MANAGED_KB_DOC_RECONCILER_ARMED`. The flag is exempted in
+      `test_kb_migration_env_contract.py`'s `OPTIONAL_OVERRIDES` until that wiring
+      lands.
     - _HANDOFF §5.37 · Requirements: 21.2_
