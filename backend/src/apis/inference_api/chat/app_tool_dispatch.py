@@ -47,8 +47,13 @@ logger = logging.getLogger(__name__)
 class AppToolCallError(Exception):
     """Dispatch failed in a way the caller should surface as an error.
 
-    `code` is an app-api HTTP status hint; `message` is safe to return to
-    the client (no internals).
+    `code` is the status app-api should ultimately answer the SPA with, NOT
+    the status this container returns — AgentCore Runtime flattens any
+    non-2xx into a 424 and drops the body. The route encodes `code` and
+    `message` into a 200 response body and app-api restores the status.
+    See `apis/shared/mcp_apps/error_envelope.py`.
+
+    `message` is safe to return to the client (no internals).
     """
 
     def __init__(self, message: str, code: int = 400) -> None:
@@ -285,13 +290,23 @@ async def _ensure_oauth_token(client: Any, user_id: str) -> Optional[str]:
 
     # No token and a consent URL: the user has not authorized this
     # connector. There is no turn to interrupt here, so surface it as an
-    # error the App can render — the SPA relays `message` verbatim.
+    # error the App can render.
+    #
+    # `code` is NOT this response's HTTP status. AgentCore Runtime rewrites
+    # any non-2xx from this container into a generic 424 and discards the
+    # body, so returning 409 directly reached the SPA as "Received error
+    # (409) from runtime. Please check your CloudWatch logs" — verified
+    # live on dev 2026-09-08. The route returns 200 + an envelope carrying
+    # this code and message, and app-api restores the real status before
+    # replying to the SPA. See `apis/shared/mcp_apps/error_envelope.py`.
     #
     # 409, never 401: the SPA's error interceptor treats *any* 401 as an
     # expired BFF session and redirects to login, so answering "connect
     # your account" with a 401 would sign the user out. 409 is already this
     # codebase's "connector needs connecting" status (the file-source
     # browser and the export dialog both branch on it to show Connect).
+    # The envelope reader enforces this independently — it will not relay
+    # a 401 even if one is asked for here.
     raise AppToolCallError(
         f"Authorization required for '{provider_id}'. Connect the account, "
         "then try again.",
