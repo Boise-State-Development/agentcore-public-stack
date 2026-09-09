@@ -57,7 +57,7 @@ dependencies = [
 # AgentCore-specific dependencies (for inference_api)
 agentcore = [
     "strands-agents==1.51.0",
-    "strands-agents-tools==0.8.6",
+    "strands-agents-tools==0.8.8",
 
     "aws-opentelemetry-distro==0.19.0",
     "bedrock-agentcore==1.21.0",
