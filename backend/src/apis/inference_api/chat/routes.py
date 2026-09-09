@@ -67,6 +67,8 @@ from .app_context_dispatch import (
     dispatch_app_context_update,
     merge_and_clear_pending_context,
 )
+from apis.shared.mcp_apps.error_envelope import app_tool_error_response
+
 from .app_tool_dispatch import AppToolCallError, dispatch_app_tool_call
 from .agent_binding_policy import binds_conversation
 from .models import FileContent, InvocationRequest
@@ -1338,7 +1340,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             )
             return JSONResponse(payload)
         except AppToolCallError as e:
-            return JSONResponse({"error": e.message}, status_code=e.code)
+            # 200 + envelope, not `status_code=e.code`: AgentCore Runtime
+            # rewrites any non-2xx to a generic 424 and discards the
+            # message, so a deliberate 409 ("connect the account") reached
+            # the SPA as "check your CloudWatch logs". app-api restores the
+            # real status. See `mcp_apps.error_envelope`.
+            return app_tool_error_response(e.message, e.code)
         except HTTPException:
             raise
         except Exception:
@@ -1386,7 +1393,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             )
             return JSONResponse(payload)
         except AppContextUpdateError as e:
-            return JSONResponse({"error": e.message}, status_code=e.code)
+            # Same AgentCore flattening as the app_tool_call path above.
+            return app_tool_error_response(e.message, e.code)
         except HTTPException:
             raise
         except Exception:
