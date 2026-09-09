@@ -93,6 +93,17 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
   /** Whether the selected task expects a .zip bundling images with a manifest. */
   readonly requiresArchive = computed(() => this.selectedTaskSpec()?.requires_archive ?? false);
 
+  /** Whether the selected task emits free text rather than class probabilities.
+   * Generative tasks are LoRA-adapted, so they expose adapter controls the
+   * classification tasks have no use for. */
+  readonly isGenerative = computed(() => this.selectedTaskSpec()?.is_generative ?? false);
+
+  /** Whether to show the image-resolution knob.
+   * The generative trainer never reads image_size — the model's own processor
+   * decides tiling and resolution — so offering the field there would be a
+   * control that silently does nothing. */
+  readonly showImageSize = computed(() => this.requiresArchive() && !this.isGenerative());
+
   /** Columns a record must carry, for the upload hint. */
   readonly requiredColumns = computed(() => this.selectedTaskSpec()?.required_columns ?? []);
 
@@ -159,6 +170,9 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
     seed: ['42'],
     contextLength: ['512'],
     imageSize: ['224'],
+    loraR: ['16'],
+    loraAlpha: ['32'],
+    loadIn4bit: ['true'],
     maxRuntimeHours: [24, [Validators.required, Validators.min(1), Validators.max(120)]],
   });
 
@@ -396,6 +410,9 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
       seed: hp['seed'] ?? '42',
       contextLength: hp['context_length'] ?? '512',
       imageSize: hp['image_size'] ?? '224',
+      loraR: hp['lora_r'] ?? '16',
+      loraAlpha: hp['lora_alpha'] ?? '32',
+      loadIn4bit: hp['load_in_4bit'] ?? 'true',
     });
 
     // Sync slider from model defaults (e.g. "0.8" → 80)
@@ -443,6 +460,14 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
       if (formValues.seed) hyperparameters['seed'] = formValues.seed;
       if (formValues.contextLength) hyperparameters['context_length'] = formValues.contextLength;
       if (formValues.imageSize) hyperparameters['image_size'] = formValues.imageSize;
+      // Adapter settings only mean something to a generative task. Sending
+      // them for a classifier would put dead keys in its job record, which is
+      // what the hyperparameters panel on the detail page renders.
+      if (this.isGenerative()) {
+        if (formValues.loraR) hyperparameters['lora_r'] = formValues.loraR;
+        if (formValues.loraAlpha) hyperparameters['lora_alpha'] = formValues.loraAlpha;
+        if (formValues.loadIn4bit) hyperparameters['load_in_4bit'] = formValues.loadIn4bit;
+      }
 
       // Convert slider percentage (e.g. 80) to decimal string (e.g. "0.8")
       hyperparameters['split_ratio'] = (this.splitSlider.value / 100).toString();

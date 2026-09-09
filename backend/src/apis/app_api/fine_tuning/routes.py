@@ -124,6 +124,7 @@ async def list_task_types(
             requires_archive=spec.requires_archive,
             inference_upload_extensions=list(spec.inference_upload_extensions),
             default_instance_type=spec.default_instance_type,
+            is_generative=spec.is_generative,
         )
         for spec in (
             task_types.get_task_spec(t) for t in task_types.TASK_TYPES
@@ -588,8 +589,9 @@ async def create_job(
     hyperparameters["job_pk"] = f"USER#{user.user_id}"
     hyperparameters["job_sk"] = f"JOB#{job_id}"
 
-    # Ensure training scripts are uploaded and get the S3 URI
-    scripts_s3_uri = script_service.ensure_scripts_uploaded()
+    # Ensure training scripts are uploaded and get the S3 URI.  The archive is
+    # per DLC family: the families install different dependency sets.
+    scripts_s3_uri = script_service.ensure_scripts_uploaded(spec.task_type)
 
     # S3 paths
     output_s3_prefix = s3_service.get_output_s3_prefix(user.user_id, job_id)

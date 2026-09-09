@@ -37,9 +37,19 @@ class TestRegistry:
         assert list(task_types.TASK_SPECS) == list(task_types.TASK_SPECS)
 
     @pytest.mark.parametrize("task_type", task_types.TASK_TYPES)
-    def test_label_column_is_required(self, task_type):
+    def test_the_target_column_is_required(self, task_type):
+        """Whatever a task learns to predict has to be in every record.
+
+        For a classifier that is the label column; for a generative task
+        there is no label set at all and the target is the response text.
+        """
         spec = task_types.get_task_spec(task_type)
-        assert spec.label_column in spec.required_columns
+        if spec.is_generative:
+            assert spec.label_column is None
+            assert spec.response_column in spec.required_columns
+        else:
+            assert spec.response_column is None
+            assert spec.label_column in spec.required_columns
 
     @pytest.mark.parametrize("task_type", task_types.TASK_TYPES)
     def test_image_tasks_require_an_archive(self, task_type):
@@ -61,7 +71,20 @@ class TestRegistry:
         assert task_types.ARCHIVE_TASK_TYPES == (
             task_types.IMAGE_CLASSIFICATION,
             task_types.IMAGE_TEXT_CLASSIFICATION,
+            task_types.IMAGE_TEXT_TO_TEXT,
         )
+
+    def test_generative_task_list_matches_the_specs(self):
+        assert task_types.GENERATIVE_TASK_TYPES == (task_types.IMAGE_TEXT_TO_TEXT,)
+
+    def test_is_generative_predicate(self):
+        assert not task_types.is_generative(task_types.TEXT_CLASSIFICATION)
+        assert not task_types.is_generative(task_types.IMAGE_TEXT_CLASSIFICATION)
+        assert task_types.is_generative(task_types.IMAGE_TEXT_TO_TEXT)
+
+    def test_legacy_rows_are_never_generative(self):
+        """A row with no task_type predates task types and is a classifier."""
+        assert not task_types.is_generative(None)
 
     @pytest.mark.parametrize("task_type", task_types.TASK_TYPES)
     def test_payload_size_is_within_batch_transform_limits(self, task_type):
@@ -75,6 +98,59 @@ class TestRegistry:
         spec = task_types.get_task_spec(task_type)
         assert pricing.training_rate(spec.default_instance_type) is not None
         assert pricing.transform_rate(spec.default_instance_type) is not None
+
+
+class TestGenerativeTask:
+    """Invariants specific to image-text-to-text."""
+
+    def _spec(self):
+        return task_types.get_task_spec(task_types.IMAGE_TEXT_TO_TEXT)
+
+    def test_pipeline_tag_matches_the_hub(self):
+        """The pre-flight compares this against the Hub's own tag verbatim.
+
+        llava-hf/llava-v1.6-34b-hf and every other catalog VLM is tagged
+        "image-text-to-text"; a different spelling here rejects all of them.
+        """
+        assert self._spec().hf_pipeline_tags == ("image-text-to-text",)
+
+    def test_generative_tag_stays_out_of_the_dual_encoder_task(self):
+        """image-text-classification needs a text tower to pool.
+
+        Letting a generative tag through there passes the pre-flight and then
+        fails on a billed GPU inside the dual-encoder check.
+        """
+        fusion = task_types.get_task_spec(task_types.IMAGE_TEXT_CLASSIFICATION)
+        assert task_types.IMAGE_TEXT_TO_TEXT not in fusion.hf_pipeline_tags
+
+    def test_prompt_and_response_are_distinct_columns(self):
+        spec = self._spec()
+        assert spec.text_column == "prompt"
+        assert spec.response_column == "response"
+        assert spec.text_column != spec.response_column
+
+    def test_runs_in_its_own_dlc_family(self):
+        """Sharing the vision family would put bitsandbytes in its requirements."""
+        spec = self._spec()
+        assert spec.dlc_family == task_types.DLC_FAMILY_VLM
+        assert spec.dlc_family != task_types.DLC_FAMILY_VISION
+
+    def test_default_instance_has_enough_vram_for_a_quantised_vlm(self):
+        """24GB cards OOM on the larger catalog entries."""
+        spec = self._spec()
+        assert pricing.ACCELERATOR_MEMORY_GB[spec.default_instance_type] >= 48
+
+    def test_lora_defaults_are_present(self):
+        """The trainer reads these straight off the hyperparameters."""
+        defaults = self._spec().default_hyperparameters
+        for key in ("lora_r", "lora_alpha", "lora_dropout", "load_in_4bit"):
+            assert key in defaults
+
+    def test_effective_batch_is_recovered_by_accumulation(self):
+        """A literal batch of 1 would make the gradient estimate very noisy."""
+        defaults = self._spec().default_hyperparameters
+        assert int(defaults["per_device_train_batch_size"]) == 1
+        assert int(defaults["gradient_accumulation_steps"]) > 1
 
 
 class TestCatalog:

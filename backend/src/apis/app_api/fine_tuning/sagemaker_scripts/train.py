@@ -26,12 +26,14 @@ try:  # package context: unit tests and the app-api container
     from . import task_common
     from . import task_image_classification
     from . import task_image_text_classification
+    from . import task_image_text_to_text
     from . import task_text_classification
 except ImportError:  # pragma: no cover - flat sourcedir inside the SageMaker DLC
     import task_types  # type: ignore
     import task_common  # type: ignore
     import task_image_classification  # type: ignore
     import task_image_text_classification  # type: ignore
+    import task_image_text_to_text  # type: ignore
     import task_text_classification  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -48,7 +50,19 @@ TASK_MODULES = {
     task_types.TEXT_CLASSIFICATION: task_text_classification,
     task_types.IMAGE_CLASSIFICATION: task_image_classification,
     task_types.IMAGE_TEXT_CLASSIFICATION: task_image_text_classification,
+    task_types.IMAGE_TEXT_TO_TEXT: task_image_text_to_text,
 }
+
+
+def str2bool(value):
+    """Parse a boolean hyperparameter.
+
+    SageMaker passes every hyperparameter as a string, so ``bool("false")`` —
+    which is True — is the trap this exists to avoid.
+    """
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
 def resolve_task_module(task_type):
@@ -88,6 +102,16 @@ def parse_args(argv=None):
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--context_length", type=int, default=512)
     parser.add_argument("--image_size", type=int, default=224)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+
+    # Generative VLM (LoRA) hyperparameters.  Ignored by the classification
+    # tasks, which train every weight of a much smaller model.
+    parser.add_argument("--load_in_4bit", type=str2bool, default=True)
+    parser.add_argument("--lora_r", type=int, default=16)
+    parser.add_argument("--lora_alpha", type=int, default=32)
+    parser.add_argument("--lora_dropout", type=float, default=0.05)
+    parser.add_argument("--lora_target_modules", type=str, default="")
+    parser.add_argument("--max_new_tokens", type=int, default=256)
 
     # DynamoDB progress reporting
     parser.add_argument("--dynamodb_table_name", type=str, default="")

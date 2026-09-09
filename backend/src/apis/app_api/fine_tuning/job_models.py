@@ -39,6 +39,7 @@ def _hyperparameters(task_type: str, **overrides: str) -> Dict[str, str]:
 _TEXT = task_types.TEXT_CLASSIFICATION
 _IMAGE = task_types.IMAGE_CLASSIFICATION
 _IMAGE_TEXT = task_types.IMAGE_TEXT_CLASSIFICATION
+_VLM = task_types.IMAGE_TEXT_TO_TEXT
 
 
 AVAILABLE_MODELS: List[AvailableModel] = [
@@ -229,6 +230,81 @@ AVAILABLE_MODELS: List[AvailableModel] = [
         default_instance_type="ml.g6.xlarge",
         default_hyperparameters=_hyperparameters(_IMAGE_TEXT),
     ),
+    # ---------------------------------------------------------------
+    # Image + text to text (generative VLM)
+    #
+    # These are LoRA-adapted, not fully fine-tuned: a full fine-tune of even
+    # the smallest entry here needs more optimiser memory than the largest
+    # instance we offer.  Every entry must ship a chat template, because the
+    # trainer formats turns with it rather than inventing a dialogue format
+    # the checkpoint has never seen.
+    #
+    # context_length is the sequence budget INCLUDING expanded image tokens.
+    # LLaVA-1.5 emits 576 per image; the 1.6/NeXT models tile at higher
+    # resolution and emit up to 2880, which is why they get a larger budget.
+    # ---------------------------------------------------------------
+    AvailableModel(
+        model_id="smolvlm-instruct",
+        model_name="SmolVLM Instruct",
+        huggingface_model_id="HuggingFaceTB/SmolVLM-Instruct",
+        description="2.2B parameter vision-language model from HuggingFace, small enough to iterate on quickly and the cheapest way to validate a dataset",
+        task_type=_VLM,
+        default_instance_type="ml.g6e.xlarge",
+        default_hyperparameters=_hyperparameters(
+            _VLM,
+            # Small enough to train in bf16, which is faster than 4-bit and
+            # avoids the dequantisation overhead entirely.
+            load_in_4bit="false",
+            per_device_train_batch_size="2",
+            gradient_accumulation_steps="4",
+        ),
+    ),
+    AvailableModel(
+        model_id="llava-1.5-7b",
+        model_name="LLaVA 1.5 7B",
+        huggingface_model_id="llava-hf/llava-1.5-7b-hf",
+        description="7B parameter vision-language model, the standard baseline for visual instruction tuning at a fixed 576 image tokens",
+        task_type=_VLM,
+        default_instance_type="ml.g6e.xlarge",
+        default_hyperparameters=_hyperparameters(_VLM),
+    ),
+    AvailableModel(
+        model_id="llava-1.6-mistral-7b",
+        model_name="LLaVA 1.6 Mistral 7B",
+        huggingface_model_id="llava-hf/llava-v1.6-mistral-7b-hf",
+        description="7.6B parameter LLaVA-NeXT on Mistral, higher-resolution tiling than 1.5 and correspondingly slower per record",
+        task_type=_VLM,
+        default_instance_type="ml.g6e.xlarge",
+        default_hyperparameters=_hyperparameters(_VLM, context_length="2048"),
+    ),
+    AvailableModel(
+        model_id="qwen25-vl-7b-instruct",
+        model_name="Qwen2.5-VL 7B Instruct",
+        huggingface_model_id="Qwen/Qwen2.5-VL-7B-Instruct",
+        description="8.3B parameter vision-language model from Alibaba with dynamic resolution, strong on documents, charts and OCR-heavy images",
+        task_type=_VLM,
+        default_instance_type="ml.g6e.xlarge",
+        default_hyperparameters=_hyperparameters(_VLM, context_length="2048"),
+    ),
+    AvailableModel(
+        model_id="llava-1.6-34b",
+        model_name="LLaVA 1.6 34B",
+        huggingface_model_id="llava-hf/llava-v1.6-34b-hf",
+        description="34.8B parameter LLaVA-NeXT on Yi-34B, the most capable option and by far the slowest — expect multi-hour runs and budget accordingly",
+        task_type=_VLM,
+        # One L40S still holds the 4-bit weights (~18GB), so the cheapest
+        # instance that fits is a single-GPU one.  The larger size is for host
+        # RAM, not VRAM: the base arrives as 15 shards that are quantised on
+        # the way in.
+        default_instance_type="ml.g6e.4xlarge",
+        default_hyperparameters=_hyperparameters(
+            _VLM,
+            context_length="2048",
+            gradient_accumulation_steps="16",
+            lora_r="8",
+            lora_alpha="16",
+        ),
+    ),
 ]
 
 MODEL_CATALOG: Dict[str, AvailableModel] = {m.model_id: m for m in AVAILABLE_MODELS}
@@ -311,3 +387,7 @@ class TaskTypeResponse(BaseModel):
     requires_archive: bool
     inference_upload_extensions: List[str]
     default_instance_type: str
+    #: True when the task emits free text rather than class probabilities.
+    #: Defaulted so a client built against the classification-only shape keeps
+    #: deserialising this response.
+    is_generative: bool = False
