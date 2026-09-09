@@ -20,10 +20,12 @@ Four things invalidate earlier versions of this document:
    deployed clean. They are §5 items 25–41 and they are the most useful part of
    this document. Three clusters: 32–36 trace to the two engines never being made
    exclusive (PR #900); 37–39 to the ingestion consumer never actually knowing when
-   a document was ready (PRs #901, #908); of the two answer-quality items **40 (the
-   context cap) is now RESOLVED (PR #997, task 16.1) and 41 (diagram answer quality)
-   remains OPEN** — §5.41, where the managed backend gives a *worse* answer than
-   legacy. §5.33 is also RESOLVED (PR #998, task 16.3).
+   a document was ready (PRs #901, #908); both answer-quality items are now RESOLVED
+   — **40 (the context cap) via PR #997 (task 16.1) and 41 (diagram answer quality)
+   via task 16.2**. §5.41 is *understood and closed as a product/training matter, not
+   a code fix*: the managed backend gives a worse per-column answer than legacy on
+   structured diagrams, but on a self-service platform the mitigation is user
+   guidance, not engineering (see §5.41). §5.33 is also RESOLVED (PR #998, task 16.3).
 3. **The `document_id` "known unknown" was a false alarm** and is now resolved with
    measurements — see §6. An earlier revision listed it as the top open risk. The
    probe was reading facade keys that have never existed. Two genuine findings came
@@ -925,7 +927,8 @@ answer than legacy** on a question it retrieves *better*. Both are open.
     (0.0561 legacy versus 0.4988 managed). I measured the retriever and never
     checked the answer. Score separation is not answer quality.
 
-41. ⚠️ **OPEN. Column-structured diagrams yield confidently wrong answers.** The
+41. ✅ **RESOLVED (task 16.2) — understood; closed as a product/training matter, no
+    code fix. Column-structured diagrams yield confidently wrong answers.** The
     capability in §5.35 is real — an image-only flowchart that legacy cannot ingest
     at all becomes retrievable, and Bedrock's vision model genuinely decodes it.
     But asked "what should they take semester 4?" from a 3.5-year curriculum
@@ -944,10 +947,32 @@ answer than legacy** on a question it retrieves *better*. Both are open.
     boundaries — the digit after "Semester" fell into the next bucket. If it takes
     that to check, a chunk of prose was never going to carry it.
 
-    **Guidance until this is understood:** image extraction is worth demonstrating
-    as *retrievable where it was previously impossible*, not as a source of precise
-    tabular answers. Do not put a per-column question from a diagram in front of an
-    audience.
+    **Re-measured 2026-09-08** on the live diagram corpus (`ast-1a90784a7f18`,
+    `4-yr-flowchart-v2026.pdf`) with both read-only harnesses. Legacy returned **0
+    chunks on every query** — the image-only PDF is unusable there — while managed
+    returned 5, so the capability gain is one-directional. At the chunk level the
+    failure is visible directly: the vision narrative splits into a header-only
+    chunk (`"Semester 1 Semester 2 Semester 3 Semester 4 …"`, no courses), course
+    chunks with no semester tag (`"ME 215 …"`, `"CHEM 111 … 1 credit"`), and a few
+    single-semester narratives. For "semester 4?" the top-ranked chunk is about
+    *Semester 3*. **The task-16.1 cap fix does not rescue this:** at both 2,000 and
+    8,000 chars the answer reported 14 credits (chart: 19) and kept the mis-columned
+    `ENGR 220`. The existence question ("does it include a capstone?") was correct
+    at both caps. More context cannot restore a coordinate that was never captured.
+
+    **Why we are not fixing it in code.** A text sidecar *would* work — managed
+    ingests whatever lands in our S3 data source, and a text table keeps its
+    row/column structure because they are literal characters, not pixels — but this
+    is **not a single-tenant tool we administer**. Users create their own agents
+    backed by these knowledge bases, and a regular user has no way to know a
+    flowchart needs converting to a text table for good answers. So the honest
+    mitigation is **user training and guidance** on which content and which agent
+    types work best, not an engineering change.
+
+    **Standing guidance:** demo and describe image extraction as *retrievable where
+    it was previously impossible*, never as a source of precise tabular answers. Do
+    not put a per-column question from a diagram in front of an audience, and do not
+    promise precise per-semester / per-column results from image-only documents.
 
 ---
 
@@ -966,7 +991,7 @@ answer than legacy** on a question it retrieves *better*. Both are open.
 | Group | Notes |
 |---|---|
 | ~~**§5.40** the 2,000-char cap~~ ✅ DONE (PR #997) | Engine-aware cap: managed **8,000**, legacy 2,000 (`rag_service.resolve_context_cap`, keyed on `resolve_engine_for`). Requirement 3.2 amended; validated end-to-end on the KINES advising corpus in dev; mutation-tested |
-| **§5.41** diagram answers | Column-structured diagrams give confident wrong answers because chunks carry no coordinates. Understand the shape before promising anything about tabular image content |
+| ~~**§5.41** diagram answers~~ ✅ DONE (task 16.2) | Understood: the vision model flattens the 2-D layout, chunks carry no column coordinates, and the 16.1 cap fix does not rescue it (re-measured 2026-09-08: 14 credits vs the chart's 19 at both caps, mis-columned `ENGR 220` persists). Closed as a **product/training matter, not code** — this is a self-service platform, and users won't know to convert a diagram to text. Guidance: demo as *retrievable where previously impossible*, never precise per-column answers |
 | ~~**§5.33** the one fail-open line~~ ✅ DONE (PR #998) | `if not doc_ids: return vectors` now returns `[]` + `METRIC_STATUS_FILTER_FAIL_CLOSED` when a non-empty batch carries no `document_id`; an empty input stays an empty result with no metric. Guard `test_filter_fails_closed_when_no_chunk_carries_a_document_id`, mutation-tested |
 | ~~**engine visibility**~~ ✅ DONE (task 16.4) | The facade now logs one INFO line per query naming the served engine (`engine=managed (Managed)` / `engine=s3vectors (Classic)`), read from the same KB_Record `resolve_backend` uses. The knowledge base section carries a `Managed`/`Classic` badge, fed by a new `engine` field on `UpgradeStatusResponse` (defaults `classic`), and its per-document status vocabulary is engine-aware — `uploading → processing → ready` for managed, `chunking`/`embedding` kept for legacy. Mutation-tested. Branch `feat/kb-engine-visibility` |
 | **14.4** one-click document retry | Req 21.2. Ingestion is S3-event-triggered and there is no reprocess endpoint, so this needs new backend against a live pipeline. The card currently directs the user to re-upload, which works today. Close it by building the endpoint **or** by amending Req 21.2 to accept re-upload |
