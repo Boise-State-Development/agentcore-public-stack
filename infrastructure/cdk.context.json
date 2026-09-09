@@ -20,8 +20,8 @@
     "cloudFrontPriceClass": "PriceClass_100"
   },
   "appApi": {
-    "cpu": 512,
-    "memory": 1024,
+    "cpu": 1024,
+    "memory": 2048,
     "desiredCount": 2,
     "maxCapacity": 10
   },

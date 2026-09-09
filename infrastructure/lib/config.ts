@@ -615,10 +615,32 @@ export function loadConfig(scope: cdk.App): AppConfig {
       additionalCorsOrigins: process.env.CDK_FRONTEND_CORS_ORIGINS || scope.node.tryGetContext('frontend')?.additionalCorsOrigins,
     },
     appApi: {
-      cpu: parseIntEnv(process.env.CDK_APP_API_CPU) || scope.node.tryGetContext('appApi')?.cpu,
-      memory: parseIntEnv(process.env.CDK_APP_API_MEMORY) || scope.node.tryGetContext('appApi')?.memory,
-      desiredCount: parseIntEnv(process.env.CDK_APP_API_DESIRED_COUNT) ?? scope.node.tryGetContext('appApi')?.desiredCount,
-      maxCapacity: parseIntEnv(process.env.CDK_APP_API_MAX_CAPACITY) || scope.node.tryGetContext('appApi')?.maxCapacity,
+      // Precedence for every sizing knob: env var > FLAT dotted context >
+      // nested context object.
+      //
+      // The flat form is not optional. `--context appApi.cpu=2048` — which is
+      // exactly what scripts/common/load-env.sh emits — sets the flat key
+      // context['appApi.cpu']; it does NOT build a nested { appApi: { cpu } }.
+      // Reading only the nested form accepted the operator's flag and silently
+      // ignored it, so every --context sizing override was dead. Same failure
+      // mode as the observability tunables (see OBSERVABILITY_DEFAULT_* notes).
+      //
+      // `??` rather than `||` throughout: parseIntEnv already maps '' and
+      // unparseable input to undefined, so `??` is safe, and it stops a
+      // legitimate 0 (e.g. desiredCount: 0 to park an environment) from being
+      // swallowed as falsy.
+      cpu: parseIntEnv(process.env.CDK_APP_API_CPU)
+        ?? parseIntEnv(scope.node.tryGetContext('appApi.cpu'))
+        ?? scope.node.tryGetContext('appApi')?.cpu,
+      memory: parseIntEnv(process.env.CDK_APP_API_MEMORY)
+        ?? parseIntEnv(scope.node.tryGetContext('appApi.memory'))
+        ?? scope.node.tryGetContext('appApi')?.memory,
+      desiredCount: parseIntEnv(process.env.CDK_APP_API_DESIRED_COUNT)
+        ?? parseIntEnv(scope.node.tryGetContext('appApi.desiredCount'))
+        ?? scope.node.tryGetContext('appApi')?.desiredCount,
+      maxCapacity: parseIntEnv(process.env.CDK_APP_API_MAX_CAPACITY)
+        ?? parseIntEnv(scope.node.tryGetContext('appApi.maxCapacity'))
+        ?? scope.node.tryGetContext('appApi')?.maxCapacity,
       additionalCorsOrigins: process.env.CDK_APP_API_CORS_ORIGINS || scope.node.tryGetContext('appApi')?.additionalCorsOrigins,
     },
     inferenceApi: {
