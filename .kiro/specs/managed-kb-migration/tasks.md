@@ -791,7 +791,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       carries the contradicting measurement).
     - _HANDOFF §5.40 · Requirements: 3.1, 3.2_
 
-  - [ ] 16.2 Understand diagram answer quality before promising anything
+  - [x] 16.2 Understand diagram answer quality before promising anything
     - Column-structured diagrams yield confident wrong answers: a curriculum
       flowchart reported 11 credits where the chart says 19, invented a course from
       an adjacent column, and missed four others. Correctness depends on which
@@ -799,6 +799,21 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Image extraction genuinely works (§5.35) — an image-only PDF that legacy
       cannot ingest at all becomes retrievable. The capability is real; precise
       tabular answers from it are not established.
+    - **RESOLVED (2026-09-08).** Re-measured on the live diagram corpus
+      (`ast-1a90784a7f18`, `4-yr-flowchart-v2026.pdf`) with both read-only harnesses:
+      legacy returned 0 chunks on every query (image-only PDF unusable on legacy),
+      managed returned 5. The vision narrative loses the column binding — the
+      header-only chunk carries no courses, the course chunks carry no semester — so
+      a per-column question ("semester 4?") is answered confidently wrong (14 credits
+      vs the chart's 19; the mis-columned `ENGR 220` persists). Raising the cap
+      2,000→8,000 (task 16.1) did NOT fix it. Existence questions ("does it include a
+      capstone?") are correct at both caps.
+    - **Decision: no code fix.** A text sidecar would work (managed ingests whatever
+      lands in our S3 data source, and a text table keeps its structure), but this is
+      a self-service platform — users create their own agents and would not know to
+      convert a document. The mitigation is user training/guidance on which content
+      and agent types work best, not engineering. Demo image extraction as
+      *retrievable where previously impossible*, never as precise per-column answers.
     - _HANDOFF §5.41_
 
   - [x] 16.3 Make the document-status filter fail closed on its one open path
