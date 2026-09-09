@@ -8,7 +8,7 @@ cacheRead=0, cacheWrite=134k mid-turn). Dedicated cachePoints on toolConfig and
 the system prompt keep the stable prefix readable from cache on those turns.
 
 Contract under test (see ModelConfig.to_bedrock_config comment):
-  1. toolConfig.tools tail  — via cache_tools="default"
+  1. toolConfig.tools tail  — via CacheConfig(tools_ttl=True)
   2. system tail            — via SystemContentBlock list from AgentFactory
   3. last user message tail — via CacheConfig(strategy="auto")
 Bedrock allows max 4 cachePoints per request; nothing else may add one, so the
@@ -37,22 +37,41 @@ def _count_cache_points(node) -> int:
 
 
 # ---------------------------------------------------------------------------
-# ModelConfig: cache_tools + support predicate
+# ModelConfig: tools caching + support predicate
 # ---------------------------------------------------------------------------
 class TestCacheToolsConfig:
-    def test_cache_tools_set_for_claude_with_caching(self):
+    def test_tools_ttl_set_for_claude_with_caching(self):
         config = ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True)
-        assert config.to_bedrock_config()["cache_tools"] == "default"
+        bedrock_config = config.to_bedrock_config()
+        assert bedrock_config["cache_config"].tools_ttl is True
+        # The model-level key was deprecated in strands-agents 1.55.0
+        # (_warn_on_deprecated_cache_tools); tools_ttl supersedes it.
+        assert "cache_tools" not in bedrock_config
 
-    def test_no_cache_tools_when_caching_disabled(self):
+    def test_no_cache_config_when_caching_disabled(self):
         config = ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=False)
-        assert "cache_tools" not in config.to_bedrock_config()
+        bedrock_config = config.to_bedrock_config()
+        assert "cache_config" not in bedrock_config
+        assert "cache_tools" not in bedrock_config
 
-    def test_no_cache_tools_for_non_anthropic_bedrock_model(self):
+    def test_tools_ttl_off_for_non_anthropic_bedrock_model(self):
         """A model Strands' auto strategy would no-op on must not get explicit
         cachePoints either — Bedrock would reject them with ValidationException."""
         config = ModelConfig(model_id="amazon.nova-pro-v1:0", caching_enabled=True)
-        assert "cache_tools" not in config.to_bedrock_config()
+        bedrock_config = config.to_bedrock_config()
+        assert bedrock_config["cache_config"].tools_ttl is False
+        assert "cache_tools" not in bedrock_config
+
+    def test_no_ttl_configured_so_the_emitted_points_carry_none(self):
+        """cache_config.ttl must stay unset.
+
+        It is what makes tools_ttl=True emit a bare ``{"type": "default"}``
+        (byte-identical to the old cache_tools="default"), and what keeps
+        _apply_system_cache_ttl from rewriting the TTL on the cache point
+        AgentFactory places. Both sit inside the cached prefix.
+        """
+        config = ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True)
+        assert config.to_bedrock_config()["cache_config"].ttl is None
 
     def test_support_predicate_false_for_non_bedrock_provider(self):
         config = ModelConfig(
@@ -186,6 +205,32 @@ class TestFormattedRequestCachePoints:
         # Strands' auto strategy strips only message-level points — the
         # system point must survive.
         assert request_parts["system"][0] == {"text": "You are a helpful assistant."}
+
+    def test_system_blocks_hold_exactly_one_cache_point(self, request_parts):
+        """1.55's _should_cache_system must not double the point we placed.
+
+        Its guard is ``not any("cachePoint" in block ...)``, so a second point
+        can only appear if AgentFactory stops placing ours — which would move
+        the system boundary and rewrite the cached prefix. A count of 2 would
+        also be a ValidationException (adjacent cache points).
+        """
+        assert _count_cache_points(request_parts["system"]) == 1
+
+    def test_system_prompt_without_our_point_gets_exactly_one(self, model):
+        """The 1.55 safety net, for any path that bypasses AgentFactory.
+
+        Pinned deliberately: cache_config.system_prompt_ttl stays at its
+        default True, so a system prompt reaching Bedrock without our
+        trailing cachePoint still ends the static prefix at the same place
+        rather than at the tools tail.
+        """
+        request = model.format_request(
+            [{"role": "user", "content": [{"text": "hi"}]}],
+            None,
+            system_prompt_content=[{"text": "You are a helpful assistant."}],
+        )
+        assert _count_cache_points(request["system"]) == 1
+        assert request["system"][-1] == {"cachePoint": {"type": "default"}}
 
     def test_last_user_message_tail_is_cache_point(self, request_parts):
         last_user = [m for m in request_parts["messages"] if m["role"] == "user"][-1]
