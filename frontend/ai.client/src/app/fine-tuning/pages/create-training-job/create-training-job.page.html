@@ -464,8 +464,9 @@
             </div>
           }
 
-          <!-- Image Size — image-bearing tasks only -->
-          @if (requiresArchive()) {
+          <!-- Image Size — image classifiers only; the generative trainer
+               takes its resolution from the model's own processor. -->
+          @if (showImageSize()) {
             <div>
               <label for="hp-img" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Image Size</label>
               <input
@@ -474,6 +475,43 @@
                 type="text"
                 class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
               />
+            </div>
+          }
+
+          <!-- LoRA adapter — generative tasks only -->
+          @if (isGenerative()) {
+            <div>
+              <label for="hp-lora-r" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">LoRA Rank</label>
+              <input
+                id="hp-lora-r"
+                formControlName="loraR"
+                type="text"
+                class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Higher adapts more, and costs more memory.</p>
+            </div>
+
+            <div>
+              <label for="hp-lora-alpha" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">LoRA Alpha</label>
+              <input
+                id="hp-lora-alpha"
+                formControlName="loraAlpha"
+                type="text"
+                class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Conventionally twice the rank.</p>
+            </div>
+
+            <div>
+              <label for="hp-4bit" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Quantization</label>
+              <select
+                id="hp-4bit"
+                formControlName="loadIn4bit"
+                class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              >
+                <option value="true">4-bit (fits larger models)</option>
+                <option value="false">bfloat16 (faster, needs more VRAM)</option>
+              </select>
             </div>
           }
 

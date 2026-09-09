@@ -34,6 +34,7 @@ from typing import Dict, Mapping, Optional, Tuple
 TEXT_CLASSIFICATION = "text-classification"
 IMAGE_CLASSIFICATION = "image-classification"
 IMAGE_TEXT_CLASSIFICATION = "image-text-classification"
+IMAGE_TEXT_TO_TEXT = "image-text-to-text"
 
 #: Task assumed for a job record written before task types existed, and for a
 #: request that omits the field.  Must stay ``TEXT_CLASSIFICATION`` — every
@@ -53,6 +54,12 @@ DEFAULT_TASK_TYPE = TEXT_CLASSIFICATION
 # exact container they were validated on.
 DLC_FAMILY_TEXT = "text"
 DLC_FAMILY_VISION = "vision"
+# Generative VLMs need PEFT and bitsandbytes on top of the vision stack.
+# bitsandbytes requires torch>=2.4, which the text container (torch 2.1)
+# cannot satisfy, so the dependency set cannot simply be added to the shared
+# requirements file — the family is what selects the right one at packaging
+# time.  See ``script_packaging_service.REQUIREMENTS_BY_FAMILY``.
+DLC_FAMILY_VLM = "vlm"
 
 
 # =========================================================================
@@ -70,8 +77,9 @@ class TaskSpec:
     # --- Training record contract -------------------------------------
     #: Columns every training record must carry.
     required_columns: Tuple[str, ...]
-    #: Column holding the target class.
-    label_column: str
+    #: Column holding the target class, or None for a generative task, which
+    #: has no fixed label set.
+    label_column: Optional[str]
     #: Column holding an image path relative to the archive root, or None for
     #: text-only tasks.
     image_column: Optional[str]
@@ -103,6 +111,15 @@ class TaskSpec:
     hf_pipeline_tags: Tuple[str, ...]
     default_instance_type: str
     default_hyperparameters: Mapping[str, str]
+
+    # --- Generative tasks ----------------------------------------------
+    #: Column holding the target text a generative task learns to produce.
+    #: None for the classification tasks.  Defaulted so the three existing
+    #: specs are untouched.
+    response_column: Optional[str] = None
+    #: True when the model emits free text rather than a class distribution.
+    #: Drives the output contract: probability columns vs a text column.
+    is_generative: bool = False
 
     def supports_extension(self, filename: str) -> bool:
         """True when ``filename`` is an acceptable training upload."""
@@ -227,9 +244,10 @@ TASK_SPECS: Dict[str, TaskSpec] = {
         #
         # "image-text-to-text" (LLaVA, Qwen-VL) and "visual-question-answering"
         # (ViLT, BLIP) are generative or fusion models with no text tower to
-        # pool, and are excluded on purpose: allowing them would let the
-        # pre-flight pass a model that only fails later, on a billed GPU,
-        # inside the trainer's dual-encoder check.
+        # pool, and stay excluded here: allowing them would let the pre-flight
+        # pass a model that only fails later, on a billed GPU, inside the
+        # trainer's dual-encoder check.  Generative VLMs have their own task —
+        # see IMAGE_TEXT_TO_TEXT below.
         hf_pipeline_tags=("zero-shot-image-classification",),
         default_instance_type="ml.g6.xlarge",
         default_hyperparameters={
@@ -239,6 +257,55 @@ TASK_SPECS: Dict[str, TaskSpec] = {
             "context_length": "77",
         },
     ),
+    IMAGE_TEXT_TO_TEXT: TaskSpec(
+        task_type=IMAGE_TEXT_TO_TEXT,
+        display_name="Image + text to text",
+        description=(
+            "Teach a vision-language model to answer about an image in your "
+            "own style or vocabulary. Upload a .zip containing a manifest "
+            '(CSV/JSONL/JSON) with "image", "prompt" and "response" fields, '
+            "plus the image files the manifest points at."
+        ),
+        required_columns=("image", "prompt", "response"),
+        # Generative: there is no class list, so no label column and no
+        # softmax.  ``response`` is the target text, not a category.
+        label_column=None,
+        image_column="image",
+        text_column="prompt",
+        response_column="response",
+        is_generative=True,
+        upload_extensions=(".zip",),
+        manifest_extensions=_MANIFEST_EXTENSIONS,
+        requires_archive=True,
+        inference_upload_extensions=(".zip",),
+        inference_content_type="application/zip",
+        inference_max_payload_mb=100,
+        dlc_family=DLC_FAMILY_VLM,
+        hf_pipeline_tags=("image-text-to-text",),
+        # 48GB (L40S).  A 7B VLM in 4-bit needs ~5GB of weights but the
+        # activations for a high-resolution image are what actually size the
+        # card: LLaVA-1.6's AnyRes tiling emits up to 2880 image tokens per
+        # image.  The 24GB g6/g5 instances OOM on the larger checkpoints, so
+        # the default starts where the whole catalog fits.
+        default_instance_type="ml.g6e.xlarge",
+        default_hyperparameters={
+            **_COMMON_HYPERPARAMETERS,
+            # LoRA wants a markedly higher LR than full fine-tuning: only the
+            # adapter matrices move, and they start at zero.
+            "learning_rate": "1e-4",
+            # One sequence per step, recovered to an effective batch of 8 by
+            # accumulation.  A VLM sequence is thousands of tokens, so a
+            # literal batch of 16 OOMs on any instance we offer.
+            "per_device_train_batch_size": "1",
+            "gradient_accumulation_steps": "8",
+            "context_length": "1024",
+            "load_in_4bit": "true",
+            "lora_r": "16",
+            "lora_alpha": "32",
+            "lora_dropout": "0.05",
+            "max_new_tokens": "256",
+        },
+    ),
 }
 
 #: Stable, deterministic ordering for anything user-facing.
@@ -246,11 +313,19 @@ TASK_TYPES: Tuple[str, ...] = (
     TEXT_CLASSIFICATION,
     IMAGE_CLASSIFICATION,
     IMAGE_TEXT_CLASSIFICATION,
+    IMAGE_TEXT_TO_TEXT,
 )
 
 #: Task types whose upload is an archive of a manifest plus image files.
 ARCHIVE_TASK_TYPES: Tuple[str, ...] = tuple(
     t for t in TASK_TYPES if TASK_SPECS[t].requires_archive
+)
+
+#: Task types that emit free text instead of a class distribution.  These are
+#: the ones whose result file carries an output column rather than one
+#: probability column per class.
+GENERATIVE_TASK_TYPES: Tuple[str, ...] = tuple(
+    t for t in TASK_TYPES if TASK_SPECS[t].is_generative
 )
 
 
@@ -275,3 +350,8 @@ def get_task_spec(task_type: Optional[str]) -> TaskSpec:
 def requires_images(task_type: Optional[str]) -> bool:
     """True when the task's training records reference image files."""
     return get_task_spec(task_type).image_column is not None
+
+
+def is_generative(task_type: Optional[str]) -> bool:
+    """True when the task produces free text rather than class probabilities."""
+    return get_task_spec(task_type).is_generative

@@ -23,11 +23,13 @@ try:  # package context: unit tests and the app-api container
     from .. import task_types
     from . import task_image_classification
     from . import task_image_text_classification
+    from . import task_image_text_to_text
     from . import task_text_classification
 except ImportError:  # pragma: no cover - flat sourcedir inside the SageMaker DLC
     import task_types  # type: ignore
     import task_image_classification  # type: ignore
     import task_image_text_classification  # type: ignore
+    import task_image_text_to_text  # type: ignore
     import task_text_classification  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ TASK_MODULES = {
     task_types.TEXT_CLASSIFICATION: task_text_classification,
     task_types.IMAGE_CLASSIFICATION: task_image_classification,
     task_types.IMAGE_TEXT_CLASSIFICATION: task_image_text_classification,
+    task_types.IMAGE_TEXT_TO_TEXT: task_image_text_to_text,
 }
 
 #: Task type of the artifact currently loaded, remembered at module scope.
@@ -151,21 +154,11 @@ def _escape_csv(value):
     return '"' + str(value).replace('"', '""') + '"'
 
 
-def output_fn(prediction, accept="text/csv"):
-    """Format predictions as CSV with one probability column per class.
-
-    Output format:
-        id,prob_label1,prob_label2,...
-        "example.jpg",0.850000,0.150000
-
-    The first column is whatever identifies a record for the task: the input
-    text for text classification, the archive-relative image path for the
-    image tasks.
-    """
+def _classification_rows(prediction, identifier_column):
+    """CSV rows for a task that emits one probability column per class."""
     identifiers = prediction["identifiers"]
     probabilities = prediction["probabilities"]
     labels = prediction["labels"]
-    identifier_column = prediction.get("identifier_column", "id")
 
     header = identifier_column + "," + ",".join(
         f"prob_{_sanitize_label(label)}" for label in labels
@@ -181,5 +174,56 @@ def output_fn(prediction, accept="text/csv"):
         else:
             values = ",".join("0.000000" for _ in labels)
         rows.append(f"{_escape_csv(identifier)},{values}")
+    return rows
+
+
+def _generative_rows(prediction, identifier_column):
+    """CSV rows for a task that emits free text.
+
+    Still CSV, and still one row per input record, so the result file
+    downloads and opens exactly like a classification result.  Generated text
+    routinely contains commas, quotes and newlines; ``_escape_csv`` quotes and
+    doubles them, which is valid CSV for all three.
+    """
+    identifiers = prediction["identifiers"]
+    prompts = prediction.get("prompts", [])
+    generations = prediction["generations"]
+
+    rows = [f"{identifier_column},prompt,output"]
+    for index, identifier in enumerate(identifiers):
+        prompt = prompts[index] if index < len(prompts) else ""
+        generation = generations[index] if index < len(generations) else ""
+        rows.append(
+            f"{_escape_csv(identifier)},{_escape_csv(prompt)},{_escape_csv(generation)}"
+        )
+    return rows
+
+
+def output_fn(prediction, accept="text/csv"):
+    """Format predictions as CSV.
+
+    Two shapes, chosen by what the task produced rather than by a flag the
+    caller has to pass:
+
+    Classification — an identifier followed by one probability per class::
+
+        id,prob_label1,prob_label2
+        "example.jpg",0.850000,0.150000
+
+    Generative — an identifier, the prompt, and the generated text::
+
+        image,prompt,output
+        "cat.jpg","What is this?","A tabby cat sitting on a windowsill."
+
+    The first column is whatever identifies a record for the task: the input
+    text for text classification, the archive-relative image path for every
+    image task.
+    """
+    identifier_column = prediction.get("identifier_column", "id")
+
+    if "generations" in prediction:
+        rows = _generative_rows(prediction, identifier_column)
+    else:
+        rows = _classification_rows(prediction, identifier_column)
 
     return "\n".join(rows)
