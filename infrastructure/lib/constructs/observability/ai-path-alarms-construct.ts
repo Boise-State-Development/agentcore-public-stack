@@ -11,6 +11,28 @@ const AGENTCORE_NAMESPACE = 'AWS/Bedrock-AgentCore';
 /** The namespace bedrock-runtime inference publishes to. */
 const BEDROCK_NAMESPACE = 'AWS/Bedrock';
 
+/**
+ * Alarm-name-safe label for a Bedrock model id.
+ *
+ * `ModelId` arrives in three spellings for the same underlying model: a bare id
+ * (`amazon.titan-embed-text-v2:0`), an inference-profile id
+ * (`global.anthropic.claude-sonnet-5`), and a full foundation-model ARN
+ * (`arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-3-haiku-...`).
+ * The ARN form is reduced to its last path segment, so an ARN-keyed entry and a
+ * bare-id entry for the same model produce the same readable label rather than
+ * one unreadable one. Quotas differ per inference profile, so `us.` and
+ * `global.` variants deliberately remain distinct.
+ */
+function modelSlug(modelId: string): string {
+  const bare = modelId.includes('/')
+    ? modelId.slice(modelId.lastIndexOf('/') + 1)
+    : modelId;
+  return bare
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export interface AiPathAlarmsConstructProps {
   config: AppConfig;
   /** AgentCore Memory ARN. The `Resource` dimension value is the full ARN. */
@@ -124,19 +146,48 @@ export class AiPathAlarmsConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // The only leading indicator here: quota usage climbs before throttling.
-    alarms.alarm('BedrockQuotaUsageAlarm', {
-      name: 'bedrock-tpm-quota-usage',
-      alarmDescription:
-        'Estimated Bedrock tokens-per-minute quota usage is high. This is the leading '
-        + 'indicator for bedrock-invocation-throttles — acting on it means requesting a '
-        + 'quota increase before users see failures rather than after.',
-      metric: bedrockMetric('EstimatedTPMQuotaUsage', 'Maximum'),
-      threshold: 80,
-      evaluationPeriods: 3,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-    });
+    // Quota usage is the only leading indicator in this construct: it climbs
+    // before throttling starts. It has to be measured PER MODEL, because a TPM
+    // quota is per model and per inference profile. The account-wide roll-up has
+    // no single denominator to be a percentage of — summing a 40,000,000-quota
+    // profile with a 200,000-quota one produces a number comparable to nothing,
+    // and it hides the model closest to its own ceiling, which is usually the
+    // one with the smallest quota rather than the most traffic.
+    //
+    // Statistic stays Maximum, not Average: the quota is per *minute*, the
+    // period is 5 minutes, and the underlying data is 1-minute, so Maximum reads
+    // the peak minute in each window. Averaging would dilute a real spike below
+    // the threshold.
+    //
+    // No configured quotas means no alarms here at all; the backstop is
+    // bedrock-invocation-throttles. See OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTAS.
+    const quotaPercent = config.observability.bedrockTpmQuotaPercent;
+    for (const [modelId, tpmQuota] of Object.entries(config.observability.bedrockTpmQuotas)) {
+      const slug = modelSlug(modelId);
+
+      alarms.alarm(`BedrockQuotaUsageAlarm-${slug}`, {
+        name: `bedrock-tpm-quota-usage-${slug}`,
+        alarmDescription:
+          `Estimated TPM quota usage for ${modelId} reached ${quotaPercent}% of its `
+          + `configured ${tpmQuota} TPM quota. FIRST: confirm ${tpmQuota} is still the live `
+          + 'quota — it is configured by hand and nothing checks it automatically '
+          + '(aws service-quotas list-service-quotas --service-code bedrock). If it is '
+          + 'current, this is the leading indicator for bedrock-invocation-throttles: '
+          + 'request an increase now, because increases take lead time. The metric excludes '
+          + 'quota Bedrock reserves up front from max_tokens, so real pressure can be higher.',
+        metric: new cloudwatch.Metric({
+          namespace: BEDROCK_NAMESPACE,
+          metricName: 'EstimatedTPMQuotaUsage',
+          dimensionsMap: { ModelId: modelId },
+          statistic: 'Maximum',
+          period: ALARM_PERIOD,
+        }),
+        threshold: Math.floor((tpmQuota * quotaPercent) / 100),
+        evaluationPeriods: 3,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+    }
 
     // ============================================================
     // AgentCore Memory

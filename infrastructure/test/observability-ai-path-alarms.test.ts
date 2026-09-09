@@ -45,20 +45,23 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
   });
 
   describe('Bedrock inference', () => {
-    it('alarms on throttles, server errors, and quota usage', () => {
+    // The two quota alarms mock-config configures, and their 75%-of-quota
+    // thresholds. Kept next to the assertions so a mock change that silently
+    // drops a model fails here rather than reducing coverage unnoticed.
+    const SONNET_5 = 'bedrock-tpm-quota-usage-global-anthropic-claude-sonnet-5';
+    const SONNET_4 = 'bedrock-tpm-quota-usage-us-anthropic-claude-sonnet-4-20250514-v1-0';
+
+    it('alarms on throttles and server errors', () => {
       for (const name of [
         'bedrock-invocation-throttles',
         'bedrock-invocation-server-errors',
-        'bedrock-tpm-quota-usage',
       ]) {
         expect(byName(name).Properties.Namespace).toBe('AWS/Bedrock');
       }
     });
 
-    it('uses the account-wide roll-up rather than per-model alarms', () => {
-      for (const name of ['bedrock-invocation-throttles', 'bedrock-tpm-quota-usage']) {
-        expect(byName(name).Properties.Dimensions).toBeUndefined();
-      }
+    it('uses the account-wide roll-up for throttles, which need no denominator', () => {
+      expect(byName('bedrock-invocation-throttles').Properties.Dimensions).toBeUndefined();
     });
 
     it('throttle alarm fires on any throttle', () => {
@@ -69,11 +72,40 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
       expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
     });
 
-    it('quota-usage alarm is a percentage gauge on a metric that has live data', () => {
-      const alarm = byName('bedrock-tpm-quota-usage');
-      expect(alarm.Properties.MetricName).toBe('EstimatedTPMQuotaUsage');
-      expect(alarm.Properties.Statistic).toBe('Maximum');
-      expect(alarm.Properties.Threshold).toBe(80);
+    // Regression guard. The original alarm compared this metric against 80 as if
+    // it were a percentage; it is an absolute token count, so 80 was crossed by
+    // roughly one sentence of output and the alarm sat in ALARM ~99% of the time,
+    // clearing only when a period had no data at all.
+    it('creates no account-wide quota alarm, which could not be a percentage', () => {
+      // Sort both sides: alarm discovery order is not guaranteed.
+      expect(allNames().filter((n) => /tpm-quota/.test(n)).sort())
+        .toEqual([`${MOCK_PREFIX}-${SONNET_5}`, `${MOCK_PREFIX}-${SONNET_4}`].sort());
+      for (const n of allNames()) {
+        expect(n).not.toBe(`${MOCK_PREFIX}-bedrock-tpm-quota-usage`);
+      }
+    });
+
+    it('quota alarms are per-model, scoped by the ModelId dimension', () => {
+      for (const [name, modelId] of [
+        [SONNET_5, 'global.anthropic.claude-sonnet-5'],
+        [SONNET_4, 'us.anthropic.claude-sonnet-4-20250514-v1:0'],
+      ] as const) {
+        const alarm = byName(name);
+        expect(alarm.Properties.MetricName).toBe('EstimatedTPMQuotaUsage');
+        expect(alarm.Properties.Namespace).toBe('AWS/Bedrock');
+        expect(alarm.Properties.Dimensions).toEqual([{ Name: 'ModelId', Value: modelId }]);
+      }
+    });
+
+    // Maximum, not Average: the quota is per minute, the period is five, and the
+    // underlying data is 1-minute. Averaging would dilute a real spike.
+    it('quota alarm threshold is the configured percent of each model quota', () => {
+      expect(byName(SONNET_5).Properties.Threshold).toBe(30_000_000); // 75% of 40M
+      expect(byName(SONNET_4).Properties.Threshold).toBe(150_000); //    75% of 200k
+      for (const name of [SONNET_5, SONNET_4]) {
+        expect(byName(name).Properties.Statistic).toBe('Maximum');
+        expect(byName(name).Properties.TreatMissingData).toBe('notBreaching');
+      }
     });
   });
 
@@ -181,7 +213,9 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
   it('all AI-path alarms are routed to the alarm topic', () => {
     for (const name of [
       'bedrock-invocation-throttles', 'bedrock-invocation-server-errors',
-      'bedrock-tpm-quota-usage', 'agentcore-memory-system-errors',
+      'bedrock-tpm-quota-usage-global-anthropic-claude-sonnet-5',
+      'bedrock-tpm-quota-usage-us-anthropic-claude-sonnet-4-20250514-v1-0',
+      'agentcore-memory-system-errors',
       'agentcore-memory-throttles', 'agentcore-gateway-system-errors',
       'agentcore-gateway-throttles', 'agentcore-code-interpreter-system-errors',
       'agentcore-code-interpreter-active-sessions',
