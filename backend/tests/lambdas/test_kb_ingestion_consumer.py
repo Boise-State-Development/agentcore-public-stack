@@ -30,6 +30,13 @@ DOCUMENT_ID = "doc-ing01"
 BUCKET = "docs-bucket"
 KEY = f"assistants/{ASSISTANT_ID}/documents/{DOCUMENT_ID}/report.pdf"
 
+#: Size of the object the fixture stages in S3. The reconcile HEADs the real
+#: object, so a managed document that reaches `complete` must have real bytes to
+#: measure. The DOC# rows are seeded WITHOUT a declared sizeBytes (declared == 0),
+#: so the common managed path exercises the "client under-reported" reconcile
+#: branch: reserve the real size, then commit it — net-zero on reservedBytes.
+OBJECT_BYTES = 2048
+
 
 @pytest.fixture()
 def table(monkeypatch):
@@ -53,6 +60,13 @@ def table(monkeypatch):
             ],
             BillingMode="PAY_PER_REQUEST",
         )
+        # The RAG documents bucket, with the uploaded object in place. The reconcile
+        # takes the authoritative size from an S3 HEAD, so the object must exist for
+        # a managed document to complete.
+        s3 = boto3.client("s3", region_name=REGION)
+        s3.create_bucket(Bucket=BUCKET)
+        s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"x" * OBJECT_BYTES)
+
         t = boto3.resource("dynamodb", region_name=REGION).Table(TABLE)
         t.put_item(
             Item={
@@ -779,3 +793,202 @@ class TestUndeclaredStatusesAreWaitedOut:
             "TEXT_INDEXED was handled by the unknown-status fallback; it is a state "
             "we have observed in production and it should be classified explicitly"
         )
+
+
+# ---------------------------------------------------------------------------
+# The byte cap is settled against the AUTHORITATIVE S3 size (Req 12.3/12.4/12.6)
+# ---------------------------------------------------------------------------
+class TestByteCapReconcileAtIngestion:
+    """Enforcement of Requirement 12.11 on the ingestion side.
+
+    The request-time reservation used the client-declared size, which is not
+    trustworthy. When a managed document reaches ``complete`` the reservation is
+    reconciled against the real S3 size; on every terminal FAILURE the reservation
+    is returned so a failed upload never permanently shrinks the owner's allowance.
+    """
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def _reserve(self, table, declared):
+        """Model the request-time state: DOC# declares ``declared`` and the KB
+        record already holds that many reserved bytes."""
+        table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"},
+            UpdateExpression="SET sizeBytes = :d",
+            ExpressionAttributeValues={":d": declared},
+        )
+        table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"},
+            UpdateExpression="SET reservedBytes = :d, storedBytes = :z, totalBytes = :d",
+            ExpressionAttributeValues={":d": declared, ":z": 0},
+        )
+
+    def _put_object(self, size):
+        boto3.client("s3", region_name=REGION).put_object(
+            Bucket=BUCKET, Key=KEY, Body=b"x" * size
+        )
+
+    def _kb(self, table):
+        return table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"}
+        ).get("Item") or {}
+
+    def _run(self, table, statuses=("NOT_FOUND", "INDEXED"), backend_cls=_FakeBackend):
+        fake = backend_cls(statuses=list(statuses))
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            return fake, ic.handle_object(BUCKET, KEY)
+
+    def test_real_equals_declared_commits_the_reservation(self, table):
+        self._seed_managed(table)
+        self._reserve(table, 2048)
+        self._put_object(2048)
+
+        self._run(table)
+
+        kb = self._kb(table)
+        assert int(kb["storedBytes"]) == 2048
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 2048
+        assert _doc(table)["status"] == "complete"
+
+    def test_real_smaller_than_declared_commits_real_and_releases_the_difference(self, table):
+        """Client over-reported: charge only what was stored, return the rest."""
+        self._seed_managed(table)
+        self._reserve(table, 4096)
+        self._put_object(2048)
+
+        self._run(table)
+
+        kb = self._kb(table)
+        assert int(kb["storedBytes"]) == 2048
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 2048  # 4096 reserved, 2048 released
+
+    def test_real_larger_than_declared_reserves_the_shortfall_then_commits(self, table):
+        """Client under-reported but still under the cap: reserve the extra, commit."""
+        self._seed_managed(table)
+        self._reserve(table, 1024)
+        self._put_object(2048)
+
+        self._run(table)
+
+        kb = self._kb(table)
+        assert int(kb["storedBytes"]) == 2048
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 2048
+        assert _doc(table)["status"] == "complete"
+
+    def test_real_over_cap_fails_the_document_deletes_object_and_releases(self, table, monkeypatch):
+        """Client under-reported AND the true size overshoots the cap.
+
+        The document must be failed, the orphaned S3 object deleted, and the
+        original reservation returned — no bytes charged, no stranded source.
+        """
+        monkeypatch.setenv("MANAGED_KB_PER_OWNER_DEFAULT_BYTES", "2048")
+        monkeypatch.setenv("MANAGED_KB_PER_KB_CEILING_BYTES", "2048")
+        self._seed_managed(table)
+        self._reserve(table, 1024)
+        self._put_object(4096)  # real; 1024 declared -> shortfall 3072 over the 2048 cap
+
+        _, result = self._run(table)
+
+        assert result["status"] == "failed"
+        assert result.get("note") == "byte-cap-exceeded"
+        assert _doc(table)["status"] == "failed"
+        # The reservation is returned in full.
+        kb = self._kb(table)
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 0
+        assert int(kb.get("storedBytes") or 0) == 0
+        # The orphaned object is gone.
+        with pytest.raises(Exception):
+            boto3.client("s3", region_name=REGION).head_object(Bucket=BUCKET, Key=KEY)
+
+    def test_a_failed_ingestion_releases_the_reservation(self, table):
+        """NAMED mutation guard: dropping the release-on-failure in the Bedrock-
+        FAILED path must fail here. A failed upload may not permanently shrink the
+        owner's allowance (Requirement 12.6)."""
+        self._seed_managed(table)
+        self._reserve(table, 2048)
+
+        self._run(table, statuses=["FAILED"])
+
+        kb = self._kb(table)
+        assert int(kb["reservedBytes"]) == 0, (
+            "a Bedrock-FAILED document did not release its reservation; a failed "
+            "upload has permanently shrunk the owner's cap"
+        )
+        assert int(kb["totalBytes"]) == 0
+        assert _doc(table)["status"] == "failed"
+
+    def test_an_ingest_exception_releases_the_reservation(self, table):
+        """The submit itself raising is also terminal and must release."""
+        self._seed_managed(table)
+        self._reserve(table, 2048)
+
+        class _Failing(_FakeBackend):
+            async def ingest(self, kb_ref, source):
+                raise RuntimeError("bedrock unavailable")
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_Failing(statuses=["NOT_FOUND"]),
+        ):
+            with pytest.raises(RuntimeError):
+                ic.handle_object(BUCKET, KEY)
+
+        kb = self._kb(table)
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 0
+
+    def test_a_still_indexing_document_does_NOT_release(self, table):
+        """The non-terminal 'leave for redelivery' path must keep the bytes
+        reserved — the delivery that completes the document will settle them."""
+        self._seed_managed(table)
+        self._reserve(table, 2048)
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_FakeBackend(statuses=["IN_PROGRESS"]),
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        kb = self._kb(table)
+        assert int(kb["reservedBytes"]) == 2048, (
+            "a document still indexing released its reservation; the completing "
+            "delivery would then find nothing reserved"
+        )
+
+    def test_a_redelivery_does_not_double_commit(self, table):
+        """settle_once + the terminal early-exit make the byte accounting
+        idempotent: a second delivery of an already-complete document must not
+        drive reservedBytes negative."""
+        self._seed_managed(table)
+        self._reserve(table, 2048)
+        self._put_object(2048)
+
+        # Delivery 1 completes and commits.
+        self._run(table, statuses=["NOT_FOUND", "INDEXED"])
+        kb1 = self._kb(table)
+        assert int(kb1["storedBytes"]) == 2048
+        assert int(kb1["reservedBytes"]) == 0
+
+        # Delivery 2: Bedrock still reports INDEXED. Must be a no-op for accounting.
+        _, result = self._run(table, statuses=["INDEXED"])
+        assert result.get("note") == "already-settled"
+        kb2 = self._kb(table)
+        assert int(kb2["storedBytes"]) == 2048
+        assert int(kb2["reservedBytes"]) == 0, (
+            "a redelivery committed a second time and drove reservedBytes negative"
+        )
+
+    def test_a_legacy_document_is_never_byte_accounted(self, table):
+        """Legacy KBs stay uncapped: no reservation is created or touched."""
+        _seed_kb(table)  # no retrievalEngine -> legacy
+        ic.handle_object(BUCKET, KEY)
+        kb = self._kb(table)
+        assert "reservedBytes" not in kb and "storedBytes" not in kb

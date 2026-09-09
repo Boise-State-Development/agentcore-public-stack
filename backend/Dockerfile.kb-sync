@@ -43,6 +43,11 @@ COPY backend/src/apis/shared/embeddings/ ${LAMBDA_TASK_ROOT}/apis/shared/embeddi
 # that package are stdlib only (test_kb_backend_boundary.py), so this adds
 # files, not dependencies.
 COPY backend/src/apis/shared/kb_backend/ ${LAMBDA_TASK_ROOT}/apis/shared/kb_backend/
+# observability/ — kb_backend/metrics.py (reached via byte_cap, which
+# document_service uses to release a managed-KB byte reservation on a stale
+# or failed upload) emits through observability/emf.py. Stdlib-only closure
+# (test_lambda_image_imports.py enforces it); this adds files, not deps.
+COPY backend/src/apis/shared/observability/ ${LAMBDA_TASK_ROOT}/apis/shared/observability/
 # assistants/ — document_service verifies assistant ownership via
 # get_assistant before soft-deleting; the worker's miss-eviction path
 # (_delete_missing_web_document) goes through it.

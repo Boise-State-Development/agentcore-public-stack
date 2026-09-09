@@ -124,6 +124,9 @@ case "$SERVICE" in
             # cleanup_service.py reads records.resolve_engine and calls
             # ManagedKbBackend to delete from a promoted knowledge base.
             "backend/src/apis/shared/kb_backend"
+            # observability/ — reached via kb_backend/metrics.py when
+            # document_service releases a managed-KB byte reservation.
+            "backend/src/apis/shared/observability"
             "backend/src/apis/app_api/file_sources"
             "backend/src/apis/app_api/documents"
             "backend/src/apis/app_api/web_sources"

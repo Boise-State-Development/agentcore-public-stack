@@ -82,7 +82,47 @@ async def _auto_fail_stale_document(document: Document) -> Document:
         error_message='Processing timed out. The document may need to be re-uploaded.',
         error_details=f'Document was stuck in "{document.status}" state since {document.updated_at}',
     )
+    # A document that timed out in a processing state never reached the ingestion
+    # consumer's terminal reconcile, so its request-time byte reservation (managed
+    # KBs only) would leak. Return it (Requirement 12.6); settle_once keeps this
+    # idempotent against a concurrent client-reported failure on the same document.
+    await release_reservation_if_managed(document)
     return updated if updated else document
+
+
+async def release_reservation_if_managed(document: Document) -> None:
+    """Return a managed-KB byte reservation for a document abandoned before its
+    bytes were settled by the ingestion consumer (Requirement 12.6).
+
+    Exactly-once via ``byte_cap.settle_once``: the request-time reservation is
+    released by whichever terminal path the document reaches first — a
+    client-reported upload failure, this stale sweep, or the ingestion consumer's
+    own failure path — and the guard stops two of them double-crediting the
+    allowance. A no-op for legacy knowledge bases (uncapped) and for zero-size
+    rows (nothing was reserved).
+
+    ``app_kb_id == assistant_id`` this phase. boto3 is called synchronously here,
+    matching the rest of this module.
+    """
+    from apis.shared.kb_backend import byte_cap
+    from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
+
+    size_bytes = int(document.size_bytes or 0)
+    if size_bytes <= 0:
+        return
+    assistant_id = document.assistant_id
+    try:
+        record = get_kb_record(assistant_id, assistant_id)
+        if resolve_engine(record) != ENGINE_MANAGED:
+            return
+        if not byte_cap.settle_once(assistant_id, document.document_id):
+            return
+        byte_cap.release(assistant_id, assistant_id, size_bytes)
+    except Exception as e:  # noqa: BLE001 - a bookkeeping failure must not break the status write
+        logger.error(
+            f"Failed to release byte reservation for document {document.document_id}: {e}",
+            exc_info=True,
+        )
 
 
 async def create_document(
