@@ -73,6 +73,11 @@ case "$SERVICE" in
         IMAGE_URI_SSM="/${CDK_PROJECT_PREFIX}/kb-migration/image-tag"
         ECR_REPO_URI="${REGISTRY}/${CDK_PROJECT_PREFIX}-kb-migration"
         ;;
+    kb-migration-document-reconciler)
+        FUNCTION_NAME_SSM="/${CDK_PROJECT_PREFIX}/kb-migration/document-reconciler-function-name"
+        IMAGE_URI_SSM="/${CDK_PROJECT_PREFIX}/kb-migration/image-tag"
+        ECR_REPO_URI="${REGISTRY}/${CDK_PROJECT_PREFIX}-kb-migration"
+        ;;
     kb-migration-ingestion-consumer)
         FUNCTION_NAME_SSM="/${CDK_PROJECT_PREFIX}/kb-migration/ingestion-consumer-function-name"
         IMAGE_URI_SSM="/${CDK_PROJECT_PREFIX}/kb-migration/image-tag"
@@ -90,7 +95,7 @@ case "$SERVICE" in
         ;;
     *)
         echo "Unknown service: $SERVICE" >&2
-        echo "Expected one of: rag-ingestion | kb-sync-dispatcher | kb-sync-worker | scheduled-runs-dispatcher | scheduled-runs-worker | kb-migration-dispatcher | kb-migration-worker | kb-migration-reconciler | kb-migration-ingestion-consumer" >&2
+        echo "Expected one of: rag-ingestion | kb-sync-dispatcher | kb-sync-worker | scheduled-runs-dispatcher | scheduled-runs-worker | kb-migration-dispatcher | kb-migration-worker | kb-migration-reconciler | kb-migration-document-reconciler | kb-migration-ingestion-consumer" >&2
         exit 1
         ;;
 esac

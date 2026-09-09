@@ -217,6 +217,14 @@ export interface ManagedKbConfig {
   migrationEnabled: boolean;
   /** The Reconciler deletes rather than only reporting. Default false. */
   reconcilerArmed: boolean;
+  /**
+   * The dead-letter document reconciler CORRECTS stranded DOC# rows —
+   * marking retrievable-but-stranded documents complete and re-ingesting
+   * missing ones — rather than only reporting them. Same inverted
+   * convention as `reconcilerArmed`: deployed and running from day one but
+   * disarmed, so its judgement is auditable before it writes. Default false.
+   */
+  docReconcilerArmed: boolean;
   /** Per-owner Byte_Cap, standard role tier. Default 100 MB. */
   perOwnerDefaultBytes: number;
   /** Per-owner Byte_Cap, elevated (admin-granted) role tier. Default 1 GB. */
@@ -693,6 +701,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
         parseBooleanEnv(process.env.CDK_MANAGED_KB_RECONCILER_ARMED)
         ?? parseBooleanEnv(scope.node.tryGetContext('managedKb.reconcilerArmed'))
         ?? scope.node.tryGetContext('managedKb')?.reconcilerArmed
+        ?? false,
+      docReconcilerArmed:
+        parseBooleanEnv(process.env.CDK_MANAGED_KB_DOC_RECONCILER_ARMED)
+        ?? parseBooleanEnv(scope.node.tryGetContext('managedKb.docReconcilerArmed'))
+        ?? scope.node.tryGetContext('managedKb')?.docReconcilerArmed
         ?? false,
       // Byte caps in BYTES so no consumer has to guess a unit. The
       // standard tier is deliberately below the 1 GB user-files

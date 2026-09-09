@@ -231,6 +231,9 @@ build_cdk_context_params() {
     if [ -n "${CDK_MANAGED_KB_RECONCILER_ARMED:-}" ]; then
         context_params="${context_params} --context managedKb.reconcilerArmed=\"${CDK_MANAGED_KB_RECONCILER_ARMED}\""
     fi
+    if [ -n "${CDK_MANAGED_KB_DOC_RECONCILER_ARMED:-}" ]; then
+        context_params="${context_params} --context managedKb.docReconcilerArmed=\"${CDK_MANAGED_KB_DOC_RECONCILER_ARMED}\""
+    fi
     # Byte_Caps in BYTES (Requirement 12.2) and the rollback window in DAYS
     # (Requirement 15.11). config.ts reads the same flat dotted keys, so these
     # are honoured rather than silently dropped.
@@ -399,6 +402,8 @@ export CDK_ARTIFACTS_RETENTION_DAYS="${CDK_ARTIFACTS_RETENTION_DAYS:-$(get_json_
 #   newDefault      — new knowledge bases are created managed
 #   migrationEnabled — the background migration worker runs at all
 #   reconcilerArmed  — the daily reconciler DELETES rather than only reporting
+#   docReconcilerArmed — the nightly document reconciler CORRECTS stranded DOC#
+#                        rows rather than only reporting
 #
 # Empty is safe and is the shipped state. Unlike the default-ON flags
 # above, there is no "kill switch" reading here to get wrong: nothing
@@ -406,6 +411,7 @@ export CDK_ARTIFACTS_RETENTION_DAYS="${CDK_ARTIFACTS_RETENTION_DAYS:-$(get_json_
 export CDK_MANAGED_KB_NEW_DEFAULT="${CDK_MANAGED_KB_NEW_DEFAULT:-$(get_json_value "managedKb.newDefault" "${CONTEXT_FILE}")}"
 export CDK_MANAGED_KB_MIGRATION_ENABLED="${CDK_MANAGED_KB_MIGRATION_ENABLED:-$(get_json_value "managedKb.migrationEnabled" "${CONTEXT_FILE}")}"
 export CDK_MANAGED_KB_RECONCILER_ARMED="${CDK_MANAGED_KB_RECONCILER_ARMED:-$(get_json_value "managedKb.reconcilerArmed" "${CONTEXT_FILE}")}"
+export CDK_MANAGED_KB_DOC_RECONCILER_ARMED="${CDK_MANAGED_KB_DOC_RECONCILER_ARMED:-$(get_json_value "managedKb.docReconcilerArmed" "${CONTEXT_FILE}")}"
 # Per-owner / per-knowledge-base Byte_Caps, in BYTES (Requirement 12.2), and
 # the legacy-vector rollback window in DAYS (Requirement 15.11). Defaults live
 # in config.ts as named constants (100 MB / 1 GB / 500 MB / 30 days); these

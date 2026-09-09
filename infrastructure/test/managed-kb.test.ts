@@ -587,13 +587,15 @@ describe('Managed_KB retrieval wiring on PlatformStack', () => {
   it('attaches retrieval to the AgentCore Runtime role and the App API task role', () => {
     const roles = t.findResources('AWS::IAM::Role');
     const holders = policiesWithSid(t, 'ManagedKbRetrieve');
-    // FOUR holders as of task 2.1: the two compute identities that serve
+    // FIVE holders as of task 16.5: the two compute identities that serve
     // user turns, plus the migration worker (the `verify` canary
-    // retrieval, Requirement 15.7) and the ingestion consumer (polling
-    // until a document is actually retrievable, Requirement 10.6). The
-    // exact count is asserted so a fifth holder appearing has to be a
-    // deliberate edit here rather than a silent widening.
-    expect(holders).toHaveLength(4);
+    // retrieval, Requirement 15.7), the ingestion consumer (polling until
+    // a document is actually retrievable, Requirement 10.6), and the
+    // document reconciler (confirming a stranded document is retrievable
+    // before marking it complete, §5.37). The exact count is asserted so a
+    // sixth holder appearing has to be a deliberate edit here rather than a
+    // silent widening.
+    expect(holders).toHaveLength(5);
 
     const holderRoleIds = holders.flatMap((h) => h.roleIds);
     const holderRoles = holderRoleIds.map((id) => {
@@ -612,10 +614,11 @@ describe('Managed_KB retrieval wiring on PlatformStack', () => {
     //    its ecs-tasks trust principal.
     expect(holderRoles.some(trustsService(ECS_TASKS_PRINCIPAL))).toBe(true);
 
-    // 3. The remaining two are the migration Lambda roles, and nothing
-    //    else: every holder must be one of those three trust shapes.
+    // 3. The remaining three are the migration Lambda roles (worker,
+    //    ingestion consumer, document reconciler), and nothing else:
+    //    every holder must be one of those three trust shapes.
     const lambdaHolders = holderRoles.filter(trustsService(LAMBDA_PRINCIPAL));
-    expect(lambdaHolders).toHaveLength(2);
+    expect(lambdaHolders).toHaveLength(3);
     const unaccounted = holderRoles.filter(
       (r) => r.RoleName !== 'test-project-agentcore-runtime-role'
         && !trustsService(ECS_TASKS_PRINCIPAL)(r)
