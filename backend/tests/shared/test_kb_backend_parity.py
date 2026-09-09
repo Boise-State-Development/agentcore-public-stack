@@ -19,6 +19,7 @@ Requirements: 3.1, 3.2, 3.3, 3.4
 """
 
 import asyncio
+import logging
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 
@@ -26,8 +27,10 @@ import pytest
 
 from apis.shared.assistants.kb_access import granted
 from apis.shared.assistants.rag_service import (
+    MANAGED_MAX_CONTEXT_CHARS,
     MAX_CONTEXT_CHARS,
     augment_prompt_with_context,
+    resolve_context_cap,
     search_assistant_knowledgebase_with_formatting,
 )
 from apis.shared.kb_backend.protocol import (
@@ -173,6 +176,53 @@ def test_managed_path_requests_top_k_five(managed_kb):
 
     assert backend.calls, "the managed backend was never reached"
     assert backend.calls[0]["top_k"] == DEFAULT_TOP_K
+
+
+# ---------------------------------------------------------------------------
+# Requirement 3.2 — the context cap is engine-aware (amended 2026-09-04, §5.40)
+# ---------------------------------------------------------------------------
+#
+# The cap is NO LONGER identical across backends, and that is the fix, not a
+# regression. Bedrock's chunks are ~3x the Docling chunks 2,000 was sized for, so
+# a single character cap silently admitted 4 legacy chunks and 1 managed chunk —
+# top_k=5 became top_k=1 at the model, with wrong answers to show for it. The cap
+# is now per engine, and these guards pin the two values apart. Measured before/
+# after on the KINES advising corpus (dev ast-1d51df6ea532): at 2,000 the model
+# described 1 of 4 emphasis areas and guessed the rest from outside knowledge;
+# at 8,000 all four came from the documents.
+
+
+def test_managed_gets_the_eight_thousand_char_cap():
+    """A managed knowledge base's context cap is 8,000.
+
+    Pinned to the literal, not to ``MANAGED_MAX_CONTEXT_CHARS`` — that number is a
+    property of Bedrock's chunk sizing measured on a real corpus (eval §13.6,
+    HANDOFF §5.40), so a silent edit to the constant must fail here rather than
+    follow it (HANDOFF §4: never assert a constant against itself).
+    """
+    assert resolve_context_cap(ASSISTANT_ID, record={"retrievalEngine": ENGINE_MANAGED}) == 8000
+
+
+def test_legacy_keeps_the_two_thousand_char_cap():
+    """An absent/legacy record resolves to the historical 2,000 cap, unchanged."""
+    assert resolve_context_cap(ASSISTANT_ID, record={}) == 2000
+
+
+def test_the_managed_and_legacy_caps_are_distinct():
+    """Guard against the two caps collapsing to one value — the mutation that
+    reintroduces §5.40 by making managed inherit the 2,000 figure again."""
+    assert MANAGED_MAX_CONTEXT_CHARS == 8000
+    assert MAX_CONTEXT_CHARS == 2000
+    assert MANAGED_MAX_CONTEXT_CHARS != MAX_CONTEXT_CHARS
+
+
+def test_context_cap_keys_on_the_same_kb_record_read_as_the_backend():
+    """With no record passed, the cap reads the KB_Record itself and gets 8,000
+    for a managed assistant — the SAME read ``resolve_backend`` uses, so the cap
+    and the served engine can never disagree."""
+    boto_patch, _ = _patch_record_and_statuses({})
+    with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
+        assert resolve_context_cap(ASSISTANT_ID) == 8000
     assert DEFAULT_TOP_K == 5, "the parity contract pins top_k at 5"
 
 
@@ -618,3 +668,74 @@ def test_existing_record_without_an_engine_attribute_resolves_to_legacy():
 
 def test_fake_managed_backend_conforms_to_protocol():
     assert isinstance(FakeManagedBackend([]), KnowledgeBaseBackend)
+
+
+# ---------------------------------------------------------------------------
+# Engine visibility (task 16.4, HANDOFF §6) — one INFO line per query naming
+# the engine that served it. The resolver otherwise logs only on failure, so
+# without this line "is the managed backend actually serving?" is answerable
+# only from the KB record. These pin the line's presence and its content, so
+# deleting it or mislabelling the engine fails a named test.
+# ---------------------------------------------------------------------------
+
+_RAG_LOGGER = "apis.shared.assistants.rag_service"
+
+
+def _engine_log_lines(caplog) -> List[str]:
+    return [r.getMessage() for r in caplog.records if "served by engine=" in r.getMessage()]
+
+
+def test_managed_query_logs_the_serving_engine(managed_kb, caplog):
+    """A managed query emits exactly one INFO line naming ``managed`` / Managed."""
+    managed_kb([_managed_chunk("doc-a", 0)])
+    boto_patch, _ = _patch_record_and_statuses({"doc-a": "complete"})
+
+    with (
+        patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}),
+        boto_patch,
+        caplog.at_level(logging.INFO, logger=_RAG_LOGGER),
+    ):
+        asyncio.run(
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
+        )
+
+    lines = _engine_log_lines(caplog)
+    assert len(lines) == 1, f"expected exactly one engine line, got {lines}"
+    assert "engine=managed" in lines[0]
+    assert "(Managed)" in lines[0]
+    assert ASSISTANT_ID in lines[0]
+
+
+def test_legacy_query_logs_the_serving_engine(caplog):
+    """A legacy (absent-record) query names ``s3vectors`` / Classic."""
+    boto_patch, _ = _patch_legacy_record_and_statuses({"doc-a": "complete"})
+
+    with (
+        patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}),
+        boto_patch,
+        patch(
+            "apis.shared.embeddings.bedrock_embeddings.search_assistant_knowledgebase",
+            return_value=_s3_response(
+                [{"key": "doc-a#0", "distance": 0.2, "metadata": {"document_id": "doc-a", "text": "legacy"}}]
+            ),
+        ),
+        caplog.at_level(logging.INFO, logger=_RAG_LOGGER),
+    ):
+        asyncio.run(
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=OWNER_ACCESS)
+        )
+
+    lines = _engine_log_lines(caplog)
+    assert len(lines) == 1, f"expected exactly one engine line, got {lines}"
+    assert "engine=s3vectors" in lines[0]
+    assert "(Classic)" in lines[0]
+
+
+def test_the_engine_line_is_not_emitted_when_access_is_denied(caplog):
+    """No grant ⇒ no backend contacted ⇒ no engine line, since none served."""
+    with caplog.at_level(logging.INFO, logger=_RAG_LOGGER):
+        results = asyncio.run(
+            search_assistant_knowledgebase_with_formatting(ASSISTANT_ID, "q", access=None)
+        )
+    assert results == []
+    assert _engine_log_lines(caplog) == []

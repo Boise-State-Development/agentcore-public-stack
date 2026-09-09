@@ -217,6 +217,14 @@ export interface ManagedKbConfig {
   migrationEnabled: boolean;
   /** The Reconciler deletes rather than only reporting. Default false. */
   reconcilerArmed: boolean;
+  /**
+   * The dead-letter document reconciler CORRECTS stranded DOC# rows —
+   * marking retrievable-but-stranded documents complete and re-ingesting
+   * missing ones — rather than only reporting them. Same inverted
+   * convention as `reconcilerArmed`: deployed and running from day one but
+   * disarmed, so its judgement is auditable before it writes. Default false.
+   */
+  docReconcilerArmed: boolean;
   /** Per-owner Byte_Cap, standard role tier. Default 100 MB. */
   perOwnerDefaultBytes: number;
   /** Per-owner Byte_Cap, elevated (admin-granted) role tier. Default 1 GB. */
@@ -475,6 +483,35 @@ export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD = 1;
 export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD = 5;
 
 /**
+ * Percent of a model's tokens-per-minute quota at which to alarm.
+ *
+ * Below 100 on purpose: a Bedrock quota increase takes lead time, so the alarm
+ * is only useful if it fires while there is still time to request one.
+ */
+export const OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT = 75;
+
+/**
+ * Per-model tokens-per-minute quotas, keyed by the `ModelId` dimension value
+ * Bedrock publishes on `EstimatedTPMQuotaUsage`.
+ *
+ * Empty by default, and that is the only honest default. TPM quotas are per
+ * model *and* per account, most are adjustable, and they differ by two orders
+ * of magnitude between models in the same account — 40,000,000 for one
+ * inference profile next to 200,000 for another. Any shipped number would be
+ * wrong for every fork and would go stale silently the first time somebody
+ * requested an increase.
+ *
+ * With no entries, no quota alarm is created at all. That is deliberate: the
+ * backstop is `bedrock-invocation-throttles`, which fires on real refusals and
+ * needs no quota configured. Populating this buys the *leading* indicator.
+ *
+ * Read the values actually applied to an account with:
+ *   aws service-quotas list-service-quotas --service-code bedrock \
+ *     --query "Quotas[?contains(QuotaName,'tokens per minute')]"
+ */
+export const OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTAS: { [modelId: string]: number } = {};
+
+/**
  * Observability configuration.
  *
  * Precedence per field: CDK_OBSERVABILITY_* env var, then the flat dotted
@@ -499,6 +536,15 @@ export interface ObservabilityConfig {
   promptCacheAvoidableMissThreshold: number;
   promptCacheWastedUsdThreshold: number;
   promptCacheSessionWastedUsdThreshold: number;
+
+  /** Percent of a model's TPM quota at which its usage alarm fires. */
+  bedrockTpmQuotaPercent: number;
+  /**
+   * Per-model TPM quotas keyed by `ModelId`. Empty creates no quota alarms at
+   * all; see OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTAS for why there is no
+   * shippable default.
+   */
+  bedrockTpmQuotas: { [modelId: string]: number };
 
   xraySamplingRate: number;
   xraySamplingReservoir: number;
@@ -621,10 +667,32 @@ export function loadConfig(scope: cdk.App): AppConfig {
       additionalCorsOrigins: process.env.CDK_FRONTEND_CORS_ORIGINS || scope.node.tryGetContext('frontend')?.additionalCorsOrigins,
     },
     appApi: {
-      cpu: parseIntEnv(process.env.CDK_APP_API_CPU) || scope.node.tryGetContext('appApi')?.cpu,
-      memory: parseIntEnv(process.env.CDK_APP_API_MEMORY) || scope.node.tryGetContext('appApi')?.memory,
-      desiredCount: parseIntEnv(process.env.CDK_APP_API_DESIRED_COUNT) ?? scope.node.tryGetContext('appApi')?.desiredCount,
-      maxCapacity: parseIntEnv(process.env.CDK_APP_API_MAX_CAPACITY) || scope.node.tryGetContext('appApi')?.maxCapacity,
+      // Precedence for every sizing knob: env var > FLAT dotted context >
+      // nested context object.
+      //
+      // The flat form is not optional. `--context appApi.cpu=2048` — which is
+      // exactly what scripts/common/load-env.sh emits — sets the flat key
+      // context['appApi.cpu']; it does NOT build a nested { appApi: { cpu } }.
+      // Reading only the nested form accepted the operator's flag and silently
+      // ignored it, so every --context sizing override was dead. Same failure
+      // mode as the observability tunables (see OBSERVABILITY_DEFAULT_* notes).
+      //
+      // `??` rather than `||` throughout: parseIntEnv already maps '' and
+      // unparseable input to undefined, so `??` is safe, and it stops a
+      // legitimate 0 (e.g. desiredCount: 0 to park an environment) from being
+      // swallowed as falsy.
+      cpu: parseIntEnv(process.env.CDK_APP_API_CPU)
+        ?? parseIntEnv(scope.node.tryGetContext('appApi.cpu'))
+        ?? scope.node.tryGetContext('appApi')?.cpu,
+      memory: parseIntEnv(process.env.CDK_APP_API_MEMORY)
+        ?? parseIntEnv(scope.node.tryGetContext('appApi.memory'))
+        ?? scope.node.tryGetContext('appApi')?.memory,
+      desiredCount: parseIntEnv(process.env.CDK_APP_API_DESIRED_COUNT)
+        ?? parseIntEnv(scope.node.tryGetContext('appApi.desiredCount'))
+        ?? scope.node.tryGetContext('appApi')?.desiredCount,
+      maxCapacity: parseIntEnv(process.env.CDK_APP_API_MAX_CAPACITY)
+        ?? parseIntEnv(scope.node.tryGetContext('appApi.maxCapacity'))
+        ?? scope.node.tryGetContext('appApi')?.maxCapacity,
       additionalCorsOrigins: process.env.CDK_APP_API_CORS_ORIGINS || scope.node.tryGetContext('appApi')?.additionalCorsOrigins,
     },
     inferenceApi: {
@@ -693,6 +761,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
         parseBooleanEnv(process.env.CDK_MANAGED_KB_RECONCILER_ARMED)
         ?? parseBooleanEnv(scope.node.tryGetContext('managedKb.reconcilerArmed'))
         ?? scope.node.tryGetContext('managedKb')?.reconcilerArmed
+        ?? false,
+      docReconcilerArmed:
+        parseBooleanEnv(process.env.CDK_MANAGED_KB_DOC_RECONCILER_ARMED)
+        ?? parseBooleanEnv(scope.node.tryGetContext('managedKb.docReconcilerArmed'))
+        ?? scope.node.tryGetContext('managedKb')?.docReconcilerArmed
         ?? false,
       // Byte caps in BYTES so no consumer has to guess a unit. The
       // standard tier is deliberately below the 1 GB user-files
@@ -954,6 +1027,18 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseFloatEnv(scope.node.tryGetContext('observability.promptCacheSessionWastedUsdThreshold'))
         ?? scope.node.tryGetContext('observability')?.promptCacheSessionWastedUsdThreshold
         ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+      bedrockTpmQuotaPercent:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.bedrockTpmQuotaPercent'))
+        ?? scope.node.tryGetContext('observability')?.bedrockTpmQuotaPercent
+        ?? OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
+      // A map, not a scalar. Reaches us as an object from nested context, or as
+      // a JSON / `k=v,k=v` string from the env var and flat context key.
+      bedrockTpmQuotas:
+        parseModelQuotaMapEnv(process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS)
+        ?? parseModelQuotaMapEnv(scope.node.tryGetContext('observability.bedrockTpmQuotas'))
+        ?? scope.node.tryGetContext('observability')?.bedrockTpmQuotas
+        ?? OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTAS,
       // parseFloatEnv: parseIntEnv turns 0.05 into 0, disabling sampling.
       xraySamplingRate:
         parseFloatEnv(process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE)
@@ -1126,6 +1211,73 @@ export function parseJsonRecordEnv(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Parse a per-model quota map: `ModelId` -> tokens-per-minute quota.
+ *
+ * Accepts three input shapes, because this value reaches config by three routes
+ * and only one of them can carry double quotes safely:
+ *
+ *   1. a real object — from a nested `observability` block in cdk.context.json
+ *   2. a JSON string — `{"global.anthropic.claude-sonnet-5":40000000}`
+ *   3. a compact `k=v,k=v` string — `global.anthropic.claude-sonnet-5=40000000`
+ *
+ * Form 3 exists because `deploy.sh` runs `eval npx cdk synth ${CDK_CONTEXT_PARAMS}`.
+ * Under eval the shell removes quote characters, so a JSON value passed through a
+ * `--context` flag arrives as `{model:40000000}` — no longer valid JSON. Form 3
+ * contains no quotes at all and therefore survives eval unchanged, which makes it
+ * the form to use for CI variables. load-env.sh single-quotes the value as well,
+ * so form 2 also survives, but form 3 needs nothing to go right.
+ *
+ * Malformed input returns undefined so nullish coalescing falls through to the
+ * default; individual bad entries are filtered rather than throwing. Non-finite
+ * values are rejected — a NaN threshold is accepted by CloudFormation and can
+ * never be crossed by any metric, which is a silent dead alarm.
+ */
+export function parseModelQuotaMapEnv(
+  value: unknown,
+): { [modelId: string]: number } | undefined {
+  let parsed: unknown = value;
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') {
+      return undefined;
+    }
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      // Not JSON — try the eval-safe `k=v,k=v` form before giving up.
+      const pairs: { [modelId: string]: number } = {};
+      let sawOne = false;
+      for (const part of trimmed.split(',')) {
+        const eq = part.lastIndexOf('=');
+        if (eq <= 0) continue;
+        const key = part.slice(0, eq).trim();
+        const num = Number(part.slice(eq + 1).trim());
+        if (key !== '' && Number.isFinite(num)) {
+          pairs[key] = num;
+          sawOne = true;
+        }
+      }
+      return sawOne ? pairs : undefined;
+    }
+  } else if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return undefined;
+  }
+
+  const result: { [modelId: string]: number } = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (typeof k === 'string' && typeof v === 'number' && Number.isFinite(v)) {
+      result[k] = v;
+    }
+  }
+  return result;
 }
 
 /**

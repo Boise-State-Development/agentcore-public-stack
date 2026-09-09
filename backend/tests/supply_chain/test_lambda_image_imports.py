@@ -69,6 +69,7 @@ IMAGES: Dict[str, Tuple[str, List[str], List[str]]] = {
             "apis/app_api/kb_migration/dispatcher.py",
             "apis/app_api/kb_migration/worker.py",
             "apis/app_api/kb_migration/reconciler.py",
+            "apis/app_api/kb_migration/document_reconciler.py",
             "apis/app_api/kb_migration/ingestion_consumer.py",
         ],
         [],

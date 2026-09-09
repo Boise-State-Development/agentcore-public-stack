@@ -136,15 +136,19 @@ export interface KbMigrationConstructProps {
  *   - reconciler — daily tag-filtered `ListKnowledgeBases` joined
  *     against KB_Records (Req 14). Ships DISARMED: it reports intended
  *     deletions and deletes nothing.
+ *   - document reconciler — nightly join of Bedrock's per-document view
+ *     against non-terminal DOC# rows (task 16.5, §5.37). The second
+ *     writer the ingestion consumer's dead-letter path never had. Ships
+ *     DISARMED: it reports intended corrections and writes nothing.
  *   - ingestion consumer — durable, retryable replacement for the
  *     in-process `asyncio.ensure_future` orchestration, routing each
  *     uploaded document to the legacy pipeline or to Direct_Ingestion
  *     according to its knowledge base's engine (Req 10).
  *
- * ONE IMAGE, FOUR FUNCTIONS. Every function points
+ * ONE IMAGE, FIVE FUNCTIONS. Every function points
  * `fromImageAsset` at the SAME byte-stable `bootstrap-assets/kb-migration/`
  * directory, so CDK emits a single image asset and the platform deploy
- * pushes one image rather than four. The per-function difference is the
+ * pushes one image rather than five. The per-function difference is the
  * `cmd` override, which lands in `ImageConfig.Command` — function
  * *configuration*, not code. That distinction is what makes the
  * platform-as-bootstrap pattern work here: the backend workflow's
@@ -187,17 +191,26 @@ export interface KbMigrationConstructProps {
  *   /{prefix}/kb-migration/dispatcher-function-name
  *   /{prefix}/kb-migration/worker-function-name
  *   /{prefix}/kb-migration/reconciler-function-name
+ *   /{prefix}/kb-migration/document-reconciler-function-name
  *   /{prefix}/kb-migration/ingestion-consumer-function-name
  */
 export class KbMigrationConstruct extends Construct {
   public readonly dispatcherLambda: lambda.DockerImageFunction;
   public readonly workerLambda: lambda.DockerImageFunction;
   public readonly reconcilerLambda: lambda.DockerImageFunction;
+  /**
+   * Dead-letter document reconciler (task 16.5). Drives DOC# rows stuck
+   * non-terminal past a grace window to their true state — the second
+   * writer the ingestion consumer's dead-letter path never had.
+   */
+  public readonly documentReconcilerLambda: lambda.DockerImageFunction;
   public readonly ingestionConsumerLambda: lambda.DockerImageFunction;
   /** Async-invocation dead-letter queue for the ingestion consumer (Req 10.1). */
   public readonly ingestionConsumerDlq: sqs.Queue;
   public readonly dispatcherScheduleRule: events.Rule;
   public readonly reconcilerScheduleRule: events.Rule;
+  /** Nightly document-reconciler tick (task 16.5). */
+  public readonly documentReconcilerScheduleRule: events.Rule;
   /** Documents-bucket `Object Created` rule feeding the ingestion consumer. */
   public readonly documentsEventRule: events.Rule;
 
@@ -228,6 +241,7 @@ export class KbMigrationConstruct extends Construct {
       MANAGED_KB_NEW_DEFAULT: managedKb.newDefault ? 'true' : 'false',
       MANAGED_KB_MIGRATION_ENABLED: managedKb.migrationEnabled ? 'true' : 'false',
       MANAGED_KB_RECONCILER_ARMED: managedKb.reconcilerArmed ? 'true' : 'false',
+      MANAGED_KB_DOC_RECONCILER_ARMED: managedKb.docReconcilerArmed ? 'true' : 'false',
       MANAGED_KB_PER_OWNER_DEFAULT_BYTES: String(managedKb.perOwnerDefaultBytes),
       MANAGED_KB_PER_OWNER_ELEVATED_BYTES: String(managedKb.perOwnerElevatedBytes),
       MANAGED_KB_PER_KB_CEILING_BYTES: String(managedKb.perKnowledgeBaseCeilingBytes),
@@ -325,6 +339,41 @@ export class KbMigrationConstruct extends Construct {
         'Managed_KB daily reconciler - joins tag-filtered ListKnowledgeBases against KB_Records (report-only until armed)',
     });
 
+    // ── Document reconciler (task 16.5, HANDOFF §5.37) ──
+    //
+    // The ingestion consumer is the only writer of DOC# status, and Lambda's
+    // async retry caps at 2, so a dead-lettered ingestion event strands a
+    // document non-terminal even when Bedrock finished indexing it — and the
+    // retrieval filter serves only `complete`, so its content is in the
+    // knowledge base and invisible to every query. This is the missing second
+    // writer: nightly, it drives stranded-but-retrievable rows to `complete`,
+    // FAILED rows to `failed`, and re-ingests NOT_FOUND rows from S3.
+    //
+    // Ships DISARMED (MANAGED_KB_DOC_RECONCILER_ARMED). Same inverted
+    // convention as the KB reconciler: deployed and running from day one but
+    // report-only, so its judgement can be audited before it corrects records.
+    const documentReconcilerLogGroup = new logs.LogGroup(this, 'KbDocumentReconcilerLogGroup', {
+      retention: logRetentionFor(config),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    this.documentReconcilerLambda = new lambda.DockerImageFunction(this, 'KbDocumentReconcilerLambda', {
+      code: lambda.DockerImageCode.fromImageAsset(bootstrapDir, {
+        cmd: ['apis.app_api.kb_migration.document_reconciler.lambda_handler'],
+      }),
+      architecture: lambda.Architecture.ARM_64,
+      // Scans managed KB_Records, queries each one's DOC# rows, and probes
+      // Bedrock (GetKnowledgeBaseDocuments + a filtered Retrieve) per stranded
+      // document, re-ingesting the truly-missing. A per-run action limit bounds
+      // the corrective work; 15 min gives headroom for a probe-heavy pass.
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 512,
+      logGroup: documentReconcilerLogGroup,
+      environment: sharedEnvironment,
+      description:
+        'Managed_KB dead-letter document reconciler - drives stranded DOC# rows to their true state (report-only until armed)',
+    });
+
     // ── Ingestion consumer + its dead-letter queue (task 2.2) ──
     //
     // The DLQ is the "durable retry anchor" half of Requirement 10.1/10.7.
@@ -377,6 +426,7 @@ export class KbMigrationConstruct extends Construct {
       this.dispatcherLambda,
       this.workerLambda,
       this.reconcilerLambda,
+      this.documentReconcilerLambda,
       this.ingestionConsumerLambda,
     ];
 
@@ -394,6 +444,10 @@ export class KbMigrationConstruct extends Construct {
     // size). Read-only: nothing here writes user documents.
     documentsBucket.grantRead(this.workerLambda);
     documentsBucket.grantRead(this.ingestionConsumerLambda);
+    // The document reconciler re-ingests NOT_FOUND documents from their
+    // existing S3 keys — the same re-ingest path as the ingestion consumer,
+    // so it needs the same read grant. Read-only: it never writes documents.
+    documentsBucket.grantRead(this.documentReconcilerLambda);
 
     this.workerLambda.grantInvoke(this.dispatcherLambda);
 
@@ -423,6 +477,16 @@ export class KbMigrationConstruct extends Construct {
     managedKbRole.grantDirectIngestion(this.ingestionConsumerLambda.role!);
     managedKbRole.grantRetrieval(this.workerLambda.role!);
     managedKbRole.grantRetrieval(this.ingestionConsumerLambda.role!);
+
+    // Document reconciler (task 16.5). It probes Bedrock's document view
+    // (GetKnowledgeBaseDocuments — under grantDirectIngestion), confirms
+    // retrievability (bedrock:Retrieve — grantRetrieval), and re-ingests
+    // NOT_FOUND documents (IngestKnowledgeBaseDocuments — grantDirectIngestion).
+    // Deliberately NOT grantProvisioning: it reads KB_Records from DynamoDB, not
+    // ListKnowledgeBases, and never creates or deletes a knowledge base — a
+    // strictly narrower footprint than the KB reconciler beside it.
+    managedKbRole.grantDirectIngestion(this.documentReconcilerLambda.role!);
+    managedKbRole.grantRetrieval(this.documentReconcilerLambda.role!);
 
     // The dispatcher receives none of the three grants above, each of
     // which carries its own namespace-conditioned PutMetricData
@@ -492,6 +556,24 @@ export class KbMigrationConstruct extends Construct {
         'Managed_KB daily reconciler tick — runs report-only until MANAGED_KB_RECONCILER_ARMED is set',
     });
     this.reconcilerScheduleRule.addTarget(new targets.LambdaFunction(this.reconcilerLambda));
+
+    // Nightly document reconciliation (task 16.5). A fixed off-peak hour
+    // (09:00 UTC ≈ 02:00-03:00 America/Denver) rather than rate(1 day), so
+    // "nightly" means night rather than "24h after each deploy". ENABLED
+    // regardless of the flags, for the same reason as the KB reconciler above:
+    // it ships report-only (MANAGED_KB_DOC_RECONCILER_ARMED off), report-only is
+    // read-only, and the audit period only happens if the schedule runs. A
+    // dead-lettered document is rare, so once-a-day recovery latency is
+    // acceptable; tighten to hourly here if dead-letters ever prove common.
+    this.documentReconcilerScheduleRule = new events.Rule(this, 'KbDocumentReconcilerSchedule', {
+      schedule: events.Schedule.cron({ minute: '0', hour: '9' }),
+      enabled: true,
+      description:
+        'Managed_KB nightly document reconciler tick — runs report-only until MANAGED_KB_DOC_RECONCILER_ARMED is set',
+    });
+    this.documentReconcilerScheduleRule.addTarget(
+      new targets.LambdaFunction(this.documentReconcilerLambda),
+    );
 
     // ── Documents-bucket ObjectCreated trigger (task 2.2) ──
     //
@@ -660,6 +742,7 @@ export class KbMigrationConstruct extends Construct {
       ['DispatcherFunctionNameParameter', 'dispatcher', this.dispatcherLambda],
       ['WorkerFunctionNameParameter', 'worker', this.workerLambda],
       ['ReconcilerFunctionNameParameter', 'reconciler', this.reconcilerLambda],
+      ['DocumentReconcilerFunctionNameParameter', 'document-reconciler', this.documentReconcilerLambda],
       ['IngestionConsumerFunctionNameParameter', 'ingestion-consumer', this.ingestionConsumerLambda],
     ];
     for (const [logicalId, slug, fn] of functionNameParameters) {

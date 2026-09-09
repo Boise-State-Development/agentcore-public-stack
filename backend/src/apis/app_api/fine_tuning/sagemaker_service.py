@@ -31,11 +31,19 @@ logger = logging.getLogger(__name__)
 _TRAINING_IMAGE_TAGS = {
     task_types.DLC_FAMILY_TEXT: "huggingface-pytorch-training:2.1.0-transformers4.36.0-gpu-py310-cu121-ubuntu20.04",
     task_types.DLC_FAMILY_VISION: "huggingface-pytorch-training:2.8.0-transformers4.56.2-gpu-py312-cu129-ubuntu22.04",
+    # Generative VLMs run the same container as the vision tasks — torch 2.8
+    # satisfies bitsandbytes' torch>=2.4 floor and transformers 4.56 knows
+    # every architecture in the catalog.  The family exists to select the
+    # dependency set (peft + bitsandbytes), not a different image; keeping it
+    # separate means a future VLM-only image bump cannot re-baseline the
+    # image-classification jobs.
+    task_types.DLC_FAMILY_VLM: "huggingface-pytorch-training:2.8.0-transformers4.56.2-gpu-py312-cu129-ubuntu22.04",
 }
 
 _INFERENCE_IMAGE_TAGS = {
     task_types.DLC_FAMILY_TEXT: "huggingface-pytorch-inference:2.1.0-transformers4.37.0-gpu-py310-cu118-ubuntu20.04",
     task_types.DLC_FAMILY_VISION: "huggingface-pytorch-inference:2.6.0-transformers4.51.3-gpu-py312-cu124-ubuntu22.04",
+    task_types.DLC_FAMILY_VLM: "huggingface-pytorch-inference:2.6.0-transformers4.51.3-gpu-py312-cu124-ubuntu22.04",
 }
 
 # The AWS-owned account that publishes Deep Learning Containers. Same in every

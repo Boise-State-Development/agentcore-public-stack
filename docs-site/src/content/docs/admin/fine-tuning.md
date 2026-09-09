@@ -20,10 +20,16 @@ Deep Learning Container the job runs in.
 | `text-classification` | text → label | `.csv` / `.jsonl` / `.json` | `text`, `label` |
 | `image-classification` | image → label | `.zip` | `image`, `label` |
 | `image-text-classification` | image + text → label | `.zip` | `image`, `text`, `label` |
+| `image-text-to-text` | image + prompt → free text | `.zip` | `image`, `prompt`, `response` |
 
-All three produce the same output: a softmax over the dataset's own classes,
-written as a CSV with one probability column per class. That shared contract is
-deliberate — it means a new modality never breaks the result viewer.
+The three classification tasks produce the same output: a softmax over the
+dataset's own classes, written as a CSV with one probability column per class.
+
+`image-text-to-text` is **generative** — it keeps the model's language head and
+learns to write the response, so it has no label column and no class list. Its
+result is still a CSV with one row per input record, carrying an `output`
+column instead of probability columns, so the download and the result viewer
+are unchanged.
 
 ### Image datasets
 
@@ -68,6 +74,13 @@ Each task declares a DLC *family*, and the two families move independently:
 |---|---|---|
 | `text` | PyTorch 2.1 / transformers 4.36 | Every existing text model was trained and validated here. Bumping it would re-baseline all of them at once. |
 | `vision` | PyTorch 2.8 / transformers 4.56 | Modern vision checkpoints do not load on 4.36. |
+| `vlm` | PyTorch 2.8 / transformers 4.56 | Same image as `vision`, but its own family so it can install `peft` and `bitsandbytes` — and so a future VLM-only image bump cannot re-baseline the image classifiers. |
+
+Each family gets its own `sourcedir-<family>.tar.gz`, because the dependency
+sets differ. `bitsandbytes` requires torch >= 2.4, which the text container
+(torch 2.1) cannot satisfy, so a single shared `requirements.txt` would break
+dependency installation for every existing text job. The file each family gets
+is `script_packaging_service.REQUIREMENTS_BY_FAMILY`.
 
 If a tag is retired or lags in a region, override it without a code deploy:
 
@@ -145,9 +158,32 @@ The commonest refusal is a **GGUF-only repository**. GGUF is a llama.cpp
 inference format and cannot be fine-tuned by transformers at all — look for the
 original, unquantised repository instead.
 
-Note that generative vision-language models (`image-text-to-text`, e.g. LLaVA
-or Qwen-VL) are **not** supported. They emit tokens rather than a class
-distribution, and would need a separate generative task type with LoRA/PEFT.
+Generative vision-language models (LLaVA, Qwen-VL) belong to the
+`image-text-to-text` task, not to `image-text-classification` — the latter
+needs a *dual encoder* exposing `get_image_features` and `get_text_features`
+(the CLIP/SigLIP/ALIGN family), and a generative checkpoint has no text tower
+to pool.
+
+### Generative VLMs are LoRA-adapted, not fully fine-tuned
+
+A full fine-tune needs roughly 16 bytes per parameter once gradients and the
+AdamW moments are resident — about 550 GB for a 34B model, against the 384 GB
+on the largest instance offered. So `image-text-to-text` quantises the frozen
+base to 4-bit (NF4) and trains low-rank adapters on top. Two consequences worth
+knowing:
+
+- **The artifact is an adapter, not a model.** It is a few hundred MB rather
+  than tens of GB, and inference reloads the base from the Hub and applies the
+  adapter over it. `vlm_adapter.json` inside the artifact records which base
+  and whether it was quantised.
+- **Loss is computed on the response only.** The prompt is masked out, so the
+  model does not spend its gradient budget learning to reproduce questions it
+  will always be given.
+
+`load_in_4bit`, `lora_r` and `lora_alpha` are exposed on the create-job form
+for this task. Models below about 3B are faster in bfloat16 — the 4-bit path
+pays a dequantisation cost that only earns its keep when the model would not
+otherwise fit.
 
 ## Admin surface
 

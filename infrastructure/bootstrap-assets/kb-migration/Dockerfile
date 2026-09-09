@@ -17,12 +17,13 @@
 # generated file, an unpinned base tag — and the next platform deploy
 # silently reverts all four functions to this no-op stub.
 #
-# All FOUR functions use this ONE build context with different
+# All FIVE functions use this ONE build context with different
 # ImageConfig.Command overrides, so the stub modules must live at the
 # SAME dotted paths as the real image's handlers:
 #   apis.app_api.kb_migration.dispatcher.lambda_handler
 #   apis.app_api.kb_migration.worker.lambda_handler
 #   apis.app_api.kb_migration.reconciler.lambda_handler
+#   apis.app_api.kb_migration.document_reconciler.lambda_handler
 #   apis.app_api.kb_migration.ingestion_consumer.lambda_handler
 #
 # DO NOT add functionality here.
@@ -37,6 +38,7 @@ FROM public.ecr.aws/lambda/python:3.12@sha256:745b0eb8a9787e9c4bfd4fc4cae942399a
 COPY dispatcher.py ${LAMBDA_TASK_ROOT}/apis/app_api/kb_migration/dispatcher.py
 COPY worker.py ${LAMBDA_TASK_ROOT}/apis/app_api/kb_migration/worker.py
 COPY reconciler.py ${LAMBDA_TASK_ROOT}/apis/app_api/kb_migration/reconciler.py
+COPY document_reconciler.py ${LAMBDA_TASK_ROOT}/apis/app_api/kb_migration/document_reconciler.py
 COPY ingestion_consumer.py ${LAMBDA_TASK_ROOT}/apis/app_api/kb_migration/ingestion_consumer.py
 
 CMD ["apis.app_api.kb_migration.dispatcher.lambda_handler"]

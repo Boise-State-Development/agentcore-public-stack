@@ -240,7 +240,7 @@ jobs:
   build-kb-migration:
     name: Build kb-migration image
     needs: test-backend
-    # Native ARM64 runner — all four kb-migration Lambdas are arm64 (see the
+    # Native ARM64 runner — all five kb-migration Lambdas are arm64 (see the
     # managed-kb CDK construct), matching the kb-sync pattern.
     runs-on: ubuntu-24.04-arm
     environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
@@ -275,10 +275,10 @@ jobs:
 
   deploy-kb-migration-code:
     name: Deploy kb-migration Lambda images
-    # ONE image, FOUR functions: dispatcher, worker, reconciler and ingestion
-    # consumer share the kb-migration image and differ only in
-    # ImageConfig.Command (CDK-owned), so a single job points all four at the
-    # freshly-built tag.
+    # ONE image, FIVE functions: dispatcher, worker, reconciler, document
+    # reconciler and ingestion consumer share the kb-migration image and differ
+    # only in ImageConfig.Command (CDK-owned), so a single job points all five at
+    # the freshly-built tag.
     #
     # This is the job that replaces the bootstrap stub
     # (infrastructure/bootstrap-assets/kb-migration/) with the real handlers.
@@ -317,6 +317,8 @@ jobs:
         run: bash scripts/build/deploy-image-lambda-one.sh kb-migration-worker
       - name: Deploy kb-migration reconciler image
         run: bash scripts/build/deploy-image-lambda-one.sh kb-migration-reconciler
+      - name: Deploy kb-migration document reconciler image
+        run: bash scripts/build/deploy-image-lambda-one.sh kb-migration-document-reconciler
       - name: Deploy kb-migration ingestion consumer image
         run: bash scripts/build/deploy-image-lambda-one.sh kb-migration-ingestion-consumer
 

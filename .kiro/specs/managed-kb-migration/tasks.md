@@ -766,7 +766,16 @@ All three flags — managed-default, migration, and reconciler arming — ship *
 
 - [ ] 16. Post-implementation findings (opened by running it — see `HANDOFF.md` §5)
 
-  - [ ] 16.1 Resolve the 2,000-character context cap on the managed path
+  - [x] 16.1 Resolve the 2,000-character context cap on the managed path
+    - **RESOLVED 2026-09-04 (Option A: engine-aware cap).** `rag_service.resolve_context_cap`
+      returns 2,000 for legacy, 8,000 for managed, keyed on the same `resolve_engine_for`
+      the backend resolver uses. Both call sites (`inference_api/chat/routes.py`,
+      `app_api/assistants/routes.py`) pass it. Requirement 3.2 amended; out-of-scope
+      note updated. Guard in `tests/shared/test_kb_backend_parity.py`, mutation-tested
+      (dropping the managed branch fails two named tests). Measured end-to-end on a
+      prod-derived KINES advising corpus re-created in dev (`ast-1d51df6ea532`): at
+      2,000 the model described 1 of 4 emphasis areas from the docs and guessed the
+      rest; at 8,000 all four came from the documents. Branch `fix/kb-managed-context-cap`.
     - **The most consequential open item.** Bedrock's chunks are ~3× Docling's, so
       only ~1 chunk clears the cap and four of reranking's five results never reach
       the model. Measured: legacy 388/130/1035/106 chars (4 fit) vs managed
@@ -782,7 +791,7 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       carries the contradicting measurement).
     - _HANDOFF §5.40 · Requirements: 3.1, 3.2_
 
-  - [ ] 16.2 Understand diagram answer quality before promising anything
+  - [x] 16.2 Understand diagram answer quality before promising anything
     - Column-structured diagrams yield confident wrong answers: a curriculum
       flowchart reported 11 credits where the chart says 19, invented a course from
       an adjacent column, and missed four others. Correctness depends on which
@@ -790,15 +799,57 @@ All three flags — managed-default, migration, and reconciler arming — ship *
     - Image extraction genuinely works (§5.35) — an image-only PDF that legacy
       cannot ingest at all becomes retrievable. The capability is real; precise
       tabular answers from it are not established.
+    - **RESOLVED (2026-09-08).** Re-measured on the live diagram corpus
+      (`ast-1a90784a7f18`, `4-yr-flowchart-v2026.pdf`) with both read-only harnesses:
+      legacy returned 0 chunks on every query (image-only PDF unusable on legacy),
+      managed returned 5. The vision narrative loses the column binding — the
+      header-only chunk carries no courses, the course chunks carry no semester — so
+      a per-column question ("semester 4?") is answered confidently wrong (14 credits
+      vs the chart's 19; the mis-columned `ENGR 220` persists). Raising the cap
+      2,000→8,000 (task 16.1) did NOT fix it. Existence questions ("does it include a
+      capstone?") are correct at both caps.
+    - **Decision: no code fix.** A text sidecar would work (managed ingests whatever
+      lands in our S3 data source, and a text table keeps its structure), but this is
+      a self-service platform — users create their own agents and would not know to
+      convert a document. The mitigation is user training/guidance on which content
+      and agent types work best, not engineering. Demo image extraction as
+      *retrievable where previously impossible*, never as precise per-column answers.
     - _HANDOFF §5.41_
 
-  - [ ] 16.3 Make the document-status filter fail closed on its one open path
+  - [x] 16.3 Make the document-status filter fail closed on its one open path
+    - **RESOLVED (§5.33).** `_filter_vectors_by_document_status`'s `if not doc_ids:
+      return vectors` now fails closed: a non-empty batch where no chunk carries a
+      `document_id` returns `[]` and emits `METRIC_STATUS_FILTER_FAIL_CLOSED`, like
+      every other unprovable path. An empty input stays an empty result with no
+      metric (an ordinary "no match", not a degradation). Guard
+      `test_filter_fails_closed_when_no_chunk_carries_a_document_id` in
+      `tests/shared/test_search_filtering.py`, mutation-tested (reverting to
+      `return vectors` fails it). Branch `fix/kb-status-filter-fail-closed`.
     - `_filter_vectors_by_document_status` opens with `if not doc_ids: return
       vectors`. Every other unprovable path in that function returns `[]` and emits
       `METRIC_STATUS_FILTER_FAIL_CLOSED`. Predates this feature; not firing today.
     - _HANDOFF §5.33 · Requirements: 5.1, 5.2_
 
-  - [ ] 16.4 Give the UI one vocabulary and show which engine served a query
+  - [x] 16.4 Give the UI one vocabulary and show which engine served a query
+    - **RESOLVED (task 16.4).** Two surfaces, one source (the server-derived
+      engine on the upgrade status). (1) **Status vocabulary** is now
+      engine-aware: `KnowledgeBaseSectionComponent.statusLabel` reads
+      `uploading → processing → ready` (+ `failed`) for a managed knowledge base
+      and keeps `uploading/chunking/embedding/complete/failed` for legacy
+      assistants, which still emit them. Fixes the card showing `Uploading` for
+      the whole managed indexing wait (managed writes only `uploading` then
+      `complete`, PR #900). (2) **Engine visibility**: `rag_service`'s facade
+      logs exactly one INFO line per query naming the served engine
+      (`engine=managed (Managed)` / `engine=s3vectors (Classic)`), read from the
+      same KB_Record `resolve_backend` uses so it cannot disagree; and a
+      `Managed`/`Classic` badge renders beside the document list, fed by a new
+      `engine` field on `UpgradeStatusResponse` (defaults `classic`,
+      absence-means-legacy). Mutation-tested guards in
+      `tests/shared/test_kb_backend_parity.py` (log line + content),
+      `tests/routes/test_kb_upgrade.py::TestEngineBadge`,
+      `kb-upgrade.service.spec.ts` and
+      `knowledge-base-section.component.spec.ts`; no user-facing string says
+      "vector" (Req 23.6). Branch `feat/kb-engine-visibility`.
     - Document status is now written only by the owning engine (PR #900), so the
       legacy `chunking`/`embedding` words never appear for a promoted knowledge
       base — but nothing replaced them, so the card shows `Uploading` for the whole
@@ -819,4 +870,27 @@ All three flags — managed-default, migration, and reconciler arming — ship *
       both needed manual repair.
     - Overlaps task 14.4 (one-click retry) and the report-only reconciler, which
       already knows how to join Bedrock's view against ours.
+    - **Backend built (report-only), branch `feat/kb-deadletter-reconcile`.**
+      `kb_migration/document_reconciler.py` is the missing second writer of `DOC#`
+      status: once a day it finds rows stuck non-terminal (`uploading`/`chunking`/
+      `embedding`) past a 60-minute grace gate, asks Bedrock the ground truth per
+      document, and — the §5.37 case — drives a stranded-but-**retrievable** document
+      to `complete`. It reuses the consumer's own probes (`document_status`, the
+      `equals`-on-`document_id` retrievability search, its status-set constants, and
+      `set_document_terminal`) so §5.37/§5.38/§5.39 live in one place, not four. A
+      `FAILED` document is driven to `failed`; a `NOT_FOUND` one (dead-lettered before
+      ingest) is **re-ingested** from the S3 bytes — the scheduled form of 14.4's
+      one-click retry. Modelled on `reconciler.py`: **ships disarmed**
+      (`MANAGED_KB_DOC_RECONCILER_ARMED`, empty ⇒ off), per-run action limit applies
+      in both modes so the report is trustworthy, grace gate is a pure function of the
+      row's own `updatedAt` and fails closed. `terminal`/`deleting` rows are never
+      candidates (a soft-deleted doc must not be resurrected). Guards in
+      `tests/lambdas/test_kb_document_reconciler.py`, mutation-verified (neutering the
+      retrievability gate fails `test_indexed_but_not_retrievable_is_left_short_of_complete`;
+      widening `NON_TERMINAL_STATUSES` fails `test_terminal_and_deleting_rows_are_never_candidates`).
+    - **Remaining (deploy-gated follow-up, not in this PR):** wire the reconciler's
+      own Lambda + EventBridge schedule + IAM in `kb-migration-construct.ts`, then set
+      and eventually flip `MANAGED_KB_DOC_RECONCILER_ARMED`. The flag is exempted in
+      `test_kb_migration_env_contract.py`'s `OPTIONAL_OVERRIDES` until that wiring
+      lands.
     - _HANDOFF §5.37 · Requirements: 21.2_

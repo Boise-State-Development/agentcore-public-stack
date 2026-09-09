@@ -112,6 +112,15 @@ jobs:
       CDK_DOMAIN_NAME: ""
       CDK_CORS_ORIGINS: ${{ vars.CDK_CORS_ORIGINS }}
       CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
+      # Ephemeral nightly: smallest sizing that still exercises the multi-task
+      # paths. Pinned literally rather than read from vars.* so a production
+      # sizing bump never silently inflates the cost of a stack that exists for
+      # one test run. desiredCount stays at 2 so the shared BFF cookie key path
+      # is still covered.
+      CDK_APP_API_CPU: 512
+      CDK_APP_API_MEMORY: 1024
+      CDK_APP_API_DESIRED_COUNT: 2
+      CDK_APP_API_MAX_CAPACITY: 4
       CDK_ALB_SUBDOMAIN: ${{ inputs.alb-subdomain }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       CDK_CLOUDFRONT_CERTIFICATE_ARN: ""

@@ -344,3 +344,84 @@ class TestTextPredictFn:
         )
 
         assert result["labels"] == ["class_0", "class_1", "class_2"]
+
+
+class TestGenerativeOutputFn:
+    """A generative task emits text, not a probability per class.
+
+    The result is still one CSV row per input record, so the download and the
+    result viewer are unchanged by the new modality.
+    """
+
+    def _prediction(self, **overrides):
+        prediction = {
+            "identifiers": ["cat.jpg"],
+            "prompts": ["What is this?"],
+            "generations": ["A tabby cat."],
+            "identifier_column": "image",
+        }
+        prediction.update(overrides)
+        return prediction
+
+    def test_header_names_prompt_and_output(self):
+        header = output_fn(self._prediction()).split("\n")[0]
+        assert header == "image,prompt,output"
+
+    def test_row_carries_the_generated_text(self):
+        rows = output_fn(self._prediction()).split("\n")
+        assert rows[1] == '"cat.jpg","What is this?","A tabby cat."'
+
+    def test_generative_shape_is_chosen_without_a_flag(self):
+        """Dispatch is on what the task produced, not on a caller-passed hint."""
+        classification = {
+            "identifiers": ["a"],
+            "probabilities": np.array([[0.25, 0.75]]),
+            "labels": ["no", "yes"],
+            "identifier_column": "id",
+        }
+        assert "prob_yes" in output_fn(classification)
+        assert "prob_" not in output_fn(self._prediction())
+
+    def test_embedded_newlines_are_quoted(self):
+        """Generated text is multi-line far more often than a label is."""
+        rendered = output_fn(
+            self._prediction(generations=["line one\nline two"])
+        )
+        assert '"line one\nline two"' in rendered
+
+    def test_embedded_quotes_are_doubled(self):
+        rendered = output_fn(self._prediction(generations=['He said "hi"']))
+        assert '"He said ""hi"""' in rendered
+
+    def test_embedded_commas_do_not_split_the_row(self):
+        rendered = output_fn(self._prediction(generations=["red, green, blue"]))
+        assert '"red, green, blue"' in rendered
+
+    def test_multiple_records(self):
+        rendered = output_fn(
+            self._prediction(
+                identifiers=["a.jpg", "b.jpg"],
+                prompts=["p1", "p2"],
+                generations=["g1", "g2"],
+            )
+        )
+        assert len(rendered.split("\n")) == 3
+
+    def test_missing_prompts_do_not_drop_the_row(self):
+        """A short prompts list must degrade to blank, not truncate results."""
+        rendered = output_fn(
+            self._prediction(
+                identifiers=["a.jpg", "b.jpg"],
+                prompts=[],
+                generations=["g1", "g2"],
+            )
+        )
+        rows = rendered.split("\n")
+        assert len(rows) == 3
+        assert rows[2] == '"b.jpg","","g2"'
+
+    def test_empty_prediction_still_emits_a_header(self):
+        rendered = output_fn(
+            self._prediction(identifiers=[], prompts=[], generations=[])
+        )
+        assert rendered == "image,prompt,output"

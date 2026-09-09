@@ -505,6 +505,7 @@ INFERENCE_BUNDLE_FILES = (
     "task_text_classification.py",
     "task_image_classification.py",
     "task_image_text_classification.py",
+    "task_image_text_to_text.py",
 )
 
 

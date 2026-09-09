@@ -194,6 +194,7 @@ class TestTheConstructSetsWhatTheHandlersRead:
         [
             "MANAGED_KB_MIGRATION_ENABLED",
             "MANAGED_KB_RECONCILER_ARMED",
+            "MANAGED_KB_DOC_RECONCILER_ARMED",
             "MANAGED_KB_SERVICE_ROLE_ARN",
             "S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME",
         ],

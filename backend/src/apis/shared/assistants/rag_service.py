@@ -22,10 +22,19 @@ implemented twice is a rule that will eventually differ (Requirement 3):
 * **``top_k`` narrowing.** Applied *after* the status filter, which is the order
   the legacy path has always used: filter-then-slice, so an incomplete document
   cannot silently shrink a five-chunk answer.
-* **The 2,000-character context cap.** ``augment_prompt_with_context``'s
-  default. Held constant deliberately: the evaluation measured no correctness
-  change between 2,000 and 20,000 characters, so raising it here would add a
-  variable to a change whose whole purpose is to hold every variable but one.
+* **The context cap, per engine.** ``augment_prompt_with_context`` takes an
+  explicit ``max_context_length``; :func:`resolve_context_cap` decides it from
+  the assistant's engine. Legacy keeps the historical 2,000 characters; managed
+  gets :data:`MANAGED_MAX_CONTEXT_CHARS` (8,000). This is a *deliberate*
+  managed-only asymmetry, amended into Requirement 3.2 on 2026-09-04 after
+  measurement: holding the *character* cap identical across backends did **not**
+  hold retrieval identical, because Bedrock's chunks are ~3x the size of the
+  Docling chunks the 2,000 figure was sized for — so at 2,000, four of managed's
+  five reranked chunks never reached the model and answers went wrong (HANDOFF
+  §5.40). Capping per engine restores parity in the unit that actually matters:
+  chunks reaching the model, not characters. The evaluation's §13.6 "no
+  correctness change 2,000→20,000" covered single-fact lookups only and flagged
+  multi-chunk synthesis — the case that broke — as untested.
 
 The dual-read pilot
 -------------------
@@ -45,7 +54,7 @@ client already reads. The rename stops at the seam; no caller has to change.
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Mapping, Optional, Set
 
 import boto3
 
@@ -59,15 +68,49 @@ from apis.shared.kb_backend.metrics import (
 )
 from apis.shared.kb_backend.protocol import DEFAULT_TOP_K, Chunk, distance_from_relevance
 from apis.shared.kb_backend.query_guard import clamp_query
-from apis.shared.kb_backend.resolver import load_record, resolve_backend
+from apis.shared.kb_backend.resolver import (
+    ENGINE_MANAGED,
+    load_record,
+    resolve_backend,
+    resolve_engine_for,
+)
 
 logger = logging.getLogger(__name__)
 
-#: Parity contract (Requirement 3.2): the cap is 2,000 characters on every
-#: backend, unchanged from the value the legacy path has always used. Named so
-#: that a change to it is a visible change to a constant rather than an edit to a
-#: default argument.
+#: Legacy context cap (Requirement 3.2): 2,000 characters, unchanged from the
+#: value the S3 Vectors path has always used. Named so a change to it is a visible
+#: change to a constant rather than an edit to a default argument.
 MAX_CONTEXT_CHARS = 2000
+
+#: Managed context cap (Requirement 3.2, amended by measurement 2026-09-04).
+#: Bedrock's chunks run ~3x larger than the Docling chunks 2,000 was sized for, so
+#: at 2,000 only ~1 of top_k=5 managed chunks clears the cap and four of
+#: reranking's results never reach the model — measured, with wrong/degraded
+#: answers to show for it (HANDOFF §5.40). 8,000 is the evaluation's own §13.6
+#: sizing: the point at which all five managed chunks fit, ~966 extra input
+#: tokens/turn. Pin the literal, not ``MAX_CONTEXT_CHARS * k``: 8,000 is a
+#: property of Bedrock's chunk sizing measured against this corpus, not a multiple
+#: of the legacy figure, and must not silently follow it if that one moves.
+MANAGED_MAX_CONTEXT_CHARS = 8000
+
+
+def resolve_context_cap(assistant_id: str, *, record: Optional[Mapping[str, Any]] = None) -> int:
+    """The context-character cap for this assistant's engine, read at call time.
+
+    Managed knowledge bases get :data:`MANAGED_MAX_CONTEXT_CHARS`; every other
+    engine — and any unreadable record, which resolves to legacy — gets
+    :data:`MAX_CONTEXT_CHARS`. Keyed on the SAME decision the backend resolver
+    uses (:func:`resolve_engine_for`, backed by ``records.resolve_engine``), so
+    the cap and the backend can never disagree about which engine an assistant is
+    on. That single source is the whole point: a second, independent "is this
+    managed?" test here would be a second chance to drift.
+
+    Pass ``record`` when the caller already holds the KB_Record to skip a read.
+    The constants are read inside the function, at call time, never bound as
+    default arguments — see the module-constant note in HANDOFF §3.
+    """
+    engine = resolve_engine_for(assistant_id, record=record)
+    return MANAGED_MAX_CONTEXT_CHARS if engine == ENGINE_MANAGED else MAX_CONTEXT_CHARS
 
 
 async def search_assistant_knowledgebase_with_formatting(
@@ -136,6 +179,21 @@ async def search_assistant_knowledgebase_with_formatting(
         # from costing an extra DynamoDB round trip on every turn.
         record = load_record(assistant_id)
         backend = resolve_backend(assistant_id, record=record)
+
+        # Engine visibility (task 16.4, HANDOFF §6): exactly one INFO line per
+        # query naming the engine that served it. The resolver logs only on
+        # failure, so before this the question "is the managed backend actually
+        # serving?" could be answered only by reading the KB_Record out of band —
+        # and this feature's whole risk profile is silent regressions. Read from
+        # the SAME record ``resolve_backend`` just used (no extra DynamoDB round
+        # trip), so the logged engine can never disagree with the one that ran.
+        engine = resolve_engine_for(assistant_id, record=record)
+        logger.info(
+            "knowledge base retrieval for assistant %s served by engine=%s (%s)",
+            assistant_id,
+            engine,
+            "Managed" if engine == ENGINE_MANAGED else "Classic",
+        )
 
         # Clamp before dispatch, so both backends receive an identically-shaped
         # query (Requirement 4.2). Managed KB rejects anything over 10,000
@@ -265,7 +323,22 @@ def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_
             doc_ids.add(doc_id)
 
     if not doc_ids:
-        return vectors
+        # FAIL CLOSED (Requirement 5; §5.33). Reaching here with vectors present
+        # means not one chunk carried a `document_id`, so not one can be confirmed
+        # `complete` — the same unprovable state the branches below drop to `[]`.
+        # The old `return vectors` was the single fail-OPEN line left in an
+        # otherwise fail-closed function: it served chunks whose parent document
+        # was never verified (including content a user may have deleted) whenever
+        # `_document_id` resolved to "" for the whole batch. An *empty* input stays
+        # an empty result with no metric — that is an ordinary "no match", logged
+        # at INFO by the caller, not a degradation.
+        if vectors:
+            logger.error(
+                "Document status filter: chunks present but none carry a "
+                "document_id; dropping all because status cannot be confirmed"
+            )
+            emit_count(METRIC_STATUS_FILTER_FAIL_CLOSED)
+        return []
 
     # Look up document status in DynamoDB
     valid_doc_ids: Set[str] = set()

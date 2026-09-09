@@ -594,13 +594,15 @@ export class StreamParserService {
       onUiResource: (data: UiResourceEvent) => {
         // Inline event (arrives right after its tool_result, mid-stream),
         // unlike the post-message_stop side channels above — just record
-        // it keyed by toolUseId. The tool-use renderer picks it up
-        // reactively and swaps in the MCP App frame. Viewed-session only:
-        // McpAppStateService is reset on route change, so recording for a
-        // background conversation would be wiped before it could render.
-        if (this.isViewedSession(state)) {
-          this.mcpAppState.recordLive(data);
-        }
+        // it under this stream's own session, keyed by toolUseId. The
+        // tool-use renderer picks it up reactively and swaps in the MCP App
+        // frame. Deliberately NOT viewed-session-scoped: McpAppStateService
+        // retains per conversation rather than resetting on route change, so
+        // a background conversation's App is there when the user navigates
+        // to it. Dropping it here would lose it for good — the inline event
+        // never re-streams and the persisted replay rides on a `GET
+        // /messages` that navigate-back skips.
+        this.mcpAppState.recordLive(state.sessionId, data);
       },
 
       onToolInputPartial: (data: ToolInputPartialEvent) => {
@@ -608,10 +610,13 @@ export class StreamParserService {
         // UI tool's args are still streaming (after early frame mount). Record
         // the latest healed prefix keyed by toolUseId; the frame relays it to
         // the App as `ui/notifications/tool-input-partial` for progressive
-        // rendering (e.g. Excalidraw's guided camera tour).
-        if (this.isViewedSession(state)) {
-          this.mcpAppState.recordPartialInput(data.toolUseId, data.arguments);
-        }
+        // rendering (e.g. Excalidraw's guided camera tour). Recorded under
+        // this stream's own session, same as the resource above.
+        this.mcpAppState.recordPartialInput(
+          state.sessionId,
+          data.toolUseId,
+          data.arguments,
+        );
       },
 
       onSessionTitle: (data: SessionTitleEvent) => {

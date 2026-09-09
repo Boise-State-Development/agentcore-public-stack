@@ -67,6 +67,8 @@ from .app_context_dispatch import (
     dispatch_app_context_update,
     merge_and_clear_pending_context,
 )
+from apis.shared.mcp_apps.error_envelope import app_tool_error_response
+
 from .app_tool_dispatch import AppToolCallError, dispatch_app_tool_call
 from .agent_binding_policy import binds_conversation
 from .models import FileContent, InvocationRequest
@@ -1338,7 +1340,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             )
             return JSONResponse(payload)
         except AppToolCallError as e:
-            return JSONResponse({"error": e.message}, status_code=e.code)
+            # 200 + envelope, not `status_code=e.code`: AgentCore Runtime
+            # rewrites any non-2xx to a generic 424 and discards the
+            # message, so a deliberate 409 ("connect the account") reached
+            # the SPA as "check your CloudWatch logs". app-api restores the
+            # real status. See `mcp_apps.error_envelope`.
+            return app_tool_error_response(e.message, e.code)
         except HTTPException:
             raise
         except Exception:
@@ -1386,7 +1393,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             )
             return JSONResponse(payload)
         except AppContextUpdateError as e:
-            return JSONResponse({"error": e.message}, status_code=e.code)
+            # Same AgentCore flattening as the app_tool_call path above.
+            return app_tool_error_response(e.message, e.code)
         except HTTPException:
             raise
         except Exception:
@@ -1709,6 +1717,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         from apis.shared.assistants.kb_access import granted
         from apis.shared.assistants.rag_service import (
             augment_prompt_with_context,
+            resolve_context_cap,
             search_assistant_knowledgebase_with_formatting,
         )
         from apis.shared.assistants.service import (
@@ -1989,7 +1998,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
             # 4. Augment message with context
             if context_chunks:
-                augmented_message = augment_prompt_with_context(user_message=input_data.message, context_chunks=context_chunks)
+                # Engine-aware cap (Requirement 3.2): managed gets 8,000 so
+                # reranking's top_k chunks actually reach the model; legacy keeps
+                # 2,000. See rag_service.resolve_context_cap / HANDOFF §5.40.
+                cap = resolve_context_cap(input_data.rag_assistant_id)
+                augmented_message = augment_prompt_with_context(user_message=input_data.message, context_chunks=context_chunks, max_context_length=cap)
                 logger.info(
                     f"Augmented message with {len(context_chunks)} context chunks"
                 )

@@ -6,8 +6,14 @@ to `/invocations` with an `app_tool_call` directive. This module runs that
 single tool call WITHOUT a model turn:
 
 1. Rebuild the conversation's agent via `get_agent` (the same path resume
-   uses) so the MCP client session + auth (OAuth token cache, SigV4,
-   consent hook) are wired exactly as for a model-driven tool call.
+   uses) so the MCP client session + transport auth (SigV4, OIDC
+   forwarding, the lazy OAuth token provider) are wired exactly as for a
+   model-driven tool call.
+1a. Resolve the OAuth token this call needs. A model-driven call gets this
+   from `OAuthConsentHook`, which fires on `BeforeToolCallEvent` — an event
+   this path never raises, because it calls the MCP client directly instead
+   of running the agent's tool loop. So the warm-the-cache half of the hook
+   is repeated here explicitly (see `_ensure_oauth_token`).
 2. Re-check the tool's `_meta.ui.visibility` includes `"app"` — the spec
    MUST, enforced here as the second gate (app-api is the first).
 3. Call the tool against the MCP client that surfaced it (recorded in the
@@ -31,6 +37,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from apis.shared.mcp_apps.broker import get_app_tool_event_broker
+from apis.shared.oauth.auth_failure import looks_like_auth_failure
 
 from apis.shared.security.log_sanitize import scrub_log
 
@@ -40,8 +47,13 @@ logger = logging.getLogger(__name__)
 class AppToolCallError(Exception):
     """Dispatch failed in a way the caller should surface as an error.
 
-    `code` is an app-api HTTP status hint; `message` is safe to return to
-    the client (no internals).
+    `code` is the status app-api should ultimately answer the SPA with, NOT
+    the status this container returns — AgentCore Runtime flattens any
+    non-2xx into a 424 and drops the body. The route encodes `code` and
+    `message` into a 200 response body and app-api restores the status.
+    See `apis/shared/mcp_apps/error_envelope.py`.
+
+    `message` is safe to return to the client (no internals).
     """
 
     def __init__(self, message: str, code: int = 400) -> None:
@@ -180,6 +192,264 @@ def _resolve_client(agent: Any, tool_name: str):
     return ui_metadata, client
 
 
+def _provider_for_client(client: Any) -> Optional[str]:
+    """The OAuth provider_id backing `client`, or None when it isn't gated.
+
+    Reads the same `MCPClient -> provider_id` map `OAuthConsentHook` reaches
+    through its injected `provider_lookup`. Lazy import for the same reason
+    `_resolve_client` uses one.
+    """
+    from agents.main_agent.integrations.external_mcp_client import (
+        get_external_mcp_integration,
+    )
+
+    try:
+        return get_external_mcp_integration().provider_for_client(client)
+    except Exception:  # noqa: BLE001 - a lookup miss must not block the call
+        logger.warning(
+            "failed to resolve the OAuth provider for an MCP client",
+            exc_info=True,
+        )
+        return None
+
+
+async def _user_disconnected(user_id: str, provider_id: str) -> bool:
+    """Durable "user pressed Disconnect" intent for (user, provider).
+
+    Mirrors `OAuthConsentHook._is_disconnected`. Without it an App frame
+    left open on screen keeps working off the cached token for the rest of
+    its TTL after the user disconnects the connector.
+    """
+    from apis.shared.oauth.disconnect_repository import get_disconnect_repository
+
+    try:
+        return bool(
+            await get_disconnect_repository().is_disconnected(user_id, provider_id)
+        )
+    except Exception:  # noqa: BLE001 - fail open, same as the hook's lookup
+        logger.warning(
+            "failed to read disconnect intent for provider=%s",
+            scrub_log(provider_id),
+            exc_info=True,
+        )
+        return False
+
+
+async def _ensure_oauth_token(client: Any, user_id: str) -> Optional[str]:
+    """Guarantee an OAuth token is cached before an app-initiated call.
+
+    A model-driven tool call gets this from `OAuthConsentHook._gate`, which
+    fires on `BeforeToolCallEvent`. This path calls the MCP client directly,
+    so that event never fires and nothing warms `oauth_token_cache` — the
+    lazy token provider then resolves to `None` and the request goes out
+    with no `Authorization` header at all. Servers that allow an
+    unauthenticated `tools/list` (so the tool still registers and the App
+    still renders) answer such a call with their own "you aren't connected"
+    text, which reads to the user as the App being broken.
+
+    The cache is per-process, so it is cold on any container that has not
+    run a model-driven turn for this (user, provider) — the common case
+    after a page reload lands the call on a fresh runtime — and it expires
+    on its own TTL well before the App frame does.
+
+    Returns the provider_id when the client is OAuth-gated (whether or not
+    the cache was already warm), else None. Raises `AppToolCallError` when
+    AgentCore Identity says this user genuinely still has to consent.
+    """
+    provider_id = _provider_for_client(client)
+    if not provider_id:
+        return None
+
+    from agents.main_agent.integrations import oauth_token_cache
+    from apis.shared.oauth.token_resolution import resolve_token_or_consent_url
+
+    force_reauth = await _user_disconnected(user_id, provider_id)
+    if not force_reauth and oauth_token_cache.get(user_id, provider_id):
+        return provider_id
+    if force_reauth:
+        oauth_token_cache.clear_user_provider(user_id, provider_id)
+
+    resolved = await resolve_token_or_consent_url(
+        provider_id, user_id, force_authentication=force_reauth
+    )
+    if resolved is None:
+        # Couldn't ask AgentCore at all — that is not evidence of a consent
+        # gap, so don't tell the user to connect something they may already
+        # have connected. Let the call go out; the server's own error is a
+        # truer report than a guess.
+        logger.warning(
+            "could not resolve a %s token for an app-initiated tools/call; "
+            "calling unauthenticated",
+            scrub_log(provider_id),
+        )
+        return provider_id
+
+    if resolved["token"]:
+        oauth_token_cache.set(user_id, provider_id, resolved["token"])
+        return provider_id
+
+    # No token and a consent URL: the user has not authorized this
+    # connector. There is no turn to interrupt here, so surface it as an
+    # error the App can render.
+    #
+    # `code` is NOT this response's HTTP status. AgentCore Runtime rewrites
+    # any non-2xx from this container into a generic 424 and discards the
+    # body, so returning 409 directly reached the SPA as "Received error
+    # (409) from runtime. Please check your CloudWatch logs" — verified
+    # live on dev 2026-09-08. The route returns 200 + an envelope carrying
+    # this code and message, and app-api restores the real status before
+    # replying to the SPA. See `apis/shared/mcp_apps/error_envelope.py`.
+    #
+    # 409, never 401: the SPA's error interceptor treats *any* 401 as an
+    # expired BFF session and redirects to login, so answering "connect
+    # your account" with a 401 would sign the user out. 409 is already this
+    # codebase's "connector needs connecting" status (the file-source
+    # browser and the export dialog both branch on it to show Connect).
+    # The envelope reader enforces this independently — it will not relay
+    # a 401 even if one is asked for here.
+    raise AppToolCallError(
+        f"Authorization required for '{provider_id}'. Connect the account, "
+        "then try again.",
+        code=409,
+    )
+
+
+def _invalidate_oauth_token(user_id: str, provider_id: str, tool_name: str) -> None:
+    """Drop a token the MCP server just rejected, so the next call re-asks.
+
+    Deliberately does NOT retry the call, unlike the hook's
+    `_handle_auth_failure`. An app-initiated call is whatever button the
+    user pressed — `complete_task`, `delete_event` — and re-firing a
+    mutation off a regex match could apply the side effect twice. Clearing
+    is enough: the next press misses the cache, re-resolves from the vault
+    (which refreshes transparently), and either succeeds or reports that
+    consent is required.
+    """
+    from agents.main_agent.integrations import oauth_token_cache
+
+    logger.info(
+        "app-initiated tools/call for tool=%s looks like a %s auth failure; "
+        "clearing the cached token so the next call re-resolves it",
+        scrub_log(tool_name),
+        scrub_log(provider_id),
+    )
+    oauth_token_cache.clear_user_provider(user_id, provider_id)
+
+
+# --- opportunistic UI-resource revalidation ---------------------------------
+# The App HTML the SPA re-mounts on reload is whatever `resources/read`
+# returned when the tool first ran, replayed verbatim from the `UIRES#` row. So
+# a server that ships a new App version — or tightens the CSP its App runs
+# under — never reaches conversations that already exist.
+#
+# Re-reading needs a live MCP client, and the only path to one is a built
+# agent, so revalidating on every conversation open would add a full agent
+# rebuild (76% of sessions bypass the agent cache) to a page load that runs no
+# model turn. Instead we piggyback: an app-initiated tools/call ALREADY built
+# the agent and revived the client, so the read is nearly free here. The
+# refreshed shell lands on the NEXT load rather than this one — that is the
+# trade, and it converges for the Apps people actually use.
+_refresh_lock = threading.Lock()
+_refreshed_resources: set = set()
+_refresh_tasks: set = set()
+# One refresh per resource per process; a chatty App must not re-read its own
+# shell on every button press.
+_MAX_REFRESHED = 512
+
+
+def _claim_refresh(session_id: str, tool_use_id: str) -> bool:
+    """Whether this process should refresh this resource (once only)."""
+    key = f"{session_id}#{tool_use_id}"
+    with _refresh_lock:
+        if key in _refreshed_resources:
+            return False
+        if len(_refreshed_resources) >= _MAX_REFRESHED:
+            _refreshed_resources.clear()
+        _refreshed_resources.add(key)
+        return True
+
+
+def _refresh_ui_resource(user_id: str, session_id: str, tool_use_id: str) -> None:
+    """Re-read this App's `ui://` resource and overwrite its stored copy.
+
+    Best-effort and silent: this runs after the App already has its answer,
+    so nothing here may raise or slow the call down.
+    """
+    from apis.shared.mcp_apps.ui_resource_store import get_ui_resource_store
+
+    store = get_ui_resource_store()
+    provenance = store.get_provenance(user_id=user_id, tool_use_id=tool_use_id)
+    if not provenance:
+        return
+    # The tool that PRODUCED the frame, which is not the tool the App just
+    # called — the resourceUri hangs off the producing tool's catalog entry.
+    producing_tool = provenance.get("toolName")
+    if not producing_tool:
+        return
+
+    from agents.main_agent.integrations.mcp_apps import fetch_ui_resource
+
+    _, client = _resolve_client(None, producing_tool)
+    if client is None:
+        return
+    # `fetch_ui_resource` calls `read_resource_sync` straight through, and
+    # between turns Strands has already stopped the client's session — the
+    # same reason an app-initiated call needs this wrapper.
+    with _active_session(client):
+        payload = fetch_ui_resource(producing_tool, tool_use_id)
+    if not payload or not payload.get("html"):
+        return
+
+    store.store(
+        user_id=user_id,
+        session_id=session_id,
+        tool_use_id=tool_use_id,
+        resource_uri=payload.get("resourceUri", ""),
+        html=payload["html"],
+        mime_type=payload.get("mimeType", ""),
+        csp=payload.get("csp") or {},
+        permissions=payload.get("permissions") or {},
+        sandbox_origin=payload.get("sandboxOrigin", ""),
+        server_name=payload.get("serverName", ""),
+        icon=payload.get("icon", ""),
+        tool_name=producing_tool,
+        # Preserved: the anchor belongs to the producing turn, and a refresh
+        # must not renumber where the frame sits in the thread.
+        produced_by_message_index=provenance.get("producedByMessageIndex"),
+    )
+    logger.info(
+        "mcp-apps: revalidated UI resource (session=%s, toolUseId=%s)",
+        scrub_log(session_id),
+        scrub_log(tool_use_id),
+    )
+
+
+def _schedule_ui_resource_refresh(
+    user_id: str, session_id: str, tool_use_id: str
+) -> None:
+    """Fire the refresh off the response path; never fail the tool call."""
+    if not _claim_refresh(session_id, tool_use_id):
+        return
+
+    async def _run() -> None:
+        try:
+            await asyncio.to_thread(
+                _refresh_ui_resource, user_id, session_id, tool_use_id
+            )
+        except Exception:  # noqa: BLE001 - revalidation is best-effort
+            logger.warning(
+                "mcp-apps: UI resource revalidation failed (session=%s)",
+                scrub_log(session_id),
+                exc_info=True,
+            )
+
+    task = asyncio.create_task(_run())
+    # Hold a reference: asyncio only weakly references running tasks, so
+    # without this the refresh can be garbage-collected mid-flight.
+    _refresh_tasks.add(task)
+    task.add_done_callback(_refresh_tasks.discard)
+
+
 async def dispatch_app_tool_call(
     agent: Any,
     *,
@@ -210,6 +480,10 @@ async def dispatch_app_tool_call(
             f"No live MCP client for tool '{tool_name}'", code=409
         )
 
+    # The consent hook can't run for this call (no BeforeToolCallEvent), so
+    # resolve the OAuth token here or the request goes out unauthenticated.
+    provider_id = await _ensure_oauth_token(client, user_id)
+
     # Distinct id for the thread card — the originating tool_use_id is the
     # one that rendered the iframe; this proxied call is its own invocation.
     synth_id = f"app-{tool_use_id}-{uuid.uuid4().hex[:8]}"
@@ -237,6 +511,11 @@ async def dispatch_app_tool_call(
     content = _serialize_content(result)
     is_error = _is_error(result)
     status = "error" if is_error else "success"
+
+    if provider_id and looks_like_auth_failure(
+        {"status": status, "content": content}
+    ):
+        _invalidate_oauth_token(user_id, provider_id, tool_name)
 
     # Surface the call in the conversation thread. Best-effort: a missing
     # listener (no active stream) buffers in the broker for the next turn;
@@ -269,6 +548,10 @@ async def dispatch_app_tool_call(
             },
         },
     )
+
+    # The agent is built and the client revived right now — the one moment
+    # re-reading this App's shell costs almost nothing. See the note above.
+    _schedule_ui_resource_refresh(user_id, session_id, tool_use_id)
 
     return {
         "toolUseId": tool_use_id,

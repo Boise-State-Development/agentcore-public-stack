@@ -13,6 +13,7 @@ import {
   OAuthConsentService,
 } from '../../../../services/oauth-consent/oauth-consent.service';
 import { McpAppStateService } from '../../../services/mcp-apps/mcp-app-state.service';
+import { ChatStateService } from '../../../services/chat/chat-state.service';
 import type { ToolResultData } from './tool-use/tool-renderer-registry.service';
 
 // ──────────────────────────────────────────────────────────────
@@ -306,6 +307,7 @@ export class AssistantMessageComponent {
 
   private consentService = inject(OAuthConsentService);
   private mcpAppState = inject(McpAppStateService);
+  private chatState = inject(ChatStateService);
 
   /**
    * Transforms content blocks into display blocks.
@@ -386,8 +388,12 @@ export class AssistantMessageComponent {
         // signal here keeps `displayBlocks` reactive to a late-arriving
         // `ui_resource` — the computed re-runs when McpAppStateService
         // updates and the tool gets promoted retroactively (vs. staying
-        // folded into the group forever).
-        const hasMcpAppResource = this.mcpAppState.has(toolUse.toolUseId);
+        // folded into the group forever). Resources are held per
+        // conversation, so the lookup is scoped to the viewed one.
+        const hasMcpAppResource = this.mcpAppState.has(
+          this.chatState.viewedSessionId(),
+          toolUse.toolUseId,
+        );
 
         if (promotedVisual || hasMcpAppResource) {
           // Promoted visuals and MCP Apps both need their own first-class

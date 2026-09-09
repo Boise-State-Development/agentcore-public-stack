@@ -21,6 +21,82 @@ class TestVoiceAgentImport:
         assert issubclass(VoiceAgent, BaseAgent)
 
 
+class TestBidiProviderContract:
+    """Bind the voice provider import against the pinned SDK.
+
+    ``voice_agent`` imports the provider inside a ``try/except ImportError``
+    that degrades to ``BIDI_AVAILABLE = False`` and one INFO line. A rename
+    upstream therefore does not crash — it silently turns voice off. That is
+    exactly what strands-agents 1.55.0 did: ``models.nova_sonic``'s
+    ``BidiNovaSonicModel`` became ``models.bedrock``'s
+    ``BedrockNovaSonicModel``.
+
+    These assertions read the pinned SDK's *source*, not a live import, because
+    ``tests.yml`` installs ``--extra agentcore --extra dev`` but not
+    ``--extra bidi``: the provider module ships in the base wheel while its
+    runtime dependencies do not, so importing it here would fail on CI even
+    when the pin is correct.
+    """
+
+    def _provider_source(self):
+        import importlib.util
+        import pathlib
+
+        spec = importlib.util.find_spec("strands.experimental.bidi")
+        assert spec is not None and spec.origin, "strands bidi package not found"
+        provider = pathlib.Path(spec.origin).parent / "models" / "bedrock.py"
+        assert provider.is_file(), (
+            f"{provider} is missing — the bidi provider module was renamed again; "
+            "update the import in agents/main_agent/voice_agent.py"
+        )
+        return provider.read_text()
+
+    def test_provider_module_defines_the_class_we_import(self):
+        assert "class BedrockNovaSonicModel" in self._provider_source()
+
+    def test_voice_agent_imports_the_current_provider_name(self):
+        """Read the module's import statements, not its prose.
+
+        The comment above the import names the old symbol on purpose, so match
+        against the parsed AST rather than the raw text.
+        """
+        import ast
+        import inspect
+
+        import agents.main_agent.voice_agent as va
+
+        imported = {
+            f"{node.module}.{alias.name}"
+            for node in ast.walk(ast.parse(inspect.getsource(va)))
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        assert (
+            "strands.experimental.bidi.models.bedrock.BedrockNovaSonicModel" in imported
+        )
+        assert not any("BidiNovaSonicModel" in name for name in imported), (
+            f"stale 1.51 provider name still imported: {sorted(imported)}"
+        )
+
+    def test_provider_takes_flattened_audio_and_region_kwargs(self):
+        """1.55.0 replaced provider_config/client_config with audio/region."""
+        source = self._provider_source()
+        assert "audio: AudioConfig | None = None" in source
+        assert "region: str | None = None" in source
+        assert "provider_config" not in source
+
+    def test_audio_config_still_carries_the_five_keys_we_send(self):
+        from strands.experimental.bidi.types.model import AudioConfig
+
+        assert {"voice", "input_rate", "output_rate", "channels", "format"} <= set(
+            AudioConfig.__annotations__
+        )
+
+    def test_nova_sonic_usage_is_still_cumulative(self):
+        """VoiceAgent de-cumulates bidi_usage; a switch to deltas would double-count."""
+        assert "usage_is_cumulative = True" in self._provider_source()
+
+
 class TestVoiceConstants:
     """Req VA-2: Voice configuration constants."""
 

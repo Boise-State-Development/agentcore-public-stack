@@ -436,9 +436,15 @@ export class MessageMapService {
       // resources the backend replays on this response. The inline
       // `ui_resource` event never re-streams, so without this the
       // `mcp-app-frame` falls back to a plain tool card after a refresh.
-      // session.page resets McpAppStateService before this load, so the
-      // non-clobbering seed lands cleanly.
-      this.mcpAppState.seedFromHydration(messagesResponse.uiResources ?? []);
+      // Only reached on a real fetch — `loadMessagesForSession` skips this
+      // whole path once a conversation's messages are cached, which is why
+      // McpAppStateService retains per conversation instead of resetting on
+      // navigation. The seed is non-clobbering, so it can't undo a live
+      // `recordLive` entry for the same invocation.
+      this.mcpAppState.seedFromHydration(
+        sessionId,
+        messagesResponse.uiResources ?? [],
+      );
     } finally {
       if (showLoading) {
         this._isLoadingSession.set(null);

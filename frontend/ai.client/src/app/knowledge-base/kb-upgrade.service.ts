@@ -27,6 +27,15 @@ export type DocumentIssueKind =
   | 'still_processing'
   | 'being_removed';
 
+/**
+ * The UI-facing engine name, for the `Managed`/`Classic` badge (task 16.4).
+ *
+ * Deliberately friendly words, not the backend's internal engine ids: the badge
+ * exists to answer "which engine is serving this?" for a human. `classic` is the
+ * default the server sends for a legacy or not-yet-migrated knowledge base.
+ */
+export type KbEngine = 'managed' | 'classic';
+
 export interface UpgradeProgress {
   completed: number;
   total: number;
@@ -46,6 +55,8 @@ export interface DocumentNotCarried {
 
 export interface UpgradeStatus {
   phase: UpgradePhase;
+  /** Which engine currently serves this knowledge base — drives the badge. */
+  engine: KbEngine;
   canUpgrade: boolean;
   progress: UpgradeProgress | null;
   reason: string | null;
@@ -63,6 +74,7 @@ export interface UpgradeResult {
 /** What the client falls back to when the status call fails. */
 const NOTHING_TO_SHOW: UpgradeStatus = {
   phase: 'none',
+  engine: 'classic',
   canUpgrade: false,
   progress: null,
   reason: null,

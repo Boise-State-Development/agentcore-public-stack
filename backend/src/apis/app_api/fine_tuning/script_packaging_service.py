@@ -10,6 +10,8 @@ from typing import Optional
 import boto3
 from botocore.exceptions import ClientError
 
+from . import task_types
+
 logger = logging.getLogger(__name__)
 
 # Directory containing the SageMaker scripts (relative to this module)
@@ -26,18 +28,42 @@ PACKAGE_DIR = os.path.dirname(__file__)
 SCRIPT_FILES = [
     "train.py",
     "inference.py",
-    "requirements.txt",
     "task_common.py",
     "task_text_classification.py",
     "task_image_classification.py",
     "task_image_text_classification.py",
+    "task_image_text_to_text.py",
 ]
 
 # Files pulled from the package directory rather than sagemaker_scripts/.
 SHARED_FILES = ["task_types.py"]
 
-# S3 key for the packaged scripts
-SCRIPTS_S3_KEY = "scripts/sourcedir.tar.gz"
+# The dependency file each DLC family gets, packaged into the archive AS
+# ``requirements.txt`` — which is the only name the DLC installs from.
+#
+# One shared file cannot serve all three.  The VLM family needs peft and
+# bitsandbytes, and bitsandbytes requires torch>=2.4 while the text container
+# is torch 2.1: adding them to the shared file would break dependency
+# installation for every existing text job.  Selecting the file per family is
+# the same reasoning that already keys the DLC image by family.
+REQUIREMENTS_BY_FAMILY = {
+    task_types.DLC_FAMILY_TEXT: "requirements.txt",
+    task_types.DLC_FAMILY_VISION: "requirements.txt",
+    task_types.DLC_FAMILY_VLM: "requirements-vlm.txt",
+}
+
+#: Name the requirements file must have inside the archive.
+PACKAGED_REQUIREMENTS_NAME = "requirements.txt"
+
+
+def scripts_s3_key(dlc_family: str) -> str:
+    """S3 key for one family's source directory.
+
+    Keyed by family because the archives differ only in their requirements
+    file; a single key would make the last job to run overwrite the
+    dependency set of the other families.
+    """
+    return f"scripts/sourcedir-{dlc_family}.tar.gz"
 
 
 class ScriptPackagingService:
@@ -54,10 +80,10 @@ class ScriptPackagingService:
         self._bucket = bucket_name or os.environ.get(
             "S3_FINE_TUNING_BUCKET_NAME", "fine-tuning-data"
         )
-        self._cached_s3_uri: Optional[str] = None
+        self._cached_s3_uris: dict = {}
 
     @staticmethod
-    def _source_paths() -> list:
+    def _source_paths(dlc_family: str) -> list:
         """Return (archive name, source path) for every packaged file.
 
         Ordered deterministically so the content hash is stable across calls —
@@ -65,19 +91,26 @@ class ScriptPackagingService:
         """
         paths = [(name, os.path.join(SCRIPTS_DIR, name)) for name in SCRIPT_FILES]
         paths += [(name, os.path.join(PACKAGE_DIR, name)) for name in SHARED_FILES]
+
+        requirements = REQUIREMENTS_BY_FAMILY.get(
+            dlc_family, REQUIREMENTS_BY_FAMILY[task_types.DLC_FAMILY_TEXT]
+        )
+        paths.append(
+            (PACKAGED_REQUIREMENTS_NAME, os.path.join(SCRIPTS_DIR, requirements))
+        )
         return sorted(paths, key=lambda pair: pair[0])
 
-    def _compute_content_hash(self) -> str:
+    def _compute_content_hash(self, dlc_family: str) -> str:
         """Compute SHA256 hash of all script file contents."""
         hasher = hashlib.sha256()
-        for name, filepath in self._source_paths():
+        for name, filepath in self._source_paths(dlc_family):
             if os.path.exists(filepath):
                 hasher.update(name.encode("utf-8"))
                 with open(filepath, "rb") as f:
                     hasher.update(f.read())
         return hasher.hexdigest()
 
-    def _create_tar_gz(self) -> bytes:
+    def _create_tar_gz(self, dlc_family: str) -> bytes:
         """Create an in-memory tar.gz archive of the scripts.
 
         Files are added at the root level of the archive (no subdirectory),
@@ -85,7 +118,7 @@ class ScriptPackagingService:
         """
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            for name, filepath in self._source_paths():
+            for name, filepath in self._source_paths(dlc_family):
                 if os.path.exists(filepath):
                     tar.add(filepath, arcname=name)
                 else:
@@ -93,12 +126,12 @@ class ScriptPackagingService:
         buf.seek(0)
         return buf.read()
 
-    def _check_s3_hash(self, content_hash: str) -> bool:
+    def _check_s3_hash(self, content_hash: str, key: str) -> bool:
         """Check if the S3 object exists and has a matching content hash."""
         try:
             response = self._s3.head_object(
                 Bucket=self._bucket,
-                Key=SCRIPTS_S3_KEY,
+                Key=key,
             )
             s3_hash = response.get("Metadata", {}).get("content-hash", "")
             return s3_hash == content_hash
@@ -107,33 +140,36 @@ class ScriptPackagingService:
                 return False
             raise
 
-    def ensure_scripts_uploaded(self) -> str:
-        """Ensure scripts tar.gz is uploaded to S3. Returns the S3 URI.
+    def ensure_scripts_uploaded(self, task_type: Optional[str] = None) -> str:
+        """Ensure the source dir for ``task_type``'s family is in S3.
 
         Uses content-hash caching to skip re-upload if scripts haven't changed.
-        Caches the URI in memory after the first successful call.
+        Caches the URI per family in memory after the first successful call.
         """
-        if self._cached_s3_uri:
-            return self._cached_s3_uri
+        dlc_family = task_types.get_task_spec(task_type).dlc_family
 
-        content_hash = self._compute_content_hash()
+        cached = self._cached_s3_uris.get(dlc_family)
+        if cached:
+            return cached
 
-        if not self._check_s3_hash(content_hash):
-            tar_bytes = self._create_tar_gz()
+        key = scripts_s3_key(dlc_family)
+        content_hash = self._compute_content_hash(dlc_family)
+
+        if not self._check_s3_hash(content_hash, key):
+            tar_bytes = self._create_tar_gz(dlc_family)
             self._s3.put_object(
                 Bucket=self._bucket,
-                Key=SCRIPTS_S3_KEY,
+                Key=key,
                 Body=tar_bytes,
                 Metadata={"content-hash": content_hash},
             )
-            logger.info(
-                f"Uploaded scripts tar.gz to s3://{self._bucket}/{SCRIPTS_S3_KEY}"
-            )
+            logger.info(f"Uploaded scripts tar.gz to s3://{self._bucket}/{key}")
         else:
-            logger.debug("Scripts tar.gz already up-to-date in S3")
+            logger.debug(f"Scripts tar.gz already up-to-date in S3 for {dlc_family}")
 
-        self._cached_s3_uri = f"s3://{self._bucket}/{SCRIPTS_S3_KEY}"
-        return self._cached_s3_uri
+        uri = f"s3://{self._bucket}/{key}"
+        self._cached_s3_uris[dlc_family] = uri
+        return uri
 
 
 # Singleton access

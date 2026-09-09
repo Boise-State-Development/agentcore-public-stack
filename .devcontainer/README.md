@@ -19,6 +19,8 @@ For agent execution rules and the workspace-path map, see
 | AWS CDK CLI                  | 2.1128.0   | Matches `infrastructure/package.json`     |
 | Docker CLI (client only)     | 29.4.3     | sha256-verified static binary             |
 | Docker buildx (CLI plugin)   | 0.30.1     | sha256-verified GitHub release            |
+| actionlint (workflow linter) | 1.7.12     | sha256-verified GitHub release            |
+| ShellCheck (shell linter)    | 0.9.0      | Ubuntu 24.04 apt package                  |
 | Playwright chromium runtime  | n/a        | Apt deps for Playwright 1.59.x            |
 
 > All artifacts downloaded over the network during the build are verified

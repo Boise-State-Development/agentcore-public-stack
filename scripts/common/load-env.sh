@@ -231,6 +231,9 @@ build_cdk_context_params() {
     if [ -n "${CDK_MANAGED_KB_RECONCILER_ARMED:-}" ]; then
         context_params="${context_params} --context managedKb.reconcilerArmed=\"${CDK_MANAGED_KB_RECONCILER_ARMED}\""
     fi
+    if [ -n "${CDK_MANAGED_KB_DOC_RECONCILER_ARMED:-}" ]; then
+        context_params="${context_params} --context managedKb.docReconcilerArmed=\"${CDK_MANAGED_KB_DOC_RECONCILER_ARMED}\""
+    fi
     # Byte_Caps in BYTES (Requirement 12.2) and the rollback window in DAYS
     # (Requirement 15.11). config.ts reads the same flat dotted keys, so these
     # are honoured rather than silently dropped.
@@ -287,6 +290,32 @@ build_cdk_context_params() {
     fi
     if [ -n "${CDK_OBSERVABILITY_ECS_MEMORY_PERCENT:-}" ]; then
         context_params="${context_params} --context observability.ecsMemoryPercent=\"${CDK_OBSERVABILITY_ECS_MEMORY_PERCENT}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT:-}" ]; then
+        context_params="${context_params} --context observability.bedrockTpmQuotaPercent=\"${CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT}\""
+    fi
+    # The one non-scalar observability tunable: a map of Bedrock ModelId to that
+    # model's TPM quota. Two accepted forms:
+    #
+    #   global.anthropic.claude-sonnet-5=40000000,us.amazon.nova-micro-v1:0=8000000
+    #   {"global.anthropic.claude-sonnet-5":40000000}
+    #
+    # PREFER THE FIRST. deploy.sh runs `eval npx cdk synth ${CDK_CONTEXT_PARAMS}`,
+    # and eval removes quote characters, so JSON passed the way every other value
+    # here is passed arrives as {model:40000000} — no longer valid JSON. It would
+    # then fall back to the empty default and create NO alarms, with no error.
+    # Hence: single quotes below so JSON survives too, and a hard failure if the
+    # value contains a single quote, which would break that quoting in turn.
+    # Unset means no per-model quota alarms are created.
+    if [ -n "${CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS:-}" ]; then
+        case "${CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS}" in
+            *"'"*)
+                echo "ERROR: CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS must not contain a single quote." >&2
+                echo "       Use the eval-safe form: modelId=quota,modelId=quota" >&2
+                return 1
+                ;;
+        esac
+        context_params="${context_params} --context observability.bedrockTpmQuotas='${CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS}'"
     fi
     if [ -n "${CDK_OBSERVABILITY_XRAY_SAMPLING_RATE:-}" ]; then
         context_params="${context_params} --context observability.xraySamplingRate=\"${CDK_OBSERVABILITY_XRAY_SAMPLING_RATE}\""
@@ -399,6 +428,8 @@ export CDK_ARTIFACTS_RETENTION_DAYS="${CDK_ARTIFACTS_RETENTION_DAYS:-$(get_json_
 #   newDefault      — new knowledge bases are created managed
 #   migrationEnabled — the background migration worker runs at all
 #   reconcilerArmed  — the daily reconciler DELETES rather than only reporting
+#   docReconcilerArmed — the nightly document reconciler CORRECTS stranded DOC#
+#                        rows rather than only reporting
 #
 # Empty is safe and is the shipped state. Unlike the default-ON flags
 # above, there is no "kill switch" reading here to get wrong: nothing
@@ -406,6 +437,7 @@ export CDK_ARTIFACTS_RETENTION_DAYS="${CDK_ARTIFACTS_RETENTION_DAYS:-$(get_json_
 export CDK_MANAGED_KB_NEW_DEFAULT="${CDK_MANAGED_KB_NEW_DEFAULT:-$(get_json_value "managedKb.newDefault" "${CONTEXT_FILE}")}"
 export CDK_MANAGED_KB_MIGRATION_ENABLED="${CDK_MANAGED_KB_MIGRATION_ENABLED:-$(get_json_value "managedKb.migrationEnabled" "${CONTEXT_FILE}")}"
 export CDK_MANAGED_KB_RECONCILER_ARMED="${CDK_MANAGED_KB_RECONCILER_ARMED:-$(get_json_value "managedKb.reconcilerArmed" "${CONTEXT_FILE}")}"
+export CDK_MANAGED_KB_DOC_RECONCILER_ARMED="${CDK_MANAGED_KB_DOC_RECONCILER_ARMED:-$(get_json_value "managedKb.docReconcilerArmed" "${CONTEXT_FILE}")}"
 # Per-owner / per-knowledge-base Byte_Caps, in BYTES (Requirement 12.2), and
 # the legacy-vector rollback window in DAYS (Requirement 15.11). Defaults live
 # in config.ts as named constants (100 MB / 1 GB / 500 MB / 30 days); these

@@ -13,6 +13,7 @@ import { AppConfig,
   MANAGED_KB_RETENTION_WINDOW_DAYS,
   OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
   OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+  OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
   OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
   OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
   OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
@@ -81,6 +82,16 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
         OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
       promptCacheSessionWastedUsdThreshold:
         OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+      bedrockTpmQuotaPercent: OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
+      // Deliberately NOT the empty default: two entries with deliberately
+      // different orders of magnitude, so the per-model alarms exist in test
+      // stacks and the routing guard covers them. The real default is empty and
+      // is asserted separately in config.test.ts. Illustrative values — quotas
+      // are per-account, so these are not canonical for any deployment.
+      bedrockTpmQuotas: {
+        'global.anthropic.claude-sonnet-5': 40_000_000,
+        'us.anthropic.claude-sonnet-4-20250514-v1:0': 200_000,
+      },
       xraySamplingRate: OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
       xraySamplingReservoir: OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
       xrayInsightsNotifications: false,
@@ -106,6 +117,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       newDefault: false,
       migrationEnabled: false,
       reconcilerArmed: false,
+      docReconcilerArmed: false,
       perOwnerDefaultBytes: MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
       perOwnerElevatedBytes: MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
       perKnowledgeBaseCeilingBytes: MANAGED_KB_PER_KB_CEILING_BYTES,

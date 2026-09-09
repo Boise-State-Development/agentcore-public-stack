@@ -160,18 +160,21 @@
     </div>
   }
 
-  <!-- Static historical cards for app-initiated tool calls (PR #6,
-       Option A). The PR #5 broker is in-memory, so on reload the live
-       tool_use/tool_result are gone; these replay them as a read-only
-       record at the end of the conversation. -->
-  @if (hasMcpAppCards()) {
+  <!-- App-initiated tool calls (PR #6, Option A) whose App frame can't
+       render, so they have no header to hide behind. Everything else shows
+       on its own frame's actions chip; this is the fallback that keeps the
+       record from disappearing, summarized the same way. -->
+  @if (orphanedMcpAppCards().length) {
     <section
-      class="mt-3 flex flex-col gap-2"
+      class="mt-3 rounded-lg border border-gray-200/80 bg-white px-3 py-2 dark:border-white/10 dark:bg-slate-800/70"
       aria-label="Tool calls run by embedded apps in this conversation"
     >
-      @for (card of mcpAppCards(); track card.cardId) {
-        <app-mcp-app-card [card]="card" />
-      }
+      <div
+        class="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-primary-600 dark:text-primary-300"
+      >
+        Run by app
+      </div>
+      <app-mcp-app-actions [cards]="orphanedMcpAppCards()" />
     </section>
   }
 

@@ -22,7 +22,8 @@ export interface FineTuningAccessResponse {
 export type FineTuningTaskType =
   | 'text-classification'
   | 'image-classification'
-  | 'image-text-classification';
+  | 'image-text-classification'
+  | 'image-text-to-text';
 
 export const DEFAULT_TASK_TYPE: FineTuningTaskType = 'text-classification';
 
@@ -35,6 +36,11 @@ export interface TaskTypeResponse {
   requires_archive: boolean;
   inference_upload_extensions: string[];
   default_instance_type: string;
+  /** True when the model emits free text rather than class probabilities.
+   * Generative tasks are LoRA-adapted, so they expose adapter controls and
+   * their result file carries an output column instead of one probability
+   * column per class. */
+  is_generative: boolean;
 }
 
 // ── Model Catalog ───────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import { FineTuningHttpService } from '../../services/fine-tuning-http.service';
 import { FineTuningUploadService } from '../../services/fine-tuning-upload.service';
 import type {
   AvailableModel,
+  FineTuningTaskType,
   JobResponse,
   PresignResponse,
   TaskTypeResponse,
@@ -84,6 +85,7 @@ const mockTaskTypes: TaskTypeResponse[] = [
     requires_archive: false,
     inference_upload_extensions: ['.txt', '.csv', '.jsonl', '.json'],
     default_instance_type: 'ml.g5.xlarge',
+    is_generative: false,
   },
   {
     task_type: 'image-classification',
@@ -94,6 +96,18 @@ const mockTaskTypes: TaskTypeResponse[] = [
     requires_archive: true,
     inference_upload_extensions: ['.zip'],
     default_instance_type: 'ml.g6.xlarge',
+    is_generative: false,
+  },
+  {
+    task_type: 'image-text-to-text',
+    display_name: 'Image + text to text',
+    description: 'Teach a vision-language model to answer about an image.',
+    required_columns: ['image', 'prompt', 'response'],
+    upload_extensions: ['.zip'],
+    requires_archive: true,
+    inference_upload_extensions: ['.zip'],
+    default_instance_type: 'ml.g6e.xlarge',
+    is_generative: true,
   },
 ];
 
@@ -328,6 +342,105 @@ describe('CreateTrainingJobPage', () => {
         learning_rate: '1e-4',
       }),
     );
+  });
+
+  describe('generative (image-text-to-text) tasks', () => {
+    const vlmModel: AvailableModel = {
+      model_id: 'llava-1.5-7b',
+      model_name: 'LLaVA 1.5 7B',
+      huggingface_model_id: 'llava-hf/llava-1.5-7b-hf',
+      description: 'Vision-language model',
+      task_type: 'image-text-to-text',
+      default_instance_type: 'ml.g6e.xlarge',
+      default_hyperparameters: {
+        epochs: '3',
+        learning_rate: '1e-4',
+        per_device_train_batch_size: '1',
+        context_length: '1024',
+        lora_r: '8',
+        lora_alpha: '16',
+        load_in_4bit: 'false',
+        split_ratio: '0.8',
+      },
+    };
+
+    /** The task list is fetched on a microtask, so the spec has to let
+     * loadTaskTypes() settle before a task can be selected by name. */
+    async function selectTask(taskType: FineTuningTaskType) {
+      const component = createComponent();
+      await Promise.resolve();
+      component.selectTaskType(taskType);
+      return component;
+    }
+
+    const selectVlmTask = () => selectTask('image-text-to-text');
+
+    it('reports the task as generative from the backend spec', async () => {
+      const component = await selectVlmTask();
+      expect(component.isGenerative()).toBe(true);
+    });
+
+    it('hides the image-size knob the generative trainer ignores', async () => {
+      const component = await selectVlmTask();
+      // Archive-based, so the classification gate alone would show it.
+      expect(component.requiresArchive()).toBe(true);
+      expect(component.showImageSize()).toBe(false);
+    });
+
+    it('still shows image size for an image classifier', async () => {
+      const component = await selectTask('image-classification');
+      expect(component.showImageSize()).toBe(true);
+    });
+
+    it('seeds the adapter controls from the model defaults', async () => {
+      const component = await selectVlmTask();
+      component.selectModel(vlmModel);
+      const values = component.form.getRawValue();
+      expect(values.loraR).toBe('8');
+      expect(values.loraAlpha).toBe('16');
+      expect(values.loadIn4bit).toBe('false');
+    });
+
+    it('submits the adapter settings for a generative task', async () => {
+      const component = await selectVlmTask();
+      const router = TestBed.inject(Router);
+      vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+      component.selectModel(vlmModel);
+      component.uploadState.set({
+        file: new File([''], 'data.zip'),
+        progress: 100,
+        status: 'complete',
+        s3Key: 'uploads/data.zip',
+      });
+
+      await component.submitJob();
+
+      const call = mockState.createTrainingJob.mock.calls[0][0];
+      expect(call.hyperparameters).toEqual(
+        expect.objectContaining({ lora_r: '8', lora_alpha: '16', load_in_4bit: 'false' }),
+      );
+    });
+
+    it('omits the adapter settings for a classification task', async () => {
+      const component = createComponent();
+      const router = TestBed.inject(Router);
+      vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+      component.selectModel(mockModel);
+      component.uploadState.set({
+        file: new File([''], 'test.jsonl'),
+        progress: 100,
+        status: 'complete',
+        s3Key: 'uploads/test.jsonl',
+      });
+
+      await component.submitJob();
+
+      const call = mockState.createTrainingJob.mock.calls[0][0];
+      expect(call.hyperparameters).not.toHaveProperty('lora_r');
+      expect(call.hyperparameters).not.toHaveProperty('load_in_4bit');
+    });
   });
 
   it('should convert max runtime hours to seconds', async () => {
