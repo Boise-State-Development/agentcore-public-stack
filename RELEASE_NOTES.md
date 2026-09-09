@@ -1,3 +1,306 @@
+# Release Notes — v1.20.0
+
+**Release Date:** September 9, 2026
+**Previous Release:** v1.19.1 (September 7, 2026)
+
+---
+
+> 🏗️ **CDK deploy required.** A new Lambda, its role and log group, an EventBridge rule and one SSM parameter for the managed-KB document reconciler; per-model Bedrock quota alarms replacing one account-wide alarm; and a new app-api task-definition revision. **No new table and no GSI operation on any existing table** — nothing has to reach `ACTIVE` before this deploy is safe.
+>
+> 💸 **Default app-api Fargate sizing doubles.** `appApi.cpu` 512 → 1024 and `appApi.memory` 1024 → 2048, per task, at 2 tasks. **A fork that sets nothing pays roughly twice as much for app-api compute after this deploy.** Set `CDK_APP_API_CPU=512` and `CDK_APP_API_MEMORY=1024` to keep the old sizing. See Deployment notes.
+>
+> 🔔 **One alarm disappears and is not automatically replaced.** `{prefix}-bedrock-tpm-quota-usage` is deleted because it was in ALARM roughly 99% of the time and accounted for very nearly all traffic on the alarm topic. Its replacement is per-model and **opt-in**, so an operator who configures nothing loses the leading indicator for quota pressure until they set `CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS`.
+>
+> 🌐 **A nightly Lambda starts running for every fork, regardless of feature flags.** The managed-KB document reconciler's construct is instantiated unconditionally, so the schedule is created and enabled even with every `managedKb` flag off. It is **report-only** and read-only unless explicitly armed — but it does perform a full `Scan` of the RAG assistants table each night.
+>
+> 🧰 **`browse_web` will not appear until the bootstrap seeder is re-run.** The tool ships registered in code but inert, because tool availability is driven by the DynamoDB catalog. The Seed Bootstrap Data workflow is `workflow_dispatch`-only and is **not** invoked by any deploy pipeline.
+
+---
+
+## Highlights
+
+Two capabilities the platform simply did not have, and one measurement that changes how it should be scaled. **`browse_web`** lets the agent drive a real Chrome browser in the AgentCore Browser sandbox — navigate, read, click, type, screenshot, and hand the user a live view URL to watch the session through. **Generative VLM fine-tuning** adds a fourth task type: instead of classifying an image into a fixed label set, a model can now be taught to *write* about one in an institution's own vocabulary, LoRA-adapted over a 4-bit base so a 34B checkpoint fits on hardware that a full fine-tune would need 550 GB for. Alongside them, a new load-testing harness answers a question nobody could previously answer with evidence, and the answer is uncomfortable: **the campus-scale ceiling is the Bedrock TPM quota, not compute** — a representative production turn consumes ~26,700 quota-counted tokens, so the untouched default quota supports about 225 turns per minute platform-wide and a single 300-student class exceeds it.
+
+Three fixes are worth reading even if you don't use the features they sit under. MCP Apps reach the end of a three-part chain that made every button in an embedded App fail silently after a page reload — and the middle link turned out to be that **AgentCore Runtime rewrites any non-2xx container response to a generic 424 and throws the body away**, which is a constraint on every inference-api handler that reports an error by HTTP status. A managed knowledge base could give confidently wrong answers from documents it had retrieved correctly, because a context cap sized for one chunker silently collapsed a five-chunk retrieval to one. And a security fix closes a sandbox escape in the Calculator tool's expression allowlist, which is enabled by default for every user.
+
+## `browse_web` — the agent drives a real browser
+
+The agent can now use a real Chrome browser rather than fetching a URL and hoping the content is in the HTML. Nine actions, one per call: `navigate`, `extract_text`, `extract_links`, `click`, `type`, `evaluate`, `screenshot`, `live_view`, and `close`. `live_view` returns a URL the user can open to **watch the browser session as it happens**, which turns an opaque multi-step automation into something observable. The tool's own docstring positions it as the expensive fallback to `fetch_url_content`, not a replacement for it.
+
+Two things to be clear about, because the platform's older Browser documentation describes something else. This is **not** Nova Act — there is no separate vision or action model and no new API key. The conversation model itself chooses each action, and the tool is a thin protocol driver. And `BROWSER_TOOL_ENABLED` is a **kill switch that defaults to on**, not an opt-in; what actually keeps the tool dark is that it is seeded `enabledByDefault: False` and, until the catalog row exists, is not offered at all.
+
+### Backend
+
+- `backend/src/agents/builtin_tools/browser/` — new package, three modules, **zero new dependencies**. `browse_tool.py` is the `@tool(context=True)` entry point and its dispatch; `cdp_client.py` is a hand-rolled Chrome DevTools Protocol client (`CdpSession`, `connect`, `command`, `evaluate`, `navigate`, `screenshot`); `session_pool.py` manages acquisition, reconnection, idle reaping and live-view URLs.
+- **Why raw CDP instead of Playwright.** `websockets` is already in the inference-api image as a transitive dependency of `bedrock-agentcore`. Playwright would have added a bundled Node driver to the container for a capability the protocol already provides. The trade-off is stated rather than hidden: interaction is JavaScript-in-page, so `click` calls `el.click()` and `type` sets `el.value` then dispatches `input`/`change` with `bubbles: true` to make Angular and React state update. Pages that need genuinely trusted input — drag, some canvas widgets, some anti-bot forms — will not work.
+- **A rebuilt agent does not start a second browser.** The session identity persists on Strands `agent.state` under `browser_tool.session` as `{sessionId, identifier, startedAt}`, while the live socket stays process-local. A second cached agent for the same conversation reconnects to the same remote session rather than starting — and billing — another one. boto3 calls are wrapped in `asyncio.to_thread` behind a per-session lock.
+- **Budgets exist because the model pays for them in tokens.** Page text caps at 8,000 characters (~2k tokens), `evaluate` results at 4,000, links at 50; truncation messages tell the model to narrow with a selector rather than re-reading. Screenshots are never automatic — `navigate` returns text, and an image requires an explicit `action="screenshot"`. Remote sessions expire at 900s against an AgentCore allowance of 8 hours, and a local idle reap at 600s closes the socket *and* stops the remote session.
+- **URL validation runs before the session pool is touched**, so a refused URL costs nothing. Scheme must be http/https, and `localhost`, `127.0.0.1`, `::1`, `169.254.169.254` (EC2 IMDS) and `metadata.google.internal` are denied outright. There is deliberately **no domain allowlist** in this release: defence-in-depth rests on the browser running in AWS with PUBLIC network mode, unable to reach the deployment VPC. An institution that wants a URL allowlist does not get one yet.
+
+### Infrastructure
+
+**None — and that is the point.** Every resource this needs already existed. `browser-construct.ts` creates the AgentCore Browser, `inference-agentcore-construct.ts` already sets `BROWSER_ID` on the runtime, and the runtime role already carried `ConnectBrowserLiveViewStream` alongside the session APIs, which is why `live_view` works with no IAM change at all. Before this commit the only readers of `BROWSER_ID` were `.env.example` and a startup log line.
+
+### Test Coverage
+
+381 lines in `backend/tests/agents/builtin_tools/browser/test_browse_tool.py`, with no AWS contact: a `FakeWebSocket` that actually speaks CDP covers protocol framing (browser-scoped vs page-scoped commands, target creation, page exceptions surfacing as `CdpError`, idempotent close failing pending futures), seven parametrized URL-validation cases, and nine dispatch tests — including the metadata endpoint being refused *without the pool ever being touched*, and the kill switch short-circuiting before session acquisition.
+
+**Not yet validated against live AWS.** The SigV4 WebSocket handshake, the browser-level CDP endpoint and a real page load cannot be exercised by unit tests, and the authoring session's SSO token had expired. `backend/scripts/probe_agentcore_browser.py` exists to run exactly those five checks (`--discover`, `--keep`); treat it as the verification step before enabling the tool for users.
+
+## Generative VLM fine-tuning
+
+Fine-tuning gains a fourth task type, **Image + text to text**. The three existing tasks all end in a softmax over a fixed class list, so the platform could tell you *which* of your labels an image matched but never produce prose about it. A generative VLM can be taught to answer a question about an image in an institution's own style and vocabulary — reading a form, describing a diagram, drafting a caption — and the pre-flight now accepts any Hub checkpoint tagged `image-text-to-text`, so users can bring their own.
+
+Five models are curated, with per-model defaults chosen rather than inherited:
+
+| Model | Size | Default instance | Notable override |
+|---|---|---|---|
+| `HuggingFaceTB/SmolVLM-Instruct` | 2.2B | ml.g6e.xlarge | `load_in_4bit=false` — bf16 is faster below ~3B |
+| `llava-hf/llava-1.5-7b-hf` | 7B | ml.g6e.xlarge | — |
+| `llava-hf/llava-v1.6-mistral-7b-hf` | 7.6B | ml.g6e.xlarge | `context_length=2048` for AnyRes tiling |
+| `Qwen/Qwen2.5-VL-7B-Instruct` | 8.3B | ml.g6e.xlarge | `context_length=2048` |
+| `llava-hf/llava-v1.6-34b-hf` | 34.8B | ml.g6e.4xlarge | `grad_accum=16`, `lora_r=8` |
+
+LLaVA-1.6 and Qwen get a doubled context length because AnyRes tiling can emit up to 2,880 image tokens against LLaVA-1.5's fixed 576. The 34B model's catalog copy warns to expect multi-hour runs and budget accordingly.
+
+### Backend
+
+- **LoRA, not a full fine-tune, and the arithmetic is the reason.** At roughly 16 bytes per parameter once gradients and AdamW moments are resident, a 34B full fine-tune needs ~550 GB against the 384 GB on the largest instance offered. The frozen base is quantised to 4-bit NF4 (double quant, bf16 compute) and only adapters train. **The artifact is therefore an adapter of a few hundred MB, not a model**: `vlm_adapter.json` records the base model id, quantisation and generation settings, and `model_fn` rebuilds base-plus-adapter with `PeftModel.from_pretrained`, pulling the base from the Hub.
+- **Loss is masked to the response span.** Labels are set to `-100` at pad positions, non-attended positions, image-placeholder token ids, and the whole prompt prefix. Prompt length is measured by rendering each record through the processor's chat template **twice** — once with `add_generation_prompt=True` and no answer, once complete — so the count is a true prefix in the same tokenisation rather than an estimate. `prompt_mask_limit()` clamps to `len-1`, because an all-masked row yields NaN loss that poisons the batch average.
+- **No invented chat format.** `render_chat()` raises if a checkpoint ships no chat template rather than guessing a dialogue shape the model never saw during pre-training.
+- **`check_collation()` collates two records before `Trainer` starts.** The failure it exists to catch is truncation cutting into the image-placeholder run, which makes the placeholder count disagree with the image-feature count and dies in the first forward pass — minutes into a billed GPU, after tens of gigabytes of weight downloads. It re-raises with actionable guidance instead.
+- **Batched generation is deliberately not attempted** (`GENERATION_BATCH_SIZE = 1`). It needs left padding plus a per-architecture agreement about where image placeholders sit relative to the pad run, and getting that subtly wrong produces fluent garbage rather than an error — the worst possible failure for a result file a researcher will treat as data.
+- **Per-family script packaging.** `bitsandbytes==0.50.2` requires torch ≥ 2.4 and the text DLC is torch 2.1, so a single shared requirements file would have broken dependency installation for **every existing text job**. `scripts/sourcedir.tar.gz` becomes `scripts/sourcedir-{text,vision,vlm}.tar.gz`, each carrying its family's requirements packaged under the only filename the DLC installs from. The VLM family maps to the *same* DLC images as vision — the family selects the dependency set, so a future VLM-only image bump cannot re-baseline the image classifiers.
+- The result contract is unchanged in shape. `output_fn` branches on `"generations" in prediction` rather than a caller-supplied flag, emitting `image,prompt,output` through the existing CSV escaping. **The download path and the result viewer needed no changes at all.**
+
+### Frontend
+
+- `create-training-job.page.ts` gains `isGenerative()` and `showImageSize()`, three new controls (LoRA Rank, LoRA Alpha, Quantization) seeded from the model's `default_hyperparameters`, and submits them **only** for a generative task so a classifier's job record carries no dead keys in its hyperparameters panel.
+- The Image Size field is now hidden for generative tasks. The generative trainer never reads `image_size` — the model's own processor decides tiling and resolution — so leaving it visible would have been a control that silently did nothing.
+
+### Infrastructure
+
+None. No CDK deploy for this feature. Two operational notes: the first job of each family writes its own `sourcedir-{family}.tar.gz` under the existing `scripts/` prefix in the same bucket, so no IAM or bucket-policy change is needed and the old `scripts/sourcedir.tar.gz` is simply orphaned; and `pricing.py` already carried both g6e instance types, so the dollar-quota path works unchanged. Operators may still need a **SageMaker service-quota increase for `ml.g6e` training instances**, which no code change can supply.
+
+### Test Coverage
+
+665 lines across five files. `test_vlm_task.py` (285 new lines, ~45 tests) verifies the module imports without torch present and is registered in **both** the training and inference dispatchers, that `render_chat` raises rather than inventing a format, that `prompt_mask_limit` never masks the final position, and that a disabled quantisation config returns `None` *without importing bitsandbytes*. `test_script_packaging_service.py` asserts the VLM archive carries the peft stack and the text archive does **not** carry bitsandbytes. `test_task_types.py` pins the generative tag out of the dual-encoder task. `test_inference_script.py` covers embedded newlines, doubled quotes and commas not splitting a row. `create-training-job.page.spec.ts` (113 lines) covers the conditional controls both ways.
+
+The honest gap: torch, transformers and peft are absent from the backend venv by design, so the collator itself cannot be unit tested. The masking arithmetic was extracted into a pure function and covered there; the collator is guarded at runtime by `check_collation`.
+
+## An App's tool calls, and the 424 that ate their errors
+
+Every button in an embedded MCP App failed after a page reload, and failed *silently* — the user saw the MCP server's own "isn't connected yet" text rather than anything resembling an auth error. Fixing it took three passes, each of which only became visible once the previous one landed, and the middle one is a finding that applies well beyond MCP Apps.
+
+**Why the calls were unauthenticated.** An app-initiated `tools/call` runs `dispatch_app_tool_call`, which speaks to the MCP client directly instead of running the agent's tool loop. Strands therefore never raises `BeforeToolCallEvent`, so `OAuthConsentHook` — the only thing in the system that warms `oauth_token_cache` — never ran. The client's token provider is a pure cache read, so it resolved to `None` and the request went out **with no `Authorization` header at all**. Two things conspired to make this quiet: a server that accepts an unauthenticated `initialize`/`tools/list` (Google Tasks does) still registers its tools, so the App rendered perfectly and only the calls failed; and because no 401 came back, the existing 401-triggered recovery that *would* have warmed the cache from the vault never fired. A server that 401s its `tools/list` would have self-healed. The trigger is any container that has not served a model-driven turn for that user and provider — a reload onto a fresh runtime, a local restart, or a lapsed 3000s cache TTL.
+
+`_ensure_oauth_token` now repeats the hook's warm-the-cache half before dispatch, and distinguishes three outcomes rather than two: an unresolvable provider means "couldn't ask AgentCore", not "user must consent", so the call proceeds unauthenticated instead of false-prompting a connected user. A genuine consent requirement raises **409, never 401** — the SPA's error interceptor treats any 401 as an expired BFF session and would sign a user out over an unconnected connector. An auth-shaped failure clears the cached token and deliberately **does not retry**, because an app call is whatever button the user pressed (`complete_task`, `delete_event`) and a regex-triggered retry could apply a mutation twice. `AUTH_FAILURE_PATTERN` moved to `apis/shared/oauth/auth_failure.py` so the hook and the dispatch cannot drift on what an auth failure looks like.
+
+**Why nobody saw the 409.** Because it never arrived. inference-api runs behind AgentCore Runtime, **which rewrites any non-2xx container response to a generic 424 and discards the body**. The status and the message were destroyed before app-api ever saw them, and the user got:
+
+> Error — Received error (424) from runtime. Please check your CloudWatch logs for more information.
+
+This had made three separate in-repo comments false — one claiming statuses were relayed "verbatim (403 not-app-visible, 409 no consent)", one claiming the SPA relayed `message` verbatim — and it cannot reproduce locally, because a local uvicorn talks to app-api directly with no AgentCore in the path. Errors now cross the boundary as **HTTP 200 plus an `appToolError` envelope**, which app-api unwraps back into the real status. The envelope enforces two properties independently of its callers: an unlisted or malformed status collapses to 502 rather than letting upstream choose a 401, and because an envelope now arrives *with* a 200, the envelope check is placed **before** the provenance-card write so an enveloped error still persists no card. The SPA contract is unchanged — only the one hop that crosses AgentCore changes shape.
+
+**Why the restored message still didn't render.** app-api returned `{"error": "<string>"}`. `ErrorService.handleHttpError` looks for a message in three places: a top-level string `detail`, an `error` key whose value is an **object** carrying `.detail` or `.message`, or a top-level string `message`. A string-valued `error` matches none of them, so `userMessage` stayed undefined and the generic per-status fallback rendered while the real text sat unread in the body. The sharpest part of this is the inversion: AgentCore's 424 body used the key `message`, which *did* match — so "check your CloudWatch logs" was rendered for precisely the reason the useful text was not. The body now carries `detail` alongside `error`, one key for each of the two independent consumers, and needed no SPA change.
+
+The toast now reads: *Authorization required for 'google-tasks'. Connect the account, then try again.*
+
+### Test Coverage
+
+546 lines across the three commits. 30 parametrized guards on the envelope itself, relay tests asserting the real status is restored, that a 401 is never relayed, and that an enveloped error persists no card (with a success control proving the check doesn't swallow success); nine async dispatch tests covering cold-cache warm from the vault, warm-cache skip, consent-to-409 with no dispatch, a disconnected user bypassing a cached token, and an auth-shaped failure clearing the token in exactly one call with no retry.
+
+## MCP Apps stop forgetting
+
+Four changes to how App frames live in a conversation, grouped because they are one story: the host was treating an App as a render-time artifact when it is really a stateful thing with a lifecycle.
+
+**Leaving a conversation and coming back dropped the App to a plain tool card.** Only a hard refresh brought it back. Two mechanisms collided: the session page called `McpAppStateService.reset()` on every route change, and the only thing that re-seeds the registry is the `uiResources` sidecar on `GET /messages` — a request `loadMessagesForSession` deliberately **skips** once a conversation's messages are cached, with no eviction. So every visit after the first reset the registry with no path back, and the inline `ui_resource` SSE event never re-streams. A hard refresh worked only because it destroyed the message cache. The registry is now keyed `sessionId → toolUseId → resource` and never reset on navigation; readers pass the viewed session id, writers pass the streaming session's own id. That second detail fixes a related loss: an App produced by a conversation streaming **in the background** used to be discarded permanently by an `isViewedSession` gate that existed only because of the reset.
+
+**An MCP server shipping a new App version couldn't reach existing conversations.** The stored `UIRES#` row was replayed verbatim forever, which had quietly made the platform the durable store of record for a resource that belongs to the server — including the CSP and permissions the App runs under. An app-initiated tool call now schedules a background revalidation: re-read the resource from the server, rewrite the row, preserve `produced_by_message_index` so a refresh cannot renumber where the frame sits in the thread. It is piggybacked on interaction rather than run on conversation open because re-reading needs a live MCP client, the only path to one is a built agent, and revalidating on open would add a full agent rebuild to a page load that runs no model turn — for every App, whether or not anyone touches it. The consequences are bounded deliberately: the refreshed shell lands on the **next** page load, the work never runs on the response path, a read that fails or returns no HTML leaves the old copy intact, and a new projection-limited `get_provenance` avoids pulling the ~130KB HTML it is about to overwrite. One side effect worth knowing: because `store()` recomputes `ttl` from now, each revalidation extends that row's 90-day expiry.
+
+**An App that saves its state on teardown wasn't getting to.** `dispose()` sent `ui/resource-teardown` and then removed the `message` listener in the same tick, so the View's ack landed on a removed listener and an App that answered teardown by calling a save tool had its `postMessage` dropped. Compounding it, teardown only fired from the frame's `onDestroy`, by which point Angular is removing the iframe in the same tick. `dispose()` now returns a promise that resolves on the ack or after a 1500ms grace window, gating inbound messages on a new `detached` flag rather than `disposed` — the window is live on purpose. A new `McpAppTeardownService` fires `teardownAll()` from the conversation-change effect while the iframe is still alive, swallowing individual rejections so one hung App can't strand the others. This matters more than it looks because the host is deliberately *not* the store of record for App state: a teardown the App never hears about is state nobody saves. Honest limits: a hard refresh or tab close still gets no window, and reparenting the iframe was rejected because moving an iframe in the DOM reloads it, destroying the very state being saved.
+
+**Reloading a conversation with an interactive App produced a wall of static cards.** An App that runs a tool on nearly every user gesture turned the tail of the thread into unbounded provenance noise, detached from where the calls happened and duplicating state the re-mounted App already shows. Those calls now surface on the frame that ran them as a header chip — `3 actions`, or `3 actions · 1 failed` in the danger token — expanding to one collapsed success summary (`board_snapshot ×6, update_task ×2`) with each failure listed separately alongside its error text. Cards whose frame can't render keep a standalone fallback box. Grouping works because a card's `toolUseId` is the *originating* call that produced the App's `ui_resource`, not a per-call id. This remains provenance-only — none of it reaches the model or the prompt.
+
+### Test Coverage
+
+470 lines across the four changes, including an identity assertion that a `cardsFor` miss returns the same frozen array reference (so a miss doesn't churn a computed every change-detection pass), a rewritten bridge test that now asserts the grace window where it previously asserted the same-tick detach, and coverage that a `tools/call` made *in response to* teardown is still proxied while one made after the window is ignored.
+
+## Stranded knowledge-base documents get found
+
+A user uploads a document to a managed knowledge base. They are told it worked. The content really is indexed in Bedrock and really is retrievable. And the assistant will **never** cite it — permanently, silently. This happened twice in dev and both were repaired by hand.
+
+`DOC#` status has exactly one writer, the ingestion consumer. Lambda's async retry is capped at **two** attempts, a hard service limit; when an event dead-letters, the row is left non-terminal (`uploading`, `chunking`, `embedding`) with nothing remaining to revisit it — while Bedrock, indifferent to the consumer's fate, often finished indexing seconds later. Because the retrieval filter serves only `complete` documents, every chunk of that document is dropped from every query.
+
+### Backend
+
+- `document_reconciler.py` walks KB_Records, skips anything not managed or lacking an `awsKbId`, and pages `DOC#` rows to exhaustion. Candidates are the three non-terminal statuses; `complete`, `failed` and **`deleting`** are never candidates, because resurrecting a soft-deleted document would be a data-governance failure rather than a repair.
+- **The grace gate is a pure function of the row's own `updatedAt`, never of discovery time**, and returns "not stuck" on an unparseable or absent timestamp — fail-safe by construction.
+- Classification reuses the ingestion consumer's own probes rather than reimplementing them, so the two cannot drift: in-flight is left alone; a FAILED-family status is marked `failed`; INDEXED or partial gets a **retrievability check first**, and only then `complete`. A document that Bedrock calls indexed but that does not actually come back from a retrieval is deliberately left short of `complete`. `NOT_FOUND` is re-ingested from the row's own `s3Key`. An unrecognised status is treated as in-flight and logged.
+- The retrievability check takes **one reading, not a poll**, and carries the load-bearing `{"equals": {"key": "document_id", "value": …}}` filter — an unfiltered probe confirms the wrong document.
+- **`lambda_handler` ignores an `armed` field in the event and logs a warning**, so `lambda:InvokeFunction` alone cannot turn on writing. Arming is an environment variable, deployed deliberately.
+- Bounds throughout: 25 actions per run by default (ceiling 100), 5,000 records per run, and the action limit is **applied in report-only mode too** so that the report is a trustworthy prediction of what an armed run would do.
+- Five new `{prefix}/ManagedKb` metrics: `KbStrandedDocumentsFound`, `…Completed`, `…Reingested`, `…Failed`, `KbDocumentReconcilerLimitReached`. Found and LimitReached emit in both modes; the three action metrics only on an armed successful write.
+
+### Infrastructure
+
+New `KbDocumentReconcilerLambda` (ARM64, 15-minute timeout, 512 MB) sharing the one byte-stable kb-migration image asset, plus its role, its log group, an EventBridge rule at `cron(0 9 * * ? *)` — 09:00 UTC, roughly 02:00–03:00 America/Denver — and SSM parameter `/{prefix}/kb-migration/document-reconciler-function-name`. IAM is exactly `assistantsTable` read/write, `documentsBucket` **read-only**, and the existing `ManagedKbDirectIngestion` and `ManagedKbRetrieve` grants; provisioning rights and `iam:PassRole` are deliberately withheld and asserted absent by tests. **No new table and no GSI operation on any existing table** — this reuses the RAG assistants table.
+
+Two things operators should know that the commits do not say. **No CloudWatch alarm covers this Lambda** — it is absent from the `LambdaAlarmsConstruct` function list, and none of the five new metrics has an alarm, so a failing nightly run pages nobody; check the log group after the first few nights. And the run performs a **full `Scan`** of the RAG assistants table, because the KbWorkIndex GSI is sparse and deliberately excludes these records — that cost is incurred nightly even with zero managed KBs, on top of the existing daily KB reconciler scan. `MAX_RECORDS_PER_RUN` bounds records *yielded*, not items scanned.
+
+### Test Coverage
+
+677 lines in `test_kb_document_reconciler.py` — 61 collected cases across 13 classes, with no AWS contact (moto plus a stub modelling Bedrock's document view). Coverage includes the arming flag, the grace gate, each terminal transition, terminal rows being ignored, per-run action limits, the retrievability probe's filter, and a mixed run. Infrastructure tests add the nightly rule targeting the right Lambda, the rule being **enabled with every flag off**, and arming independence in both directions — arming the document reconciler does not arm the KB reconciler, or vice versa.
+
+## Campus-scale load testing, and the ceiling it found
+
+The interesting output of this work is not the harness. It is a number.
+
+Against production with Claude Sonnet 5, **a representative turn costs ~26,700 quota-counted tokens** — 384 input, **24,926 cache-read**, 1,372 output — against the ~1,920 that the harness's own naive default profile produces. Cache-read tokens count against the Bedrock TPM quota, which is what makes the gap roughly **14×**: across eight observed invocations, quota-counted tokens ran 16× the sum of input and output alone. At the applied **6,000,000 TPM** quota — the untouched AWS default — that puts the platform-wide ceiling at about **225 turns per minute**, which **a single 300-student class exceeds**. A load test built on the naive profile would have passed comfortably while describing a production workload that throttles.
+
+The consequence is a capacity conclusion no amount of Fargate tuning addresses: raising Sonnet 5's TPM quota from 6M toward ~40M for 1,300 concurrent users is a Service Quotas request, not a code change.
+
+### Backend and tooling
+
+- `tests/load/` is a **separate uv project** with its own lockfile. Putting Locust in `backend/pyproject.toml` would have landed it in `backend/uv.lock` and in the app-api and inference-api image dependency resolution.
+- Users log in through the **real Cognito Hosted UI** authorization-code flow, because `/chat/stream` is cookie-only since the BFF migration — no token can be minted with `initiate-auth`. A generic `HTMLParser` finds the form with a password input and resubmits every hidden field rather than hardcoding Cognito's field names, and password values are never captured.
+- **The metrics that matter are measured client-side.** The native `POST /chat/stream` row measures time to response *headers* only, which for a streamed response is nearly meaningless. Two custom metrics — `SSE chat: time to first token` and `SSE chat: full turn` — are fired from the SSE reader instead. This is the same reasoning the observability guidance gives for why ALB `TargetResponseTime` is a weak signal on this path: the ALB does not consider the request complete until the stream closes. Failure-inside-200 is caught too: a `stopReason: "error"` on `message_stop`, or a stream ending without `done`, both record as turn failures.
+- `validate_host()` hard-fails a non-https target, because the `__Host-`prefixed session and CSRF cookies are Secure-only and `requests` silently drops them — producing a login that appears to succeed and then 401s on every turn.
+- **A `CredentialPool` refuses to start an under-provisioned run.** A `test_start` listener compares Locust's user count to the pool *before the first login* and quits with one clear message, rather than letting users die one at a time mid-ramp. Sharing identities is not merely untidy: shared users share a `user_id`, so session and cost writes collide on one DynamoDB partition, one quota counter and one memory namespace, and the run partly measures its own key collisions. The opt-out is explicit (`AGENTCORE_LOAD_ALLOW_CREDENTIAL_REUSE=1`, strict truthiness so a typo leaves the safe default).
+- `ClassroomBurstShape` runs baseline → spike → hold → drain, twice, 840 seconds at defaults (20 baseline users, spikes to 300 over 30s). The second burst is the point: the first hits cold tasks, an empty prompt cache and 60s scale-out cooldowns, which makes "survives the 9am class" and "survives a class following a class" separately answerable.
+- The representative profile enables 12 of 28 production tools **to inflate the cached prompt prefix, not to be called** — the prompts are general-knowledge questions answerable from weights, because firing Canvas, PeopleSoft and Brave Search at 300–1300× concurrency would load institutional and third-party systems irrelevant to the measurement.
+- `scripts/load-test/watch-tpm.sh` is read-only and reports tokens/min, percentage of the **applied** quota, turns/min and implied tokens/turn, flagging `/UNREPRESENTATIVE` when implied tokens/turn falls below 10,000 — that is, when the profile is lying. It reads 5-minute windows because one observed production minute reported 546,206 quota tokens against a single invocation, more than that model's context window, so per-minute peaks are untrustworthy. It also **warns when the applied quota still equals the AWS default**, meaning no increase ever landed.
+- `scripts/load-test/provision.sh` and `teardown.sh` exist because two platform safety rails correctly block a load test and neither is workaroundable test-side: `FORCE_CHANGE_PASSWORD` prevents scripted Hosted-UI login, and per-user cost quotas hard-stop sustained traffic, after which the run measures quota enforcement rather than the chat path. Like `set-bsu-overrides.sh`, these are **not run by CI**, require confirmation, and support `--dry-run`.
+
+**These scripts mutate live AWS state and teardown is mandatory.** They create real users in the same Cognito pool real people use, and write `unlimited` quota overrides — a **disabled cost control** on a real `user_id`, visible in the admin dashboard under Quota Overrides. Safety rails are worth naming: every manifest username must begin with `loadtest-`, validated across the whole file in one pass **before any delete**, so a hand-edited manifest cannot delete real users nor a subset before failing; overrides are deleted before users; credentials never appear in argv; and the manifest is created empty and `chmod 600` *before* any password is written, outside the repo tree.
+
+Four incidental bugs surfaced along the way, all in the harness rather than the platform: `GET /costs` 404'd every read-only iteration (the router has no root route — the original "verified present" claim was simply wrong, and a 404 fails at near-zero cost while inflating the error rate), `GET /tools` paid a 307 round trip on every call, `provision.sh` reported an unset `AWS_PROFILE` as a wrong project prefix because it discarded AWS's stderr, and the prompts loader stripped blank lines but not comments, so a documented prompts file would have sent its own header to the model as a user turn.
+
+### Test Coverage
+
+608 lines, 53 tests, all pure logic with no AWS, network or load: SSE parsing, config validation, the login-form parser, credential-pool uniqueness and worker partitioning, and the burst shape's timeline, spawn-rate arithmetic and validation. The **provisioning scripts have no automated tests** — verification was manual, and the AWS calls themselves are unexercised.
+
+## 🐛 Bug fixes
+
+- **A managed knowledge base answered confidently and wrongly from documents it had retrieved correctly.** A Major-Core course was described as an elective; on an advising corpus only one of four emphasis areas came from the documents and the other three were invented. `MAX_CONTEXT_CHARS = 2000` was a single shared default adopted "for parity", but Bedrock's chunks are roughly 3× larger than Docling's and the cap truncates per accumulated chunk — so a requested `top_k=5` fit about four legacy chunks and only **one** managed chunk. It was silently a `top_k=1` retrieval, and the neighbours it dropped carried the section header that gave the remaining chunk its meaning. The evaluation that had justified the shared cap covered single-fact lookups only and had explicitly flagged multi-chunk synthesis as untested. Managed KBs now resolve an 8,000-character cap through `resolve_context_cap`, keyed on the same engine resolution the backend selection already uses, so an absent or unreadable record still resolves legacy. All four emphasis areas now come from the documents. Costs roughly 966 extra input tokens per augmented turn on managed KBs (#997)
+- **Retrieval could serve chunks whose parent document status was never verified — including deleted content.** `_filter_vectors_by_document_status` opened with `if not doc_ids: return vectors`. Because `doc_ids` is built per chunk and yields an empty string when the location and both metadata mirrors are absent, a **non-empty** batch in which every chunk resolved to an empty id produced an empty set and returned the vectors **unfiltered**, skipping the DynamoDB status check entirely. Every other unprovable branch in that function already returned `[]`; this one path was overlooked, against a requirement that already mandated failing closed. It now returns `[]` and emits `KbStatusFilterFailClosed`. The trade-off is intended: in that state a query returns nothing rather than unverified content (#998)
+- **A managed-KB document showed the literal "Uploading" for the entire indexing wait.** The managed consumer writes only `uploading` and then `complete`, so the finer-grained legacy vocabulary (`Chunking`, `Embedding`) had nothing to describe. Managed documents now read `Processing` → `Ready`, with `Failed`; legacy keeps its own words. The engine is also now visible directly — a `Managed`/`Classic` badge on the Uploaded Documents panel, and one INFO line per retrieval naming the engine, which previously could only be answered by reading the KB record out of band (#1006)
+- **Voice Mode would have silently switched off** on the `strands-agents` upgrade. 1.55.0 moved the Nova Sonic provider from `strands.experimental.bidi.models.nova_sonic.BidiNovaSonicModel` to `strands.experimental.bidi.models.bedrock.BedrockNovaSonicModel` and flattened its constructor. `voice_agent.py` imports the provider inside `except ImportError: BIDI_AVAILABLE = False`, so a rename is swallowed: voice off everywhere, no crash, one INFO log line. The rename is not in the upstream release notes. The import is now an explicit module import so a future rename fails loudly, and a contract test reads the pinned SDK's source from disk to assert the class, the flattened signature and the five audio-config keys still hold (#1012)
+
+## 🔒 Security
+
+**A sandbox escape in the Calculator tool's expression allowlist** — `strands-agents-tools` 0.8.6 → 0.8.8.
+
+The tool validates a model-supplied expression with an AST allowlist. A string literal is normally rejected, because a string reaching `sympify` gets re-parsed and defeats the restriction entirely. The allowlist carves out one exception: a string *is* trusted as a positional argument to a small set of constructors that parse it as a plain name or numeric literal — `Symbol`, `symbols`, `Rational`, `Integer`, `Float`. Through 0.8.6 that check looked **only at the positional argument and ignored the call's keyword arguments**. Because SymPy's `symbols()` accepts a `cls=` keyword naming the class to apply to each parsed name, `symbols('...', cls=N)` reroutes the string through `sympify` after all — outside the restricted namespace, while the allowlist believes a safe constructor is handling it.
+
+This was live rather than theoretical: `tool_registry.py` registers `calculator` on the default agent and the bootstrap seeder marks it `enabledByDefault: True`, so it is on for every user unless an admin turns it off. Upstream 0.8.8 trusts a string positional only when every keyword on the call is a boolean assumption flag, and treats `**kwargs` unpacking as untrusted outright since it can smuggle in `cls`.
+
+**No CVE or GHSA identifier was issued**; the fix is identified by the version boundary. Ordinary arithmetic and symbolic input is unaffected, and `Symbol('x', positive=True)` still passes. The upgrade was validated by diffing the two wheels: six files differ and only `calculator.py` is in this repo's import graph.
+
+101 lines of regression tests in `backend/tests/security/test_calculator_sandbox.py` — 17 executed cases including the disclosed form, a payload-carrying variant, the `**kwargs` route, and eight legitimate expressions guarding against the fix narrowing real use. The tests import from the *installed* wheel, so a resolver drift below 0.8.8 fails the suite rather than silently reopening the escape.
+
+**This ships through `backend.yml`, not a CDK deploy.** Bumping the pin without shipping a new inference-api image leaves the old wheel running.
+
+## ⚠️ Changed
+
+- **Default app-api Fargate sizing doubles.** `appApi.cpu` 512 → 1024 and `appApi.memory` 1024 → 2048 per task, at 2 tasks. Production had been running 2 × (0.5 vCPU, 1 GB) — 1 vCPU total — and reportedly saturated at around 100 concurrent logins, failing the container health check, pulling a task mid-burst and rejecting requests at roughly 13× latency. Sizing is now per-environment through GitHub Variables, which also fixes a real config-plumbing bug: the loader read only the **nested** `appApi` context object, while `load-env.sh` emits `--context appApi.cpu=…`, which CDK stores as the *flat* key `appApi.cpu`. A direct `cdk synth --context appApi.cpu=…` was therefore accepted and discarded. (In CI the environment variable was already winning, so the blast radius was narrower than it sounds.) **Set `CDK_APP_API_CPU=512` and `CDK_APP_API_MEMORY=1024` to keep the previous sizing** (#1020)
+- **The account-wide Bedrock quota alarm is deleted, and its replacement is opt-in.** See Infrastructure below. A fork that configures nothing has no quota alarm after this deploy (#1016)
+- **`McpAppBridge.dispose()` now returns `Promise<void>`** and accepts an optional grace-period argument, and the bridge keeps serving inbound messages for up to 1500ms after teardown is requested. Internal to the SPA; relevant only to forks that have extended this class (#1003)
+- **Fine-tuning script packaging is per-DLC-family.** `scripts/sourcedir.tar.gz` becomes `scripts/sourcedir-{text,vision,vlm}.tar.gz` in the same bucket and prefix, so no IAM or bucket-policy change is needed. The old object is orphaned — nothing reads or deletes it, and it can be removed by hand (#1014)
+
+## 🏗️ Infrastructure
+
+- **New managed-KB document reconciler Lambda, schedule, role, log group and SSM parameter.** Covered in the spotlight above. The two points to carry into a deploy plan: the construct is instantiated **unconditionally**, so the Lambda and the *enabled* nightly rule are created regardless of every `managedKb` flag — deliberate, because report-only is read-only and the audit period only happens if the schedule runs — and the run performs a nightly full `Scan` of the RAG assistants table even with zero managed KBs. Roughly 6–7 new CloudFormation resources; the 460-resource guard did not trip (#1007, #1008)
+- **Per-model Bedrock TPM quota alarms.** `{prefix}-bedrock-tpm-quota-usage` is deleted and replaced by `{prefix}-bedrock-tpm-quota-usage-<model-slug>`, one per entry in `CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS`, thresholded at `CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT` (default 75) of that model's own quota. Net resource change is **−1** for a fork that configures nothing. The default map is deliberately empty: quotas differ by two orders of magnitude within a single account, most are adjustable, and any shipped number would be wrong for every fork and stale the first time someone requested an increase. `Maximum` statistic over a 5-minute period against 1-minute data, because the quota is per *minute* and averaging would dilute a real spike below the threshold. Each alarm's description leads with the instruction to confirm the configured quota is still the live one — **it is maintained by hand and nothing checks it** (#1016)
+- `infrastructure/cdk.context.json` added to the `platform.yml` push-paths filter; a sizing edit there previously triggered no deploy (#1020)
+
+## 🔧 CI/CD
+
+- **`CDK_MANAGED_KB_DOC_RECONCILER_ARMED` is now forwarded** from `vars.*` in the platform deploy job's **job-level** `env:`. The flag had been threaded through `load-env.sh` and `config.ts` but never added to the workflow, so `load-env.sh` always saw it unset and never emitted the `--context` flag — the accept-then-silently-ignore failure this repo has now hit three times (#1018)
+- New job-level `CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT` and `CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS` (#1016)
+- New job-level `CDK_APP_API_CPU`, `CDK_APP_API_MEMORY`, `CDK_APP_API_DESIRED_COUNT`, `CDK_APP_API_MAX_CAPACITY`. `nightly-deploy-pipeline.yml` pins 512/1024/2/4 **literally** rather than from `vars.*`, so a production sizing bump never inflates an ephemeral nightly stack — while `desiredCount` stays at 2 so the shared BFF cookie-key path is still exercised (#1020)
+- **New `Test load suite (pytest)` job on every PR into `develop` and `main`**, plus `locust --list` on both locustfiles. The gate exists because the locustfiles encode the `/chat/stream` payload shape and the SSE event names, so renaming a stream event now fails CI instead of silently producing a load test that reports every turn as never finishing (#1020)
+- `deploy-image-lambda-one.sh` and `backend.yml` gain a `kb-migration-document-reconciler` case (#1008)
+- `shellcheck` 0.9.0 and `actionlint` 1.7.12 added to the dev container and its `HEALTHCHECK` — they compose, since actionlint shells out to shellcheck to lint workflow `run:` blocks. Neither is wired into CI yet; **an existing long-lived dev container will report unhealthy until rebuilt** (#1020)
+
+## 📦 Dependencies
+
+| Component | Package | From | To |
+|---|---|---|---|
+| Backend | `strands-agents` | 1.51.0 | 1.55.0 |
+| Backend | `strands-agents-tools` | 0.8.6 | 0.8.8 |
+| Backend (transitive) | `aws-sdk-bedrock-runtime` | 0.5.0 | 0.11.0 |
+| Backend (transitive) | `smithy-core` | 0.4.0 | 0.8.1 |
+| Backend (transitive) | `smithy-aws-core` | 0.5.0 | 0.11.0 |
+| Backend (transitive) | `smithy-http` | 0.4.0 | 0.5.0 |
+| Fine-tuning VLM image | `peft` | — | 0.20.0 |
+| Fine-tuning VLM image | `bitsandbytes` | — | 0.50.2 |
+| Fine-tuning VLM image | `pillow` | — | 12.3.0 |
+| Load suite (isolated) | `locust` | — | 2.46.4 |
+| Dev container | `shellcheck` | — | 0.9.0 |
+| Dev container | `actionlint` | — | 1.7.12 |
+
+`boto3` and `botocore` are deliberately unchanged at 1.43.68 — 1.55.0 floors well below that and nothing forced a bump. The `strands-agents` upgrade also required two code adaptations beyond the Voice Mode rename: `cache_tools` is deprecated in favour of `CacheConfig(tools_ttl=…)`, and 1.55.0 auto-injects a system cache point guarded by a predicate equivalent to the factory's own — worth verifying because two adjacent cache points are a Bedrock `ValidationException` and a moved system boundary would rewrite the cached prefix and destroy hit rates. The upgrade was checked against dev Bedrock: a request formatted by 1.55.0 read the exact cache entry a 1.51.0-formatted request had just written, and a three-turn session went first-write → hit → hit with constant tool-config and system-prompt hashes.
+
+## 🧪 Test coverage
+
+Roughly **4,100 lines of new tests** across the release:
+
+| Area | Lines | Scope |
+|---|---|---|
+| KB document reconciler | 677 | 61 cases, 13 classes; moto plus a Bedrock document-view stub |
+| Generative VLM fine-tuning | 665 | Task spec, trainer purity, per-family packaging, CSV escaping, SPA controls |
+| Load suite | 608 | 53 tests: SSE, config, login form, credential pool, burst shape |
+| MCP Apps error envelope + OAuth | 546 | 30 envelope guards, 9 async dispatch tests, relay/status restoration |
+| MCP Apps lifecycle | 470 | Retention, revalidation, teardown grace, actions chip |
+| `browse_web` | 381 | CDP framing via a fake that speaks the protocol, URL validation, budgets |
+| Managed-KB engine visibility | 226 | Badge, status vocabulary, retrieval log line |
+| `strands-agents` 1.55.0 | 153 | Provider contract read from the pinned SDK's source on disk |
+| Bedrock quota alarms | 122 | Per-model dimensions, thresholds, context parsing, routing |
+| Calculator sandbox | 101 | 17 cases against the installed wheel |
+| KB cap + fail-closed | 82 | Cap resolution, engine keying, empty-`document_id` batch |
+| app-api sizing config | 75 | Flat vs nested context precedence, unset variable falls through |
+
+Two claims in this release's commit messages are the authors' own methodology rather than independently reproduced here, and are worth reading as such: several describe their tests as "mutation-verified" without a mutation-testing config in the diffs, and the full-suite pass counts (7,940 backend / 2,558 frontend on the fine-tuning branch) were not re-run.
+
+## 🚀 Deployment notes
+
+**A CDK deploy is required**, and both backend images plus the SPA must ship. Order does not matter much, with one exception noted below.
+
+1. **Decide the app-api sizing before deploying Platform.** The committed default changed, so doing nothing is a choice with a bill attached. Set the four GitHub Variables on the deploy job's environment, then confirm the resolved values in the synth log — **changing a GitHub Variable triggers no workflow**, so deploy via `workflow_dispatch`. `cpu` and `memory` must remain a valid Fargate pair (1024 → 2048–8192; 2048 → 4096–16384); an invalid pair is a **failed CloudFormation deploy**, not a silent fallback.
+
+   | Variable | Default if unset |
+   |---|---|
+   | `CDK_APP_API_CPU` | `1024` (was 512) |
+   | `CDK_APP_API_MEMORY` | `2048` (was 1024) |
+   | `CDK_APP_API_DESIRED_COUNT` | `2` |
+   | `CDK_APP_API_MAX_CAPACITY` | `10` |
+
+2. **Restore a Bedrock quota alarm if you want one.** The account-wide alarm is deleted on this deploy and nothing replaces it automatically. Read your live quotas, then set the map — **use the quote-free form**, because `deploy.sh` runs `eval npx cdk synth` and `eval` strips quotes:
+
+   ```bash
+   aws service-quotas list-service-quotas --service-code bedrock \
+     --query "Quotas[?contains(QuotaName,'tokens per minute')]"
+   ```
+
+   ```
+   CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS=global.anthropic.claude-sonnet-5=40000000,us.anthropic.claude-sonnet-4-20250514-v1:0=200000
+   ```
+
+   JSON is also accepted, but only survives because `load-env.sh` single-quotes it; a value containing a single quote now fails the script loudly rather than degrading to "no alarms, no error". Remember that the configured quota is a hand-maintained number that nothing verifies — `bedrock-invocation-throttles` remains the no-configuration backstop, and it fires on real refusals.
+
+3. **Expect the document reconciler to start running, and read its output before arming it.** The nightly rule is created enabled for every deployment. It is report-only and read-only until `CDK_MANAGED_KB_DOC_RECONCILER_ARMED` is explicitly truthy — unset, empty and `false` all mean off, at every layer. Give it a few nights, read the log group (there is **no alarm** on this Lambda and no alarm on its five metrics), confirm the proposed actions look right, and only then arm it. Armed runs are capped at 25 corrections per night by default. This flag is independent of `CDK_MANAGED_KB_RECONCILER_ARMED`; arming one does not arm the other. Between the CDK deploy and the next `backend.yml` run the rule invokes the no-op bootstrap stub, which is safe.
+
+4. **Re-run Seed Bootstrap Data if you want `browse_web`.** The tool ships registered in code but has no DynamoDB catalog row, and tool availability is driven entirely by that catalog — so without a seed run it never appears in the UI, is never enabled, and is never handed to the agent. The workflow is `workflow_dispatch`/`workflow_call` only and **is not invoked by any deploy pipeline**, so this will not happen as a side effect. The seeder is idempotent and skips existing tool rows. Once seeded, note the shape of the default grant: the seeded `default` role carries a wildcard tool grant, so the tool becomes *granted* to everyone while still requiring each user to enable it in their tool preferences. An institution that wants it restricted should grant per-role rather than rely on the wildcard. Consider running `backend/scripts/probe_agentcore_browser.py` first — the SigV4 WebSocket handshake and a real page load were not exercised against live AWS in this release.
+
+5. **Ship both backend images together.** The MCP Apps error envelope is a contract change between inference-api and app-api. `backend.yml` deploys both from the same commit so the steady state is fine, but a *new* inference-api behind an *old* app-api would relay `200 + {"appToolError": …}` straight to the SPA, where it reads as a successful call with an empty result. The reverse pairing is harmless.
+
+6. **No backfill, no migration, no index to wait for.** Nothing in this release adds or modifies a GSI, and no one-shot script needs running.
+
+Two things this release cannot do for you. If you intend to serve anything like campus scale, **request a Bedrock TPM quota increase now** — the measurement above puts the untouched 6,000,000 TPM default at roughly 225 turns per minute platform-wide, and quota increases have lead time. And if you plan to fine-tune VLMs, check your **SageMaker `ml.g6e` training-instance quota**, which the platform cannot raise on your behalf.
+
+---
+
 # Release Notes — v1.19.1
 
 **Release Date:** September 7, 2026
