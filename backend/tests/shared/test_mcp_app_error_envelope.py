@@ -14,6 +14,7 @@ import pytest
 
 from apis.shared.mcp_apps.error_envelope import (
     ENVELOPE_KEY,
+    app_tool_error_body,
     app_tool_error_response,
     build_error_envelope,
     read_error_envelope,
@@ -130,3 +131,26 @@ def test_error_response_round_trips_through_the_reader() -> None:
         "connect the account",
         409,
     )
+
+
+# --- the body the SPA's two consumers actually read ------------------------
+
+
+def test_error_body_carries_both_keys() -> None:
+    """`error` for the App bridge, `detail` for the global toast.
+
+    A string-valued `error` alone matches none of ErrorService's four
+    lookups, so the toast fell back to "The request conflicts with the
+    current state." while the real message sat unread in the body.
+    """
+    assert app_tool_error_body("connect the account") == {
+        "error": "connect the account",
+        "detail": "connect the account",
+    }
+
+
+def test_error_body_detail_is_what_the_toast_reads() -> None:
+    # ErrorService priority 1 is a top-level string `detail`.
+    body = app_tool_error_body("Authorization required for 'google-tasks'.")
+    assert isinstance(body.get("detail"), str)
+    assert body["detail"] == "Authorization required for 'google-tasks'."

@@ -161,7 +161,11 @@ def test_restores_status_and_message_from_envelope(
 
     resp = TestClient(app).post("/mcp-apps/proxy-call", json=_BODY)
     assert resp.status_code == 409
+    # `error` feeds the App bridge; `detail` is what the SPA's global
+    # ErrorService renders in the toast. Without `detail` the user gets
+    # the generic "The request conflicts with the current state."
     assert resp.json()["error"] == consent
+    assert resp.json()["detail"] == consent
 
 
 def test_enveloped_error_never_relays_a_401(
