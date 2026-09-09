@@ -291,6 +291,32 @@ build_cdk_context_params() {
     if [ -n "${CDK_OBSERVABILITY_ECS_MEMORY_PERCENT:-}" ]; then
         context_params="${context_params} --context observability.ecsMemoryPercent=\"${CDK_OBSERVABILITY_ECS_MEMORY_PERCENT}\""
     fi
+    if [ -n "${CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT:-}" ]; then
+        context_params="${context_params} --context observability.bedrockTpmQuotaPercent=\"${CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT}\""
+    fi
+    # The one non-scalar observability tunable: a map of Bedrock ModelId to that
+    # model's TPM quota. Two accepted forms:
+    #
+    #   global.anthropic.claude-sonnet-5=40000000,us.amazon.nova-micro-v1:0=8000000
+    #   {"global.anthropic.claude-sonnet-5":40000000}
+    #
+    # PREFER THE FIRST. deploy.sh runs `eval npx cdk synth ${CDK_CONTEXT_PARAMS}`,
+    # and eval removes quote characters, so JSON passed the way every other value
+    # here is passed arrives as {model:40000000} — no longer valid JSON. It would
+    # then fall back to the empty default and create NO alarms, with no error.
+    # Hence: single quotes below so JSON survives too, and a hard failure if the
+    # value contains a single quote, which would break that quoting in turn.
+    # Unset means no per-model quota alarms are created.
+    if [ -n "${CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS:-}" ]; then
+        case "${CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS}" in
+            *"'"*)
+                echo "ERROR: CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS must not contain a single quote." >&2
+                echo "       Use the eval-safe form: modelId=quota,modelId=quota" >&2
+                return 1
+                ;;
+        esac
+        context_params="${context_params} --context observability.bedrockTpmQuotas='${CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS}'"
+    fi
     if [ -n "${CDK_OBSERVABILITY_XRAY_SAMPLING_RATE:-}" ]; then
         context_params="${context_params} --context observability.xraySamplingRate=\"${CDK_OBSERVABILITY_XRAY_SAMPLING_RATE}\""
     fi

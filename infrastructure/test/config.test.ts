@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { loadConfig, AppConfig,
   OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
   OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+  OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
   OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
   OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
   OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
@@ -97,6 +98,8 @@ const OBSERVABILITY_ENV_KEYS = [
   'CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD',
   'CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD',
   'CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD',
+  'CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT',
+  'CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS',
 ] as const;
 
 function clearObservabilityEnv(): void {
@@ -1631,6 +1634,12 @@ describe('Observability Configuration', () => {
       expect(obs.dynamoThrottleThreshold).toBe(OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD);
       expect(obs.ecsCpuPercent).toBe(OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT);
       expect(obs.ecsMemoryPercent).toBe(OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT);
+      expect(obs.bedrockTpmQuotaPercent).toBe(OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT);
+      // Empty on purpose: TPM quotas are per-account and adjustable, so no
+      // number is shippable. Empty means no quota alarm is created at all, and
+      // bedrock-invocation-throttles is the backstop. If this ever gains a
+      // default, every fork silently inherits a wrong threshold.
+      expect(obs.bedrockTpmQuotas).toEqual({});
     });
   });
 
@@ -1644,6 +1653,60 @@ describe('Observability Configuration', () => {
     test('fractional X-Ray sampling rate survives parsing', () => {
       process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '0.25';
       expect(loadConfig(app).observability.xraySamplingRate).toBe(0.25);
+    });
+
+    test('CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT reaches config', () => {
+      process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT = '60';
+      expect(loadConfig(app).observability.bedrockTpmQuotaPercent).toBe(60);
+    });
+
+    // The quota map is the one non-scalar observability tunable, so it travels
+    // as a string. Model ids contain dots and colons, which must survive as
+    // literal key characters.
+    test('bedrock TPM quota map parses from a JSON env var', () => {
+      process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS = JSON.stringify({
+        'global.anthropic.claude-sonnet-5': 40000000,
+        'us.anthropic.claude-sonnet-4-20250514-v1:0': 200000,
+      });
+      expect(loadConfig(app).observability.bedrockTpmQuotas).toEqual({
+        'global.anthropic.claude-sonnet-5': 40000000,
+        'us.anthropic.claude-sonnet-4-20250514-v1:0': 200000,
+      });
+    });
+
+    // The form CI should use. deploy.sh runs `eval npx cdk synth ${params}` and
+    // eval strips quote characters, so a quote-free encoding is the only one that
+    // cannot be corrupted in transit. Note the colon inside the model id, which
+    // is why the key/value split is on the LAST '=' rather than the first.
+    test('bedrock TPM quota map parses from the eval-safe k=v form', () => {
+      process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS =
+        'global.anthropic.claude-sonnet-5=40000000,us.anthropic.claude-sonnet-4-20250514-v1:0=200000';
+      expect(loadConfig(app).observability.bedrockTpmQuotas).toEqual({
+        'global.anthropic.claude-sonnet-5': 40000000,
+        'us.anthropic.claude-sonnet-4-20250514-v1:0': 200000,
+      });
+    });
+
+    // Regression guard for the bug this shape caused: JSON passed through eval
+    // the way every other --context value is passed loses its quotes and becomes
+    // {model:40000000}. That is not JSON and not k=v, so it must fall through to
+    // the empty default rather than half-parsing into a NaN threshold.
+    test('eval-mangled JSON does not half-parse into a bad threshold', () => {
+      process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS =
+        '{global.anthropic.claude-sonnet-5:40000000}';
+      const quotas = loadConfig(app).observability.bedrockTpmQuotas;
+      expect(Object.values(quotas).every((v) => Number.isFinite(v))).toBe(true);
+    });
+
+    // A malformed value must fall through to the default, not abort synth. The
+    // failure mode to avoid is a half-parsed map producing a NaN threshold,
+    // which CloudFormation accepts and no metric can ever cross.
+    test('a malformed quota map falls back to the empty default', () => {
+      for (const bad of ['not json', '[]', '{"model":"not-a-number"}', '{"model":null}']) {
+        process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS = bad;
+        const quotas = loadConfig(app).observability.bedrockTpmQuotas;
+        expect(Object.values(quotas).every((v) => Number.isFinite(v))).toBe(true);
+      }
     });
 
     test('booleans parse from env', () => {
@@ -1738,6 +1801,8 @@ describe('Observability Configuration', () => {
         promptCacheAvoidableMissThreshold: 22,
         promptCacheWastedUsdThreshold: 2.5,
         promptCacheSessionWastedUsdThreshold: 23,
+        bedrockTpmQuotaPercent: OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
+        bedrockTpmQuotas: {},
       });
     });
   });
