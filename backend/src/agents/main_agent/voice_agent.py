@@ -5,7 +5,7 @@ Extends BaseAgent with BidiAgent (Strands bidirectional agent) for
 real-time voice interaction. Shares session history with text ChatAgent
 for voice-text continuity.
 
-Requires: strands-agents[bidi] extra for BidiAgent and BidiNovaSonicModel.
+Requires: strands-agents[bidi] extra for BidiAgent and BedrockNovaSonicModel.
 
 Based on the voice agent pattern from:
 https://github.com/aws-samples/sample-strands-agent-with-agentcore
@@ -23,10 +23,18 @@ from agents.main_agent.config.constants import EnvVars, Defaults
 
 logger = logging.getLogger(__name__)
 
-# Optional imports — BidiAgent requires the strands bidi extra
+# Optional imports — BidiAgent requires the strands bidi extra.
+#
+# strands-agents 1.55.0 renamed the provider: the module went
+# ``models.nova_sonic`` -> ``models.bedrock`` and the class
+# ``BidiNovaSonicModel`` -> ``BedrockNovaSonicModel``. That is an ImportError,
+# which this block swallows into BIDI_AVAILABLE=False — so a stale import would
+# not crash, it would silently turn voice off everywhere with one INFO line.
+# Import the name explicitly rather than leaning on the package's lazy
+# ``__getattr__``, so a future rename fails loudly here too.
 try:
     from strands.experimental.bidi import BidiAgent
-    from strands.experimental.bidi.models.nova_sonic import BidiNovaSonicModel
+    from strands.experimental.bidi.models.bedrock import BedrockNovaSonicModel
     BIDI_AVAILABLE = True
 except ImportError:
     BIDI_AVAILABLE = False
@@ -45,7 +53,7 @@ class VoiceAgent(BaseAgent):
     Bidirectional voice agent using AWS Nova Sonic 2.
 
     Provides:
-    - Real-time speech-to-speech via BidiNovaSonicModel
+    - Real-time speech-to-speech via BedrockNovaSonicModel
     - Voice-text continuity (loads previous text chat history)
     - Separate agent_id ("voice") to avoid session state conflicts
     - Configurable voice, sample rate, and model via environment variables
@@ -95,18 +103,21 @@ class VoiceAgent(BaseAgent):
                 EnvVars.NOVA_SONIC_MODEL_ID, Defaults.NOVA_SONIC_MODEL_ID
             )
 
-            model = BidiNovaSonicModel(
+            # 1.55.0 flattened the provider's constructor: the audio settings
+            # moved from provider_config["audio"] to the `audio` kwarg (an
+            # AudioConfig TypedDict with these same five keys), and the region
+            # moved from client_config["region"] to `region`. Both are
+            # keyword-only now.
+            model = BedrockNovaSonicModel(
                 model_id=model_id,
-                provider_config={
-                    "audio": {
-                        "voice": self._voice,
-                        "input_rate": Defaults.NOVA_SONIC_INPUT_RATE,
-                        "output_rate": Defaults.NOVA_SONIC_OUTPUT_RATE,
-                        "channels": 1,
-                        "format": "pcm",
-                    },
+                audio={
+                    "voice": self._voice,
+                    "input_rate": Defaults.NOVA_SONIC_INPUT_RATE,
+                    "output_rate": Defaults.NOVA_SONIC_OUTPUT_RATE,
+                    "channels": 1,
+                    "format": "pcm",
                 },
-                client_config={"region": os.environ.get(EnvVars.AWS_REGION, Defaults.AWS_REGION)},
+                region=os.environ.get(EnvVars.AWS_REGION, Defaults.AWS_REGION),
             )
 
             # Build voice-specific system prompt

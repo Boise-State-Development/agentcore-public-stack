@@ -152,10 +152,32 @@ class TestStrandsCancellationContract:
         assert callable(getattr(Agent, "cancel", None))
 
     def test_sequential_executor_honors_the_cancel_signal(self):
-        """Queued tools must be skipped once cancel is armed (new in 1.51.0)."""
+        """Queued tools must be skipped once cancel is armed (new in 1.51.0).
+
+        1.51.0 read ``agent._cancel_signal`` inline; 1.55.0 moved the same read
+        behind ``Agent._observe_cancellation``. Accept either spelling — what
+        must not disappear is the per-tool check.
+        """
         from strands.tools.executors import sequential
 
-        assert "_cancel_signal" in inspect.getsource(sequential)
+        source = inspect.getsource(sequential)
+        assert "_cancel_signal" in source or "_observe_cancellation" in source
+
+    def test_observe_cancellation_reads_the_signal_we_clear(self):
+        """``reset_cancellation_state`` clears ``agent._cancel_signal`` by name.
+
+        1.55.0's ``_observe_cancellation`` is the only reader the executor goes
+        through, and it also mirrors a caller-supplied ``_external_cancel_signal``
+        onto the internal one. We never pass ``cancel_signal`` to ``stream_async``,
+        so that stays None — but if a future change starts passing one, clearing
+        the internal signal alone would stop being enough and a cancelled turn
+        would wedge every turn after it.
+        """
+        from strands import Agent
+
+        source = inspect.getsource(Agent._observe_cancellation)
+        assert "self._cancel_signal.is_set()" in source
+        assert "_external_cancel_signal" in source
 
     def test_mcp_tool_forwards_the_cancel_signal(self):
         """The in-flight MCP call must see the signal (new in 1.51.0)."""

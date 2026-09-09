@@ -382,7 +382,7 @@ class ModelConfig:
         # allows max 4; nothing else in this codebase adds one, see the
         # position test in tests/agents/main_agent/core/test_bedrock_cache_points.py):
         #
-        #   1. toolConfig tail   — cache_tools="default" (_build_tools_cache_point)
+        #   1. toolConfig tail   — CacheConfig(tools_ttl=True) (_build_tools_cache_point)
         #   2. system tail       — SystemContentBlock list built by
         #                          AgentFactory.create_agent (the deprecated
         #                          cache_prompt config key is NOT used)
@@ -402,9 +402,9 @@ class ModelConfig:
         # ~28k-token static prefix still reads from cache on those turns.
         #
         # For a model whose id Strands doesn't recognize as cache-capable,
-        # auto strategy logs a warning and no-ops — but cache_tools and a
-        # system cachePoint are sent unconditionally once configured, so both
-        # are gated on bedrock_cache_points_supported() (the same predicate
+        # auto strategy logs a warning and no-ops — but the tools and system
+        # cachePoints are sent unconditionally once configured, so both are
+        # gated on bedrock_cache_points_supported() (the same predicate
         # Strands' auto mode uses). Requires strands-agents>=1.48.0: a
         # cachePoint trailing a non-PDF `document` attachment is rejected by
         # Bedrock's Anthropic adapter with "ValidationException ...
@@ -415,11 +415,33 @@ class ModelConfig:
         # document is the first content block. Cache hits are user-visible in
         # the cost/context badge the moment this is on.
         # See: https://github.com/strands-agents/sdk-python/issues/1966
+        # tools_ttl replaces the model-level cache_tools key, deprecated in
+        # strands-agents 1.55.0 (_warn_on_deprecated_cache_tools). The emitted
+        # block is byte-identical either way, which matters because it is the
+        # tail of the cached prefix: with cache_config.ttl unset,
+        # _build_tools_cache_point resolves ttl to None for tools_ttl=True
+        # exactly as _build_deprecated_cache_tools_point did for
+        # cache_tools="default", so both emit {"cachePoint": {"type": "default"}}
+        # with no ttl key. False (not None) on the unsupported branch pins the
+        # off state explicitly rather than falling back through the deprecated
+        # key. Since cache_config.ttl stays unset, _apply_system_cache_ttl is
+        # also a no-op — it only rewrites a TTL-less cache point when one is
+        # configured.
+        #
+        # system_prompt_ttl keeps its 1.55 default of True, which appends a
+        # system cachePoint via _should_cache_system. That is inert on every
+        # path here: the guard is `not any("cachePoint" in block ...)`, and
+        # AgentFactory.create_agent already appends its own whenever
+        # bedrock_cache_points_supported() — the same predicate, so the two
+        # can't disagree. It stays on as the safety net for a system prompt
+        # that reaches Bedrock without going through that factory.
         if self.caching_enabled:
             from strands.models import CacheConfig
-            config["cache_config"] = CacheConfig(strategy="auto")
-            if self.bedrock_cache_points_supported():
-                config["cache_tools"] = "default"
+            config["cache_config"] = CacheConfig(
+                strategy="auto",
+                system_prompt_ttl=True,
+                tools_ttl=self.bedrock_cache_points_supported(),
+            )
 
         if self.retry_config:
             from botocore.config import Config as BotocoreConfig
