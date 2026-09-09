@@ -298,7 +298,13 @@ TASK_SPECS: Dict[str, TaskSpec] = {
             # literal batch of 16 OOMs on any instance we offer.
             "per_device_train_batch_size": "1",
             "gradient_accumulation_steps": "8",
-            "context_length": "1024",
+            # Generous on purpose. A VLM spends most of its sequence on the
+            # image — SmolVLM-Instruct measures 1377 tokens for one image, so
+            # the old 1024 default could not fit the image, let alone the
+            # prompt. The collator pads to the longest item in the batch, not
+            # to this value, so headroom here costs nothing; too little is a
+            # failed job on a billed GPU.
+            "context_length": "2048",
             "load_in_4bit": "true",
             "lora_r": "16",
             "lora_alpha": "32",

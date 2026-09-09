@@ -283,3 +283,92 @@ class TestCollationCheck:
 
     def test_empty_dataset_is_a_no_op(self):
         vlm.check_collation(lambda batch: 1 / 0, [])
+
+
+class TestResolveEffectiveContext:
+    """A fixed context length cannot be right for every model.
+
+    How much of the sequence an image consumes depends on the checkpoint's
+    tiling AND on the resolution of the images the user uploaded, so the
+    trainer measures a sample and raises the budget to fit.
+    """
+
+    def test_keeps_the_request_when_it_already_fits(self):
+        effective, raised = vlm.resolve_effective_context(2048, 900, 8192)
+        assert (effective, raised) == (2048, False)
+
+    def test_raises_to_fit_a_longer_record(self):
+        effective, raised = vlm.resolve_effective_context(1024, 1500, 8192)
+        assert raised
+        assert effective == 1500 + vlm.TEXT_TOKEN_HEADROOM
+
+    def test_smolvlm_1377_token_image_regression(self):
+        """The real failure this exists to prevent.
+
+        SmolVLM-Instruct spends 1377 tokens on one image. Against the old
+        1024 default, truncation cut the image placeholder run to 891 and the
+        job died on a billed GPU with a processor-level token-count mismatch.
+        """
+        effective, raised = vlm.resolve_effective_context(1024, 1377, 8192)
+        assert raised
+        assert effective > 1377
+
+    def test_clamps_to_the_model_maximum(self):
+        """Never ask for more context than the checkpoint supports."""
+        effective, _ = vlm.resolve_effective_context(4096, 4000, 2048)
+        assert effective == 2048
+
+    def test_clamp_wins_over_the_raise(self):
+        effective, raised = vlm.resolve_effective_context(512, 9000, 4096)
+        assert raised
+        assert effective == 4096
+
+    def test_unknown_model_max_is_not_a_clamp(self):
+        """resolve_max_context_length returns None when nothing is readable."""
+        effective, _ = vlm.resolve_effective_context(2048, 3000, None)
+        assert effective == 3000 + vlm.TEXT_TOKEN_HEADROOM
+
+    def test_unmeasurable_sample_keeps_the_request(self):
+        """Measurement is best-effort; check_collation is the backstop."""
+        effective, raised = vlm.resolve_effective_context(2048, None, 8192)
+        assert (effective, raised) == (2048, False)
+
+
+class TestMeasureRequiredContext:
+
+    def test_returns_none_when_a_record_cannot_be_processed(self, monkeypatch):
+        """A measurement failure must not abort the job on its own."""
+        processor = MagicMock()
+        processor.chat_template = "t"
+        processor.side_effect = RuntimeError("boom")
+        dataset = [{"image": "/nope.png", "prompt": "p", "response": "r"}]
+        assert vlm.measure_required_context(processor, SPEC, dataset) is None
+
+    def test_samples_no_more_than_the_dataset_holds(self, monkeypatch):
+        """A 1-record dataset must not index past the end."""
+        processor = MagicMock()
+        processor.chat_template = None
+        assert vlm.measure_required_context(processor, SPEC, []) is None
+
+
+class TestCatalogContextDefaults:
+    """Every catalog default must clear its model's own image-token cost."""
+
+    def test_smolvlm_default_fits_its_own_image(self):
+        from apis.app_api.fine_tuning.job_models import MODEL_CATALOG
+
+        default = int(
+            MODEL_CATALOG["smolvlm-instruct"].default_hyperparameters["context_length"]
+        )
+        # Measured on dev: 1377 tokens for one image, plus prompt and response.
+        assert default > 1377
+
+    def test_anyres_models_get_a_larger_budget(self):
+        """LLaVA-NeXT tiling and Qwen dynamic resolution both exceed 2048."""
+        from apis.app_api.fine_tuning.job_models import MODEL_CATALOG
+
+        for model_id in ("llava-1.6-mistral-7b", "qwen25-vl-7b-instruct", "llava-1.6-34b"):
+            default = int(
+                MODEL_CATALOG[model_id].default_hyperparameters["context_length"]
+            )
+            assert default >= 4096, model_id
