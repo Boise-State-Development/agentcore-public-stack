@@ -66,6 +66,28 @@ def app_tool_error_response(message: str, code: int) -> "JSONResponse":
     return JSONResponse(build_error_envelope(message, code), status_code=200)
 
 
+def app_tool_error_body(message: str) -> Dict[str, str]:
+    """app-api's error body for a failed app-tool call.
+
+    Carries the same text under **both** keys on purpose, because two
+    independent consumers read it and they disagree on the key:
+
+    - ``error`` — `McpAppProxyService` reads ``err.error?.error`` and hands
+      the text to the iframe's JSON-RPC reply.
+    - ``detail`` — the SPA's global `ErrorService` renders the toast. It
+      reads ``detail`` / ``error.detail`` / ``error.message`` / ``message``,
+      and treats a *string* ``error`` as no message at all — falling back to
+      a generic per-status string ("The request conflicts with the current
+      state." for 409). ``detail`` is also FastAPI's own `HTTPException`
+      shape, which the rest of this router already emits.
+
+    Verified on dev 2026-09-09: with only ``error``, a consent failure
+    surfaced as the generic 409 toast even though the message was present
+    in the body.
+    """
+    return {"error": message, "detail": message}
+
+
 def read_error_envelope(
     payload: Any,
 ) -> Optional[Tuple[str, int]]:

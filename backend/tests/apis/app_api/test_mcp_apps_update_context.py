@@ -145,6 +145,7 @@ def test_restores_status_and_message_from_envelope(
     resp = TestClient(app).post("/mcp-apps/update-context", json=_BODY)
     assert resp.status_code == 400
     assert resp.json()["error"] == "needs content"
+    assert resp.json()["detail"] == "needs content"
 
 
 def test_enveloped_error_never_relays_a_401(
