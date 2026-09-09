@@ -178,27 +178,34 @@ jobs:
       # cdk.context.json stay inert.
       CDK_MCP_TOKEN_ENRICHMENT_ENABLED: ${{ vars.CDK_MCP_TOKEN_ENRICHMENT_ENABLED }}
       CDK_MCP_TOKEN_ENRICHMENT_CLAIMS: ${{ vars.CDK_MCP_TOKEN_ENRICHMENT_CLAIMS }}
-      # Managed knowledge bases (.kiro/specs/managed-kb-migration). THREE
+      # Managed knowledge bases (.kiro/specs/managed-kb-migration). FOUR
       # INDEPENDENT OPT-IN flags, all defaulting to OFF — the inverse of the
       # kill-switch flags above, and the difference matters here. An unset
       # GitHub Actions variable renders as an EMPTY STRING, not as absent, so
       # a `!== 'false'` reading of an unset variable would resolve to TRUE and
       # arm the feature on every fork. config.ts reads these with
       # parseBooleanEnv, which maps both unset and empty to undefined and falls
-      # through to `false` (Requirement 19.8). Leave all three unset to deploy
+      # through to `false` (Requirement 19.8). Leave all four unset to deploy
       # the managed backend without starting a fleet migration.
       #
-      #   CDK_MANAGED_KB_NEW_DEFAULT       new KBs are created managed
-      #   CDK_MANAGED_KB_MIGRATION_ENABLED the background migrator runs at all
-      #   CDK_MANAGED_KB_RECONCILER_ARMED  the daily reconciler DELETES orphans
-      #                                    rather than only reporting them
+      #   CDK_MANAGED_KB_NEW_DEFAULT           new KBs are created managed
+      #   CDK_MANAGED_KB_MIGRATION_ENABLED     the background migrator runs at all
+      #   CDK_MANAGED_KB_RECONCILER_ARMED      the daily reconciler DELETES orphans
+      #                                        rather than only reporting them
+      #   CDK_MANAGED_KB_DOC_RECONCILER_ARMED  the nightly document reconciler
+      #                                        CORRECTS stranded DOC# rows (marks
+      #                                        retrievable-but-stranded docs complete,
+      #                                        re-ingests missing ones) rather than
+      #                                        only reporting them (task 16.5, §5.37)
       #
-      # reconcilerArmed is the inverted one: the Reconciler is deployed and
-      # running from day one but DISARMED, so its judgement can be reviewed
-      # against real data before it deletes anything (Requirements 14.7, 19.7).
+      # The two ARMED flags are the inverted ones: both reconcilers are deployed
+      # and running from day one but DISARMED, so their judgement can be reviewed
+      # against real data before they delete/correct anything (Requirements 14.7,
+      # 19.7). Report-only is read-only, so their schedules run regardless.
       CDK_MANAGED_KB_NEW_DEFAULT: ${{ vars.CDK_MANAGED_KB_NEW_DEFAULT }}
       CDK_MANAGED_KB_MIGRATION_ENABLED: ${{ vars.CDK_MANAGED_KB_MIGRATION_ENABLED }}
       CDK_MANAGED_KB_RECONCILER_ARMED: ${{ vars.CDK_MANAGED_KB_RECONCILER_ARMED }}
+      CDK_MANAGED_KB_DOC_RECONCILER_ARMED: ${{ vars.CDK_MANAGED_KB_DOC_RECONCILER_ARMED }}
       # Storage cost controls. Byte_Caps are in BYTES (Requirement 12.2),
       # defaulting to 100 MB standard / 1 GB elevated / 500 MB per knowledge
       # base; the retention window is in DAYS and must stay >= 30
