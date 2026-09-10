@@ -275,7 +275,7 @@ AVAILABLE_MODELS: List[AvailableModel] = [
         description="7.6B parameter LLaVA-NeXT on Mistral, higher-resolution tiling than 1.5 and correspondingly slower per record",
         task_type=_VLM,
         default_instance_type="ml.g6e.xlarge",
-        default_hyperparameters=_hyperparameters(_VLM, context_length="2048"),
+        default_hyperparameters=_hyperparameters(_VLM, context_length="4096"),
     ),
     AvailableModel(
         model_id="qwen25-vl-7b-instruct",
@@ -284,7 +284,7 @@ AVAILABLE_MODELS: List[AvailableModel] = [
         description="8.3B parameter vision-language model from Alibaba with dynamic resolution, strong on documents, charts and OCR-heavy images",
         task_type=_VLM,
         default_instance_type="ml.g6e.xlarge",
-        default_hyperparameters=_hyperparameters(_VLM, context_length="2048"),
+        default_hyperparameters=_hyperparameters(_VLM, context_length="4096"),
     ),
     AvailableModel(
         model_id="llava-1.6-34b",
@@ -299,7 +299,7 @@ AVAILABLE_MODELS: List[AvailableModel] = [
         default_instance_type="ml.g6e.4xlarge",
         default_hyperparameters=_hyperparameters(
             _VLM,
-            context_length="2048",
+            context_length="4096",
             gradient_accumulation_steps="16",
             lora_r="8",
             lora_alpha="16",

@@ -282,14 +282,28 @@ def train(args, spec):
     model = load_base_model(args.model_name_or_path, args.load_in_4bit)
 
     max_ctx = task_common.resolve_max_context_length(model.config, tokenizer)
-    effective_context = (
-        min(args.context_length, max_ctx) if max_ctx else args.context_length
+    measured = measure_required_context(processor, spec, frame.to_dict("records"))
+    effective_context, raised = resolve_effective_context(
+        args.context_length, measured, max_ctx
     )
     logger.info(
         f"Context length: requested={args.context_length}, "
-        f"effective={effective_context}"
-        f"{' (capped)' if max_ctx and args.context_length > max_ctx else ''}"
+        f"measured={measured}, effective={effective_context}"
     )
+    if raised:
+        logger.warning(
+            f"Raised context length from {args.context_length} to "
+            f"{effective_context}: this model spends {measured} tokens on a "
+            f"record, mostly on the image. Truncating to the requested length "
+            f"would have cut into the image tokens and failed the job."
+        )
+    if measured and max_ctx and measured > max_ctx:
+        raise ValueError(
+            f"A single record needs {measured} tokens but "
+            f"{args.model_name_or_path} supports at most {max_ctx}. The image "
+            f"alone does not fit. Use smaller images, or a model that tiles "
+            f"less aggressively."
+        )
 
     if args.load_in_4bit:
         model = prepare_model_for_kbit_training(
@@ -387,6 +401,74 @@ def train(args, spec):
     logger.info(f"Saved LoRA adapter to {model_dir}")
 
     return metrics
+
+
+#: Tokens left for the prompt and response after the image is accounted for,
+#: when a context length has to be raised to fit. Generous on purpose: the
+#: cost of overshooting is a little wasted padding, the cost of undershooting
+#: is a failed job on a billed GPU.
+TEXT_TOKEN_HEADROOM = 256
+
+
+def measure_required_context(processor, spec, dataset, sample_size=4):
+    """Longest untruncated rendering across a sample of records.
+
+    A vision-language model spends most of its sequence on the image, and how
+    much is not knowable in advance: it depends on the checkpoint's tiling
+    strategy *and* on the resolution of the images the user uploaded.
+    SmolVLM-Instruct spends 1377 tokens on a single image; LLaVA-1.6's AnyRes
+    tiling can spend more than twice that.
+
+    That is why a fixed default context length cannot be right for every
+    model, and why guessing one and letting truncation cut into the image
+    placeholder run is a job that fails minutes into a billed GPU.  Measuring
+    is cheap — a handful of CPU-side processor calls — so measure.
+
+    Returns None when the sample cannot be processed at all; the caller keeps
+    the requested length and lets :func:`check_collation` produce the error.
+    """
+    try:
+        from . import task_image_classification
+    except ImportError:  # pragma: no cover - flat sourcedir
+        import task_image_classification  # type: ignore
+
+    longest = 0
+    for index in range(min(sample_size, len(dataset))):
+        record = dataset[index]
+        try:
+            image = task_image_classification.load_image(record[spec.image_column])
+            text = render_chat(
+                processor,
+                build_messages(record[spec.text_column], record[spec.response_column]),
+                add_generation_prompt=False,
+            )
+            # No truncation: the point is to find out how long it really is.
+            batch = processor(images=[image], text=[text], return_tensors="pt")
+            longest = max(longest, int(batch["input_ids"].shape[1]))
+        except Exception as error:  # pragma: no cover - defer to check_collation
+            logger.warning(f"Could not measure record {index}: {error}")
+            return None
+
+    return longest or None
+
+
+def resolve_effective_context(requested, measured, model_max):
+    """Context length to actually use.
+
+    Raises the requested length to fit the measured records, then clamps to
+    what the model supports.  Returns ``(effective, raised)``.
+    """
+    effective = int(requested)
+    raised = False
+
+    if measured and measured > effective:
+        effective = measured + TEXT_TOKEN_HEADROOM
+        raised = True
+
+    if model_max:
+        effective = min(effective, int(model_max))
+
+    return effective, raised
 
 
 def check_collation(collator, dataset, sample_size=2):
