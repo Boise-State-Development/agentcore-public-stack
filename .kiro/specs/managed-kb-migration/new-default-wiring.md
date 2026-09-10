@@ -1,6 +1,15 @@
 # NEW_DEFAULT wiring — make new agents born managed
 
-**Status:** Built (this branch) · **Part of:** `managed-kb-migration` (rollout ladder step 2)
+> **SUPERSEDED** by `born-managed-provision-then-ingest.md`. The problem statement
+> and the flag/infra wiring below still hold and shipped; the *approach* — reusing
+> `enroll` to migrate an empty corpus — did not, and was replaced before merge.
+> Reusing `enroll` writes `retrievalEngine=managed` only at promotion, so the first
+> document would be grabbed by the legacy pipeline, tested on legacy, and then
+> indexed a second time on managed. Provisioning is now stacked onto the first
+> upload with the engine declared up front. Kept for the record of why.
+
+**Status:** Superseded (approach only; flag reader + infra wiring shipped) ·
+**Part of:** `managed-kb-migration` (rollout ladder step 2)
 
 ## Problem
 `MANAGED_KB_NEW_DEFAULT` is meant to make a newly created agent's knowledge base

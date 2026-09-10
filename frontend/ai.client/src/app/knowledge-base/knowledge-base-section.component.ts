@@ -253,8 +253,18 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
    * reads `uploading → processing → ready` (+ `failed`); legacy assistants keep
    * the finer-grained words they still emit. The word "vector" appears nowhere,
    * per Requirement 23.6.
+   *
+   * `provisioning` is checked before the engine split and reads the same either
+   * way. A born-managed first upload sets it in the same request that declares the
+   * knowledge base managed, but the engine here comes from the upgrade-status
+   * poll — which may not have caught up yet — so keying this label on the engine
+   * would show a first-time author "Uploading" for the minutes their knowledge
+   * base is being built. The status itself is unambiguous, so it answers alone.
    */
   statusLabel(docStatus: DocumentStatus): string {
+    if (docStatus === 'provisioning') {
+      return 'Provisioning knowledge base…';
+    }
     if (this.isManagedEngine()) {
       switch (docStatus) {
         case 'complete':

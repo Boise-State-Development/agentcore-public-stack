@@ -6,7 +6,15 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 # Type alias for document processing status
-DocumentStatus = Literal["uploading", "chunking", "embedding", "complete", "failed", "deleting"]
+#
+# 'provisioning' is the leading status a born-managed first upload carries while
+# its Bedrock knowledge base is being created (MANAGED_KB_NEW_DEFAULT). It is
+# non-terminal and non-retrievable — the retrieval facade serves only 'complete' —
+# so it can never answer a question from a knowledge base that does not exist yet.
+# 'chunking'/'embedding' are written only by the legacy S3-Vectors pipeline.
+DocumentStatus = Literal[
+    "provisioning", "uploading", "chunking", "embedding", "complete", "failed", "deleting"
+]
 
 
 @dataclass(frozen=True)

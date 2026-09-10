@@ -42,8 +42,19 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 #: The migration flag. Absent, empty, or anything outside the truthy set means the
-#: dispatcher invokes nothing.
+#: dispatcher invokes nothing for the shadow→verify→promote states.
 FLAG_MIGRATION_ENABLED = "MANAGED_KB_MIGRATION_ENABLED"
+
+#: Born-managed (rollout ladder step 2). Gates the ``born_managed`` state ONLY.
+#:
+#: Two flags rather than one because the ladder's steps are meant to be
+#: independent: step 2 makes new agents born managed, step 3 starts migrating the
+#: existing fleet, and a deployment sitting on step 2 must not have its fleet
+#: quietly migrated. Gating this dispatcher on ``MANAGED_KB_MIGRATION_ENABLED``
+#: alone would have made step 2 useless on its own — the trigger would queue a
+#: provisioning job that nothing ever picked up, leaving the author's first
+#: document parked at "Provisioning knowledge base…" forever.
+FLAG_NEW_DEFAULT = "MANAGED_KB_NEW_DEFAULT"
 
 #: Recognised affirmative spellings, matching the reconciler's. An allow-list
 #: rather than a truthiness test, because the failure being designed around is a
@@ -68,13 +79,29 @@ METRIC_DISPATCH_FAILED = "KbMigrationDispatchFailed"
 
 
 def migration_enabled() -> bool:
-    """Whether the dispatcher may invoke the worker at all.
+    """Whether the dispatcher may invoke the worker for MIGRATION work at all.
 
     Read at call time. Bound as a module constant it would be captured at import
     and a test overriding the variable would silently get the production value —
     the mistake that cost a 33-second test on this feature already.
     """
     return (os.environ.get(FLAG_MIGRATION_ENABLED) or "").strip().lower() in _TRUTHY
+
+
+def new_default_enabled() -> bool:
+    """Whether the dispatcher may invoke the worker for BORN-MANAGED provisioning.
+
+    Read at call time, same reason as :func:`migration_enabled`. Mirrors
+    ``kb_upgrade.service.new_default_enabled`` — the flag is read on both sides of
+    the handoff because each side is useless without the other: the trigger queues
+    the job, this dispatcher is the only thing that picks it up.
+    """
+    return (os.environ.get(FLAG_NEW_DEFAULT) or "").strip().lower() in _TRUTHY
+
+
+def dispatcher_enabled() -> bool:
+    """Whether this tick has any reason to run at all."""
+    return migration_enabled() or new_default_enabled()
 
 
 def dispatch_limit() -> int:
@@ -106,22 +133,35 @@ def _now_iso() -> str:
 
 
 def _work_states() -> List[str]:
-    """Every work-eligible state, drained-first.
+    """Every work-eligible state, drained-first. Ordering only — no flag gating.
 
     Derived from ``WORK_ELIGIBLE_STATES`` rather than restated, with an explicit
-    priority order laid over it. A record in ``promote`` is one conditional write
-    from being finished, so serving it ahead of new ``shadow`` work drains the queue
-    instead of accumulating half-migrated knowledge bases.
+    priority order laid over it. ``born_managed`` is served first because somebody
+    is watching an upload spinner for it, and a record in ``promote`` next because
+    it is one conditional write from being finished — serving those ahead of new
+    ``shadow`` work drains the queue instead of accumulating half-migrated
+    knowledge bases.
 
     Anything work-eligible but absent from the priority list is appended rather
     than dropped. A state added to the records module and forgotten here then
     migrates slowly, which is a scheduling nuisance; dropped, it would stall
     forever with its work keys written and nothing ever reading them — invisible,
     because the record still looks queued.
-    """
-    from apis.shared.kb_backend.records import PROMOTE, SHADOW, VERIFY, WORK_ELIGIBLE_STATES
 
-    priority = (PROMOTE, VERIFY, SHADOW)
+    Which of these a given tick may actually sweep is :func:`_enabled_work_states`.
+    The two are separate on purpose: this one answers "what work exists and in what
+    order", that one answers "what is switched on", and a single function doing both
+    cannot be tested for either.
+    """
+    from apis.shared.kb_backend.records import (
+        BORN_MANAGED,
+        PROMOTE,
+        SHADOW,
+        VERIFY,
+        WORK_ELIGIBLE_STATES,
+    )
+
+    priority = (BORN_MANAGED, PROMOTE, VERIFY, SHADOW)
     ordered = [state for state in priority if state in WORK_ELIGIBLE_STATES]
     remainder = sorted(set(WORK_ELIGIBLE_STATES) - set(priority))
     if remainder:
@@ -130,6 +170,30 @@ def _work_states() -> List[str]:
             f"order; sweeping them last"
         )
     return ordered + remainder
+
+
+def _enabled_work_states() -> List[str]:
+    """The states THIS tick may sweep, each gated on its own flag.
+
+    This is what keeps the rollout ladder's rungs independent. ``born_managed``
+    answers to ``MANAGED_KB_NEW_DEFAULT`` (step 2) and every migration state to
+    ``MANAGED_KB_MIGRATION_ENABLED`` (step 3), so a deployment sitting on step 2
+    has new agents born managed and NOT ONE existing knowledge base touched.
+
+    Gating them together — either flag enabling all of them — would turn step 2
+    into a back door for step 3's blast radius; gating born-managed on the
+    migration flag would make step 2 useless alone, queueing provisioning jobs that
+    nothing ever picks up and parking every first upload on "Provisioning…".
+    """
+    from apis.shared.kb_backend.records import BORN_MANAGED
+
+    allowed_migration = migration_enabled()
+    allowed_born = new_default_enabled()
+    return [
+        state
+        for state in _work_states()
+        if (allowed_born if state == BORN_MANAGED else allowed_migration)
+    ]
 
 
 def _invoke_worker(payload: Dict[str, Any]) -> None:
@@ -170,7 +234,7 @@ async def _due_records(limit: int, now_iso: str) -> List[Dict[str, Any]]:
     from apis.shared.kb_backend.records import query_due_work
 
     collected: List[Dict[str, Any]] = []
-    for state in _work_states():
+    for state in _enabled_work_states():
         if len(collected) >= limit:
             break
         remaining = limit - len(collected)
@@ -187,8 +251,11 @@ async def dispatch_once() -> Dict[str, int]:
     """One dispatcher tick. Returns the metric counts (also emitted)."""
     counts: Dict[str, int] = {"Due": 0, "Dispatched": 0, "Failed": 0}
 
-    if not migration_enabled():
-        logger.info(f"{FLAG_MIGRATION_ENABLED} is not truthy; dispatcher tick is a no-op")
+    if not dispatcher_enabled():
+        logger.info(
+            f"neither {FLAG_MIGRATION_ENABLED} nor {FLAG_NEW_DEFAULT} is truthy; "
+            f"dispatcher tick is a no-op"
+        )
         return counts
 
     limit = dispatch_limit()

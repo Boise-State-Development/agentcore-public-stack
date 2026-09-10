@@ -157,17 +157,6 @@ async def create_assistant_endpoint(request: CreateAssistantRequest, current_use
         # Convert to response model (excludes owner_id for privacy)
         assistant_dict = assistant.model_dump(by_alias=True, exclude={"ownerId"})
 
-        # Born-managed (MANAGED_KB_NEW_DEFAULT): a newly created agent provisions on
-        # the managed backend from the start, skipping the Upgrade step. Fire-and-
-        # forget — no-op unless the flag (and the migration worker) are on, and it
-        # can never fail agent creation (see maybe_enroll_new_default).
-        from apis.app_api.kb_upgrade.service import maybe_enroll_new_default
-        asyncio.ensure_future(
-            maybe_enroll_new_default(
-                assistant.assistant_id, owner_user_id=user_id, visibility=assistant.visibility
-            )
-        )
-
         return AssistantResponse.model_validate(assistant_dict)
 
     except Exception as e:
@@ -404,20 +393,6 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
 
         # Surface the requester's permission on the response so the SPA stays consistent
         updated_assistant.user_permission = permission
-
-        # Born-managed (MANAGED_KB_NEW_DEFAULT): when a draft is finalized to
-        # COMPLETE, provision its knowledge base on the managed backend from the
-        # start. Only on the DRAFT->COMPLETE transition, so ordinary edits of an
-        # already-complete agent do not re-fire. Fire-and-forget and self-gating.
-        if assistant.status != "COMPLETE" and updated_assistant.status == "COMPLETE":
-            from apis.app_api.kb_upgrade.service import maybe_enroll_new_default
-            asyncio.ensure_future(
-                maybe_enroll_new_default(
-                    assistant_id,
-                    owner_user_id=assistant.owner_id,
-                    visibility=updated_assistant.visibility,
-                )
-            )
 
         # Convert to response model
         return AssistantResponse.model_validate(updated_assistant.model_dump(by_alias=True))

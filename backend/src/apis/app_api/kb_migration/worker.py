@@ -909,7 +909,15 @@ async def run_step(
         # the clause would be unreachable, which is how a guard becomes decoration.
         await take_lease(assistant_id, app_kb_id)
 
-        if state == r.SHADOW:
+        if state == r.BORN_MANAGED:
+            # Born-managed provisioning (MANAGED_KB_NEW_DEFAULT). Not part of the
+            # shadow→verify→promote migration — there is no legacy corpus to carry
+            # across — but it runs here to inherit the lease and the work-key
+            # queue, which is what makes a minutes-long provision survive a crash.
+            from apis.app_api.kb_migration.provisioner import run_born_managed
+
+            result = await run_born_managed(assistant_id, app_kb_id, record)
+        elif state == r.SHADOW:
             result = await run_shadow(assistant_id, app_kb_id, record, backend)
         elif state == r.VERIFY:
             result = await run_verify(assistant_id, app_kb_id, record, backend)

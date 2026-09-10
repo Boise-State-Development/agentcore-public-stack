@@ -29,6 +29,7 @@ from apis.app_api.documents.services.storage_service import (
     generate_upload_url,
 )
 from apis.app_api.file_sources.service import require_file_source_token, resolve_file_source
+from apis.app_api.kb_upgrade.born_managed import STATUS_PROVISIONING, begin_born_managed
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
@@ -146,14 +147,32 @@ async def generate_upload_url_endpoint(
     """
     try:
         # 1. Resolve permission — owner or editor may upload documents
-        await _require_edit_permission(assistant_id, current_user)
+        assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
 
-        # 1b. Managed KBs are byte-capped on EVERY path that adds bytes
+        # 1b. Born-managed (MANAGED_KB_NEW_DEFAULT): the FIRST document is what
+        #     triggers knowledge-base provisioning, so a prompt-only agent or an
+        #     abandoned draft never spends a Bedrock knowledge base. This declares
+        #     the engine managed up front — which is what makes the legacy pipeline
+        #     skip the object about to land — and queues the provisioning job for
+        #     the worker. It never raises: a failure leaves the agent on legacy.
+        #     Returns True only while the knowledge base is still being built.
+        provisioning = await begin_born_managed(
+            assistant_id, owner_user_id=assistant_owner_id
+        )
+
+        # 1c. Managed KBs are byte-capped on EVERY path that adds bytes
         #     (Requirement 12.11); the interactive upload path is enforced here.
         #     Reserve the client-declared size BEFORE creating the DOC# row or
         #     issuing a presigned URL, so an over-cap upload is refused with a 413
         #     the client can act on rather than after the bytes are already staged.
         #     Legacy KBs return 0 and are never checked.
+        #
+        #     This runs AFTER the born-managed trigger deliberately: the record it
+        #     creates already resolves to managed, so a born-managed first document
+        #     is capped like every other one. Skipping the reserve for it would be
+        #     the subtle bug — the reconcile at ingestion COMMITS the reservation
+        #     (`reservedBytes -= n`), so a document that committed without reserving
+        #     would drive the counter negative and corrupt the cap permanently.
         reserved_bytes = await _reserve_managed_upload(assistant_id, request.size_bytes)
 
         # 2. Generate document_id and S3 key
@@ -165,9 +184,11 @@ async def generate_upload_url_endpoint(
         s3_key = _get_s3_key(assistant_id, document_id, sanitized_filename)
 
         try:
-            # 3. Create document record in DynamoDB (status='uploading'). The
-            #    declared size is persisted as sizeBytes — the value the ingestion
-            #    step reconciles the true S3 size against (Requirement 12.3).
+            # 3. Create document record in DynamoDB (status='uploading', or
+            #    'provisioning' when this upload is what triggered the knowledge
+            #    base being built). The declared size is persisted as sizeBytes —
+            #    the value the ingestion step reconciles the true S3 size against
+            #    (Requirement 12.3).
             _ = await create_document(
                 assistant_id=assistant_id,
                 filename=request.filename,
@@ -175,6 +196,7 @@ async def generate_upload_url_endpoint(
                 size_bytes=request.size_bytes,
                 s3_key=s3_key,
                 document_id=document_id,
+                status=STATUS_PROVISIONING if provisioning else "uploading",
             )
 
             # 4. Generate presigned S3 URL

@@ -68,6 +68,22 @@ logger.setLevel(logging.INFO)
 STATUS_COMPLETE = "complete"
 STATUS_FAILED = "failed"
 
+#: The leading status of a born-managed first upload (``MANAGED_KB_NEW_DEFAULT``):
+#: the document is uploaded and its knowledge base is still being created, so the
+#: managed lifecycle is ``provisioning → uploading → complete``.
+#:
+#: Defined HERE, in the module that owns the managed document lifecycle, rather
+#: than beside the API-side trigger, because the migration Lambda image carries
+#: only ``apis/shared/kb_backend`` and ``apis/app_api/kb_migration`` — importing
+#: the trigger's package from the provisioning job would fail on a cold start.
+#: ``kb_upgrade.born_managed`` re-exports this name for the API side, so the two
+#: halves cannot drift apart.
+#:
+#: Non-terminal and non-retrievable: the retrieval facade serves only
+#: ``complete``, so a document in this status can never answer a question out of a
+#: knowledge base that does not exist yet.
+STATUS_PROVISIONING = "provisioning"
+
 #: How long to wait for a document to become genuinely retrievable after Bedrock
 #: reports it INDEXED. The observed gap is 0.75-1.03 s; the margin is wide because
 #: the cost of waiting is a few seconds of Lambda time and the cost of not waiting
@@ -587,7 +603,7 @@ def _reconcile_bytes_on_complete(
 
 def handle_object(bucket: str, key: str) -> Dict[str, Any]:
     """Route one uploaded object. Returns a summary for logging and tests."""
-    from apis.shared.kb_backend.records import ENGINE_MANAGED
+    from apis.shared.kb_backend.records import BORN_MANAGED, ENGINE_MANAGED
 
     assistant_id, document_id, filename = parse_object_key(key)
     engine, record = resolve_engine_for(assistant_id)
@@ -604,9 +620,38 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
     aws_kb_id = (record or {}).get("awsKbId")
     data_source_id = (record or {}).get("awsDataSourceId")
     if not aws_kb_id or not data_source_id:
-        # Managed engine but no identifiers means provisioning has not finished.
-        # Failing loudly is correct: silently falling back to legacy would create
-        # exactly the dual-index this function exists to prevent.
+        # Managed engine but no identifiers. Two very different situations share
+        # this shape, and telling them apart is the difference between a working
+        # born-managed first upload and a dead-lettered one.
+        if (record or {}).get("migrationState") == BORN_MANAGED:
+            # Born-managed (MANAGED_KB_NEW_DEFAULT): the knowledge base is being
+            # created right now and this is the document that triggered it. The S3
+            # event fires within seconds; provisioning takes minutes. Lambda's
+            # asynchronous retry is capped at 2 attempts — a hard service limit —
+            # so waiting here or raising for redelivery both end in the DLQ well
+            # before the knowledge base exists.
+            #
+            # So this defers instead: a benign no-op that ingests nothing, writes
+            # nothing, and does NOT fail. The provisioning job owns the handoff and
+            # ingests this document itself once the knowledge base is ACTIVE
+            # (kb_migration/provisioner.py), which is why correctness here does not
+            # depend on the redelivery window at all. The DOC# row is left in
+            # `provisioning`, which is what the user sees.
+            logger.info(
+                f"document {document_id} belongs to a knowledge base still being "
+                f"provisioned (born-managed); deferring to the provisioning job, "
+                f"which owns its ingestion"
+            )
+            return {
+                "routed": "managed",
+                "ingested": False,
+                "document_id": document_id,
+                "note": "deferred-provisioning",
+            }
+
+        # Not born-managed: managed intent with no provisioner behind it. Failing
+        # loudly is correct — silently falling back to legacy would create exactly
+        # the dual-index this function exists to prevent.
         raise IngestionRoutingError(
             f"assistant {assistant_id} resolves to the managed engine but its "
             f"knowledge base is not provisioned (awsKbId={aws_kb_id!r}, "

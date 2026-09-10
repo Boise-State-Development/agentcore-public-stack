@@ -625,6 +625,47 @@ def _resource_name(app_kb_id: str, project_prefix: Optional[str] = None) -> str:
     return f"{tag_prefix(project_prefix)}-kb-{app_kb_id}"
 
 
+def new_managed_kb_record(
+    app_kb_id: str,
+    owner_user_id: str,
+    *,
+    client_token: str,
+    visibility: str = "PRIVATE",
+):
+    """The KB_Record a not-yet-built managed knowledge base starts life as.
+
+    Factored out rather than inlined because born-managed
+    (``MANAGED_KB_NEW_DEFAULT``) writes this record from the API on first upload,
+    minutes before :func:`provision_managed_kb` ever runs. Two call sites building
+    the same record by hand is exactly the drift that produced the tag-contract
+    defect: they would agree on the day they were written and diverge on the day
+    one of them gained a field. ``parser_config`` in particular is not decoration —
+    a corpus indexed without image extraction is not comparable to one indexed
+    with it, and this record is where that fact is captured.
+    """
+    from apis.shared.kb_backend import records as r
+
+    return r.KbRecord(
+        app_kb_id=app_kb_id,
+        owner_user_id=owner_user_id,
+        visibility=visibility,
+        provisioning_state=r.PROVISIONING,
+        client_token=client_token,
+        # Not recorded: with no pin, Bedrock chooses the embedding model and
+        # nothing here would know which. A field naming Titan on a knowledge
+        # base Bedrock embedded with something else is worse than an absent
+        # one — nothing reads these for retrieval, so they can only mislead.
+        embedding_model_id=None,
+        embedding_dimensions=0,
+        image_extraction=True,
+        parser_config={
+            "imageExtractionStatus": IMAGE_EXTRACTION_STATUS,
+            "connectorType": CONNECTOR_TYPE,
+            "embeddingDataType": EMBEDDING_DATA_TYPE,
+        },
+    )
+
+
 async def provision_managed_kb(
     assistant_id: str,
     app_kb_id: Optional[str] = None,
@@ -697,23 +738,8 @@ async def provision_managed_kb(
             f"{existing.get('provisioningState')} record"
         )
     else:
-        record = r.KbRecord(
-            app_kb_id=app_kb_id,
-            owner_user_id=owner_user_id,
-            provisioning_state=r.PROVISIONING,
-            client_token=kb_token,
-            # Not recorded: with no pin, Bedrock chooses the embedding model and
-            # nothing here would know which. A field naming Titan on a knowledge
-            # base Bedrock embedded with something else is worse than an absent
-            # one — nothing reads these for retrieval, so they can only mislead.
-            embedding_model_id=None,
-            embedding_dimensions=0,
-            image_extraction=True,
-            parser_config={
-                "imageExtractionStatus": IMAGE_EXTRACTION_STATUS,
-                "connectorType": CONNECTOR_TYPE,
-                "embeddingDataType": EMBEDDING_DATA_TYPE,
-            },
+        record = new_managed_kb_record(
+            app_kb_id, owner_user_id, client_token=kb_token
         )
         try:
             # DDB before AWS. See the module docstring; this ordering is the

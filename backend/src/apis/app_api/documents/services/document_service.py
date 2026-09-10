@@ -132,7 +132,8 @@ async def create_document(
     size_bytes: int,
     s3_key: str,
     document_id: Optional[str] = None,
-    provenance: Optional[DocumentProvenance] = None
+    provenance: Optional[DocumentProvenance] = None,
+    status: DocumentStatus = 'uploading'
 ) -> Document:
     """
     Create a new document record in DynamoDB
@@ -150,9 +151,16 @@ async def create_document(
         provenance: Optional file-source origin metadata. Set only for
             documents imported from an external connector; None for device
             uploads.
+        status: Initial status. Defaults to 'uploading' — the only caller that
+            overrides it is the born-managed first upload, which uses
+            'provisioning' because the knowledge base its document is bound for
+            is still being created (MANAGED_KB_NEW_DEFAULT). Passing it in rather
+            than patching the row afterwards keeps the document from ever being
+            visible as 'uploading' to a poller, which is what would make the
+            managed ingestion consumer's defer look like a stuck upload.
 
     Returns:
-        Document object with status='uploading'
+        Document object with the requested initial status
     """
     try:
         import boto3
@@ -176,7 +184,7 @@ async def create_document(
         content_type=content_type,
         size_bytes=size_bytes,
         s3_key=s3_key,
-        status='uploading',
+        status=status,
         created_at=now,
         updated_at=now,
         source_connector_id=provenance.source_connector_id if provenance else None,
