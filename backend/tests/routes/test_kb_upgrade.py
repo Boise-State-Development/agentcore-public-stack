@@ -30,7 +30,7 @@ Requirements: 21.1, 21.2, 21.3, 21.4, 23.1, 23.2, 23.3, 23.4, 23.5, 23.6, 23.7,
 
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -731,3 +731,73 @@ class TestWireContract:
             retryable=True,
         ).model_dump(by_alias=True)
         assert payload["documentId"] == "d1"
+
+
+# ── Born-managed (MANAGED_KB_NEW_DEFAULT) ────────────────────────────────────
+class TestNewDefaultFlag:
+    @pytest.mark.parametrize(
+        "raw", ["", "  ", "false", "no", "off", "0", "disabled", None]
+    )
+    def test_absent_empty_or_negative_reads_as_off(self, monkeypatch, raw):
+        if raw is None:
+            monkeypatch.delenv(s.FLAG_NEW_DEFAULT, raising=False)
+        else:
+            monkeypatch.setenv(s.FLAG_NEW_DEFAULT, raw)
+        assert s.new_default_enabled() is False
+
+    @pytest.mark.parametrize("raw", ["1", "true", "yes", "on", "enabled", "TRUE"])
+    def test_affirmative_spellings_read_as_on(self, monkeypatch, raw):
+        monkeypatch.setenv(s.FLAG_NEW_DEFAULT, raw)
+        assert s.new_default_enabled() is True
+
+    def test_the_flag_is_read_at_call_time(self, monkeypatch):
+        monkeypatch.setenv(s.FLAG_NEW_DEFAULT, "true")
+        assert s.new_default_enabled() is True
+        monkeypatch.setenv(s.FLAG_NEW_DEFAULT, "false")
+        assert s.new_default_enabled() is False
+
+
+class TestMaybeEnrollNewDefault:
+    """Born-managed reuses enroll(); these pin the gating and the never-break-
+    agent-creation contract without touching AWS."""
+
+    @pytest.mark.asyncio
+    async def test_noop_and_does_not_enrol_when_flag_off(self, monkeypatch):
+        """MUTATION GUARD: dropping the new_default_enabled() gate makes this fail
+        — enroll would be called for every new agent even with the flag off."""
+        monkeypatch.delenv(s.FLAG_NEW_DEFAULT, raising=False)
+        with patch.object(s, "enroll", new=AsyncMock()) as enroll:
+            await s.maybe_enroll_new_default(
+                "ast-x", owner_user_id="u", visibility="PRIVATE"
+            )
+        enroll.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_enrols_when_flag_on(self, monkeypatch):
+        monkeypatch.setenv(s.FLAG_NEW_DEFAULT, "true")
+        with patch.object(s, "enroll", new=AsyncMock()) as enroll:
+            await s.maybe_enroll_new_default(
+                "ast-x", owner_user_id="u", visibility="SHARED"
+            )
+        enroll.assert_awaited_once_with(
+            "ast-x", owner_user_id="u", visibility="SHARED"
+        )
+
+    @pytest.mark.asyncio
+    async def test_swallows_upgrade_unavailable_when_migration_off(self, monkeypatch):
+        """Flag on but the migration worker off: enroll refuses, and born-managed
+        must NOT raise (the agent just stays on legacy)."""
+        monkeypatch.setenv(s.FLAG_NEW_DEFAULT, "true")
+        with patch.object(
+            s, "enroll", new=AsyncMock(side_effect=s.UpgradeUnavailable("off"))
+        ):
+            await s.maybe_enroll_new_default("ast-x", owner_user_id="u")
+
+    @pytest.mark.asyncio
+    async def test_swallows_unexpected_errors(self, monkeypatch):
+        """A provisioning/DynamoDB hiccup must never fail agent creation."""
+        monkeypatch.setenv(s.FLAG_NEW_DEFAULT, "true")
+        with patch.object(
+            s, "enroll", new=AsyncMock(side_effect=RuntimeError("boom"))
+        ):
+            await s.maybe_enroll_new_default("ast-x", owner_user_id="u")

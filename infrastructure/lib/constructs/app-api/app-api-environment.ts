@@ -254,6 +254,12 @@ export function buildAppApiEnvironment(
     // behave identically — but an explicit value makes the shipped state visible
     // in the task definition instead of having to be inferred from silence.
     MANAGED_KB_MIGRATION_ENABLED: String(config.managedKb.migrationEnabled),
+    // Born-managed: when true, a newly finalized agent's knowledge base is
+    // provisioned on the managed backend from creation (skips the Upgrade step).
+    // The app-api reads this to enrol new agents; it depends on the migration
+    // worker running, so it only has effect alongside MANAGED_KB_MIGRATION_ENABLED.
+    // Explicit 'false' (not omitted) for the same visibility reason as above.
+    MANAGED_KB_NEW_DEFAULT: String(config.managedKb.newDefault),
     // Kept in step with the IAM condition by deriving both from one helper; a
     // mismatch would make every metric publish silently denied.
     MANAGED_KB_METRIC_NAMESPACE: managedKbMetricNamespace(config),

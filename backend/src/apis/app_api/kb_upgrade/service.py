@@ -45,6 +45,15 @@ class UpgradeUnavailable(Exception):
 #: action is available, and "available" has to mean actionable.
 FLAG_MIGRATION_ENABLED = "MANAGED_KB_MIGRATION_ENABLED"
 
+#: Born-managed: when set, a newly finalized agent is enrolled so its knowledge
+#: base provisions on the managed backend from the start, skipping the user-facing
+#: Upgrade step (rollout ladder step 2). It DEPENDS ON the migration machinery —
+#: born-managed provisions and promotes through the same dispatcher-driven worker,
+#: so with ``MANAGED_KB_MIGRATION_ENABLED`` off there is nothing to finish the
+#: provision. ``maybe_enroll_new_default`` therefore leans on ``enroll``'s own
+#: migration gate rather than duplicating the dependency.
+FLAG_NEW_DEFAULT = "MANAGED_KB_NEW_DEFAULT"
+
 #: Affirmative spellings, matching ``dispatcher._TRUTHY`` exactly. An allow-list
 #: rather than truthiness, because the value being designed around is present but
 #: empty: ``bool("")`` is right by luck and ``bool("false")`` is not.
@@ -65,6 +74,18 @@ def migration_enabled() -> bool:
     feature a 33-second test that ignored its own override.
     """
     return (os.environ.get(FLAG_MIGRATION_ENABLED) or "").strip().lower() in _TRUTHY
+
+
+def new_default_enabled() -> bool:
+    """Whether newly created agents should be born on the managed backend.
+
+    Read at call time, never bound as a default argument — same reason as
+    :func:`migration_enabled`. This gate is necessary but not sufficient: born-
+    managed also needs the migration worker running to finish provisioning, which
+    ``maybe_enroll_new_default`` obtains by going through ``enroll`` (gated on
+    ``migration_enabled``).
+    """
+    return (os.environ.get(FLAG_NEW_DEFAULT) or "").strip().lower() in _TRUTHY
 
 
 def _now() -> datetime:
@@ -433,6 +454,52 @@ async def enroll(
             "and you can leave this page."
         ),
     )
+
+
+async def maybe_enroll_new_default(
+    assistant_id: str,
+    *,
+    owner_user_id: str,
+    visibility: str = "PRIVATE",
+) -> None:
+    """Born-managed: enrol a newly finalized agent so its knowledge base
+    provisions on the managed backend from the start (``MANAGED_KB_NEW_DEFAULT``,
+    rollout ladder step 2).
+
+    Reuses :func:`enroll` deliberately. A brand-new agent has no corpus, so
+    "migrating" it provisions the knowledge base, converges immediately
+    (``migrated == total == 0``), and promotes — all through the proven, crash-
+    safe, dispatcher-driven worker. ``catch_up`` already carries across any
+    document uploaded during the window, so a first upload racing the promotion is
+    handled by the same machinery rather than a new one. This is why born-managed
+    needs no bespoke provisioning path and no minutes-long request-side task:
+    ``enroll`` is two DynamoDB writes; the slow AWS ``CreateKnowledgeBase`` happens
+    later in the worker.
+
+    Best-effort by contract. It no-ops unless ``new_default_enabled()``; ``enroll``
+    itself no-ops (raises :class:`UpgradeUnavailable`) when the migration worker is
+    not running, which is caught here because born-managed without a worker would
+    park the record in ``shadow`` with nothing to finish it. It is idempotent via
+    ``enroll``'s conditional writes, and ANY failure is logged and swallowed — a
+    provisioning hiccup must never fail agent creation; the agent simply stays on
+    legacy, exactly as before this feature.
+
+    Fire-and-forget it from the finalize path; do not await it in the request.
+    """
+    if not new_default_enabled():
+        return
+    try:
+        await enroll(assistant_id, owner_user_id=owner_user_id, visibility=visibility)
+    except UpgradeUnavailable:
+        logger.info(
+            f"kb {assistant_id}: NEW_DEFAULT set but migration is disabled; the "
+            f"agent stays on legacy (no worker would finish a born-managed provision)"
+        )
+    except Exception as exc:  # noqa: BLE001 - born-managed must never break agent creation
+        logger.warning(
+            f"kb {assistant_id}: born-managed enrolment failed, leaving the agent "
+            f"on legacy: {exc}"
+        )
 
 
 async def retry(assistant_id: str, *, owner_user_id: str) -> EnrollResponse:

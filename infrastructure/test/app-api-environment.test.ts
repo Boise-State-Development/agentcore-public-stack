@@ -101,3 +101,27 @@ describe('buildAppApiEnvironment — managed KB upgrade offer', () => {
     expect(strays).toEqual([]);
   });
 });
+
+/**
+ * Born-managed: `apis/app_api/kb_upgrade/service.py` reads `MANAGED_KB_NEW_DEFAULT`
+ * to enrol newly finalized agents onto the managed backend. The migration Lambdas
+ * already receive it; before this it never reached the API, so flipping the flag
+ * was a no-op. These pin the wiring.
+ */
+describe('buildAppApiEnvironment — born-managed (NEW_DEFAULT)', () => {
+  const managedKbDefaults = () => createMockConfig().managedKb;
+
+  it('threads config.managedKb.newDefault into MANAGED_KB_NEW_DEFAULT', () => {
+    const on = buildAppApiEnvironment(
+      createMockConfig({ managedKb: { ...managedKbDefaults(), newDefault: true } }),
+      stubParams(),
+    );
+    expect(on.MANAGED_KB_NEW_DEFAULT).toBe('true');
+  });
+
+  it("ships 'false' explicitly rather than omitting the variable", () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.MANAGED_KB_NEW_DEFAULT).toBe('false');
+    expect(Object.keys(off)).toContain('MANAGED_KB_NEW_DEFAULT');
+  });
+});
