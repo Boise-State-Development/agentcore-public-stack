@@ -350,15 +350,27 @@ def train(args, spec):
     image_token_ids = resolve_image_token_ids(processor, model.config)
     logger.info(f"Masking image placeholder token ids: {sorted(image_token_ids)}")
 
+    # Checkpoint often enough that an interruption costs a fraction of the
+    # run, and rarely enough that the S3 mirror stays cheap.
+    save_steps = task_common.resolve_save_steps(
+        len(train_dataset), args.per_device_train_batch_size, args.gradient_accumulation_steps, args.epochs
+    )
+    checkpointing = task_common.checkpoint_arguments(
+        save_steps, enabled=args.checkpointing
+    )
+    logger.info(
+        f"Checkpointing: {checkpointing.get('save_strategy')} "
+        f"every {checkpointing.get('save_steps', 'n/a')} step(s)"
+    )
+
     training_args = task_common.build_training_arguments(
-        output_dir="/opt/ml/checkpoints",
+        output_dir=task_common.CHECKPOINT_DIR,
         learning_rate=args.learning_rate,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         weight_decay=args.weight_decay,
         eval_strategy="epoch",
-        save_strategy="no",
         logging_dir="/opt/ml/output/tensorboard",
         remove_unused_columns=False,
         label_names=["labels"],
@@ -368,6 +380,7 @@ def train(args, spec):
         # sequence causes; it is a bitsandbytes optimiser, so it is only
         # available on the quantised path.
         optim="paged_adamw_8bit" if args.load_in_4bit else "adamw_torch",
+        **checkpointing,
     )
 
     collator = build_collator(processor, spec, effective_context, image_token_ids)
@@ -388,7 +401,7 @@ def train(args, spec):
         f"batch_size={args.per_device_train_batch_size} x "
         f"{args.gradient_accumulation_steps} accumulation"
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=task_common.latest_checkpoint())
 
     metrics = trainer.evaluate()
     logger.info(f"Final evaluation: loss={metrics.get('eval_loss', 'N/A')}")
