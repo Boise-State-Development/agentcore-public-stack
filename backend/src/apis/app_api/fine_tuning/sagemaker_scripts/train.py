@@ -103,6 +103,10 @@ def parse_args(argv=None):
     parser.add_argument("--context_length", type=int, default=512)
     parser.add_argument("--image_size", type=int, default=224)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    # Kill switch. Checkpointing is what makes a restart — a spot interruption,
+    # or a job killed at the budget-clamped MaxRuntime — resume instead of
+    # starting over, so it is on unless deliberately turned off.
+    parser.add_argument("--checkpointing", type=str2bool, default=True)
 
     # Generative VLM (LoRA) hyperparameters.  Ignored by the classification
     # tasks, which train every weight of a much smaller model.

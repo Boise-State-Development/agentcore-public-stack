@@ -103,19 +103,32 @@ def train(args, spec):
         frame, args.split_ratio, args.seed
     )
 
+    # Checkpoint often enough that an interruption costs a fraction of the
+    # run, and rarely enough that the S3 mirror stays cheap.
+    save_steps = task_common.resolve_save_steps(
+        len(train_dataset), args.per_device_train_batch_size, 1, args.epochs
+    )
+    checkpointing = task_common.checkpoint_arguments(
+        save_steps, enabled=args.checkpointing
+    )
+    logger.info(
+        f"Checkpointing: {checkpointing.get('save_strategy')} "
+        f"every {checkpointing.get('save_steps', 'n/a')} step(s)"
+    )
+
     training_args = task_common.build_training_arguments(
-        output_dir="/opt/ml/checkpoints",
+        output_dir=task_common.CHECKPOINT_DIR,
         learning_rate=args.learning_rate,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.per_device_train_batch_size,
         weight_decay=args.weight_decay,
         eval_strategy="epoch",
-        save_strategy="no",
         logging_dir="/opt/ml/output/tensorboard",
         # The collator returns pixel tensors, not model-signature columns;
         # Trainer's default column pruning would strip the image paths it
         # needs before the collator ever sees them.
         remove_unused_columns=False,
+        **checkpointing,
     )
 
     trainer = Trainer(
@@ -134,7 +147,7 @@ def train(args, spec):
         f"batch_size={args.per_device_train_batch_size}, "
         f"image_size={args.image_size}"
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=task_common.latest_checkpoint())
 
     metrics = trainer.evaluate()
     logger.info(f"Final evaluation: accuracy={metrics.get('eval_accuracy', 'N/A')}")

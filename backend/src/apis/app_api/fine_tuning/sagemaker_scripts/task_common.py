@@ -20,6 +20,7 @@ without them.
 """
 
 import logging
+import math
 import os
 import shutil
 import zipfile
@@ -56,6 +57,17 @@ DATASET_READERS = {
 
 #: Image files an archive-based dataset may reference.
 SUPPORTED_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tiff")
+
+#: Where Trainer writes checkpoints. SageMaker mirrors this directory to S3
+#: continuously when CheckpointConfig names the same LocalPath, and restores it
+#: before the script runs again — which is what makes a restart resumable.
+CHECKPOINT_DIR = "/opt/ml/checkpoints"
+
+#: Roughly how many checkpoints a run should produce. Fewer means more lost
+#: work per interruption; more means more S3 traffic. Ten is a compromise that
+#: costs at most ~10% of a run.
+TARGET_CHECKPOINTS = 10
+
 
 #: Directory the training script unpacks an uploaded archive into.  Sits
 #: outside the input channel so the extracted tree is never mistaken for
@@ -285,6 +297,72 @@ def split_frame(frame, split_ratio, seed):
         f"Data split: {len(dataset['train'])} train / {len(dataset['test'])} eval"
     )
     return dataset["train"].shuffle(seed=seed), dataset["test"].shuffle(seed=seed)
+
+
+# =========================================================================
+# Checkpointing
+# =========================================================================
+
+def resolve_save_steps(num_examples, batch_size, gradient_accumulation_steps,
+                       epochs, target=TARGET_CHECKPOINTS):
+    """Optimizer-step interval that yields roughly ``target`` checkpoints.
+
+    A fixed interval cannot work across these jobs.  ``save_steps`` counts
+    *optimizer* steps, not samples, and a generative VLM trains at batch 1 with
+    heavy gradient accumulation — a 90-sample epoch is about 5 steps.  Against
+    a hardcoded ``save_steps=50`` the longest, most interruption-exposed job in
+    the catalog would never checkpoint at all, while a fast text classifier
+    with thousands of steps would checkpoint constantly.
+
+    Scaling to the run's own step count fixes both ends.  Returns at least 1.
+    """
+    per_epoch_batches = max(1, math.ceil(num_examples / max(1, batch_size)))
+    steps_per_epoch = max(1, math.ceil(
+        per_epoch_batches / max(1, gradient_accumulation_steps)
+    ))
+    total_steps = max(1, int(steps_per_epoch * max(1, epochs)))
+    return max(1, total_steps // max(1, target))
+
+
+def checkpoint_arguments(save_steps, enabled=True):
+    """TrainingArguments kwargs for periodic checkpointing.
+
+    ``save_total_limit=1`` keeps only the newest checkpoint: resume needs the
+    latest and nothing else, and an unbounded set would grow the mirrored S3
+    prefix for the whole run.
+    """
+    if not enabled or not save_steps or save_steps <= 0:
+        return {"save_strategy": "no"}
+    return {
+        "save_strategy": "steps",
+        "save_steps": int(save_steps),
+        "save_total_limit": 1,
+    }
+
+
+def latest_checkpoint(checkpoint_dir=CHECKPOINT_DIR):
+    """Path to the checkpoint SageMaker restored, or None for a fresh start.
+
+    On a spot interruption or any other restart SageMaker repopulates
+    ``CHECKPOINT_DIR`` from S3 before re-running the script, so the presence of
+    a checkpoint here is how a resumed attempt distinguishes itself from a
+    first one.  Never raises: a malformed checkpoint should cost the run its
+    progress, not fail the job outright.
+    """
+    if not os.path.isdir(checkpoint_dir):
+        return None
+
+    try:
+        from transformers.trainer_utils import get_last_checkpoint
+
+        found = get_last_checkpoint(checkpoint_dir)
+    except Exception as error:  # pragma: no cover - defensive
+        logger.warning(f"Could not inspect {checkpoint_dir}: {error}")
+        return None
+
+    if found:
+        logger.info(f"Resuming from checkpoint {found}")
+    return found
 
 
 # =========================================================================

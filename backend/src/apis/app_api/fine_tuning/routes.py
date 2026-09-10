@@ -596,6 +596,7 @@ async def create_job(
     # S3 paths
     output_s3_prefix = s3_service.get_output_s3_prefix(user.user_id, job_id)
     output_s3_uri = s3_service.get_output_s3_uri(user.user_id, job_id)
+    checkpoint_s3_uri = s3_service.get_checkpoint_s3_uri(user.user_id, job_id)
     input_s3_uri = f"s3://{s3_service.bucket_name}/{request.dataset_s3_key}"
 
     # Create DynamoDB job record
@@ -625,6 +626,7 @@ async def create_job(
             max_runtime=max_runtime_seconds,
             source_dir_s3_uri=scripts_s3_uri,
             task_type=spec.task_type,
+            checkpoint_s3_uri=checkpoint_s3_uri,
         )
         job = jobs_repo.update_job_status(user.user_id, job_id, "TRAINING")
     except Exception as e:

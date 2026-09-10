@@ -48,6 +48,10 @@ _INFERENCE_IMAGE_TAGS = {
 
 # The AWS-owned account that publishes Deep Learning Containers. Same in every
 # region we support.
+#: Must match ``task_common.CHECKPOINT_DIR`` — SageMaker only mirrors the
+#: directory it is told about, and the trainer only writes to the one it knows.
+CHECKPOINT_LOCAL_PATH = "/opt/ml/checkpoints"
+
 _DLC_REGISTRY_ACCOUNT = "763104351884"
 
 _SUPPORTED_DLC_REGIONS = (
@@ -126,6 +130,7 @@ class SageMakerService:
         instance_type: str,
         instance_count: int = 1,
         max_runtime: int = 86400,
+        checkpoint_s3_uri: Optional[str] = None,
         source_dir_s3_uri: str = "",
         task_type: Optional[str] = None,
         volume_size_gb: Optional[int] = None,
@@ -189,6 +194,16 @@ class SageMakerService:
             },
             "HyperParameters": hyperparameters,
         }
+
+        # Mirror the container's checkpoint directory to S3 while the job runs,
+        # and restore it before a restarted attempt runs again. Without this
+        # the trainer still writes checkpoints, but they die with the instance
+        # — so a job stopped at MaxRuntime, or interrupted, yields nothing.
+        if checkpoint_s3_uri:
+            params["CheckpointConfig"] = {
+                "S3Uri": checkpoint_s3_uri,
+                "LocalPath": CHECKPOINT_LOCAL_PATH,
+            }
 
         if subnets and security_groups:
             params["VpcConfig"] = {
