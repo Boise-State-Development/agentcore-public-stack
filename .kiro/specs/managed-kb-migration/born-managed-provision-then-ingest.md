@@ -189,6 +189,94 @@ construct — real plumbing that does not belong in the same change as the flow
 itself. Worth doing before the flag is turned on for anyone who cares about the
 first-upload experience.
 
+## Successor design: Lambda durable functions
+
+Recorded because the orchestration choice here was deliberate and the better option
+is now available. **Nothing below is a criticism of what shipped** — it is where to
+aim if the migration engine is ever rebuilt, so the next person does not
+re-derive it.
+
+### The mechanism this feature actually needed
+Strip born-managed to its essentials and it is one linear sequence with two slow
+waits in the middle:
+
+```
+declare the record managed → create the KB → wait for ACTIVE
+→ ingest the document → wait for INDEXED → wait for retrievable → complete
+                                        ↘ on any failure → roll back to legacy
+```
+
+Everything else in this change is scaffolding to make that sequence survive a
+process that can die at any point: the `born_managed` work state, the sparse work
+keys, the lease, the 15-minute dispatcher tick, the consumer's DEFER, the
+one-document-per-invocation cap, and the re-arm. All of it exists because a Lambda
+is killed at 15 minutes and an S3 event gets 3 delivery attempts.
+
+### Why durable functions fit better than Step Functions
+Step Functions was considered and rejected on two grounds (see the conversation on
+PR #1027): it would be the **only** state machine in the stack — a new AWS service
+for every fork maintainer to learn — and it moves the saga out of Python into ASL,
+which would forfeit `tests/property/test_pbt_kb_migration_convergence.py`, the
+crash-at-every-step property test that already caught a double-promotion bug.
+
+Lambda durable functions (re:Invent 2025; Python supported) avoid both. A durable
+function **is** a normal Lambda with a `DurableConfig`, so no new service enters the
+stack, and the sequence stays as ordinary Python — the SDK adds `context.step()`,
+`context.wait()`, `context.waitForCondition()`, `map()`, `parallel()`. Completed
+steps are checkpointed; on failure or resume Lambda replays the handler from the top
+and skips them. Waits suspend for up to a year and incur **no duration charge** on
+on-demand functions.
+
+`waitForCondition()` — pause until a supplied check function passes — is a direct
+replacement for all three of this feature's hand-rolled poll loops
+(`_wait_for_knowledge_base_active`, `wait_until_indexed`,
+`wait_until_retrievable`), and it deletes the reason the consumer currently burns
+billed Lambda time asleep.
+
+### What it would delete
+The dispatcher Lambda; `GSI7_PK`/`GSI7_SK` and the work-key invariant;
+`acquire_lease`/`migrationLeaseUntil`/`LeaseLost`; `defer_verify` and
+`verifyAttempts`; `dispatch_limit` and the priority ordering in `_work_states`;
+`MAX_DOCUMENTS_PER_INVOCATION` and the re-arm; the consumer's DEFER branch and the
+`born_managed` state itself; the 15-minute pickup latency; and most of the document
+reconciler, which exists because events dead-letter and durable executions do not.
+`retain` becomes a single 30-day `wait()` instead of a stored `retainUntil` plus a
+nightly job to notice it.
+
+### What survives any rewrite
+Everything that makes the *writes* safe, as opposed to the orchestration:
+`resolve_engine`'s absence-means-legacy default, the conditional-write guards
+(`adopt_managed_engine`, `promote_engine`'s four guards, `attach_aws_ids`), the
+persisted `clientToken` that stops a retry creating a second knowledge base, and
+`byte_cap.settle_once`. Durability guarantees the sequence resumes; it does not make
+an individual AWS or DynamoDB call idempotent. **And the first-upload trigger order
+survives unchanged**: the engine must still be declared before the object lands, or
+the legacy pipeline takes the first document.
+
+### Costs, which is why this is not a follow-up ticket yet
+- **An existing function cannot be converted.** AWS is explicit that
+  `DurableConfig` cannot be added to a function created without it, so this is a new
+  Lambda plus a cutover, not a flag flip on the worker.
+- **It forces a deploy-pipeline change.** Durable functions must be invoked by a
+  qualified (version/alias) ARN so replays run the same code. `backend.yml`
+  currently pushes images onto `$LATEST` via `update-function-code --image-uri`.
+- **Replay determinism is a real footgun.** The handler re-runs from the top on
+  every resume, so anything outside a `step()` executes again. Code that reads a
+  record at the top and branches on its state needs deliberate care, and the bugs
+  only appear after a crash.
+- **Young, and a public-repo dependency.** GA'd through 2026, AWS describes the SDKs
+  as fast-moving, and fork maintainers inherit the SDK plus an IAM policy
+  (`AWSLambdaBasicDurableExecutionRole`). Confirm region availability for this
+  deployment's region before planning.
+
+### Recommended first move
+Not a rewrite. A throwaway spike of **born-managed alone** as a durable function —
+it is the smallest complete instance of the pattern — to find out whether replay
+determinism is pleasant or nasty against this codebase's read-record-then-branch
+style. That answer decides whether the engine-wide rewrite is real. If it is, the
+order is: born-managed first (no legacy corpus, lowest blast radius), then
+shadow→verify→promote.
+
 ## Risks
 - **KB-count quota** (~10k/account, one KB per agent) still gates turning the flag
   ON — unchanged by this design; first-doc provisioning at least bounds it to
