@@ -1,0 +1,214 @@
+@let t = tool();
+
+<!-- Identity -->
+<div class="border-b border-gray-200 px-4 py-4 dark:border-white/10">
+  <div class="flex items-start gap-3">
+    <span
+      aria-hidden="true"
+      class="grid size-10 shrink-0 place-items-center rounded-xl border border-gray-200 bg-gray-50 font-mono text-sm font-semibold text-gray-600 dark:border-white/10 dark:bg-white/5 dark:text-gray-300"
+      >{{ monogram() }}</span
+    >
+    <div class="min-w-0 flex-1">
+      <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">{{ t.displayName }}</h3>
+      <p class="truncate font-mono text-xs/5 text-gray-500 dark:text-gray-400">{{ t.toolId }}</p>
+    </div>
+  </div>
+
+  @if (t.description) {
+    <p class="mt-3 text-sm/6 text-gray-600 dark:text-gray-300">{{ t.description }}</p>
+  }
+
+  <div
+    class="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-white/10 dark:bg-white/5"
+  >
+    <span id="tool-detail-state" class="text-sm/6 font-medium text-gray-900 dark:text-white">
+      {{ toolService.isToolShownEnabled(t) ? 'On in this conversation' : 'Off' }}
+    </span>
+    @if (toolService.agentLocked()) {
+      <span class="flex items-center gap-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
+        <ng-icon name="heroLockClosed" class="size-3.5" aria-hidden="true" />
+        Fixed by this agent
+      </span>
+    } @else {
+      <button
+        type="button"
+        role="switch"
+        [attr.aria-checked]="toolService.isToolShownEnabled(t)"
+        aria-labelledby="tool-detail-state"
+        (click)="toggleTool()"
+        (keydown.space)="$event.preventDefault(); toggleTool()"
+        class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+        [class]="
+          toolService.isToolShownEnabled(t)
+            ? 'bg-primary-600 dark:bg-primary-500'
+            : 'bg-gray-200 dark:bg-gray-700'
+        "
+      >
+        <span
+          aria-hidden="true"
+          class="pointer-events-none inline-block size-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out"
+          [class.translate-x-5]="toolService.isToolShownEnabled(t)"
+          [class.translate-x-0]="!toolService.isToolShownEnabled(t)"
+        ></span>
+      </button>
+    }
+  </div>
+</div>
+
+<!-- Tabs. A tool that isn't an MCP server has a single panel, so it gets no strip. -->
+@if (isMcpServer()) {
+  <div
+    role="tablist"
+    aria-label="Tool details"
+    class="flex gap-1 border-b border-gray-200 px-3 dark:border-white/10"
+  >
+    @for (item of tabs(); track item.id) {
+      <button
+        type="button"
+        role="tab"
+        [id]="'tool-detail-tab-' + item.id"
+        [attr.aria-selected]="tab() === item.id"
+        [attr.aria-controls]="'tool-detail-panel-' + item.id"
+        [tabindex]="tab() === item.id ? 0 : -1"
+        (click)="tab.set(item.id)"
+        (keydown)="onTabKeydown($event)"
+        class="-mb-px flex items-center gap-1.5 border-b-2 px-2.5 py-3 text-sm/6 whitespace-nowrap focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500"
+        [class]="
+          tab() === item.id
+            ? 'border-primary-600 font-semibold text-primary-600 dark:border-primary-400 dark:text-primary-400'
+            : 'border-transparent font-medium text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'
+        "
+      >
+        {{ item.label }}
+        @if (item.count !== null) {
+          <span
+            class="rounded bg-gray-100 px-1.5 font-mono text-xs/5 text-gray-500 tabular-nums dark:bg-white/5 dark:text-gray-400"
+            >{{ item.count }}</span
+          >
+        }
+      </button>
+    }
+  </div>
+}
+
+<!-- Panels -->
+<div class="flex-1 overflow-y-auto px-4 py-3">
+  @if (tab() === 'tools') {
+    <div
+      role="tabpanel"
+      id="tool-detail-panel-tools"
+      aria-labelledby="tool-detail-tab-tools"
+      tabindex="0"
+    >
+      @if (subTools().length > 0) {
+        <p class="mb-3 text-xs/5 text-gray-500 dark:text-gray-400">
+          Turn off the ones this conversation doesn’t need — only the tools left on are sent
+          to the model.
+        </p>
+        <ul class="flex flex-col gap-2">
+          @for (sub of subTools(); track sub.name) {
+            <li
+              class="flex items-start justify-between gap-3 rounded-2xl border border-gray-200 px-3 py-2.5 dark:border-white/10"
+            >
+              <div class="min-w-0 flex-1">
+                <span
+                  [id]="'subtool-' + t.toolId + '-' + sub.name"
+                  class="block font-mono text-xs/5 font-medium text-gray-900 dark:text-white"
+                  >{{ sub.name }}</span
+                >
+                @if (sub.description) {
+                  <!--
+                    Clamped, because these are raw Python docstrings: several
+                    carry their whole "Args:" block, and one unclamped tool
+                    description filled two thirds of the pane on Student
+                    MyBoiseState. Splitting the agent-facing text from a
+                    human-facing summary is the real fix, and it belongs in the
+                    catalog rather than here.
+                  -->
+                  <!--
+                    No `block` here: line-clamp-2 sets display:-webkit-box, and
+                    a display utility alongside it wins the cascade and silently
+                    un-clamps the text.
+                  -->
+                  <span
+                    class="mt-0.5 line-clamp-2 text-xs/5 text-gray-500 dark:text-gray-400"
+                    [attr.title]="sub.description"
+                    >{{ sub.description }}</span
+                  >
+                }
+              </div>
+              <button
+                type="button"
+                role="switch"
+                [attr.aria-checked]="toolService.isSubToolShownEnabled(t, sub)"
+                [attr.aria-labelledby]="'subtool-' + t.toolId + '-' + sub.name"
+                [disabled]="toolService.agentLocked()"
+                (click)="toggleServerTool(sub.name)"
+                (keydown.space)="$event.preventDefault(); toggleServerTool(sub.name)"
+                class="relative mt-0.5 inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+                [class.cursor-pointer]="!toolService.agentLocked()"
+                [class.cursor-not-allowed]="toolService.agentLocked()"
+                [class.opacity-60]="toolService.agentLocked()"
+                [class]="
+                  toolService.isSubToolShownEnabled(t, sub)
+                    ? 'bg-primary-600 dark:bg-primary-500'
+                    : 'bg-gray-200 dark:bg-gray-700'
+                "
+              >
+                <span
+                  aria-hidden="true"
+                  class="pointer-events-none inline-block size-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out"
+                  [class.translate-x-4]="toolService.isSubToolShownEnabled(t, sub)"
+                  [class.translate-x-0]="!toolService.isSubToolShownEnabled(t, sub)"
+                ></span>
+              </button>
+            </li>
+          }
+        </ul>
+      } @else {
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+          This server hasn’t been asked what it offers yet.
+        </p>
+        <button
+          type="button"
+          (click)="discover()"
+          [disabled]="discovering()"
+          class="mt-3 inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 px-3 py-1.5 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+        >
+          <ng-icon
+            name="heroArrowPath"
+            class="size-4"
+            [class.animate-spin]="discovering()"
+            aria-hidden="true"
+          />
+          {{ discovering() ? 'Listing tools…' : 'List this server’s tools' }}
+        </button>
+        @if (discoverError(); as message) {
+          <p class="mt-2 text-xs/5 text-state-danger-600 dark:text-state-danger-400" role="alert">
+            {{ message }}
+          </p>
+        }
+      }
+    </div>
+  } @else {
+    <div
+      role="tabpanel"
+      id="tool-detail-panel-about"
+      aria-labelledby="tool-detail-tab-about"
+      tabindex="0"
+    >
+      <dl class="flex flex-col gap-2.5">
+        @for (fact of facts(); track fact.label) {
+          <div class="flex items-baseline justify-between gap-4">
+            <dt class="text-xs/5 text-gray-500 dark:text-gray-400">{{ fact.label }}</dt>
+            <dd
+              class="min-w-0 text-right font-mono text-xs/5 break-words text-gray-700 dark:text-gray-200"
+            >
+              {{ fact.value }}
+            </dd>
+          </div>
+        }
+      </dl>
+    </div>
+  }
+</div>
