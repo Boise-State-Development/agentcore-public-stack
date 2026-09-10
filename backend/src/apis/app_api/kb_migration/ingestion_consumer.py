@@ -467,6 +467,124 @@ def wait_until_retrievable(
     return None
 
 
+def _get_doc_row(assistant_id: str, document_id: str) -> Optional[Dict[str, Any]]:
+    """The ``DOC#`` row, or ``None``. Read once per invocation.
+
+    Carries the declared ``sizeBytes`` reconciled against the true S3 size, and the
+    ``byteCapSettled`` marker that makes settlement idempotent across redeliveries.
+    """
+    response = _table().get_item(
+        Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"}
+    )
+    return response.get("Item")
+
+
+def _declared_bytes(doc_row: Optional[Dict[str, Any]]) -> int:
+    """The size the client declared at request time, or 0 if the row has none.
+
+    0 is the correct default for a document that reserved nothing at request time
+    (an imported file, whose row is created with ``sizeBytes=0`` and whose true
+    size is only known here) — the reconcile then reserves the whole real size.
+    """
+    if not doc_row:
+        return 0
+    try:
+        return int(doc_row.get("sizeBytes") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _delete_s3_object(bucket: str, key: str) -> None:
+    """Best-effort delete of an orphaned source object that overshot the cap.
+
+    A failure to delete must not turn a cap rejection into an unhandled error: the
+    document is already being failed, and a stranded object is a smaller problem
+    than a stuck ingestion. boto3 is imported here to keep this module's
+    module-level imports stdlib-only (image-size discipline).
+    """
+    try:
+        import boto3
+
+        boto3.client("s3").delete_object(Bucket=bucket, Key=key)
+    except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
+        logger.warning(f"failed to delete orphaned object s3://{bucket}/{key}: {exc}")
+
+
+def _release_reservation(assistant_id: str, document_id: str, declared: int) -> None:
+    """Return the request-time reservation on a terminal ingestion FAILURE.
+
+    Exactly-once via ``byte_cap.settle_once`` (Requirement 12.6). Called only from
+    genuinely terminal failure paths — never from the "leave it non-terminal for
+    redelivery" paths, where the bytes must stay reserved for the delivery that
+    eventually completes the document.
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    if declared <= 0:
+        return
+    if not byte_cap.settle_once(assistant_id, document_id):
+        return
+    byte_cap.release(assistant_id, assistant_id, declared)
+
+
+def _reconcile_bytes_on_complete(
+    assistant_id: str,
+    document_id: str,
+    bucket: str,
+    key: str,
+    record: Optional[Dict[str, Any]],
+    declared: int,
+) -> None:
+    """Settle the byte reservation against the AUTHORITATIVE S3 size (Req 12.3/12.4).
+
+    The request-time reservation used the client-declared size, which is an input,
+    not a measurement. Here — the document is indexed and its bytes are really in
+    S3 — the true size is taken from an S3 HEAD and the reservation is reconciled:
+
+    * ``real == declared`` — commit the reservation as-is.
+    * ``real < declared`` — the client over-reported; commit the real size and
+      release the difference so the owner is not charged for bytes never stored.
+    * ``real > declared`` — the client UNDER-reported, which is the case that could
+      defeat the cap. Reserve the shortfall against the binding cap. If that
+      breaches it, the document overshoots: raise :class:`ByteCapExceeded` so the
+      caller fails it — but first return the original reservation and delete the
+      orphaned S3 object, leaving no bytes charged and no stranded source.
+
+    Exactly-once via ``byte_cap.settle_once``: a redelivery that re-examines an
+    already-settled document does nothing, which is what stops a second commit
+    driving ``reservedBytes`` negative.
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    if not byte_cap.settle_once(assistant_id, document_id):
+        # A prior delivery already settled this document's bytes.
+        return
+
+    real = byte_cap.object_size_bytes(bucket, key)
+
+    if real == declared:
+        byte_cap.commit(assistant_id, assistant_id, real)
+        return
+    if real < declared:
+        byte_cap.commit(assistant_id, assistant_id, real)
+        byte_cap.release(assistant_id, assistant_id, declared - real)
+        return
+
+    # real > declared: reserve the shortfall the client did not declare.
+    elevated = bool((record or {}).get("elevatedByteCap"))
+    cap = byte_cap.effective_cap(elevated)
+    try:
+        byte_cap.reserve(assistant_id, assistant_id, real - declared, cap)
+    except byte_cap.ByteCapExceeded:
+        # Overshoots the cap. Undo everything this document reserved and remove the
+        # source object, then let the caller mark it failed.
+        if declared > 0:
+            byte_cap.release(assistant_id, assistant_id, declared)
+        _delete_s3_object(bucket, key)
+        raise
+    byte_cap.commit(assistant_id, assistant_id, real)
+
+
 def handle_object(bucket: str, key: str) -> Dict[str, Any]:
     """Route one uploaded object. Returns a summary for logging and tests."""
     from apis.shared.kb_backend.records import ENGINE_MANAGED
@@ -500,6 +618,30 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
     from apis.shared.kb_backend.managed_backend import ManagedKbBackend
     from apis.shared.kb_backend.protocol import DocumentSource
 
+    # The DOC# row carries the size declared and reserved at request time
+    # (sizeBytes) and the byteCapSettled marker. Read it once. If a PRIOR delivery
+    # already drove this document terminal AND settled its bytes, this is a
+    # redelivery and re-running the byte accounting would double-count — a second
+    # commit drives reservedBytes negative, a second release over-credits the cap.
+    # Return without touching anything (Requirement 12.4/12.5).
+    doc_row = _get_doc_row(assistant_id, document_id)
+    if (
+        doc_row
+        and doc_row.get("byteCapSettled")
+        and doc_row.get("status") in (STATUS_COMPLETE, STATUS_FAILED)
+    ):
+        logger.info(
+            f"document {document_id} is already {doc_row.get('status')} and its "
+            f"bytes are settled; skipping to avoid double-counting"
+        )
+        return {
+            "routed": "managed",
+            "ingested": False,
+            "document_id": document_id,
+            "status": doc_row.get("status"),
+            "note": "already-settled",
+        }
+    declared = _declared_bytes(doc_row)
     # The backend takes the App_KB_Id and resolves the AWS identifiers itself on
     # every operation. Threading them in from here would defeat that: a
     # dormancy/rehydration cycle replaces them, and a caller holding a stale pair
@@ -527,6 +669,7 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
             assistant_id, document_id, STATUS_FAILED,
             error=f"the knowledge base reports this document as {status}",
         )
+        _release_reservation(assistant_id, document_id, declared)
         return {"routed": "managed", "ingested": False, "document_id": document_id,
                 "status": status}
 
@@ -537,6 +680,7 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
         except Exception as exc:
             logger.error(f"direct ingestion of {document_id} failed: {exc}", exc_info=True)
             set_document_terminal(assistant_id, document_id, STATUS_FAILED, error=str(exc))
+            _release_reservation(assistant_id, document_id, declared)
             raise
     else:
         # Already submitted — a redelivery, or a document still being worked on.
@@ -560,6 +704,7 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
             assistant_id, document_id, STATUS_FAILED,
             error=f"the knowledge base reports this document as {status}",
         )
+        _release_reservation(assistant_id, document_id, declared)
         return {"routed": "managed", "ingested": True, "document_id": document_id,
                 "status": status}
 
@@ -593,6 +738,40 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
             f"document {document_id} is INDEXED but was not retrievable within the "
             f"poll window; leaving it for redelivery"
         )
+
+    # INDEXED and retrievable. Settle the byte reservation against the AUTHORITATIVE
+    # S3 size before declaring success (Requirement 12.3): the request-time reserve
+    # used the client's declared size, which is not trustworthy. This commits the
+    # true bytes, or — if the client under-reported and the real size overshoots the
+    # cap — fails the document and removes the orphaned object.
+    from apis.shared.kb_backend.byte_cap import ByteCapExceeded
+
+    try:
+        _reconcile_bytes_on_complete(
+            assistant_id, document_id, bucket, key, record, declared
+        )
+    except ByteCapExceeded:
+        # The reservation has been returned and the source object deleted inside the
+        # reconcile. Fail the document with an actionable message (Requirement
+        # 12.12) rather than reporting a success that breaches the cap.
+        logger.warning(
+            f"document {document_id} indexed but its true size overshoots the byte "
+            f"cap; marking failed and removing the orphaned object"
+        )
+        set_document_terminal(
+            assistant_id, document_id, STATUS_FAILED,
+            error=(
+                "this document exceeds the knowledge base's storage limit; delete "
+                "unused documents or request an elevated storage tier"
+            ),
+        )
+        return {
+            "routed": "managed",
+            "ingested": True,
+            "document_id": document_id,
+            "status": STATUS_FAILED,
+            "note": "byte-cap-exceeded",
+        }
 
     set_document_terminal(
         assistant_id,

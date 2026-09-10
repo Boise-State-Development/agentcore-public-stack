@@ -19,7 +19,7 @@ from apis.app_api.documents.models import (
     ReportUploadFailureRequest,
     UploadUrlResponse,
 )
-from apis.app_api.documents.services.document_service import _generate_document_id, create_document, list_assistant_documents, update_document_status
+from apis.app_api.documents.services.document_service import _generate_document_id, create_document, list_assistant_documents, update_document_status, release_reservation_if_managed
 from apis.app_api.documents.services.document_service import get_document as get_document_service
 from apis.app_api.documents.services.import_service import run_import
 from apis.app_api.documents.services.storage_service import (
@@ -35,6 +35,7 @@ from apis.shared.oauth.provider_repository import (
     get_provider_repository,
 )
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
+from apis.shared.kb_backend.byte_cap import ByteCapExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,73 @@ async def _require_edit_permission(assistant_id: str, current_user: User) -> str
     return assistant.owner_id
 
 
+async def _resolve_managed_kb(assistant_id: str) -> tuple[bool, bool]:
+    """Return ``(is_managed, elevated)`` for this assistant's knowledge base.
+
+    Reads the KB_Record once. A legacy knowledge base — an absent record, or any
+    record whose engine is not the exact managed literal — returns
+    ``(False, False)`` so the caller skips all cap logic: legacy S3-Vectors
+    knowledge bases stay uncapped (Requirement 12.11 scopes the cap to managed
+    KBs). The elevated tier is READ from the existing ``elevatedByteCap`` flag,
+    never written here — granting it is a separate feature.
+    """
+    from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
+
+    # app_kb_id == assistant_id this phase. get_kb_record is a blocking boto3 call.
+    record = await asyncio.to_thread(get_kb_record, assistant_id, assistant_id)
+    if resolve_engine(record) != ENGINE_MANAGED:
+        return False, False
+    return True, bool((record or {}).get("elevatedByteCap"))
+
+
+async def _reserve_managed_upload(assistant_id: str, size_bytes: int) -> int:
+    """Provisionally reserve a declared upload size against the managed-KB cap.
+
+    Returns the number of bytes reserved — ``0`` for a legacy knowledge base,
+    which is uncapped and never touched. Raises
+    :class:`~apis.shared.kb_backend.byte_cap.ByteCapExceeded` if the reservation
+    would breach the binding cap; the endpoint turns that into HTTP 413 with the
+    numbers (Requirement 12.12).
+
+    The reservation is PROVISIONAL. ``size_bytes`` is the client's own declaration
+    and a client that under-reports its size would defeat the cap, so this only
+    buys fast, friendly feedback before a presigned URL is issued — the
+    authoritative gate is the S3-HEAD reconcile at ingestion (Requirement 12.3).
+    ``effective_cap`` folds the per-owner allowance and the per-KB ceiling into one
+    atomic conditional write (Requirement 12.1/12.5).
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    is_managed, elevated = await _resolve_managed_kb(assistant_id)
+    if not is_managed:
+        return 0
+    cap = byte_cap.effective_cap(elevated)
+    await asyncio.to_thread(byte_cap.reserve, assistant_id, assistant_id, size_bytes, cap)
+    return size_bytes
+
+
+async def _release_managed_reservation(assistant_id: str, size_bytes: int) -> None:
+    """Return a managed-KB reservation taken earlier in THIS request.
+
+    Used only to unwind the request-time reservation when a later step of the same
+    upload-URL request fails (document-row create, presigned-URL generation) before
+    the client is ever handed a URL. No ``settle_once`` guard here: the reservation
+    was taken microseconds ago by this same request, the document is not yet
+    visible to any other settlement path, and the ``DOC#`` row may not even exist —
+    stamping a marker on it would conjure a partial row. The abandoned-after-URL
+    cases (client upload failure, stale sweep) settle through their own guarded
+    paths (Requirement 12.6).
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    if size_bytes <= 0:
+        return
+    is_managed, _ = await _resolve_managed_kb(assistant_id)
+    if not is_managed:
+        return
+    await asyncio.to_thread(byte_cap.release, assistant_id, assistant_id, size_bytes)
+
+
 @router.post("/upload-url", response_model=UploadUrlResponse, status_code=status.HTTP_200_OK)
 async def generate_upload_url_endpoint(
     assistant_id: str,
@@ -80,6 +148,14 @@ async def generate_upload_url_endpoint(
         # 1. Resolve permission — owner or editor may upload documents
         await _require_edit_permission(assistant_id, current_user)
 
+        # 1b. Managed KBs are byte-capped on EVERY path that adds bytes
+        #     (Requirement 12.11); the interactive upload path is enforced here.
+        #     Reserve the client-declared size BEFORE creating the DOC# row or
+        #     issuing a presigned URL, so an over-cap upload is refused with a 413
+        #     the client can act on rather than after the bytes are already staged.
+        #     Legacy KBs return 0 and are never checked.
+        reserved_bytes = await _reserve_managed_upload(assistant_id, request.size_bytes)
+
         # 2. Generate document_id and S3 key
         from apis.app_api.documents.services.storage_service import _get_s3_key, _sanitize_filename
 
@@ -88,24 +164,45 @@ async def generate_upload_url_endpoint(
         sanitized_filename = _sanitize_filename(request.filename)
         s3_key = _get_s3_key(assistant_id, document_id, sanitized_filename)
 
-        # 3. Create document record in DynamoDB (status='uploading')
-        _ = await create_document(
-            assistant_id=assistant_id,
-            filename=request.filename,
-            content_type=request.content_type,
-            size_bytes=request.size_bytes,
-            s3_key=s3_key,
-            document_id=document_id,
-        )
+        try:
+            # 3. Create document record in DynamoDB (status='uploading'). The
+            #    declared size is persisted as sizeBytes — the value the ingestion
+            #    step reconciles the true S3 size against (Requirement 12.3).
+            _ = await create_document(
+                assistant_id=assistant_id,
+                filename=request.filename,
+                content_type=request.content_type,
+                size_bytes=request.size_bytes,
+                s3_key=s3_key,
+                document_id=document_id,
+            )
 
-        # 4. Generate presigned S3 URL
-        presigned_url, _ = await generate_upload_url(
-            assistant_id=assistant_id, document_id=document_id, filename=request.filename, content_type=request.content_type, expires_in=3600
-        )
+            # 4. Generate presigned S3 URL
+            presigned_url, _ = await generate_upload_url(
+                assistant_id=assistant_id, document_id=document_id, filename=request.filename, content_type=request.content_type, expires_in=3600
+            )
+        except Exception:
+            # A step after the reservation failed and the client never received a
+            # URL, so this upload can never settle the bytes. Return the
+            # reservation now rather than leak it (Requirement 12.6).
+            await _release_managed_reservation(assistant_id, reserved_bytes)
+            raise
 
         # 5. Return response
         return UploadUrlResponse(documentId=document_id, uploadUrl=presigned_url, expiresIn=3600)
 
+    except ByteCapExceeded as e:
+        # Requirement 12.12: the numbers make the error actionable — the user can
+        # see how far over they are and request an elevated tier.
+        used = "" if e.already_used is None else f" (currently using {e.already_used} bytes)"
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"This file ({e.requested} bytes) would put the assistant over its "
+                f"{e.cap}-byte knowledge-base limit{used}. Delete unused documents "
+                f"or request an elevated storage tier."
+            ),
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -239,6 +336,12 @@ async def report_upload_failure(
 
         if not updated:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update document status")
+
+        # The client's upload to S3 never landed, so the bytes reserved at
+        # request time will never be settled by the ingestion consumer. Return
+        # them now (Requirement 12.6). settle_once makes this idempotent against a
+        # concurrent stale-document sweep marking the same document failed.
+        await release_reservation_if_managed(document)
 
         return DocumentResponse.model_validate(updated.model_dump(by_alias=True))
 

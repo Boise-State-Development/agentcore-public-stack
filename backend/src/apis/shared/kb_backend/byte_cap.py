@@ -127,6 +127,24 @@ def per_kb_ceiling() -> int:
     return _env_int("MANAGED_KB_PER_KB_CEILING_BYTES", DEFAULT_PER_KB_CEILING_BYTES)
 
 
+def effective_cap(elevated: bool = False) -> int:
+    """The single binding cap for an owner's knowledge base this phase.
+
+    ``App_KB_Id == assistant_id`` today, so one owner has exactly one managed
+    knowledge base and both limits — the per-owner allowance and the per-KB
+    ceiling — apply to the *same* accounting record. The binding limit is
+    therefore the smaller of the two.
+
+    Returning ``min`` and reserving against it lets a single atomic
+    :func:`reserve` enforce both caps at once (Requirement 12.1). The obvious
+    alternative — reserve against the owner cap, then a second read-and-compare
+    against the ceiling — is not atomic: two concurrent uploads could each pass a
+    separate ceiling check and collectively breach it, which is the exact race a
+    cap exists to close. Folding both into one conditional write keeps 12.5.
+    """
+    return min(per_owner_cap(elevated), per_kb_ceiling())
+
+
 def _table():
     import boto3
 
@@ -232,6 +250,45 @@ def release(assistant_id: str, app_kb_id: str, n_bytes: int) -> None:
         ExpressionAttributeNames={"#reserved": "reservedBytes", "#total": "totalBytes"},
         ExpressionAttributeValues={":neg": Decimal(-n_bytes)},
     )
+
+
+def settle_once(assistant_id: str, document_id: str) -> bool:
+    """Claim the one-time right to settle a document's reservation.
+
+    Returns ``True`` for exactly one caller per document and ``False`` for every
+    caller after it, by atomically stamping ``byteCapSettled`` on the ``DOC#`` row
+    under ``attribute_not_exists``.
+
+    This is what makes commit/release idempotent. A reservation taken at request
+    time is settled — converted to stored bytes, or returned — on whichever
+    terminal path the document actually reaches: the ingestion consumer, a
+    client-reported upload failure, or the stale-document sweep. But those paths
+    are not mutually exclusive under concurrency, and the ingestion consumer in
+    particular is *redelivered* (its whole design turns on EventBridge's 2-retry
+    cap), so a document that reaches ``INDEXED`` is re-examined on every
+    redelivery. Without this guard a redelivery would commit the same bytes twice
+    — driving ``reservedBytes`` negative and inflating ``storedBytes`` — and two
+    racing failure paths would release the same reservation twice, over-crediting
+    the allowance and defeating the cap. Both break the invariant
+    ``totalBytes == storedBytes + reservedBytes`` that Property 5 rests on.
+
+    Keyed on the ``DOC#`` row rather than a separate ledger so the claim shares the
+    document's own lifetime: delete the document and the marker goes with it.
+    """
+    from botocore.exceptions import ClientError
+
+    try:
+        _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+            UpdateExpression="SET byteCapSettled = :true",
+            ConditionExpression="attribute_not_exists(byteCapSettled)",
+            ExpressionAttributeValues={":true": True},
+        )
+        return True
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
 
 
 def reserve_snapshot(
