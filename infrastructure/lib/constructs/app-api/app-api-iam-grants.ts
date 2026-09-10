@@ -429,6 +429,24 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
                   `arn:aws:sagemaker:${config.awsRegion}:${config.awsAccount}:transform-job/${config.projectPrefix}-*`],
     }),
   );
+  // Batch Transform is a two-step API: CreateModel to register the trained
+  // artifact, then CreateTransformJob against that model. Without this the
+  // transform path dies at step one with AccessDeniedException, which is what
+  // it did — inference only ever worked when app-api was run locally under a
+  // developer's own credentials, never from the deployed task role.
+  //
+  // Separate from SageMakerJobManagement because the resource pattern differs:
+  // sagemaker_service names the model `model-{job_name}`, so the ARN carries a
+  // `model-` prefix ahead of the project prefix and would not match the
+  // job-shaped pattern above.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'SageMakerModelManagement',
+      effect: iam.Effect.ALLOW,
+      actions: ['sagemaker:CreateModel'],
+      resources: [`arn:aws:sagemaker:${config.awsRegion}:${config.awsAccount}:model/model-${config.projectPrefix}-*`],
+    }),
+  );
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
       sid: 'PassSageMakerRole',
