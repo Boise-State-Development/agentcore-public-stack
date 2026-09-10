@@ -62,6 +62,7 @@ const mockJobResponse: JobResponse = {
   error_message: null,
   max_runtime_seconds: 86400,
   training_progress: null,
+  use_spot: false,
 };
 
 function createMockState() {
@@ -440,6 +441,39 @@ describe('CreateTrainingJobPage', () => {
       const call = mockState.createTrainingJob.mock.calls[0][0];
       expect(call.hyperparameters).not.toHaveProperty('lora_r');
       expect(call.hyperparameters).not.toHaveProperty('load_in_4bit');
+    });
+  });
+
+  describe('managed spot', () => {
+    async function submitWith(component: CreateTrainingJobPage) {
+      const router = TestBed.inject(Router);
+      vi.spyOn(router, 'navigate').mockResolvedValue(true);
+      component.selectModel(mockModel);
+      component.uploadState.set({
+        file: new File([''], 'test.jsonl'),
+        progress: 100,
+        status: 'complete',
+        s3Key: 'uploads/test.jsonl',
+      });
+      await component.submitJob();
+      return mockState.createTrainingJob.mock.calls[0][0];
+    }
+
+    it('defaults to off', () => {
+      const component = createComponent();
+      expect(component.form.getRawValue().useSpot).toBe(false);
+    });
+
+    it('sends use_spot false unless the user opts in', async () => {
+      const call = await submitWith(createComponent());
+      expect(call.use_spot).toBe(false);
+    });
+
+    it('sends use_spot true when enabled', async () => {
+      const component = createComponent();
+      component.form.patchValue({ useSpot: true });
+      const call = await submitWith(component);
+      expect(call.use_spot).toBe(true);
     });
   });
 

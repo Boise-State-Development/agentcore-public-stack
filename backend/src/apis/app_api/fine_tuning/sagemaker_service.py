@@ -52,6 +52,18 @@ _INFERENCE_IMAGE_TAGS = {
 #: directory it is told about, and the trainer only writes to the one it knows.
 CHECKPOINT_LOCAL_PATH = "/opt/ml/checkpoints"
 
+#: Head-room added to MaxRuntimeInSeconds to get MaxWaitTimeInSeconds for a
+#: spot job. MaxWaitTime covers capacity waiting *and* training, and the API
+#: requires it to exceed MaxRuntime, so it cannot simply equal it.
+#:
+#: Four hours because measured on-demand capacity waits for the GPU families
+#: this feature uses ran 28-58 minutes in us-west-2; spot draws from the
+#: surplus of those same constrained pools, so its queue is longer, not
+#: shorter. Waiting is not billed — only running is — so a generous allowance
+#: costs nothing but patience, while a tight one fails the job outright with
+#: MaxWaitTimeExceeded after it has already queued.
+SPOT_CAPACITY_WAIT_ALLOWANCE_SECONDS = 4 * 60 * 60
+
 _DLC_REGISTRY_ACCOUNT = "763104351884"
 
 _SUPPORTED_DLC_REGIONS = (
@@ -131,6 +143,7 @@ class SageMakerService:
         instance_count: int = 1,
         max_runtime: int = 86400,
         checkpoint_s3_uri: Optional[str] = None,
+        use_spot: bool = False,
         source_dir_s3_uri: str = "",
         task_type: Optional[str] = None,
         volume_size_gb: Optional[int] = None,
@@ -204,6 +217,20 @@ class SageMakerService:
                 "S3Uri": checkpoint_s3_uri,
                 "LocalPath": CHECKPOINT_LOCAL_PATH,
             }
+
+        if use_spot:
+            # MaxWaitTimeInSeconds must be strictly larger than
+            # MaxRuntimeInSeconds, and it covers waiting for capacity *plus*
+            # training — so it is the runtime plus an allowance for the queue,
+            # not the runtime itself.
+            params["EnableManagedSpotTraining"] = True
+            params["StoppingCondition"]["MaxWaitTimeInSeconds"] = (
+                max_runtime + SPOT_CAPACITY_WAIT_ALLOWANCE_SECONDS
+            )
+            logger.info(
+                f"Managed spot enabled for {job_name}: MaxWait="
+                f"{params['StoppingCondition']['MaxWaitTimeInSeconds']}s"
+            )
 
         if subnets and security_groups:
             params["VpcConfig"] = {

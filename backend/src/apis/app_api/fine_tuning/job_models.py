@@ -343,6 +343,11 @@ class CreateJobRequest(BaseModel):
     hyperparameters: Optional[Dict[str, str]] = None
     max_runtime_seconds: int = Field(default=86400, le=432000, gt=0)
     custom_huggingface_model_id: Optional[str] = None
+    #: Run on managed spot capacity. Opt-in, not default: spot trades a large
+    #: discount for a longer queue, and measured on-demand waits for these GPU
+    #: families already ran 28-58 minutes — a researcher who needs a result
+    #: this afternoon should be able to pay for certainty.
+    use_spot: bool = False
 
 
 class JobResponse(BaseModel):
@@ -369,6 +374,7 @@ class JobResponse(BaseModel):
     error_message: Optional[str] = None
     max_runtime_seconds: int = 86400
     training_progress: Optional[float] = None
+    use_spot: bool = False
 
 
 class JobListResponse(BaseModel):

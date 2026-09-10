@@ -174,6 +174,7 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
     loraAlpha: ['32'],
     loadIn4bit: ['true'],
     maxRuntimeHours: [24, [Validators.required, Validators.min(1), Validators.max(120)]],
+    useSpot: [false],
   });
 
   ngOnInit(): void {
@@ -483,6 +484,7 @@ export class CreateTrainingJobPage implements OnInit, OnDestroy {
         ...(isCustom ? {} : { instance_type: model!.default_instance_type }),
         hyperparameters,
         max_runtime_seconds: (formValues.maxRuntimeHours ?? 24) * 3600,
+        use_spot: formValues.useSpot ?? false,
         ...(isCustom ? { custom_huggingface_model_id: customHfId } : {}),
       };
 

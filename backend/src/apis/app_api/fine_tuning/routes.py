@@ -573,6 +573,22 @@ async def create_job(
 
     if request.hyperparameters:
         hyperparameters.update(request.hyperparameters)
+
+    # Spot restarts the job from the last checkpoint. With checkpointing off
+    # it restarts from zero, and a run longer than the mean time between
+    # interruptions then almost never completes — it just re-bills the same
+    # early steps forever. Refuse the combination rather than sell it.
+    if request.use_spot and not task_types.str2bool(
+        hyperparameters.get("checkpointing", "true")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Managed spot requires checkpointing. Without it an "
+                "interrupted job restarts from the beginning, so a long run "
+                "may never finish while still being billed for every attempt."
+            ),
+        )
     hyperparameters["model_name_or_path"] = huggingface_id
     hyperparameters["task_type"] = spec.task_type
 
@@ -613,6 +629,7 @@ async def create_job(
         sagemaker_job_name=sagemaker_job_name,
         output_s3_prefix=output_s3_prefix,
         max_runtime_seconds=max_runtime_seconds,
+        use_spot=request.use_spot,
     )
 
     # Start SageMaker training job
@@ -627,6 +644,7 @@ async def create_job(
             source_dir_s3_uri=scripts_s3_uri,
             task_type=spec.task_type,
             checkpoint_s3_uri=checkpoint_s3_uri,
+            use_spot=request.use_spot,
         )
         job = jobs_repo.update_job_status(user.user_id, job_id, "TRAINING")
     except Exception as e:
@@ -769,6 +787,11 @@ def _estimate_training_progress(sm_status: dict, job: dict) -> Optional[float]:
         "DownloadingTrainingImage": 6.0,
         "Downloading": 8.0,
         "Uploading": 92.0,
+        # Spot only: the job is stalled waiting to be rescheduled, not
+        # progressing. Without this the elapsed-time curve below keeps
+        # climbing and the bar lies about a job that is standing still.
+        "Interrupted": 10.0,
+        "MaxWaitTimeExceeded": 0.0,
     }
     if secondary in phase_progress:
         return phase_progress[secondary]

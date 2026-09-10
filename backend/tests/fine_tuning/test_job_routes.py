@@ -178,6 +178,84 @@ class TestCreateJob:
         body = resp.json()
         assert body["model_id"] == "distilgpt2"
 
+    def _spot_app(self, make_user):
+        app = _create_app()
+        user = make_user(email="user@example.com")
+
+        mock_s3 = MagicMock()
+        mock_s3.check_object_exists.return_value = True
+        mock_s3.get_output_s3_prefix.return_value = "output/user-001/job-abc"
+        mock_s3.get_output_s3_uri.return_value = "s3://bucket/output/user-001/job-abc"
+        mock_s3.get_checkpoint_s3_uri.return_value = "s3://bucket/checkpoints/user-001/job-abc"
+        mock_s3.bucket_name = "test-bucket"
+
+        mock_jobs = MagicMock()
+        mock_jobs.create_job.return_value = SAMPLE_JOB
+        mock_jobs.update_job_status.return_value = {**SAMPLE_JOB, "status": "TRAINING"}
+
+        mock_sm = MagicMock()
+        mock_sm.create_training_job.return_value = {}
+
+        mock_script = MagicMock()
+        mock_script.ensure_scripts_uploaded.return_value = "s3://test-bucket/scripts/sourcedir-text.tar.gz"
+
+        _setup_deps(app, user, SAMPLE_GRANT, mock_jobs, mock_s3, mock_sm,
+                    MagicMock(), mock_script)
+        return TestClient(app), mock_sm
+
+    def test_spot_is_off_unless_asked_for(self, make_user):
+        client, mock_sm = self._spot_app(make_user)
+        resp = client.post("/fine-tuning/jobs", json={
+            "model_id": "distilgpt2",
+            "dataset_s3_key": "datasets/user-001/abc/train.jsonl",
+        })
+        assert resp.status_code == 201
+        assert mock_sm.create_training_job.call_args[1]["use_spot"] is False
+
+    def test_spot_is_forwarded_to_sagemaker(self, make_user):
+        client, mock_sm = self._spot_app(make_user)
+        resp = client.post("/fine-tuning/jobs", json={
+            "model_id": "distilgpt2",
+            "dataset_s3_key": "datasets/user-001/abc/train.jsonl",
+            "use_spot": True,
+        })
+        assert resp.status_code == 201
+        assert mock_sm.create_training_job.call_args[1]["use_spot"] is True
+
+    def test_spot_with_checkpointing_disabled_is_refused(self, make_user):
+        """Spot restarts from the last checkpoint. With none, a long run
+        restarts from zero and may never finish while billing every attempt —
+        refuse the combination rather than sell it."""
+        client, mock_sm = self._spot_app(make_user)
+        resp = client.post("/fine-tuning/jobs", json={
+            "model_id": "distilgpt2",
+            "dataset_s3_key": "datasets/user-001/abc/train.jsonl",
+            "use_spot": True,
+            "hyperparameters": {"checkpointing": "false"},
+        })
+        assert resp.status_code == 400
+        assert "checkpointing" in resp.json()["detail"].lower()
+        mock_sm.create_training_job.assert_not_called()
+
+    def test_checkpointing_off_without_spot_is_allowed(self, make_user):
+        """The kill switch stays usable on on-demand."""
+        client, mock_sm = self._spot_app(make_user)
+        resp = client.post("/fine-tuning/jobs", json={
+            "model_id": "distilgpt2",
+            "dataset_s3_key": "datasets/user-001/abc/train.jsonl",
+            "hyperparameters": {"checkpointing": "false"},
+        })
+        assert resp.status_code == 201
+
+    def test_checkpoint_uri_reaches_sagemaker(self, make_user):
+        client, mock_sm = self._spot_app(make_user)
+        client.post("/fine-tuning/jobs", json={
+            "model_id": "distilgpt2",
+            "dataset_s3_key": "datasets/user-001/abc/train.jsonl",
+        })
+        uri = mock_sm.create_training_job.call_args[1]["checkpoint_s3_uri"]
+        assert uri == "s3://bucket/checkpoints/user-001/job-abc"
+
     def test_rejects_dataset_the_trainer_cannot_read(self, make_user):
         """Last gate before SageMaker: no GPU is provisioned for a doomed job."""
         app = _create_app()
