@@ -30,7 +30,7 @@ Requirements: 21.1, 21.2, 21.3, 21.4, 23.1, 23.2, 23.3, 23.4, 23.5, 23.6, 23.7,
 
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -731,3 +731,27 @@ class TestWireContract:
             retryable=True,
         ).model_dump(by_alias=True)
         assert payload["documentId"] == "d1"
+
+
+# ── Born-managed (MANAGED_KB_NEW_DEFAULT) ────────────────────────────────────
+class TestNewDefaultFlag:
+    @pytest.mark.parametrize(
+        "raw", ["", "  ", "false", "no", "off", "0", "disabled", None]
+    )
+    def test_absent_empty_or_negative_reads_as_off(self, monkeypatch, raw):
+        if raw is None:
+            monkeypatch.delenv(s.FLAG_NEW_DEFAULT, raising=False)
+        else:
+            monkeypatch.setenv(s.FLAG_NEW_DEFAULT, raw)
+        assert s.new_default_enabled() is False
+
+    @pytest.mark.parametrize("raw", ["1", "true", "yes", "on", "enabled", "TRUE"])
+    def test_affirmative_spellings_read_as_on(self, monkeypatch, raw):
+        monkeypatch.setenv(s.FLAG_NEW_DEFAULT, raw)
+        assert s.new_default_enabled() is True
+
+    def test_the_flag_is_read_at_call_time(self, monkeypatch):
+        monkeypatch.setenv(s.FLAG_NEW_DEFAULT, "true")
+        assert s.new_default_enabled() is True
+        monkeypatch.setenv(s.FLAG_NEW_DEFAULT, "false")
+        assert s.new_default_enabled() is False

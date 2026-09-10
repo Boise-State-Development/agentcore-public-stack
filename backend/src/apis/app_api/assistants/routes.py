@@ -156,6 +156,7 @@ async def create_assistant_endpoint(request: CreateAssistantRequest, current_use
 
         # Convert to response model (excludes owner_id for privacy)
         assistant_dict = assistant.model_dump(by_alias=True, exclude={"ownerId"})
+
         return AssistantResponse.model_validate(assistant_dict)
 
     except Exception as e:

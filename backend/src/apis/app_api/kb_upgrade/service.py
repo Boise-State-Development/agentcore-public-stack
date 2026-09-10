@@ -45,6 +45,19 @@ class UpgradeUnavailable(Exception):
 #: action is available, and "available" has to mean actionable.
 FLAG_MIGRATION_ENABLED = "MANAGED_KB_MIGRATION_ENABLED"
 
+#: Born-managed: when set, an agent's knowledge base is created on the managed
+#: backend the moment its FIRST document is uploaded, skipping the user-facing
+#: Upgrade step entirely (rollout ladder step 2). Read here so the flag has one
+#: definition, and acted on in ``kb_upgrade.born_managed`` (the upload trigger) and
+#: ``kb_migration.provisioner`` (the job that builds the knowledge base).
+#:
+#: Independent of ``MANAGED_KB_MIGRATION_ENABLED`` by design: born-managed has no
+#: corpus to carry across and does not go through shadow/verify/promote, so a
+#: deployment can sit on step 2 — new agents managed, existing fleet untouched —
+#: for as long as it likes. The migration dispatcher reads BOTH flags and gates
+#: each work state on its own.
+FLAG_NEW_DEFAULT = "MANAGED_KB_NEW_DEFAULT"
+
 #: Affirmative spellings, matching ``dispatcher._TRUTHY`` exactly. An allow-list
 #: rather than truthiness, because the value being designed around is present but
 #: empty: ``bool("")`` is right by luck and ``bool("false")`` is not.
@@ -65,6 +78,17 @@ def migration_enabled() -> bool:
     feature a 33-second test that ignored its own override.
     """
     return (os.environ.get(FLAG_MIGRATION_ENABLED) or "").strip().lower() in _TRUTHY
+
+
+def new_default_enabled() -> bool:
+    """Whether a new agent's knowledge base should be born on the managed backend.
+
+    Read at call time, never bound as a default argument — same reason as
+    :func:`migration_enabled`. Sufficient on its own: born-managed provisioning is
+    served by the migration dispatcher under this flag alone, so it does not also
+    require ``MANAGED_KB_MIGRATION_ENABLED``.
+    """
+    return (os.environ.get(FLAG_NEW_DEFAULT) or "").strip().lower() in _TRUTHY
 
 
 def _now() -> datetime:

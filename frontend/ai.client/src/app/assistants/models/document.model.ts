@@ -1,12 +1,24 @@
 /**
  * Document status types matching backend DocumentStatus
+ *
+ * `provisioning` is the leading status of a born-managed first upload
+ * (MANAGED_KB_NEW_DEFAULT): the file is uploaded and the assistant's knowledge
+ * base is still being created. Only ever the FIRST document of an assistant —
+ * every upload after that starts at `uploading`.
  */
-export type DocumentStatus = 'uploading' | 'chunking' | 'embedding' | 'complete' | 'failed';
+export type DocumentStatus =
+  | 'provisioning'
+  | 'uploading'
+  | 'chunking'
+  | 'embedding'
+  | 'complete'
+  | 'failed';
 
 /**
  * Statuses that indicate a document is still being processed.
  */
 export const PROCESSING_STATUSES: readonly DocumentStatus[] = [
+  'provisioning',
   'uploading',
   'chunking',
   'embedding',

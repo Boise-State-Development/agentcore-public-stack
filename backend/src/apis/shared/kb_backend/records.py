@@ -76,6 +76,18 @@ PROMOTE = "promote"
 RETAIN = "retain"
 MIGRATION_FAILED = "failed"
 
+#: Born-managed provisioning (``MANAGED_KB_NEW_DEFAULT``). Not part of the
+#: shadow→verify→promote migration at all: there is no legacy corpus to carry
+#: across and nothing to verify against, because the knowledge base is managed
+#: from its first document. It borrows this column purely to reuse the sparse
+#: work-key queue and the worker lease — the two things that make a minutes-long
+#: provision survive a crash — rather than growing a second dispatcher.
+#:
+#: Deliberately NOT named ``provisioning``: that string is already the
+#: ``provisioningState`` value, and two attributes carrying the same word with
+#: different meanings is how the wrong one gets read.
+BORN_MANAGED = "born_managed"
+
 #: Reserved in the enum so a stored value round-trips, but never entered in this
 #: phase. Reclaiming legacy vectors is explicitly a follow-up spec; a worker that
 #: found itself here would delete data this phase has promised to retain.
@@ -83,7 +95,12 @@ RECLAIM = "reclaim"
 
 #: States that keep a record in the dispatcher's queue. Work keys are written on
 #: entering one of these.
-WORK_ELIGIBLE_STATES = frozenset({SHADOW, VERIFY, PROMOTE})
+#:
+#: ``BORN_MANAGED`` is here for the same reason the migration states are: it is
+#: work the dispatcher must keep handing back until it reaches a terminal state.
+#: Adding it here is what makes the dispatcher sweep it — ``_work_states`` derives
+#: from this set rather than restating it.
+WORK_ELIGIBLE_STATES = frozenset({BORN_MANAGED, SHADOW, VERIFY, PROMOTE})
 
 #: States that take a record out of the queue for good. Work keys are removed on
 #: entering one of these. ``RETAIN`` is the terminal state this phase reaches;
@@ -92,7 +109,7 @@ WORK_ELIGIBLE_STATES = frozenset({SHADOW, VERIFY, PROMOTE})
 TERMINAL_STATES = frozenset({RETAIN, MIGRATION_FAILED})
 
 ALL_MIGRATION_STATES = frozenset(
-    {SHADOW, VERIFY, PROMOTE, RETAIN, MIGRATION_FAILED, RECLAIM}
+    {BORN_MANAGED, SHADOW, VERIFY, PROMOTE, RETAIN, MIGRATION_FAILED, RECLAIM}
 )
 
 
@@ -423,6 +440,65 @@ def set_resource_policy_state(
         Key=key,
         UpdateExpression=expression,
         ExpressionAttributeValues=values,
+    )
+
+
+def adopt_managed_engine(
+    assistant_id: str,
+    app_kb_id: str,
+    now_iso: str,
+) -> None:
+    """Declare a brand-new knowledge base managed BEFORE it has been built.
+
+    Born-managed's counterpart to :func:`promote_engine`, and deliberately not
+    the same function. ``promote_engine`` is guarded on ``migrationState =
+    promote`` and on the catch-up pass having converged, because it is a
+    **cutover**: a corpus already exists on legacy and must be proven carried
+    across before anything is switched. Here there is no corpus and nothing to
+    carry — the engine is declared first precisely so the first document is
+    picked up by the managed pipeline instead of the legacy one.
+
+    That ordering is the whole point. The legacy ingestion handler skips a
+    document only when its record already resolves to ``managed``
+    (``handler._resolve_engine``), so a knowledge base that became managed
+    *after* its first upload would have that document indexed on legacy,
+    answered from legacy, and then indexed a second time on managed.
+
+    Two guards, both necessary:
+
+    * ``attribute_not_exists(retrievalEngine)`` — never re-declare. A record that
+      is already managed (born that way, or promoted by a migration) must not have
+      its ``promotedAt``/``bornManagedAt`` rewritten by a retry, and a concurrent
+      second first-upload must lose rather than both "win".
+    * ``provisioningState = provisioning`` — only a record that is still being
+      built may be declared this way. Without it a torn-down (``deleting``) record
+      could be resurrected as managed with no knowledge base behind it.
+
+    ``upgradeNoticeDismissedAt`` is stamped here on purpose. The upgrade card
+    reads a managed record as ``phase="succeeded"`` and offers the one-time "your
+    knowledge base was upgraded" notice; a knowledge base that was never on legacy
+    has nothing to be congratulated about, so the notice is retired before it can
+    ever be shown.
+
+    Raises :class:`TransitionLost` when either guard fails, which every caller
+    treats as "somebody else got here first" rather than an error.
+    """
+    _conditional(
+        _table().update_item,
+        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        UpdateExpression=(
+            "SET retrievalEngine = :managed, bornManagedAt = :now, "
+            "upgradeNoticeDismissedAt = :now, updatedAt = :now"
+        ),
+        ConditionExpression=(
+            "attribute_not_exists(retrievalEngine) "
+            "AND provisioningState = :provisioning"
+        ),
+        ExpressionAttributeValues={
+            ":managed": ENGINE_MANAGED,
+            ":provisioning": PROVISIONING,
+            ":now": now_iso,
+        },
     )
 
 

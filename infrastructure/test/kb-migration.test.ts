@@ -349,6 +349,31 @@ describe('KbMigrationConstruct — schedules', () => {
     });
   });
 
+  it('dispatcher rule is ENABLED under newDefault ALONE, because born-managed needs it', () => {
+    // This one rule drives two independent things: the shadow→verify→promote
+    // migration and born-managed provisioning. Rollout ladder step 2 turns on
+    // newDefault only — and with the rule disabled, the first upload of every new
+    // agent would queue a provisioning job nothing ever picked up and sit on
+    // "Provisioning knowledge base…" forever. The Python gates each work state on
+    // its own flag, so an enabled rule here migrates NOTHING that already exists.
+    const t = synth({ newDefault: true, migrationEnabled: false });
+    t.hasResourceProperties('AWS::Events::Rule', {
+      ScheduleExpression: 'rate(15 minutes)',
+      State: 'ENABLED',
+    });
+  });
+
+  it('dispatcher rule is DISABLED only when BOTH flags are off', () => {
+    const t = synth({ newDefault: false, migrationEnabled: false });
+    const rules = Object.values(
+      t.findResources('AWS::Events::Rule', {
+        Properties: { ScheduleExpression: 'rate(15 minutes)' },
+      }),
+    );
+    expect(rules).toHaveLength(1);
+    expect((rules[0] as { Properties: { State: string } }).Properties.State).toBe('DISABLED');
+  });
+
   it('reconciler rule is ENABLED even with every flag off, because report-only is the point', () => {
     // Requirement 14.7 makes report-only the INITIAL DEPLOYED MODE so
     // the Reconciler's judgement can be audited for weeks before

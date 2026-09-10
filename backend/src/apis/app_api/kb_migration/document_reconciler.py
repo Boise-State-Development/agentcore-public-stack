@@ -102,7 +102,16 @@ _TRUTHY = frozenset({"1", "true", "yes", "on", "enabled"})
 # minus its terminal members. ``deleting`` is deliberately NOT here: a
 # soft-deleted document is being removed on purpose and must never be resurrected
 # to ``complete``.
-NON_TERMINAL_STATUSES = frozenset({"uploading", "chunking", "embedding"})
+#
+# ``provisioning`` (born-managed, MANAGED_KB_NEW_DEFAULT) is here as the long-
+# horizon backstop for a first document whose provisioning job was killed between
+# building the knowledge base and handing the document over. It is safe to include
+# precisely because the sweep already skips any record with no ``awsKbId`` — while
+# the knowledge base does not exist there is nothing to probe, so such a document is
+# never even considered. Once it does exist, a document still parked here past the
+# grace window probes ``NOT_FOUND`` and is re-ingested from S3, which is exactly the
+# correction that is owed.
+NON_TERMINAL_STATUSES = frozenset({"provisioning", "uploading", "chunking", "embedding"})
 
 # ── Tunables, resolved at call time ──────────────────────────────────────────
 #

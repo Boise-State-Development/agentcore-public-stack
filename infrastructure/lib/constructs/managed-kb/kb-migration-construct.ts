@@ -533,11 +533,19 @@ export class KbMigrationConstruct extends Construct {
     // whatever else is configured, because this rule is the only
     // initiator (Requirement 19.6). Eligible knowledge bases just
     // accumulate sparse KbWorkIndex keys as inert data.
+    //
+    // Enabled by EITHER flag, because this one rule now drives two independent
+    // things: the shadow→verify→promote migration (migrationEnabled) and
+    // born-managed provisioning (newDefault). The Python gates each work state on
+    // its own flag, so an enabled rule under newDefault alone provisions new
+    // agents' knowledge bases and does not touch a single existing one. Without
+    // this, step 2 of the rollout ladder would queue provisioning jobs that
+    // nothing ever picked up and park every first upload on "Provisioning…".
     this.dispatcherScheduleRule = new events.Rule(this, 'KbMigrationDispatcherSchedule', {
       schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
-      enabled: managedKb.migrationEnabled,
+      enabled: managedKb.newDefault || managedKb.migrationEnabled,
       description:
-        'Managed_KB migration dispatcher tick — the only initiator of migration work',
+        'Managed_KB migration dispatcher tick — the only initiator of migration and born-managed work',
     });
     this.dispatcherScheduleRule.addTarget(new targets.LambdaFunction(this.dispatcherLambda));
 

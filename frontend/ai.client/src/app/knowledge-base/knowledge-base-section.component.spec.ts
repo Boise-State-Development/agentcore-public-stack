@@ -5,7 +5,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { KnowledgeBaseSectionComponent } from './knowledge-base-section.component';
 import { KbUpgradeService, UpgradeStatus, DocumentNotCarried } from './kb-upgrade.service';
-import { Document } from '../assistants/models/document.model';
+import { Document, PROCESSING_STATUSES } from '../assistants/models/document.model';
 import { ConfigService } from '../services/config.service';
 import { ToastService } from '../services/toast/toast.service';
 import { DocumentService } from '../assistants/services/document.service';
@@ -555,6 +555,30 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
         fixture.detectChanges();
         expect(text()).toContain('Processing');
         expect(text()).not.toContain('Uploading');
+      });
+
+      it('names the born-managed provisioning wait, on either engine reading', async () => {
+        // The label must NOT depend on the engine. A born-managed first upload sets
+        // `provisioning` in the same request that declares the knowledge base
+        // managed, but the engine here comes from the upgrade-status poll, which
+        // has not necessarily caught up — so keying this on the engine would show a
+        // first-time author "Uploading" for the minutes their knowledge base is
+        // being built.
+        await render(status({ phase: 'none', engine: 'classic' }));
+        expect(fixture.componentInstance.statusLabel('provisioning')).toBe(
+          'Provisioning knowledge base…',
+        );
+
+        await render(status({ phase: 'succeeded', engine: 'managed' }));
+        expect(fixture.componentInstance.statusLabel('provisioning')).toBe(
+          'Provisioning knowledge base…',
+        );
+      });
+
+      it('keeps polling a provisioning document', async () => {
+        // Provisioning is non-terminal, so it has to be in PROCESSING_STATUSES or
+        // the row would sit there until the author reloaded the page.
+        expect(PROCESSING_STATUSES).toContain('provisioning');
       });
     });
 

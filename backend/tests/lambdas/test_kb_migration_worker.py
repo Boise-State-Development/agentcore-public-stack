@@ -219,10 +219,19 @@ class TestDispatcherSweep:
         # Appended, not promoted ahead of the known order.
         assert states[-1] == "reindex"
 
-    def test_promote_is_swept_first(self):
+    def test_promote_is_swept_before_the_other_migration_states(self):
         """A record in ``promote`` is one conditional write from finished, so
-        draining beats starting new shadow work."""
-        assert dispatcher._work_states()[0] == r.PROMOTE
+        draining beats starting new shadow work.
+
+        ``born_managed`` now leads the whole list — a first upload has somebody
+        watching a spinner for it, whereas every migration state is background work
+        — so this asserts the ordering among the MIGRATION states, which is what the
+        drain-first argument was ever about.
+        """
+        states = dispatcher._work_states()
+        migration_states = [s for s in states if s != r.BORN_MANAGED]
+        assert migration_states[0] == r.PROMOTE
+        assert states[0] == r.BORN_MANAGED
 
     def test_no_terminal_state_is_swept(self):
         assert not set(dispatcher._work_states()) & set(r.TERMINAL_STATES)
