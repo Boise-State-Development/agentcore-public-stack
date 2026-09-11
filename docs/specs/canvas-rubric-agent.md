@@ -1,6 +1,6 @@
 # Spec: Canvas Rubric Agent
 
-**Status:** Auth + consent paths validated in dev 2026-09-10 (§10). Content-fidelity fixes built in mcp-servers#38, awaiting merge + deploy. Agent itself not yet built.
+**Status:** Built and smoke-tested in dev 2026-09-10 (§10, §10a). Server fixes merged (mcp-servers#38, #39; #40 open). Remaining: institutional KB content (§10a), then prod cutover (§8.2).
 **Audience:** A fresh implementation session with no prior context — this doc is self-contained.
 **Owner:** Phil Merrell
 **Last updated:** 2026-09-10
@@ -747,6 +747,63 @@ prod will hit this.
 pre-#39 orphans that Canvas 500s on delete; remove them in the Canvas UI. Assignment 1756044 is
 still at 8 points (was 5): restoring it needs
 `url:PUT|/api/v1/courses/:course_id/assignments/:id`, which the dev provider does not grant.
+
+---
+
+## 10a. Built in dev — 2026-09-10
+
+**Agent `ast-9149ef191614` "Rubric Builder"**, owned by phil, `PRIVATE`.
+
+| Primitive | Value |
+|---|---|
+| Model | `us.anthropic.claude-sonnet-5` |
+| Tool binding | `canvas_faculty` |
+| Skill bindings | `rubric_authoring`, `canvas_rubric_publishing` |
+| Knowledge base | 5 documents, 33 chunks, all `complete` |
+| Starters | the three from §6 |
+
+Skills created as system skills in the dev catalog. Knowledge base documents:
+`rubric-design-guide.md`, `scoring-scales.md`, `canvas-rubric-mechanics.md`,
+`canvas-rubric-csv-format.md`, `exemplar-rubrics.md`.
+
+### Smoke test — §8.1 criterion 1 passes
+
+*"Make a rubric for the Syllabus Acknowledgment assignment in my Canvas course."*
+
+`list_courses` → `list_assignments` → `get_assignment_details` → activated
+`rubric_authoring` → complete draft table. **Zero questions asked.** Points totalled 8 to match
+the assignment. It stopped and asked before publishing, so the confirm gate held.
+
+Two behaviours worth noting because they are the difference between a KB that is read and a KB
+that is obeyed:
+
+- It **deviated from the guide with a stated reason** — used 2 criteria rather than the guide's
+  3–6, explaining that "stretching it to 3+ criteria would force compliance-flavored rows that
+  the design guide says to avoid." That is the guide being reasoned with, not pattern-matched.
+- It **named the outcome gap unprompted**: "no course learning outcomes are attached to this
+  assignment", then said what it aligned to instead.
+
+Turn cost $0.12 on Sonnet 5, ~28.9k context. Note the binding replacement is visible in the UI —
+"Tools 1 enabled" — confirming the Agent's bindings override the user's own tool selection.
+
+### The gap that remains: institutional content
+
+The knowledge base currently holds **craft** guidance only — rubric design, scoring-scale
+conventions, Canvas mechanics, the CSV format, and exemplar rubrics written as phrasing models.
+All of it is authored for this agent and none of it is institutional.
+
+**Not present, and deliberately not invented:** Boise State program and department learning
+outcomes, the Center for Teaching and Learning's actual rubric guidance and house scoring scale,
+and accreditation framework criteria (ABET, AACSB, CAEP, …). Those are real institutional
+documents; fabricating plausible substitutes would produce an agent that aligns rubrics to
+outcomes nobody adopted.
+
+This is the difference between §5's target and what the agent does today. The smoke test hit zero
+questions because that assignment had no outcomes to align to — the agent said so and aligned to
+the task's own purpose. **Given a real assignment in a real program, the outcomes slot will not
+fill and the agent will have to ask.** Supplying (1) program outcomes and (2) the CTL guidance and
+default scale is what closes it, and it is the single highest-value item remaining. It needs no
+engineering.
 
 ---
 
