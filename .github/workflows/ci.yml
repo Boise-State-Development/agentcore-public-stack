@@ -31,6 +31,11 @@ jobs:
     with:
       run_backend: true
       run_frontend: true
+      # The frontend suite again under --coverage — the nightly's invocation.
+      # Coverage changes how the specs are built (see tests.yml), so specs can
+      # pass here and fail there. Only the PR gate pays for it; the deploy
+      # workflows keep running the plain suite.
+      run_frontend_coverage: true
       run_infra: true
       # Pure-logic tests for tests/load. Deliberately only on the PR gate: the
       # deploy workflows run test suites to protect a deploy, and the load
