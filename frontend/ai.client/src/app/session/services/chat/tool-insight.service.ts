@@ -60,6 +60,19 @@ export class ToolInsightService {
     ReadonlyMap<string, AgentStatusEvent>
   >(new Map());
 
+  /**
+   * Epoch ms at which each conversation's current turn began.
+   *
+   * Recorded at the stream reset rather than at the first `agent_status`,
+   * because the wait the user is actually measuring starts when they hit
+   * send — the gap before the first runtime event is often the longest part
+   * of it, and a timer that only starts once the model replies would hide
+   * exactly the stall worth seeing.
+   */
+  private readonly turnStartBySession = signal<ReadonlyMap<string, number>>(
+    new Map(),
+  );
+
   // -- reads ---------------------------------------------------------------
 
   /** Everything known about one tool call in one conversation. */
@@ -92,6 +105,11 @@ export class ToolInsightService {
     return this.statusBySession().get(sessionId);
   }
 
+  /** Epoch ms the current turn started, or undefined when none is running. */
+  turnStartedAt(sessionId: string): number | undefined {
+    return this.turnStartBySession().get(sessionId);
+  }
+
   // -- writes --------------------------------------------------------------
 
   /**
@@ -101,6 +119,11 @@ export class ToolInsightService {
    * so it writes through to the insight registry as well as updating the live
    * status. The rest are live-only.
    */
+  /** Mark the start of a turn, for the elapsed-time readout. */
+  startTurn(sessionId: string): void {
+    this.turnStartBySession.update(map => new Map(map).set(sessionId, Date.now()));
+  }
+
   recordStatus(sessionId: string, event: AgentStatusEvent): void {
     this.statusBySession.update(map => new Map(map).set(sessionId, event));
 
@@ -129,6 +152,12 @@ export class ToolInsightService {
       next.delete(sessionId);
       return next;
     });
+    // The turn clock is deliberately NOT cleared here. `clearStatus` fires on
+    // the turn's falling edge while the loader is still mounted for a frame or
+    // two, and dropping the start time mid-teardown made the elapsed readout
+    // vanish before the loader did — a visible flicker on every single turn.
+    // It is overwritten by the next `startTurn`, and read only while a turn is
+    // running, so leaving it costs nothing.
   }
 
   /**

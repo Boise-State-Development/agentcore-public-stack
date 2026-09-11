@@ -205,7 +205,11 @@
   <!-- Loading indicator -->
   @if (isChatLoading()) {
     <div class="py-4">
-      <app-pulsating-loader [notice]="loaderNotice()" [status]="loaderStatus()" />
+      <app-pulsating-loader
+      [notice]="loaderNotice()"
+      [status]="loaderStatus()"
+      [statusTool]="loaderStatusTool()"
+      [startedAt]="loaderStartedAt()" />
     </div>
   }
 

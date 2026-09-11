@@ -1,6 +1,6 @@
 import { Component, computed, effect, input, output, inject, signal, PLATFORM_ID } from '@angular/core';
 import { isPlatformBrowser, NgTemplateOutlet } from '@angular/common';
-import { Message } from '../../services/models/message.model';
+import { Message, ToolUseData } from '../../services/models/message.model';
 import type { Artifact } from '../../services/artifacts/artifact.model';
 import { UserMessageComponent } from './components/user-message.component';
 import { AssistantMessageComponent } from './components/assistant-message.component';
@@ -52,21 +52,6 @@ import { StreamParserService } from '../../services/chat/stream-parser.service';
  * BREAKS a run: the user interjected, and the words on either side of that
  * interjection are answers to different things.
  */
-/**
- * Turn an MCP tool identifier into something readable in a sentence.
- *
- * Deliberately light: `list_assignments` -> `list assignments`, keeping the
- * verb so "Using list assignments" reads as an action. The scoped-id prefix
- * (`server::tool`) is routing detail and never shown.
- */
-function humanizeToolName(toolName: string): string {
-  return (toolName.split('::').pop() ?? toolName)
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/[_\-.]+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
 interface TurnSegment {
   key: string;
   kind: 'user' | 'assistant';
@@ -303,26 +288,57 @@ export class MessageListComponent {
    * Returns null once text starts streaming: at that point the loader is gone
    * anyway, and a lingering "Thinking" under a visible answer would be wrong.
    */
-  protected readonly loaderStatus = computed<string | null>(() => {
+  protected readonly loaderStatus = computed<string | null>(() =>
+    this.loaderStatusTool() ? 'Running' : 'Thinking',
+  );
+
+  /**
+   * The tool currently executing, or null.
+   *
+   * Derived from the CONTENT stream — a `toolUse` block on the streaming
+   * message that has no result yet — rather than from `agent_status`, and
+   * that choice is load-bearing.
+   *
+   * `agent_status` transitions are drained by the stream coordinator when the
+   * agent stream yields its next event. During tool execution the agent
+   * stream yields nothing, so a `tool_start` sits in the queue for exactly
+   * the silent stretch it exists to explain, and arrives alongside its own
+   * `tool_end` once the batch finishes. Measured on a three-tool browse turn:
+   * the indicator read "Thinking" for the entire 4.5s the tools were running
+   * and never once showed their name.
+   *
+   * The client does not have that problem. It knows a tool is in flight the
+   * moment the block streams in, first-hand, with no round trip. So this is
+   * both simpler and strictly more current. `agent_status` keeps its real
+   * job: the event-loop-measured durations, which the client genuinely
+   * cannot derive.
+   *
+   * Shown verbatim rather than prettified — `list_assignments` is the thing
+   * that is running, and it is the same identifier the tool rail and the
+   * admin catalog use. Humanising it would invent a second name for one
+   * thing.
+   */
+  protected readonly loaderStatusTool = computed<string | null>(() => {
+    const messages = this.messages();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message.role !== 'assistant') continue;
+      // Only the newest assistant message can have work in flight; an older
+      // one with an unresolved tool is an abandoned turn, not a running one.
+      for (const block of message.content) {
+        const toolUse = block.toolUse as ToolUseData | undefined | null;
+        if (toolUse?.name && !toolUse.result) return toolUse.name;
+      }
+      return null;
+    }
+    return null;
+  });
+
+  /** Epoch ms the viewed conversation's turn started, for the elapsed timer. */
+  protected readonly loaderStartedAt = computed<number | null>(() => {
     const sessionId = this.chatStateService.viewedSessionId();
     if (!sessionId) return null;
-    const status = this.toolInsight.status(sessionId);
-    if (!status) return null;
-
-    switch (status.phase) {
-      case 'tool_start':
-        return status.toolName ? `Using ${humanizeToolName(status.toolName)}` : null;
-      case 'thinking':
-        // A later cycle means the model is reading tool results before it
-        // answers, which is a different wait and worth naming differently.
-        return status.cycle > 1 ? 'Reviewing what came back' : 'Thinking';
-      case 'tool_end':
-        // Between tools: the next thing is either another call or the answer.
-        // "Working" claims neither.
-        return 'Working';
-      default:
-        return null;
-    }
+    return this.toolInsight.turnStartedAt(sessionId) ?? null;
   });
 
   /**

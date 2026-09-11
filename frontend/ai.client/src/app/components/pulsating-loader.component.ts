@@ -6,86 +6,78 @@ import {
   input,
   OnInit,
   OnDestroy,
+  inject,
+  PLATFORM_ID,
 } from '@angular/core';
-
-/**
- * University-themed loading phrases for the typewriter effect
- */
-const LOADING_PHRASES = [
-  'Forming a hypothesis',
-  'Calculating',
-  'Inferring',
-  'Deriving',
-  'Researching',
-  'Analyzing data',
-  'Reviewing literature',
-  'Running experiments',
-  'Consulting the archives',
-  'Checking citations',
-  'Cross-referencing',
-  'Synthesizing findings',
-  'Examining variables',
-  'Testing assumptions',
-  'Evaluating evidence',
-  'Compiling results',
-  'Pondering',
-  'Deliberating',
-  'Theorizing',
-  'Extrapolating',
-];
+import { isPlatformBrowser } from '@angular/common';
 
 /**
  * PulsatingLoaderComponent
  *
- * A loading indicator featuring a pulsing circle with expanding ring effect
- * and a typewriter-style text animation. The text cycles through university-themed
- * loading phrases, typing in character by character, pausing, then deleting
- * before showing the next phrase.
+ * The line shown while a turn is running: a small pulsing dot, what the agent
+ * is doing, and how long it has been doing it.
  *
- * When `notice` is set, the playful cycling stops and the loader states a
- * specific fact instead — used when the backend is retrying a failed model
- * call. A retry is otherwise indistinguishable from a hang, and cheerful
- * phrases like "Pondering..." during a provider outage actively mislead.
+ * WHAT THIS DELIBERATELY NO LONGER DOES
+ * -------------------------------------
+ * It used to cycle twenty invented phrases — "Pondering", "Cross-referencing",
+ * "Consulting the archives" — typed out character by character. They were
+ * charming and they were fiction: identical whether the model was generating,
+ * waiting on a Canvas round trip, or hung. A user watching "Cross-referencing"
+ * for ninety seconds learned nothing, and two of those ninety-second turns got
+ * abandoned in prod.
  *
- * @example
- * ```html
- * <app-pulsating-loader />
- * <app-pulsating-loader [notice]="'The model is busy. Retrying…'" />
- * ```
+ * Everything shown here is now a fact we actually hold:
+ *
+ * - `status` comes from the runtime's `agent_status` events — the event loop's
+ *   own model-call and tool-call boundaries.
+ * - `statusTool` is the tool's real name. While a tool runs, its name is the
+ *   most accurate label available and invents nothing.
+ * - the elapsed timer is measured from the moment the turn was sent.
+ *
+ * `notice` outranks both. It states a specific fact that is NOT the healthy
+ * path (the model is being retried), so it takes the warning colour and the
+ * amber dot — the dot matters because it is the part a user tracks
+ * peripherally, and changing only the text leaves the indicator looking
+ * routine during an outage.
  */
 @Component({
   selector: 'app-pulsating-loader',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div
-      class="flex items-center gap-4"
+      class="flex items-center gap-2"
       role="status"
       [attr.aria-busy]="true"
-      [attr.aria-live]="hasFixedText() ? 'polite' : null"
-      [attr.aria-label]="'Loading: ' + displayText()"
+      aria-live="polite"
+      [attr.aria-label]="ariaLabel()"
     >
-      <!-- Pulsing circle with ring effect -->
-      <div class="pulsing-circle" [class.is-notice]="!!notice()" aria-hidden="true"></div>
+      <span class="pulse-dot" [class.is-notice]="!!notice()" aria-hidden="true"></span>
 
-      <!-- Typewriter text with cursor. A notice replaces the cycling phrases
-           outright — and drops the cursor, which would read as "still typing"
-           on text that is finished. -->
-      <div class="flex items-center">
+      <span class="sep" aria-hidden="true">&bull;</span>
+
+      <!-- Tabular figures so the seconds tick without the line jittering, and
+           aria-hidden so a screen reader is not re-announced to every second. -->
+      @if (elapsedLabel(); as elapsed) {
+        <span class="text-xs tabular-nums text-gray-400 dark:text-gray-500" aria-hidden="true">{{ elapsed }}</span>
+        <span class="sep" aria-hidden="true">&bull;</span>
+      }
+
+      <!-- Tracked by its own text, so a change in state destroys this node and
+           builds a new one — which is what lets the enter animation run on
+           every transition. The timer is a sibling for the same reason in
+           reverse: it must NOT re-animate once a second. -->
+      @for (frame of stateFrames(); track frame) {
         <span
-          class="text-base/6 font-medium"
-          [class]="notice()
-            ? 'text-state-warning-700 dark:text-state-warning-400'
-            : 'text-secondary-600 dark:text-secondary-400'"
+          class="state text-sm"
+          [class.is-notice]="!!notice()"
+          [class.shimmer]="!notice()"
         >
-          {{ displayText() }}
+          {{ label() }}
+          @if (statusTool(); as tool) {
+            <span class="font-mono text-[13px]">{{ tool }}</span>
+          }
         </span>
-        @if (!hasFixedText()) {
-          <span
-            class="typing-cursor ml-0.5 text-secondary-600 dark:text-secondary-400"
-            aria-hidden="true"
-          >|</span>
-        }
-      </div>
+      }
     </div>
 
     <style>
@@ -93,268 +85,220 @@ const LOADING_PHRASES = [
         display: block;
       }
 
-      .pulsing-circle {
-        position: relative;
-        width: 12px;
-        height: 12px;
-        flex-shrink: 0;
-      }
-
-      .pulsing-circle::before {
-        content: '';
-        position: relative;
-        display: block;
-        width: 300%;
-        height: 300%;
-        box-sizing: border-box;
-        margin-left: -100%;
-        margin-top: -100%;
-        border-radius: 50%;
+      /*
+       * 7px, opacity-only. The previous indicator was a 12px dot inside a 36px
+       * expanding ring, which drew more attention than the sentence next to it.
+       */
+      .pulse-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 9999px;
+        flex: none;
         background-color: var(--color-secondary-500);
-        animation: pulse-ring 1.25s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        animation: loader-pulse 1.3s ease-in-out infinite;
       }
 
-      .pulsing-circle::after {
-        content: '';
-        position: absolute;
-        left: 0;
-        top: 0;
-        display: block;
-        width: 100%;
-        height: 100%;
-        background-color: var(--color-secondary-500);
-        border-radius: 50%;
-        box-shadow: 0 0 8px var(--color-secondary-500 / 0.4);
-        animation: pulse-dot 1.25s cubic-bezier(0.455, 0.03, 0.515, 0.955) -0.4s infinite;
-      }
-
-      /* Notice state: same pulse, different signal colour. The dot is the
-         only thing a user tracks peripherally, so it has to change too —
-         swapping just the text leaves the indicator looking routine. */
-      .pulsing-circle.is-notice::before,
-      .pulsing-circle.is-notice::after {
+      .pulse-dot.is-notice {
         background-color: var(--color-state-warning-500);
       }
 
-      .pulsing-circle.is-notice::after {
-        box-shadow: 0 0 8px var(--color-state-warning-500);
+      :host-context(.dark) .pulse-dot {
+        background-color: var(--color-secondary-400);
       }
 
-      @keyframes pulse-ring {
-        0% {
-          transform: scale(0.33);
-        }
-        80%, 100% {
-          opacity: 0;
-        }
+      .sep {
+        font-size: 11px;
+        line-height: 1;
+        color: var(--color-gray-400);
       }
 
-      @keyframes pulse-dot {
-        0% {
+      :host-context(.dark) .sep {
+        color: var(--color-gray-600);
+      }
+
+      .state {
+        --shimmer-base: #6b7280;      /* gray-500 */
+        --shimmer-highlight: #d1d5db; /* gray-300 */
+        background: linear-gradient(
+          90deg,
+          var(--shimmer-base) 25%,
+          var(--shimmer-highlight) 50%,
+          var(--shimmer-base) 75%
+        );
+        background-size: 200% 100%;
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        animation: state-enter 0.3s ease-out;
+      }
+
+      :host-context(.dark) .state {
+        --shimmer-base: #9ca3af;      /* gray-400 */
+        --shimmer-highlight: #f3f4f6; /* gray-100 */
+      }
+
+      .state.shimmer {
+        animation:
+          state-enter 0.3s ease-out,
+          loader-shimmer 2.2s ease-in-out infinite;
+      }
+
+      /* The mono tool name is a child, so it must inherit the gradient rather
+         than paint its own colour over it. */
+      .state span {
+        color: inherit;
+        -webkit-text-fill-color: inherit;
+      }
+
+      /*
+       * A notice is a warning, and a warning that shimmers reads as decoration.
+       * It opts out of the gradient entirely and keeps a solid amber.
+       */
+      .state.is-notice {
+        background: none;
+        -webkit-text-fill-color: currentColor;
+        color: var(--color-state-warning-700);
+      }
+
+      :host-context(.dark) .state.is-notice {
+        color: var(--color-state-warning-400);
+      }
+
+      @keyframes loader-pulse {
+        0%,
+        100% {
+          opacity: 0.35;
           transform: scale(0.8);
         }
         50% {
+          opacity: 1;
           transform: scale(1);
         }
+      }
+
+      @keyframes loader-shimmer {
+        0% {
+          background-position: 200% center;
+        }
         100% {
-          transform: scale(0.8);
+          background-position: -200% center;
         }
       }
 
-      /* Dark mode - use lighter secondary shade */
-      :host-context(.dark) .pulsing-circle::before {
-        background-color: var(--color-secondary-400);
-      }
-
-      :host-context(.dark) .pulsing-circle::after {
-        background-color: var(--color-secondary-400);
-        box-shadow: 0 0 8px var(--color-secondary-400 / 0.5);
-      }
-
-      .typing-cursor {
-        animation: cursor-blink 0.7s step-end infinite;
-        font-weight: 400;
-      }
-
-      @keyframes cursor-blink {
-        0%, 100% {
-          opacity: 1;
-        }
-        50% {
+      @keyframes state-enter {
+        from {
           opacity: 0;
+          transform: translateY(3px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .pulse-dot {
+          animation: none;
+          opacity: 0.8;
+        }
+
+        .state,
+        .state.shimmer {
+          animation: none;
         }
       }
     </style>
   `,
 })
 export class PulsatingLoaderComponent implements OnInit, OnDestroy {
+  private platformId = inject(PLATFORM_ID);
+
   /**
-   * Fixed message that replaces the cycling phrases, e.g. a retry in
-   * progress. Null (the default) keeps the normal typewriter behaviour.
+   * A specific fact that is not the healthy path — currently only "the model
+   * is being retried". Outranks `status`: a retry in progress is the more
+   * important truth.
    */
   notice = input<string | null>(null);
 
   /**
-   * What the agent is actually doing right now — "Using list_assignments",
-   * "Thinking" — from the `agent_status` stream.
-   *
-   * Distinct from `notice` on purpose. A notice is an exception worth an
-   * amber dot (the model is being retried); a status is the normal, healthy
-   * case and stays in the routine colour. Both replace the cycling phrases,
-   * because a real fact always beats "Pondering...", and `notice` wins when
-   * both are present — a retry in progress is the more important truth.
+   * What the agent is doing, from `agent_status`. Null falls back to the
+   * generic waiting label.
    */
   status = input<string | null>(null);
 
-  // Base timing constants (in milliseconds)
-  private readonly TYPE_SPEED_BASE = 45;
-  private readonly TYPE_SPEED_VARIANCE = 35;
-  private readonly DELETE_SPEED_BASE = 15;
-  private readonly DELETE_SPEED_VARIANCE = 10;
-  private readonly PAUSE_AFTER_TYPING = 1200;
-  private readonly PAUSE_AFTER_DELETING = 300;
+  /**
+   * The running tool's own name, rendered in mono beside `status`. Separate
+   * from `status` so the identifier is visibly an identifier.
+   */
+  statusTool = input<string | null>(null);
 
-  // Characters that cause slight hesitation (less common, harder to reach)
-  private readonly SLOW_CHARS = new Set(['z', 'x', 'q', 'j', 'k', 'v', 'b', 'p', 'y', 'w']);
-  // Characters that flow quickly (home row, common)
-  private readonly FAST_CHARS = new Set(['a', 's', 'd', 'f', 'e', 'r', 't', 'i', 'o', 'n', ' ']);
+  /**
+   * Epoch ms the turn started. Null hides the timer entirely rather than
+   * showing a zero that never moves.
+   */
+  startedAt = input<number | null>(null);
 
-  // State signals
-  private currentPhraseIndex = signal(0);
-  private currentCharIndex = signal(0);
-  private isDeleting = signal(false);
-  private isPaused = signal(false);
+  /** Ticks once a second so the elapsed readout recomputes. */
+  private readonly now = signal(Date.now());
+  private timer: ReturnType<typeof setInterval> | null = null;
 
-  // Timer reference for cleanup
-  private animationTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // Computed display text with ellipsis. A notice wins outright; the
-  // typewriter keeps ticking underneath so it resumes cleanly when the
-  // notice clears mid-turn.
-  displayText = computed(() => {
-    const notice = this.notice();
-    if (notice) {
-      return notice;
-    }
-    const status = this.status();
-    if (status) {
-      return `${status}…`;
-    }
-    const phrase = LOADING_PHRASES[this.currentPhraseIndex()] + '...';
-    return phrase.substring(0, this.currentCharIndex());
-  });
-
-  /** True when a fixed line (notice or status) replaces the typewriter. */
-  protected readonly hasFixedText = computed(
-    () => !!this.notice() || !!this.status(),
+  /**
+   * Falls back to "Thinking" rather than a vaguer word.
+   *
+   * Before the first `agent_status` arrives there is a real gap — the request
+   * in flight, the session loading, the agent building — and we cannot tell
+   * those apart. But from the user's side every one of them is the same fact:
+   * the assistant has the turn and has not answered yet. "Thinking" states
+   * that; "Working" was a hedge that said less and, on a cold start, was the
+   * only thing shown for the first several seconds.
+   */
+  protected readonly label = computed(
+    () => this.notice() ?? this.status() ?? 'Thinking',
   );
 
+  protected readonly elapsedLabel = computed(() => {
+    const started = this.startedAt();
+    if (!started) return null;
+    const seconds = Math.max(0, Math.floor((this.now() - started) / 1000));
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}m ${seconds % 60}s`;
+  });
+
+  /**
+   * A single frame keyed by the visible text.
+   *
+   * `@for ... track frame` over this is what animates the state change: when
+   * the text differs the old node is destroyed and a new one created, so the
+   * enter keyframe runs. A plain interpolation would mutate the text in place
+   * and never animate. The timer stays outside this loop deliberately — it
+   * changes every second and must not re-animate.
+   */
+  protected readonly stateFrames = computed(() => {
+    const tool = this.statusTool();
+    return [tool ? `${this.label()} ${tool}` : this.label()];
+  });
+
+  /**
+   * The timer is `aria-hidden` and re-announced text would be noise, so the
+   * accessible name carries the state only.
+   */
+  protected readonly ariaLabel = computed(() => {
+    const tool = this.statusTool();
+    return tool ? `${this.label()} ${tool}` : this.label();
+  });
+
   ngOnInit(): void {
-    this.startAnimation();
+    // No interval during SSR: it would never fire and would keep the platform
+    // from stabilising.
+    if (!isPlatformBrowser(this.platformId)) return;
+    this.timer = setInterval(() => this.now.set(Date.now()), 1000);
   }
 
   ngOnDestroy(): void {
-    if (this.animationTimer) {
-      clearTimeout(this.animationTimer);
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
     }
-  }
-
-  private startAnimation(): void {
-    this.tick();
-  }
-
-  private tick(): void {
-    const currentPhrase = LOADING_PHRASES[this.currentPhraseIndex()] + '...';
-    const charIndex = this.currentCharIndex();
-    const deleting = this.isDeleting();
-
-    if (this.isPaused()) {
-      return; // Wait for pause to complete
-    }
-
-    if (!deleting) {
-      // Typing mode
-      if (charIndex < currentPhrase.length) {
-        // Type next character
-        this.currentCharIndex.update((v) => v + 1);
-        const nextChar = currentPhrase[charIndex] || '';
-        this.scheduleNextTick(this.getTypingDelay(nextChar));
-      } else {
-        // Finished typing, pause then start deleting
-        this.isPaused.set(true);
-        this.animationTimer = setTimeout(() => {
-          this.isPaused.set(false);
-          this.isDeleting.set(true);
-          this.tick();
-        }, this.PAUSE_AFTER_TYPING);
-      }
-    } else {
-      // Deleting mode (faster, less variance - like holding backspace)
-      if (charIndex > 0) {
-        // Delete previous character
-        this.currentCharIndex.update((v) => v - 1);
-        this.scheduleNextTick(this.getDeletingDelay());
-      } else {
-        // Finished deleting, pause then move to next phrase
-        this.isPaused.set(true);
-        this.animationTimer = setTimeout(() => {
-          this.isPaused.set(false);
-          this.isDeleting.set(false);
-          // Move to next phrase (random selection)
-          this.selectNextPhrase();
-          this.tick();
-        }, this.PAUSE_AFTER_DELETING);
-      }
-    }
-  }
-
-  /**
-   * Calculate typing delay based on character difficulty and randomness
-   */
-  private getTypingDelay(char: string): number {
-    const lowerChar = char.toLowerCase();
-    let baseDelay = this.TYPE_SPEED_BASE;
-
-    // Adjust base delay based on character
-    if (this.FAST_CHARS.has(lowerChar)) {
-      baseDelay *= 0.7; // Faster for common/easy chars
-    } else if (this.SLOW_CHARS.has(lowerChar)) {
-      baseDelay *= 1.4; // Slower for uncommon/harder chars
-    }
-
-    // Add pause after spaces (natural word break)
-    if (char === ' ') {
-      baseDelay += Math.random() * 60;
-    }
-
-    // Random variance for organic feel
-    const variance = (Math.random() - 0.5) * 2 * this.TYPE_SPEED_VARIANCE;
-
-    // Occasional micro-pause (5% chance) - simulates brief hesitation
-    const microPause = Math.random() < 0.05 ? 80 : 0;
-
-    return Math.max(15, baseDelay + variance + microPause);
-  }
-
-  /**
-   * Calculate deletion delay - faster and more consistent (like holding backspace)
-   */
-  private getDeletingDelay(): number {
-    const variance = (Math.random() - 0.5) * 2 * this.DELETE_SPEED_VARIANCE;
-    return Math.max(10, this.DELETE_SPEED_BASE + variance);
-  }
-
-  private scheduleNextTick(delay: number): void {
-    this.animationTimer = setTimeout(() => this.tick(), delay);
-  }
-
-  private selectNextPhrase(): void {
-    // Select a random phrase different from the current one
-    let nextIndex: number;
-    do {
-      nextIndex = Math.floor(Math.random() * LOADING_PHRASES.length);
-    } while (nextIndex === this.currentPhraseIndex() && LOADING_PHRASES.length > 1);
-
-    this.currentPhraseIndex.set(nextIndex);
   }
 }
