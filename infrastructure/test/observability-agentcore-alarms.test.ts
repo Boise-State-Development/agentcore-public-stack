@@ -156,13 +156,21 @@ describe('AgentCore Runtime alarms — verified metric binding', () => {
       expect(dims.map((d: any) => d.Name)).toEqual(['Service']);
     });
 
-    it('reads the peak of the period, sustained over three periods', () => {
+    it('reads the peak of the period, sustained over a full hour', () => {
       const alarm = byName('agentcore-runtime-active-sessions');
       // Maximum, not Average: a gauge averaged over 5 minutes hides the peak
       // that matters.
       expect(alarm.Properties.Statistic).toBe('Maximum');
       expect(alarm.Properties.Period).toBe(300);
-      expect(alarm.Properties.EvaluationPeriods).toBe(3);
+      // 12 x 5 min = 1 hour sustained. The window, not the threshold, is what
+      // distinguishes a real accumulation regression from a load test: on 7 days
+      // of prod data the previous 3-period (15 min) window fired on all three
+      // nightly load tests, and no threshold separates them (see config.ts).
+      expect(alarm.Properties.EvaluationPeriods).toBe(12);
+      expect(alarm.Properties.Period * alarm.Properties.EvaluationPeriods).toBe(3_600);
+      // Every datapoint must breach; a dip resets. Accumulation that reaps
+      // itself is not the failure mode being watched.
+      expect(alarm.Properties.DatapointsToAlarm ?? alarm.Properties.EvaluationPeriods).toBe(12);
       expect(alarm.Properties.ComparisonOperator).toBe('GreaterThanThreshold');
       expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
     });
@@ -171,16 +179,27 @@ describe('AgentCore Runtime alarms — verified metric binding', () => {
      * The #1016 lesson, pinned. That alarm sat above threshold for 195 of 197
      * datapoints because an account-wide roll-up was compared against a number
      * that did not denominate it. Here the threshold has to clear a normal day
-     * by a wide margin — post-#827 microVM lifetimes of 21.5-33.6 min put
-     * observed concurrency in the tens — while staying far below the 5,000
-     * concurrent-session account quota, which `agentcore-throttles` owns.
+     * by a wide margin — measured prod traffic outside load-test bursts is max
+     * 8-16 with a mean of 2.4-6.8, and dev peaks at 5 — while staying far below
+     * the 5,000 concurrent-session account quota, which `agentcore-throttles`
+     * owns.
+     *
+     * The upper bound also guards the other direction: a threshold high enough
+     * to sit above a load test (~1500) would sit above the ~99-sustained #338
+     * regime too, and the alarm would never fire on the regression it exists
+     * for. Duration, not magnitude, does that separation — see the window test
+     * above.
      */
     it('is thresholded well above normal traffic and well below the account quota', () => {
       const threshold = byName('agentcore-runtime-active-sessions').Properties.Threshold;
       expect(threshold).toBe(
         createMockConfig({}).observability.agentCoreActiveSessionThreshold,
       );
-      expect(threshold).toBeGreaterThan(100);
+      // Comfortably above a normal day (peaks in the tens)...
+      expect(threshold).toBeGreaterThan(20);
+      // ...and below the ~99 sustained by the #338 regression, so that regime
+      // actually trips it.
+      expect(threshold).toBeLessThan(99);
       expect(threshold).toBeLessThan(5_000 * 0.1);
     });
   });
