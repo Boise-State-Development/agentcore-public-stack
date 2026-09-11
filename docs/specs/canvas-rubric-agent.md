@@ -1,6 +1,6 @@
 # Spec: Canvas Rubric Agent
 
-**Status:** Design approved, not yet implemented. Blocked on four upstream fixes (§4).
+**Status:** Design approved, not yet implemented. Auth path validated in dev 2026-09-10 (§10); blocked on content-fidelity fixes (§4).
 **Audience:** A fresh implementation session with no prior context — this doc is self-contained.
 **Owner:** Phil Merrell
 **Last updated:** 2026-09-10
@@ -117,9 +117,21 @@ data.append((f"{rprefix}[points]", str(rating.get("points", 0))))
 ```
 
 Canvas's API supports `rubric[criteria][x][ratings][y][long_description]`, and **that is where a
-descriptor lives**. The descriptors are this agent's entire product. Wire the agent up today and
-every rubric arrives in Canvas with correct criteria, correct scale, correct points, and **no
-descriptor text at all** — while appearing to have succeeded.
+descriptor lives**. The descriptors are this agent's entire product.
+
+**Validated in dev 2026-09-10 — the failure mode is worse than "descriptors go missing."** Asked
+for three named levels (Exemplary / Proficient / Developing) plus a descriptor in all six cells,
+the model had nowhere to put a descriptor, so it **overloaded the rating `description` field with
+the descriptor sentence and dropped the level names entirely**. `get_rubric` confirms what Canvas
+stored: ratings carry no `long_description` at all, criterion `long_description` is `""`, and the
+rating name for a 4-point level reads *"Code is clean, efficient, and follows best practices with
+no redundancy or inefficiency."* The rubric renders with paragraphs where the level labels belong
+and no level labels anywhere.
+
+This is a direct consequence of the unconstrained `criteria` schema (§4.7): the docstring offers
+ratings only `{description, points}`, so a descriptor has exactly one place to go and it is the
+wrong one. Fixing the schema and the passthrough together is what makes this correct — either
+alone still produces a wrong rubric.
 
 Fix: pass `long_description` through on ratings. One line. **Nothing else in this spec matters
 until this lands** — §7.2's field-mapping skill is inert without it.
@@ -152,14 +164,16 @@ specific list implies it is); update the provider record in both environments.
 Two related notes:
 - Prod is also missing `url:POST|/api/v1/conversations`, so `send_conversation` is presumably
   already broken there. Unrelated to rubrics; worth fixing in the same pass.
-- **Scope widening does not force re-consent.** `compute_scopes_hash` is persisted as
-  `scopesHash` on the provider record but nothing reads it. Faculty who already connected Canvas
-  hold a vaulted token minted under the old, narrower scope set; the token is *valid*, so no
-  existing consent-recovery path fires and they get a permanent 401 on rubric tools. Either add
-  scope-drift detection at token resolution (compare stored hash against the provider's current
-  hash, treat divergence as needs-re-consent) or accept a manual "disconnect and reconnect
-  Canvas" instruction to every faculty user. **This is the one item that lands in
-  `agentcore-public-stack` rather than `mcp-servers`.**
+- **Scope widening DOES force re-consent automatically — verified in dev 2026-09-10.** An
+  earlier draft of this spec claimed the opposite; it was wrong. AgentCore's token vault keys on
+  the requested scope set, so the first tool call after a scope edit returned
+  *"AUTHORIZATION NEEDED — Connect Canvas for Faculty"* rather than a Canvas 401. No
+  `scopesHash` drift detection is needed; that field being unread is fine, not a gap.
+  **Rollout implication instead:** the prompt fires on the first call to *any* tool on that
+  provider, not just one needing the new scope — it hit `list_courses`, whose scope was
+  unchanged. So adding the scopes in prod makes every connected faculty member reconnect on
+  their next Canvas use. One click, not a broken state, but announce it rather than shipping it
+  silently.
 
 ### 4.4 Stale catalog snapshot
 
@@ -168,7 +182,33 @@ gate the runtime — a bare grant loads whatever the live server returns — but
 admin per-tool picker and the `needsApproval` flag, so `create_rubric` cannot be marked as
 requiring user approval. Fix: re-run tool discovery on the catalog record after the deploy.
 
-### 4.5 Recommended at the same time (not blocking)
+### 4.5 Attaching a rubric silently rewrites the assignment's points — NEW, found 2026-09-10
+
+`associate_rubric` with `use_for_grading: true` (the default) caused Canvas to change the
+assignment's `points_possible` from **5.0 to 8.0** — the rubric's total. Nobody asked for that,
+nothing warned, and in a live course it is a grade-affecting change to an assignment the
+instructor did not think they were editing.
+
+This is Canvas behaviour, not a bug in our tool, but it must be surfaced. Minimum: the
+publishing skill warns before attaching (§7.3) and the agent states the change afterwards.
+Better: `associate_rubric` and `create_rubric` return the assignment's before/after
+`points_possible` so the agent can report it without a second call. Best: the agent reads
+`points_possible` first and, when the rubric total differs, asks the instructor which number
+should win before writing.
+
+### 4.6 `get_rubric` cannot confirm an attachment — NEW, found 2026-09-10
+
+After a successful `associate_rubric` (association id returned, attachment real),
+`get_rubric` returned `"associations": []`. The attachment *was* live —
+`get_assignment_details` on the assignment showed the rubric and the changed point value — so
+`get_rubric`'s `associations` array is unreliable as a verification signal despite the tool
+requesting `include[]=associations`.
+
+Consequence: the "call `get_rubric` and compare" verification step in §7.3 does not work as
+written. Verify attachment via `get_assignment_details` instead; `get_rubric` remains correct
+for criteria and ratings. Worth a follow-up to find out why the include is not populating.
+
+### 4.7 Recommended at the same time (not blocking)
 
 - **Give `criteria` a real schema.** The live tool definition is
   `{"type":"array","items":{"type":"object","additionalProperties":true}}` — no properties, no
@@ -414,10 +454,21 @@ to the instructor and ask whether to replace, attach the existing one, or create
 second — do not silently create a duplicate. `create_rubric` is not idempotent and
 has no dry-run, so never retry it blind after an error; check with `list_rubrics`.
 
+## Attaching changes the assignment's point value
+
+Canvas sets the assignment's `points_possible` to the rubric's total when you attach
+with `use_for_grading`. Call `get_assignment_details` BEFORE attaching. If the
+assignment's points and the rubric's total differ, say so and ask which should win —
+do not silently re-point an assignment students may already have seen.
+
 ## After writing
 
-Call `get_rubric` and compare it against the table you showed the instructor. If
-anything is missing — especially descriptors — say so rather than reporting success.
+Verify with `get_assignment_details`, not `get_rubric`. `get_rubric` returns an empty
+`associations` array even for a live attachment, so it cannot confirm the rubric is
+attached; it is still correct for criteria and ratings.
+
+Compare what came back against the table you showed the instructor. If anything is
+missing — especially descriptors — say so rather than reporting success.
 ```
 
 ### 7.4 Knowledge base: Rubric Design Library
@@ -448,7 +499,7 @@ score-inversion gotchas that come with it.
 ## 8. Phasing
 
 1. **Phase 0 — Unblock the server.** §4.1 (rating `long_description`), §4.2 (`update_rubric` /
-   `delete_rubric`), §4.5 (`criteria` schema, criterion-points default). One PR in `mcp-servers`.
+   `delete_rubric`), §4.7 (`criteria` schema, criterion-points default). One PR in `mcp-servers`.
    Deploy to dev.
 2. **Phase 1 — Unblock dev config.** Add the four rubric scopes to the dev provider record and
    the Canvas test developer key. Re-run tool discovery on `TOOL#canvas_faculty` (§4.4). Verify
@@ -469,8 +520,9 @@ Phases 0 and 1 are prerequisites for everything. Phase 2 can run in parallel wit
 
 ## 9. Open questions
 
-- **Scope re-consent (§4.3).** Build drift detection off the unused `scopesHash`, or accept a
-  manual reconnect campaign? Affects every already-connected faculty member, not just this agent.
+- ~~Scope re-consent~~ — **settled 2026-09-10**, see §4.3. Automatic; no code needed. The
+  remaining question is comms, not engineering: when prod scopes change, every connected faculty
+  member gets a reconnect prompt on their next Canvas use.
 - **Memory space.** Binding one would let an instructor's house style (preferred scale, tone,
   standing outcomes) persist so the second rubric asks less than the first. v1 supports one Memory
   Space per Agent. Worth a phase-4 decision once we see whether faculty repeat themselves.
@@ -481,12 +533,40 @@ Phases 0 and 1 are prerequisites for everything. Phase 2 can run in parallel wit
 - **Rubric preview as an MCP App.** A rendered rubric grid would be a far better confirmation step
   than a markdown table, and the natural place to put the approve/publish control. The
   `canvas-faculty` server serves no UI resources today. Post-v1.
-- **Does a rubric created with no association appear in Course → Rubrics?** (§4.5.) Needs a
+- **Does a rubric created with no association appear in Course → Rubrics?** (§4.7.) Needs a
   sandbox test; determines whether "I'll attach it later" is a supported path.
 
 ---
 
-## 10. Reference
+## 10. Dev validation log — 2026-09-10
+
+Run against dev (`boisestatecanvas.test.instructure.com`), course 50994 "Faculty Demo: Intro to
+MCP", as `system_admin`, Haiku 4.5, `canvas_faculty` enabled in the tool picker.
+
+| Step | Result |
+|---|---|
+| Canvas developer key: 4 rubric scopes added | done by admin |
+| Provider record `canvas-faculty`: 8 → 12 scopes | persisted; no AgentCore re-registration, no client-secret re-entry |
+| First Canvas tool call after the scope edit | **consent re-prompt** (§4.3) — fired on `list_courses`, not a rubric tool |
+| Reconnect; consent screen | listed the rubric scopes |
+| `list_courses` | course 50994 returned |
+| `list_rubrics` | `GET .../rubrics` scope works — course had no rubrics |
+| `create_rubric` | `POST .../rubrics` scope works — rubric **256107**, 2 criteria, 8 points |
+| `list_assignments` | assignment **1756044** "Syllabus Acknowledgment", 5.0 points |
+| `associate_rubric` | `POST .../rubric_associations` scope works — association **519900** |
+| `get_rubric` | ratings have **no** `long_description`; descriptors sit in `description`; level names lost (§4.1) |
+| `get_rubric` associations | **`[]`** despite a live attachment (§4.6) |
+| `get_assignment_details` | rubric attached; `points_possible` now **8.0**, was 5.0 (§4.5) |
+
+All four rubric scopes are validated end to end. The auth and transport path is proven; what
+remains blocking is content fidelity (§4.1) and the two behaviours found here (§4.5, §4.6).
+
+Turn cost ran $0.033–$0.077 with ~23.8k–27.4k context tokens, consistent with §6's estimate
+that `canvas_faculty`'s ~11.7k of tool definitions dominates the prefix.
+
+---
+
+## 11. Reference
 
 - Origin notebook: `manage_rubrics.py` (Colab, shared read-only) — the workflow this replaces.
 - MCP server: `mcp-servers/packages/canvas-faculty/app.py`, `README.md` (carries the full
