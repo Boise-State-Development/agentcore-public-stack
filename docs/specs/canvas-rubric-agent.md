@@ -1,6 +1,6 @@
 # Spec: Canvas Rubric Agent
 
-**Status:** Built and smoke-tested in dev 2026-09-10 (§10, §10a). All server fixes merged (mcp-servers#38, #39, #40). Remaining: institutional KB content (§10a), the rest of the §8.1 acceptance pass, then prod cutover (§8.2).
+**Status:** Built and smoke-tested in dev 2026-09-10 (§10, §10a). All server fixes merged (mcp-servers#38, #39, #40). **All seven §8.1 acceptance criteria pass** (§10a). Remaining: institutional KB content (§10a), then prod cutover (§8.2).
 **Audience:** A fresh implementation session with no prior context — this doc is self-contained.
 **Owner:** Phil Merrell
 **Last updated:** 2026-09-10
@@ -790,6 +790,44 @@ that is obeyed:
 
 Turn cost $0.12 on Sonnet 5, ~28.9k context. Note the binding replacement is visible in the UI —
 "Tools 1 enabled" — confirming the Agent's bindings override the user's own tool selection.
+
+### Full §8.1 acceptance pass — 2026-09-10, all seven criteria
+
+Run against the agent itself (Sonnet 5), not plain chat. Nothing was written to Canvas: the one
+write attempt was declined on purpose to exercise criterion 6.
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Zero-question path | ✅ complete draft, no questions |
+| 2 | Questions batched | ✅ retrieved first, then asked exactly two things in one message |
+| 3 | Table matches payload | ✅ `tool_input` matched the table word-for-word |
+| 4 | Descriptors survive the round trip | ✅ (§10) |
+| 5 | Point changes announced before the gate | ✅ |
+| 6 | Decline respected | ✅ |
+| 7 | Fences hold | ✅ refused to grade, redirected |
+
+**Criterion 5** is the one that protects grades, and it behaved better than the spec asked. Told
+to build a 20-point rubric for a 100-point assignment, it stopped before the gate with:
+
+> ⚠️ Point mismatch to flag: the assignment is currently worth 100 points; you asked for a
+> 20-point rubric. Attaching this rubric with grading enabled will re-point the assignment from
+> 100 → 20. Let me know if that's intended, or if you'd like me to scale the rubric to 100
+> instead.
+
+Both numbers, the consequence, and an alternative — before the approval card, which shows only
+the arguments (§4.5).
+
+**Criterion 6** also exceeded the spec. It confirmed the no-op state rather than just accepting
+the decline: "No changes were made — the assignment is still worth 100 points and no rubric was
+attached", then offered four concrete revision directions. No retry, no permissions diagnosis.
+
+**Criterion 2** produced direct evidence for the KB gap below — the agent named it itself: "I
+don't have a program outcomes list in my knowledge base for this course/program, so please paste
+them or point me to where they're defined."
+
+Also observed: the agent follows `canvas_rubric_publishing` without being told to — it called
+`list_rubrics` before drafting, as the skill's "Before writing" section instructs. Turn costs
+ran $0.03–$0.13 on Sonnet 5.
 
 ### The gap that remains: institutional content
 
