@@ -58,12 +58,15 @@ describe('ToolRailComponent', () => {
               @if (batch.summary) { <p class="batch-summary">{{ batch.summary }}</p> }
               @for (call of batch.calls; track call.id) {
                 <div class="call-row">
-                  <span [class]="statusDotClass(call)"></span>
-                  <span class="call-description">{{ describe(call) }}</span>
-                  <span class="call-tool-name">{{ call.toolName }}</span>
-                  @if (call.durationMs) {
-                    <span class="call-duration">{{ formatDuration(call.durationMs) }}</span>
-                  }
+                  <button type="button" class="call-toggle" (click)="toggleCallDetail(call.id)" [attr.aria-expanded]="isCallDetailOpen(call)">
+                    <span [class]="statusDotClass(call)"></span>
+                    <span class="call-description">{{ describe(call) }}</span>
+                    <span class="call-tool-name">{{ call.toolName }}</span>
+                    @if (call.durationMs) {
+                      <span class="call-duration">{{ formatDuration(call.durationMs) }}</span>
+                    }
+                  </button>
+                  @if (isCallDetailOpen(call)) {
                   @if (call.input && (call.input | keyvalue)?.length) {
                     <div class="call-input"><span>input:</span><span>{{ formatInput(call.input) }}</span></div>
                   }
@@ -85,6 +88,7 @@ describe('ToolRailComponent', () => {
                     @for (item of getResultImages(call); track $index) {
                       <img [src]="getImageDataUrl(item)" alt="Tool result image" />
                     }
+                  }
                   }
                 </div>
               }
@@ -355,6 +359,7 @@ describe('ToolRailComponent', () => {
         }),
       );
       component.toggleExpanded();
+      component.toggleCallDetail('tool-1');
       fixture.detectChanges();
 
       expect(fixture.nativeElement.querySelector('.call-input').textContent).toContain(
@@ -391,21 +396,30 @@ describe('ToolRailComponent', () => {
     it('does not render an input row for an empty input', () => {
       render(makeGroup({ calls: [makeCall({ input: {} })] }));
       component.toggleExpanded();
+      component.toggleCallDetail('tool-1');
       fixture.detectChanges();
 
       expect(fixture.nativeElement.querySelector('.call-input')).toBeNull();
     });
 
-    it('offers the full result only when it was truncated', () => {
+    // Split into two cases on purpose: the detail is now a real `@if`, so a
+    // second `toggle*` call in one case folds it back up and the assertion
+    // silently measures the wrong state.
+    it('offers no "show full result" for a short result', () => {
       render(
         makeGroup({
           calls: [makeCall({ result: { status: 'success', content: [{ text: 'short' }] } })],
         }),
       );
       component.toggleExpanded();
+      component.toggleCallDetail('tool-1');
       fixture.detectChanges();
-      expect(fixture.nativeElement.querySelector('.toggle-result')).toBeNull();
 
+      expect(fixture.nativeElement.querySelector('.call-result')).toBeTruthy();
+      expect(fixture.nativeElement.querySelector('.toggle-result')).toBeNull();
+    });
+
+    it('offers "show full result" for a truncated one', () => {
       render(
         makeGroup({
           calls: [
@@ -416,7 +430,9 @@ describe('ToolRailComponent', () => {
         }),
       );
       component.toggleExpanded();
+      component.toggleCallDetail('tool-1');
       fixture.detectChanges();
+
       expect(fixture.nativeElement.querySelector('.toggle-result')).toBeTruthy();
     });
 
@@ -446,11 +462,84 @@ describe('ToolRailComponent', () => {
         }),
       );
       component.toggleExpanded();
+      component.toggleCallDetail('tool-1');
       fixture.detectChanges();
 
       expect(fixture.nativeElement.querySelector('img').getAttribute('src')).toBe(
         'data:image/png;base64,abc',
       );
+    });
+  });
+
+  describe('call detail (third disclosure level)', () => {
+    it('keeps raw input and result folded when the rail is expanded', () => {
+      // Expanding says WHICH steps ran; a wall of JSON under every row buries
+      // the summaries that make the rail readable in the first place.
+      render(
+        makeGroup({
+          calls: [
+            makeCall({
+              result: { status: 'success', content: [{ text: 'CS 101 · 3 sections' }] },
+            }),
+          ],
+        }),
+      );
+      component.toggleExpanded();
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.call-description')).toBeTruthy();
+      expect(fixture.nativeElement.querySelector('.call-input')).toBeNull();
+      expect(fixture.nativeElement.querySelector('.call-result')).toBeNull();
+    });
+
+    it('reveals the detail on click and folds it again', () => {
+      render(makeGroup());
+      component.toggleExpanded();
+      fixture.detectChanges();
+
+      fixture.nativeElement.querySelector('.call-toggle').click();
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('.call-input')).toBeTruthy();
+
+      fixture.nativeElement.querySelector('.call-toggle').click();
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('.call-input')).toBeNull();
+    });
+
+    it('tracks detail per call', () => {
+      render(
+        makeGroup({ calls: [makeCall({ id: 'a' }), makeCall({ id: 'b' })] }),
+      );
+
+      component.toggleCallDetail('a');
+      expect(component.isCallDetailOpen(makeCall({ id: 'a' }))).toBe(true);
+      expect(component.isCallDetailOpen(makeCall({ id: 'b' }))).toBe(false);
+    });
+
+    it('always shows a call that is still streaming its output', () => {
+      // The live "generating" preview is the point of the streaming path;
+      // folding it away would make a generating artifact look like nothing
+      // was happening.
+      const streaming = makeCall({
+        id: 'gen',
+        status: 'pending',
+        streamingContent: '<html>partial',
+        result: undefined,
+      });
+      expect(component.isCallDetailOpen(streaming)).toBe(true);
+    });
+
+    it('exposes the detail state to assistive technology', () => {
+      render(makeGroup());
+      component.toggleExpanded();
+      fixture.detectChanges();
+
+      const toggle = fixture.nativeElement.querySelector('.call-toggle');
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+      toggle.click();
+      fixture.detectChanges();
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
     });
   });
 

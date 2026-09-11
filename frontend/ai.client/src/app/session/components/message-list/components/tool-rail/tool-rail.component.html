@@ -49,32 +49,44 @@
   }
 </button>
 
-<!-- Expanded rail. Always shows the real input and result: the summary line
-     is what you read, this is what you check it against, so it must never be
-     replaced by a prettier restatement of itself. -->
+<!-- Expanded rail: a compact accordion list. One row per call, dense enough
+     to scan a whole pipeline at a glance, with the raw input and result
+     folded behind each row. The summary line is what you read; this is what
+     you check it against, so the detail must stay reachable — but it is
+     reference material, not the default view. -->
 <div class="collapsible-content" [class.open]="isExpanded()">
   <div>
     <div
-      class="pl-4 space-y-3 mt-2 border-l-2 border-gray-300/50 dark:border-gray-600/50"
+      class="mt-2 overflow-hidden rounded-lg border border-gray-200/80 divide-y divide-gray-200/80 dark:border-white/10 dark:divide-white/10"
     >
       @for (batch of batches(); track batch.key) {
         <!-- The batch's own line, when the side-channel summarized this
              round. One per batch, not one per group: a collapsed pipeline
              contains several rounds and each did something different. -->
         @if (batch.summary) {
-          <p class="text-xs font-medium text-gray-600 dark:text-gray-300 -ml-2 first:mt-0 mt-1">
+          <p
+            class="bg-gray-100/70 px-2.5 py-1.5 text-[11px] font-medium text-gray-600 dark:bg-white/5 dark:text-gray-300"
+          >
             {{ batch.summary }}
           </p>
         }
 
         @for (call of batch.calls; track call.id) {
-        <div>
+        <div class="bg-white/40 dark:bg-transparent">
           <!-- Row header: the human line first, the tool identifier second.
                The identifier still matters (it is what an admin greps for),
-               but it is not what most readers need. -->
-          <div class="flex items-baseline gap-2 mb-0.5">
+               but it is not what most readers need. Clicking reveals the raw
+               input and result — reference material, so it stays folded until
+               someone actually wants to check the summary against it. -->
+          <button
+            type="button"
+            (click)="toggleCallDetail(call.id)"
+            class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-gray-100/70 group/call dark:hover:bg-white/5"
+            [attr.aria-expanded]="isCallDetailOpen(call)"
+            [attr.aria-label]="'Toggle details for ' + call.toolName"
+          >
             <span [class]="statusDotClass(call)"></span>
-            <span class="text-xs text-gray-600 dark:text-gray-300">
+            <span class="text-xs text-gray-600 dark:text-gray-300 group-hover/call:text-gray-800 dark:group-hover/call:text-gray-100">
               {{ describe(call) }}
             </span>
             <span class="text-[11px] font-mono text-gray-400 dark:text-gray-500 truncate">
@@ -87,9 +99,26 @@
                 {{ formatDuration(call.durationMs) }}
               </span>
             }
-          </div>
+            <svg
+              class="chevron size-2.5 shrink-0 text-gray-400 dark:text-gray-500"
+              [class.open]="isCallDetailOpen(call)"
+              [class.ml-auto]="!call.durationMs"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
 
-          <div class="ml-3.5 space-y-1">
+          <!-- Kept as an `@if` rather than a CSS-collapsed panel: a long
+               conversation can hold a lot of rows, and parking every tool
+               result in the DOM to clip it costs memory and leaves the JSON
+               reachable by screen readers on rows nobody opened. The enter
+               animation supplies the accordion feel without that cost. -->
+          @if (isCallDetailOpen(call)) {
+          <div class="detail-panel space-y-1 border-t border-gray-200/60 bg-gray-50/60 px-2.5 py-2 dark:border-white/5 dark:bg-black/20">
             <!-- Input -->
             @if (call.input && (call.input | keyvalue)?.length) {
               <div class="flex items-baseline gap-1.5">
@@ -166,6 +195,7 @@
               }
             }
           </div>
+          }
         </div>
         }
       }

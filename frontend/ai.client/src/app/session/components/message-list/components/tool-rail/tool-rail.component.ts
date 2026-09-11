@@ -26,6 +26,18 @@ export class ToolRailComponent {
   /** Whether the rail is expanded */
   isExpanded = signal(false);
 
+  /**
+   * Calls whose raw input/result detail has been revealed.
+   *
+   * Three levels of disclosure, each answering a different question: the
+   * collapsed rail says what the agent did, expanding says which steps it
+   * took, and this says what each step actually sent and got back. The last
+   * is reference material — a wall of JSON under every row buries the very
+   * summaries that make the rail readable — so it stays folded until asked
+   * for.
+   */
+  expandedCallIds = signal<Set<string>>(new Set());
+
   /** Track which individual tool results are fully expanded (for long results in fallback mode) */
   expandedResultIds = signal<Set<string>>(new Set());
 
@@ -107,6 +119,31 @@ export class ToolRailComponent {
   /** Toggle rail expand/collapse */
   toggleExpanded(): void {
     this.isExpanded.update(v => !v);
+  }
+
+  /** Toggle the raw input/result detail for a specific tool call. */
+  toggleCallDetail(callId: string): void {
+    this.expandedCallIds.update(ids => {
+      const next = new Set(ids);
+      if (next.has(callId)) {
+        next.delete(callId);
+      } else {
+        next.add(callId);
+      }
+      return next;
+    });
+  }
+
+  /**
+   * Whether a call's raw detail is showing.
+   *
+   * A call still streaming long output (an artifact being generated) shows it
+   * regardless of the toggle: that live preview is the whole point of the
+   * streaming path, and folding it away would make a generating artifact look
+   * like nothing was happening.
+   */
+  isCallDetailOpen(call: ToolCallDisplay): boolean {
+    return this.isGenerating(call) || this.expandedCallIds().has(call.id);
   }
 
   /** Toggle full result display for a specific tool call */
