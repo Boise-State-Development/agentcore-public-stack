@@ -135,6 +135,11 @@ class ToolCatalogService:
                     category=tool.category,
                     protocol=tool.protocol,
                     status=tool.status,
+                    # UserToolAccess has always declared this field; nothing ever
+                    # passed it, so every tool reported `requiresOauthProvider:
+                    # null` and the SPA had no way to tell that 13 of the 31
+                    # tools in prod need a connection before they will work.
+                    requires_oauth_provider=tool.requires_oauth_provider,
                     granted_by=granted_by,
                     enabled_by_default=tool.enabled_by_default,
                     user_enabled=user_enabled,
