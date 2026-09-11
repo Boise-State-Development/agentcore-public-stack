@@ -1,33 +1,46 @@
-import { Component } from '@angular/core';
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PulsatingLoaderComponent } from './pulsating-loader.component';
 
-@Component({
-  imports: [PulsatingLoaderComponent],
-  template: `<app-pulsating-loader
-    [notice]="notice"
-    [status]="status"
-    [statusTool]="statusTool"
-    [startedAt]="startedAt"
-  />`,
-})
-class HostComponent {
-  notice: string | null = null;
-  status: string | null = null;
-  statusTool: string | null = null;
-  startedAt: number | null = null;
+interface LoaderInputs {
+  notice: string | null;
+  status: string | null;
+  statusTool: string | null;
+  startedAt: number | null;
 }
 
-function render(props: Partial<HostComponent> = {}) {
-  const fixture = TestBed.createComponent(HostComponent);
-  Object.assign(fixture.componentInstance, props);
-  fixture.detectChanges();
+/**
+ * Driven through `setInput` on the component itself rather than a host
+ * wrapper: mutating host fields after the first change-detection pass trips
+ * NG0100 in dev mode, which is a harness artifact rather than anything the
+ * component does wrong.
+ */
+function render(
+  props: Partial<LoaderInputs> = {},
+): ComponentFixture<PulsatingLoaderComponent> {
+  const fixture = TestBed.createComponent(PulsatingLoaderComponent);
+  setInputs(fixture, { notice: null, status: null, statusTool: null, startedAt: null, ...props });
   return fixture;
+}
+
+function setInputs(
+  fixture: ComponentFixture<PulsatingLoaderComponent>,
+  props: Partial<LoaderInputs>,
+) {
+  for (const [key, value] of Object.entries(props)) {
+    fixture.componentRef.setInput(key, value);
+  }
+  fixture.detectChanges();
 }
 
 const textOf = (fixture: { nativeElement: HTMLElement }) =>
   (fixture.nativeElement.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+/** Just the state phrase, without the bullet separators or the timer. */
+const stateOf = (fixture: { nativeElement: HTMLElement }) =>
+  (fixture.nativeElement.querySelector('.state')?.textContent ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 describe('PulsatingLoaderComponent', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -35,14 +48,14 @@ describe('PulsatingLoaderComponent', () => {
 
   describe('what it says', () => {
     it('shows the live state from agent_status', () => {
-      expect(textOf(render({ status: 'Thinking' }))).toContain('Thinking');
+      expect(stateOf(render({ status: 'Thinking' }))).toBe('Thinking');
     });
 
     it('shows the running tool by its real name', () => {
       // The identifier is the most accurate label available while a tool runs,
       // and is the same one the tool rail and admin catalog use.
       const fixture = render({ status: 'Running', statusTool: 'list_assignments' });
-      expect(textOf(fixture)).toContain('Running list_assignments');
+      expect(stateOf(fixture)).toBe('Running list_assignments');
     });
 
     it('renders the tool name as an identifier, not prose', () => {
@@ -59,7 +72,7 @@ describe('PulsatingLoaderComponent', () => {
       // The fallback is "Thinking", not a vaguer hedge: on a cold start the
       // gap before the first agent_status can run several seconds, and that
       // gap is the only thing the user sees.
-      expect(textOf(render())).toBe('Thinking');
+      expect(stateOf(render())).toBe('Thinking');
     });
 
     it('lets a notice outrank the state', () => {
@@ -71,6 +84,64 @@ describe('PulsatingLoaderComponent', () => {
       const text = textOf(fixture);
       expect(text).toContain('The model is busy. Retrying');
       expect(text).not.toContain('Thinking');
+    });
+  });
+
+  describe('layout', () => {
+    it('orders the line pulse, timer, state', () => {
+      const fixture = render({ status: 'Thinking', startedAt: Date.now() });
+      const row = fixture.nativeElement.querySelector('[role="status"]')!;
+      const kinds = [...row.children].map(el =>
+        el.classList.contains('pulse-dot')
+          ? 'dot'
+          : el.classList.contains('sep')
+            ? 'sep'
+            : el.classList.contains('state')
+              ? 'state'
+              : 'timer',
+      );
+      expect(kinds).toEqual(['dot', 'sep', 'timer', 'sep', 'state']);
+    });
+
+    it('drops the second bullet when there is no timer', () => {
+      // A dangling separator next to nothing reads as a rendering bug.
+      const fixture = render({ status: 'Thinking' });
+      expect(fixture.nativeElement.querySelectorAll('.sep').length).toBe(1);
+    });
+
+    it('shimmers the state on the healthy path', () => {
+      const state = render({ status: 'Thinking' }).nativeElement.querySelector('.state');
+      expect(state?.classList.contains('shimmer')).toBe(true);
+    });
+
+    it('does not shimmer a notice', () => {
+      // A warning that shimmers reads as decoration rather than a warning.
+      const state = render({ notice: 'Still working…' }).nativeElement.querySelector('.state');
+      expect(state?.classList.contains('shimmer')).toBe(false);
+      expect(state?.classList.contains('is-notice')).toBe(true);
+    });
+
+    it('rebuilds the state node when the state changes, so it can animate', () => {
+      // `@for ... track` over the visible text is what makes the enter
+      // keyframe run; a plain interpolation would mutate text in place and
+      // never animate.
+      const fixture = render({ status: 'Thinking', startedAt: Date.now() });
+      const first = fixture.nativeElement.querySelector('.state');
+
+      setInputs(fixture, { status: 'Running', statusTool: 'browse_web' });
+
+      expect(fixture.nativeElement.querySelector('.state')).not.toBe(first);
+    });
+
+    it('keeps the same state node while only the timer ticks', () => {
+      // The state must not re-animate once a second.
+      const fixture = render({ status: 'Thinking', startedAt: Date.now() });
+      const first = fixture.nativeElement.querySelector('.state');
+
+      vi.advanceTimersByTime(3000);
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.state')).toBe(first);
     });
   });
 

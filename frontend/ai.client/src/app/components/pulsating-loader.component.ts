@@ -45,7 +45,7 @@ import { isPlatformBrowser } from '@angular/common';
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div
-      class="flex items-center gap-2.5"
+      class="flex items-center gap-2"
       role="status"
       [attr.aria-busy]="true"
       aria-live="polite"
@@ -53,24 +53,30 @@ import { isPlatformBrowser } from '@angular/common';
     >
       <span class="pulse-dot" [class.is-notice]="!!notice()" aria-hidden="true"></span>
 
-      <span
-        class="text-sm"
-        [class]="notice()
-          ? 'text-state-warning-700 dark:text-state-warning-400'
-          : 'text-gray-600 dark:text-gray-300'"
-      >
-        {{ label() }}
-        @if (statusTool(); as tool) {
-          <span class="font-mono text-[13px] text-gray-700 dark:text-gray-200">{{ tool }}</span>
-        }
-      </span>
+      <span class="sep" aria-hidden="true">&bull;</span>
 
-      <!-- Tabular figures so the seconds tick without the line jittering. -->
+      <!-- Tabular figures so the seconds tick without the line jittering, and
+           aria-hidden so a screen reader is not re-announced to every second. -->
       @if (elapsedLabel(); as elapsed) {
+        <span class="text-xs tabular-nums text-gray-400 dark:text-gray-500" aria-hidden="true">{{ elapsed }}</span>
+        <span class="sep" aria-hidden="true">&bull;</span>
+      }
+
+      <!-- Tracked by its own text, so a change in state destroys this node and
+           builds a new one — which is what lets the enter animation run on
+           every transition. The timer is a sibling for the same reason in
+           reverse: it must NOT re-animate once a second. -->
+      @for (frame of stateFrames(); track frame) {
         <span
-          class="text-xs tabular-nums text-gray-400 dark:text-gray-500"
-          aria-hidden="true"
-        >{{ elapsed }}</span>
+          class="state text-sm"
+          [class.is-notice]="!!notice()"
+          [class.shimmer]="!notice()"
+        >
+          {{ label() }}
+          @if (statusTool(); as tool) {
+            <span class="font-mono text-[13px]">{{ tool }}</span>
+          }
+        </span>
       }
     </div>
 
@@ -100,6 +106,64 @@ import { isPlatformBrowser } from '@angular/common';
         background-color: var(--color-secondary-400);
       }
 
+      .sep {
+        font-size: 11px;
+        line-height: 1;
+        color: var(--color-gray-400);
+      }
+
+      :host-context(.dark) .sep {
+        color: var(--color-gray-600);
+      }
+
+      .state {
+        --shimmer-base: #6b7280;      /* gray-500 */
+        --shimmer-highlight: #d1d5db; /* gray-300 */
+        background: linear-gradient(
+          90deg,
+          var(--shimmer-base) 25%,
+          var(--shimmer-highlight) 50%,
+          var(--shimmer-base) 75%
+        );
+        background-size: 200% 100%;
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        animation: state-enter 0.3s ease-out;
+      }
+
+      :host-context(.dark) .state {
+        --shimmer-base: #9ca3af;      /* gray-400 */
+        --shimmer-highlight: #f3f4f6; /* gray-100 */
+      }
+
+      .state.shimmer {
+        animation:
+          state-enter 0.3s ease-out,
+          loader-shimmer 2.2s ease-in-out infinite;
+      }
+
+      /* The mono tool name is a child, so it must inherit the gradient rather
+         than paint its own colour over it. */
+      .state span {
+        color: inherit;
+        -webkit-text-fill-color: inherit;
+      }
+
+      /*
+       * A notice is a warning, and a warning that shimmers reads as decoration.
+       * It opts out of the gradient entirely and keeps a solid amber.
+       */
+      .state.is-notice {
+        background: none;
+        -webkit-text-fill-color: currentColor;
+        color: var(--color-state-warning-700);
+      }
+
+      :host-context(.dark) .state.is-notice {
+        color: var(--color-state-warning-400);
+      }
+
       @keyframes loader-pulse {
         0%,
         100% {
@@ -112,10 +176,35 @@ import { isPlatformBrowser } from '@angular/common';
         }
       }
 
+      @keyframes loader-shimmer {
+        0% {
+          background-position: 200% center;
+        }
+        100% {
+          background-position: -200% center;
+        }
+      }
+
+      @keyframes state-enter {
+        from {
+          opacity: 0;
+          transform: translateY(3px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
       @media (prefers-reduced-motion: reduce) {
         .pulse-dot {
           animation: none;
           opacity: 0.8;
+        }
+
+        .state,
+        .state.shimmer {
+          animation: none;
         }
       }
     </style>
@@ -174,6 +263,20 @@ export class PulsatingLoaderComponent implements OnInit, OnDestroy {
     if (seconds < 60) return `${seconds}s`;
     const minutes = Math.floor(seconds / 60);
     return `${minutes}m ${seconds % 60}s`;
+  });
+
+  /**
+   * A single frame keyed by the visible text.
+   *
+   * `@for ... track frame` over this is what animates the state change: when
+   * the text differs the old node is destroyed and a new one created, so the
+   * enter keyframe runs. A plain interpolation would mutate the text in place
+   * and never animate. The timer stays outside this loop deliberately — it
+   * changes every second and must not re-animate.
+   */
+  protected readonly stateFrames = computed(() => {
+    const tool = this.statusTool();
+    return [tool ? `${this.label()} ${tool}` : this.label()];
   });
 
   /**
