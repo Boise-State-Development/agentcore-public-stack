@@ -488,14 +488,3 @@ export interface MessageBuilder {
   createdAt: string;
   isComplete: boolean;
 }
-
-/**
- * Tool progress state for UI feedback
- */
-export interface ToolProgress {
-  visible: boolean;
-  message?: string;
-  toolName?: string;
-  toolUseId?: string;
-  startTime?: number;
-}

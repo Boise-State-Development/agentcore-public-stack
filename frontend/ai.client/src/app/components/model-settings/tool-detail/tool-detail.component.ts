@@ -8,9 +8,11 @@ import {
   signal,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowPath, heroLockClosed } from '@ng-icons/heroicons/outline';
+import { heroArrowPath, heroCheckCircle, heroLockClosed } from '@ng-icons/heroicons/outline';
 import { Tool, ToolService } from '../../../services/tool/tool.service';
 import { splitToolDescription } from '../../../shared/utils/tool-description';
+import { ConnectorStatusService } from '../../../settings/connectors/services/connector-status.service';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 
 /** Which panel of the detail view is showing. */
 export type ToolDetailTab = 'tools' | 'about';
@@ -36,14 +38,46 @@ export type ToolDetailTab = 'tools' | 'about';
   selector: 'app-tool-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon],
-  providers: [provideIcons({ heroArrowPath, heroLockClosed })],
+  providers: [provideIcons({ heroArrowPath, heroCheckCircle, heroLockClosed })],
   host: { class: 'flex h-full flex-col' },
   templateUrl: './tool-detail.component.html',
 })
 export class ToolDetailComponent {
   protected readonly toolService = inject(ToolService);
+  protected readonly connectorStatus = inject(ConnectorStatusService);
+  private readonly consent = inject(OAuthConsentService);
 
   readonly tool = input.required<Tool>();
+
+  /** The OAuth provider this tool needs, or null when it needs none. */
+  protected readonly providerId = computed(() => this.tool().requiresOauthProvider ?? null);
+
+  /** Connection state for that provider; 'none' when the tool needs no consent. */
+  protected readonly connection = computed(() => {
+    const provider = this.providerId();
+    return provider ? this.connectorStatus.stateFor(provider) : 'none';
+  });
+
+  protected readonly connecting = computed(() => {
+    const provider = this.providerId();
+    return provider ? this.consent.inFlightProviders().has(provider) : false;
+  });
+
+  /**
+   * Open the provider's consent popup. Reuses the same service the chat layer
+   * and settings page use, so popup blocking, COOP-severed openers and the
+   * completion broadcast are all already handled — and
+   * `ConnectorStatusService` flips the chip when that broadcast lands.
+   *
+   * `requestConsent` is called with no authorization URL on purpose: the
+   * service then fetches a fresh one, because AgentCore's URLs expire quickly.
+   */
+  protected connect(): void {
+    const provider = this.providerId();
+    if (!provider) return;
+    this.consent.requestConsent(provider, undefined);
+    void this.consent.openConsentPopup(provider);
+  }
 
   protected readonly isMcpServer = computed(() => {
     const protocol = this.tool().protocol;

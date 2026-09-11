@@ -44,7 +44,6 @@ import {
   type ContentBlockBuilder,
   type MessageBuilder,
   type SteeringAppliedEvent,
-  type ToolProgress,
   type ContentBlockDeltaEvent,
   type ContentBlockStartEvent,
   type ToolResultEventData,
@@ -59,9 +58,6 @@ enum StreamState {
   Completed = 'completed',
   Error = 'error',
 }
-
-// Re-export ToolProgress for backwards compatibility
-export type { ToolProgress };
 
 /**
  * Tools whose `content` input is a long document worth surfacing live (as a
@@ -109,9 +105,6 @@ interface ParserSessionState {
    * here instead and are folded in, in order, when that message finalizes.
    */
   steeringMessages: WritableSignal<Message[]>;
-
-  /** Tool progress indicator state */
-  toolProgress: WritableSignal<ToolProgress>;
 
   /**
    * Epoch ms of the last event received on this stream. Stamped on EVERY
@@ -187,7 +180,6 @@ export class StreamParserService {
   /** Stable per-session accessor signals (cached so callers can hold them). */
   private readonly allMessagesCache = new Map<string, Signal<Message[]>>();
   private readonly streamingMessageIdCache = new Map<string, Signal<string | null>>();
-  private readonly toolProgressCache = new Map<string, Signal<ToolProgress>>();
   private readonly modelRetryCache = new Map<string, Signal<ModelRetryEvent | null>>();
   private readonly lastEventAtCache = new Map<string, Signal<number>>();
   private readonly citationsCache = new Map<string, Signal<Citation[]>>();
@@ -213,11 +205,6 @@ export class StreamParserService {
    */
   streamingMessageIdFor(sessionId: string): Signal<string | null> {
     return this.cachedAccessor(this.streamingMessageIdCache, sessionId, (state) => state.streamingMessageId(), null);
-  }
-
-  /** Tool progress indicator state for a session. */
-  toolProgressFor(sessionId: string): Signal<ToolProgress> {
-    return this.cachedAccessor(this.toolProgressCache, sessionId, (state) => state.toolProgress(), { visible: false });
   }
 
   /**
@@ -421,7 +408,6 @@ export class StreamParserService {
       currentMessageBuilder,
       completedMessages,
       steeringMessages,
-      toolProgress: signal<ToolProgress>({ visible: false }),
       modelRetry: signal<ModelRetryEvent | null>(null),
       lastEventAt: signal<number>(Date.now()),
       error: signal<string | null>(null),
@@ -511,14 +497,12 @@ export class StreamParserService {
       onContentBlockDelta: (data) => this.handleContentBlockDelta(state, data),
       onContentBlockStop: (data) => this.handleContentBlockStop(state, data),
 
-      onToolUse: (data) => {
+      onToolUse: () => {
         // This turn has tool boundaries, so a follow-up typed from here can
         // land mid-turn. Drives the composer's placeholder wording.
         this.steering.markToolUsed(state.sessionId);
-        this.handleToolUseProgress(state, data);
       },
       onToolResult: (data) => this.handleToolResult(state, data),
-      onToolProgress: (progress) => state.toolProgress.set(progress),
 
       onModelRetry: (data: ModelRetryEvent) => {
         // Not viewed-session-scoped on purpose: this signal is read per
@@ -753,17 +737,6 @@ export class StreamParserService {
 
       return { ...builder, contentBlocks: newBlocks };
     });
-
-    // Show tool progress for tool_use blocks
-    if (blockType === 'tool_use' && data.toolUse) {
-      state.toolProgress.set({
-        visible: true,
-        toolName: data.toolUse.name,
-        toolUseId: data.toolUse.toolUseId,
-        message: `Running ${data.toolUse.name}...`,
-        startTime: Date.now(),
-      });
-    }
   }
 
   private handleContentBlockDelta(state: ParserSessionState, data: ContentBlockDeltaEvent): void {
@@ -843,26 +816,11 @@ export class StreamParserService {
 
       block.isComplete = true;
 
-      if (block.type === 'tool_use') {
-        state.toolProgress.set({ visible: false });
-      }
-
       const newBlocks = new Map(builder.contentBlocks);
       newBlocks.set(data.contentBlockIndex, { ...block });
 
       return { ...builder, contentBlocks: newBlocks };
     });
-  }
-
-  private handleToolUseProgress(state: ParserSessionState, data: {
-    tool_use: { name: string; tool_use_id: string; input: string };
-  }): void {
-    state.toolProgress.update((progress) => ({
-      ...progress,
-      visible: true,
-      toolName: data.tool_use.name,
-      toolUseId: data.tool_use.tool_use_id,
-    }));
   }
 
   private handleToolResult(state: ParserSessionState, data: ToolResultEventData): void {
@@ -914,8 +872,6 @@ export class StreamParserService {
 
       return { ...builder, contentBlocks: newBlocks };
     });
-
-    state.toolProgress.set({ visible: false });
   }
 
   private handleMessageStop(state: ParserSessionState, data: { stopReason: string }): void {
@@ -941,7 +897,6 @@ export class StreamParserService {
   private handleDone(state: ParserSessionState): void {
     this.finalizeCurrentMessage(state);
     state.isStreamComplete.set(true);
-    state.toolProgress.set({ visible: false });
     state.modelRetry.set(null);
     state.streamState = StreamState.Completed;
 
@@ -1102,7 +1057,6 @@ export class StreamParserService {
   private setError(state: ParserSessionState, message: string): void {
     state.error.set(message);
     state.isStreamComplete.set(true);
-    state.toolProgress.set({ visible: false });
     state.streamState = StreamState.Error;
   }
 

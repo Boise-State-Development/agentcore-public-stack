@@ -623,8 +623,7 @@ describe('stream-parser-core', () => {
         onDone: vi.fn(),
         onError: vi.fn(),
         onMetadata: vi.fn(),
-        onReasoning: vi.fn(),
-        onToolProgress: vi.fn()
+        onReasoning: vi.fn()
       };
     });
 
@@ -645,21 +644,15 @@ describe('stream-parser-core', () => {
       expect(callbacks.onContentBlockDelta).toHaveBeenCalledWith(data);
     });
 
-    it('should call onToolUse and onToolProgress for valid tool_use', () => {
+    it('should call onToolUse for valid tool_use', () => {
       const data = { tool_use: { name: 'search', tool_use_id: 'id123' } };
       processStreamEvent('tool_use', data, callbacks);
       expect(callbacks.onToolUse).toHaveBeenCalledWith(data);
-      expect(callbacks.onToolProgress).toHaveBeenCalledWith({
-        visible: true,
-        toolName: 'search',
-        toolUseId: 'id123'
-      });
     });
 
-    it('should call onDone and hide tool progress for done event', () => {
+    it('should call onDone for done event', () => {
       processStreamEvent('done', null, callbacks);
       expect(callbacks.onDone).toHaveBeenCalled();
-      expect(callbacks.onToolProgress).toHaveBeenCalledWith({ visible: false });
     });
 
     it('should call onParseError for invalid event type', () => {
