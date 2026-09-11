@@ -116,25 +116,38 @@
                   class="block font-mono text-xs/5 font-medium text-gray-900 dark:text-white"
                   >{{ sub.name }}</span
                 >
-                @if (sub.description) {
-                  <!--
-                    Clamped, because these are raw Python docstrings: several
-                    carry their whole "Args:" block, and one unclamped tool
-                    description filled two thirds of the pane on Student
-                    MyBoiseState. Splitting the agent-facing text from a
-                    human-facing summary is the real fix, and it belongs in the
-                    catalog rather than here.
-                  -->
-                  <!--
-                    No `block` here: line-clamp-2 sets display:-webkit-box, and
-                    a display utility alongside it wins the cascade and silently
-                    un-clamps the text.
-                  -->
-                  <span
-                    class="mt-0.5 line-clamp-2 text-xs/5 text-gray-500 dark:text-gray-400"
-                    [attr.title]="sub.description"
-                    >{{ sub.description }}</span
+                <!--
+                  The docstring's first paragraph, unwrapped. The clamp that used
+                  to be here hid the problem rather than fixing it: two lines of
+                  an `Args:` block are two lines of the wrong text.
+                -->
+                @if (sub.summary) {
+                  <span class="mt-0.5 block text-xs/5 text-gray-500 dark:text-gray-400">{{
+                    sub.summary
+                  }}</span>
+                }
+                @if (sub.detail) {
+                  <button
+                    type="button"
+                    (click)="toggleDetail(sub.name)"
+                    [attr.aria-expanded]="isDetailExpanded(sub.name)"
+                    [attr.aria-controls]="'subtool-detail-' + t.toolId + '-' + sub.name"
+                    class="mt-1 text-xs/5 font-medium text-primary-600 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-400"
                   >
+                    {{ isDetailExpanded(sub.name) ? 'Hide details' : 'Show details' }}
+                  </button>
+                  @if (isDetailExpanded(sub.name)) {
+                    <!--
+                      Keeps its line structure: an `Args:` block is a list, and
+                      unwrapping it into a paragraph would read worse. Scrolls
+                      sideways itself rather than making the pane do it.
+                    -->
+                    <pre
+                      [id]="'subtool-detail-' + t.toolId + '-' + sub.name"
+                      class="mt-1.5 overflow-x-auto rounded-lg bg-gray-50 p-2 font-mono text-[11px]/5 whitespace-pre text-gray-600 dark:bg-white/5 dark:text-gray-300"
+                      >{{ sub.detail }}</pre
+                    >
+                  }
                 }
               </div>
               <button

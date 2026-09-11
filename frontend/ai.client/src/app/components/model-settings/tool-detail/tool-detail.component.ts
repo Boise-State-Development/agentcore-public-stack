@@ -10,6 +10,7 @@ import {
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowPath, heroLockClosed } from '@ng-icons/heroicons/outline';
 import { Tool, ToolService } from '../../../services/tool/tool.service';
+import { splitToolDescription } from '../../../shared/utils/tool-description';
 
 /** Which panel of the detail view is showing. */
 export type ToolDetailTab = 'tools' | 'about';
@@ -67,7 +68,36 @@ export class ToolDetailComponent {
   protected readonly discovering = signal(false);
   protected readonly discoverError = signal<string | null>(null);
 
-  protected readonly subTools = computed(() => this.tool().serverTools ?? []);
+  /**
+   * The server's tools with their docstrings split into a readable summary and
+   * the reference detail below it. One unsplit description filled two thirds of
+   * this pane on Student MyBoiseState, which has seventeen of them.
+   */
+  protected readonly subTools = computed(() =>
+    (this.tool().serverTools ?? []).map((sub) => ({
+      ...sub,
+      ...splitToolDescription(sub.description),
+    })),
+  );
+
+  /** Sub-tools whose reference detail the user has opened. */
+  private readonly expandedDetails = signal<Set<string>>(new Set());
+
+  isDetailExpanded(name: string): boolean {
+    return this.expandedDetails().has(name);
+  }
+
+  toggleDetail(name: string): void {
+    this.expandedDetails.update((set) => {
+      const next = new Set(set);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+      }
+      return next;
+    });
+  }
 
   protected readonly tabs = computed(() => [
     { id: 'tools' as const, label: 'Tools', count: this.subTools().length },
