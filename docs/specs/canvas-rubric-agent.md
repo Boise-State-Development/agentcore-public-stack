@@ -1,6 +1,6 @@
 # Spec: Canvas Rubric Agent
 
-**Status:** Built and smoke-tested in dev 2026-09-10 (§10, §10a). Server fixes merged (mcp-servers#38, #39; #40 open). Remaining: institutional KB content (§10a), then prod cutover (§8.2).
+**Status:** Built and smoke-tested in dev 2026-09-10 (§10, §10a). All server fixes merged (mcp-servers#38, #39, #40). Remaining: institutional KB content (§10a), the rest of the §8.1 acceptance pass, then prod cutover (§8.2).
 **Audience:** A fresh implementation session with no prior context — this doc is self-contained.
 **Owner:** Phil Merrell
 **Last updated:** 2026-09-10
@@ -743,8 +743,13 @@ provider that has a discovery URL. Worked around with a direct scopes-only `PATC
 (`X-CSRF-Token` from the `__Host-bff_csrf` cookie). A connectors admin following §8.2 step 4 in
 prod will hit this.
 
-**Course 50994 cleanup:** 256107 and 256110 deleted via the API. **256108 and 256109 remain** —
-pre-#39 orphans that Canvas 500s on delete; remove them in the Canvas UI. Assignment 1756044 is
+**Course 50994 cleanup:** 256107 and 256110 deleted via the API. **256108 and 256109 cannot be
+deleted at all.** Every route 500s or 404s — including `DELETE` from a full Canvas *admin* browser
+session, and a rescue attempt that POSTs a Course `rubric_association` (both `purpose` values).
+They are absent from the Canvas UI's Rubrics page under both Saved and Archived, so they are inert;
+only the API index endpoint reveals them. Removing them needs Instructure support (the 500 bodies
+carry `error_report_id`s) or the monthly reset of the test instance. **The 500 is not an OAuth
+scope problem** — it reproduces for an admin — so do not debug it as one. Assignment 1756044 is
 still at 8 points (was 5): restoring it needs
 `url:PUT|/api/v1/courses/:course_id/assignments/:id`, which the dev provider does not grant.
 
