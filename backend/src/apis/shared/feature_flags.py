@@ -234,3 +234,51 @@ def artifact_share_inbox_enabled() -> bool:
         os.environ.get("ARTIFACT_SHARE_INBOX_ENABLED", "").strip().lower()
         != "false"
     )
+
+
+def agent_status_enabled() -> bool:
+    """Whether the agent narrates what it is doing while a turn streams.
+
+    Covers the runtime ``AgentStatusHook`` (model-call and tool-call
+    boundaries), the ``agent_status`` SSE event the stream coordinator drains
+    from it, and the SPA's live status line + per-tool durations. **Default ON
+    with a kill switch** (house style, mirroring ``mid_turn_steering_enabled``):
+    unset or empty resolves to enabled; only the literal ``"false"``
+    (case-insensitive) disables.
+
+    While off the hook is still registered but every callback returns
+    immediately and the drain yields nothing, leaving the loading indicator on
+    its cycling phrases and tool rows with no duration — exactly the
+    pre-feature behaviour.
+
+    Costs nothing against the model: the hook observes boundaries the event
+    loop already crosses and writes to an in-process list. Nothing it produces
+    reaches the prompt, so the cacheable prefix is untouched.
+    """
+    return os.environ.get("AGENT_STATUS_ENABLED", "").strip().lower() != "false"
+
+
+def tool_summaries_enabled() -> bool:
+    """Whether tool batches get a model-generated one-line summary.
+
+    Covers the Nova Micro summarizer that runs as a side-channel task at each
+    tool boundary, the ``tool_group_summary`` SSE event, the ``TSUM#``
+    persistence rows, and their replay on ``GET /messages``. **Default ON with
+    a kill switch** (house style): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables.
+
+    This flag gates the *model-generated* summary only. The SPA's deterministic
+    per-tool formatters are client-side, cost nothing, and keep working with
+    this off — turning the flag off degrades the rail from prose ("Found the
+    Syllabus Acknowledgment assignment in BIO 101") to the formatter line
+    ("Listed 4 assignments"), never to a bare tool name.
+
+    Cost note (CLAUDE.md token-effectiveness tenet): the summarizer is a
+    **side-channel**, structured exactly like ``session_title`` — its own
+    Bedrock call on its own messages, concurrent with the agent stream. It
+    never appends to the agent's conversation, so it adds nothing to the
+    cacheable prefix and cannot cause a cache re-write. Its own spend is one
+    bounded Nova Micro call per tool batch (inputs and results are truncated
+    before they are sent), which is why it is affordable to leave on.
+    """
+    return os.environ.get("TOOL_SUMMARIES_ENABLED", "").strip().lower() != "false"
