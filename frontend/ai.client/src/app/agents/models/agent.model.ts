@@ -193,6 +193,23 @@ export interface BindableItem {
   meta: Record<string, unknown>;
 }
 
+/**
+ * One tool an MCP server exposes, as carried on a `kind: 'tool'` item's
+ * `meta.serverTools`. It is the server's last *discovery* snapshot (refreshed by
+ * "Discover from server" on the admin tool page), which is why an undiscovered
+ * server arrives with an empty list rather than a short one.
+ *
+ * This is what lets an author bind a subset: a selected name becomes the scoped
+ * ref `serverId::toolName`. Presentation and authoring only — the list is never
+ * consulted at run time, where the scoped ref itself does the narrowing.
+ */
+export interface BindableServerTool {
+  name: string;
+  description?: string;
+  needsApproval?: boolean;
+  enabled?: boolean;
+}
+
 export interface BindableListResponse {
   kind: string;
   items: BindableItem[];
