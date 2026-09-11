@@ -46,7 +46,6 @@ import type {
   SessionTitleEvent,
   SteeringAppliedEvent,
   ModelRetryEvent,
-  ToolProgress,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
 
@@ -74,7 +73,6 @@ export interface StreamParserCallbacks {
   // Tool events
   onToolUse?: (data: ToolUseEvent) => void;
   onToolResult?: (data: ToolResultEventData) => void;
-  onToolProgress?: (progress: ToolProgress) => void;
 
   // Metadata and auxiliary events
   onMetadata?: (data: MetadataEvent) => void;
@@ -656,17 +654,6 @@ export function processStreamEvent(
       case 'content_block_start':
         if (validateContentBlockStartEvent(data)) {
           callbacks.onContentBlockStart?.(data);
-
-          // Emit tool progress for tool_use blocks
-          if (data.type === 'tool_use' && data.toolUse) {
-            callbacks.onToolProgress?.({
-              visible: true,
-              toolName: data.toolUse.name,
-              toolUseId: data.toolUse.toolUseId,
-              message: `Running ${data.toolUse.name}...`,
-              startTime: Date.now(),
-            });
-          }
         } else {
           callbacks.onParseError?.('content_block_start: invalid data structure');
         }
@@ -691,11 +678,6 @@ export function processStreamEvent(
       case 'tool_use':
         if (validateToolUseEvent(data)) {
           callbacks.onToolUse?.(data);
-          callbacks.onToolProgress?.({
-            visible: true,
-            toolName: data.tool_use.name,
-            toolUseId: data.tool_use.tool_use_id,
-          });
         } else {
           callbacks.onParseError?.('tool_use: invalid data structure');
         }
@@ -704,7 +686,6 @@ export function processStreamEvent(
       case 'tool_result':
         if (validateToolResultEvent(data)) {
           callbacks.onToolResult?.(data);
-          callbacks.onToolProgress?.({ visible: false });
         } else {
           callbacks.onParseError?.('tool_result: invalid data structure');
         }
@@ -720,7 +701,6 @@ export function processStreamEvent(
 
       case 'done':
         callbacks.onDone?.();
-        callbacks.onToolProgress?.({ visible: false });
         break;
 
       case 'error':

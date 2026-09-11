@@ -151,7 +151,6 @@ export class PreviewChatService {
       // Unused callbacks for preview - just ignore these events
       onContentBlockStart: () => {},
       onContentBlockStop: () => {},
-      onToolProgress: () => {},
       onMetadata: () => {},
       onReasoning: () => {},
       onCitation: () => {},
