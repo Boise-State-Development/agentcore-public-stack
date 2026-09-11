@@ -13,7 +13,12 @@ from typing import Dict, List, Optional, Any
 import boto3
 from botocore.exceptions import ClientError
 
-from .models import ToolDefinition, UserToolPreference, ToolStatus
+from .models import (
+    ToolCapabilitySnapshot,
+    ToolDefinition,
+    UserToolPreference,
+    ToolStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +67,53 @@ class ToolCatalogRepository:
             return ToolDefinition.from_dynamo_item(item)
         except ClientError as e:
             logger.error(f"Error getting tool {tool_id}: {e}")
+            raise
+
+    # =========================================================================
+    # MCP capability snapshots (PK=TOOL#{id}, SK=CAPABILITIES)
+    # =========================================================================
+
+    async def get_capabilities(
+        self, tool_id: str
+    ) -> Optional["ToolCapabilitySnapshot"]:
+        """The stored prompts/resources snapshot for a tool, or None if never discovered."""
+        try:
+            response = self._table.get_item(
+                Key={"PK": f"TOOL#{tool_id}", "SK": "CAPABILITIES"}
+            )
+            item = response.get("Item")
+            if not item:
+                return None
+            return ToolCapabilitySnapshot.from_dynamo_item(item)
+        except ClientError as e:
+            logger.error(f"Error getting capabilities for {tool_id}: {e}")
+            raise
+
+    async def put_capabilities(
+        self, snapshot: "ToolCapabilitySnapshot"
+    ) -> "ToolCapabilitySnapshot":
+        """Write a capability snapshot, replacing any previous one.
+
+        Replace rather than merge: the snapshot is a point-in-time answer from
+        the server, and merging would keep prompts the server has since removed.
+        """
+        try:
+            self._table.put_item(Item=snapshot.to_dynamo_item())
+            return snapshot
+        except ClientError as e:
+            logger.error(
+                f"Error writing capabilities for {snapshot.tool_id}: {e}"
+            )
+            raise
+
+    async def delete_capabilities(self, tool_id: str) -> None:
+        """Drop a tool's snapshot — used when the tool itself is deleted."""
+        try:
+            self._table.delete_item(
+                Key={"PK": f"TOOL#{tool_id}", "SK": "CAPABILITIES"}
+            )
+        except ClientError as e:
+            logger.error(f"Error deleting capabilities for {tool_id}: {e}")
             raise
 
     async def list_tools(

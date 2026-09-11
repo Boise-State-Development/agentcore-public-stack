@@ -20,7 +20,10 @@ from apis.shared.oauth.provider_repository import (
     get_provider_repository,
 )
 from apis.app_api.tools.service import get_tool_catalog_service
-from apis.app_api.tools.discovery import discover_tools_for_saved_tool
+from apis.app_api.tools.discovery import (
+    discover_capabilities_for_saved_tool,
+    discover_tools_for_saved_tool,
+)
 from apis.shared.tools.gateway_target_service import (
     GatewayTargetConflictError,
     GatewayTargetNotFoundError,
@@ -40,6 +43,7 @@ from apis.shared.tools.models import (
     DiscoveredMCPTool,
     GatewayTargetStatusResponse,
     MCPAuthType,
+    ToolCapabilitySnapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -734,3 +738,94 @@ async def remove_roles_from_tool(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post(
+    "/{tool_id}/capabilities/refresh", response_model=ToolCapabilitySnapshot
+)
+async def admin_refresh_tool_capabilities(
+    tool_id: str,
+    admin: User = Depends(require_tools_admin),
+    provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
+):
+    """Ask a saved MCP server what prompts and resources it exposes, and store it.
+
+    An admin action rather than a user one: probing opens a live MCP session, so
+    doing it per user per page view would hammer every server in the catalog.
+    Users read the stored snapshot.
+
+    A 3LO server is probed with the **admin's own** vaulted token, exactly as
+    ``POST /admin/tools/discover`` does. The snapshot therefore reflects what the
+    admin's connection can see — for providers that scope-filter by grant, a user
+    with narrower scopes may see less. That is the same caveat the tool listing
+    has always carried, and it is far better than the alternative: six servers in
+    prod currently expose nothing at all because discovery runs without a token.
+
+    A failed probe is **not** written over a good snapshot. Losing a working
+    listing because a server was briefly down would be a worse outcome than
+    showing a slightly stale one, so the previous snapshot is returned with the
+    error attached.
+    """
+    service = get_tool_catalog_service()
+    tool = await service.repository.get_tool(tool_id)
+    if tool is None:
+        raise HTTPException(status_code=404, detail="Tool not found")
+
+    oauth_token: Optional[str] = None
+    if tool.requires_oauth_provider:
+        provider = await provider_repo.get_provider(tool.requires_oauth_provider)
+        if provider is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown OAuth provider '{tool.requires_oauth_provider}'.",
+            )
+        identity = get_agentcore_identity_client()
+        try:
+            result = await identity.get_token_for_user(
+                provider_name=provider.provider_id,
+                scopes=provider.scopes,
+                user_id=admin.user_id,
+                # customParameters are part of the AgentCore vault key — omitting
+                # them would falsely report consent-required for a vaulted token.
+                custom_parameters=custom_parameters_for(provider.custom_parameters),
+            )
+        except (WorkloadTokenUnavailableError, CallbackUrlUnavailableError) as err:
+            logger.warning("Capability discovery token unavailable: %s", err)
+            raise HTTPException(status_code=503, detail=str(err))
+        if result.requires_consent or not result.access_token:
+            raise HTTPException(
+                status_code=409,
+                detail=f"You haven't connected '{provider.display_name}' yet. "
+                "Connect it in your connector settings, then retry.",
+            )
+        oauth_token = result.access_token
+    elif getattr(tool, "forward_auth_token", False):
+        if not admin.raw_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Forward-auth discovery needs your session token, which "
+                "this request didn't carry.",
+            )
+        oauth_token = admin.raw_token
+
+    snapshot = await discover_capabilities_for_saved_tool(
+        tool, oauth_token=oauth_token, discovered_by=admin.user_id
+    )
+
+    if snapshot.error:
+        previous = await service.repository.get_capabilities(tool_id)
+        if previous is not None:
+            previous.error = snapshot.error
+            return previous
+        return snapshot
+
+    return await service.repository.put_capabilities(snapshot)
+
+
+@router.get("/{tool_id}/capabilities", response_model=ToolCapabilitySnapshot)
+async def admin_get_tool_capabilities(
+    tool_id: str,
+    admin: User = Depends(require_tools_admin),
+):
+    """The stored snapshot, without probing. Empty when never discovered."""
+    service = get_tool_catalog_service()
+    snapshot = await service.repository.get_capabilities(tool_id)
+    return snapshot or ToolCapabilitySnapshot(tool_id=tool_id)

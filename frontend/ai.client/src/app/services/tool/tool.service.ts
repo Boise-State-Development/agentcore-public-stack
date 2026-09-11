@@ -56,6 +56,12 @@ export interface Tool {
   userEnabled: boolean | null;
   isEnabled: boolean;
   /**
+   * OAuth provider this tool needs the user to connect before it will work,
+   * or null/absent when it needs no per-user consent. Mirrors the catalog's
+   * `requiresOauthProvider`.
+   */
+  requiresOauthProvider?: string | null;
+  /**
    * For MCP-server tools, the individual tools the server exposes. Empty for
    * non-MCP tools or servers whose tools are discovered live.
    */

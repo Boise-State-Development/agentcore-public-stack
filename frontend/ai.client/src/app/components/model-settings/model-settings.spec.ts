@@ -39,9 +39,11 @@ describe('ModelSettings', () => {
     };
     mockToolService = {
       tools: signal<any[]>([]),
+      visibleTools: signal<any[]>([]),
       enabledTools: signal([]),
       toolsByCategory: signal(new Map()),
       categories: signal([]),
+      isToolShownEnabled: (tool: any) => tool.isEnabled,
       toggleTool: vi.fn(),
     };
 
@@ -203,12 +205,119 @@ describe('ModelSettings', () => {
       expect(component.subtitle(calculator as any)).toBe('Does sums');
     });
 
+    it('names which of a server’s tools matched the query', async () => {
+      const component = await createComponent();
+      component['toolQuery'].set('send_mess');
+      expect(component.matchedSubTools(gmail as any)).toEqual(['send_message']);
+    });
+
+    it('stays quiet when the row’s own text already explains the match', async () => {
+      const component = await createComponent();
+      component['toolQuery'].set('gmail');
+      expect(component.matchedSubTools(gmail as any)).toEqual([]);
+    });
+
     it('builds a monogram from the display name', async () => {
       const component = await createComponent();
       expect(component.monogram(gmail as any)).toBe('GF');
       expect(component.monogram({ displayName: 'Excalidraw' } as any)).toBe('E');
       expect(component.monogram({ displayName: '1Password' } as any)).toBe('P');
       expect(component.monogram({ displayName: '///' } as any)).toBe('?');
+    });
+  });
+
+  describe('search and grouping', () => {
+    const tool = (over: Partial<any>) => ({
+      toolId: 't',
+      displayName: 'T',
+      description: '',
+      category: 'utility',
+      icon: null,
+      protocol: 'local',
+      status: 'active',
+      grantedBy: [],
+      enabledByDefault: false,
+      userEnabled: null,
+      isEnabled: false,
+      ...over,
+    });
+
+    const calculator = tool({ toolId: 'calculator', displayName: 'Calculator', category: 'utility' });
+    const artifacts = tool({
+      toolId: 'create_artifact',
+      displayName: 'Artifacts',
+      category: 'utility',
+      isEnabled: true,
+    });
+    const github = tool({ toolId: 'github_repos', displayName: 'Github Repos', category: 'code' });
+    const calendar = tool({
+      toolId: 'google_calendar',
+      displayName: 'Google Calendar',
+      category: 'custom',
+      protocol: 'mcp_external',
+      serverTools: [
+        { name: 'suggest_time', enabled: true },
+        { name: 'list_events', enabled: true },
+      ],
+    });
+
+    beforeEach(() => {
+      mockToolService.tools.set([calculator, artifacts, github, calendar]);
+      mockToolService.visibleTools = signal([calculator, artifacts, github, calendar]);
+      mockToolService.isToolShownEnabled = (t: any) => t.isEnabled;
+    });
+
+    it('pins the enabled group above the categories', async () => {
+      const component = await createComponent();
+      const rows = component['toolRows']();
+      expect(rows[0]).toMatchObject({ kind: 'header', id: 'enabled', count: 1 });
+      expect(rows[1]).toMatchObject({ kind: 'tool', id: 'create_artifact' });
+    });
+
+    it('collapses categories by default so the list is headers, not 31 rows', async () => {
+      const component = await createComponent();
+      const rows = component['toolRows']();
+      const toolIds = rows.filter((r: any) => r.kind === 'tool').map((r: any) => r.id);
+      // Only the enabled tool has a row; the other three sit behind headers.
+      expect(toolIds).toEqual(['create_artifact']);
+      expect(rows.filter((r: any) => r.kind === 'header' && r.collapsible).map((r: any) => r.label))
+        .toEqual(['Code & repositories', 'Custom', 'Utility']);
+    });
+
+    it('reveals a category’s tools when it is expanded', async () => {
+      const component = await createComponent();
+      component.toggleCategory('code');
+      const ids = component['toolRows']().filter((r: any) => r.kind === 'tool').map((r: any) => r.id);
+      expect(ids).toContain('github_repos');
+    });
+
+    it('flattens to one ungrouped run while searching', async () => {
+      const component = await createComponent();
+      component['toolQuery'].set('calc');
+      const rows = component['toolRows']();
+      expect(rows[0]).toMatchObject({ kind: 'header', id: 'results', collapsible: false, count: 1 });
+      expect(rows[1]).toMatchObject({ kind: 'tool', id: 'calculator' });
+    });
+
+    it('matches a server through its own tool names', async () => {
+      const component = await createComponent();
+      component['toolQuery'].set('suggest_time');
+      const ids = component['toolRows']().filter((r: any) => r.kind === 'tool').map((r: any) => r.id);
+      expect(ids).toEqual(['google_calendar']);
+    });
+
+    it('emits no rows at all when nothing matches, so the empty state can show', async () => {
+      const component = await createComponent();
+      component['toolQuery'].set('zzzznope');
+      // A bare "Results 0" header would make toolRows() non-empty and silently
+      // suppress the empty state — that regression shipped once.
+      expect(component['toolRows']()).toEqual([]);
+    });
+
+    it('falls back to the raw slug for a category the frontend does not know', async () => {
+      const component = await createComponent();
+      expect(component.categoryLabel('utility')).toBe('Utility');
+      expect(component.categoryLabel('quantum_widgets')).toBe('quantum_widgets');
     });
   });
 });
