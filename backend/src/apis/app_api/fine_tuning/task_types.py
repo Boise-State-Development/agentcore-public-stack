@@ -335,6 +335,22 @@ GENERATIVE_TASK_TYPES: Tuple[str, ...] = tuple(
 )
 
 
+def str2bool(value) -> bool:
+    """Parse a boolean hyperparameter.
+
+    Lives here because both sides need it and this is the only module they
+    share: app-api validates a submission before billing a GPU, and the
+    training script parses the same value inside the container.
+
+    ``bool("false")`` is True, which is the trap this exists to avoid —
+    SageMaker passes every hyperparameter as a string, and JSON-parses some of
+    them back into Python-style ``"False"`` on the command line.
+    """
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_task_spec(task_type: Optional[str]) -> TaskSpec:
     """Return the spec for ``task_type``.
 

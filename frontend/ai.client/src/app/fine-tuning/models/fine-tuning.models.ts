@@ -81,6 +81,9 @@ export interface CreateJobRequest {
   hyperparameters?: Record<string, string>;
   max_runtime_seconds?: number;
   custom_huggingface_model_id?: string;
+  /** Run on managed spot capacity — cheaper, but queues longer and can be
+   * interrupted. Safe because the job checkpoints and resumes. */
+  use_spot?: boolean;
 }
 
 export interface JobResponse {
@@ -106,6 +109,7 @@ export interface JobResponse {
   error_message: string | null;
   max_runtime_seconds: number;
   training_progress: number | null;
+  use_spot: boolean;
 }
 
 export interface JobListResponse {

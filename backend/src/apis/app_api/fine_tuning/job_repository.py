@@ -67,6 +67,9 @@ class FineTuningJobsRepository:
             "updated_at": item["updatedAt"],
             "error_message": item.get("error_message"),
             "max_runtime_seconds": int(item.get("max_runtime_seconds", 86400)),
+            # Absent on every row written before spot existed, and those all
+            # ran on-demand.
+            "use_spot": bool(item.get("use_spot", False)),
             "training_progress": round(float(item["training_progress"]) * 100, 1) if item.get("training_progress") is not None else None,
         }
         return result
@@ -84,6 +87,7 @@ class FineTuningJobsRepository:
         sagemaker_job_name: str,
         output_s3_prefix: str,
         max_runtime_seconds: int = 86400,
+        use_spot: bool = False,
         task_type: str = task_types.DEFAULT_TASK_TYPE,
     ) -> dict:
         """Create a new training job record."""
@@ -105,6 +109,7 @@ class FineTuningJobsRepository:
             "instance_count": 1,
             "sagemaker_job_name": sagemaker_job_name,
             "max_runtime_seconds": max_runtime_seconds,
+            "use_spot": use_spot,
             "createdAt": now,
             "updatedAt": now,
         }

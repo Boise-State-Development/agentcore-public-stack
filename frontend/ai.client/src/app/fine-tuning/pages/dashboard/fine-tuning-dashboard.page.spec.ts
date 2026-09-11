@@ -36,6 +36,7 @@ const mockTrainingJob: JobResponse = {
   error_message: null,
   max_runtime_seconds: 86400,
   training_progress: null,
+  use_spot: false,
 };
 
 const mockInferenceJob: InferenceJobResponse = {

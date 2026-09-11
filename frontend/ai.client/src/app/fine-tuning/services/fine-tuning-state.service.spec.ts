@@ -25,6 +25,7 @@ describe('FineTuningStateService', () => {
     billable_seconds: null, estimated_cost_usd: null, created_at: '2026-03-01T00:00:00Z',
     updated_at: '2026-03-01T00:00:00Z', error_message: null, max_runtime_seconds: 86400,
     training_progress: null,
+    use_spot: false,
   };
 
   const mockInferenceJob: InferenceJobResponse = {

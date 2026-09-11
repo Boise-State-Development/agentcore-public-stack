@@ -29,6 +29,7 @@ const mockJob: JobResponse = {
   error_message: null,
   max_runtime_seconds: 86400,
   training_progress: 45,
+  use_spot: false,
 };
 
 function createMockState() {

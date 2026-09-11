@@ -54,15 +54,10 @@ TASK_MODULES = {
 }
 
 
-def str2bool(value):
-    """Parse a boolean hyperparameter.
-
-    SageMaker passes every hyperparameter as a string, so ``bool("false")`` —
-    which is True — is the trap this exists to avoid.
-    """
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in ("1", "true", "yes", "on")
+#: Re-exported so the container script and app-api parse boolean
+#: hyperparameters identically — a disagreement here would let app-api admit a
+#: job the trainer then runs with different settings.
+str2bool = task_types.str2bool
 
 
 def resolve_task_module(task_type):

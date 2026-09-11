@@ -130,16 +130,31 @@ def transform_rate(instance_type: str) -> Optional[float]:
 
 
 def calculate_cost(
-    instance_type: str, billable_seconds: int, *, transform: bool = False
+    instance_type: str,
+    billable_seconds: int,
+    *,
+    transform: bool = False,
+    instance_count: int = 1,
 ) -> float:
     """Cost in USD for ``billable_seconds`` on ``instance_type``.
+
+    ``BillableTimeInSeconds`` is per instance — AWS documents multiplying it
+    by the instance count to get the total compute time billed.  Harmless
+    while every job runs on one instance, but silent under-billing the moment
+    a multi-instance job lands, so the multiply is here rather than waiting to
+    be discovered.
+
+    This is also correct for **managed spot**, with no special casing: AWS
+    expresses the spot discount by *shrinking* BillableTimeInSeconds against
+    the same on-demand rate, which is why the documented savings formula is
+    ``(1 - BillableTimeInSeconds / TrainingTimeInSeconds) * 100``.
 
     Returns 0.0 for an instance we have no rate for.  Callers must not rely on
     that to mean "free" — validate the instance up front instead; a silent
     0.0 is exactly the blind spot that lets unpriced GPU time go unbilled.
     """
     rate = transform_rate(instance_type) if transform else training_rate(instance_type)
-    return round((rate or 0.0) * (billable_seconds / 3600), 4)
+    return round((rate or 0.0) * (billable_seconds / 3600) * max(1, instance_count), 4)
 
 
 def estimate_max_cost(
