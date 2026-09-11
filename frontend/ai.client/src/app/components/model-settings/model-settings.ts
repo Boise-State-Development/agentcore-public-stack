@@ -1,6 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, input, output, signal, computed, effect, ElementRef } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath, heroLockClosed } from '@ng-icons/heroicons/outline';
+import { heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath, heroArrowLeft, heroLockClosed } from '@ng-icons/heroicons/outline';
+import { ToolDetailComponent } from './tool-detail/tool-detail.component';
 import { ModelService } from '../../session/services/model/model.service';
 import { ToolService, Tool } from '../../services/tool/tool.service';
 import { SkillService } from '../../services/skill/skill.service';
@@ -40,10 +41,11 @@ interface AdvancedParamRow {
 @Component({
   selector: 'app-model-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
-  providers: [provideIcons({ heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath, heroLockClosed })],
+  imports: [NgIcon, ToolDetailComponent],
+  providers: [provideIcons({ heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath, heroArrowLeft, heroLockClosed })],
   host: {
     '(document:click)': 'onDocumentClick($event)',
+    '(document:keydown.escape)': 'onEscape($event)',
   },
   templateUrl: './model-settings.html',
   styleUrl: './model-settings.css',
@@ -190,6 +192,13 @@ export class ModelSettings {
         this.hasBeenOpened.set(true);
       }
 
+      // Closing the drawer resets it to the list. Reopening onto whichever tool
+      // you last inspected would be a surprise — the drawer's job on open is to
+      // show what this conversation is carrying.
+      if (!isOpen) {
+        this.detailToolId.set(null);
+      }
+
       // Load the skills picker lazily on first open. SkillService deliberately
       // has no constructor load (unlike ToolService): skills are opt-in and the
       // feature is off in every deployed env until PR-5, so a boot-time fetch
@@ -278,12 +287,31 @@ export class ModelSettings {
     }
   }
 
-  /** Which MCP server rows are expanded to show their per-tool toggles. */
-  protected expandedServers = signal<Set<string>>(new Set());
-  /** Servers with a live discovery request in flight. */
-  protected discoveringServers = signal<Set<string>>(new Set());
-  /** Per-server discovery error messages. */
-  protected discoverError = signal<Record<string, string>>({});
+  /**
+   * The tool whose detail pane is open, or null for the list.
+   *
+   * Held as an id rather than the object so the pane re-reads the live tool from
+   * the service — toggling a sub-tool replaces the object in `tools()`, and a
+   * captured reference would show stale switches.
+   */
+  private readonly detailToolId = signal<string | null>(null);
+
+  /**
+   * The last tool the detail pane showed. Kept after Back so the pane still has
+   * something to render on the way out; clearing it would make the detail
+   * disappear instantly instead of sliding.
+   */
+  protected readonly lastDetailTool = computed<Tool | null>(() => {
+    const id = this.lastDetailToolId();
+    return id ? (this.toolService.tools().find((t) => t.toolId === id) ?? null) : null;
+  });
+  private readonly lastDetailToolId = signal<string | null>(null);
+
+  /** The open tool, or null when the list is showing. Drives the transforms. */
+  protected readonly detailTool = computed<Tool | null>(() => {
+    const id = this.detailToolId();
+    return id ? (this.toolService.tools().find((t) => t.toolId === id) ?? null) : null;
+  });
 
   toggleTool(toolId: string): void {
     this.toolService.toggleTool(toolId);
@@ -294,55 +322,55 @@ export class ModelSettings {
     return tool.protocol === 'mcp' || tool.protocol === 'mcp_external';
   }
 
-  isServerExpanded(toolId: string): boolean {
-    return this.expandedServers().has(toolId);
-  }
-
-  /** "3 of 8 tools enabled" when a server is partially enabled, else null. */
-  partialServerLabel(tool: Tool): string | null {
+  /**
+   * The row's one subtitle line. Leads with the count for an MCP server, and
+   * with the partial-selection state when only some of its tools are on —
+   * that's the fact a row can't afford to bury now that the per-tool switches
+   * live a pane away.
+   */
+  subtitle(tool: Tool): string {
     const subs = tool.serverTools ?? [];
-    if (subs.length === 0) return null;
+    const description = tool.description || 'No description recorded.';
+    if (subs.length === 0) return description;
     const on = subs.filter((s) => s.enabled).length;
-    if (on === 0 || on === subs.length) return null;
-    return `${on} of ${subs.length} tools enabled`;
+    const prefix =
+      on > 0 && on < subs.length
+        ? `${on} of ${subs.length} tools on`
+        : `${subs.length} tools`;
+    return `${prefix} · ${description}`;
   }
 
-  toggleServerExpanded(toolId: string): void {
-    this.expandedServers.update((set) => {
-      const next = new Set(set);
-      if (next.has(toolId)) {
-        next.delete(toolId);
-      } else {
-        next.add(toolId);
-      }
-      return next;
-    });
+  /** Initials, so a row reads as an object rather than a line of text. */
+  monogram(tool: Tool): string {
+    const initials = tool.displayName
+      .replace(/[^A-Za-z ]/g, '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((word) => word[0])
+      .join('');
+    return initials.toUpperCase() || '?';
   }
 
-  toggleServerTool(toolId: string, name: string): void {
-    this.toolService.toggleServerTool(toolId, name);
+  openToolDetail(toolId: string): void {
+    this.detailToolId.set(toolId);
+    this.lastDetailToolId.set(toolId);
   }
 
-  async discoverServerTools(tool: Tool): Promise<void> {
-    this.discoveringServers.update((s) => new Set(s).add(tool.toolId));
-    this.discoverError.update((m) => {
-      const next = { ...m };
-      delete next[tool.toolId];
-      return next;
-    });
-    try {
-      await this.toolService.discoverServerTools(tool.toolId);
-    } catch {
-      this.discoverError.update((m) => ({
-        ...m,
-        [tool.toolId]: 'Could not list this server’s tools.',
-      }));
-    } finally {
-      this.discoveringServers.update((s) => {
-        const next = new Set(s);
-        next.delete(tool.toolId);
-        return next;
-      });
+  closeToolDetail(): void {
+    this.detailToolId.set(null);
+  }
+
+  /**
+   * Escape backs out of the detail before it closes the drawer, so the key does
+   * the least destructive thing available. The model dropdown handles its own
+   * Escape on keydown and stops there.
+   */
+  onEscape(event: Event): void {
+    if (this.isModelDropdownOpen()) return;
+    if (this.detailToolId() !== null) {
+      event.preventDefault();
+      this.closeToolDetail();
     }
   }
 

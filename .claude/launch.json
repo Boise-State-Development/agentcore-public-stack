@@ -19,7 +19,8 @@
         "main.py"
       ],
       "port": 8000,
-      "cwd": "backend/src/apis/app_api"
+      "cwd": "backend/src/apis/app_api",
+      "autoPort": false
     },
     {
       "name": "inference-api",
@@ -28,7 +29,8 @@
         "main.py"
       ],
       "port": 8001,
-      "cwd": "backend/src/apis/inference_api"
+      "cwd": "backend/src/apis/inference_api",
+      "autoPort": false
     },
     {
       "name": "docs-site",
