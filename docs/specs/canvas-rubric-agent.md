@@ -695,12 +695,58 @@ All four rubric scopes are validated end to end, and the approval gate works in 
 The auth, transport and consent paths are proven; what remains blocking is content fidelity
 (§4.1) and the two Canvas behaviours found here (§4.5, §4.6).
 
-**Test litter left in course 50994:** rubrics **256107** ("Rubric Scope Test", attached to
-assignment 1756044, which it re-pointed 5.0 → 8.0) and **256108** ("Approval Gate Test").
-With no `delete_rubric` (§4.2) these must be removed in the Canvas UI.
+### Round-trip verification — 2026-09-10, after mcp-servers#38 and #39
 
-Turn cost ran $0.033–$0.077 with ~23.8k–27.4k context tokens, consistent with §6's estimate
-that `canvas_faculty`'s ~11.7k of tool definitions dominates the prefix.
+**§8.1 criterion 4 is proven.** A rubric created with descriptors and **no assignment**, read
+straight back with `get_rubric`:
+
+```json
+{"id": "_1326", "description": "Exemplary",
+ "long_description": "Student supports all claims with specific, relevant evidence…",
+ "points": 4.0}
+```
+
+Level names in `description`, descriptors in `long_description`, criterion points derived to 4.0
+from the highest rating, and the rubric is fetchable despite having no assignment.
+
+Notably, **the schema alone changed the model's behaviour** — twice, with different wording, and
+with no prompt guidance. Before #38 the same request packed descriptors into `description` and
+lost the level names. That is the argument for typed tool inputs over docstring instructions.
+
+| Check | Result |
+|---|---|
+| Six rubric scopes on the Canvas test key + provider record | ✅ |
+| Server 44 tools, structured `$defs` | ✅ |
+| Catalog rediscovered to 44, flags preserved | ✅ |
+| `create_rubric` / `associate_rubric` / `delete_rubric` gated | ✅ |
+| Descriptors survive create → `get_rubric` | ✅ |
+| Course-bound rubric readable with no assignment (#39) | ✅ |
+| `delete_rubric` on an associated rubric | ✅ (256107, 256110) |
+| `delete_rubric` on a pre-#39 orphan | ❌ Canvas **500** — UI only |
+| `update_assignment` to restore assignment points | ❌ scope not on the dev provider |
+
+Three things this surfaced, all folded into mcp-servers#40 or below:
+
+- `create_rubric` reported a **course** id under an `assignment_id` key for the Course fallback.
+- `delete_rubric` returned an all-null digest, so a success read as a failure.
+- **Two gates can stack on one tool call.** A scope change and an approval gate both fired on the
+  same `create_rubric`, so the user saw *"Connect Canvas for Faculty"* and *"Approve
+  create_rubric"* simultaneously, with nothing indicating which comes first. Harmless for someone
+  who knows the system; a faculty member would reasonably guess wrong. Worth sequencing in the
+  SPA, and worth a line in §7.1 if not.
+
+**Admin-UI bug blocking §8.2 step 4:** saving the connector form fails with *"Discovery config
+can only be updated together with a credential rotation (client_id + client_secret)."* The SPA
+sends `oauthDiscoveryUrl` on every save and `admin/oauth/routes.py` treats any non-None value as
+a discovery change — so **a scopes-only edit is impossible through the admin UI** for any
+provider that has a discovery URL. Worked around with a direct scopes-only `PATCH`
+(`X-CSRF-Token` from the `__Host-bff_csrf` cookie). A connectors admin following §8.2 step 4 in
+prod will hit this.
+
+**Course 50994 cleanup:** 256107 and 256110 deleted via the API. **256108 and 256109 remain** —
+pre-#39 orphans that Canvas 500s on delete; remove them in the Canvas UI. Assignment 1756044 is
+still at 8 points (was 5): restoring it needs
+`url:PUT|/api/v1/courses/:course_id/assignments/:id`, which the dev provider does not grant.
 
 ---
 
