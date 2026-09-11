@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, input } from '@an
 import { Message, ContentBlock, ToolUseData } from '../../../services/models/message.model';
 import { ToolUseComponent } from './tool-use';
 import { ToolRailComponent } from './tool-rail';
-import { ToolCallGroup, ToolCallDisplay } from './tool-rail/tool-rail.model';
+import { ToolCallGroup, ToolCallDisplay, ToolCallBatch } from './tool-rail/tool-rail.model';
 import { ReasoningContentComponent } from './reasoning-content';
 import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
@@ -14,6 +14,7 @@ import {
 } from '../../../../services/oauth-consent/oauth-consent.service';
 import { McpAppStateService } from '../../../services/mcp-apps/mcp-app-state.service';
 import { ChatStateService } from '../../../services/chat/chat-state.service';
+import { ToolInsightService } from '../../../services/chat/tool-insight.service';
 import type { ToolResultData } from './tool-use/tool-renderer-registry.service';
 
 // ──────────────────────────────────────────────────────────────
@@ -107,6 +108,8 @@ const MOCK_TOOL_GROUP: ToolCallGroup = {
  * promoted visuals and grouped tool rails.
  */
 interface DisplayBlock {
+  /** True when this block belongs to the message currently streaming. */
+  streaming?: boolean;
   type:
     | 'text'
     | 'tool_group'
@@ -177,7 +180,7 @@ interface DisplayBlock {
                 <app-streaming-text
                   class="min-w-0 max-w-full overflow-hidden"
                   [text]="block.data!.text!"
-                  [isStreaming]="isStreaming()"
+                  [isStreaming]="block.streaming ?? false"
                 />
               </div>
             </div>
@@ -302,12 +305,31 @@ interface DisplayBlock {
   `,
 })
 export class AssistantMessageComponent {
-  message = input.required<Message>();
-  isStreaming = input<boolean>(false);
+  /**
+   * The assistant messages of one uninterrupted run within a turn.
+   *
+   * A run, not a message, because the agent loop starts a NEW Bedrock message
+   * at every tool round trip: a four-tool turn arrives as five assistant
+   * messages. Rendering each separately gave every tool call its own card,
+   * copy button and metadata row — the stacking this component exists to
+   * remove — and, worse, meant the tool-grouping pass below could never see
+   * two consecutive tool calls at once, because they were always in different
+   * messages. Flattening the run is what lets one rail describe the whole
+   * sequence.
+   */
+  messages = input.required<Message[]>();
+
+  /**
+   * Id of the message currently streaming, or null. Only the last message of
+   * a run can be streaming; blocks are marked individually so the typewriter
+   * effect applies to the live text and not to text already finished.
+   */
+  streamingMessageId = input<string | null>(null);
 
   private consentService = inject(OAuthConsentService);
   private mcpAppState = inject(McpAppStateService);
   private chatState = inject(ChatStateService);
+  private toolInsight = inject(ToolInsightService);
 
   /**
    * Transforms content blocks into display blocks.
@@ -325,33 +347,87 @@ export class AssistantMessageComponent {
       ];
     }
 
-    const blocks = this.message().content;
-    const messageId = this.message().id;
-    // Pending interrupts anchored to this message. Used to flip the matching
-    // tool_use blocks to ``awaiting_auth`` so the row reads as "paused for
-    // authorization" instead of an indefinite spinner.
+    const messages = this.messages();
+    // No viewed session (a preview pane, a fresh tab) means no recorded
+    // insights; '' can never match a real session key, so lookups miss
+    // cleanly instead of needing a null branch at every call site.
+    const sessionId = this.chatState.viewedSessionId() ?? '';
+    const streamingId = this.streamingMessageId();
+    const messageIds = new Set(messages.map((m) => m.id));
+
+    // Pending interrupts anchored to ANY message in this run. Used to flip the
+    // matching tool_use blocks to ``awaiting_auth`` so the row reads as
+    // "paused for authorization" instead of an indefinite spinner.
     const pendingInterruptsHere = this.consentService
       .pending()
-      .filter((req) => req.messageId === messageId);
+      .filter((req) => req.messageId && messageIds.has(req.messageId));
     const hasPendingInterruptHere = pendingInterruptsHere.length > 0;
     const result: DisplayBlock[] = [];
     let pendingToolCalls: ToolCallDisplay[] = [];
 
-    const flushToolGroup = () => {
-      if (pendingToolCalls.length > 0) {
-        result.push({
-          type: 'tool_group',
-          group: {
-            calls: [...pendingToolCalls],
-            // groupSummary is not populated yet -- future enhancement.
-            // For now, always uses fallback mode (chained tool names).
-          },
+    // Read once per recomputation, not per call: these are signal reads, and
+    // the computed must re-run when a late-arriving summary lands.
+    const insights = this.toolInsight;
+
+    /**
+     * Segment a rail's calls by the backend batch that produced them.
+     *
+     * Grouping into a rail is a client-side decision (consecutive tool calls
+     * across the messages of one run); batches are one per event-loop cycle.
+     * A four-step pipeline collapses into one rail containing four batches,
+     * each with its own summary, so the rail can show a line per round
+     * instead of letting the opening round's line speak for all of them.
+     *
+     * Calls with no recorded batch (unsummarized — flag off, Nova failed, or
+     * an older conversation) each become their own singleton batch rather
+     * than merging into a neighbour, so an unsummarized call is never filed
+     * under a summary that does not describe it.
+     */
+    const segmentIntoBatches = (calls: ToolCallDisplay[]): ToolCallBatch[] => {
+      const batches: ToolCallBatch[] = [];
+      for (const call of calls) {
+        const insight = insights.get(sessionId, call.id);
+        const batchId = insight?.batchId;
+        const open = batches[batches.length - 1];
+        if (batchId && open?.key === batchId) {
+          open.calls.push(call);
+          continue;
+        }
+        batches.push({
+          key: batchId ?? call.id,
+          summary: insight?.summary,
+          calls: [call],
         });
-        pendingToolCalls = [];
       }
+      return batches;
     };
 
-    for (const block of blocks) {
+    const flushToolGroup = () => {
+      if (pendingToolCalls.length === 0) return;
+      const calls = [...pendingToolCalls];
+      pendingToolCalls = [];
+      result.push({
+        type: 'tool_group',
+        group: {
+          calls,
+          // `groupSummary` is deliberately left unset: the rail derives its
+          // header from these batches, so the two can never disagree.
+          batches: segmentIntoBatches(calls),
+        },
+      });
+    };
+
+    // Flatten the run. A tool group deliberately spans message boundaries:
+    // only text and reasoning break it, because those are the points where
+    // the agent actually said something to the user.
+    const blocks = messages.flatMap((message) =>
+      message.content.map((block) => ({
+        block,
+        streaming: message.id === streamingId,
+      })),
+    );
+
+    for (const { block, streaming } of blocks) {
       // Handle reasoning content. Only render a "Thinking" block when it has
       // something to show -- reasoning text or a redacted notice. A block with
       // an empty `reasoningText.text` and no `redactedContent` (e.g. a
@@ -367,10 +443,13 @@ export class AssistantMessageComponent {
         continue;
       }
 
-      // Handle text
+      // Handle text. `streaming` is per-block, not per-run: in a
+      // multi-message run every earlier message's text is already final, and
+      // running the typewriter over finished text would re-animate the whole
+      // response on every delta.
       if (block.type === 'text' && block.text) {
         flushToolGroup();
-        result.push({ type: 'text', data: block });
+        result.push({ type: 'text', data: block, streaming });
         continue;
       }
 
@@ -391,7 +470,7 @@ export class AssistantMessageComponent {
         // folded into the group forever). Resources are held per
         // conversation, so the lookup is scoped to the viewed one.
         const hasMcpAppResource = this.mcpAppState.has(
-          this.chatState.viewedSessionId(),
+          sessionId,
           toolUse.toolUseId,
         );
 
@@ -445,6 +524,10 @@ export class AssistantMessageComponent {
             hasPendingInterruptHere && hasNoResult && baseStatus === 'pending'
               ? 'awaiting_auth'
               : baseStatus;
+          // Duration comes from the runtime's `tool_end` status (measured by
+          // the event loop, not inferred from stream arrival times), so it is
+          // absent on a reload — deliberately, see ToolInsightService.
+          const insight = insights.get(sessionId, toolUse.toolUseId);
           pendingToolCalls.push({
             id: toolUse.toolUseId,
             toolName: toolUse.name,
@@ -452,6 +535,7 @@ export class AssistantMessageComponent {
             result: toolUse.result,
             status,
             streamingContent: toolUse.streamingContent,
+            durationMs: insight?.durationMs,
           });
         }
         continue;

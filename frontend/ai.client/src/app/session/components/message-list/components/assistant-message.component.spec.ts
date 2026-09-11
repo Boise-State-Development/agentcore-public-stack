@@ -77,9 +77,9 @@ describe('AssistantMessageComponent', () => {
 
   describe('tool grouping logic', () => {
     it('should group a single tool call into one tool_group', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeToolBlock('search_classes'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -90,11 +90,11 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should group 3 consecutive tool calls into one tool_group', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeToolBlock('google_drive_search'),
         makeToolBlock('gdrive_fetch'),
         makeToolBlock('web_search'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -107,12 +107,12 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should split tool groups when a text block appears between them', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeToolBlock('tool_a'),
         makeToolBlock('tool_b'),
         makeTextBlock('Here are the results:'),
         makeToolBlock('tool_c'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -125,9 +125,9 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should render text blocks standalone', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeTextBlock('Hello world'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -137,14 +137,14 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should handle text before, between, and after tool groups', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeTextBlock('Let me search for that.'),
         makeToolBlock('search'),
         makeToolBlock('fetch'),
         makeTextBlock('Here is what I found:'),
         makeToolBlock('summarize'),
         makeTextBlock('All done!'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -159,7 +159,7 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should handle empty content array', () => {
-      fixture.componentRef.setInput('message', makeMessage([]));
+      fixture.componentRef.setInput('messages', [makeMessage([])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -169,9 +169,9 @@ describe('AssistantMessageComponent', () => {
 
   describe('promoted visuals break tool groups', () => {
     it('should extract promoted visual and render minimized tool + visual', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makePromotedVisualToolBlock('chart_tool'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -182,11 +182,11 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should flush pending tool group before a promoted visual', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeToolBlock('search'),
         makeToolBlock('fetch'),
         makePromotedVisualToolBlock('chart_tool'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -198,12 +198,12 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should resume grouping regular tools after a promoted visual', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeToolBlock('search'),
         makePromotedVisualToolBlock('chart_tool'),
         makeToolBlock('summarize'),
         makeToolBlock('format'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -242,7 +242,7 @@ describe('AssistantMessageComponent', () => {
       const tool = makeToolBlock('create_view', {
         result: { status: 'success', content: [{ text: 'Diagram displayed!' }] },
       });
-      fixture.componentRef.setInput('message', makeMessage([tool]));
+      fixture.componentRef.setInput('messages', [makeMessage([tool])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -261,7 +261,7 @@ describe('AssistantMessageComponent', () => {
       TestBed.inject(ChatStateService).setViewedSession(VIEWED_SESSION);
       mcpAppState.recordLive(VIEWED_SESSION, makeUiResource('tooluse_mcp_app_1'));
 
-      fixture.componentRef.setInput('message', makeMessage([tool]));
+      fixture.componentRef.setInput('messages', [makeMessage([tool])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -289,7 +289,7 @@ describe('AssistantMessageComponent', () => {
       TestBed.inject(ChatStateService).setViewedSession(VIEWED_SESSION);
 
       // Initial render: ui_resource hasn't arrived yet → tool folded into group.
-      fixture.componentRef.setInput('message', makeMessage([tool]));
+      fixture.componentRef.setInput('messages', [makeMessage([tool])]);
       fixture.detectChanges();
       expect(component.displayBlocks()[0].type).toBe('tool_group');
 
@@ -309,9 +309,9 @@ describe('AssistantMessageComponent', () => {
 
     it('promoted-visual tool still emits both tool_use_minimized AND promoted_visual blocks', () => {
       // Sanity: the new gate must not regress the legacy promoted-visual path.
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makePromotedVisualToolBlock('chart_tool'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -323,14 +323,14 @@ describe('AssistantMessageComponent', () => {
 
   describe('reasoning content', () => {
     it('should render reasoning blocks and flush tool groups', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeToolBlock('search'),
         {
           type: 'reasoningContent',
           reasoningContent: { reasoningText: { text: 'Thinking...' } },
         },
         makeToolBlock('fetch'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -346,13 +346,13 @@ describe('AssistantMessageComponent', () => {
       // Signature-only / empty thinking blocks (e.g. Sonnet 5) are kept in the
       // message for API correctness but must not paint an empty "Thinking"
       // collapsible.
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         {
           type: 'reasoningContent',
           reasoningContent: { reasoningText: { text: '', signature: 'abc123' } },
         },
         { type: 'text', text: 'Here is your answer.' },
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -361,12 +361,12 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should render a reasoning block that has only redacted content', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         {
           type: 'reasoningContent',
           reasoningContent: { redactedContent: 'encrypted-blob' },
         },
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -377,7 +377,7 @@ describe('AssistantMessageComponent', () => {
 
   describe('tool call data mapping', () => {
     it('should map toolUseData fields to ToolCallDisplay correctly', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeToolBlock('my_tool', {
           toolUseId: 'specific-id',
           input: { foo: 'bar' },
@@ -387,7 +387,7 @@ describe('AssistantMessageComponent', () => {
             content: [{ text: 'Something went wrong' }],
           },
         }),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -401,7 +401,7 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should default status to pending when not set', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         {
           type: 'toolUse',
           toolUse: {
@@ -411,7 +411,7 @@ describe('AssistantMessageComponent', () => {
             // no status field
           },
         },
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -420,14 +420,14 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should carry streamingContent through to the ToolCallDisplay', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeToolBlock('create_artifact', {
           status: 'pending',
           streamingContent: '<!DOCTYPE html><html><body>partial',
           // no result yet — still generating
           result: undefined,
         }),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
@@ -437,9 +437,9 @@ describe('AssistantMessageComponent', () => {
     });
 
     it('should leave streamingContent undefined for ordinary tool calls', () => {
-      fixture.componentRef.setInput('message', makeMessage([
+      fixture.componentRef.setInput('messages', [makeMessage([
         makeToolBlock('my_tool'),
-      ]));
+      ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();

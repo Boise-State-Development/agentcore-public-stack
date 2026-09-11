@@ -13,6 +13,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from agents.main_agent.core import ModelConfig, SystemPromptBuilder, AgentFactory
 from agents.main_agent.session import SessionFactory
 from agents.main_agent.session.hooks import (
+    AgentStatusHook,
     DisplayTextHook,
     SteeringHook,
     StopHook,
@@ -282,6 +283,8 @@ class BaseAgent(ABC):
           what the UI renders for an interrupted turn
         - OAuthConsentHook: Pauses the agent (Strands interrupt) when an
           OAuth-gated MCP tool is about to run without a cached token
+        - AgentStatusHook: Records model/tool boundaries so the UI can say what
+          the agent is doing while the turn streams
         - Approval hooks: Gate dangerous operations for user confirmation
 
         Returns:
@@ -327,6 +330,15 @@ class BaseAgent(ABC):
         # stashes it on the agent for the stream coordinator to surface on the
         # final metadata SSE event.
         hooks.append(ContextAttributionHook())
+
+        # Live narration of what the agent is doing (model call / tool call
+        # boundaries) plus Strands-measured per-tool durations. Held on the
+        # wrapper so the stream coordinator can drain the transitions into
+        # `agent_status` SSE events, and the closed tool batches into the
+        # tool-summary side-channel. Registered unconditionally; the callbacks
+        # return immediately when AGENT_STATUS_ENABLED=false.
+        self.agent_status_hook = AgentStatusHook()
+        hooks.append(self.agent_status_hook)
 
         # Per-model-call prompt-cache prefix fingerprints (toolConfig /
         # system prompt / history hashes). Best-effort; the stream

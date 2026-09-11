@@ -239,6 +239,116 @@
         }
       }
     </div>
+  } @else if (tab() === 'prompts') {
+    <div
+      role="tabpanel"
+      id="tool-detail-panel-prompts"
+      aria-labelledby="tool-detail-tab-prompts"
+      tabindex="0"
+    >
+      @if (capabilitiesLoading()) {
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading…</p>
+      } @else if (neverDiscovered()) {
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+          Nobody has asked this server what prompts it offers yet. An administrator can
+          refresh it.
+        </p>
+      } @else if (!capabilities()?.supportsPrompts) {
+        <!--
+          Distinct from "has none": this server answered prompts/list with
+          "method not found", so prompts are not part of what it does.
+        -->
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+          This server doesn’t offer prompts.
+        </p>
+      } @else if (prompts().length === 0) {
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+          This server offers prompts, but none right now.
+        </p>
+      } @else {
+        <ul class="flex flex-col gap-2">
+          @for (prompt of prompts(); track prompt.name) {
+            <li class="rounded-2xl border border-gray-200 px-3 py-2.5 dark:border-white/10">
+              <span class="block font-mono text-xs/5 font-medium text-gray-900 dark:text-white">{{
+                prompt.title || prompt.name
+              }}</span>
+              @if (prompt.description) {
+                <span class="mt-0.5 block text-xs/5 text-gray-500 dark:text-gray-400">{{
+                  prompt.description
+                }}</span>
+              }
+              @if (prompt.arguments.length > 0) {
+                <span class="mt-1 block font-mono text-[11px]/5 text-gray-400 dark:text-gray-500"
+                  >arguments: {{ prompt.arguments.join(', ') }}</span
+                >
+              }
+            </li>
+          }
+        </ul>
+      }
+    </div>
+  } @else if (tab() === 'resources') {
+    <div
+      role="tabpanel"
+      id="tool-detail-panel-resources"
+      aria-labelledby="tool-detail-tab-resources"
+      tabindex="0"
+    >
+      @if (capabilitiesLoading()) {
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading…</p>
+      } @else if (neverDiscovered()) {
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+          Nobody has asked this server what resources it offers yet. An administrator can
+          refresh it.
+        </p>
+      } @else if (!capabilities()?.supportsResources) {
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+          This server doesn’t offer resources.
+        </p>
+      } @else if (resources().length === 0) {
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+          This server offers resources, but none right now.
+        </p>
+      } @else {
+        <ul class="flex flex-col gap-2">
+          @for (resource of resources(); track resource.uri) {
+            <li class="rounded-2xl border border-gray-200 px-3 py-2.5 dark:border-white/10">
+              <span class="flex items-start gap-1.5">
+                <span
+                  class="min-w-0 flex-1 font-mono text-xs/5 font-medium break-all text-gray-900 dark:text-white"
+                  >{{ resource.uri }}</span
+                >
+                @if (resource.uriTemplate) {
+                  <!--
+                    A template is a pattern, not a readable URI — the
+                    placeholders have to be filled before anything can read it.
+                  -->
+                  <span
+                    class="shrink-0 rounded-sm bg-gray-100 px-1.5 font-mono text-[10px]/5 text-gray-600 dark:bg-white/10 dark:text-gray-300"
+                    >template</span
+                  >
+                }
+              </span>
+              @if (resource.name || resource.description) {
+                <span class="mt-0.5 block text-xs/5 text-gray-500 dark:text-gray-400">{{
+                  resource.description || resource.name
+                }}</span>
+              }
+              @if (resource.mimeType) {
+                <span class="mt-1 block font-mono text-[11px]/5 text-gray-400 dark:text-gray-500">{{
+                  resource.mimeType
+                }}</span>
+              }
+            </li>
+          }
+        </ul>
+      }
+      @if (capabilities()?.truncated) {
+        <p class="mt-3 text-xs/5 text-gray-400 dark:text-gray-500">
+          This server exposes more than we store; the list above is capped.
+        </p>
+      }
+    </div>
   } @else {
     <div
       role="tabpanel"

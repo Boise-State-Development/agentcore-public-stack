@@ -266,6 +266,68 @@ export interface ModelRetryEvent {
 }
 
 /**
+ * What the agent is doing right now, emitted from the runtime's
+ * `AgentStatusHook` at each model-call and tool-call boundary.
+ *
+ * The point is honesty. Before this, a turn that was waiting 9 seconds on a
+ * Canvas round trip looked exactly like a turn that was hung: cycling phrases
+ * either way. Each transition here names something that actually happened.
+ *
+ * PHASES
+ * - `thinking`    the model is generating (one per event-loop cycle, so a
+ *                 three-tool turn reports it four times — that IS the turn's
+ *                 shape, and `cycle` distinguishes them)
+ * - `tool_start`  a specific tool began executing
+ * - `tool_end`    it finished; carries the Strands-measured `durationMs` and
+ *                 whether it succeeded
+ *
+ * There is deliberately no "responding" phase: the SPA already knows text is
+ * streaming because the deltas are arriving. A backend-derived duplicate of a
+ * fact the client holds first-hand would only disagree at the edges.
+ *
+ * Gated by `AGENT_STATUS_ENABLED` (default on with a kill switch). Absence is
+ * the pre-feature behaviour — cycling phrases and no durations — never an
+ * error.
+ */
+export interface AgentStatusEvent {
+  type: 'agent_status';
+  sessionId: string;
+  phase: 'thinking' | 'tool_start' | 'tool_end';
+  /** 1-based event-loop cycle this transition belongs to. */
+  cycle: number;
+  toolName?: string;
+  toolUseId?: string;
+  /** Present on `tool_end`: measured by the event loop, not the client. */
+  durationMs?: number | null;
+  /** Present on `tool_end`: false for a raised error OR an error result. */
+  ok?: boolean;
+}
+
+/**
+ * A model-generated one-line summary of a finished batch of tool calls —
+ * "Found the Syllabus Acknowledgment assignment in BIO 101".
+ *
+ * Produced by a Nova Micro side-channel task (see
+ * `apis/shared/tool_summaries/summarizer.py`), so it lands mid-turn, *after*
+ * the tools it describes and out of band with the content stream. The SPA
+ * shows its own deterministic formatter line until this arrives, then swaps.
+ *
+ * `toolUseIds` is what the SPA keys on: the rail groups by tool-use id, so it
+ * must be able to find this summary from any call in the group. `batchId` is
+ * the first of those ids and exists for the persistence row's identity.
+ *
+ * Gated by `TOOL_SUMMARIES_ENABLED`. Absence means the deterministic line
+ * stands — a downgrade in specificity, never a blank.
+ */
+export interface ToolGroupSummaryEvent {
+  type: 'tool_group_summary';
+  sessionId: string;
+  batchId: string;
+  toolUseIds: string[];
+  summary: string;
+}
+
+/**
  * CSP domain allowlists declared by an MCP App resource (SEP-1865
  * `McpUiResourceCsp`). The sandbox proxy composes the inner iframe's CSP
  * from these plus the spec's deny-by-default fallbacks.
@@ -404,7 +466,9 @@ export type StreamEventType =
   | 'ui_tool_input_partial'
   | 'session_title'
   | 'steering_applied'
-  | 'model_retry';
+  | 'model_retry'
+  | 'agent_status'
+  | 'tool_group_summary';
 
 /**
  * Union type of all possible event data types
@@ -433,6 +497,8 @@ export type StreamEventData =
   | SessionTitleEvent
   | SteeringAppliedEvent
   | ModelRetryEvent
+  | AgentStatusEvent
+  | ToolGroupSummaryEvent
   | null
   | undefined;
 

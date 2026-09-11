@@ -687,3 +687,8 @@ class MessagesListResponse(BaseModel):
         alias="uiResources",
         description="Persisted MCP App UI resources (SEP-1865) for this session, each shaped like the inline `ui_resource` SSE event ({type, toolUseId, resourceUri, html, mimeType, csp, permissions, sandboxOrigin}). Replayed on load to re-seed McpAppStateService and re-instantiate the mcp-app-frame iframe. Returned only on the first page.",
     )
+    tool_summaries: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="toolSummaries",
+        description="Persisted model-generated tool-batch summaries for this session, each shaped like the live `tool_group_summary` SSE event ({batchId, toolUseIds, summary}). Replayed on load so a reloaded conversation keeps the prose line the user saw live instead of downgrading to the client-side deterministic formatter. Returned only on the first page.",
+    )

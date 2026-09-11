@@ -15,13 +15,18 @@
        or remounts when the next turn starts. -->
   @for (turn of turns(); track turn.key; let isLastTurn = $last) {
   <div class="space-y-6" [style.minHeight]="isLastTurn ? lastTurnMinHeight() : null">
-  @for (message of turn.messages; track message.id) {
-    @if (message.role === 'user') {
+  <!-- Segments, not messages: an uninterrupted run of assistant messages is
+       ONE card. The agent loop emits a new Bedrock message per tool round
+       trip, so rendering per message gave a four-tool answer five cards, five
+       copy buttons and five metadata rows — and kept consecutive tool calls in
+       separate messages where no rail could group them. See segmentTurn(). -->
+  @for (segment of turn.segments; track segment.key) {
+    @if (segment.kind === 'user') {
       <!-- scroll-mt matches the fixed-header offset (4rem) + gap (1rem) so
            scrollIntoView pins the message just below the frosted top nav in
            full-page mode; embedded scrollports have no overlaying header. -->
-      <div [attr.id]="'message-' + message.id" [class.scroll-mt-20]="!embeddedMode()">
-        <app-user-message [message]="message"></app-user-message>
+      <div [attr.id]="'message-' + segment.last.id" [class.scroll-mt-20]="!embeddedMode()">
+        <app-user-message [message]="segment.last"></app-user-message>
       </div>
     } @else {
         <div
@@ -29,25 +34,35 @@
           role="group"
           aria-label="Assistant message with metadata">
             <div class="rounded-2xl bg-gray-50 px-4 py-3 text-base/6 text-gray-800 dark:bg-gray-900 dark:text-gray-200 overflow-hidden">
-                <app-assistant-message class="min-w-0 block" [message]="message" [isStreaming]="message.id === streamingMessageId()"></app-assistant-message>
+                <app-assistant-message
+                  class="min-w-0 block"
+                  [messages]="segment.messages"
+                  [streamingMessageId]="streamingMessageId()"></app-assistant-message>
             </div>
+            <!-- Per-response affordances anchor to the run's LAST message:
+                 that is the one a Continue resumes and the one whose cost
+                 metadata describes the finished answer. -->
             <div class="mt-1 flex justify-start">
                 <app-message-actions
-                  [message]="message"
-                  [canContinue]="canContinueFor(message.id)"
-                  [interruptedReason]="interruptedReasonFor(message.id)"
+                  [messages]="segment.messages"
+                  [canContinue]="canContinueFor(segment.last.id)"
+                  [interruptedReason]="interruptedReasonFor(segment.last.id)"
                   (continueRequested)="continueRequested.emit()"></app-message-actions>
             </div>
             <div class="invisible mt-1 flex flex-wrap items-center gap-2 opacity-0 transition-opacity duration-200 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100" aria-live="polite" aria-atomic="true">
-                @if (message.metadata) {
-                    <app-message-metadata-badges [metadata]="message.metadata"></app-message-metadata-badges>
+                @if (segment.last.metadata) {
+                    <app-message-metadata-badges [metadata]="segment.last.metadata"></app-message-metadata-badges>
                 }
-                @if (message.citations && message.citations.length > 0) {
-                    <app-citation-display [citations]="message.citations"></app-citation-display>
+                @if (segment.last.citations && segment.last.citations.length > 0) {
+                    <app-citation-display [citations]="segment.last.citations"></app-citation-display>
                 }
             </div>
         </div>
     }
+
+    <!-- Artifacts stay anchored to their producing message, which may be any
+         message in the run, so this still iterates the run's messages. -->
+    @for (message of segment.messages; track message.id) {
 
     <!-- Artifacts produced by this turn, anchored to their final
          assistant message via producedByMessageIndex. Renders both live
@@ -88,6 +103,7 @@
           />
         }
       </section>
+    }
     }
 
   }
@@ -189,7 +205,7 @@
   <!-- Loading indicator -->
   @if (isChatLoading()) {
     <div class="py-4">
-      <app-pulsating-loader [notice]="loaderNotice()" />
+      <app-pulsating-loader [notice]="loaderNotice()" [status]="loaderStatus()" />
     </div>
   }
 
