@@ -19,6 +19,7 @@ import {
   heroPencilSquare,
   heroTrash,
   heroUserGroup,
+  heroArrowPath,
   heroGlobeAlt,
   heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
@@ -98,9 +99,39 @@ export function isTransientGatewayStatus(status: string): boolean {
   return TRANSIENT_GATEWAY_STATUSES.includes(status.toUpperCase());
 }
 import { AppRolesService } from '../../roles/services/app-roles.service';
+import { ToolCapabilities } from '../../../services/tool-capability/tool-capability.service';
 import { ToolRoleDialogComponent, ToolRoleDialogData, ToolRoleDialogResult } from '../components/tool-role-dialog.component';
 import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult } from '../components/delete-tool-dialog.component';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+
+/** "1 prompt" / "8 prompts" / "no prompts". */
+export function describeCount(count: number, noun: string): string {
+  if (count === 0) {
+    return `no ${noun}s`;
+  }
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * What a finished capability refresh should say.
+ *
+ * A probe that could not reach the server records `error` and leaves the
+ * previous snapshot in place, so that case must read as a failure — reporting
+ * "no prompts" there would claim the server offers none when we never asked it
+ * successfully. The two are genuinely different facts.
+ */
+export function capabilityRefreshSummary(
+  snapshot: ToolCapabilities,
+  displayName: string
+): string {
+  if (snapshot.error) {
+    return `Could not reach ${displayName}: ${snapshot.error}`;
+  }
+  const counts =
+    `${describeCount(snapshot.prompts.length, 'prompt')}, ` +
+    `${describeCount(snapshot.resources.length, 'resource')}`;
+  return snapshot.truncated ? `${counts} (truncated)` : counts;
+}
 
 @Component({
   selector: 'app-tool-list',
@@ -114,6 +145,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
       heroPencilSquare,
       heroTrash,
       heroUserGroup,
+      heroArrowPath,
       heroGlobeAlt,
       heroExclamationTriangle,
       heroStarSolid,
@@ -321,6 +353,23 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
 
                     <!-- Actions -->
                     <div class="flex shrink-0 items-center gap-1">
+                      @if (tool.protocol === 'mcp_external') {
+                        <button
+                          type="button"
+                          (click)="refreshCapabilities(tool)"
+                          [disabled]="isRefreshingCapabilities(tool.toolId)"
+                          [attr.aria-label]="'Refresh prompts and resources for ' + tool.displayName"
+                          [title]="capabilityRefreshTitle(tool)"
+                          class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                        >
+                          <ng-icon
+                            name="heroArrowPath"
+                            class="size-4"
+                            [class.animate-spin]="isRefreshingCapabilities(tool.toolId)"
+                            aria-hidden="true"
+                          />
+                        </button>
+                      }
                       <button
                         type="button"
                         (click)="openRoleDialog(tool)"
@@ -672,6 +721,84 @@ export class ToolListPage {
   /** The joined failure reasons for an unhealthy gateway tool, else null. */
   gatewayFailureReasons(toolId: string): string | null {
     return gatewayFailureReasonsFor(this.gatewayStatuses().get(toolId));
+  }
+
+  /**
+   * Tools whose capability probe is in flight, and the outcome of the last one
+   * per tool. Kept per row because refreshing is a live MCP session against
+   * that one server, and a slow server should not freeze the others.
+   */
+  private readonly refreshingCapabilities = signal<ReadonlySet<string>>(new Set());
+  private readonly capabilityRefreshOutcome = signal<ReadonlyMap<string, string>>(new Map());
+
+  isRefreshingCapabilities(toolId: string): boolean {
+    return this.refreshingCapabilities().has(toolId);
+  }
+
+  /** Tooltip: what the button does, or what the last refresh in this session found. */
+  capabilityRefreshTitle(tool: AdminTool): string {
+    if (this.isRefreshingCapabilities(tool.toolId)) {
+      return `Asking ${tool.displayName} what it offers...`;
+    }
+    return (
+      this.capabilityRefreshOutcome().get(tool.toolId) ??
+      `Refresh the prompts and resources listed for ${tool.displayName}`
+    );
+  }
+
+  /**
+   * Re-probe one external MCP server and store what it reports.
+   *
+   * Nothing else writes a capability snapshot and nothing re-runs on a
+   * schedule, so a server that gained a prompt since its last probe shows the
+   * old answer — an empty Prompts tab — until this runs. Deploying a server
+   * does not refresh it.
+   */
+  async refreshCapabilities(tool: AdminTool): Promise<void> {
+    const toolId = tool.toolId;
+    if (this.isRefreshingCapabilities(toolId)) {
+      return;
+    }
+    this.setRefreshingCapabilities(toolId, true);
+    try {
+      const snapshot = await this.adminToolService.refreshToolCapabilities(toolId);
+      if (this.destroyed) {
+        return;
+      }
+      this.setCapabilityOutcome(
+        toolId,
+        capabilityRefreshSummary(snapshot, tool.displayName)
+      );
+    } catch (error: unknown) {
+      console.error('Error refreshing tool capabilities:', error);
+      const message =
+        error instanceof Error ? error.message : 'Failed to refresh capabilities.';
+      alert(message);
+    } finally {
+      if (!this.destroyed) {
+        this.setRefreshingCapabilities(toolId, false);
+      }
+    }
+  }
+
+  private setRefreshingCapabilities(toolId: string, value: boolean): void {
+    this.refreshingCapabilities.update(prev => {
+      const next = new Set(prev);
+      if (value) {
+        next.add(toolId);
+      } else {
+        next.delete(toolId);
+      }
+      return next;
+    });
+  }
+
+  private setCapabilityOutcome(toolId: string, summary: string): void {
+    this.capabilityRefreshOutcome.update(prev => {
+      const next = new Map(prev);
+      next.set(toolId, summary);
+      return next;
+    });
   }
 
   async openRoleDialog(tool: AdminTool): Promise<void> {
