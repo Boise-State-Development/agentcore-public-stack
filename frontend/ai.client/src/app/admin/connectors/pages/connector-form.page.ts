@@ -776,6 +776,15 @@ export class ConnectorFormPage implements OnInit {
   /** Same tri-state tracking for the export-target mapping. */
   private readonly exportAdapterLoadedFromServer = signal<string>('');
 
+  /**
+   * The discovery URL loaded from the server. Update only sends the field
+   * when it actually changed: the backend treats a discovery change as a
+   * credential-rotation event, and the admin cannot rotate (the client
+   * secret is never readable back), so resending an unchanged URL would
+   * block every metadata-only edit on a discovery-URL connector.
+   */
+  private readonly discoveryLoadedFromServer = signal<string>('');
+
   /** Every file-source adapter shipped in the backend registry. */
   readonly fileSourceAdapters = computed(() =>
     this.connectorsService.getFileSourceAdapters()
@@ -970,6 +979,7 @@ export class ConnectorFormPage implements OnInit {
       this.iconLoadedFromServer.set(connector.iconData ?? null);
       this.adapterLoadedFromServer.set(connector.fileSourceAdapterId ?? '');
       this.exportAdapterLoadedFromServer.set(connector.exportTargetAdapterId ?? '');
+      this.discoveryLoadedFromServer.set(connector.oauthDiscoveryUrl ?? '');
       this.selectedRoles.set(connector.allowedRoles.length > 0 ? connector.allowedRoles : ['*']);
       this.applyDiscoveryValidator();
     } catch (error) {
@@ -1118,8 +1128,16 @@ export class ConnectorFormPage implements OnInit {
           updates.clientId = formValue.clientId;
           updates.clientSecret = formValue.clientSecret;
         }
-        if (this.needsDiscovery() && formValue.oauthDiscoveryUrl) {
-          updates.oauthDiscoveryUrl = formValue.oauthDiscoveryUrl;
+        // Only send the discovery URL when the admin actually changed it —
+        // the backend requires a credential rotation alongside a discovery
+        // change, so an unchanged value would reject the whole save.
+        const currentDiscovery = formValue.oauthDiscoveryUrl || '';
+        if (
+          this.needsDiscovery() &&
+          currentDiscovery &&
+          currentDiscovery !== this.discoveryLoadedFromServer()
+        ) {
+          updates.oauthDiscoveryUrl = currentDiscovery;
         }
         await this.connectorsService.updateConnector(this.providerId()!, updates);
         this.router.navigate(['/admin/connectors']);
