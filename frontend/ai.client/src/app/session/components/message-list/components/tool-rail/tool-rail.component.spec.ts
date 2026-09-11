@@ -54,7 +54,9 @@ describe('ToolRailComponent', () => {
               }
             </button>
             <div class="collapsible-content" [class.open]="isExpanded()">
-              @for (call of group().calls; track call.id) {
+              @for (batch of batches(); track batch.key) {
+              @if (batch.summary) { <p class="batch-summary">{{ batch.summary }}</p> }
+              @for (call of batch.calls; track call.id) {
                 <div class="call-row">
                   <span [class]="statusDotClass(call)"></span>
                   <span class="call-description">{{ describe(call) }}</span>
@@ -85,6 +87,7 @@ describe('ToolRailComponent', () => {
                     }
                   }
                 </div>
+              }
               }
             </div>
           `,
@@ -153,6 +156,132 @@ describe('ToolRailComponent', () => {
       expect(
         fixture.nativeElement.querySelector('.tool-count').textContent,
       ).toContain('2 tools');
+    });
+  });
+
+  describe('batches', () => {
+    function batched(...specs: { summary?: string; names: string[] }[]) {
+      let n = 0;
+      const batches = specs.map((spec, b) => ({
+        key: `b${b}`,
+        summary: spec.summary,
+        calls: spec.names.map(name => makeCall({ id: `c${n++}`, toolName: name })),
+      }));
+      return { calls: batches.flatMap(b => b.calls), batches };
+    }
+
+    it('renders one line per summarized batch', () => {
+      // Regression: a rail collapsing a multi-round pipeline showed only the
+      // FIRST batch's summary, so it claimed the whole group did what its
+      // opening round did.
+      render(
+        batched(
+          { summary: 'Found 3 courses', names: ['list_courses'] },
+          { summary: 'Found the Syllabus assignment', names: ['list_assignments'] },
+        ),
+      );
+      component.toggleExpanded();
+      fixture.detectChanges();
+
+      const lines = [...fixture.nativeElement.querySelectorAll('.batch-summary')].map(
+        (el: Element) => el.textContent!.trim(),
+      );
+      expect(lines).toEqual(['Found 3 courses', 'Found the Syllabus assignment']);
+    });
+
+    it('keeps every call, under its own batch', () => {
+      render(
+        batched(
+          { summary: 'Round one', names: ['list_courses', 'list_terms'] },
+          { summary: 'Round two', names: ['get_course'] },
+        ),
+      );
+      component.toggleExpanded();
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelectorAll('.call-row').length).toBe(3);
+    });
+
+    it('omits the line for an unsummarized batch', () => {
+      render(batched({ names: ['list_courses'] }));
+      component.toggleExpanded();
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.batch-summary')).toBeNull();
+      expect(fixture.nativeElement.querySelector('.call-description')).toBeTruthy();
+    });
+
+    it('treats a group with no batches as one implicit batch', () => {
+      // Older callers and tests omit `batches` entirely.
+      render(makeGroup({ calls: [makeCall({ id: 'a' }), makeCall({ id: 'b' })] }));
+
+      expect(component.batches().length).toBe(1);
+      expect(component.batches()[0].calls.length).toBe(2);
+    });
+
+    describe('collapsed headline', () => {
+      it('states the summary alone when it covers the whole group', () => {
+        render(batched({ summary: 'Found 3 courses', names: ['list_courses'] }));
+        expect(component.headline()).toBe('Found 3 courses');
+      });
+
+      it('says how many rounds follow rather than over-claiming', () => {
+        render(
+          batched(
+            { summary: 'Found 3 courses', names: ['list_courses'] },
+            { summary: 'Found the assignment', names: ['list_assignments'] },
+            { summary: 'Read it', names: ['get_assignment_details'] },
+          ),
+        );
+        expect(component.headline()).toBe('Found 3 courses, then 2 more steps');
+      });
+
+      it('uses the singular for a single following round', () => {
+        render(
+          batched(
+            { summary: 'Found 3 courses', names: ['list_courses'] },
+            { summary: 'Read it', names: ['get_course'] },
+          ),
+        );
+        expect(component.headline()).toBe('Found 3 courses, then 1 more step');
+      });
+
+      it('does not grow with the size of the group', () => {
+        // Only ever ONE summary in the header — that is the point of
+        // collapsing.
+        render(
+          batched(
+            ...Array.from({ length: 8 }, (_, i) => ({
+              summary: `Round ${i} did a thing`,
+              names: ['list_courses'],
+            })),
+          ),
+        );
+        expect(component.headline()).toBe('Round 0 did a thing, then 7 more steps');
+      });
+
+      it('counts only the rounds after the first summarized one', () => {
+        render(
+          batched(
+            { names: ['list_courses'] },
+            { summary: 'Found the assignment', names: ['list_assignments'] },
+          ),
+        );
+        expect(component.headline()).toBe('Found the assignment');
+      });
+
+      it('falls back to the deterministic line when nothing was summarized', () => {
+        render(batched({ names: ['list_assignments'] }));
+        expect(component.headline()).toBe('Listed assignments');
+      });
+
+      it('an explicit groupSummary overrides the derived header', () => {
+        render({
+          ...batched({ summary: 'Derived', names: ['list_courses'] }),
+          groupSummary: 'Explicit',
+        });
+        expect(component.headline()).toBe('Explicit');
+      });
     });
   });
 

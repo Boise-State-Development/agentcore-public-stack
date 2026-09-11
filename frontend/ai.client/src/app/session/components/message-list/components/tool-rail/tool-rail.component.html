@@ -57,7 +57,17 @@
     <div
       class="pl-4 space-y-3 mt-2 border-l-2 border-gray-300/50 dark:border-gray-600/50"
     >
-      @for (call of group().calls; track call.id) {
+      @for (batch of batches(); track batch.key) {
+        <!-- The batch's own line, when the side-channel summarized this
+             round. One per batch, not one per group: a collapsed pipeline
+             contains several rounds and each did something different. -->
+        @if (batch.summary) {
+          <p class="text-xs font-medium text-gray-600 dark:text-gray-300 -ml-2 first:mt-0 mt-1">
+            {{ batch.summary }}
+          </p>
+        }
+
+        @for (call of batch.calls; track call.id) {
         <div>
           <!-- Row header: the human line first, the tool identifier second.
                The identifier still matters (it is what an admin greps for),
@@ -157,6 +167,7 @@
             }
           </div>
         </div>
+        }
       }
     </div>
   </div>

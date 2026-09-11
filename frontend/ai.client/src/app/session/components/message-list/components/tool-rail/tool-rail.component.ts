@@ -7,7 +7,7 @@ import {
 } from '@angular/core';
 import { KeyValuePipe } from '@angular/common';
 import { JsonSyntaxHighlightPipe } from '../tool-use/json-syntax-highlight.pipe';
-import { ToolCallGroup, ToolCallDisplay } from './tool-rail.model';
+import { ToolCallGroup, ToolCallDisplay, ToolCallBatch } from './tool-rail.model';
 import { describeToolCall, describeToolGroup } from './tool-summary';
 import { PinScrollToBottomDirective } from './pin-scroll-to-bottom.directive';
 import { ToolResultContent } from '../../../../services/models/message.model';
@@ -30,16 +30,45 @@ export class ToolRailComponent {
   expandedResultIds = signal<Set<string>>(new Set());
 
   /**
+   * The group's calls segmented by backend batch.
+   *
+   * A caller that doesn't supply `batches` (older callers, tests) gets one
+   * implicit unsummarized batch covering everything, which renders exactly
+   * like the pre-batch rail.
+   */
+  batches = computed<ToolCallBatch[]>(() => {
+    const group = this.group();
+    if (group.batches?.length) return group.batches;
+    return group.calls.length
+      ? [{ key: group.calls[0].id, calls: group.calls }]
+      : [];
+  });
+
+  /**
    * The one line shown collapsed.
    *
-   * `groupSummary` is the model-generated sentence when the tool-summary
-   * side-channel produced one, and the deterministic formatter's line
-   * otherwise — the caller always supplies one of the two. The local fallback
-   * here only covers a group built without either (older callers, tests).
+   * Order of preference: an explicit override; then the first batch that has
+   * a model-generated summary; then the deterministic formatter.
+   *
+   * When summarized batches are followed by more rounds, the header says so
+   * ("…, then 2 more steps") rather than presenting the opening round's line
+   * as if it described the whole group — the expanded view carries the rest.
+   * It still must not grow with the group, which is the entire point of
+   * collapsing, so only ONE summary ever appears here.
    */
-  headline = computed(
-    () => this.group().groupSummary || describeToolGroup(this.group().calls),
-  );
+  headline = computed(() => {
+    const override = this.group().groupSummary;
+    if (override) return override;
+
+    const batches = this.batches();
+    const first = batches.findIndex((b) => !!b.summary);
+    if (first === -1) return describeToolGroup(this.group().calls);
+
+    const head = batches[first].summary!;
+    const rest = batches.length - 1 - first;
+    if (rest <= 0) return head;
+    return `${head}, then ${rest} more step${rest === 1 ? '' : 's'}`;
+  });
 
   /** True while any call in the group is still executing. */
   isRunning = computed(() =>

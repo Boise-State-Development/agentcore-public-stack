@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, input } from '@an
 import { Message, ContentBlock, ToolUseData } from '../../../services/models/message.model';
 import { ToolUseComponent } from './tool-use';
 import { ToolRailComponent } from './tool-rail';
-import { ToolCallGroup, ToolCallDisplay } from './tool-rail/tool-rail.model';
+import { ToolCallGroup, ToolCallDisplay, ToolCallBatch } from './tool-rail/tool-rail.model';
 import { ReasoningContentComponent } from './reasoning-content';
 import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
@@ -15,7 +15,6 @@ import {
 import { McpAppStateService } from '../../../services/mcp-apps/mcp-app-state.service';
 import { ChatStateService } from '../../../services/chat/chat-state.service';
 import { ToolInsightService } from '../../../services/chat/tool-insight.service';
-import { describeToolGroup } from './tool-rail/tool-summary';
 import type { ToolResultData } from './tool-use/tool-renderer-registry.service';
 
 // ──────────────────────────────────────────────────────────────
@@ -370,6 +369,39 @@ export class AssistantMessageComponent {
     // the computed must re-run when a late-arriving summary lands.
     const insights = this.toolInsight;
 
+    /**
+     * Segment a rail's calls by the backend batch that produced them.
+     *
+     * Grouping into a rail is a client-side decision (consecutive tool calls
+     * across the messages of one run); batches are one per event-loop cycle.
+     * A four-step pipeline collapses into one rail containing four batches,
+     * each with its own summary, so the rail can show a line per round
+     * instead of letting the opening round's line speak for all of them.
+     *
+     * Calls with no recorded batch (unsummarized — flag off, Nova failed, or
+     * an older conversation) each become their own singleton batch rather
+     * than merging into a neighbour, so an unsummarized call is never filed
+     * under a summary that does not describe it.
+     */
+    const segmentIntoBatches = (calls: ToolCallDisplay[]): ToolCallBatch[] => {
+      const batches: ToolCallBatch[] = [];
+      for (const call of calls) {
+        const insight = insights.get(sessionId, call.id);
+        const batchId = insight?.batchId;
+        const open = batches[batches.length - 1];
+        if (batchId && open?.key === batchId) {
+          open.calls.push(call);
+          continue;
+        }
+        batches.push({
+          key: batchId ?? call.id,
+          summary: insight?.summary,
+          calls: [call],
+        });
+      }
+      return batches;
+    };
+
     const flushToolGroup = () => {
       if (pendingToolCalls.length === 0) return;
       const calls = [...pendingToolCalls];
@@ -378,16 +410,9 @@ export class AssistantMessageComponent {
         type: 'tool_group',
         group: {
           calls,
-          // The model-generated line when the side-channel produced one for
-          // any call in this group; otherwise the deterministic formatter,
-          // which is always available and needs no network. Never a bare
-          // chain of tool names — that was the old fallback and it is what
-          // made the rail unreadable.
-          groupSummary:
-            insights.summaryFor(
-              sessionId,
-              calls.map((c) => c.id),
-            ) ?? describeToolGroup(calls),
+          // `groupSummary` is deliberately left unset: the rail derives its
+          // header from these batches, so the two can never disagree.
+          batches: segmentIntoBatches(calls),
         },
       });
     };
