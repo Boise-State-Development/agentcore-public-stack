@@ -38,12 +38,25 @@ def _mem_svc(space, role) -> MagicMock:
     return svc
 
 
-def _tool_svc(*accessible_ids: str) -> MagicMock:
-    # Mirror the palette: get_user_accessible_tools returns objects carrying .tool_id.
+def _tool_svc(*accessible: object) -> MagicMock:
+    """Mirror the palette: ``get_user_accessible_tools`` returns ``UserToolAccess``.
+
+    Each entry is a bare id (a tool with no discovered per-tool list, the shape of a
+    local tool or an MCP server that has never been discovered) or a
+    ``(id, [tool names])`` pair carrying that server's ``server_tools`` — the field
+    ``_validate_tool`` checks a scoped ref's tool name against.
+    """
     svc = MagicMock()
-    svc.get_user_accessible_tools = AsyncMock(
-        return_value=[SimpleNamespace(tool_id=t) for t in accessible_ids]
-    )
+    items = []
+    for entry in accessible:
+        tool_id, names = entry if isinstance(entry, tuple) else (entry, ())
+        items.append(
+            SimpleNamespace(
+                tool_id=tool_id,
+                server_tools=[SimpleNamespace(name=n) for n in names],
+            )
+        )
+    svc.get_user_accessible_tools = AsyncMock(return_value=items)
     return svc
 
 
@@ -333,6 +346,79 @@ class TestToolValidation:
             tool_service=svc,
         )
         svc.get_user_accessible_tools.assert_not_awaited()
+
+    # -- scoped refs (``toolId::mcpToolName``) -----------------------------------
+    @pytest.mark.asyncio
+    async def test_scoped_ref_passes_when_base_accessible_and_name_exposed(self):
+        # The whole point: bind 2 of a 3-tool server. The base carries the grant, the
+        # discovered serverTools list carries the name.
+        svc = _tool_svc(("canvas_faculty", ["list_courses", "list_rubrics", "grade_submission"]))
+        await validate_agent_write(
+            _user(),
+            bindings=[
+                AgentBinding(kind="tool", ref="canvas_faculty::list_courses"),
+                AgentBinding(kind="tool", ref="canvas_faculty::list_rubrics"),
+            ],
+            tool_service=svc,
+        )
+        svc.get_user_accessible_tools.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_scoped_ref_403_when_base_inaccessible(self):
+        # Scoping narrows a grant; it can never conjure one.
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                bindings=[AgentBinding(kind="tool", ref="secret_server::peek")],
+                tool_service=_tool_svc(("canvas_faculty", ["list_courses"])),
+            )
+        assert ei.value.status_code == 403
+        # The message names the base — that is what an admin would grant.
+        assert "secret_server" in ei.value.message
+        assert "::" not in ei.value.message
+
+    @pytest.mark.asyncio
+    async def test_scoped_ref_400_when_name_not_exposed(self):
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                bindings=[AgentBinding(kind="tool", ref="canvas_faculty::no_such_tool")],
+                tool_service=_tool_svc(("canvas_faculty", ["list_courses"])),
+            )
+        assert ei.value.status_code == 400
+        assert "no_such_tool" in ei.value.message
+
+    @pytest.mark.asyncio
+    async def test_scoped_ref_allowed_when_server_never_discovered(self):
+        # An empty serverTools list means "never discovered", not "exposes nothing" —
+        # mirrors ToolCatalogService.save_user_preferences, which skips the name check
+        # in exactly this case rather than rejecting every scoped ref.
+        await validate_agent_write(
+            _user(),
+            bindings=[AgentBinding(kind="tool", ref="canvas_faculty::list_courses")],
+            tool_service=_tool_svc("canvas_faculty"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_ref_with_empty_tool_name_400(self):
+        # "base::" parses to a bare ref, so accepting it would store a whole-server
+        # binding under a ref the author wrote to narrow one.
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                bindings=[AgentBinding(kind="tool", ref="canvas_faculty::")],
+                tool_service=_tool_svc(("canvas_faculty", ["list_courses"])),
+            )
+        assert ei.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_bare_ref_still_binds_whole_server(self):
+        # Additive: a bare ref is unaffected by the discovered list.
+        await validate_agent_write(
+            _user(),
+            bindings=[AgentBinding(kind="tool", ref="canvas_faculty")],
+            tool_service=_tool_svc(("canvas_faculty", ["list_courses", "grade_submission"])),
+        )
 
 
 # --------------------------------------------------------------------------- KB

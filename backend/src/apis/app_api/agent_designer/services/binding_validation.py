@@ -8,8 +8,11 @@ Resolution scope:
 - ``model``          → must exist + author passes ``ModelAccessService.can_access_model``.
 - ``tool``           → author must have the tool in the ``/agents/bindable`` palette
   (``ToolCatalogService.get_user_accessible_tools``, the SAME source the picker fetches, so
-  "if the palette offers it, the write accepts it" — cf. the model check). Run-time then
-  re-resolves each bound tool against the *invoker* (``AppRoleService.can_access_tool``, D5).
+  "if the palette offers it, the write accepts it" — cf. the model check). A ref may be
+  *scoped* (``toolId::mcpToolName``) to bind a subset of an MCP server's tools: the base
+  id is checked against the palette and the tool name against that server's discovered
+  ``serverTools`` list. Run-time then re-resolves each bound tool against the *invoker*
+  (``AppRoleService.can_access_tool``, D5).
 - ``skill``          → feature-flagged; author must have the skill in the ``/agents/bindable``
   palette (``resolve_accessible_skill_ids``, the SAME source the picker fetches). Run-time then
   re-resolves each bound skill against the *invoker* (``resolve_invocable_skill_ids``, D5).
@@ -28,6 +31,7 @@ from apis.shared.feature_flags import memory_spaces_enabled, skills_enabled
 from apis.shared.memory.service import MemorySpaceService
 from apis.shared.models.managed_models import list_all_managed_models
 from apis.shared.skills.access import resolve_accessible_skill_ids
+from apis.shared.tools.scoped_ids import SCOPE_DELIMITER, parse_scoped_tool_id
 
 from apis.app_api.admin.services.model_access import ModelAccessService
 from apis.app_api.tools.service import ToolCatalogService
@@ -73,15 +77,22 @@ async def validate_agent_write(
         # kind is present, then validate each binding synchronously against those sets — the
         # same sources the palette uses, so the picker and the write agree (cf. the model
         # check). Each is fetched lazily (only when that kind is actually bound).
-        accessible_tool_ids: Optional[set] = None
+        # Tools map catalog id -> the server's discovered tool names (empty for a
+        # non-MCP tool, or an MCP server with no discovery snapshot), because a scoped
+        # ref has to be checked on both axes: base id in the palette, tool name exposed
+        # by that server.
+        accessible_tools: Optional[dict] = None
         if any(b.kind == "tool" for b in bindings):
             svc = tool_service or ToolCatalogService()
-            accessible_tool_ids = {t.tool_id for t in await svc.get_user_accessible_tools(user)}
+            accessible_tools = {
+                t.tool_id: {st.name for st in t.server_tools}
+                for t in await svc.get_user_accessible_tools(user)
+            }
         accessible_skill_ids: Optional[set] = None
         if skills_enabled() and any(b.kind == "skill" for b in bindings):
             accessible_skill_ids = set(await resolve_accessible_skill_ids(user))
         for binding in bindings:
-            _validate_binding(user, binding, mem, accessible_tool_ids, accessible_skill_ids)
+            _validate_binding(user, binding, mem, accessible_tools, accessible_skill_ids)
 
 
 async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessService) -> None:
@@ -156,7 +167,7 @@ def _validate_binding(
     user: User,
     binding: AgentBinding,
     mem: MemorySpaceService,
-    accessible_tool_ids: Optional[set] = None,
+    accessible_tools: Optional[dict] = None,
     accessible_skill_ids: Optional[set] = None,
 ) -> None:
     kind = binding.kind
@@ -170,7 +181,7 @@ def _validate_binding(
         )
 
     if kind == "tool":
-        _validate_tool(binding, accessible_tool_ids or set())
+        _validate_tool(binding, accessible_tools or {})
         return
 
     if kind == "skill":
@@ -181,17 +192,49 @@ def _validate_binding(
         _validate_memory_space(user, binding, mem)
 
 
-def _validate_tool(binding: AgentBinding, accessible_tool_ids: set) -> None:
+def _validate_tool(binding: AgentBinding, accessible_tools: dict) -> None:
+    """Validate one ``tool`` binding, bare (whole server) or scoped (one tool of it).
+
+    Mirrors ``ToolCatalogService.save_user_preferences``, which validates the same
+    ``base::tool`` shape on the user-preference axis: the **base** id must be in the
+    author's palette (``get_user_accessible_tools`` — the exact source the Designer
+    picker fetches, so a bindable tool is always writable), and the tool name must be
+    one the server actually exposes.
+
+    A server with an empty ``serverTools`` list has simply never been discovered
+    ("Discover from server" on the admin tool page populates it); the name check is
+    skipped there rather than rejecting every scoped ref, exactly as the preference
+    path does. That cached list is a UI/validation aid only — it is never consulted at
+    run time, so it can gate what an author may *write* but is not the enforcement
+    point. Enforcement is the scoped id itself reaching ``collect_tool_name_filters``.
+    """
     ref = (binding.ref or "").strip()
     if not ref:
         raise BindingValidationError("tool binding requires a non-empty 'ref'.", status_code=400)
-    # The tool id must be in the author's palette (get_user_accessible_tools) — the exact
-    # source the Designer picker fetches, so a bindable tool is always writable. Run-time
-    # re-resolves against the invoker via AppRoleService.can_access_tool (D5).
-    if ref not in accessible_tool_ids:
+
+    base, tool_name = parse_scoped_tool_id(ref)
+    if tool_name is None and SCOPE_DELIMITER in ref:
+        # "canvas_faculty::" parses to a bare ref, so it would silently store as a
+        # whole-server binding — the opposite of what the author meant to narrow.
         raise BindingValidationError(
-            f"You do not have access to tool '{ref}'.", status_code=403
+            f"tool binding ref '{ref}' is missing a tool name after "
+            f"'{SCOPE_DELIMITER}'.",
+            status_code=400,
         )
+    # Run-time re-resolves against the invoker via AppRoleService.can_access_tool (D5),
+    # which likewise admits a scoped ref whose base server is granted.
+    if base not in accessible_tools:
+        raise BindingValidationError(
+            f"You do not have access to tool '{base}'.", status_code=403
+        )
+
+    if tool_name is not None:
+        server_names = accessible_tools[base]
+        if server_names and tool_name not in server_names:
+            raise BindingValidationError(
+                f"Tool '{base}' does not expose a tool named '{tool_name}'.",
+                status_code=400,
+            )
 
 
 def _validate_skill(binding: AgentBinding, accessible_skill_ids: set) -> None:

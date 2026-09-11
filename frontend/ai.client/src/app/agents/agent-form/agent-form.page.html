@@ -363,12 +363,73 @@
         <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Capabilities this agent can call.</p>
         <div class="mt-4 flex flex-wrap gap-2">
           @for (t of tools(); track t.ref) {
-            <button type="button" (click)="toggleTool(t.ref)" class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition" [class.border-primary-500]="isToolSelected(t.ref)" [class.bg-primary-50]="isToolSelected(t.ref)" [class.text-primary-accessible]="isToolSelected(t.ref)" [class.dark:bg-primary-900/30]="isToolSelected(t.ref)" [class.dark:text-primary-accessible-dark]="isToolSelected(t.ref)" [class.border-gray-200]="!isToolSelected(t.ref)" [class.text-gray-700]="!isToolSelected(t.ref)" [class.dark:border-gray-700]="!isToolSelected(t.ref)" [class.dark:text-gray-300]="!isToolSelected(t.ref)" [appTooltip]="t.description" appTooltipPosition="top">
-              @if (isToolSelected(t.ref)) { <ng-icon name="heroCheck" class="size-3.5" /> }
-              {{ t.label }}
-            </button>
+            <!--
+              The chip selects the whole server, which is what a tool binding has always
+              meant. An MCP server with a discovered tool list gets a second control: the
+              caret opens its tools so the author can bind a subset instead. A server the
+              agent doesn't need every tool of is the common case — Rubric Builder wants
+              7 of canvas_faculty's 44 — and the ones it doesn't take sit in the model's
+              toolConfig on every turn.
+            -->
+            <span class="inline-flex items-stretch rounded-full border transition" [class.border-primary-500]="isToolSelected(t.ref)" [class.bg-primary-50]="isToolSelected(t.ref)" [class.dark:bg-primary-900/30]="isToolSelected(t.ref)" [class.border-gray-200]="!isToolSelected(t.ref)" [class.dark:border-gray-700]="!isToolSelected(t.ref)">
+              <button type="button" (click)="toggleTool(t.ref)" class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm" [class.text-primary-accessible]="isToolSelected(t.ref)" [class.dark:text-primary-accessible-dark]="isToolSelected(t.ref)" [class.text-gray-700]="!isToolSelected(t.ref)" [class.dark:text-gray-300]="!isToolSelected(t.ref)" [appTooltip]="t.description" appTooltipPosition="top">
+                @if (isToolSelected(t.ref)) { <ng-icon name="heroCheck" class="size-3.5" /> }
+                {{ t.label }}
+                @if (isToolSelected(t.ref) && canScopeTool(t) && !isWholeServerSelected(t)) {
+                  <span class="text-xs/5 tabular-nums opacity-80">{{ selectedServerToolCount(t) }} of {{ serverTools(t).length }}</span>
+                }
+              </button>
+              @if (isToolSelected(t.ref) && canScopeTool(t)) {
+                <button type="button" (click)="toggleToolExpanded(t.ref)" [attr.aria-expanded]="isToolExpanded(t.ref)" [attr.aria-controls]="'agent-server-tools-' + t.ref" [attr.aria-label]="'Choose which ' + t.label + ' tools this agent can call'" class="inline-flex items-center rounded-r-full pr-2.5 pl-1 text-gray-500 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:text-gray-200">
+                  <ng-icon name="heroChevronDown" class="size-3.5 transition-transform" [class.rotate-180]="isToolExpanded(t.ref)" />
+                </button>
+              }
+            </span>
           }
         </div>
+
+        <!--
+          Per-tool selection, matching the chat tool picker's sub-tool rows (mono name,
+          first-paragraph summary, `Show details` for the Args: block, switch on the
+          right) rather than inventing a second pattern for the same decision.
+        -->
+        @for (t of tools(); track t.ref) {
+          @if (isToolSelected(t.ref) && canScopeTool(t) && isToolExpanded(t.ref)) {
+            <div [id]="'agent-server-tools-' + t.ref" class="mt-4 rounded-2xl border border-gray-200 p-4 dark:border-white/10">
+              <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                <span class="font-medium text-gray-700 dark:text-gray-300">{{ t.label }}</span> —
+                @if (isWholeServerSelected(t)) {
+                  all {{ serverTools(t).length }} tools. Turn off the ones this agent doesn't need; only the tools left on are sent to the model.
+                } @else {
+                  {{ selectedServerToolCount(t) }} of {{ serverTools(t).length }} tools. Only the tools left on are sent to the model.
+                }
+              </p>
+              <ul class="mt-3 flex flex-col gap-2">
+                @for (sub of serverTools(t); track sub.name) {
+                  <li class="flex items-start justify-between gap-3 rounded-2xl border border-gray-200 px-3 py-2.5 dark:border-white/10">
+                    <div class="min-w-0 flex-1">
+                      <span [id]="'agent-subtool-' + t.ref + '-' + sub.name" class="block font-mono text-xs/5 font-medium text-gray-900 dark:text-white">{{ sub.name }}</span>
+                      @if (sub.summary) {
+                        <span class="mt-0.5 block text-xs/5 text-gray-500 dark:text-gray-400">{{ sub.summary }}</span>
+                      }
+                      @if (sub.detail) {
+                        <button type="button" (click)="toggleToolDetail(t.ref + '::' + sub.name)" [attr.aria-expanded]="isToolDetailExpanded(t.ref + '::' + sub.name)" [attr.aria-controls]="'agent-subtool-detail-' + t.ref + '-' + sub.name" class="mt-1 text-xs/5 font-medium text-primary-600 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-400">
+                          {{ isToolDetailExpanded(t.ref + '::' + sub.name) ? 'Hide details' : 'Show details' }}
+                        </button>
+                        @if (isToolDetailExpanded(t.ref + '::' + sub.name)) {
+                          <pre [id]="'agent-subtool-detail-' + t.ref + '-' + sub.name" class="mt-1.5 overflow-x-auto rounded-lg bg-gray-50 p-2 font-mono text-[11px]/5 whitespace-pre text-gray-600 dark:bg-white/5 dark:text-gray-300">{{ sub.detail }}</pre>
+                        }
+                      }
+                    </div>
+                    <button type="button" role="switch" [attr.aria-checked]="isServerToolSelected(t.ref, sub.name)" [attr.aria-labelledby]="'agent-subtool-' + t.ref + '-' + sub.name" (click)="toggleServerTool(t, sub.name)" (keydown.space)="$event.preventDefault(); toggleServerTool(t, sub.name)" class="relative mt-0.5 inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500" [class]="isServerToolSelected(t.ref, sub.name) ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
+                      <span aria-hidden="true" class="pointer-events-none inline-block size-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out" [class.translate-x-4]="isServerToolSelected(t.ref, sub.name)" [class.translate-x-0]="!isServerToolSelected(t.ref, sub.name)"></span>
+                    </button>
+                  </li>
+                }
+              </ul>
+            </div>
+          }
+        }
       </section>
     }
 

@@ -258,6 +258,77 @@ class TestToolResolution:
         args = svc.can_access_tool.await_args.args
         assert args[0].user_id == "u-bob" and args[1] == "web_search"
 
+    # -- scoped refs (``toolId::mcpToolName``) -----------------------------------
+    @pytest.mark.asyncio
+    async def test_scoped_refs_survive_resolution_verbatim(self, monkeypatch):
+        # The scoped id IS the enforcement: it must reach enabled_tools intact for
+        # collect_tool_name_filters to narrow the server. Collapsing it to the base
+        # here would silently restore all of the server's tools.
+        _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(
+            _assistant(
+                bindings=[
+                    _tool_binding("canvas_faculty::list_courses"),
+                    _tool_binding("canvas_faculty::list_rubrics"),
+                ]
+            ),
+            _user(),
+        )
+        assert plan.tools.tool_ids == [
+            "canvas_faculty::list_courses",
+            "canvas_faculty::list_rubrics",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_bare_ref_still_resolves_to_whole_server(self, monkeypatch):
+        # Additive: an existing whole-server binding is untouched.
+        _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_tool_binding("canvas_faculty")]), _user()
+        )
+        assert plan.tools.tool_ids == ["canvas_faculty"]
+
+    @pytest.mark.asyncio
+    async def test_scoped_ref_blocks_when_base_inaccessible(self, monkeypatch):
+        # Block-with-message, not a silent drop (D5). The gate answers on the base, so
+        # this asserts the real shape: the invoker is granted neither, and the message
+        # names the server an administrator would grant.
+        _patch_tool_access(monkeypatch, {"calculator"})
+        with pytest.raises(AgentBindingBlockedError) as ei:
+            await resolve_agent_invocation(
+                _assistant(bindings=[_tool_binding("canvas_faculty::list_courses")]),
+                _user(),
+            )
+        assert "canvas_faculty" in ei.value.message
+        assert "::" not in ei.value.message
+
+    @pytest.mark.asyncio
+    async def test_scoped_ref_allowed_when_base_server_granted(self, monkeypatch):
+        # A grant on the server admits any subset of it — the gate is handed the scoped
+        # id and AppRoleService.can_access_tool base-collapses it (tested against real
+        # role records in tests/shared/test_scoped_tool_grants.py).
+        _patch_tool_access(monkeypatch, {"canvas_faculty::list_courses"})
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_tool_binding("canvas_faculty::list_courses")]), _user()
+        )
+        assert plan.tools.tool_ids == ["canvas_faculty::list_courses"]
+
+    @pytest.mark.asyncio
+    async def test_access_checked_once_per_server(self, monkeypatch):
+        # Seven tools of one server is the normal shape; it should cost one gate call.
+        svc = _patch_tool_access(monkeypatch, True)
+        await resolve_agent_invocation(
+            _assistant(
+                bindings=[
+                    _tool_binding("canvas_faculty::list_courses"),
+                    _tool_binding("canvas_faculty::list_rubrics"),
+                    _tool_binding("web_search"),
+                ]
+            ),
+            _user(),
+        )
+        assert svc.can_access_tool.await_count == 2
+
 
 class TestSkillResolution:
     @pytest.mark.asyncio

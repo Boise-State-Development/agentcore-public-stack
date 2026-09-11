@@ -89,10 +89,12 @@ Canvas, so any bearer value works.
   `memory_space` (`inference_api/chat/agent_binding_resolver.py`). The
   *"`tool` and `skill` are accepted and stored but inert until Phase 2/3"* comment in
   `apis/shared/assistants/models.py` is **stale**; ignore it.
-- **Tool bindings take bare catalog ids only.** `apis/shared/rbac/service.py` `can_access_tool`:
-  *"callers pass a bare catalog id … never a scoped `base::tool` id."* Binding `canvas_faculty`
-  therefore brings **all 42 tools** (~11.7k tokens of definitions). Trimming to the 5 rubric
-  tools would require accepting scoped refs in `binding.ref` — a platform change, out of scope.
+- **Tool bindings take bare catalog ids *or* scoped ones.** ~~`can_access_tool` exact-matched the
+  id, so binding `canvas_faculty` brought all 42 tools and trimming would need a platform
+  change.~~ **Superseded** — `binding.ref` now accepts `canvas_faculty::create_rubric`, and a
+  scoped ref is admitted by a grant on its base server. A bare ref still means the whole server,
+  so nothing about the shape above changed for an agent that wants all of it. Measured on this
+  agent in dev: bare = 44 tools and a 27,959-token prompt; the 7 scoped refs below = 9,981.
 - **Tool bindings replace** the request's `enabled_tools`; a bound tool the invoker cannot access
   raises `AgentBindingBlockedError` and blocks the turn with a message (no silent drop).
 - **Skills bind no tools.** `ChatAgent`: *"Skills are pure knowledge bundles … the tool universe
@@ -611,19 +613,29 @@ Ordered; each step has a different owner, which is why it is worth writing down.
 Steps 3 and 4 must not be separated by long — between them, rubric tools 401 with a message that
 tells the user a Canvas admin must act, which will already be done.
 
-### 8.3 Residual risk: the prompt fence is not a control
+### 8.3 Residual risk: the prompt fence is not a control — FIX SHIPPED
 
-The Agent binds `canvas_faculty` as a bare id, so it holds all 42 tools including
+The Agent bound `canvas_faculty` as a bare id, so it held all 44 tools including
 `grade_submission`, `bulk_grade_submissions`, `create_assignment` and `create_page`. Two of the
-42 are gated by approval; the rest are held back **only by the system prompt** (§7.1 Scope).
+44 were gated by approval; the rest were held back **only by the system prompt** (§7.1 Scope).
 That is a real fence for ordinary use and no fence at all against a determined prompt.
 
-The structural fix is scoped tool bindings (`binding.ref` accepting `canvas_faculty::create_rubric`),
-which `rbac/service.py` explicitly rejects today (§3.3). Until then, the mitigations available are:
-flag the genuinely destructive tools `needsApproval` as well, so the blast radius of a prompt
-that gets past the fence is still one click wide; and keep the Agent's visibility `SHARED`
-during the pilot so the population is known. Worth an explicit decision before the marketplace
-listing goes public.
+The structural fix — scoped tool bindings — has since shipped, so `binding.ref` accepts
+`canvas_faculty::create_rubric` and the runtime builds the MCP client restricted to the named
+tools (§3.3). **The agent is not rebound yet**; doing so is a one-click change in the Agent
+Designer (open the Tools chip's caret, leave on only the seven below).
+
+The seven it needs: `list_courses`, `list_assignments`, `get_assignment_details`, `list_rubrics`,
+`get_rubric`, `create_rubric`, `associate_rubric`.
+
+Verified in dev on the real agent: with those seven bound, the runtime logs the client as
+`(tools: associate_rubric, create_rubric, get_assignment_details, get_rubric, list_assignments,
+list_courses, list_rubrics)`, the whole turn prompt drops from 27,959 tokens to 9,981, and asked
+whether it can grade, the agent answers that it has no such tool — where the bare-bound run named
+`grade_submission`, `grade_with_rubric` and `bulk_grade_submissions` and declined by policy.
+
+Flagging the destructive tools `needsApproval` is still worth doing as defence in depth, and
+keeping the Agent's visibility limited during the pilot still bounds the population.
 
 ## 9. Open questions
 
