@@ -2,6 +2,14 @@
   display: block;
 }
 
+/* The rail renders inside `.message-block`, whose global prose rule
+   (styles.css) gives every <p> a 16px margin-bottom. The batch summary is a
+   banded row in an accordion, not a prose paragraph — the margin punched a
+   gap between it and the calls it summarizes. */
+.batch-summary {
+  margin-bottom: 0;
+}
+
 /* Status dot base */
 .status-dot {
   width: 6px;
