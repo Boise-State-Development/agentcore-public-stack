@@ -194,10 +194,10 @@ both directions:
 **Still to do in prod:** run the same discovery and set the same flag after the prod deploy
 (§4.3).
 
-**Open:** whether `associate_rubric` should also be gated. It is the tool that re-points the
-assignment (§4.5), which argues yes — but `create_rubric` with `assignment_id` creates *and*
-attaches in one already-gated call, so `associate_rubric` only covers attaching a pre-existing
-rubric. Gating it adds a second prompt to a less common path.
+**Decided 2026-09-10: `associate_rubric` is gated too.** Dev now flags both
+(`gated: send_conversation, create_rubric, associate_rubric`). The extra prompt on the
+less-common path is worth it because `associate_rubric` is the call that re-points the
+assignment (§4.5) — the one side effect in this feature that touches student-visible grades.
 
 ### 4.5 Attaching a rubric silently rewrites the assignment's points — NEW, found 2026-09-10
 
@@ -206,8 +206,17 @@ assignment's `points_possible` from **5.0 to 8.0** — the rubric's total. Nobod
 nothing warned, and in a live course it is a grade-affecting change to an assignment the
 instructor did not think they were editing.
 
-This is Canvas behaviour, not a bug in our tool, but it must be surfaced. Minimum: the
-publishing skill warns before attaching (§7.3) and the agent states the change afterwards.
+This is Canvas behaviour, not a bug in our tool, but it must be surfaced.
+
+**The approval gate does not cover this on its own.** The approval card renders `tool_input` —
+for `associate_rubric` that is `course_id`, `rubric_id`, `assignment_id`, `use_for_grading`.
+Nothing in those four values tells the instructor that approving will change the assignment
+from 5 points to 8. **The card shows the inputs, not the consequences.** So the gate is
+necessary but not sufficient: the agent has to state the point change in the message *before*
+the prompt, or the instructor approves a payload whose effect is invisible.
+
+Minimum: the publishing skill warns before attaching (§7.3) and the agent states the change
+afterwards.
 Better: `associate_rubric` and `create_rubric` return the assignment's before/after
 `points_possible` so the agent can report it without a second call. Best: the agent reads
 `points_possible` first and, when the rubric total differs, asks the instructor which number
@@ -487,6 +496,16 @@ with `use_for_grading`. Call `get_assignment_details` BEFORE attaching. If the
 assignment's points and the rubric's total differ, say so and ask which should win —
 do not silently re-point an assignment students may already have seen.
 
+## The approval prompt
+
+Creating or attaching a rubric pauses for the instructor's approval. The card they
+see lists the raw arguments, not the effects — so anything consequential must be in
+your message BEFORE the prompt, in plain language. Above all: if attaching will
+change the assignment's point value, say both numbers first.
+
+A decline means they want something different. Ask what to change. Never retry the
+same call and never tell them it is a permissions problem.
+
 ## After writing
 
 Verify with `get_assignment_details`, not `get_rubric`. `get_rubric` returns an empty
@@ -544,6 +563,63 @@ Phases 0 and 1 are prerequisites for everything. Phase 2 can run in parallel wit
 
 ---
 
+### 8.1 Acceptance criteria
+
+The agent is done when a faculty member who has never used it can do this unaided:
+
+1. **Zero-question path.** "Make a rubric for the Final Project in BIOL 101" produces a complete
+   draft rubric — criteria, levels, a descriptor in every cell, aligned to named outcomes — with
+   **no clarifying questions**. This is the headline criterion; if it needs questions, either the
+   KB is thin or the slot-filling instructions are not landing (§5).
+2. **Questions are batched.** Where a question *is* unavoidable, everything missing is asked in
+   one message, not one question per turn.
+3. **The table matches the payload.** The markdown table the agent shows and the `tool_input` on
+   the approval card describe the same rubric. A divergence is a correctness bug, not a cosmetic
+   one.
+4. **Descriptors survive the round trip.** `get_rubric` after publishing returns a
+   `long_description` on every rating, matching the table cell. This fails today (§4.1) and is
+   the single check that proves the blocker fixed.
+5. **Point changes are announced before the gate.** If attaching will re-point the assignment,
+   the agent says so *before* the approval prompt, with both numbers (§4.5).
+6. **Decline is respected.** Declining the gate produces a revision conversation, not a retry or
+   a permissions diagnosis (§10).
+7. **Fences hold.** Asked to grade, message students, or edit an assignment, the agent declines
+   and redirects — even though it can see those tools.
+
+### 8.2 Prod cutover checklist
+
+Ordered; each step has a different owner, which is why it is worth writing down.
+
+| # | Step | Owner |
+|---|---|---|
+| 1 | Merge and deploy the `mcp-servers` fix (§4.1, §4.2, §4.7) | eng |
+| 2 | Redeploy `canvas-faculty` to prod; confirm `tools/list` returns 42 | eng |
+| 3 | Add the 4 rubric scopes **and** `url:POST|/api/v1/conversations` to the **production** Canvas developer key | Canvas admin |
+| 4 | Add the same scopes to the prod `canvas-faculty` provider record | connectors admin |
+| 5 | **Announce the reconnect** before step 4 lands — every connected faculty member gets a consent prompt on their next Canvas use, including for tools whose scopes did not change (§4.3) | comms |
+| 6 | Admin → Tools → Canvas for Faculty → *Discover from server* (refreshes 7 → 42) | tools admin |
+| 7 | Flag `create_rubric` and `associate_rubric` as **Needs approval**; save | tools admin |
+| 8 | **Fix the `student` role grant first** — see §9. After step 6 the per-tool picker exposes all 42 tools, so students would see `grade_submission`, `create_assignment`, `create_rubric` | RBAC admin |
+| 9 | Build the KB (§7.4) and the Agent (§6) | eng |
+| 10 | Smoke-test §8.1 criteria 3–7 against a sandbox course before publishing the listing | eng |
+
+Steps 3 and 4 must not be separated by long — between them, rubric tools 401 with a message that
+tells the user a Canvas admin must act, which will already be done.
+
+### 8.3 Residual risk: the prompt fence is not a control
+
+The Agent binds `canvas_faculty` as a bare id, so it holds all 42 tools including
+`grade_submission`, `bulk_grade_submissions`, `create_assignment` and `create_page`. Two of the
+42 are gated by approval; the rest are held back **only by the system prompt** (§7.1 Scope).
+That is a real fence for ordinary use and no fence at all against a determined prompt.
+
+The structural fix is scoped tool bindings (`binding.ref` accepting `canvas_faculty::create_rubric`),
+which `rbac/service.py` explicitly rejects today (§3.3). Until then, the mitigations available are:
+flag the genuinely destructive tools `needsApproval` as well, so the blast radius of a prompt
+that gets past the fence is still one click wide; and keep the Agent's visibility `SHARED`
+during the pilot so the population is known. Worth an explicit decision before the marketplace
+listing goes public.
+
 ## 9. Open questions
 
 - ~~Scope re-consent~~ — **settled 2026-09-10**, see §4.3. Automatic; no code needed. The
@@ -552,10 +628,14 @@ Phases 0 and 1 are prerequisites for everything. Phase 2 can run in parallel wit
 - **Memory space.** Binding one would let an instructor's house style (preferred scale, tone,
   standing outcomes) persist so the second rubric asks less than the first. v1 supports one Memory
   Space per Agent. Worth a phase-4 decision once we see whether faculty repeat themselves.
-- **Prod `student` role grants `canvas_faculty`.** Harmless today (7 read-ish tools). Once the
-  42-tool build lands, students see `create_assignment`, `grade_submission`, `create_rubric` in
-  their picker. Canvas 403s them on their own role so it is not privilege escalation, but it is a
-  confusing catalog entry that will generate support tickets. Clean up before Phase 5.
+- **Prod `student` role grants `canvas_faculty` — now a cutover blocker, not a musing.** Prod
+  RBAC grants this tool to `student`, `staff` and `faculty`. Harmless today (7 read-ish tools),
+  but step 6 of §8.2 caches all 42, and the per-tool picker then exposes `grade_submission`,
+  `bulk_grade_submissions`, `create_assignment` and `create_rubric` to students. Canvas 403s them
+  on their own role, so it is not privilege escalation — but a student seeing "grade submissions"
+  in their own tool list is its own problem, independent of whether the call would succeed.
+  **Resolve before §8.2 step 6, not after.** The likely fix is dropping the grant from `student`;
+  confirm nothing student-facing depends on it first.
 - **Rubric preview as an MCP App.** A rendered rubric grid would be a far better confirmation step
   than a markdown table, and the natural place to put the approve/publish control. The
   `canvas-faculty` server serves no UI resources today. Post-v1.
@@ -594,6 +674,7 @@ MCP", as `system_admin`, Haiku 4.5, `canvas_faculty` enabled in the tool picker.
 | Approval interrupt | *"APPROVAL NEEDED — Approve `create_rubric` to let the assistant continue"*, with **View arguments** showing the full pretty-printed `tool_input` |
 | Approve | rubric **256108** created |
 | Decline | *"User declined to approve the 'create_rubric' tool call; the agent should not invoke it."* — nothing written |
+| `associate_rubric` → **Needs approval** ✓, saved | dev now gates `create_rubric` **and** `associate_rubric` (plus the pre-existing `send_conversation`) |
 
 Two behaviours worth designing around, both folded into §7.1:
 
