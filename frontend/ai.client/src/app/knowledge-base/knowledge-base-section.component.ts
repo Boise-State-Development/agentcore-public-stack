@@ -1476,20 +1476,36 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     this.pollingDocuments.update((set) => new Set(set).add(documentId));
 
     try {
-      await this.documentService.pollDocumentStatus(recordId, documentId, (document) => {
-        // Update the document in the list
-        this.uploadedDocuments.update((docs) =>
-          docs.map((doc) => (doc.documentId === documentId ? document : doc)),
-        );
-      });
+      await this.documentService.pollDocumentStatus(
+        recordId,
+        documentId,
+        (document) => {
+          // Update the document in the list
+          this.uploadedDocuments.update((docs) =>
+            docs.map((doc) => (doc.documentId === documentId ? document : doc)),
+          );
+        },
+        undefined,
+        undefined,
+        undefined,
+        // Deleting a row already drops it from this set, so this turns that into
+        // real cancellation instead of a display-only flag. Before it, deleting a
+        // document mid-upload left the loop asking about a row that no longer
+        // existed until its 404 tolerance ran out — five "Not found" dialogs.
+        () => !this.pollingDocuments().has(documentId),
+      );
 
       // Polling completed - reload full list to ensure consistency
       await this.loadDocuments();
     } catch (error) {
       // Handle document/record deletion gracefully
-      if (error instanceof DocumentUploadError && error.code === 'DOCUMENT_NOT_FOUND') {
-        console.warn('Document or record was deleted during polling:', documentId);
-        // Remove the document from the local list immediately
+      if (
+        error instanceof DocumentUploadError &&
+        (error.code === 'DOCUMENT_NOT_FOUND' || error.code === 'POLL_CANCELLED')
+      ) {
+        // Cancelled or gone. Both are ordinary outcomes, not faults: the row has
+        // already been removed from the list by whoever cancelled it, and a reload
+        // here would race the optimistic delete and flash the row back.
         this.uploadedDocuments.update((docs) =>
           docs.filter((doc) => doc.documentId !== documentId),
         );
