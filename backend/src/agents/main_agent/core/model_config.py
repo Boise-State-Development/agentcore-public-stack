@@ -392,8 +392,13 @@ class ModelConfig:
         #                          not touch the system/tools points.
         #
         # The tools+system points make a message-level lookup miss cost a
-        # cache READ of the stable prefix instead of a full re-write at
-        # $2.5/MTok (write premium). One proven miss mode is structural:
+        # cache READ of the stable prefix instead of a full re-write at the
+        # cache-write premium. There is no flat per-MTok figure for that
+        # premium: it is 1.25x the model's OWN base input rate, so price it
+        # against the model in play ($1.375/MTok on our default Haiku 4.5,
+        # $4.125 on Sonnet 4.6) — see the prompt-cache contract in CLAUDE.md,
+        # which is the single place that rule is maintained.
+        # One proven miss mode is structural:
         # Anthropic's cache lookback checks only ~20 content blocks behind
         # the breakpoint, so a wide parallel tool fan-out (e.g. 18 parallel
         # calls = ~38 new blocks) pushes the previous checkpoint out of range

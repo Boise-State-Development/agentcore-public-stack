@@ -16,8 +16,10 @@ Byte-stability contract: between compaction-state changes, restoring the same
 stored history must produce byte-identical ``agent.messages``. Bedrock prompt
 caching requires an exact prefix match, so any per-restore mutation of older
 turns (e.g. a sliding truncation window) breaks the cached prefix and forces a
-full re-write (~$2.5/MTok on a 35k–150k prefix) nearly every turn — far more
-expensive than the read tokens truncation saves.
+full re-write of a 35k–150k prefix nearly every turn, at the cache-write
+premium — 1.25x the model's own base input rate, not a flat per-MTok figure;
+see the prompt-cache contract in CLAUDE.md — far more expensive than the read
+tokens truncation saves.
 
 Based on: https://github.com/aws-samples/sample-strands-agent-with-agentcore
 """

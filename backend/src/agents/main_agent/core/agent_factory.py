@@ -259,14 +259,41 @@ class AgentFactory:
 
         # Bedrock prompt caching: give the system prompt its own cachePoint by
         # passing it as a SystemContentBlock list with a trailing cachePoint
-        # (the cache_prompt model-config key is deprecated). Together with
-        # cache_tools (set in to_bedrock_config) this keeps the stable
-        # system+tools prefix readable from cache even when the auto-placed
-        # message-level cache point misses — see the cachePoint budget comment
-        # in ModelConfig.to_bedrock_config. Strands' auto strategy strips only
-        # message-level cachePoints, never system ones. Agent.system_prompt
-        # remains the plain string (split_system_prompt concatenates the text
-        # blocks), so hashing/attribution/voice consumers are unaffected.
+        # (the cache_prompt model-config key is deprecated). Together with the
+        # tools cachePoint (CacheConfig(tools_ttl=...) in to_bedrock_config;
+        # the model-level cache_tools key it replaces is deprecated as of
+        # strands-agents 1.55.0) this keeps the stable system+tools prefix
+        # readable from cache even when the auto-placed message-level cache
+        # point misses — see the cachePoint budget comment in
+        # ModelConfig.to_bedrock_config.
+        #
+        # INVARIANT, as of strands-agents 1.55.0 (the pinned version): this
+        # hand-placed system cachePoint is honored, never doubled. 1.55 does
+        # place a system cachePoint of its own — _should_cache_system(), with
+        # CacheConfig.system_prompt_ttl defaulting to True — but it arms on two
+        # conditions that together can never catch a block list this branch
+        # skipped. (1) It returns early unless _cache_strategy == "anthropic",
+        # i.e. "claude"/"anthropic" in the model id — the same test inside
+        # bedrock_cache_points_supported(), so on any model where upstream
+        # would place one, the list below already carries ours. (2) Its final
+        # guard is `not any("cachePoint" in block for block in system_blocks)`,
+        # which sees that block and stands down. Upstream's own CacheConfig
+        # docstring says the same thing ("A hand-placed system cache point is
+        # honored rather than doubled"). The older claim that auto strategy
+        # "strips only message-level cachePoints, never system ones" was a
+        # 1.51-era fact and is NOT the reason this is safe — do not restore it.
+        #
+        # RE-VERIFY BEFORE ANY BUMP PAST 1.55.0. This is a statement about
+        # upstream internals and it has already rotted once. Re-check
+        # _should_cache_system's guard, CacheConfig.system_prompt_ttl's
+        # default, and that tools_ttl=True still emits a bare
+        # {"cachePoint": {"type": "default"}} while cache_config.ttl is unset —
+        # the tools point is the tail of the cached prefix, so a stray ttl key
+        # there is a fleet-wide prefix re-write.
+        #
+        # Agent.system_prompt remains the plain string (split_system_prompt
+        # concatenates the text blocks), so hashing/attribution/voice consumers
+        # are unaffected.
         agent_system_prompt: Any = system_prompt
         if system_prompt and model_config.bedrock_cache_points_supported():
             agent_system_prompt = [

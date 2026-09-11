@@ -9,8 +9,14 @@ and the harm is already multi-user.
 their $30/month quota in 5 days on a **single conversation** (session
 `c94a3172-e1fb-4a1d-b375-6e51a56c75ad`, an essay-editing session created
 2026-07-30). August: 56 model calls, $30.45 total, of which **$27.39 (90%) was
-Bedrock cache writes** — every turn re-wrote the full ~200k-token prefix at the
-$2.50/MTok write premium while reading only the ~11k tools+system segment.
+Bedrock cache writes** — every turn re-wrote the full ~200k-token prefix while
+reading only the ~11k tools+system segment, at an effective **$2.50/MTok**.
+⚠️ That figure is this incident's own *implied* write price ($27.39 ÷ 10.95M
+write tokens — see §3 PR-5), preserved here because the §4.2 replay harness
+reproduces against it. It is **not** a platform constant and must not be quoted
+as one: the contract's rule is a multiplier — cache write is **1.25× the
+model's own base input rate** (see the prompt-cache contract in `CLAUDE.md`),
+which today is $1.375/MTok on Haiku 4.5 and $4.125 on Sonnet 4.6.
 Observability recorded `cacheStatus="hit"`, `wastedUsd=0` on all 56 calls.
 **Related:** `docs/specs/agent-cache-extra-tools-bypass.md` (**dependency** —
 the bypass is why this session restored every turn; see D3 and §3 sequencing),
@@ -255,6 +261,15 @@ is ~$0.20/MTok, so the premium `compute_wasted_usd` charges is **$2.30/MTok** �
 which is what makes the per-call figure $0.437 (190k × 2.30/1M) and the session
 $20.98. Any replay that assumes a standard Sonnet snapshot ($3.75/$0.30) prices
 the same incident at ~$31 and will look like a regression against §1.
+
+⚠️ **These are a historical record, deliberately not updated.** They are what
+this one August 2026 session's billing implied, and the replay harness is
+pinned to them so its acceptance band stays meaningful. Do **not** read them as
+the current cost model: Bedrock's cache-write premium is **1.25× the model's
+own base input rate** and its cache read is ~0.1× of the same, with no flat
+per-MTok figure for either — see the prompt-cache contract in `CLAUDE.md`,
+which is the one place that rule is maintained. Anything reasoning about
+*today's* cost must price against the model actually in play.
 
 **No backfill.** Rows written before the deploy keep whatever status they were
 given, so the incident session's own 56 rows still read `hit`. §4.4's standing

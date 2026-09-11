@@ -17,9 +17,20 @@ import { ManagedModelFormData, ModelProvider } from './managed-model.model';
  * covers — and reading that absence as "unpublished" put three rows into the
  * dev catalog at GovCloud prices, over-charging by 20%.
  *
- * Claude rates below were read from the **AWS Price List API**
- * (`AmazonBedrockFoundationModels`, us-west-2, published 2026-09-01), which
- * does carry them. Re-verify there when bumping a model id:
+ * **Which source is authoritative depends on the vendor.** The per-model AWS
+ * model cards above are authoritative for **Claude, Nova and the
+ * OpenAI/Mantle family**; the Price List API is authoritative for **xAI,
+ * Google and AgentCore**.
+ *
+ * ⚠️ Do NOT re-derive Claude rates from the Price List API. A full
+ * enumeration of the `AmazonBedrock` offer file (run twice, a week apart,
+ * across a republish) returns **10 Claude SKUs, none newer than Claude 3**,
+ * and no us-west-2 SKU at all for Haiku 4.5, Sonnet 4.6, Fable 5.1, GPT-5.4
+ * or Nova Micro. An earlier revision of this comment claimed the API "does
+ * carry them" and told you to re-verify there; it does not, and a lookup that
+ * comes back empty reads exactly like a model that is merely renamed.
+ *
+ * For the vendors the API does carry, re-verify with:
  *
  *   aws pricing get-products --region us-east-1 \
  *     --service-code AmazonBedrockFoundationModels \
@@ -78,15 +89,28 @@ const claude4xDefaults = (): Pick<
 });
 
 /**
- * Bedrock publishes cache rates as fixed multiples of a model's base input
- * rate: cache write is **1.25x**, cache read is **0.1x** (the 1-hour Claude
- * write we do not use is 2x). Deriving them removes the two fields most likely
- * to drift — the ratios were the one thing the old table got right.
+ * The cache-read multiple that has held for every model currently in the
+ * table. It is a DEFAULT, not a law — see `ratesWithDerivedCache`.
+ */
+const DEFAULT_CACHE_READ_MULTIPLIER = 0.1;
+
+/**
+ * Bedrock publishes cache rates as multiples of a model's base input rate.
+ * Cache write is **1.25x** across every family we have checked (the 1-hour
+ * Claude write we do not use is 2x), and that one is stable enough to derive:
+ * the GPT-5.6 model cards publish the same multiplier (Sol 4.40 -> 5.50), and
+ * commercial Cost Explorer billing reproduces it to four decimals on every
+ * clean day. Two model families, two independent sources, same ratio.
  *
- * Not Claude-specific: the GPT-5.6 model cards publish exactly the same two
- * multipliers (Sol 4.40 -> 5.50 / 0.44), and commercial Cost Explorer billing
- * reproduces them to four decimals on every clean day. Two model families, two
- * independent sources, same ratios.
+ * **Cache read is NOT stable at 0.1x and must not be treated as a constant.**
+ * It is the default because it holds for every row below, but there are live
+ * counterexamples on Bedrock today — Claude Fable 5.1 reads at 0.025x (a 75%
+ * cut Anthropic states explicitly) and xAI Grok 4.6 at 0.25x. Both are
+ * deliberately absent from this table: encoding a specific rate needs a second
+ * independent source, and Grok publishes no cache-write SKU at all (implicit
+ * caching only), so there is nothing for our explicit-`cachePoint` contract to
+ * place. Pass `cacheReadMultiplier` when a model's card says otherwise, so the
+ * next model that breaks the ratio is a data change and not a code change.
  *
  * `input` and `output` are the only independently published numbers, and both
  * are TIER-SPECIFIC. Pass the rates for the tier the `modelId` names, and set
@@ -96,6 +120,7 @@ const claude4xDefaults = (): Pick<
 const ratesWithDerivedCache = (
   input: number,
   output: number,
+  cacheReadMultiplier: number = DEFAULT_CACHE_READ_MULTIPLIER,
 ): Pick<
   ManagedModelFormData,
   | 'inputPricePerMillionTokens'
@@ -111,7 +136,7 @@ const ratesWithDerivedCache = (
     inputPricePerMillionTokens: input,
     outputPricePerMillionTokens: output,
     cacheWritePricePerMillionTokens: round(input * 1.25),
-    cacheReadPricePerMillionTokens: round(input * 0.1),
+    cacheReadPricePerMillionTokens: round(input * cacheReadMultiplier),
   };
 };
 

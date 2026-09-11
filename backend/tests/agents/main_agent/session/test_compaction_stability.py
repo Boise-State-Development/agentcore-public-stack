@@ -5,8 +5,10 @@ Bedrock prompt caching requires an exact prefix match, so
 a pure function of (stored messages, persisted compaction state). The old
 design truncated tool contents behind a sliding protected-turns window,
 which re-mutated the turn that just aged past the window on every restore —
-breaking the cached prefix and forcing a full prefix re-write (~$2.5/MTok on
-a 35k–150k prefix) nearly every turn (observed in prod session aecd387d:
+breaking the cached prefix and forcing a full re-write of a 35k–150k prefix
+nearly every turn, at the cache-write premium (1.25x the model's own base
+input rate, not a flat per-MTok figure — see CLAUDE.md's prompt-cache
+contract), observed in prod session aecd387d:
 -382/-1035/-1513 inter-turn prefix-token shrinkages with cacheRead=0 well
 inside the cache TTL).
 
