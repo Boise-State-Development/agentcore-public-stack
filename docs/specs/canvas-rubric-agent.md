@@ -28,7 +28,7 @@ ID, hand-author a CSV, run a cell, import to Canvas. This replaces the whole loo
 | **CSV** | Demoted to an **optional import/export**, never the deliverable | The notebook needed CSV because a script cannot read prose. The agent can. A CSV terminus would just be the notebook with a nicer front end. |
 | **Wizard style** | **Retrieve first, propose second, ask last** | Faculty-first. A blank five-variable template is a form, not a guide. See §5. |
 | **Pedagogy location** | A **skill**, not the system prompt | Skills are progressively disclosed — the body costs nothing until activated. The system prompt is in the cached prefix on every turn. |
-| **Publish gate** | **Prompt-enforced confirmation** in v1 | Platform-level `needsApproval` is unavailable until the tool catalog snapshot is refreshed (§4.4). |
+| **Publish gate** | **Platform approval interrupt** on `create_rubric`, *plus* a readable table in chat | Verified in dev 2026-09-10. Two layers on purpose: the table is readable but is the model's *claim*; the approval card renders the exact `tool_input` that will be sent, so it is the ground truth. See §4.4 and §10. |
 
 ### Non-goals
 
@@ -175,12 +175,29 @@ Two related notes:
   their next Canvas use. One click, not a broken state, but announce it rather than shipping it
   silently.
 
-### 4.4 Stale catalog snapshot
+### 4.4 Stale catalog snapshot — RESOLVED in dev 2026-09-10
 
-`mcpConfig.tools` on `TOOL#canvas_faculty` is a 7-tool snapshot in both environments. It does not
-gate the runtime — a bare grant loads whatever the live server returns — but it does gate the
-admin per-tool picker and the `needsApproval` flag, so `create_rubric` cannot be marked as
-requiring user approval. Fix: re-run tool discovery on the catalog record after the deploy.
+`mcpConfig.tools` on `TOOL#canvas_faculty` was a 7-tool snapshot, which gated the admin per-tool
+picker and the `needsApproval` flag. **Fixed in dev** with *Discover from server* on
+Admin → Tools → Canvas for Faculty: the catalog now caches all 42 tools, and existing approval
+flags survived the rediscovery (`send_conversation` kept its own).
+
+`create_rubric` is now flagged `needsApproval: true` in dev, and the interrupt was verified in
+both directions:
+
+- **Approve** → `MCPExternalApprovalHook` raises the interrupt, the SPA renders
+  *"APPROVAL NEEDED — Approve `create_rubric` to let the assistant continue"* with a
+  **View arguments** expander showing the pretty-printed `tool_input`, and the call proceeds.
+- **Decline** → the tool result becomes *"User declined to approve the 'create_rubric' tool
+  call; the agent should not invoke it."* and nothing is written to Canvas.
+
+**Still to do in prod:** run the same discovery and set the same flag after the prod deploy
+(§4.3).
+
+**Open:** whether `associate_rubric` should also be gated. It is the tool that re-points the
+assignment (§4.5), which argues yes — but `create_rubric` with `assignment_id` creates *and*
+attaches in one already-gated call, so `associate_rubric` only covers attaching a pre-existing
+rubric. Gating it adds a second prompt to a less common path.
 
 ### 4.5 Attaching a rubric silently rewrites the assignment's points — NEW, found 2026-09-10
 
@@ -316,10 +333,13 @@ Two questions is a lot. Zero is the goal.
 Activate the `rubric_authoring` skill before you draft. It carries the quality
 standards this work is judged on.
 
-Always show the complete rubric as a markdown table before writing anything to
-Canvas: scoring levels as column headings with their points, criteria as rows, and
-a descriptor in every cell. Say which outcomes it aligns to and what the points
-total is.
+Always show the complete rubric as a **markdown table written directly in your
+reply** before writing anything to Canvas: scoring levels as column headings with
+their points, criteria as rows, and a descriptor in every cell. Say which outcomes
+it aligns to and what the points total is.
+
+Do not use a charting or visualization tool to render the rubric. A rubric is text
+in a grid, not a data visualization.
 
 ## Publishing to Canvas
 
@@ -330,6 +350,12 @@ a follow-up question, or an edit request are not.
 Activate the `canvas_rubric_publishing` skill before your first write. It carries
 the Canvas field mapping and the failure modes — following it is what makes the
 published rubric match the table you showed.
+
+Creating a rubric requires the instructor to approve the tool call — they will see
+an approval prompt showing the exact data you are about to send. This is expected,
+not an error. If they decline, treat it as a considered editorial decision: ask what
+they want changed and revise the draft. Never describe a decline as a permissions
+problem, a Canvas restriction, or something to retry — they meant it.
 
 After publishing, name the rubric, say which assignment it is attached to, and give
 them the Canvas link.
@@ -558,8 +584,34 @@ MCP", as `system_admin`, Haiku 4.5, `canvas_faculty` enabled in the tool picker.
 | `get_rubric` associations | **`[]`** despite a live attachment (§4.6) |
 | `get_assignment_details` | rubric attached; `points_possible` now **8.0**, was 5.0 (§4.5) |
 
-All four rubric scopes are validated end to end. The auth and transport path is proven; what
-remains blocking is content fidelity (§4.1) and the two behaviours found here (§4.5, §4.6).
+### Approval gate (same session)
+
+| Step | Result |
+|---|---|
+| Admin → Tools → Canvas for Faculty → *Discover from server* | catalog refreshed 7 → **42** tools; existing `needsApproval` flags preserved |
+| `create_rubric` → **Needs approval** ✓, saved | persisted `needsApproval: true` |
+| "show me the rubric as a table first, then create it" | rendered a **markdown table**, then called `create_rubric` |
+| Approval interrupt | *"APPROVAL NEEDED — Approve `create_rubric` to let the assistant continue"*, with **View arguments** showing the full pretty-printed `tool_input` |
+| Approve | rubric **256108** created |
+| Decline | *"User declined to approve the 'create_rubric' tool call; the agent should not invoke it."* — nothing written |
+
+Two behaviours worth designing around, both folded into §7.1:
+
+- Asked to "show the rubric as a table", the model first reached for a **charting tool** and
+  drew a bar chart of the point values before producing the markdown table. The instruction has
+  to say *markdown table written in your reply*, and say not to visualize.
+- On decline, the model guessed at the cause — *"This may be a safety check or approval gate in
+  your Canvas environment... do you need to verify permissions first?"* A decline is an
+  editorial decision by the instructor, not a permissions failure, and the agent must treat it
+  that way or it will push users toward "fixing" a gate that is working.
+
+All four rubric scopes are validated end to end, and the approval gate works in both directions.
+The auth, transport and consent paths are proven; what remains blocking is content fidelity
+(§4.1) and the two Canvas behaviours found here (§4.5, §4.6).
+
+**Test litter left in course 50994:** rubrics **256107** ("Rubric Scope Test", attached to
+assignment 1756044, which it re-pointed 5.0 → 8.0) and **256108** ("Approval Gate Test").
+With no `delete_rubric` (§4.2) these must be removed in the Canvas UI.
 
 Turn cost ran $0.033–$0.077 with ~23.8k–27.4k context tokens, consistent with §6's estimate
 that `canvas_faculty`'s ~11.7k of tool definitions dominates the prefix.
