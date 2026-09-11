@@ -10,12 +10,18 @@ re-deriving anything. Read this, then `tasks.md`.
 
 ## 0. Read this first
 
+**Where this stands, in one line:** the build is finished and running in dev with the
+flags on there; production has every flag off, and what remains is the group-15
+probes plus turning the flags on. Ladder step 2 (born managed) is the next real
+move — see §6 "Do these first". If you read nothing else, read that table.
+
 Four things invalidate earlier versions of this document:
 
 1. **It is deployed.** The feature shipped to production in release 1.16.0 and the
    platform deploy succeeded on 2026-08-28, so `GSI7`, the Bedrock service role and
-   the four Lambdas exist in **both** dev and prod. Earlier revisions of this file
-   said "Nothing deployed"; that is no longer true.
+   the Lambdas exist in **both** dev and prod. Earlier revisions of this file
+   said "Nothing deployed"; that is no longer true. There are now **five** migration
+   Lambdas, not four — task 16.5 added the document reconciler.
 2. **Sixteen defects were found only by running it**, each reviewed clean and
    deployed clean. They are §5 items 25–41 and they are the most useful part of
    this document. Three clusters: 32–36 trace to the two engines never being made
@@ -47,12 +53,16 @@ Four things invalidate earlier versions of this document:
 
 | | |
 |---|---|
-| Spec | Complete. Requirement **8.5 was amended by measurement on 2026-08-31** — see §5.29 |
-| Implementation | Groups 1–14 except 14.5. A migration has completed `shadow → verify → promote → retain` in dev and serves from the managed backend |
-| Tests | 640 infra (jest) · ~6,840 backend (pytest) · 1,936 frontend (vitest) · 5 pre-existing unrelated Strands failures |
-| Deployed | **dev and prod.** Flags off in prod; `migrationEnabled` on in dev |
-| Open PRs | **#908** — the filtered retrievability probe (§5.38) and `TEXT_INDEXED` (§5.39), plus this document. · merged: #898 `ef2f4c9e`, #899, #900 `df93471c`, #901 `a4b660ba` |
+| Spec | Complete. Requirement **8.5 was amended by measurement on 2026-08-31** — see §5.29. Requirement 3.2 amended by task 16.1; Requirement 12.11 completed by the upload-time byte cap |
+| Implementation | **Build phase done.** Groups 1–14 except 14.4 (retry endpoint) and 14.5 (admin surface); all of group 16; born-managed provision-then-ingest. A migration has completed `shadow → verify → promote → retain` in dev and serves from the managed backend |
+| Tests | Counts drift with every merge — read the latest `develop` run rather than a number pasted here. CI is green on `develop` (backend pytest, frontend, infra jest, load suite, scan) |
+| Deployed | **dev and prod.** In dev: `migrationEnabled` on, everything else off. In prod: **every flag off**, so none of it can fire |
+| Open PRs | **none** for this feature. Last merged: **#1027** born-managed (`f1e11bd3`, 2026-09-10), **#1019** upload-time byte cap, **#1018** doc-reconciler flag forwarding, **#1017** task-16.2 docs |
 | Uncommitted | none |
+
+**What is left is not build work.** It is (a) the three pre-promotion probes in
+group 15, (b) turning flags on in prod, and (c) two deferred surfaces (14.4, 14.5).
+See §6.
 
 ### Flag state (GitHub Environment variables)
 
@@ -61,76 +71,104 @@ Four things invalidate earlier versions of this document:
 | `CDK_MANAGED_KB_MIGRATION_ENABLED` | `true` | `false` |
 | `CDK_MANAGED_KB_NEW_DEFAULT` | `false` | `false` |
 | `CDK_MANAGED_KB_RECONCILER_ARMED` | `false` | `false` |
+| `CDK_MANAGED_KB_DOC_RECONCILER_ARMED` | `false` | `false` |
 | `CDK_TAG_ENVIRONMENT` | `dev` | `prod` |
 
-`newDefault` has **no reader anywhere in `backend/src`** — "new knowledge bases are
-created managed" is design §14.7 steps 5–8, a follow-up spec. Setting it does
-nothing, which is worth knowing before someone flips it expecting an effect.
+`CDK_MANAGED_KB_DOC_RECONCILER_ARMED` is the fourth flag, added by task 16.5. It was
+settable only by hand-editing `cdk.context.json` until PR #1018 added the missing
+`platform.yml` line — the wiring existed end to end *except* for forwarding the
+GitHub variable.
+
+**`newDefault` now has a reader** (PR #1027). An earlier revision of this section
+said it had none anywhere in `backend/src` and that setting it did nothing; that was
+true then and is false now. Turning it on makes an agent's knowledge base provision
+on the managed backend **when its first document is uploaded** — not at agent
+creation, which would spend a Bedrock knowledge base on every prompt-only agent and
+abandoned draft. See `.kiro/specs/managed-kb-migration/born-managed-provision-then-ingest.md`
+for the flow, the failure/rollback path, and why the engine must be declared before
+the object lands.
 
 ⚠️ **Production carries every defect fixed after 1.16.0 shipped.** It cannot fire,
-because nothing enrols while `migrationEnabled` is false. Do not turn that flag on
-in prod until #898 and the uncommitted work have landed and shipped.
+because nothing enrols and nothing provisions while all four flags are false. The
+release-order rule still holds: ship the code, confirm the deploy, *then* consider a
+flag — never both in one motion.
 
 ### Commits
 
-**On `fix/kb-legacy-pipeline-engine-gate` — PR #900, open:**
+Deliberately **not** an exhaustive log any more. It had drifted into listing
+branches that merged weeks ago as "open", which is worse than having no list — a
+reader trusts it and then chases a PR that no longer exists. `git log --oneline
+origin/develop -- .kiro/specs/managed-kb-migration backend/src/apis/app_api/kb_migration
+backend/src/apis/shared/kb_backend` is authoritative and never stale.
 
-```
-e3398f30  propagate document deletion to the managed knowledge base       (§5.36)
-8a35dbc6  the legacy pipeline stands down for a promoted knowledge base   (§5.32, §5.34)
-```
+The landmarks worth knowing by number, newest first:
 
-**Merged as `ef2f4c9e` (was PR #898):**
+| PR | What |
+|---|---|
+| **#1027** `f1e11bd3` | Born-managed: provision on first upload, `MANAGED_KB_NEW_DEFAULT` gets a reader |
+| **#1019** | Byte cap enforced at document upload time — completes Req 12.11 |
+| **#1018** | Forward `CDK_MANAGED_KB_DOC_RECONCILER_ARMED` through `platform.yml` |
+| **#1007 / #1008** | Dead-letter document reconciler (task 16.5) — backend, then Lambda + nightly schedule + IAM |
+| **#1006** | Engine visibility: Managed/Classic badge, engine-aware status vocabulary (task 16.4) |
+| **#998** | Fail-closed status filter (§5.33) |
+| **#997** | Engine-aware context cap, managed 8,000 / legacy 2,000 (task 16.1, §5.40) |
+| **#900** `df93471c` | Legacy pipeline stands down for a promoted KB; deletion propagates (§5.32, §5.34, §5.36) |
+| **#898** `ef2f4c9e` | `bedrock:StartIngestionJob` grant, defer-verify, record the KB id first (§5.28–§5.31) |
 
-```
-fdf15d21  grant bedrock:StartIngestionJob, which authorizes direct ingestion  (§5.31)
-6420f148  drop the embedding pin, defer verify, complete a migration in dev   (§5.29, §5.30)
-7542d907  record the knowledge base id before anything else can fail          (§5.28)
-```
-
-**Already merged (16, on develop):**
-
-```
-45239838  one source of truth for the managed KB tag contract
-4acaa8f2  handoff reflects group 14 backend half and three more defects
-e59f771c  register the managed backend, fleet metrics, tagged teardown  (group 14 backend)
-d5e56f31  handoff reflects group 13 and four more defects
-ee091971  migration dispatcher and the shadow/verify/promote/retain worker (group 13)
-53476544  handoff reflects groups 11-12 and two new defects
-a361fdd4  opt-in dual-read pilot that legacy always wins                (group 12)
-a43d80bf  app-side authorization, IAM-enforced sharing, publication      (group 11)
-58f0c6b6  handoff document and accurate task-list state
-8079f7e2  tombstone deletion sagas and the report-only reconciler        (group 10)
-e6936b0b  ingestion consumer with exclusive engine routing              (group 9)
-620fa49c  managed KB provisioning, retrieval and direct ingestion        (group 8)
-d433d6f1  per-owner byte cap with atomic reserve/commit/release          (group 7)
-f2e86afe  clamp retrieval queries and fail closed on status              (groups 5, 6)
-24689de1  backend abstraction seam behind the retrieval entry point      (group 4)
-ffa7a408  KB_Record data layer with conditional state transitions        (group 3)
-5f2c98b1  spec, schema and worker platform                              (groups 1, 2)
-```
-
-**Working tree: clean.** An earlier revision listed the 14.3 upgrade surface and
-then the 8.5 amendment as uncommitted; both have landed. `apis/app_api/kb_upgrade/`
-is merged — see §7 for the file map and §2 for how to run it.
+**Working tree: clean.**
 
 ### Is the feature reachable yet?
 
-**Yes, end to end, once the flag is on — except that nothing performs the work.**
-Group 14.3 closed the last gap in the *control* path: a user can now enrol a
-knowledge base, which writes a `KB#` record in `shadow` with the GSI7 work keys.
-Before it, nothing wrote either, so every group could have been finished with the
-feature unreachable (§5 defect 21).
+**Yes, end to end, and the work actually happens.** Two paths reach the managed
+backend now:
 
-The worker's image **is deployed** — PR #886 shipped `Dockerfile.kb-migration` and
-all four Lambdas run real handlers. An earlier revision of this section said the
-image was undeployed and a `shadow` record would sit forever; that is no longer
-true. The dispatcher's rule is `ENABLED` and ticking every 15 minutes in dev.
+1. **Upgrade** (opt-in, existing corpus). A user enrols; the record enters `shadow`
+   with GSI7 work keys; the dispatcher hands it to the worker, which runs
+   `shadow → verify → promote → retain`. Gated on `MANAGED_KB_MIGRATION_ENABLED`.
+2. **Born managed** (new agent, no corpus). The first document upload declares the
+   engine managed and queues a provisioning job; the worker builds the knowledge
+   base and ingests the waiting document itself. Gated on `MANAGED_KB_NEW_DEFAULT`.
 
-⚠️ **That tick is a hazard while #898 is unmerged.** The deployed worker predates
-it, so an enrolled record can be picked up by pre-fix code and failed at `verify`.
-Always drive a local migration with `--break-lease`, which defers `dueAt` 20 minutes
-out so the deployed dispatcher skips it.
+The dispatcher's rule is enabled when **either** flag is on, and the Python gates
+each work state on its own flag — so step 2 of the rollout ladder provisions new
+agents without touching a single existing knowledge base.
+
+All five Lambdas run real handlers from `Dockerfile.kb-migration`. The dispatcher
+ticks every 15 minutes in dev.
+
+⚠️ **That 15-minute tick is also born-managed's pickup latency.** A first upload can
+sit at "Provisioning knowledge base…" for up to a whole interval before the real
+47–124 s create even begins. It is recorded as a known cost, not a bug, with the fix
+(provision inline in the ingestion consumer, keeping the queue as the fallback)
+written up in the born-managed spec.
+
+When driving a migration by hand, still use `--break-lease`: it defers `dueAt` 20
+minutes out so the deployed dispatcher does not race your local run.
+
+### The production rollout ladder
+
+Four flags, four rungs, in this order. Each is a GitHub per-environment Variable fed
+through `platform.yml`; all default OFF and unset means off. **Deploy, confirm the
+deploy, then set a variable — never both in one motion.**
+
+| Rung | Flag | What changes | Risk |
+|---|---|---|---|
+| **1** | *none* — just deploy | Everything dark. Both reconcilers run report-only, which is deliberate: Req 14.7 makes report-only the initial deployed mode so their judgement can be audited against real data before either is allowed to act | none |
+| **2** | `CDK_MANAGED_KB_NEW_DEFAULT` | New agents are born managed on their **first document upload**. No existing knowledge base is touched | **low** — each agent is independent, so a problem affects one agent |
+| **3** | `CDK_MANAGED_KB_MIGRATION_ENABLED` | The Upgrade card appears, and the background worker migrates enrolled knowledge bases `shadow → verify → promote → retain` | **medium** — touches existing corpora. Needs 15.2 and 14.5 first |
+| **4a** | `CDK_MANAGED_KB_RECONCILER_ARMED` | The KB reconciler starts **deleting** orphaned knowledge bases instead of reporting them | **high** — only after a clean report-only period you have actually read |
+| **4b** | `CDK_MANAGED_KB_DOC_RECONCILER_ARMED` | The document reconciler starts correcting stranded `DOC#` rows instead of reporting them | medium — after an audit |
+
+Rung 2 is deliberately reachable on its own: the dispatcher's schedule is enabled by
+*either* flag and the Python gates each work state on its own, so `NEW_DEFAULT` alone
+provisions new agents and migrates nothing.
+
+**The intended end state**, and the one genuinely dangerous step: once the fleet is
+fully migrated, retire the legacy pipeline. That step needs a hard **zero-legacy-
+knowledge-bases gate**, because the legacy code does not merely *create* old
+knowledge bases — it also **serves retrieval** for every un-migrated one. Removing it
+early breaks every agent that has not moved. For a public repo with forks that sync,
+make it a loud version boundary with a long deprecation window, never a quiet sync.
 
 ### What works today, verified live in dev
 
@@ -537,11 +575,13 @@ saying why that number is a property of AWS rather than a knob.
     `app-api-environment.test.ts`. The mutation — deleting the line, which is
     precisely what the defect was — is caught.
 
-    ⚠️ `managedKb.newDefault` has **no reader anywhere in `backend/src`**. It is
-    set on the Lambdas' environment and consumed by nothing, because
-    "new knowledge bases are created managed" is a follow-up spec (design §14.7
-    steps 5–8), not this phase. Leave it off; turning it on is a no-op that reads
-    like a behaviour change.
+    ⚠️ **Superseded 2026-09-10.** This warning used to read that
+    `managedKb.newDefault` had *no reader anywhere in `backend/src`*, so setting it
+    was a no-op that read like a behaviour change. That was true when written and is
+    now false: PR #1027 gave it a reader plus the app-api environment thread it was
+    also missing. It now has a real effect — an agent's knowledge base provisions on
+    the managed backend at its **first document upload**. See
+    `born-managed-provision-then-ingest.md` and the rollout ladder in §1.
 
 ---
 
@@ -980,25 +1020,36 @@ answer than legacy** on a question it retrieves *better*. Both are open.
 
 ### Do these first
 
+The build is done. What remains is proving it against prod's constraints and then
+turning flags on. In order:
+
 | | |
 |---|---|
-| **Merge #900** | Engine exclusivity, both halves. Triggers `backend.yml` (rebuilds rag-ingestion **and** kb-sync — the content hash moves because `kb_backend` was added to both images' `SOURCE_DIRS`) and `platform.yml` (the two new IAM grants). Wait for the platform deploy before testing a deletion on a promoted assistant, or the delete fails on IAM and the `DOC#` row is deliberately kept |
-| **Then re-add a document in dev** | `DOC#DOC-dc8b65658e29` is parked at `failed` from §5.31 and is not retried retroactively — there is no reprocess endpoint (task 14.4). Re-upload; that path works |
-| **Then drive a migration from the *deployed* dispatcher, not the local driver** | §5.31 is the proof that the local driver cannot see IAM defects: its SSO identity is broader than either Lambda role. Every remaining unknown in this feature is of that class |
+| **1. Task 15.1 — the live SDK probe** | The only item that can invalidate the whole feature in prod. The *static* half passes (`boto3==1.43.68` carries `MANAGED`, the embedding members, `FLOAT32`, all four document ops, with no `AWS_DATA_PATH`), and a real create → ingest → retrieve → promote has succeeded in dev. What is missing is doing it deliberately, with the checked-in environment and **no** side-loaded service model, and recording the result. If this fails, managed knowledge bases do not work in prod at all |
+| **2. Flip `CDK_MANAGED_KB_NEW_DEFAULT` in prod** | Ladder step 2. New agents are born managed on their first document; not one existing knowledge base is touched. Lowest-blast-radius rung: each agent is independent, so a problem affects that agent and no other. Deploy first, confirm the deploy, *then* set the variable — never both in one motion |
+| **3. Task 15.2 — the ingestion-concurrency probe** | Gates ladder step 3 (`MIGRATION_ENABLED`), **not** step 2. The quota page lists no account-level ingestion-concurrency limit, which is not evidence there is none. Do not size a wide fleet migration before this is answered |
+| **4. Task 14.5 — the admin surface** | Also gates step 3 rather than step 2. The moment existing knowledge bases start migrating you have a mixed fleet and no view of who is on which engine — and "how many are affected?" is the first question anyone asks when something goes wrong |
+| **5. Task 15.3 — full matrix in the dev container** | Housekeeping; CI already covers most of it |
+
+⚠️ **Before flipping anything, re-read §5.41.** Managed is *worse* than legacy for
+column-structured diagrams and two-dimensional tables: legacy returned nothing,
+managed returns a confident wrong answer. Born-managed makes managed the default for
+every new agent, so that trade stops being opt-in. The agreed mitigation is guidance,
+not code — and the `kb-chunk-inspector` spec is the tooling half of that guidance.
 
 ### Open, in rough order
 
 | Group | Notes |
 |---|---|
 | ~~**§5.40** the 2,000-char cap~~ ✅ DONE (PR #997) | Engine-aware cap: managed **8,000**, legacy 2,000 (`rag_service.resolve_context_cap`, keyed on `resolve_engine_for`). Requirement 3.2 amended; validated end-to-end on the KINES advising corpus in dev; mutation-tested |
-| ~~**§5.41** diagram answers~~ ✅ DONE (task 16.2) | Understood: the vision model flattens the 2-D layout, chunks carry no column coordinates, and the 16.1 cap fix does not rescue it (re-measured 2026-09-08: 14 credits vs the chart's 19 at both caps, mis-columned `ENGR 220` persists). Closed as a **product/training matter, not code** — this is a self-service platform, and users won't know to convert a diagram to text. Guidance: demo as *retrievable where previously impossible*, never precise per-column answers |
+| ~~**§5.41** diagram answers~~ ✅ DONE (task 16.2) | Understood: the vision model flattens the 2-D layout, chunks carry no column coordinates, and the 16.1 cap fix does not rescue it (re-measured 2026-09-08: 14 credits vs the chart's 19 at both caps, mis-columned `ENGR 220` persists). Closed as a **product/training matter, not code** — this is a self-service platform, and users won't know to convert a diagram to text. Guidance: demo as *retrievable where previously impossible*, never precise per-column answers. **The tooling half of that guidance is specced:** `.kiro/specs/kb-chunk-inspector/` (requirements + design written, no tasks yet) makes the extraction *visible* — an owner can see for themselves that a table came out mangled or an image description is wrong, instead of finding out via a confidently wrong answer. That is the difference between "managed fails invisibly" and "managed fails visibly", which is the most this decision can buy without touching a managed parser |
 | ~~**§5.33** the one fail-open line~~ ✅ DONE (PR #998) | `if not doc_ids: return vectors` now returns `[]` + `METRIC_STATUS_FILTER_FAIL_CLOSED` when a non-empty batch carries no `document_id`; an empty input stays an empty result with no metric. Guard `test_filter_fails_closed_when_no_chunk_carries_a_document_id`, mutation-tested |
 | ~~**engine visibility**~~ ✅ DONE (task 16.4) | The facade now logs one INFO line per query naming the served engine (`engine=managed (Managed)` / `engine=s3vectors (Classic)`), read from the same KB_Record `resolve_backend` uses. The knowledge base section carries a `Managed`/`Classic` badge, fed by a new `engine` field on `UpgradeStatusResponse` (defaults `classic`), and its per-document status vocabulary is engine-aware — `uploading → processing → ready` for managed, `chunking`/`embedding` kept for legacy. Mutation-tested. Branch `feat/kb-engine-visibility` |
-| **14.4** one-click document retry | Req 21.2. Ingestion is S3-event-triggered and there is no reprocess endpoint, so this needs new backend against a live pipeline. The card currently directs the user to re-upload, which works today. Close it by building the endpoint **or** by amending Req 21.2 to accept re-upload |
-| **14.5** admin surface | not started. Filter by engine, stored bytes, document counts, bulk migrate, per-KB retry |
-| **15.1** packaged-SDK probe | the *static* half is done and passing (`boto3==1.43.68` carries `MANAGED`, the embedding members, `FLOAT32`, all four document ops, no `AWS_DATA_PATH`). The live half has now effectively been done by hand — a real create → ingest → retrieve → promote succeeded in dev |
-| **15.2** ingestion-concurrency probe | unanswered. Do not size a wide fleet migration before it |
-| **15.3** full matrix | run it once the above land |
+| **14.4** one-click document retry | Req 21.2. Ingestion is S3-event-triggered and there is no reprocess endpoint, so this needs new backend against a live pipeline. The card currently directs the user to re-upload, which works today. Close it by building the endpoint **or** by amending Req 21.2 to accept re-upload. Note task 16.5's document reconciler already performs the *scheduled* form of this |
+| **14.5** admin surface | Not started. Req 23.9: list knowledge bases filterable by engine, with stored bytes and document counts, bulk migrate, per-KB retry. Gates ladder **step 3**, not step 2. Two gaps it does *not* close, worth knowing before someone assumes it does: it reads our own `KB#` records, so it cannot see AWS-only orphans (the reconciler's job — and those still consume the account's knowledge-base quota); and it carries no control for granting the elevated byte tier, which remains a hand-edited `elevatedByteCap` attribute with no API or UI writer anywhere |
+| **15.1** packaged-SDK probe | The *static* half is done and passing (`boto3==1.43.68` carries `MANAGED`, the embedding members, `FLOAT32`, all four document ops, no `AWS_DATA_PATH`). The live half has effectively happened by hand — a real create → ingest → retrieve → promote succeeded in dev — but has not been run deliberately with the checked-in environment and recorded. **Do this one first:** it is the only remaining item that can invalidate the feature in prod |
+| **15.2** ingestion-concurrency probe | Unanswered. Gates a wide fleet migration (step 3), **not** born-managed (step 2), which provisions one knowledge base at a time as agents are created |
+| **15.3** full matrix | Run it once the above land |
 
 ### RESOLVED — the `document_id` / `relevance` "known unknown" was a false alarm
 
