@@ -21,13 +21,14 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fromProjectRoot } from '../testing/project-root';
 
 describe('tailwind theme-import hygiene', () => {
   it('only styles/theme.css may @import "tailwindcss"; every other stylesheet must @reference the shared theme', () => {
     // The single allowed owner of `@import "tailwindcss"`, relative to src/.
     const ALLOWED_TAILWIND_IMPORTER = path.normalize('styles/theme.css');
 
-    const srcDir = path.resolve(__dirname, '..');
+    const srcDir = fromProjectRoot('src');
     const styleFiles: string[] = [];
 
     // Both standalone `.css` stylesheets AND `.ts` components with an inline

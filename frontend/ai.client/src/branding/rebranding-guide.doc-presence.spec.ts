@@ -8,11 +8,9 @@
 // without breaking this test. See requirements.md Requirement 9.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fromProjectRoot } from '../testing/project-root';
 
-const SPEC_DIR = dirname(fileURLToPath(import.meta.url));
-const README_PATH = resolve(SPEC_DIR, './README.md');
+const README_PATH = fromProjectRoot('src/branding/README.md');
 
 const readmeContent = readFileSync(README_PATH, 'utf8');
 

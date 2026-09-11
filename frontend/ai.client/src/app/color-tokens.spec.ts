@@ -30,6 +30,7 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fromProjectRoot } from '../testing/project-root';
 
 describe('color token hygiene', () => {
   it('src/app should not use raw Tailwind palettes (ratchet enforcement)', () => {
@@ -101,7 +102,7 @@ describe('color token hygiene', () => {
     const commentPatterns = [/\/\/.*/g, /\/\*[\s\S]*?\*\//g, /<!--[\s\S]*?-->/g];
 
     // Scan files.
-    const appDir = path.join(__dirname);
+    const appDir = fromProjectRoot('src/app');
     const files: string[] = [];
 
     function walkDir(dir: string): void {

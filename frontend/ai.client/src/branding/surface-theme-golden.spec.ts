@@ -13,14 +13,12 @@
 // value.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fromProjectRoot } from '../testing/project-root';
 import { generateSurfaceTheme } from '../../scripts/branding/generate-surface-theme';
 import { BRAND_CONFIG } from './brand.config';
 import { DEFAULT_SURFACES } from './brand.defaults';
 
-const SPEC_DIR = dirname(fileURLToPath(import.meta.url));
-const GOLDEN_CSS_PATH = resolve(SPEC_DIR, '../styles/generated/surface-theme.css');
+const GOLDEN_CSS_PATH = fromProjectRoot('src/styles/generated/surface-theme.css');
 
 /** Mirrors brand-theme-golden.spec.ts's extractThemeDeclarations. */
 function extractThemeDeclarations(fileContents: string): string {

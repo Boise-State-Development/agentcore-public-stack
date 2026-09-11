@@ -18,12 +18,10 @@
 // generator is missing from a hook, not when the count changes.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fromProjectRoot } from '../testing/project-root';
 
-const SPEC_DIR = dirname(fileURLToPath(import.meta.url));
-const PACKAGE_JSON_PATH = resolve(SPEC_DIR, '../../package.json');
-const GENERATORS_DIR = resolve(SPEC_DIR, '../../scripts/branding');
+const PACKAGE_JSON_PATH = fromProjectRoot('package.json');
+const GENERATORS_DIR = fromProjectRoot('scripts/branding');
 
 // Every generator is named generate-*.ts. color-math.ts and any other
 // helper module is intentionally excluded: only entry-point generators

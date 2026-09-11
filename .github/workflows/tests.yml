@@ -21,6 +21,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_frontend_coverage:
+        description: 'Run the frontend suite a second time under --coverage (the nightly invocation)'
+        required: false
+        default: false
+        type: boolean
       run_infra:
         description: 'Run infrastructure jest suite'
         required: false
@@ -81,6 +86,51 @@ jobs:
       - name: Run tests
         working-directory: frontend/ai.client
         run: npm run test:ci
+
+  # The SAME frontend suite, run the way the nightly runs it: `ng test
+  # --no-watch --coverage`, via the very script nightly.yml invokes.
+  #
+  # Why this is a separate gate rather than a flag on `test:ci`: under
+  # --coverage, @angular/build's unit-test builder bundles each spec into a
+  # flattened chunk emitted at the PROJECT ROOT instead of handing Vitest the
+  # spec at its own source path. `import.meta.url` and the `__dirname` shim
+  # move with it, so every filesystem-reading spec resolves relative paths
+  # from a different directory than it does without coverage. That is a real
+  # failure mode with no watered-down version — a doc-presence spec reads the
+  # wrong README and a hygiene guard walks generated CSS and "finds"
+  # violations — and until this job existed NOTHING on a pull request ever
+  # passed --coverage, so the class could only be discovered by the nightly,
+  # after merge. It went undetected for seven consecutive nights.
+  #
+  # It is its own job, and enabled only on the PR gate (ci.yml), because the
+  # deploy workflows run `test-frontend` to protect a deploy and gain nothing
+  # from paying for instrumentation there. Running in parallel with
+  # test-frontend costs no extra wall-clock on the PR.
+  #
+  # Coverage artifacts are deliberately NOT uploaded here: the nightly owns
+  # coverage *reporting* (analyze-coverage compares runs over time). This job
+  # only cares that the suite passes under the instrumented build.
+  test-frontend-coverage:
+    if: ${{ inputs.run_frontend_coverage }}
+    name: Test frontend (coverage build)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/ai.client/package-lock.json
+      - name: Install
+        working-directory: frontend/ai.client
+        run: npm ci --prefer-offline
+      - name: Run tests with coverage
+        run: bash scripts/frontend/test.sh
 
   test-infra:
     if: ${{ inputs.run_infra }}
