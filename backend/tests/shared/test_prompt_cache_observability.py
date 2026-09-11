@@ -464,7 +464,13 @@ class TestIncidentReplay:
     """
 
     # Pricing implied by the incident's own numbers: 10.95M write tokens billed
-    # at $27.39 → $2.50/MTok write, against a $0.20/MTok read.
+    # at $27.39 → $2.50/MTok write, against a $0.20/MTok read. These are a
+    # HISTORICAL record of one August 2026 session and are load-bearing for this
+    # replay — do not "correct" them to current rates or the acceptance band
+    # stops meaning anything. They are not the cost model: the live rule is that
+    # cache write is 1.25x the model's own base input rate and cache read ~0.1x
+    # of it, with no flat per-MTok figure (see CLAUDE.md's prompt-cache
+    # contract).
     INCIDENT_PRICING = {
         "cacheWritePricePerMtok": 2.50,
         "cacheReadPricePerMtok": 0.20,
