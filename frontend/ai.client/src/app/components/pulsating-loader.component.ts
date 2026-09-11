@@ -72,9 +72,10 @@ import { isPlatformBrowser } from '@angular/common';
           [class.is-notice]="!!notice()"
           [class.shimmer]="!notice()"
         >
-          {{ label() }}
           @if (statusTool(); as tool) {
-            <span class="font-mono text-[13px]">{{ tool }}</span>
+            {{ label() }} <span class="font-mono text-[13px]">{{ tool }}</span>{{ trailer() }}
+          } @else {
+            {{ label() }}{{ trailer() }}
           }
         </span>
       }
@@ -255,6 +256,16 @@ export class PulsatingLoaderComponent implements OnInit, OnDestroy {
   protected readonly label = computed(
     () => this.notice() ?? this.status() ?? 'Thinking',
   );
+
+  /**
+   * The trailing ellipsis on the live state — "Thinking…", "Running
+   * list_assignments…" — which reads as the ongoing action it is.
+   *
+   * A notice gets none: every notice string already ends in its own
+   * punctuation ("Still working…", "…attempt 2."), so appending here would
+   * double it.
+   */
+  protected readonly trailer = computed(() => (this.notice() ? '' : '…'));
 
   protected readonly elapsedLabel = computed(() => {
     const started = this.startedAt();

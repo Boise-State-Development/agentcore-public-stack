@@ -48,14 +48,14 @@ describe('PulsatingLoaderComponent', () => {
 
   describe('what it says', () => {
     it('shows the live state from agent_status', () => {
-      expect(stateOf(render({ status: 'Thinking' }))).toBe('Thinking');
+      expect(stateOf(render({ status: 'Thinking' }))).toBe('Thinking\u2026');
     });
 
     it('shows the running tool by its real name', () => {
       // The identifier is the most accurate label available while a tool runs,
       // and is the same one the tool rail and admin catalog use.
       const fixture = render({ status: 'Running', statusTool: 'list_assignments' });
-      expect(stateOf(fixture)).toBe('Running list_assignments');
+      expect(stateOf(fixture)).toBe('Running list_assignments\u2026');
     });
 
     it('renders the tool name as an identifier, not prose', () => {
@@ -72,7 +72,7 @@ describe('PulsatingLoaderComponent', () => {
       // The fallback is "Thinking", not a vaguer hedge: on a cold start the
       // gap before the first agent_status can run several seconds, and that
       // gap is the only thing the user sees.
-      expect(stateOf(render())).toBe('Thinking');
+      expect(stateOf(render())).toBe('Thinking\u2026');
     });
 
     it('lets a notice outrank the state', () => {
@@ -84,6 +84,14 @@ describe('PulsatingLoaderComponent', () => {
       const text = textOf(fixture);
       expect(text).toContain('The model is busy. Retrying');
       expect(text).not.toContain('Thinking');
+    });
+
+    it('does not double the punctuation a notice already carries', () => {
+      // Every notice string ends in its own punctuation.
+      expect(stateOf(render({ notice: 'Still working\u2026' }))).toBe('Still working\u2026');
+      expect(stateOf(render({ notice: 'The model is busy. Retrying \u2014 attempt 2.' }))).toBe(
+        'The model is busy. Retrying \u2014 attempt 2.',
+      );
     });
   });
 
