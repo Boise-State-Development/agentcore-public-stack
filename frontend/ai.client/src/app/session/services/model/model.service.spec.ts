@@ -89,6 +89,97 @@ describe('ModelService', () => {
     });
   });
 
+  /**
+   * ⚠️ The lock races the model list, and losing that race fails silently.
+   *
+   * `lockToAgentModel` resolves the pinned id against `models()`, which arrives
+   * over HTTP. Lock first and `setSelectedModelById` finds nothing, returns
+   * false — a boolean every caller discards — and leaves the selection alone,
+   * while the lock flag still disables the picker. The result is a disabled
+   * picker showing the user's default model for an agent pinned to a different
+   * one: authoritative-looking and wrong.
+   *
+   * Nothing re-ran when the models landed, because callers' effects track the
+   * agent's model id, not the model list. Observed live in the Designer preview
+   * as "System Default" where the agent binds Claude Sonnet 5.
+   *
+   * Every other test in this file locks AFTER the flush, which is why none of
+   * them caught it.
+   */
+  describe('agent model lock applied before the model list loads', () => {
+    beforeEach(() => {
+      sessionStore = {};
+      vi.stubGlobal('sessionStorage', {
+        getItem: vi.fn((k: string) => sessionStore[k] ?? null),
+        setItem: vi.fn((k: string, v: string) => { sessionStore[k] = v; }),
+        removeItem: vi.fn((k: string) => { delete sessionStore[k]; }),
+      });
+
+      mockUserSettings = { fetchSettings: vi.fn().mockResolvedValue({ defaultModelId: null }) };
+
+      TestBed.configureTestingModule({
+        providers: [
+          provideHttpClient(),
+          provideHttpClientTesting(),
+          ModelService,
+          { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
+          { provide: UserSettingsService, useValue: mockUserSettings },
+        ],
+      });
+
+      service = TestBed.inject(ModelService);
+      httpMock = TestBed.inject(HttpTestingController);
+      // NOTE: the /models request is deliberately left in flight.
+    });
+
+    it('applies the pinned model once the list arrives', async () => {
+      service.lockToAgentModel('claude-haiku');
+
+      // Locked immediately (the picker disables), but unresolvable so far.
+      expect(service.agentModelLocked()).toBe(true);
+      expect(service.selectedModel().modelId).not.toBe('claude-haiku');
+
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/models').flush(mockResponse);
+      });
+      TestBed.tick();
+
+      expect(service.selectedModel().modelId).toBe('claude-haiku');
+      expect(service.agentModelLocked()).toBe(true);
+    });
+
+    it('does not resurrect a lock that was released before the list arrived', async () => {
+      service.lockToAgentModel('claude-haiku');
+      service.clearAgentModelLock();
+
+      // Spy AFTER the release so this observes only what the arriving model list
+      // triggers. Asserting on the resulting selection instead would be testing
+      // `loadModels`' default-selection ladder — which can legitimately land on
+      // the same model — rather than the lock guard we care about.
+      const select = vi.spyOn(service, 'setSelectedModelById');
+
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/models').flush(mockResponse);
+      });
+      TestBed.tick();
+
+      expect(service.agentModelLocked()).toBe(false);
+      expect(select).not.toHaveBeenCalled();
+    });
+
+    it('leaves an unavailable pinned model unselected rather than guessing', async () => {
+      service.lockToAgentModel('ghost-model');
+
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/models').flush(mockResponse);
+      });
+      TestBed.tick();
+
+      expect(service.agentModelLocked()).toBe(true);
+      expect(service.selectedModel().modelId).not.toBe('ghost-model');
+    });
+  });
+
   describe('loadModels', () => {
     beforeEach(setup);
 

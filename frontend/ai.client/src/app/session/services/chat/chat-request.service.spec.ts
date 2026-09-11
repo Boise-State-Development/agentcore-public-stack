@@ -320,4 +320,155 @@ describe('ChatRequestService', () => {
       expect(messageMap.reloadMessagesForSession).toHaveBeenCalledWith('session1');
     });
   });
+
+  /**
+   * Preview turns (agent designer, marketplace review test drive) run on this
+   * service rather than on a parallel implementation. The fork they replaced
+   * handled 9 of the ~27 SSE events the shared parser dispatches, and because
+   * every parser callback is optional, the ones it skipped — including
+   * `tool_approval_required` and `oauth_required` — were dropped in silence. A
+   * tool call that paused for approval was therefore never surfaced, never
+   * answered, and never dispatched. These tests pin the shape that keeps the
+   * preview on the one code path everyone else exercises.
+   */
+  describe('submitPreviewRequest', () => {
+    const preview = {
+      sessionId: 'preview-abc',
+      agentId: 'ast-001',
+      message: 'hello',
+    };
+
+    it('routes through the same transport as a real chat turn', async () => {
+      await service.submitPreviewRequest(preview);
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'hello',
+          session_id: 'preview-abc',
+          rag_assistant_id: 'ast-001',
+          model_id: null,
+        }),
+      );
+    });
+
+    /**
+     * An Agent resolves instructions, model, tools, skills and memory server-side
+     * from its own record. Sending the viewer's selections would fight the
+     * bindings and test a shape nobody will ever run — and a long persona sent as
+     * `system_prompt` exceeds the length cap outright (422).
+     */
+    it('sends no prompt, model, tool or skill selection of its own', async () => {
+      await service.submitPreviewRequest(preview);
+
+      const body = mockChatHttpService.sendChatRequest.mock.calls[0][0];
+      expect(body).not.toHaveProperty('system_prompt');
+      expect(body).not.toHaveProperty('enabled_tools');
+      expect(body).not.toHaveProperty('enabled_skills');
+      expect(body).not.toHaveProperty('provider');
+      expect(body).not.toHaveProperty('selected_prompt_id');
+      expect(mockToolService.getEnabledToolIds).not.toHaveBeenCalled();
+    });
+
+    /** The preview is embedded in the editor; routing away would eject the user. */
+    it('does not navigate or register the session in the sidenav', async () => {
+      const sessionService = TestBed.inject(SessionService) as any;
+
+      await service.submitPreviewRequest(preview);
+
+      expect(mockRouter.navigate).not.toHaveBeenCalled();
+      expect(sessionService.addSessionToCache).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The viewed-session facades drive the MAIN composer's spinner and cost badge.
+     * A preview claiming them would freeze the real chat's input behind a stream
+     * happening in a side panel.
+     */
+    it('keys loading to the preview session without claiming the viewed session', async () => {
+      const chatState = TestBed.inject(ChatStateService) as any;
+
+      await service.submitPreviewRequest(preview);
+
+      expect(chatState.setChatLoading).toHaveBeenCalledWith('preview-abc', true);
+      expect(chatState.setViewedSession).not.toHaveBeenCalled();
+    });
+
+    it('adds the user message and starts streaming on the preview session', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+
+      await service.submitPreviewRequest(preview);
+
+      expect(messageMap.addUserMessage).toHaveBeenCalledWith('preview-abc', 'hello', undefined);
+      expect(messageMap.startStreaming).toHaveBeenCalledWith('preview-abc');
+    });
+
+    it('forwards file uploads', async () => {
+      await service.submitPreviewRequest({ ...preview, fileUploadIds: ['up-1'] });
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ file_upload_ids: ['up-1'] }),
+      );
+    });
+
+    /**
+     * Omitted rather than sent as `false`: the invocation path refuses a caller
+     * without `admin.marketplace` outright rather than downgrading them, so an
+     * ordinary author's request must carry no claim about the scope at all.
+     */
+    it('omits review_preview entirely unless the caller is a reviewer', async () => {
+      await service.submitPreviewRequest(preview);
+      expect(mockChatHttpService.sendChatRequest.mock.calls[0][0]).not.toHaveProperty(
+        'review_preview',
+      );
+
+      mockChatHttpService.sendChatRequest.mockClear();
+      await service.submitPreviewRequest({ ...preview, reviewPreview: true });
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ review_preview: true }),
+      );
+    });
+
+    it('is a no-op for empty content or a draft agent with no id', async () => {
+      await service.submitPreviewRequest({ ...preview, message: '   ' });
+      await service.submitPreviewRequest({ ...preview, agentId: '' });
+
+      expect(mockChatHttpService.sendChatRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * In-memory resume for preview sessions.
+   *
+   * The backend skips its metadata writes for `preview-` ids — no
+   * `PendingInterrupt`, no `PausedTurnSnapshot` — so the live parser's state is
+   * the only record of the turn. Reloading from the server here would fetch a
+   * session that was never written and replace a correct transcript with an
+   * empty one.
+   */
+  describe('resume on a preview session', () => {
+    it('resumes an approval without reloading from a session that was never persisted', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+
+      await approvalResumeHandler!('int-1', 'approved', { sessionId: 'preview-abc' });
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          session_id: 'preview-abc',
+          interrupt_responses: [{ interruptId: 'int-1', response: 'approved' }],
+        }),
+      );
+      expect(messageMap.reloadMessagesForSession).not.toHaveBeenCalled();
+    });
+
+    it('resumes an OAuth consent the same way', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+
+      await oauthResumeHandler!(['int-2'], { sessionId: 'preview-abc' });
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ session_id: 'preview-abc' }),
+      );
+      expect(messageMap.reloadMessagesForSession).not.toHaveBeenCalled();
+    });
+  });
 });

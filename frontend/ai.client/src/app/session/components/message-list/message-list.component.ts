@@ -562,10 +562,21 @@ export class MessageListComponent {
    *  so a mid-prompt refresh rehydrates the prompt rather than orphaning
    *  it. We don't anchor next to the triggering assistant message (the way
    *  OAuth prompts do) because the approval is for the *next* tool call,
-   *  not the assistant text that just streamed. */
-  protected pendingToolApprovals = computed<ToolApprovalRequest[]>(() =>
-    this.toolApprovalService.pending(),
-  );
+   *  not the assistant text that just streamed.
+   *
+   *  Filtered to THIS list's session. The service's queue is global, which was
+   *  invisible while only one message list was ever mounted; the agent
+   *  designer's preview and the marketplace review test drive now stream
+   *  through the same interrupt protocol, so an unfiltered read would render
+   *  one pane's approve/decline prompt in another pane's transcript — and
+   *  resolving it there would resume a turn the reader isn't looking at.
+   *  A null sessionId (a list not bound to a session) shows nothing rather
+   *  than everything. */
+  protected pendingToolApprovals = computed<ToolApprovalRequest[]>(() => {
+    const sessionId = this.sessionId();
+    if (!sessionId) return [];
+    return this.toolApprovalService.pending().filter((r) => r.sessionId === sessionId);
+  });
 
   /** Messages grouped into turns: each user message starts a group and the
    *  assistant messages that follow it belong to that group. Keyed by the

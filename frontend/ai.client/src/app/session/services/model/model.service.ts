@@ -1,4 +1,4 @@
-import { Injectable, signal, computed, inject } from '@angular/core';
+import { Injectable, signal, computed, effect, inject, untracked } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
@@ -99,6 +99,40 @@ export class ModelService {
     // Load models on initialization
     this.loadModels().catch(err => {
       console.error('Failed to load models on initialization:', err);
+    });
+
+    // Re-apply a pending agent model lock once the model list arrives.
+    //
+    // WHY: `lockToAgentModel` resolves the pinned id against `models()`, which
+    // is loaded asynchronously. A lock applied before that request lands set the
+    // lock FLAG (disabling the picker) while `setSelectedModelById` returned
+    // false and left the selection alone — so the picker sat disabled, showing
+    // the user's default, claiming an agent runs on a model it does not. The
+    // boolean said so and every caller discarded it. Nothing re-ran when the
+    // models turned up, because the callers' effects track the agent's model id,
+    // not the model list.
+    //
+    // Fixing it here rather than in the Designer preview: the session page locks
+    // the same way for an agent-bound conversation, so the race belongs to the
+    // lock, not to one of its callers.
+    //
+    // ⚠️ The reads below are deliberately split. `_agentLockedModelId` and
+    // `models` are tracked — those are the inputs this should re-run on. The
+    // current selection is read via `untracked`, and the write goes through
+    // `untracked` too: `setSelectedModelById` writes `_selectedModel`, and
+    // tracking that read would make this effect retrigger itself forever.
+    effect(() => {
+      const lockedId = this._agentLockedModelId();
+      const models = this.models();
+      if (!lockedId || models.length === 0) {
+        return;
+      }
+      untracked(() => {
+        if (this._selectedModel()?.modelId === lockedId) {
+          return; // already showing the pinned model
+        }
+        this.setSelectedModelById(lockedId);
+      });
     });
   }
 

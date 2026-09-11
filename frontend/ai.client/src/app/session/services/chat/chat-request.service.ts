@@ -19,6 +19,7 @@ import {
 } from '../../../services/tool-approval/tool-approval.service';
 import { ErrorService } from '../../../services/error/error.service';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
+import { isPreviewSession } from '../../../shared/constants/session.constants';
 import { HttpErrorResponse } from '@angular/common/http';
 
 export interface ContentFile {
@@ -137,6 +138,101 @@ export class ChatRequestService implements OnDestroy {
       this.messageMapService.endStreaming(sessionId);
       throw error; // Re-throw to allow caller to handle
     }
+  }
+
+  /**
+   * Send one turn of an embedded preview — the agent designer's live preview,
+   * the marketplace reviewer's test drive — through the SAME path a real chat
+   * turn takes.
+   *
+   * WHY THIS EXISTS RATHER THAN A SEPARATE SERVICE:
+   * The preview used to own a parallel `PreviewChatService` that re-implemented
+   * the SSE consumer. It handled 9 of the ~27 events `processStreamEvent`
+   * dispatches, and every callback in that core is optional — so an event with
+   * no handler is a silent no-op, not an error. The ones it dropped included
+   * `tool_approval_required` and `oauth_required`, which is to say: a tool call
+   * that paused for approval was never surfaced, never answered, and therefore
+   * never dispatched. The pane showed "Thinking" while the backing service was
+   * never called at all. Two implementations of one protocol drift, and only
+   * one of them is exercised daily.
+   *
+   * So preview turns now run on `ChatHttpService` + `StreamParserService` like
+   * everything else. That is safe because the whole chat stack is keyed by
+   * session id — `getMessagesForSession`, `stateFor`, the parser's per-session
+   * state — so the `preview-` session the caller owns is already isolated from
+   * the user's real conversations. Isolation was the only thing the fork bought,
+   * and it was already there for free.
+   *
+   * What this does NOT do, and why it is not just `submitChatRequest`:
+   *  - No navigation. The preview is embedded in the editor; routing to
+   *    `/s/{id}` would throw the user out of the form they are editing.
+   *  - No session-cache registration and no conversation-mode binding. A
+   *    `preview-` session is never persisted, so it must not appear in the
+   *    sidenav or claim the home page's selected mode.
+   *  - No `setViewedSession`. The viewed-session facades drive the main
+   *    composer; pointing them at a preview id would hijack it.
+   *  - A minimal body: an Agent resolves instructions, model, tools, skills and
+   *    memory server-side from its own record, so sending the *viewer's* model
+   *    and tool selections would fight the bindings and test a shape nobody
+   *    will ever run.
+   */
+  async submitPreviewRequest(options: {
+    sessionId: string;
+    agentId: string;
+    message: string;
+    fileUploadIds?: string[];
+    /**
+     * This preview is a marketplace **reviewer** test-driving a submission.
+     *
+     * The invocation path honours it only after re-checking `admin.marketplace`
+     * against the caller's own roles: it resolves the snapshot *under review*
+     * rather than the published-or-draft rule, and bypasses the PRIVATE
+     * visibility check (a PRIVATE agent can sit in the review queue, and an
+     * ordinary read 403s on one).
+     *
+     * ⚠️ Never set from an author-facing surface. A caller without the scope is
+     * refused outright rather than downgraded, so a stray `true` is a 403.
+     */
+    reviewPreview?: boolean;
+  }): Promise<void> {
+    const { sessionId, agentId, message, fileUploadIds, reviewPreview } = options;
+
+    if (!message.trim() || !agentId) {
+      return;
+    }
+
+    this.chatStateService.setChatLoading(sessionId, true);
+
+    const fileAttachments = this.getFileAttachments(fileUploadIds);
+    this.messageMapService.addUserMessage(sessionId, message, fileAttachments);
+    this.messageMapService.startStreaming(sessionId);
+
+    // NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
+    // AgentCore Runtime's internal 'assistant_id' field handling (causes 424).
+    const requestObject: Record<string, unknown> = {
+      message,
+      session_id: sessionId,
+      rag_assistant_id: agentId,
+      // An Agent's model binding overrides this server-side anyway; sending
+      // null keeps the request honest about the client not choosing.
+      model_id: null,
+    };
+
+    if (fileUploadIds && fileUploadIds.length > 0) {
+      requestObject['file_upload_ids'] = fileUploadIds;
+    }
+
+    // Omitted rather than sent as `false`, so an ordinary preview's request
+    // carries no claim about a scope it never had.
+    if (reviewPreview) {
+      requestObject['review_preview'] = true;
+    }
+
+    // No teardown in a catch here, deliberately: `sendChatRequest` owns its
+    // stream's teardown via `finalizeStream`, and duplicating it re-introduces
+    // the supersession race that guard exists to prevent. Nothing above can
+    // throw before that point.
+    await this.chatHttpService.sendChatRequest(requestObject);
   }
 
   /**
@@ -347,7 +443,7 @@ export class ChatRequestService implements OnDestroy {
       // paused tool card (its `tool_use` block is in the pinned prefix, not
       // in the fresh parser). Reconcile from persisted memory so the card
       // flips from "Running…" to its completed result.
-      await this.messageMapService.reloadMessagesForSession(sessionId);
+      await this.reconcileAfterResume(sessionId);
     } catch (error) {
       this.chatStateService.setChatLoading(sessionId, false);
       this.messageMapService.endStreaming(sessionId);
@@ -406,7 +502,7 @@ export class ChatRequestService implements OnDestroy {
       await this.chatHttpService.sendChatRequest(resumeRequest);
       // Reconcile from persisted memory so the approved/declined tool card
       // shows its result (the live parser can't attach it — see above).
-      await this.messageMapService.reloadMessagesForSession(sessionId);
+      await this.reconcileAfterResume(sessionId);
     } catch (error) {
       this.chatStateService.setChatLoading(sessionId, false);
       this.messageMapService.endStreaming(sessionId);
@@ -420,6 +516,31 @@ export class ChatRequestService implements OnDestroy {
       }
       throw error;
     }
+  }
+
+  /**
+   * After a resume, re-read the turn from persisted memory so the paused tool
+   * card flips from "Running…" to its result — except for a preview session,
+   * which has no persisted memory to re-read.
+   *
+   * A `preview-` session resumes **in memory**: the backend skips its metadata
+   * writes for these ids (no `PendingInterrupt`, no `PausedTurnSnapshot`), so
+   * the live parser's own state is the only record of the turn. Calling the
+   * reload here would fetch a session that was never written and replace a
+   * correct in-memory transcript with an empty one.
+   *
+   * The trade-off this accepts: a preview's paused turn does not survive a page
+   * refresh. That is already true of everything else in the pane — the preview
+   * session id is regenerated on load — so refresh-survival was never on the
+   * table for this surface, and the alternative (persisting interrupt state for
+   * sessions defined by not being persisted) would undo the point of the
+   * `preview-` prefix.
+   */
+  private async reconcileAfterResume(sessionId: string): Promise<void> {
+    if (isPreviewSession(sessionId)) {
+      return;
+    }
+    await this.messageMapService.reloadMessagesForSession(sessionId);
   }
 
   /**

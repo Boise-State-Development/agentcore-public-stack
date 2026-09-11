@@ -113,6 +113,40 @@ export class ChatStateService {
         return this.states().get(sessionId)?.loading() ?? false;
     }
 
+    // ----- Per-session cost / context reads ----------------------------------
+    // The facades above project the VIEWED session, which is right for the main
+    // composer and wrong for anything else on screen at the same time. An
+    // embedded preview (Designer, marketplace test drive) must never call
+    // `setViewedSession` — that would hand the real composer's spinner and cost
+    // badge to a conversation in a side panel — so it reads its own session
+    // through these instead.
+    //
+    // Deliberately read-only: unlike `stateFor` they never create a bucket, so
+    // they are safe to call from inside a `computed`. A session that has not
+    // streamed yet simply reads zero.
+
+    /** A session's running cost total, in dollars. */
+    costDollarsFor(sessionId: string): number {
+        return this.states().get(sessionId)?.costDollars() ?? 0;
+    }
+
+    /** A session's most-recent-turn context tokens. */
+    contextTokensFor(sessionId: string): number {
+        return this.states().get(sessionId)?.contextTokens() ?? 0;
+    }
+
+    /** A session's context window size, or 0 when unknown. */
+    contextWindowFor(sessionId: string): number {
+        return this.states().get(sessionId)?.contextWindow() ?? 0;
+    }
+
+    /** A session's context usage as a percentage of its window. */
+    contextPctFor(sessionId: string): number {
+        const window = this.contextWindowFor(sessionId);
+        if (!window || window <= 0) return 0;
+        return (this.contextTokensFor(sessionId) / window) * 100;
+    }
+
     /**
      * Whether a session has an unread response — one that finished streaming
      * while the user was looking at a different conversation. Cleared when the

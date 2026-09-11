@@ -6,6 +6,7 @@ import {
   effect,
   inject,
   Injector,
+  input,
   signal,
 } from '@angular/core';
 import { ChatStateService } from '../../services/chat/chat-state.service';
@@ -132,10 +133,43 @@ export class SessionCostBadgeComponent {
   private chatStateService = inject(ChatStateService);
   private injector = inject(Injector);
 
-  protected readonly cost = this.chatStateService.costDollars;
-  protected readonly contextTokens = this.chatStateService.contextTokens;
-  protected readonly contextWindow = this.chatStateService.contextWindowSize;
-  protected readonly contextPctValue = this.chatStateService.contextPct;
+  /**
+   * Which session to report on. Omit it — as the main chat does — and the badge
+   * follows the *viewed* session, which is the right behaviour for the composer
+   * the user is typing into.
+   *
+   * Pass it for a chat that is on screen without being the viewed session: the
+   * Designer's preview and the marketplace test drive stream into their own
+   * `preview-` sessions and deliberately never call `setViewedSession`, so an
+   * unpinned badge there would report the cost of whatever conversation the
+   * user last opened — a plausible-looking number belonging to a different
+   * conversation, which is worse than no badge at all.
+   */
+  readonly sessionId = input<string | null>(null);
+
+  protected readonly cost = computed(() => {
+    const id = this.sessionId();
+    return id ? this.chatStateService.costDollarsFor(id) : this.chatStateService.costDollars();
+  });
+
+  protected readonly contextTokens = computed(() => {
+    const id = this.sessionId();
+    return id
+      ? this.chatStateService.contextTokensFor(id)
+      : this.chatStateService.contextTokens();
+  });
+
+  protected readonly contextWindow = computed(() => {
+    const id = this.sessionId();
+    return id
+      ? this.chatStateService.contextWindowFor(id)
+      : this.chatStateService.contextWindowSize();
+  });
+
+  protected readonly contextPctValue = computed(() => {
+    const id = this.sessionId();
+    return id ? this.chatStateService.contextPctFor(id) : this.chatStateService.contextPct();
+  });
 
   protected readonly ringSize = 18;
   protected readonly ringCenter = 9;
