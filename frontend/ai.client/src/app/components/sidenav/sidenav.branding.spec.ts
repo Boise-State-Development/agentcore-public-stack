@@ -7,7 +7,7 @@
 // `chat-container.component.branding.spec.ts`.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { Router } from '@angular/router';
+import { provideRouter } from '@angular/router';
 import { Component, input, output, signal } from '@angular/core';
 import fc from 'fast-check';
 
@@ -15,9 +15,6 @@ import { SessionService } from '../../session/services/session/session.service';
 import { UserService } from '../../auth/user.service';
 import { SessionService as BffSessionService } from '../../auth/session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
-import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
-import { AgentService } from '../../agents/services/agent.service';
-import { LEGACY_MIGRATION_HOST } from '../../shared/utils/legacy-migration-host';
 import { BrandingService } from '../../../branding/branding.service';
 
 /**
@@ -76,7 +73,10 @@ describe('Sidenav — Property 9: Logo alt text equals normalized app name', () 
 
     TestBed.configureTestingModule({
       providers: [
-        { provide: Router, useValue: { navigate: vi.fn() } },
+        // A real (empty-config) router, not a `navigate` stub: the nav's
+        // `routerLink` entries instantiate `RouterLink`, which resolves
+        // `ActivatedRoute` and builds hrefs through the router itself.
+        provideRouter([]),
         {
           provide: SessionService,
           useValue: {
@@ -109,15 +109,6 @@ describe('Sidenav — Property 9: Logo alt text equals normalized app name', () 
             canAccessAdmin: signal(false),
           },
         },
-        {
-          provide: MemorySpaceService,
-          useValue: { accessible$: signal<boolean | null>(false), loadSpaces: vi.fn().mockResolvedValue(undefined) },
-        },
-        {
-          provide: AgentService,
-          useValue: { accessible$: signal<boolean | null>(false), loadAgents: vi.fn().mockResolvedValue(undefined) },
-        },
-        { provide: LEGACY_MIGRATION_HOST, useValue: false },
         { provide: BrandingService, useValue: mockBranding },
       ],
     });

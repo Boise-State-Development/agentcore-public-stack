@@ -7,9 +7,6 @@ import { SessionService } from '../../session/services/session/session.service';
 import { UserService } from '../../auth/user.service';
 import { SessionService as BffSessionService } from '../../auth/session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
-import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
-import { AgentService } from '../../agents/services/agent.service';
-import { LEGACY_MIGRATION_HOST } from '../../shared/utils/legacy-migration-host';
 
 /**
  * Feature: branding-customization
@@ -76,15 +73,6 @@ describe('Sidenav — branding logo theme swap and error handling', () => {
             canAccessAdmin: signal(false),
           },
         },
-        {
-          provide: MemorySpaceService,
-          useValue: { accessible$: signal<boolean | null>(false), loadSpaces: vi.fn().mockResolvedValue(undefined) },
-        },
-        {
-          provide: AgentService,
-          useValue: { accessible$: signal<boolean | null>(false), loadAgents: vi.fn().mockResolvedValue(undefined) },
-        },
-        { provide: LEGACY_MIGRATION_HOST, useFactory: () => false },
       ],
     });
   });
