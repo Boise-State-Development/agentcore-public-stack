@@ -103,5 +103,4 @@ export type {
   ContentBlockBuilder,
   MessageBuilder,
   ToolResultContent,
-  ToolProgress,
 } from './stream-parser-types';
