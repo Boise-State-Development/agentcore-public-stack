@@ -1469,3 +1469,164 @@ class GatewayTargetStatusResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+
+
+# =============================================================================
+# MCP capability snapshot
+# =============================================================================
+#
+# An MCP server exposes three listings: tools, prompts and resources. The stack
+# has only ever called ``tools/list``, so prompts and resources were invisible
+# to every surface in the product.
+#
+# The snapshot is stored beside the catalog row (``PK=TOOL#<id>, SK=CAPABILITIES``)
+# rather than inside it, on purpose. The catalog row is read on the agent build
+# path; prompts and resources are of no use to the agent today, and folding a few
+# KB of prompt text into an item read on every turn would be a latency and cost
+# regression for a feature the agent does not consume.
+
+
+# A single stored snapshot is bounded well under the 400KB DynamoDB item limit.
+# Servers are free to expose hundreds of resources, and a description can be a
+# whole docstring, so both the per-entry text and the entry counts are capped.
+MAX_CAPABILITY_ENTRIES = 200
+MAX_CAPABILITY_TEXT = 500
+# Guards against a server that paginates forever.
+MAX_CAPABILITY_PAGES = 20
+
+
+def _clip(value: Optional[str]) -> Optional[str]:
+    """Bound a single description/title so one verbose entry can't blow the item."""
+    if value is None:
+        return None
+    text = value.strip()
+    if len(text) <= MAX_CAPABILITY_TEXT:
+        return text
+    return text[: MAX_CAPABILITY_TEXT - 1] + "…"
+
+
+class MCPPromptEntry(BaseModel):
+    """A prompt template exposed by an MCP server (``prompts/list``)."""
+
+    name: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    arguments: List[str] = Field(
+        default_factory=list,
+        description="Argument names the prompt accepts, in the order the server listed them.",
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "title": self.title,
+            "description": self.description,
+            "arguments": self.arguments,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MCPPromptEntry":
+        return cls(
+            name=data.get("name", ""),
+            title=data.get("title"),
+            description=data.get("description"),
+            arguments=list(data.get("arguments") or []),
+        )
+
+
+class MCPResourceEntry(BaseModel):
+    """A resource exposed by an MCP server (``resources/list``).
+
+    ``uri_template`` is set for entries that came from
+    ``resources/templates/list`` — those are patterns such as
+    ``canvas://courses/{course_id}/syllabus`` rather than concrete URIs, and a
+    caller has to fill the placeholders before reading one.
+    """
+
+    uri: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    mime_type: Optional[str] = Field(None, alias="mimeType")
+    uri_template: bool = Field(default=False, alias="uriTemplate")
+
+    model_config = {"populate_by_name": True}
+
+    def to_dict(self) -> dict:
+        return {
+            "uri": self.uri,
+            "name": self.name,
+            "description": self.description,
+            "mimeType": self.mime_type,
+            "uriTemplate": self.uri_template,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MCPResourceEntry":
+        return cls(
+            uri=data.get("uri", ""),
+            name=data.get("name"),
+            description=data.get("description"),
+            mime_type=data.get("mimeType"),
+            uri_template=bool(data.get("uriTemplate", False)),
+        )
+
+
+class ToolCapabilitySnapshot(BaseModel):
+    """What one MCP server told us it offers, and when it said so.
+
+    Persisted so a detail view never has to open a live MCP session to render.
+    A 31-card catalogue opening one session per server would be unusable, and
+    OAuth-gated servers cannot be reached at all without a consent token.
+
+    ``supports_prompts`` / ``supports_resources`` record whether the server
+    answered the listing at all. A server that does not implement prompts
+    returns a JSON-RPC "method not found", which is a different fact from a
+    server that implements prompts and has none — and the UI should say
+    different things about each.
+    """
+
+    tool_id: str = Field(..., alias="toolId")
+    prompts: List[MCPPromptEntry] = Field(default_factory=list)
+    resources: List[MCPResourceEntry] = Field(default_factory=list)
+    supports_prompts: bool = Field(default=False, alias="supportsPrompts")
+    supports_resources: bool = Field(default=False, alias="supportsResources")
+    discovered_at: Optional[str] = Field(None, alias="discoveredAt")
+    discovered_by: Optional[str] = Field(None, alias="discoveredBy")
+    #: Set when the last attempt failed, so the UI can distinguish "this server
+    #: offers nothing" from "we could not ask".
+    error: Optional[str] = None
+    #: True when a listing was cut short by the entry cap above.
+    truncated: bool = Field(default=False)
+
+    model_config = {"populate_by_name": True}
+
+    def to_dynamo_item(self) -> dict:
+        return {
+            "PK": f"TOOL#{self.tool_id}",
+            "SK": "CAPABILITIES",
+            "toolId": self.tool_id,
+            "prompts": [p.to_dict() for p in self.prompts],
+            "resources": [r.to_dict() for r in self.resources],
+            "supportsPrompts": self.supports_prompts,
+            "supportsResources": self.supports_resources,
+            "discoveredAt": self.discovered_at,
+            "discoveredBy": self.discovered_by,
+            "error": self.error,
+            "truncated": self.truncated,
+        }
+
+    @classmethod
+    def from_dynamo_item(cls, item: dict) -> "ToolCapabilitySnapshot":
+        return cls(
+            tool_id=item.get("toolId", ""),
+            prompts=[MCPPromptEntry.from_dict(p) for p in item.get("prompts") or []],
+            resources=[
+                MCPResourceEntry.from_dict(r) for r in item.get("resources") or []
+            ],
+            supports_prompts=bool(item.get("supportsPrompts", False)),
+            supports_resources=bool(item.get("supportsResources", False)),
+            discovered_at=item.get("discoveredAt"),
+            discovered_by=item.get("discoveredBy"),
+            error=item.get("error"),
+            truncated=bool(item.get("truncated", False)),
+        )
