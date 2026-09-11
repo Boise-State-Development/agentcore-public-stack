@@ -20,6 +20,9 @@ Phase 3 lands incrementally:
   override): when an Agent binds tools they *are* its toolset, re-resolved per invoker via
   the same ``AppRoleService.can_access_tool`` gate; a bound tool the invoker lacks blocks the
   turn (D5). Absent tool bindings ⇒ the request's ``enabled_tools`` drive the turn as today.
+  A ref may be *scoped* (``toolId::mcpToolName``) to bind a subset of an MCP server's tools
+  rather than all of them; the scoped id rides through to the runtime, where
+  ``collect_tool_name_filters`` turns it into that server's ``allowed_tool_names``.
 - ``skill`` bindings → the effective skill set (**replace**, same shape as tools): when an
   Agent binds skills they *are* the turn's skills, re-resolved per invoker via the
   invoke-through predicate (§6/D7, ``resolve_invocable_skill_ids``); a bound skill the
@@ -42,6 +45,7 @@ from apis.shared.feature_flags import memory_spaces_enabled, skills_enabled
 from apis.shared.memory.service import MemorySpaceService
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.skills.access import resolve_invocable_skill_ids
+from apis.shared.tools.scoped_ids import base_tool_id
 
 _ROLE_RANK = {"viewer": 1, "editor": 2, "owner": 3}
 
@@ -94,6 +98,12 @@ class ResolvedTools:
     hand straight to the tool filter. An empty ``tool_ids`` is meaningful — the Agent
     deliberately runs with *no* tools — and is distinct from ``plan.tools is None`` (no tool
     binding, fall through to the request).
+
+    Ids are carried **verbatim**, scoping included: a scoped ``base::tool`` id must survive
+    into ``enabled_tools`` for ``collect_tool_name_filters`` to fold it into that server's
+    ``allowed_tool_names`` and build a filtered MCP client. Collapsing one to its base here
+    would silently restore the whole server — the exact bug the scoping exists to prevent,
+    and invisible from the outside because the turn would still work.
     """
 
     tool_ids: List[str]
@@ -223,6 +233,11 @@ async def _resolve_tools(assistant: Assistant, invoker: User) -> Optional[Resolv
     (block-with-message, no silent drop — D5). Returns ``None`` when the Agent binds no tools,
     leaving the request's ``enabled_tools`` in force. The RBAC service is fetched lazily (only
     when the Agent actually binds tools) — mirroring how ``_resolve_memory`` builds its own.
+
+    A ref may be **scoped** (``toolId::mcpToolName``) to bind a subset of an MCP server's
+    tools. Access is a property of the *server*, so the gate is keyed on the base id — which
+    is also what an administrator would grant, and so what the block message names. The
+    scoped id itself is preserved in the result; that is what narrows the turn.
     """
     tool_bindings = [b for b in (assistant.bindings or []) if b.kind == "tool"]
     if not tool_bindings:
@@ -230,13 +245,19 @@ async def _resolve_tools(assistant: Assistant, invoker: User) -> Optional[Resolv
 
     app_role_service = get_app_role_service()
     resolved: List[str] = []
+    # Access is per server, so check each base once: an Agent binding seven tools of one
+    # MCP server is the normal shape here, and it should cost one gate call, not seven.
+    checked_bases: set = set()
     for binding in tool_bindings:
         ref = binding.ref
-        if not await app_role_service.can_access_tool(invoker, ref):
-            raise AgentBindingBlockedError(
-                f"This agent uses the tool **{ref}**, which isn't available to your account. "
-                "Ask an administrator for access, or use a different agent."
-            )
+        base = base_tool_id(ref)
+        if base not in checked_bases:
+            if not await app_role_service.can_access_tool(invoker, ref):
+                raise AgentBindingBlockedError(
+                    f"This agent uses the tool **{base}**, which isn't available to your "
+                    "account. Ask an administrator for access, or use a different agent."
+                )
+            checked_bases.add(base)
         if ref not in resolved:
             resolved.append(ref)
 

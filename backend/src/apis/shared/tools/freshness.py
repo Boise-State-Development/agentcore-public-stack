@@ -37,6 +37,7 @@ import logging
 import time
 from typing import Dict, FrozenSet, List, Optional, Tuple
 from apis.shared.timestamps import to_iso
+from apis.shared.tools.scoped_ids import base_tool_ids
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +100,19 @@ async def get_freshness_hash(tool_ids: List[str]) -> str:
 
     Changes when any of the given tools' config is edited. Empty list
     returns the empty string so callers can short-circuit.
+
+    Scoped ids (`base::tool`, selecting one tool of an MCP server) are
+    collapsed to their base first: freshness is a property of the catalog
+    record, and the catalog only holds the base. Hashing a scoped id
+    verbatim looks it up, misses, and pins that entry to a constant
+    `none` — so an admin edit to a server would never evict an agent that
+    had bound a subset of it. Collapsing also de-duplicates, so an agent
+    binding seven tools of one server costs one catalog read, not seven.
     """
     if not tool_ids:
         return ""
 
-    sorted_ids = sorted(tool_ids)
+    sorted_ids = sorted(base_tool_ids(tool_ids))
     values = await asyncio.gather(
         *(get_tool_updated_at(tid) for tid in sorted_ids)
     )

@@ -262,11 +262,17 @@ class AppRoleService:
         return granted | set(await get_public_tool_ids())
 
     async def can_access_tool(self, user: User, tool_id: str) -> bool:
-        """Check if user can access a specific tool.
+        """Check if user can access a specific tool, bare or scoped.
 
-        Exact-match on the id by design: callers pass a bare catalog id
-        (an Agent's ``binding.ref``, validated against the author's palette
-        at design time), never a scoped ``base::tool`` id.
+        ``tool_id`` may be a bare catalog id or a scoped ``base::tool`` id
+        referencing one tool within an MCP server (an Agent's ``binding.ref``
+        carries either). A scoped id is accessible when its **base server id**
+        is granted: scoping narrows a grant, it never widens one, so a role
+        that grants the whole server necessarily admits any subset of it.
+
+        This is the same predicate ``filter_requested_tools`` applies on the
+        ``enabled_tools`` axis — keep the two in agreement, or a subset the
+        picker admits will be denied on the bindings axis (and vice versa).
         """
         allowed = await self._tool_grant_set(user)
 
@@ -274,7 +280,7 @@ class AppRoleService:
         if "*" in allowed:
             return True
 
-        return tool_id in allowed
+        return tool_id in allowed or base_tool_id(tool_id) in allowed
 
     async def can_access_model(self, user: User, model_id: str) -> bool:
         """Check if user can access a specific model."""
