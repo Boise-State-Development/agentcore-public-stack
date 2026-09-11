@@ -1,11 +1,19 @@
 <!-- Collapsed header: one line saying what the agent did, whatever the group's
      size. It stays collapsed while the tools run — the old behaviour force-
      expanded on any pending call, which meant the rail was at its tallest
-     exactly while the user was watching it. -->
+     exactly while the user was watching it.
+
+     The group is NAMED (`group/rail`). An unnamed `group-hover:` matches ANY
+     ancestor carrying `group`, and the assistant message card is one — so the
+     bare version lit this headline up whenever the pointer was anywhere in
+     the message, including over the answer text. Since a turn's tool calls
+     now share a single card, that meant hovering one row lightened every
+     rail's headline at once. Every group modifier in this file must stay
+     named for the same reason. -->
 <button
   type="button"
   (click)="toggleExpanded()"
-  class="flex items-center gap-2 cursor-pointer group w-full text-left"
+  class="flex items-center gap-2 cursor-pointer group/rail w-full text-left"
   [attr.aria-expanded]="isExpanded()"
   [attr.aria-label]="isExpanded() ? 'Hide tool call details' : 'Show tool call details'"
 >
@@ -21,7 +29,7 @@
   </svg>
 
   <span
-    class="text-xs text-gray-500 dark:text-gray-400 group-hover:text-gray-700 dark:group-hover:text-gray-200 min-w-0 truncate"
+    class="text-xs text-gray-500 dark:text-gray-400 group-hover/rail:text-gray-700 dark:group-hover/rail:text-gray-200 min-w-0 truncate"
     [class.text-shimmer]="isRunning()"
   >
     {{ headline() }}
