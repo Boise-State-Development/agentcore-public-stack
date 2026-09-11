@@ -285,13 +285,32 @@ async def update_provider(
     )
 
     rotating_credentials = bool(updates.client_id and updates.client_secret)
+    # Only a *different* value counts as a discovery change. Clients that
+    # round-trip the whole record (the connector edit form does) resend the
+    # unchanged discovery URL on every save; treating any non-None value as
+    # a change would make metadata-only edits — scopes, display name, icon,
+    # enabled — impossible for a discovery-URL provider, because the admin
+    # cannot satisfy the rotation requirement (AgentCore never echoes the
+    # client secret back, so there is nothing to re-enter).
     changing_discovery = (
         updates.oauth_discovery_url is not None
-        or updates.authorization_server_metadata is not None
+        and updates.oauth_discovery_url != existing.oauth_discovery_url
+    ) or (
+        updates.authorization_server_metadata is not None
+        and updates.authorization_server_metadata
+        != existing.authorization_server_metadata
     )
 
     credential_info: CredentialProviderInfo | None = None
     if rotating_credentials or changing_discovery:
+        if not rotating_credentials:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Discovery config can only be updated together with a "
+                    "credential rotation (client_id + client_secret)."
+                ),
+            )
         discovery_url = (
             updates.oauth_discovery_url
             if updates.oauth_discovery_url is not None
@@ -302,14 +321,6 @@ async def update_provider(
             if updates.authorization_server_metadata is not None
             else existing.authorization_server_metadata
         )
-        if not rotating_credentials:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Discovery config can only be updated together with a "
-                    "credential rotation (client_id + client_secret)."
-                ),
-            )
         try:
             credential_info = registrar.update_credential_provider(
                 provider_id=provider_id,
