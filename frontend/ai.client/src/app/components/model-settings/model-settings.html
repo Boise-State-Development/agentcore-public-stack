@@ -646,11 +646,35 @@
                           >{{ monogram(tool) }}</span
                         >
                         <span class="block min-w-0 flex-1 overflow-hidden">
-                          <span
-                            [id]="'tool-label-' + tool.toolId"
-                            class="block truncate text-sm/6 font-semibold text-gray-900 dark:text-white"
-                            >{{ tool.displayName }}</span
-                          >
+                          <span class="flex min-w-0 items-center gap-1.5">
+                            <span
+                              [id]="'tool-label-' + tool.toolId"
+                              class="min-w-0 truncate text-sm/6 font-semibold text-gray-900 dark:text-white"
+                              >{{ tool.displayName }}</span
+                            >
+                            <!--
+                              Static chip, never a control: this sits inside the
+                              row's body button, and a button nested in a button
+                              is invalid and swallows its own activation. The
+                              chip reports; Connect lives in the detail pane.
+                              `unknown` draws nothing — a probe that failed is
+                              not evidence the user is disconnected.
+                            -->
+                            @switch (connectionState(tool)) {
+                              @case ('connected') {
+                                <span
+                                  class="shrink-0 rounded-sm bg-state-success-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-success-700 dark:bg-state-success-900/30 dark:text-state-success-300"
+                                  >connected</span
+                                >
+                              }
+                              @case ('disconnected') {
+                                <span
+                                  class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300"
+                                  >connect</span
+                                >
+                              }
+                            }
+                          </span>
                           <span
                             [id]="'tool-desc-' + tool.toolId"
                             class="block truncate text-xs/5 text-gray-500 dark:text-gray-400"

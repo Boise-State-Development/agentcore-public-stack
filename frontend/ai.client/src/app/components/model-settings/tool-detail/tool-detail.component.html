@@ -18,6 +18,42 @@
     <p class="mt-3 text-sm/6 text-gray-600 dark:text-gray-300">{{ t.description }}</p>
   }
 
+  <!--
+    Connection. Only drawn for a tool that actually needs consent, and only
+    once we know the answer — `unknown` means the probe failed, and telling
+    someone to reconnect on that basis sends them through a flow they may not
+    need. Turning the tool on without connecting is still allowed: the agent
+    surfaces its own consent prompt mid-turn, and blocking the toggle here
+    would be a second, contradictory gate.
+  -->
+  @switch (connection()) {
+    @case ('disconnected') {
+      <div
+        class="mt-3 flex items-center justify-between gap-3 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-3 py-2 dark:border-state-warning-800 dark:bg-state-warning-900/20"
+      >
+        <span class="min-w-0 text-xs/5 text-state-warning-800 dark:text-state-warning-200">
+          Needs your {{ t.requiresOauthProvider }} account before it can run.
+        </span>
+        <button
+          type="button"
+          (click)="connect()"
+          [disabled]="connecting()"
+          class="shrink-0 rounded-2xl bg-primary-accessible px-3 py-1.5 text-xs/5 font-semibold text-white transition-[filter] hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {{ connecting() ? 'Waiting…' : 'Connect' }}
+        </button>
+      </div>
+    }
+    @case ('connected') {
+      <p
+        class="mt-3 flex items-center gap-1.5 text-xs/5 text-state-success-700 dark:text-state-success-300"
+      >
+        <ng-icon name="heroCheckCircle" class="size-3.5 shrink-0" aria-hidden="true" />
+        Connected as you
+      </p>
+    }
+  }
+
   <div
     class="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-white/10 dark:bg-white/5"
   >

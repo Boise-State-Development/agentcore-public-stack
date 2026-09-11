@@ -2,6 +2,10 @@ import { Component, ChangeDetectionStrategy, inject, input, output, signal, comp
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath, heroArrowLeft, heroLockClosed, heroMagnifyingGlass } from '@ng-icons/heroicons/outline';
 import { ToolDetailComponent } from './tool-detail/tool-detail.component';
+import {
+  ConnectionState,
+  ConnectorStatusService,
+} from '../../settings/connectors/services/connector-status.service';
 import { ModelService } from '../../session/services/model/model.service';
 import { ToolService, Tool } from '../../services/tool/tool.service';
 import { SkillService } from '../../services/skill/skill.service';
@@ -72,6 +76,7 @@ export class ModelSettings {
   protected toolService = inject(ToolService);
   protected skillService = inject(SkillService);
   protected systemPromptsService = inject(SystemPromptsService);
+  protected connectorStatus = inject(ConnectorStatusService);
 
   // Input to control visibility
   isOpen = input<boolean>(false);
@@ -213,6 +218,16 @@ export class ModelSettings {
       // show what this conversation is carrying.
       if (!isOpen) {
         this.detailToolId.set(null);
+      }
+
+      // Probe connection state for the OAuth-gated tools this user can see, so
+      // the rows can say whether a tool will actually work. `ensure` skips
+      // providers it already knows, so reopening the drawer costs nothing.
+      if (isOpen) {
+        const providers = this.toolService
+          .visibleTools()
+          .map((tool) => tool.requiresOauthProvider);
+        void this.connectorStatus.ensure(providers);
       }
 
       // Load the skills picker lazily on first open. SkillService deliberately
@@ -493,6 +508,15 @@ export class ModelSettings {
       }
       return next;
     });
+  }
+
+  /**
+   * Connection state for a tool's OAuth provider, or 'none' when the tool
+   * needs no connection at all — most tools, so the row draws no chip.
+   */
+  connectionState(tool: Tool): ConnectionState | 'none' {
+    if (!tool.requiresOauthProvider) return 'none';
+    return this.connectorStatus.stateFor(tool.requiresOauthProvider);
   }
 
   clearToolQuery(): void {
