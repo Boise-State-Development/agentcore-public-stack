@@ -41,8 +41,11 @@ logger = logging.getLogger(__name__)
 # instruction. Same model the conversation-title side-channel uses.
 _MODEL_ID = "us.amazon.nova-micro-v1:0"
 # The summary is one short sentence; anything longer is the model ignoring the
-# brief, and the store clamps it again on write.
-_MAX_OUTPUT_TOKENS = 60
+# brief, and the store clamps it again on write. Headroom matters more than
+# tightness here: a generation that hits this ceiling is DISCARDED (see
+# `stopReason` below), so a cap set too low silently costs summaries rather
+# than shortening them.
+_MAX_OUTPUT_TOKENS = 100
 # Second-stage truncation, applied to what the hook already captured. Keeps a
 # wide batch's prompt flat regardless of how chatty the tools were.
 _MAX_INPUT_CHARS = 300
@@ -100,6 +103,30 @@ def _build_prompt(calls: List[Dict[str, Any]]) -> str:
     return "Calls:\n" + "\n".join(lines)
 
 
+def _unwrap_quotes(summary: str) -> str:
+    """Remove quotes that wrap the WHOLE line, and only those.
+
+    ``str.strip('"')`` was the original implementation and it was wrong in a
+    way that showed up in production: it strips from both ends independently,
+    so a summary that legitimately ends in a quoted name lost its closing
+    quote. Observed live on dev — the model produced
+
+        Found the course "Faculty Demo: Intro to MCP"
+
+    and what persisted was
+
+        Found the course "Faculty Demo: Intro to MCP
+
+    which then rendered in the rail with a dangling quote, reading as a
+    truncation bug. Quoting the specific thing that was found is exactly what
+    makes these summaries useful, so those quotes have to survive.
+    """
+    for quote in ('"', "'"):
+        if len(summary) >= 2 and summary.startswith(quote) and summary.endswith(quote):
+            return summary[1:-1].strip()
+    return summary
+
+
 def _clean(text: str) -> str:
     """Strip the wrappers small models like to add around a one-liner."""
     summary = (text or "").strip()
@@ -107,7 +134,7 @@ def _clean(text: str) -> str:
     for prefix in ("Output:", "Summary:", "Line:"):
         if summary.lower().startswith(prefix.lower()):
             summary = summary[len(prefix) :].strip()
-    summary = summary.strip().strip('"').strip("'").strip()
+    summary = _unwrap_quotes(summary)
     # One line only — a model that explains itself gets its first sentence used.
     summary = summary.splitlines()[0].strip() if summary else ""
     return summary.rstrip(".").strip()
@@ -152,6 +179,16 @@ async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
                 "topP": 0.9,
             },
         )
+        # A generation cut off at the token ceiling is a fragment, not a
+        # summary, and cleaning cannot rescue one — the missing half is the
+        # specific thing the line was naming. Drop it and let the
+        # deterministic formatter speak. (Defensive: the dangling quotes seen
+        # on dev turned out to be `_unwrap_quotes`, not truncation, but
+        # nothing guarded this boundary and a fragment must never persist.)
+        if response.get("stopReason") == "max_tokens":
+            logger.debug("Tool-batch summary hit the token ceiling; discarding")
+            return None
+
         summary = _clean(response["output"]["message"]["content"][0]["text"])
         if not summary:
             return None
