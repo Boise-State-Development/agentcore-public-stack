@@ -568,6 +568,15 @@
             @if (doc.status === 'complete') {
               <button
                 type="button"
+                (click)="viewExtractedContent(doc)"
+                title="View extracted content"
+                [attr.aria-label]="'View the content extracted from ' + doc.filename"
+                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-primary-50 hover:text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-primary-500/10 dark:hover:text-primary-accessible-dark"
+              >
+                <ng-icon name="heroMagnifyingGlass" class="size-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
                 (click)="downloadDocument(doc.documentId)"
                 title="Download document"
                 [attr.aria-label]="'Download ' + doc.filename"

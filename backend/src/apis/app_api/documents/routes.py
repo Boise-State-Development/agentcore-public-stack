@@ -14,10 +14,16 @@ from apis.app_api.documents.models import (
     DocumentResponse,
     DocumentsListResponse,
     DownloadUrlResponse,
+    ExtractedChunkResponse,
+    ExtractedChunksResponse,
     ImportDocumentsRequest,
     ImportDocumentsResponse,
     ReportUploadFailureRequest,
     UploadUrlResponse,
+)
+from apis.app_api.documents.services.chunk_inspector import (
+    DocumentNotInspectable,
+    inspect_document_chunks,
 )
 from apis.app_api.documents.services.document_service import _generate_document_id, create_document, list_assistant_documents, update_document_status, release_reservation_if_managed
 from apis.app_api.documents.services.document_service import get_document as get_document_service
@@ -463,6 +469,76 @@ async def get_download_url(
     except Exception as e:
         logger.error(f"Error generating download URL: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to generate download URL: {str(e)}")
+
+
+@router.get(
+    "/{document_id}/chunks",
+    response_model=ExtractedChunksResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_document_chunks(
+    assistant_id: str, document_id: str, current_user: User = Depends(get_current_user_from_session)
+) -> ExtractedChunksResponse:
+    """Show what the knowledge base actually extracted from this document.
+
+    The tooling half of the task-16.2 decision on managed-kb-migration §5.41. The
+    managed backend flattens a column-structured diagram or a 2-D table at ingestion,
+    so a per-column question gets a *confident wrong answer with no trace*. We do not
+    fix the parser — it is a managed service and this is a self-service platform — so
+    instead the extraction is made visible and the owner can decide to reformat their
+    source. Guidance nobody can verify is not guidance.
+
+    Owners and editors only, the same gate as every other document endpoint. Read-only:
+    no chunking, parsing or ingestion path is touched (Requirement 5).
+    """
+    try:
+        assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
+        document = await get_document_service(assistant_id, document_id, assistant_owner_id)
+
+        if not document or document.status == "deleting":
+            # A soft-deleted document is being removed on purpose; surfacing its
+            # content would resurrect it in the one place the user is told it is gone.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Document not found: {document_id}"
+            )
+
+        result = await inspect_document_chunks(
+            assistant_id,
+            document_id,
+            file_name=document.filename,
+            status=document.status,
+        )
+
+        return ExtractedChunksResponse(
+            documentId=result.document_id,
+            fileName=result.file_name,
+            engine=result.engine,
+            available=result.available,
+            reason=result.reason,
+            chunks=[
+                ExtractedChunkResponse(
+                    text=chunk.text, order=chunk.order, score=chunk.score, page=chunk.page
+                )
+                for chunk in result.chunks
+            ],
+            returned=result.returned,
+            capReached=result.cap_reached,
+        )
+
+    except DocumentNotInspectable as e:
+        # 409 rather than 404: the document exists, it simply has no content in the
+        # knowledge base yet. The carried copy is written for the owner, not an
+        # operator — `provisioning` in particular gets its own sentence, because a
+        # born-managed first upload is waiting on the knowledge base itself.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=e.reason)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error inspecting document chunks: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read extracted content: {str(e)}",
+        )
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

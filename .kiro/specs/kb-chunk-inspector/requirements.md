@@ -47,6 +47,29 @@ parsed usefully before I rely on it.
   `resolve_engine_for` and never branch on it in the UI.
 - The response shape SHALL be identical across engines.
 
+> **AMENDED BY IMPLEMENTATION 2026-09-11 — managed only.** The clause above assumed
+> `backend.search(..., retrieval_filter=...)` was part of the protocol. It is not:
+> `retrieval_filter` exists **only** on `ManagedKbBackend.search`. The legacy
+> adapter's signature is `search(kb_ref, query, top_k)`, it accepts no filter, and it
+> ignores `top_k` — it always asks its index for a fixed five results across the
+> **whole** knowledge base.
+>
+> So on legacy there is no way to scope a retrieval to one document. Running it anyway
+> would return five whole-knowledge-base chunks, most or all belonging to *other*
+> documents, rendered under this document's filename. That is a cross-document leak —
+> exactly what Requirement 4 exists to prevent — not a cosmetic defect to tidy later.
+>
+> Teaching the legacy adapter to filter was rejected on Requirement 5's own grounds:
+> the inspector must not depend on the legacy pipeline continuing to exist, and that
+> pipeline is being deprecated. New capability there has a negative lifespan.
+>
+> **As built:** a legacy document returns `available=false` with an owner-facing
+> `reason`, as a **200 rather than an error** — the owner asked a reasonable question
+> and "your knowledge base is on the classic engine, which cannot show this" is an
+> answer. The response shape is identical either way, so the second clause above holds
+> and the UI still never branches on engine, which is what this requirement was
+> actually protecting.
+
 ### Requirement 3 — Honest completeness
 - Bedrock managed knowledge bases expose **no chunk-enumeration API**; `Retrieve`
   is query-ranked and bounded by `numberOfResults`. WHERE the full set of chunks

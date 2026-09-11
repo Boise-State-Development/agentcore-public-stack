@@ -1,6 +1,6 @@
 # KB Chunk Inspector — Tasks
 
-**Status:** Not started · **Requirements:** `requirements.md` · **Design:** `design.md`
+**Status:** Built (tasks 1-5); task 6 is a manual check against dev · **Requirements:** `requirements.md` · **Design:** `design.md`
 **Why now:** it is the tooling half of the task-16.2 decision (`managed-kb-migration`
 §5.41). That decision was "guidance, not code" — this is what makes the guidance
 possible, because a user cannot act on advice about mangled tables if they cannot see
@@ -11,7 +11,7 @@ reusing the existing citation card. No new pipeline, no infra, no legacy depende
 
 ---
 
-- [ ] 1. Backend read endpoint
+- [x] 1. Backend read endpoint
   - `GET /assistants/{assistant_id}/documents/{document_id}/chunks` in
     `backend/src/apis/app_api/documents/routes.py`
   - `_require_edit_permission` first, exactly as the sibling document endpoints do;
@@ -24,7 +24,7 @@ reusing the existing citation card. No new pipeline, no infra, no legacy depende
     resolver; never branch on engine in the response shape (Req 2)
   - _Requirements: 1, 2, 4, 5_
 
-- [ ] 2. Chunk enumeration, honest about completeness
+- [x] 2. Chunk enumeration, honest about completeness
   - One `search(...)` call through the facade with the `document_id` `equals`
     filter, `numberOfResults` at the backend ceiling (Bedrock documents 100)
   - Neutral document-anchored query text (the filename, or the row's leading text)
@@ -38,14 +38,14 @@ reusing the existing citation card. No new pipeline, no infra, no legacy depende
     came back and let the human judge it; that is the 16.2 decision, not laziness
   - _Requirements: 1, 3, 6_
 
-- [ ] 3. Response contract
+- [x] 3. Response contract
   - `{ documentId, fileName, engine, chunks: [{ text, page?, order, score? }],
     complete: bool, returned: N, capReached: bool }`
   - Full chunk text, **not** truncated to the 500-character citation limit — that
     truncation is the whole reason the existing citation trace cannot serve this
   - _Requirements: 1, 2, 3_
 
-- [ ] 4. Frontend panel
+- [x] 4. Frontend panel
   - A "View extracted content" action on the document row, enabled at `complete`
   - Panel lists each chunk's full text, monospace/`pre` so a flattened table's
     damage is actually visible, with page/location when present
@@ -58,7 +58,7 @@ reusing the existing citation card. No new pipeline, no infra, no legacy depende
     header
   - _Requirements: 1, 3_
 
-- [ ] 5. Tests
+- [x] 5. Tests
   - Route: owner sees chunks on **both** engines; non-owner 403; non-`complete`
     document 409 (cover `provisioning` and `uploading` separately); `capReached`
     set when the count equals the ceiling
