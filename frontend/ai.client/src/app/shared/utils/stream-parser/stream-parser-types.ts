@@ -1,8 +1,16 @@
 /**
  * Stream Parser Types
  *
- * Shared type definitions for SSE stream parsing used by both the main
- * StreamParserService and the PreviewChatService.
+ * Shared type definitions for SSE stream parsing, consumed by StreamParserService.
+ *
+ * Every callback on `StreamParserCallbacks` is optional and `processStreamEvent`
+ * invokes them with `?.`, so an unimplemented handler drops its event silently —
+ * no error, no `onParseError`. That is survivable for one consumer that
+ * implements them all, and was not survivable for the second consumer that did
+ * not: the preview pane implemented 9 of them and silently dropped
+ * `tool_approval_required` / `oauth_required`, so approval-gated tool calls were
+ * never surfaced and never dispatched. There is deliberately only ONE consumer
+ * of this contract now; see `shared/preview/preview-session.service.ts`.
  */
 
 import type {

@@ -15,7 +15,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { ChatContainerComponent, ChatContainerConfig } from '../../../session/components/chat-container/chat-container.component';
 import { ChatInputComponent } from '../../../session/components/chat-input/chat-input.component';
-import { PreviewChatService } from '../../../assistants/assistant-form/services/preview-chat.service';
+import { PreviewSessionService } from '../../../shared/preview/preview-session.service';
 
 /**
  * Test-drive the submission under review, before deciding on it.
@@ -49,7 +49,7 @@ import { PreviewChatService } from '../../../assistants/assistant-form/services/
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, ChatContainerComponent, ChatInputComponent],
   providers: [
-    PreviewChatService,
+    PreviewSessionService,
     provideIcons({
       heroArrowsPointingIn,
       heroArrowsPointingOut,
@@ -178,7 +178,7 @@ import { PreviewChatService } from '../../../assistants/assistant-form/services/
   styles: [':host { display: block; }'],
 })
 export class ReviewTestDriveComponent {
-  protected readonly chat = inject(PreviewChatService);
+  protected readonly chat = inject(PreviewSessionService);
 
   readonly agentId = input.required<string>();
   readonly name = input<string>('this agent');
@@ -195,16 +195,16 @@ export class ReviewTestDriveComponent {
   readonly expandedChange = output<boolean>();
 
   /**
-   * `includeSystemPrompt` / `includeEnabledTools` are off for the same reason the agent
-   * designer's preview turns them off: an agent resolves instructions, model, tools,
-   * skills and memory server-side from its own record. Sending the reviewer's tool set
-   * would fight the bindings and test something nobody will ever run.
+   * `reviewPreview` resolves the snapshot *under review* and bypasses the PRIVATE
+   * visibility check — the invocation path honours it only after re-checking
+   * `admin.marketplace` against this reviewer's own roles.
+   *
+   * The preview request body carries no prompt, model or tool selection at all:
+   * an agent resolves instructions, model, tools, skills and memory server-side
+   * from its own record, and sending the reviewer's set would fight the bindings
+   * and test something nobody will ever run.
    */
-  private readonly opts = {
-    includeSystemPrompt: false,
-    includeEnabledTools: false,
-    reviewPreview: true,
-  };
+  private readonly opts = { reviewPreview: true };
 
   protected readonly chatConfig: Partial<ChatContainerConfig> = {
     embeddedMode: true,
@@ -231,14 +231,14 @@ export class ReviewTestDriveComponent {
 
   protected onMessageSubmitted(event: { content: string; timestamp: Date }): void {
     if (!event.content.trim()) return;
-    void this.chat.sendMessage(event.content, this.agentId(), undefined, undefined, this.opts);
+    void this.chat.send(this.agentId(), event.content, this.opts).catch(() => {});
   }
 
   protected onMessageCancelled(): void {
-    this.chat.cancelRequest();
+    this.chat.cancel();
   }
 
   protected clear(): void {
-    this.chat.clearMessages();
+    this.chat.reset();
   }
 }

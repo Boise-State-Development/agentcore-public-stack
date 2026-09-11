@@ -301,6 +301,13 @@
               (shareClicked)="onAssistantShare()" />
           </div>
         }
+        <!-- Cost + context, same placement as full-page mode. Pinned to this
+             chat's own session: an embedded chat is deliberately NOT the viewed
+             session, so an unpinned badge would report whatever conversation the
+             user last opened — a plausible number belonging to something else. -->
+        <div class="flex justify-end pb-1 pr-[10px]">
+          <app-session-cost-badge [sessionId]="sessionId()" />
+        </div>
         <app-chat-input
           [showAnnouncements]="showAnnouncements()"
           [announcementPlacement]="announcementPlacement()"

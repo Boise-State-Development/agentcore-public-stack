@@ -9,6 +9,7 @@ import { firstValueFrom } from 'rxjs';
 import { HttpClient } from '@angular/common/http';
 import { SessionService } from '../session/session.service';
 import { ErrorService } from '../../../services/error/error.service';
+import { isPreviewSession } from '../../../shared/constants/session.constants';
 
 class RetriableError extends Error {
   constructor(message?: string) {
@@ -343,6 +344,18 @@ export class ChatHttpService {
    * onerror on abort), so the streaming teardown happens here.
    */
   cancelChatRequest(sessionId: string): void {
+    // A preview session has no server-side session record, so the interrupt
+    // marker and the aggregates re-fetch below have nothing to address — they
+    // would 404 and, worse, leave an interrupted-turn marker against an id
+    // that will never be loaded again. Abort the transport and tear down
+    // locally; that is the whole of "stop" for a session nobody persists.
+    if (isPreviewSession(sessionId)) {
+      this.chatStateService.abortRequest(sessionId);
+      this.messageMapService.endStreaming(sessionId);
+      this.chatStateService.setChatLoading(sessionId, false);
+      return;
+    }
+
     // Authoritative intent signal: the transport can't distinguish a Stop
     // click from a dropped socket, so we tell the backend explicitly this
     // was deliberate BEFORE aborting (so the request is queued while the
