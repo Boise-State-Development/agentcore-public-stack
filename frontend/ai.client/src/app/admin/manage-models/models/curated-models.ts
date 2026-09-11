@@ -401,11 +401,30 @@ const bedrockResponsesDefaults = (): Pick<
 });
 
 /**
- * GPT-5.6 on `bedrock-runtime` via the Responses API.
+ * The OpenAI family on `bedrock-runtime` via the Responses API.
  *
  * Rates are the **Geo CRIS, Short Context (272K)** row from each model card —
  * Geo CRIS is the tier the `us.*` inference profiles resolve to, and these
- * models are inference-profile-only (no ON_DEMAND). Verified 2026-09-06.
+ * models are inference-profile-only (no ON_DEMAND). Verified 2026-09-06,
+ * re-verified for GPT-6 Astra 2026-09-11.
+ *
+ * **Every card in this family publishes two price tables, and the tier is
+ * selected by the ACTUAL token count of the request** — not by a declared
+ * window, and not by a separate model id. Settled 2026-09-11 (see
+ * `docs/kaizen/review-queue.md`): the Price List API encodes `-long-ctx` as a
+ * value of `tokenType` under an identical `model` attribute, GPT-5.6 Terra
+ * declares a 1M window against a single model id yet still publishes a
+ * reachable Short Context table, and our own Cost Explorer rows bill
+ * `_standard` and never `-long-ctx` while calling those 1M-window ids. There
+ * is no field in which a window could be declared: `maxInputTokens` below is
+ * ours, is read only for compaction and telemetry, and never reaches a
+ * Bedrock request.
+ *
+ * That is exactly why `maxInputTokens: 272_000` is load-bearing. It does not
+ * protect us from being over-charged — nothing here does. It keeps the single
+ * flat rate per bucket that `CuratedModel` can hold **arithmetically true**,
+ * because a request that crosses 272K bills input at 2x, output at 1.5x and
+ * both cache buckets at 2x. Raising it silently UNDER-charges every long turn.
  *
  * `supportedParams` is deliberately absent. AWS publishes no parameter table
  * for these models (`model-parameters-openai.html` documents only the
@@ -415,6 +434,39 @@ const bedrockResponsesDefaults = (): Pick<
  * only from published or measured evidence.
  */
 export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
+  {
+    key: 'gpt-6-astra',
+    tagline: 'Frontier model for the hardest end-to-end work — reasoning, coding and research.',
+    capabilities: ['Reasoning', 'Vision', 'Long context', 'Prompt caching'],
+    pricingTier: 'regional',
+    template: {
+      ...bedrockResponsesDefaults(),
+      // UNVERIFIED, and the one thing here worth re-checking before anyone
+      // banks cache savings on this row: Astra's card lists Implicit and
+      // Explicit Prompt Caching under `bedrock-mantle` ONLY. Caching appears
+      // in neither column of its `bedrock-runtime` feature table, where every
+      // GPT-5.6 card lists it under both endpoints — and this row routes over
+      // `bedrock-runtime`. `supportsCaching` still inherits `true`, which is
+      // the safe stance either way: `false` would zero the cache-rate fields
+      // and price cached tokens at $0.00 while AWS bills them in full. If
+      // caching turns out not to fire here the cost is a stale capability
+      // chip, not a mispriced bill.
+      modelId: 'us.openai.gpt-6-astra',
+      modelName: 'GPT-6 Astra',
+      // Geo CRIS Short Context: $11.00 / $55.00. Global CRIS is $10.00 /
+      // $50.00. Long Context (1.05M) would be $22.00 / $82.50 — unreachable
+      // while maxInputTokens stays pinned at the 272K boundary.
+      ...ratesWithDerivedCache(11.0, 55.0),
+      // Astra departs from its GPT-5.6 siblings here: its card publishes a
+      // real cap (`Max output tokens: 128,000`) where theirs say N/A, so this
+      // overrides the family default of `null`. Declaring the published
+      // number beats inheriting "unknown".
+      maxOutputTokens: 128_000,
+      // Published on the card as April 30, 2026 — again unlike the GPT-5.6
+      // cards, which state none.
+      knowledgeCutoffDate: '2026-04-30',
+    },
+  },
   {
     key: 'gpt-5-6-sol',
     tagline: 'OpenAI\'s most capable model — frontier reasoning and agentic work.',

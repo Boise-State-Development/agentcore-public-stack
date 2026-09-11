@@ -265,7 +265,7 @@ describe('ModelCatalogPage', () => {
     });
   });
 
-  describe('curated bedrock-responses (GPT-5.6) entries', () => {
+  describe('curated bedrock-responses (OpenAI family) entries', () => {
     it('renders them on their own tab', () => {
       const page = createComponent();
       page.selectTab('bedrock-responses');
@@ -308,6 +308,34 @@ describe('ModelCatalogPage', () => {
       // silently block params the model actually accepts.
       for (const model of CURATED_BEDROCK_RESPONSES_MODELS) {
         expect(model.template.supportedParams ?? null).toBeNull();
+      }
+    });
+
+    it('curates GPT-6 Astra on the Short Context rate card', () => {
+      // The 272K cap is covered by the family loop above; this pins the rates
+      // that cap keeps correct. Geo CRIS Short Context is $11.00 / $55.00 —
+      // Long Context (1.05M) is $22.00 / $82.50, and the tier is chosen by the
+      // request's actual token count, so nothing but the cap keeps a single
+      // flat rate per bucket true.
+      const astra = CURATED_BEDROCK_RESPONSES_MODELS.find(m => m.key === 'gpt-6-astra');
+
+      expect(astra?.template.modelId).toBe('us.openai.gpt-6-astra');
+      expect(astra?.template.inputPricePerMillionTokens).toBeCloseTo(11.0, 6);
+      expect(astra?.template.outputPricePerMillionTokens).toBeCloseTo(55.0, 6);
+    });
+
+    it('declares Astra\'s published output cap and cutoff, which its siblings lack', () => {
+      // Astra's card publishes `Max output tokens: 128,000` and an April 30,
+      // 2026 cutoff; every GPT-5.6 card states neither, which is why the
+      // family default is null for both. Inheriting the default here would
+      // discard two numbers AWS actually publishes.
+      const astra = CURATED_BEDROCK_RESPONSES_MODELS.find(m => m.key === 'gpt-6-astra');
+
+      expect(astra?.template.maxOutputTokens).toBe(128_000);
+      expect(astra?.template.knowledgeCutoffDate).toBe('2026-04-30');
+
+      for (const sibling of CURATED_BEDROCK_RESPONSES_MODELS.filter(m => m.key !== 'gpt-6-astra')) {
+        expect(`${sibling.key}:${sibling.template.maxOutputTokens}`).toBe(`${sibling.key}:null`);
       }
     });
   });
