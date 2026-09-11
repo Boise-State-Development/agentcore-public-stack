@@ -93,7 +93,15 @@ export class MessageActionsComponent {
   private isBrowser = isPlatformBrowser(this.platformId);
   private markdown = inject(MarkdownService);
 
-  message = input.required<Message>();
+  /**
+   * The assistant messages of one run (see AssistantMessageComponent).
+   *
+   * A run rather than a message because the agent loop emits a separate
+   * Bedrock message per tool round trip, and Copy must yield the whole
+   * response — text the model wrote before a tool call is still part of what
+   * the user is reading. Taking only the final message would silently drop it.
+   */
+  messages = input.required<Message[]>();
 
   /** Show a "Continue" button when this is the last assistant message of a
    *  recoverable max_tokens-truncated turn. */
@@ -112,8 +120,8 @@ export class MessageActionsComponent {
   private resetTimeout: ReturnType<typeof setTimeout> | null = null;
 
   protected copyableText = computed(() =>
-    this.message()
-      .content.filter(isTextContentBlock)
+    this.messages()
+      .flatMap((message) => message.content.filter(isTextContentBlock))
       .map((block) => block.text)
       .join('\n\n')
       .trim(),

@@ -8,6 +8,7 @@ import {
 import { KeyValuePipe } from '@angular/common';
 import { JsonSyntaxHighlightPipe } from '../tool-use/json-syntax-highlight.pipe';
 import { ToolCallGroup, ToolCallDisplay } from './tool-rail.model';
+import { describeToolCall, describeToolGroup } from './tool-summary';
 import { PinScrollToBottomDirective } from './pin-scroll-to-bottom.directive';
 import { ToolResultContent } from '../../../../services/models/message.model';
 
@@ -28,33 +29,51 @@ export class ToolRailComponent {
   /** Track which individual tool results are fully expanded (for long results in fallback mode) */
   expandedResultIds = signal<Set<string>>(new Set());
 
-  /** Max tool names shown in the collapsed header before truncating */
-  private readonly COLLAPSED_MAX = 3;
-
-  /** Determine display mode: true if any summary text exists */
-  hasSummaries = computed(() =>
-    !!this.group().groupSummary || this.group().calls.some(c => c.summary)
+  /**
+   * The one line shown collapsed.
+   *
+   * `groupSummary` is the model-generated sentence when the tool-summary
+   * side-channel produced one, and the deterministic formatter's line
+   * otherwise — the caller always supplies one of the two. The local fallback
+   * here only covers a group built without either (older callers, tests).
+   */
+  headline = computed(
+    () => this.group().groupSummary || describeToolGroup(this.group().calls),
   );
 
-  /** Tool calls visible in the collapsed header (first N) */
-  collapsedHeaderCalls = computed(() =>
-    this.group().calls.slice(0, this.COLLAPSED_MAX)
+  /** True while any call in the group is still executing. */
+  isRunning = computed(() =>
+    this.group().calls.some(c => c.status === 'pending'),
   );
 
-  /** Number of tool calls beyond the collapsed limit */
-  overflowCount = computed(() =>
-    Math.max(0, this.group().calls.length - this.COLLAPSED_MAX)
-  );
+  /**
+   * Total measured execution time across the group, or null when nothing has
+   * been timed.
+   *
+   * Null rather than zero on a reloaded conversation: durations come from the
+   * live `agent_status` stream and are deliberately not persisted, so showing
+   * "0ms" for history would be a number the user could not trust.
+   */
+  totalDurationMs = computed(() => {
+    const total = this.group().calls.reduce(
+      (sum, c) => sum + (c.durationMs ?? 0),
+      0,
+    );
+    return total > 0 ? total : null;
+  });
 
-  /** Auto-expand if any tool is still pending */
-  shouldAutoExpand = computed(() =>
-    this.group().calls.some(c => c.status === 'pending')
-  );
+  /** How many calls in the group failed, or null when none did. */
+  failureCount = computed(() => {
+    const failures = this.group().calls.filter(
+      c => c.status === 'error' || c.result?.status === 'error',
+    ).length;
+    return failures > 0 ? failures : null;
+  });
 
-  /** Effective expanded state: auto-expand when tools are running */
-  effectiveExpanded = computed(() =>
-    this.isExpanded() || this.shouldAutoExpand()
-  );
+  /** The human line for one call inside the expanded rail. */
+  describe(call: ToolCallDisplay): string {
+    return call.summary || describeToolCall(call);
+  }
 
   /** Toggle rail expand/collapse */
   toggleExpanded(): void {

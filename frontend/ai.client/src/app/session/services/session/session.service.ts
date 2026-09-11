@@ -79,6 +79,14 @@ export interface MessagesListResponse {
    * so the `mcp-app-frame` survives a refresh. Present only on the first page.
    */
   uiResources?: UiResourceEvent[];
+  /**
+   * Persisted model-generated tool-batch summaries, each shaped like the live
+   * `tool_group_summary` SSE event. Replayed on load to re-seed
+   * ToolInsightService so a reloaded conversation keeps the prose line the
+   * user saw live instead of downgrading to the deterministic formatter.
+   * Present only on the first page.
+   */
+  toolSummaries?: { batchId?: string; toolUseIds?: string[]; summary?: string }[];
 }
 
 /**

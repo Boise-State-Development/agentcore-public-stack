@@ -23,6 +23,7 @@ import { SteeringService } from './steering.service';
 import { buildSteeringMessage } from './steering';
 import { ArtifactStateService } from '../artifacts/artifact-state.service';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
+import { ToolInsightService } from './tool-insight.service';
 import { SessionService } from '../session/session.service';
 import type {
   OAuthRequiredEvent,
@@ -166,6 +167,7 @@ export class StreamParserService {
   private artifactState = inject(ArtifactStateService);
   private mcpAppState = inject(McpAppStateService);
   private sessionService = inject(SessionService);
+  private toolInsight = inject(ToolInsightService);
 
   // =========================================================================
   // Per-Session State
@@ -503,6 +505,18 @@ export class StreamParserService {
         this.steering.markToolUsed(state.sessionId);
       },
       onToolResult: (data) => this.handleToolResult(state, data),
+
+      // Live narration. Not viewed-session-scoped: a background
+      // conversation's status stays with that conversation rather than
+      // leaking onto the one on screen (same reasoning as model_retry).
+      onAgentStatus: (data) => this.toolInsight.recordStatus(state.sessionId, data),
+
+      // A finished batch's model-generated summary. Arrives out of band with
+      // the content stream, keyed by tool-use id, so it can land after the
+      // rail that shows it has already rendered — the registry is a signal,
+      // so the rail re-renders when it does.
+      onToolGroupSummary: (data) =>
+        this.toolInsight.recordSummary(state.sessionId, data),
 
       onModelRetry: (data: ModelRetryEvent) => {
         // Not viewed-session-scoped on purpose: this signal is read per
@@ -898,6 +912,9 @@ export class StreamParserService {
     this.finalizeCurrentMessage(state);
     state.isStreamComplete.set(true);
     state.modelRetry.set(null);
+    // "Using list_courses" on a finished turn is a lie, not a stale nicety.
+    // Durations and summaries already recorded are untouched.
+    this.toolInsight.clearStatus(state.sessionId);
     state.streamState = StreamState.Completed;
 
     // Automatic cleanup after delay. Guarded on the stream ID so a session
@@ -1057,6 +1074,7 @@ export class StreamParserService {
   private setError(state: ParserSessionState, message: string): void {
     state.error.set(message);
     state.isStreamComplete.set(true);
+    this.toolInsight.clearStatus(state.sessionId);
     state.streamState = StreamState.Error;
   }
 
