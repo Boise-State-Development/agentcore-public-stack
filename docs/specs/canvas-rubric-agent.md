@@ -70,7 +70,7 @@ ID, hand-author a CSV, run a cell, import to Canvas. This replaces the whole loo
 | Canvas instance | `boisestatecanvas.test.instructure.com` | `boisestatecanvas.instructure.com` |
 | Tool record | `TOOL#canvas_faculty`, `enabledByDefault=false`, `isPublic=false` | same, `isPublic=true` |
 | Cached tool snapshot | 7 tools (stale) | 7 tools (stale) |
-| RBAC | `faculty` grants `canvas_faculty` (bare) | `faculty`, `staff`, `student` grant it (bare) |
+| RBAC | `faculty` grants `canvas_faculty` (bare); `isPublic: false` | `faculty`, `staff`, `student` grant it (bare) — **and `isPublic: true`, which grants it to every authenticated user regardless of role** (§9) |
 
 Verify the live tool surface with:
 
@@ -604,7 +604,7 @@ Ordered; each step has a different owner, which is why it is worth writing down.
 | 5 | **Announce the reconnect** before step 4 lands — every connected faculty member gets a consent prompt on their next Canvas use, including for tools whose scopes did not change (§4.3) | comms |
 | 6 | Admin → Tools → Canvas for Faculty → *Discover from server* (refreshes 7 → 44) | tools admin |
 | 7 | Flag `create_rubric`, `associate_rubric` **and `delete_rubric`** as **Needs approval**; save | tools admin |
-| 8 | **Fix the `student` role grant first** — see §9. After step 6 the per-tool picker exposes all 42 tools, so students would see `grade_submission`, `create_assignment`, `create_rubric` | RBAC admin |
+| 8 | **Decide who should hold the 44-tool version** — see §9. Step 6 widens it from 7 tools to 44 for *every authenticated user*, because `canvas_faculty` is `isPublic: true` (a role grant alone does not gate it). At minimum flag the destructive tools `needsApproval` | tools admin + RBAC admin |
 | 9 | Build the KB (§7.4) and the Agent (§6) | eng |
 | 10 | Smoke-test §8.1 criteria 3–7 against a sandbox course before publishing the listing | eng |
 
@@ -633,14 +633,46 @@ listing goes public.
 - **Memory space.** Binding one would let an instructor's house style (preferred scale, tone,
   standing outcomes) persist so the second rubric asks less than the first. v1 supports one Memory
   Space per Agent. Worth a phase-4 decision once we see whether faculty repeat themselves.
-- **Prod `student` role grants `canvas_faculty` — now a cutover blocker, not a musing.** Prod
-  RBAC grants this tool to `student`, `staff` and `faculty`. Harmless today (7 read-ish tools),
-  but step 6 of §8.2 caches all 42, and the per-tool picker then exposes `grade_submission`,
-  `bulk_grade_submissions`, `create_assignment` and `create_rubric` to students. Canvas 403s them
-  on their own role, so it is not privilege escalation — but a student seeing "grade submissions"
-  in their own tool list is its own problem, independent of whether the call would succeed.
-  **Resolve before §8.2 step 6, not after.** The likely fix is dropping the grant from `student`;
-  confirm nothing student-facing depends on it first.
+- **Who sees the 44-tool `canvas_faculty` in prod.** *An earlier draft of this spec said to "fix
+  the prod `student` role grant." That advice was wrong twice over, and the correction matters
+  because it changes the action.*
+
+  **First: dropping the role grant would change nothing.** `canvas_faculty` is
+  **`isPublic: true`** in prod, and `rbac/service.py` `_tool_grant_set` unions every public tool
+  into each user's grant set (`granted | set(await get_public_tool_ids())`). There are two
+  independent grants. Removing one leaves the other, and every authenticated user keeps the tool.
+
+  **Second: student access is probably deliberate, not an oversight.** It is one of 18 public
+  tools in prod and the *only* Canvas tool there — `student_myboisestate` is the portal, not
+  Canvas. With today's 7 read-ish tools, a student connecting Canvas gets "what are my courses
+  and assignments", scoped by Canvas to their own enrollments. Someone chose that, twice.
+
+  **The real issue is not who holds the tool — it is what the tool becomes.** Step 6 of §8.2
+  takes that same population from 7 tools to 44, putting `grade_submission`,
+  `bulk_grade_submissions`, `create_assignment` and `delete_rubric` in their picker. This is
+  **not** privilege escalation: Canvas enforces per-enrollment and a student's token 403s on
+  teacher actions. Three costs remain, in order:
+
+  1. **Canvas permissions are per-enrollment, not per-person.** Someone with the `student` app
+     role who also TAs a lab holds teacher rights *in that course*, so `grade_submission` and
+     `delete_rubric` genuinely work for them there. Narrow, but it is grading.
+  2. A student seeing "grade submissions" in their own tool list generates support tickets.
+  3. ~13.2k tokens of tool definitions in the prefix for users who can use a fraction of them.
+
+  **Options:**
+
+  - **A — leave it.** Accept that TAs can grade through chat. May even be desirable.
+  - **B — set `isPublic: false` *and* drop the `student` grant.** Both, or nothing changes.
+    Restricts to faculty/staff/admin but breaks the student "what are my assignments" use.
+  - **C — split into two catalog records** against the same server: a read-only student one and
+    the full faculty one. Preserves both uses. ⚠️ **Verify this actually filters at runtime
+    before relying on it** — a bare-id grant loads whatever the live server returns, and a second
+    record with a narrower cached `tools` list may restrict only the picker, not the turn.
+  - **D — flag the destructive tools `needsApproval`** so even a TA gets a prompt before a grade
+    changes. Cheap, certain, and stacks with any of the above.
+
+  Recommendation: **D regardless** — one checkbox per tool, and it closes the grading path. Then
+  choose between A and C on whether students should keep Canvas access.
 - **Rubric preview as an MCP App.** A rendered rubric grid would be a far better confirmation step
   than a markdown table, and the natural place to put the approve/publish control. The
   `canvas-faculty` server serves no UI resources today. Post-v1.
