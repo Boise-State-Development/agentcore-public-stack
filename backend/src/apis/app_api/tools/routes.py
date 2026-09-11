@@ -25,6 +25,7 @@ from apis.shared.tools.models import (
     UserToolsResponse,
     ToolPreferencesRequest,
     MCPDiscoverResponse,
+    ToolCapabilitySnapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,34 @@ async def discover_my_tool_tools(
         raise HTTPException(status_code=502, detail=str(exc))
 
     return MCPDiscoverResponse(tools=tools)
+
+
+@router.get("/{tool_id}/capabilities", response_model=ToolCapabilitySnapshot)
+async def get_my_tool_capabilities(
+    tool_id: str,
+    user: User = Depends(get_current_user_from_session),
+):
+    """The stored prompts/resources snapshot for a tool the user can access.
+
+    Reads the persisted snapshot rather than probing the server. A detail view
+    has to render immediately, a 3LO server cannot be probed without the user's
+    consent token, and a catalogue of thirty servers opening a session each
+    would be unusable. Refreshing is an admin action.
+
+    A tool that has never been discovered returns an empty snapshot with
+    ``discoveredAt: null`` rather than a 404 — "nobody has asked this server
+    yet" is a state the UI should render, not an error.
+    """
+    service = get_tool_catalog_service()
+
+    # RBAC: same gate as the per-tool discover route — the user must already
+    # have access to this catalog tool.
+    accessible = await service.get_user_accessible_tools(user)
+    if not any(t.tool_id == tool_id for t in accessible):
+        raise HTTPException(status_code=404, detail="Tool not found or not accessible")
+
+    snapshot = await service.repository.get_capabilities(tool_id)
+    return snapshot or ToolCapabilitySnapshot(tool_id=tool_id)
 
 
 # =============================================================================
