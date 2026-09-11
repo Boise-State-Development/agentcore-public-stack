@@ -2,6 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  effect,
   inject,
   input,
   linkedSignal,
@@ -10,9 +11,10 @@ import {
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowPath, heroLockClosed } from '@ng-icons/heroicons/outline';
 import { Tool, ToolService } from '../../../services/tool/tool.service';
+import { ToolCapabilityService } from '../../../services/tool-capability/tool-capability.service';
 
 /** Which panel of the detail view is showing. */
-export type ToolDetailTab = 'tools' | 'about';
+export type ToolDetailTab = 'tools' | 'prompts' | 'resources' | 'about';
 
 /**
  * The second pane of the tools drawer: everything about one tool that a row
@@ -25,11 +27,16 @@ export type ToolDetailTab = 'tools' | 'about';
  * detail gets the drawer's full width, and the list keeps its scroll position
  * underneath.
  *
- * Deliberately absent: MCP **prompts** and **resources**. The backend only ever
- * calls `tools/list` (see `app_api/tools/discovery.py`); there is no
- * `prompts/list` or `resources/list` call anywhere in the stack, so a tab for
- * either would be an empty promise. The strip is built to take them once
- * discovery exists.
+ * Prompts and resources come from the stored capability snapshot, never a live
+ * probe: probing opens an MCP session per server, and a 3LO server cannot be
+ * reached without a consent token the browser does not hold. An admin refreshes
+ * the snapshot; this pane reads it.
+ *
+ * They are read-only here. Acting on them needs two MCP methods the backend
+ * does not expose yet — `prompts/get` to expand a template's arguments into
+ * real text, and `resources/read` to fetch a resource's contents — so an
+ * "Insert" that pasted a prompt's *name* into the composer would be a worse
+ * answer than none.
  */
 @Component({
   selector: 'app-tool-detail',
@@ -41,8 +48,18 @@ export type ToolDetailTab = 'tools' | 'about';
 })
 export class ToolDetailComponent {
   protected readonly toolService = inject(ToolService);
+  private readonly capabilityService = inject(ToolCapabilityService);
 
   readonly tool = input.required<Tool>();
+
+  constructor() {
+    // Load the snapshot when a tool is shown. Keyed on the id so drilling into
+    // a second server fetches its own; `ensure` is a no-op for one already
+    // cached, so re-opening the same tool costs nothing.
+    effect(() => {
+      void this.capabilityService.ensure(this.tool().toolId);
+    });
+  }
 
   protected readonly isMcpServer = computed(() => {
     const protocol = this.tool().protocol;
@@ -69,10 +86,41 @@ export class ToolDetailComponent {
 
   protected readonly subTools = computed(() => this.tool().serverTools ?? []);
 
-  protected readonly tabs = computed(() => [
-    { id: 'tools' as const, label: 'Tools', count: this.subTools().length },
-    { id: 'about' as const, label: 'About', count: null },
-  ]);
+  /** The stored snapshot for this tool, or null while loading / on failure. */
+  protected readonly capabilities = computed(() =>
+    this.capabilityService.capabilitiesFor(this.tool().toolId),
+  );
+
+  protected readonly capabilitiesLoading = computed(() =>
+    this.capabilityService.isLoading(this.tool().toolId),
+  );
+
+  protected readonly prompts = computed(() => this.capabilities()?.prompts ?? []);
+  protected readonly resources = computed(() => this.capabilities()?.resources ?? []);
+
+  /** Never discovered — distinct from "discovered and offers nothing". */
+  protected readonly neverDiscovered = computed(() => {
+    const snapshot = this.capabilities();
+    return !!snapshot && !snapshot.discoveredAt;
+  });
+
+  /**
+   * Prompts and resources are only offered for an external MCP server. A local
+   * tool has no server to ask, and a Gateway target exposes tools only.
+   */
+  protected readonly tabs = computed(() => {
+    const tabs: { id: ToolDetailTab; label: string; count: number | null }[] = [
+      { id: 'tools', label: 'Tools', count: this.subTools().length },
+    ];
+    if (this.tool().protocol === 'mcp_external') {
+      tabs.push(
+        { id: 'prompts', label: 'Prompts', count: this.prompts().length },
+        { id: 'resources', label: 'Resources', count: this.resources().length },
+      );
+    }
+    tabs.push({ id: 'about', label: 'About', count: null });
+    return tabs;
+  });
 
   /** Initials, so a row reads as an object rather than a line of text. */
   protected readonly monogram = computed(() => {
