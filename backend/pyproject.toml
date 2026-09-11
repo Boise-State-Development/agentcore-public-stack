@@ -106,6 +106,34 @@ all = [
     "agentcore-stack[agentcore,bidi,dev]",
 ]
 
+[tool.uv]
+# Guard rail on a TRANSITIVE dependency — this is not a loosened pin.
+#
+# `mcp` arrives only via `strands-agents`; we do not depend on it directly and
+# deliberately do not promote it to a direct dependency. `strands-agents==1.55.0`
+# — the version pinned above, today — already declares `mcp>=1.23.0,<2.2`, so
+# the resolver is free to cross into `mcp` 2.x whenever it gets the chance.
+#
+# The ONLY thing holding us on the 1.x line right now is incidental: `mcp` 2.x
+# pulls `httpx2>=2.5.0`, which needs `idna>=3.18`, and we pin `idna==3.15` for
+# an unrelated Dependabot alert. A routine security bump of `idna` would quietly
+# unblock the major crossing — nobody would be choosing it, and nothing in the
+# diff would say "MCP".
+#
+# That crossing lands under `src/agents/main_agent/integrations/mcp_apps.py`,
+# which substitutes `strands.tools.mcp.mcp_client.ClientSession` with
+# `_UIExtensionClientSession` to advertise the MCP Apps UI extension (SEP-1865)
+# on `initialize`. That seam reaches through a Strands internal into an MCP SDK
+# class and has never been exercised against 2.x — where the transport
+# dependency itself changed (httpx -> httpx2) and the types moved to a separate
+# `mcp-types` distribution. The failure mode is silent: MCP App frame headers
+# degrade to a generic glyph rather than raising an ImportError.
+#
+# A constraint, not a dependency: it bounds the version IF `mcp` is in the
+# resolution graph, without adding it to our own dependency metadata. Lift it
+# deliberately, together with a test pass over that `ClientSession` patch.
+constraint-dependencies = ["mcp<2"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
