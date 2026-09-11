@@ -185,3 +185,46 @@ class ImportDocumentsResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     documents: List[DocumentResponse] = Field(..., description="Created document records, each in 'uploading' state")
+
+
+class ExtractedChunkResponse(BaseModel):
+    """One passage as the knowledge base actually holds it.
+
+    ``text`` is the FULL extracted text, deliberately not truncated. The existing
+    per-answer citation trace caps excerpts at 500 characters, which is exactly why it
+    cannot serve this purpose: a flattened table's damage is usually past the cut, so a
+    truncated excerpt of a mangled table reads like a fine excerpt of a fine table.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    text: str = Field(..., description="Full extracted text of this chunk, untruncated")
+    order: int = Field(..., description="Position in the returned set — NOT the document's own order")
+    score: Optional[float] = Field(None, description="Relevance as the backend reported it; higher is better")
+    page: Optional[int] = Field(None, description="Page number when the backend supplied one; never inferred")
+
+
+class ExtractedChunksResponse(BaseModel):
+    """What the knowledge base extracted from one document.
+
+    ``available`` is false, with a ``reason``, for a document the inspector cannot
+    show — a classic knowledge base cannot scope a retrieval to a single document. The
+    shape is identical either way so the client never branches on the engine.
+
+    ``capReached`` is honesty rather than a paging hint. Bedrock exposes no
+    chunk-enumeration API, so a complete set is never guaranteed and the UI must say
+    "up to N" instead of implying the document has exactly N chunks.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    documentId: str = Field(..., description="Document identifier", alias="documentId")
+    fileName: str = Field(..., description="Original filename", alias="fileName")
+    engine: str = Field(..., description="Engine serving this knowledge base: 'managed' or 's3vectors'")
+    available: bool = Field(..., description="False when this engine cannot show a single document's chunks")
+    reason: Optional[str] = Field(None, description="Owner-facing explanation when available is false")
+    chunks: List[ExtractedChunkResponse] = Field(default_factory=list, description="The chunks returned, unordered")
+    returned: int = Field(0, description="How many chunks are in this response")
+    capReached: bool = Field(
+        False, description="True when the per-call ceiling was hit, so more chunks may exist", alias="capReached"
+    )

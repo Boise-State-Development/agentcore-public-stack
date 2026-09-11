@@ -96,3 +96,43 @@ export interface DownloadUrlResponse {
   expiresIn: number;
 }
 
+/**
+ * One passage as the knowledge base actually holds it.
+ *
+ * `text` is the FULL extracted text. The per-answer citation trace caps excerpts at
+ * 500 characters, which is precisely why it cannot serve this purpose: a flattened
+ * table's damage is usually past the cut, so a truncated excerpt of a mangled table
+ * reads like a fine excerpt of a fine table.
+ */
+export interface ExtractedChunk {
+  text: string;
+  /** Position in the returned set — NOT the document's own order. */
+  order: number;
+  score?: number | null;
+  /** Page when the backend supplied one. Never inferred. */
+  page?: number | null;
+}
+
+/**
+ * Response from GET /assistants/{assistantId}/documents/{documentId}/chunks
+ *
+ * `available` is false with a `reason` when the engine cannot show a single
+ * document's chunks — a classic knowledge base cannot scope a retrieval to one
+ * document, and approximating would render other documents' content under this
+ * document's name. The shape is identical either way so the UI never branches on
+ * engine.
+ *
+ * `capReached` is honesty rather than a paging hint: Bedrock exposes no
+ * chunk-enumeration API, so a complete set is never guaranteed.
+ */
+export interface ExtractedChunksResponse {
+  documentId: string;
+  fileName: string;
+  engine: string;
+  available: boolean;
+  reason?: string | null;
+  chunks: ExtractedChunk[];
+  returned: number;
+  capReached: boolean;
+}
+

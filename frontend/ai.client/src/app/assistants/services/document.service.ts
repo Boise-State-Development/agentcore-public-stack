@@ -8,6 +8,7 @@ import {
   Document,
   DocumentsListResponse,
   DownloadUrlResponse,
+  ExtractedChunksResponse,
   STALE_DOCUMENT_THRESHOLD_MS,
 } from '../models/document.model';
 import { parseIso } from '../../utils/date';
@@ -227,6 +228,46 @@ export class DocumentService {
       );
     } catch (err) {
       throw this.handleApiError(err, 'Failed to get download URL');
+    }
+  }
+
+  /**
+   * Read the content the knowledge base actually extracted from a document.
+   *
+   * The tooling half of the §5.41 decision: the managed backend flattens a
+   * column-structured diagram at ingestion, so a per-column question gets a
+   * confident wrong answer with no trace. This is how an owner sees that for
+   * themselves and decides to reformat their source.
+   *
+   * A 409 means the document exists but has nothing to show yet (still processing,
+   * or its knowledge base is still being created). That is surfaced as a `reason`
+   * rather than thrown, because it is an answer to the user's question, not a fault
+   * they need to see as an error.
+   */
+  async getExtractedChunks(
+    assistantId: string,
+    documentId: string,
+  ): Promise<ExtractedChunksResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.get<ExtractedChunksResponse>(
+          `${this.baseUrl()}/${assistantId}/documents/${documentId}/chunks`,
+        ),
+      );
+    } catch (err) {
+      if (err instanceof HttpErrorResponse && err.status === 409) {
+        return {
+          documentId,
+          fileName: '',
+          engine: '',
+          available: false,
+          reason: err.error?.detail ?? 'This document is not ready to inspect yet.',
+          chunks: [],
+          returned: 0,
+          capReached: false,
+        };
+      }
+      throw this.handleApiError(err, 'Failed to read extracted content');
     }
   }
 
