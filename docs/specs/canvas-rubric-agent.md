@@ -1,6 +1,6 @@
 # Spec: Canvas Rubric Agent
 
-**Status:** Design approved, not yet implemented. Auth path validated in dev 2026-09-10 (§10); blocked on content-fidelity fixes (§4).
+**Status:** Auth + consent paths validated in dev 2026-09-10 (§10). Content-fidelity fixes built in mcp-servers#38, awaiting merge + deploy. Agent itself not yet built.
 **Audience:** A fresh implementation session with no prior context — this doc is self-contained.
 **Owner:** Phil Merrell
 **Last updated:** 2026-09-10
@@ -107,7 +107,7 @@ Canvas, so any bearer value works.
 
 ## 4. Blockers — these must ship before the agent is buildable
 
-### 4.1 Rating `long_description` is silently dropped — HARD BLOCKER
+### 4.1 Rating `long_description` is silently dropped — FIX BUILT, mcp-servers#38
 
 `create_rubric`'s ratings loop sends only two fields:
 
@@ -136,7 +136,7 @@ alone still produces a wrong rubric.
 Fix: pass `long_description` through on ratings. One line. **Nothing else in this spec matters
 until this lands** — §7.2's field-mapping skill is inert without it.
 
-### 4.2 No `update_rubric` / `delete_rubric`
+### 4.2 No `update_rubric` / `delete_rubric` — FIX BUILT, mcp-servers#38
 
 The server exposes `list_rubrics`, `get_rubric`, `create_rubric`, `associate_rubric`,
 `grade_with_rubric` — no update, no delete. The conversation can iterate freely right up to the
@@ -157,7 +157,12 @@ url:POST|/api/v1/courses/:course_id/rubrics
 url:POST|/api/v1/courses/:course_id/rubric_associations
 ```
 
-Fix: redeploy the current `canvas-faculty` image to prod; have a Canvas admin add the four scopes
+**mcp-servers#38 adds two more scopes** — `url:PUT|/api/v1/courses/:course_id/rubrics/:id` and
+`url:DELETE|/api/v1/courses/:course_id/rubrics/:id` — for `update_rubric` / `delete_rubric`.
+**Six scopes total now, not four**, and dev needs the two new ones as well before those tools
+work there.
+
+Fix: redeploy the current `canvas-faculty` image to prod; have a Canvas admin add the six scopes
 to the boisestate.ai developer key (required if *Enforce Scopes* is on — the fact that we send a
 specific list implies it is); update the provider record in both environments.
 
@@ -199,7 +204,7 @@ both directions:
 less-common path is worth it because `associate_rubric` is the call that re-points the
 assignment (§4.5) — the one side effect in this feature that touches student-visible grades.
 
-### 4.5 Attaching a rubric silently rewrites the assignment's points — NEW, found 2026-09-10
+### 4.5 Attaching a rubric silently rewrites the assignment's points — MITIGATED, mcp-servers#38
 
 `associate_rubric` with `use_for_grading: true` (the default) caused Canvas to change the
 assignment's `points_possible` from **5.0 to 8.0** — the rubric's total. Nobody asked for that,
@@ -222,7 +227,7 @@ Better: `associate_rubric` and `create_rubric` return the assignment's before/af
 `points_possible` first and, when the rubric total differs, asks the instructor which number
 should win before writing.
 
-### 4.6 `get_rubric` cannot confirm an attachment — NEW, found 2026-09-10
+### 4.6 `get_rubric` cannot confirm an attachment — MITIGATED, mcp-servers#38
 
 After a successful `associate_rubric` (association id returned, attachment real),
 `get_rubric` returned `"associations": []`. The attachment *was* live —
@@ -234,7 +239,7 @@ Consequence: the "call `get_rubric` and compare" verification step in §7.3 does
 written. Verify attachment via `get_assignment_details` instead; `get_rubric` remains correct
 for criteria and ratings. Worth a follow-up to find out why the include is not populating.
 
-### 4.7 Recommended at the same time (not blocking)
+### 4.7 Recommended at the same time — DONE in mcp-servers#38
 
 - **Give `criteria` a real schema.** The live tool definition is
   `{"type":"array","items":{"type":"object","additionalProperties":true}}` — no properties, no
@@ -299,7 +304,7 @@ for them anyway is the difference between a guide and a form.
 - "Turn an existing rubric into a Canvas rubric"
 - "Build a rubric aligned to my program's outcomes"
 
-**Token budget note.** The `canvas_faculty` binding puts ~11.7k tokens of tool definitions in the
+**Token budget note.** After mcp-servers#38 this is ~13.2k (44 tools + the structured `criteria` schema). The `canvas_faculty` binding puts ~13.2k tokens of tool definitions in the
 cacheable prefix on every turn of every session with this agent. It is deterministic and cached,
 so it is a one-time write amortized across the session — acceptable, but it is the single largest
 line item in this agent's cost and the reason §7.1 must stay short. The rubric workflow itself
@@ -593,12 +598,12 @@ Ordered; each step has a different owner, which is why it is worth writing down.
 | # | Step | Owner |
 |---|---|---|
 | 1 | Merge and deploy the `mcp-servers` fix (§4.1, §4.2, §4.7) | eng |
-| 2 | Redeploy `canvas-faculty` to prod; confirm `tools/list` returns 42 | eng |
-| 3 | Add the 4 rubric scopes **and** `url:POST|/api/v1/conversations` to the **production** Canvas developer key | Canvas admin |
+| 2 | Redeploy `canvas-faculty` to prod; confirm `tools/list` returns **44** (42 + `update_rubric` + `delete_rubric`) | eng |
+| 3 | Add the **6** rubric scopes (4 original + PUT/DELETE from mcp-servers#38) **and** `url:POST|/api/v1/conversations` to the **production** Canvas developer key | Canvas admin |
 | 4 | Add the same scopes to the prod `canvas-faculty` provider record | connectors admin |
 | 5 | **Announce the reconnect** before step 4 lands — every connected faculty member gets a consent prompt on their next Canvas use, including for tools whose scopes did not change (§4.3) | comms |
-| 6 | Admin → Tools → Canvas for Faculty → *Discover from server* (refreshes 7 → 42) | tools admin |
-| 7 | Flag `create_rubric` and `associate_rubric` as **Needs approval**; save | tools admin |
+| 6 | Admin → Tools → Canvas for Faculty → *Discover from server* (refreshes 7 → 44) | tools admin |
+| 7 | Flag `create_rubric`, `associate_rubric` **and `delete_rubric`** as **Needs approval**; save | tools admin |
 | 8 | **Fix the `student` role grant first** — see §9. After step 6 the per-tool picker exposes all 42 tools, so students would see `grade_submission`, `create_assignment`, `create_rubric` | RBAC admin |
 | 9 | Build the KB (§7.4) and the Agent (§6) | eng |
 | 10 | Smoke-test §8.1 criteria 3–7 against a sandbox course before publishing the listing | eng |
