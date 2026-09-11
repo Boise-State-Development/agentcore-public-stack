@@ -633,7 +633,18 @@
                   }
                   @if (row.kind === 'tool') {
                     @let tool = row.tool;
-                    <li class="flex items-center gap-1 rounded-2xl pr-1 hover:bg-gray-50 dark:hover:bg-white/5">
+                    <!--
+                    The hover highlight runs the full width of the drawer
+                    (`-mx-2` cancels the list's own padding), matching the
+                    section headers above it. Inset, it ended 4px past the
+                    switch while 8px of unhighlighted gutter sat beyond — the
+                    switch looked crowded against its own row's edge. `pl-2`
+                    keeps the text exactly where it was; `pr-4` is what buys
+                    the switch its breathing room.
+                  -->
+                  <li
+                    class="-mx-2 flex items-center gap-1 pr-4 pl-2 hover:bg-gray-50 dark:hover:bg-white/5"
+                  >
                       <button
                         type="button"
                         (click)="openToolDetail(tool.toolId)"
