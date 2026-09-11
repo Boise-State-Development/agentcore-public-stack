@@ -276,6 +276,9 @@ build_cdk_context_params() {
     if [ -n "${CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD:-}" ]; then
         context_params="${context_params} --context observability.agentCoreErrorThreshold=\"${CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD}\""
     fi
+    if [ -n "${CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD:-}" ]; then
+        context_params="${context_params} --context observability.agentCoreActiveSessionThreshold=\"${CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD}\""
+    fi
     if [ -n "${CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD:-}" ]; then
         context_params="${context_params} --context observability.lambdaErrorThreshold=\"${CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD}\""
     fi

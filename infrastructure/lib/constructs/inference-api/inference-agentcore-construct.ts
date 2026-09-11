@@ -730,6 +730,38 @@ export class InferenceAgentCoreConstruct extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
+    // Cost, not capacity. Runtime bills memory for a session's whole lifetime
+    // rather than for compute time, and AWS still exposes no API to list or
+    // force-terminate an active runtime session
+    // (aws/bedrock-agentcore-starter-toolkit#498 reports one runaway session
+    // burning $72.67 in 58 minutes) — the DynamoDB lease plus
+    // `cancelRequestedFor` are the only kill switch there is. So the thing worth
+    // watching is sessions *accumulating*, which is precisely what the #338
+    // `/ping` reaper bug did, undetected, for three months at 73% of the
+    // platform bill. This is the leading indicator that was missing then.
+    //
+    // Deliberately NOT thresholded as a fraction of the account quota (5,000
+    // concurrent sessions in us-west-2): quota exhaustion already has a signal
+    // in `agentcore-throttles`, and #1016 is the standing lesson about an
+    // account-wide roll-up compared against a number that does not denominate it.
+    //
+    // Account-level gauge — only a `Service` dimension, so no `Resource` here,
+    // matching `agentcore-code-interpreter-active-sessions`.
+    alarms.alarm('AgentCoreActiveSessionAlarm', {
+      name: 'agentcore-runtime-active-sessions',
+      alarmDescription:
+        'Concurrent AgentCore Runtime sessions are unusually high. Runtime bills memory '
+        + 'for the full session lifetime, so this is a cost signal before it is a capacity '
+        + 'one, and there is no AWS API to terminate a session — check that idle reaping '
+        + 'is still working (mean microVM life should be 20-50 min, not hours) before '
+        + 'assuming it is real traffic.',
+      metric: activeSessionsMetric,
+      threshold: config.observability.agentCoreActiveSessionThreshold,
+      evaluationPeriods: 3,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
     alarms.alarm('AgentCoreHighLatencyAlarm', {
       name: 'agentcore-high-latency',
       alarmDescription: 'AgentCore Runtime p99 latency exceeded threshold',

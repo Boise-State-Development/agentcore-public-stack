@@ -459,6 +459,33 @@ export const OBSERVABILITY_DEFAULT_P99_LATENCY_MS = 120_000;
 /** AgentCore Runtime errors per 5-minute period. */
 export const OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD = 10;
 
+/**
+ * Concurrent AgentCore Runtime sessions (`ActiveSessionCount`, Maximum) above
+ * which to alarm.
+ *
+ * This is a **cost** alarm, not a quota alarm. The us-west-2 default runtime
+ * quota is 5,000 concurrent sessions, so 200 is 4% of it — `agentcore-throttles`
+ * is still the signal for actual quota exhaustion. What this watches is session
+ * *accumulation*, because Runtime bills memory for a session's whole lifetime,
+ * not for compute time, and AWS offers no API to list or force-terminate an
+ * active runtime session (aws/bedrock-agentcore-starter-toolkit#498).
+ *
+ * Calibrated against this repo's own incident. While the `/ping` reaper bug of
+ * #338 was live, July 2026 burned 71,954 microVM-hours — an average of ~99
+ * concurrent sessions sustained across the whole month, weekends and nights
+ * included, with weekday peaks well above that. After #827 restored idle
+ * reaping, mean microVM life went from 488-496 min back to 21.5-33.6 min, which
+ * puts the same traffic in the single digits on average and the low tens at
+ * peak. 200 sits between the two regimes: comfortably above anything a normal
+ * day produces, and inside the band the regression ran at for three months
+ * while nothing alarmed.
+ *
+ * Tune it down once there is a week of observed `ActiveSessionCount` for a
+ * deployment — the AgentCore observability dashboard has graphed this metric
+ * since #910, and until now nothing has read it.
+ */
+export const OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD = 200;
+
 /** Lambda errors per 5-minute period. */
 export const OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD = 5;
 
@@ -527,6 +554,11 @@ export interface ObservabilityConfig {
   /** AgentCore Runtime p99 Latency floor, in ms. */
   agentCoreLatencyMs: number;
   agentCoreErrorThreshold: number;
+  /**
+   * Concurrent AgentCore Runtime sessions above which to alarm. A cost signal
+   * (Runtime bills memory for session lifetime), not a quota one.
+   */
+  agentCoreActiveSessionThreshold: number;
   lambdaErrorThreshold: number;
   lambdaDurationPercentOfTimeout: number;
   dynamoThrottleThreshold: number;
@@ -987,6 +1019,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseIntEnv(scope.node.tryGetContext('observability.agentCoreErrorThreshold'))
         ?? scope.node.tryGetContext('observability')?.agentCoreErrorThreshold
         ?? OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+      agentCoreActiveSessionThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.agentCoreActiveSessionThreshold'))
+        ?? scope.node.tryGetContext('observability')?.agentCoreActiveSessionThreshold
+        ?? OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
       lambdaErrorThreshold:
         parseIntEnv(process.env.CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD)
         ?? parseIntEnv(scope.node.tryGetContext('observability.lambdaErrorThreshold'))
