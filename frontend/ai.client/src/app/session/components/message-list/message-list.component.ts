@@ -33,7 +33,91 @@ import {
 } from '../../../services/tool-approval/tool-approval.service';
 import { CompactionSummaryService } from '../../services/chat/compaction-summary.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
+import { ToolInsightService } from '../../services/chat/tool-insight.service';
 import { StreamParserService } from '../../services/chat/stream-parser.service';
+
+/**
+ * One renderable unit inside a turn: the user's message, or an uninterrupted
+ * run of assistant messages.
+ *
+ * The run is the important half. The agent loop starts a new Bedrock message
+ * at every tool round trip, so a four-tool answer arrives as five assistant
+ * messages. Rendered one card each — with a copy button and metadata row
+ * apiece — a single answer became a column of near-empty boxes, and no tool
+ * rail could ever group two calls because they were never in the same
+ * message. Grouping them into a run gives one card, one set of actions, and
+ * one block stream for `AssistantMessageComponent` to collapse.
+ *
+ * A mid-turn steer (a user message inside a streaming turn) deliberately
+ * BREAKS a run: the user interjected, and the words on either side of that
+ * interjection are answers to different things.
+ */
+/**
+ * Turn an MCP tool identifier into something readable in a sentence.
+ *
+ * Deliberately light: `list_assignments` -> `list assignments`, keeping the
+ * verb so "Using list assignments" reads as an action. The scoped-id prefix
+ * (`server::tool`) is routing detail and never shown.
+ */
+function humanizeToolName(toolName: string): string {
+  return (toolName.split('::').pop() ?? toolName)
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_\-.]+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+interface TurnSegment {
+  key: string;
+  kind: 'user' | 'assistant';
+  messages: Message[];
+  /** Last message of the run — what per-turn affordances anchor to. */
+  last: Message;
+}
+
+interface Turn {
+  key: string;
+  messages: Message[];
+  segments: TurnSegment[];
+}
+
+/**
+ * Whether a message is Bedrock protocol scaffolding rather than something a
+ * person said.
+ *
+ * Tool results come back as USER-role messages carrying nothing but
+ * `toolResult` blocks. They render at zero height — invisible to the reader —
+ * but they sit between every pair of assistant messages in a tool-using turn.
+ * Treated as real user messages they break the assistant run at every single
+ * tool call, which is precisely the grouping this component is trying to do,
+ * and they start a spurious turn group on top of that.
+ *
+ * A mid-turn steer is the case this must NOT catch: that is a real user
+ * message with real text, and the words on either side of it are answers to
+ * different things, so it genuinely should break the run.
+ */
+function isProtocolScaffolding(message: Message): boolean {
+  if (message.role !== 'user') return false;
+  return message.content.every((block) => block.type === 'toolResult');
+}
+
+function segmentTurn(messages: readonly Message[]): TurnSegment[] {
+  const segments: TurnSegment[] = [];
+  for (const message of messages) {
+    // Invisible scaffolding must not break the run it sits inside.
+    if (isProtocolScaffolding(message)) continue;
+
+    const kind = message.role === 'user' ? 'user' : 'assistant';
+    const open = segments[segments.length - 1];
+    if (kind === 'assistant' && open?.kind === 'assistant') {
+      open.messages.push(message);
+      open.last = message;
+      continue;
+    }
+    segments.push({ key: message.id, kind, messages: [message], last: message });
+  }
+  return segments;
+}
 
 @Component({
   selector: 'app-message-list',
@@ -128,6 +212,7 @@ export class MessageListComponent {
   private mcpAppCardState = inject(McpAppCardStateService);
   private mcpAppState = inject(McpAppStateService);
   private chatStateService = inject(ChatStateService);
+  private toolInsight = inject(ToolInsightService);
   private streamParser = inject(StreamParserService);
 
   /**
@@ -206,6 +291,39 @@ export class MessageListComponent {
   protected readonly loaderNotice = computed<string | null>(
     () => this.retryNotice() ?? this.stallNotice(),
   );
+
+  /**
+   * What the agent is doing right now, phrased for the loading indicator.
+   *
+   * Derived from the `agent_status` stream, so it is a fact rather than an
+   * inference — the difference between "waiting on Canvas for 9 seconds" and
+   * "hung" was previously invisible to the user, and both looked like
+   * "Pondering...".
+   *
+   * Returns null once text starts streaming: at that point the loader is gone
+   * anyway, and a lingering "Thinking" under a visible answer would be wrong.
+   */
+  protected readonly loaderStatus = computed<string | null>(() => {
+    const sessionId = this.chatStateService.viewedSessionId();
+    if (!sessionId) return null;
+    const status = this.toolInsight.status(sessionId);
+    if (!status) return null;
+
+    switch (status.phase) {
+      case 'tool_start':
+        return status.toolName ? `Using ${humanizeToolName(status.toolName)}` : null;
+      case 'thinking':
+        // A later cycle means the model is reading tool results before it
+        // answers, which is a different wait and worth naming differently.
+        return status.cycle > 1 ? 'Reviewing what came back' : 'Thinking';
+      case 'tool_end':
+        // Between tools: the next thing is either another call or the answer.
+        // "Working" claims neither.
+        return 'Working';
+      default:
+        return null;
+    }
+  });
 
   /**
    * Persisted app-initiated tool cards (PR #6) that have nowhere better to
@@ -441,20 +559,29 @@ export class MessageListComponent {
    *  min-height binding on the previously-last group flips off. A leading
    *  assistant message with no preceding user message (pagination cutting
    *  mid-turn) forms a headless first group. */
-  protected readonly turns = computed<{ key: string; messages: Message[] }[]>(() => {
-    const groups: { key: string; messages: Message[] }[] = [];
+  protected readonly turns = computed<Turn[]>(() => {
+    const groups: Turn[] = [];
     for (const m of this.messages()) {
       // A mid-turn steer is a user message that does NOT start a turn: the
       // user sent it *into* the response already streaming, so it belongs to
       // that turn's group. Breaking here instead would split one response into
       // two groups and move the last group's scroll reserve out from under a
       // response still streaming into it. See docs/specs/mid-turn-steering.md.
-      const startsTurn = m.role === 'user' && !m.steering;
+      // Scaffolding is excluded for the same reason as steers: a tool-result
+      // message is not the user starting a new turn, and treating it as one
+      // split a single response into a turn group per tool call — which also
+      // moved the last group's scroll reserve out from under the response
+      // still streaming into it.
+      const startsTurn =
+        m.role === 'user' && !m.steering && !isProtocolScaffolding(m);
       if (startsTurn || groups.length === 0) {
-        groups.push({ key: m.id, messages: [m] });
+        groups.push({ key: m.id, messages: [m], segments: [] });
       } else {
         groups[groups.length - 1].messages.push(m);
       }
+    }
+    for (const turn of groups) {
+      turn.segments = segmentTurn(turn.messages);
     }
     return groups;
   });

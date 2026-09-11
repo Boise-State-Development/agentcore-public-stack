@@ -7,6 +7,7 @@ import { FileUploadService, FileMetadata } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
+import { ToolInsightService } from '../chat/tool-insight.service';
 import { normalizeSteeringMessages } from '../chat/steering';
 
 /** Regex to match file attachment marker in message text: [Attached files: file1.pdf, file2.png] */
@@ -69,6 +70,7 @@ export class MessageMapService {
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
   private mcpAppState = inject(McpAppStateService);
+  private toolInsight = inject(ToolInsightService);
   private injector = inject(Injector);
 
   /**
@@ -444,6 +446,18 @@ export class MessageMapService {
       this.mcpAppState.seedFromHydration(
         sessionId,
         messagesResponse.uiResources ?? [],
+      );
+
+      // Tool-batch summaries: same reasoning, same non-clobbering seed. The
+      // `tool_group_summary` event is emitted once mid-turn and never
+      // re-streams, so without this a refreshed conversation silently drops
+      // every rail from the model's prose ("Found the Syllabus Acknowledgment
+      // assignment in BIO 101") back to the client-side formatter
+      // ("Listed 12 assignments"). Durations are deliberately not replayed —
+      // see ToolInsightService.
+      this.toolInsight.seedFromHydration(
+        sessionId,
+        messagesResponse.toolSummaries ?? [],
       );
     } finally {
       if (showLoading) {

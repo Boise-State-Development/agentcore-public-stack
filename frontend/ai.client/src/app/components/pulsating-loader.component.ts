@@ -61,7 +61,7 @@ const LOADING_PHRASES = [
       class="flex items-center gap-4"
       role="status"
       [attr.aria-busy]="true"
-      [attr.aria-live]="notice() ? 'polite' : null"
+      [attr.aria-live]="hasFixedText() ? 'polite' : null"
       [attr.aria-label]="'Loading: ' + displayText()"
     >
       <!-- Pulsing circle with ring effect -->
@@ -79,7 +79,7 @@ const LOADING_PHRASES = [
         >
           {{ displayText() }}
         </span>
-        @if (!notice()) {
+        @if (!hasFixedText()) {
           <span
             class="typing-cursor ml-0.5 text-secondary-600 dark:text-secondary-400"
             aria-hidden="true"
@@ -194,6 +194,18 @@ export class PulsatingLoaderComponent implements OnInit, OnDestroy {
    */
   notice = input<string | null>(null);
 
+  /**
+   * What the agent is actually doing right now — "Using list_assignments",
+   * "Thinking" — from the `agent_status` stream.
+   *
+   * Distinct from `notice` on purpose. A notice is an exception worth an
+   * amber dot (the model is being retried); a status is the normal, healthy
+   * case and stays in the routine colour. Both replace the cycling phrases,
+   * because a real fact always beats "Pondering...", and `notice` wins when
+   * both are present — a retry in progress is the more important truth.
+   */
+  status = input<string | null>(null);
+
   // Base timing constants (in milliseconds)
   private readonly TYPE_SPEED_BASE = 45;
   private readonly TYPE_SPEED_VARIANCE = 35;
@@ -224,9 +236,18 @@ export class PulsatingLoaderComponent implements OnInit, OnDestroy {
     if (notice) {
       return notice;
     }
+    const status = this.status();
+    if (status) {
+      return `${status}…`;
+    }
     const phrase = LOADING_PHRASES[this.currentPhraseIndex()] + '...';
     return phrase.substring(0, this.currentCharIndex());
   });
+
+  /** True when a fixed line (notice or status) replaces the typewriter. */
+  protected readonly hasFixedText = computed(
+    () => !!this.notice() || !!this.status(),
+  );
 
   ngOnInit(): void {
     this.startAnimation();

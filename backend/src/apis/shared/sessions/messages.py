@@ -436,14 +436,33 @@ async def get_messages_from_cloud(
                 user_id=user_id,
             )
 
-        # Run fetches in parallel
-        messages_raw, metadata_index, pending_interrupts, ui_resource_rows = (
-            await asyncio.gather(
-                fetch_messages(),
-                fetch_metadata(),
-                fetch_pending_interrupts(),
-                fetch_ui_resources(),
+        async def fetch_tool_summaries():
+            """Fetch persisted model-generated tool-batch summaries.
+
+            Sync DynamoDB query off the session GSI; runs in a thread pool.
+            Empty when the table is absent (dev) or nothing was summarized.
+            """
+            from apis.shared.tool_summaries import get_tool_summary_store
+
+            return await asyncio.to_thread(
+                get_tool_summary_store().list_for_session,
+                session_id=session_id,
+                user_id=user_id,
             )
+
+        # Run fetches in parallel
+        (
+            messages_raw,
+            metadata_index,
+            pending_interrupts,
+            ui_resource_rows,
+            tool_summary_rows,
+        ) = await asyncio.gather(
+            fetch_messages(),
+            fetch_metadata(),
+            fetch_pending_interrupts(),
+            fetch_ui_resources(),
+            fetch_tool_summaries(),
         )
 
         messages_raw = list(messages_raw or [])
@@ -519,11 +538,30 @@ async def get_messages_from_cloud(
                     }
                 )
 
+        # Tool-batch summaries: the `tool_group_summary` SSE is emitted once
+        # mid-turn and never re-streams, so without this replay a reloaded
+        # conversation silently downgrades from the model's prose line to the
+        # SPA's deterministic formatter. First page only — the SPA keys them by
+        # toolUseId and holds them all regardless of which page renders the
+        # correlated tool_use block (same reasoning as uiResources above).
+        tool_summaries: List[Dict[str, Any]] = []
+        if not next_token:
+            tool_summaries = [
+                {
+                    "batchId": row.get("batchId", ""),
+                    "toolUseIds": row.get("toolUseIds") or [],
+                    "summary": row.get("summary", ""),
+                }
+                for row in tool_summary_rows
+                if row.get("summary")
+            ]
+
         return MessagesListResponse(
             messages=message_responses,
             next_token=next_page_token,
             pending_interrupts=pending_interrupts,
             ui_resources=ui_resources,
+            tool_summaries=tool_summaries,
         )
 
     except Exception as e:

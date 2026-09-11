@@ -1,14 +1,17 @@
-<!-- Collapsed header -->
+<!-- Collapsed header: one line saying what the agent did, whatever the group's
+     size. It stays collapsed while the tools run — the old behaviour force-
+     expanded on any pending call, which meant the rail was at its tallest
+     exactly while the user was watching it. -->
 <button
   type="button"
   (click)="toggleExpanded()"
   class="flex items-center gap-2 cursor-pointer group w-full text-left"
-  [attr.aria-expanded]="effectiveExpanded()"
-  aria-label="Toggle tool call details"
+  [attr.aria-expanded]="isExpanded()"
+  [attr.aria-label]="isExpanded() ? 'Hide tool call details' : 'Show tool call details'"
 >
   <svg
     class="chevron size-3 text-gray-400 dark:text-gray-500 shrink-0"
-    [class.open]="effectiveExpanded()"
+    [class.open]="isExpanded()"
     fill="none"
     stroke="currentColor"
     viewBox="0 0 24 24"
@@ -17,158 +20,184 @@
     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
   </svg>
 
-  <!-- Summary mode header -->
-  @if (hasSummaries() && group().groupSummary) {
-    <span
-      class="text-xs text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300"
-      [class.text-shimmer]="shouldAutoExpand()"
-    >
-      {{ group().groupSummary }}
+  <span
+    class="text-xs text-gray-500 dark:text-gray-400 group-hover:text-gray-700 dark:group-hover:text-gray-200 min-w-0 truncate"
+    [class.text-shimmer]="isRunning()"
+  >
+    {{ headline() }}
+  </span>
+
+  <!-- Counts and timing sit apart from the sentence so the sentence stays
+       readable. Both are suppressed for a single finished call, where they
+       would just restate the line above. -->
+  @if (group().calls.length > 1) {
+    <span class="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
+      {{ group().calls.length }} tools
     </span>
-  } @else {
-    <!-- Fallback mode header: chained tool names -->
+  }
+  @if (totalDurationMs(); as total) {
+    <span class="shrink-0 text-[11px] text-gray-400 dark:text-gray-500 tabular-nums">
+      {{ formatDuration(total) }}
+    </span>
+  }
+  @if (failureCount(); as failures) {
     <span
-      class="text-xs text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300 flex items-center gap-1.5 flex-wrap"
-      [class.text-shimmer]="shouldAutoExpand()"
+      class="shrink-0 text-[11px] font-medium text-state-danger-600 dark:text-state-danger-400"
     >
-      @if (effectiveExpanded()) {
-        <!-- Expanded: show all tool names with total count -->
-        @for (call of group().calls; track call.id; let last = $last) {
-          <span class="font-medium text-gray-500 dark:text-gray-400">{{ call.toolName }}</span>
-          @if (!last) {
-            <span class="text-gray-300 dark:text-gray-600">&rarr;</span>
-          }
-        }
-        <span class="text-gray-400 dark:text-gray-500 ml-1">({{ group().calls.length }} tools)</span>
-      } @else {
-        <!-- Collapsed: show first 3 then "and X more" -->
-        @for (call of collapsedHeaderCalls(); track call.id; let last = $last) {
-          <span class="font-medium text-gray-500 dark:text-gray-400">{{ call.toolName }}</span>
-          @if (!last) {
-            <span class="text-gray-300 dark:text-gray-600">&rarr;</span>
-          }
-        }
-        @if (overflowCount() > 0) {
-          <span class="text-gray-400 dark:text-gray-500 ml-0.5">and {{ overflowCount() }} more</span>
-        }
-      }
+      {{ failures }} failed
     </span>
   }
 </button>
 
-<!-- Expanded rail -->
-<div class="collapsible-content" [class.open]="effectiveExpanded()">
+<!-- Expanded rail: a compact accordion list. One row per call, dense enough
+     to scan a whole pipeline at a glance, with the raw input and result
+     folded behind each row. The summary line is what you read; this is what
+     you check it against, so the detail must stay reachable — but it is
+     reference material, not the default view. -->
+<div class="collapsible-content" [class.open]="isExpanded()">
   <div>
     <div
-      class="pl-4 space-y-3 mt-2 border-l-2"
-      [class.border-primary-500/20]="hasSummaries()"
-      [class.dark:border-primary-400/20]="hasSummaries()"
-      [class.border-gray-300/50]="!hasSummaries()"
-      [class.dark:border-gray-600/50]="!hasSummaries()"
+      class="mt-2 overflow-hidden rounded-lg border border-gray-200/80 divide-y divide-gray-200/80 dark:border-white/10 dark:divide-white/10"
     >
-      @for (call of group().calls; track call.id) {
-        <div>
-          <!-- Tool name row -->
-          <div class="flex items-center gap-2 mb-0.5">
+      @for (batch of batches(); track batch.key) {
+        <!-- The batch's own line, when the side-channel summarized this
+             round. One per batch, not one per group: a collapsed pipeline
+             contains several rounds and each did something different. -->
+        @if (batch.summary) {
+          <p
+            class="bg-gray-100/70 px-2.5 py-1.5 text-[11px] font-medium text-gray-600 dark:bg-white/5 dark:text-gray-300"
+          >
+            {{ batch.summary }}
+          </p>
+        }
+
+        @for (call of batch.calls; track call.id) {
+        <div class="bg-white/40 dark:bg-transparent">
+          <!-- Row header: the human line first, the tool identifier second.
+               The identifier still matters (it is what an admin greps for),
+               but it is not what most readers need. Clicking reveals the raw
+               input and result — reference material, so it stays folded until
+               someone actually wants to check the summary against it. -->
+          <button
+            type="button"
+            (click)="toggleCallDetail(call.id)"
+            class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-gray-100/70 group/call dark:hover:bg-white/5"
+            [attr.aria-expanded]="isCallDetailOpen(call)"
+            [attr.aria-label]="'Toggle details for ' + call.toolName"
+          >
             <span [class]="statusDotClass(call)"></span>
-            <span class="text-xs font-medium text-gray-600 dark:text-gray-400">
+            <span class="text-xs text-gray-600 dark:text-gray-300 group-hover/call:text-gray-800 dark:group-hover/call:text-gray-100">
+              {{ describe(call) }}
+            </span>
+            <span class="text-[11px] font-mono text-gray-400 dark:text-gray-500 truncate">
               {{ call.toolName }}
             </span>
             @if (call.durationMs) {
-              <span class="text-xs text-gray-400 dark:text-gray-500 ml-auto">
+              <span
+                class="text-[11px] text-gray-400 dark:text-gray-500 ml-auto shrink-0 tabular-nums"
+              >
                 {{ formatDuration(call.durationMs) }}
               </span>
             }
-          </div>
+            <svg
+              class="chevron size-2.5 shrink-0 text-gray-400 dark:text-gray-500"
+              [class.open]="isCallDetailOpen(call)"
+              [class.ml-auto]="!call.durationMs"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
 
-          <!-- Summary mode: show summary text -->
-          @if (hasSummaries() && call.summary) {
-            <p class="text-xs text-gray-500 dark:text-gray-400 ml-3.5">
-              {{ call.summary }}
-            </p>
-          }
+          <!-- Kept as an `@if` rather than a CSS-collapsed panel: a long
+               conversation can hold a lot of rows, and parking every tool
+               result in the DOM to clip it costs memory and leaves the JSON
+               reachable by screen readers on rows nobody opened. The enter
+               animation supplies the accordion feel without that cost. -->
+          @if (isCallDetailOpen(call)) {
+          <div class="detail-panel space-y-1 border-t border-gray-200/60 bg-gray-50/60 px-2.5 py-2 dark:border-white/5 dark:bg-black/20">
+            <!-- Input -->
+            @if (call.input && (call.input | keyvalue)?.length) {
+              <div class="flex items-baseline gap-1.5">
+                <span class="text-xs text-gray-400 dark:text-gray-500 shrink-0">input:</span>
+                <span class="text-xs text-gray-400 dark:text-gray-500 font-mono truncate">
+                  {{ formatInput(call.input) }}
+                </span>
+              </div>
+            }
 
-          <!-- Fallback mode: show raw input/output -->
-          @if (!hasSummaries()) {
-            <div class="ml-3.5 space-y-1">
-              <!-- Input -->
-              @if (call.input && (call.input | keyvalue)?.length) {
-                <div class="flex items-baseline gap-1.5">
-                  <span class="text-xs text-gray-400 dark:text-gray-500 shrink-0">input:</span>
-                  <span class="text-xs text-gray-400 dark:text-gray-500 font-mono truncate">
-                    {{ formatInput(call.input) }}
-                  </span>
-                </div>
-              }
-
-              <!-- Live streaming output (e.g. artifact being generated) -->
-              @if (isGenerating(call)) {
-                <div class="flex items-start gap-1.5">
-                  <span class="text-xs text-gray-400 dark:text-gray-500 shrink-0 mt-1">output:</span>
-                  <div class="w-full">
-                    <div class="flex items-center gap-1.5 mb-1 text-xs text-gray-400 dark:text-gray-500">
-                      <span class="status-dot bg-state-warning-400 shimmer"></span>
-                      <span>Generating output…</span>
-                    </div>
-                    <pre
-                      class="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700/30 rounded-xs px-2 py-1.5"
-                      aria-label="Tool output being generated"
-                      [appPinScrollToBottom]="call.streamingContent ?? ''"
-                    >{{ call.streamingContent }}</pre>
+            <!-- Live streaming output (e.g. artifact being generated) -->
+            @if (isGenerating(call)) {
+              <div class="flex items-start gap-1.5">
+                <span class="text-xs text-gray-400 dark:text-gray-500 shrink-0 mt-1">output:</span>
+                <div class="w-full">
+                  <div class="flex items-center gap-1.5 mb-1 text-xs text-gray-400 dark:text-gray-500">
+                    <span class="status-dot bg-state-warning-400 shimmer"></span>
+                    <span>Generating output…</span>
                   </div>
+                  <pre
+                    class="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700/30 rounded-xs px-2 py-1.5"
+                    aria-label="Tool output being generated"
+                    [appPinScrollToBottom]="call.streamingContent ?? ''"
+                  >{{ call.streamingContent }}</pre>
                 </div>
-              }
+              </div>
+            }
 
-              <!-- Result -->
-              @if (call.result) {
-                <div class="flex items-start gap-1.5">
-                  <span class="text-xs shrink-0 mt-1"
-                    [class.text-gray-400]="call.result.status !== 'error'"
-                    [class.dark:text-gray-500]="call.result.status !== 'error'"
-                    [class.text-state-danger-500]="call.result.status === 'error'"
-                    [class.dark:text-state-danger-400]="call.result.status === 'error'"
-                  >result:</span>
-                  <div class="result-block text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700/30 rounded-xs px-2 py-1.5 w-full overflow-hidden">
-                    @if (isResultExpanded(call.id)) {
-                      <!-- Full result with syntax highlighting -->
-                      @for (item of call.result.content; track $index) {
-                        @if (item.json) {
-                          <pre class="font-mono text-xs overflow-x-auto"><code [innerHTML]="formatResultContent(item) | jsonSyntaxHighlight"></code></pre>
-                        } @else if (item.text) {
-                          <div class="whitespace-pre-wrap break-all">{{ item.text }}</div>
-                        }
+            <!-- Result -->
+            @if (call.result) {
+              <div class="flex items-start gap-1.5">
+                <span class="text-xs shrink-0 mt-1"
+                  [class.text-gray-400]="call.result.status !== 'error'"
+                  [class.dark:text-gray-500]="call.result.status !== 'error'"
+                  [class.text-state-danger-500]="call.result.status === 'error'"
+                  [class.dark:text-state-danger-400]="call.result.status === 'error'"
+                >result:</span>
+                <div class="result-block text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700/30 rounded-xs px-2 py-1.5 w-full overflow-hidden">
+                  @if (isResultExpanded(call.id)) {
+                    <!-- Full result with syntax highlighting -->
+                    @for (item of call.result.content; track $index) {
+                      @if (item.json) {
+                        <pre class="font-mono text-xs overflow-x-auto"><code [innerHTML]="formatResultContent(item) | jsonSyntaxHighlight"></code></pre>
+                      } @else if (item.text) {
+                        <div class="whitespace-pre-wrap break-all">{{ item.text }}</div>
                       }
-                    } @else {
-                      <!-- Truncated result -->
-                      <span class="font-mono break-all whitespace-pre-wrap text-gray-500 dark:text-gray-400">{{ truncateResult(getResultText(call)) }}</span>
                     }
+                  } @else {
+                    <!-- Truncated result -->
+                    <span class="font-mono break-all whitespace-pre-wrap text-gray-500 dark:text-gray-400">{{ truncateResult(getResultText(call)) }}</span>
+                  }
 
-                    @if (getResultText(call).length > 200) {
-                      <button
-                        type="button"
-                        (click)="toggleFullResult(call.id)"
-                        class="text-primary-accessible dark:text-primary-accessible-dark hover:underline mt-1 block text-xs cursor-pointer"
-                      >
-                        {{ isResultExpanded(call.id) ? 'Show less' : 'Show full result' }}
-                      </button>
-                    }
-                  </div>
+                  @if (getResultText(call).length > 200) {
+                    <button
+                      type="button"
+                      (click)="toggleFullResult(call.id)"
+                      class="text-primary-accessible dark:text-primary-accessible-dark hover:underline mt-1 block text-xs cursor-pointer"
+                    >
+                      {{ isResultExpanded(call.id) ? 'Show less' : 'Show full result' }}
+                    </button>
+                  }
                 </div>
+              </div>
 
-                <!-- Images (if any) -->
-                @for (item of getResultImages(call); track $index) {
-                  <div class="mt-1 rounded-xs overflow-hidden bg-gray-100 dark:bg-gray-800 p-1 border border-gray-200 dark:border-gray-700">
-                    <img
-                      [src]="getImageDataUrl(item)"
-                      alt="Tool result image"
-                      class="max-w-full h-auto rounded-xs"
-                    />
-                  </div>
-                }
+              <!-- Images (if any) -->
+              @for (item of getResultImages(call); track $index) {
+                <div class="mt-1 rounded-xs overflow-hidden bg-gray-100 dark:bg-gray-800 p-1 border border-gray-200 dark:border-gray-700">
+                  <img
+                    [src]="getImageDataUrl(item)"
+                    alt="Tool result image"
+                    class="max-w-full h-auto rounded-xs"
+                  />
+                </div>
               }
-            </div>
+            }
+          </div>
           }
         </div>
+        }
       }
     </div>
   </div>

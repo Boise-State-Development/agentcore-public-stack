@@ -33,7 +33,7 @@ describe('MessageActionsComponent — Continue affordance', () => {
 
     fixture = TestBed.createComponent(MessageActionsComponent);
     component = fixture.componentInstance;
-    fixture.componentRef.setInput('message', makeMessage('partial answer'));
+    fixture.componentRef.setInput('messages', [makeMessage('partial answer')]);
   });
 
   it('hides the Continue button by default', () => {
@@ -74,7 +74,7 @@ describe('MessageActionsComponent — interrupted-turn chip', () => {
 
     fixture = TestBed.createComponent(MessageActionsComponent);
     component = fixture.componentInstance;
-    fixture.componentRef.setInput('message', makeMessage('partial answer'));
+    fixture.componentRef.setInput('messages', [makeMessage('partial answer')]);
   });
 
   it('shows "Response interrupted" + a Continue button for connection_lost', () => {

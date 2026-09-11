@@ -314,6 +314,14 @@ class StreamCoordinator:
         ui_block_index_to_tool_use_id: Dict[int, str] = {}
         ui_partial_input_acc: Dict[str, str] = {}
 
+        # Tool-batch summary tasks in flight for this turn. Each is a Nova
+        # Micro side-channel call started when a tool batch closed; the emit
+        # loop harvests whichever have finished, and `_collect_tool_summary_
+        # events` rewrites this list in place as it drains. Per-turn only —
+        # never state that outlives the turn, so the CLAUDE.md rule about
+        # caching session state on an agent instance does not bite here.
+        tool_summary_tasks: List[Any] = []
+
         # Accumulate metadata from stream
         accumulated_metadata: Dict[str, Any] = {"usage": {}, "metrics": {}}
 
@@ -586,6 +594,13 @@ class StreamCoordinator:
                 # interrupt flavor, so any extractor's resume path can rebuild
                 # the agent shape after a refresh / cache eviction.
                 if event.get("type") == "done":
+                    # Last chance for a summary still in flight to reach the
+                    # live view. Bounded wait; a straggler past it is left to
+                    # its own persistence and shows up on reload instead.
+                    for summary_sse in await self._collect_tool_summary_events(
+                        tool_summary_tasks, drain_all=True
+                    ):
+                        yield summary_sse
                     await self._persist_paused_turn_snapshot(
                         agent,
                         session_id=session_id,
@@ -976,6 +991,29 @@ class StreamCoordinator:
                     main_agent_wrapper, session_id
                 ):
                     yield steering_sse
+
+                # Live narration: the status hook records model-call and
+                # tool-call boundaries from inside Strands' event loop, which
+                # has no route to the SSE stream. Drained here, before the
+                # event it precedes is yielded, so "Using list_assignments"
+                # reaches the client while that tool is actually running
+                # rather than after its result.
+                for status_sse in self._drain_agent_status_events(
+                    main_agent_wrapper, session_id
+                ):
+                    yield status_sse
+
+                # Tool-batch summaries: start a Nova Micro side-channel task
+                # for each batch that just closed, then harvest whichever
+                # earlier tasks have finished. Non-blocking in both
+                # directions — the agent stream never waits on Nova.
+                self._spawn_tool_summary_tasks(
+                    main_agent_wrapper, session_id, user_id, tool_summary_tasks
+                )
+                for summary_sse in await self._collect_tool_summary_events(
+                    tool_summary_tasks
+                ):
+                    yield summary_sse
 
                 # Format as SSE event and yield (including done event after metadata)
                 sse_event = self._format_sse_event(event)
@@ -2235,6 +2273,170 @@ class StreamCoordinator:
             events.append(
                 f"event: steering_applied\ndata: {json.dumps(payload)}\n\n"
             )
+        return events
+
+    def _drain_agent_status_events(
+        self, main_agent_wrapper: Any, session_id: str
+    ) -> List[str]:
+        """Emit one `agent_status` SSE per transition the status hook recorded.
+
+        Drained rather than pushed for the same reason as steering: the hook
+        runs inside Strands' event loop, which has no route to the SSE stream.
+        Draining on every iteration of the emit loop keeps the transitions
+        roughly interleaved with the content they describe — "thinking" lands
+        before the text it precedes, "tool_start" before that tool's result.
+
+        Best-effort: a wrapper without the hook (voice, tests) and any failure
+        both yield nothing, leaving the SPA on its cycling phrases.
+        """
+        hook = getattr(main_agent_wrapper, "agent_status_hook", None)
+        if hook is None:
+            return []
+        try:
+            statuses = hook.drain_statuses()
+        except Exception:  # noqa: BLE001 - never break the stream on narration
+            logger.warning("Agent status drain failed", exc_info=True)
+            return []
+
+        events = []
+        for status in statuses:
+            payload = {"type": "agent_status", "sessionId": session_id, **status}
+            events.append(f"event: agent_status\ndata: {json.dumps(payload)}\n\n")
+        return events
+
+    def _spawn_tool_summary_tasks(
+        self,
+        main_agent_wrapper: Any,
+        session_id: str,
+        user_id: str,
+        tasks: List[Any],
+    ) -> None:
+        """Kick off a Nova Micro summary for each tool batch that just closed.
+
+        Concurrent with the agent stream, exactly like conversation-title
+        generation: the batch is finished, so nothing downstream waits on this,
+        and the agent's next model call is already in flight while Nova runs.
+
+        Each task persists its own result before returning it, so reload
+        survival does not depend on the emit loop still being alive when the
+        summary lands — a turn that ends (or is cancelled) between the call and
+        its completion still leaves the row behind for `GET /messages`.
+        """
+        hook = getattr(main_agent_wrapper, "agent_status_hook", None)
+        if hook is None:
+            return
+        try:
+            batches = hook.drain_batches()
+        except Exception:  # noqa: BLE001
+            logger.warning("Tool batch drain failed", exc_info=True)
+            return
+        if not batches:
+            return
+
+        from apis.shared.feature_flags import tool_summaries_enabled
+
+        if not tool_summaries_enabled():
+            return
+
+        for batch in batches:
+            tasks.append(
+                asyncio.create_task(
+                    self._summarize_and_persist_batch(batch, session_id, user_id)
+                )
+            )
+
+    @staticmethod
+    async def _summarize_and_persist_batch(
+        batch: Dict[str, Any], session_id: str, user_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Summarize one batch, persist it, and return the SSE payload.
+
+        Returns None whenever there is nothing worth showing — the SPA keeps
+        the deterministic formatter line it is already displaying, which is a
+        good enough answer that no failure here is worth surfacing.
+        """
+        try:
+            from apis.shared.tool_summaries import (
+                get_tool_summary_store,
+                summarize_tool_batch,
+            )
+
+            summary = await summarize_tool_batch(batch.get("calls") or [])
+            if not summary:
+                return None
+
+            batch_id = str(batch.get("batchId") or "")
+            tool_use_ids = [str(t) for t in (batch.get("toolUseIds") or [])]
+
+            # Persist before returning: the emit loop may never get to this
+            # payload (cancelled turn, dropped connection), but the row is
+            # what makes the summary survive a reload either way.
+            await asyncio.to_thread(
+                get_tool_summary_store().store,
+                user_id=user_id,
+                session_id=session_id,
+                batch_id=batch_id,
+                tool_use_ids=tool_use_ids,
+                summary=summary,
+            )
+            return {
+                "type": "tool_group_summary",
+                "sessionId": session_id,
+                "batchId": batch_id,
+                "toolUseIds": tool_use_ids,
+                "summary": summary,
+            }
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a summary is never worth an error
+            logger.debug("Tool batch summary task failed", exc_info=True)
+            return None
+
+    @staticmethod
+    async def _collect_tool_summary_events(
+        tasks: List[Any], *, drain_all: bool = False, timeout: float = 3.0
+    ) -> List[str]:
+        """Harvest finished summary tasks into `tool_group_summary` SSEs.
+
+        Non-blocking by default — only tasks that are already done are
+        collected, so the agent stream is never held up waiting on Nova.
+
+        `drain_all` is used once, just before the turn's final metadata and
+        `done`: it waits up to `timeout` for stragglers so a summary that lands
+        late still reaches the live view instead of only appearing on reload.
+        A task that misses even that window is abandoned here but NOT
+        cancelled — it has already persisted (or is about to), and the reload
+        path will show it.
+        """
+        if not tasks:
+            return []
+
+        if drain_all:
+            pending = [t for t in tasks if not t.done()]
+            if pending:
+                try:
+                    await asyncio.wait(pending, timeout=timeout)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        events: List[str] = []
+        still_running: List[Any] = []
+        for task in tasks:
+            if not task.done():
+                still_running.append(task)
+                continue
+            try:
+                payload = task.result()
+            except asyncio.CancelledError:
+                continue
+            except Exception:  # noqa: BLE001
+                logger.debug("Tool summary task raised", exc_info=True)
+                continue
+            if payload:
+                events.append(
+                    f"event: tool_group_summary\ndata: {json.dumps(payload)}\n\n"
+                )
+        tasks[:] = still_running
         return events
 
     def _format_sse_event(self, event: Dict[str, Any]) -> str:
