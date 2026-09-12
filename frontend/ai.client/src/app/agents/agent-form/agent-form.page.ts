@@ -75,12 +75,31 @@ interface ParamView {
 /** Friendly labels for the canonical param keys the Designer commonly exposes. */
 const PARAM_LABELS: Record<string, string> = {
   temperature: 'Temperature',
-  max_tokens: 'Max tokens',
   top_p: 'Top P',
   top_k: 'Top K',
   reasoning_effort: 'Reasoning effort',
   effort: 'Reasoning effort',
 };
+
+/**
+ * Params the Designer never exposes to an agent author, whatever the admin
+ * record declares. Filtered out of `paramSpecs` — the single choke point
+ * feeding the editable *and* the locked lists — and stripped on hydrate so a
+ * value saved before this filter can't survive invisibly.
+ *
+ * `max_tokens` is here because it is a hard truncation, not a length
+ * preference: an author who sets it low to "keep answers short" gets replies
+ * severed mid-sentence, or a tool loop cut mid-`toolUse` block. Response
+ * length belongs in the instructions. It also re-opens the `max_tokens` <->
+ * thinking coupling (`thinking budget < max_tokens default`, enforced in
+ * `shared/models/models.py`) that the drawer's param form was carrying 700+
+ * lines of clamp/conflict machinery to serve before `dae2b20e` retired it.
+ *
+ * The admin ceiling is unaffected: `maxOutputTokens` and a locked `max_tokens`
+ * spec still govern the request at the runtime. This removes the author's
+ * knob, not the governance.
+ */
+const AUTHOR_HIDDEN_PARAMS: ReadonlySet<string> = new Set(['max_tokens']);
 
 /** One of a server's tools with its docstring split for display, as the chat picker does. */
 interface DisplayServerTool {
@@ -216,7 +235,9 @@ export class AgentFormPage implements OnInit, OnDestroy {
   private readonly paramSpecs = computed<[string, ModelParamSpec][]>(() => {
     const supported = this.selectedModel()?.meta?.['supportedParams'] as SupportedParams | undefined;
     const params = supported?.params ?? {};
-    return Object.entries(params).filter(([, spec]) => spec.supported);
+    return Object.entries(params).filter(
+      ([key, spec]) => spec.supported && !AUTHOR_HIDDEN_PARAMS.has(key),
+    );
   });
   /** Editable enum params (a fixed `allowed` domain) → rendered as a select. */
   readonly enumParams = computed<ParamView[]>(() =>
@@ -354,7 +375,9 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
       this.selectedModelId.set(agent.modelConfig?.modelId ?? null);
       this.modelParams.set(
-        (agent.modelConfig?.params ?? {}) as Record<string, number | string>,
+        stripHiddenParams(
+          (agent.modelConfig?.params ?? {}) as Record<string, number | string>,
+        ),
       );
 
       const toolRefs = new Set<string>();
@@ -859,6 +882,21 @@ function toggle(set: Set<string>, ref: string): Set<string> {
 
 function paramLabel(key: string): string {
   return PARAM_LABELS[key] ?? key.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+}
+
+/**
+ * Drop author params the Designer no longer exposes, so a value saved before
+ * the key was hidden is cleared on the next save rather than lingering as an
+ * invisible override the author can neither see nor edit.
+ */
+function stripHiddenParams(
+  params: Record<string, number | string>,
+): Record<string, number | string> {
+  const next: Record<string, number | string> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (!AUTHOR_HIDDEN_PARAMS.has(key)) next[key] = value;
+  }
+  return next;
 }
 
 /** Token counts step by 1; everything else (temperature, top_p, …) by 0.1. */
