@@ -1,4 +1,4 @@
-import { Component, effect, inject, computed, signal } from '@angular/core';
+import { Component, inject, computed, signal } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { SessionList } from './components/session-list/session-list';
 import { SessionService } from '../../session/services/session/session.service';
@@ -7,9 +7,6 @@ import { SessionService as BffSessionService } from '../../auth/session.service'
 import { UserDropdownComponent } from '../topnav/components/user-dropdown.component';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
-import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
-import { AgentService } from '../../agents/services/agent.service';
-import { LEGACY_MIGRATION_HOST } from '../../shared/utils/legacy-migration-host';
 import { BrandingService } from '../../../branding/branding.service';
 
 @Component({
@@ -22,8 +19,6 @@ export class Sidenav {
   private router = inject(Router);
   private sessionService = inject(SessionService);
   private bffSession = inject(BffSessionService);
-  private memorySpaceService = inject(MemorySpaceService);
-  private agentService = inject(AgentService);
   protected sidenavService = inject(SidenavService);
   protected userService = inject(UserService);
   protected branding = inject(BrandingService);
@@ -52,45 +47,6 @@ export class Sidenav {
    * link would leave them typing `/admin` by hand.
    */
   protected isAdmin = this.userService.canAccessAdmin;
-
-  /**
-   * Whether to show the "Memory Spaces" nav entry. Rides the spaces list
-   * call: a successful (even empty) list means the `MEMORY_SPACES_ENABLED`
-   * kill switch is on; a 404 flips `accessible$` false and the entry stays
-   * hidden. `null` (unresolved) also hides it so it doesn't flash in before
-   * disappearing.
-   */
-  readonly showMemorySpaces = computed(() => this.memorySpaceService.accessible$() === true);
-
-  /**
-   * Whether to show the "Agents" (Agent Designer) nav entry. Rides the agents
-   * list call the same way `showMemorySpaces` rides spaces: a successful (even
-   * empty) list means the `AGENTS_API_ENABLED` kill switch is on; a 404 flips
-   * `accessible$` false and the entry stays hidden. `null` (unresolved) also
-   * hides it so it doesn't flash in before disappearing.
-   */
-  readonly showAgents = computed(() => this.agentService.accessible$() === true);
-
-  /**
-   * Whether to show the "Assistants" signpost. ⚠️ TEMPORARY, and deliberately *not* a
-   * signal: the host cannot change without a full page load, so this is a constant for the
-   * lifetime of the app instance. Scoped to the production apex because that is the only
-   * place the question it answers ("where did the assistants I built on the old site go?")
-   * gets asked — see `shared/utils/legacy-migration-host.ts`. The `/assistants` route is
-   * gated on the same host, so the two never disagree.
-   */
-  protected readonly showAssistantsSignpost = inject(LEGACY_MIGRATION_HOST);
-
-  constructor() {
-    // Kick off the accessibility probes once the user is authenticated —
-    // mirrors UserService's own permissions-fetch gating.
-    effect(() => {
-      if (this.userService.currentUser()) {
-        void this.memorySpaceService.loadSpaces();
-        void this.agentService.loadAgents();
-      }
-    });
-  }
 
   newSession() {
     this.sidenavService.close();
