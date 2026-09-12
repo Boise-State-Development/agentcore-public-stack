@@ -282,3 +282,24 @@ def tool_summaries_enabled() -> bool:
     before they are sent), which is why it is affordable to leave on.
     """
     return os.environ.get("TOOL_SUMMARIES_ENABLED", "").strip().lower() != "false"
+
+
+def config_cache_enabled() -> bool:
+    """Whether tenant-global config catalogs are served from the in-process cache.
+
+    Covers the model catalog, tool catalog, system-prompt list and connector
+    list — the lists every user's first load reads and that only an admin edit
+    changes. **Default ON with a kill switch** (house style, mirroring
+    ``scheduled_runs_enabled``): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables.
+
+    While off, every read goes straight to DynamoDB exactly as before — the
+    loaders are unchanged and still correct, they simply stop being memoized.
+    Turning this off costs latency and read units, never correctness, which is
+    what makes it a safe switch to flip if a stale catalog is ever suspected.
+
+    Note the cache is per process (see ``apis.shared.caching.config_cache``), so
+    a write invalidates only the task that served it; other tasks catch up
+    within ``CONFIG_CACHE_TTL_SECONDS`` (default 60).
+    """
+    return os.environ.get("CONFIG_CACHE_ENABLED", "").strip().lower() != "false"

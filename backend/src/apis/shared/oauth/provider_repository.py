@@ -5,6 +5,7 @@ provider ARN and callback URL) live here. `clientId` / `clientSecret` are
 registered directly with AgentCore Identity by the admin route.
 """
 
+import asyncio
 import logging
 import os
 from typing import List, Optional
@@ -12,6 +13,7 @@ from typing import List, Optional
 import boto3
 from botocore.exceptions import ClientError
 
+from apis.shared.caching import config_cache
 from .models import OAuthProvider, OAuthProviderUpdate
 from apis.shared.timestamps import utc_now_iso
 
@@ -67,34 +69,19 @@ class OAuthProviderRepository:
             return []
 
         try:
+            # Two entries, because the branches return different rows. Both are
+            # dropped on any write — see `invalidate_oauth_providers`. Parsing
+            # stays per-call so each caller owns its OAuthProvider objects.
             if enabled_only:
-                response = self._table.query(
-                    IndexName="EnabledProvidersIndex",
-                    KeyConditionExpression="GSI1PK = :pk",
-                    ExpressionAttributeValues={":pk": "ENABLED#true"},
+                items = await config_cache.get_or_load(
+                    config_cache.OAUTH_PROVIDERS_ENABLED,
+                    lambda: asyncio.to_thread(self._query_enabled_provider_items),
                 )
-                items = response.get("Items", [])
-                while "LastEvaluatedKey" in response:
-                    response = self._table.query(
-                        IndexName="EnabledProvidersIndex",
-                        KeyConditionExpression="GSI1PK = :pk",
-                        ExpressionAttributeValues={":pk": "ENABLED#true"},
-                        ExclusiveStartKey=response["LastEvaluatedKey"],
-                    )
-                    items.extend(response.get("Items", []))
             else:
-                response = self._table.scan(
-                    FilterExpression="SK = :sk",
-                    ExpressionAttributeValues={":sk": "CONFIG"},
+                items = await config_cache.get_or_load(
+                    config_cache.OAUTH_PROVIDERS_ALL,
+                    lambda: asyncio.to_thread(self._scan_provider_items),
                 )
-                items = response.get("Items", [])
-                while "LastEvaluatedKey" in response:
-                    response = self._table.scan(
-                        FilterExpression="SK = :sk",
-                        ExpressionAttributeValues={":sk": "CONFIG"},
-                        ExclusiveStartKey=response["LastEvaluatedKey"],
-                    )
-                    items.extend(response.get("Items", []))
 
             providers = [OAuthProvider.from_dynamo_item(item) for item in items]
             providers.sort(key=lambda p: p.display_name.lower())
@@ -102,6 +89,40 @@ class OAuthProviderRepository:
         except ClientError as e:
             logger.error("Error listing providers: %s", e)
             raise
+
+    def _query_enabled_provider_items(self) -> List[dict]:
+        """Query raw enabled-provider items. Blocking; call via ``to_thread``."""
+        response = self._table.query(
+            IndexName="EnabledProvidersIndex",
+            KeyConditionExpression="GSI1PK = :pk",
+            ExpressionAttributeValues={":pk": "ENABLED#true"},
+        )
+        items = response.get("Items", [])
+        while "LastEvaluatedKey" in response:
+            response = self._table.query(
+                IndexName="EnabledProvidersIndex",
+                KeyConditionExpression="GSI1PK = :pk",
+                ExpressionAttributeValues={":pk": "ENABLED#true"},
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+            )
+            items.extend(response.get("Items", []))
+        return items
+
+    def _scan_provider_items(self) -> List[dict]:
+        """Scan all raw provider items. Blocking; call via ``to_thread``."""
+        response = self._table.scan(
+            FilterExpression="SK = :sk",
+            ExpressionAttributeValues={":sk": "CONFIG"},
+        )
+        items = response.get("Items", [])
+        while "LastEvaluatedKey" in response:
+            response = self._table.scan(
+                FilterExpression="SK = :sk",
+                ExpressionAttributeValues={":sk": "CONFIG"},
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+            )
+            items.extend(response.get("Items", []))
+        return items
 
     # ------------------------------------------------------------------ writes
     async def put_provider(self, provider: OAuthProvider) -> OAuthProvider:
@@ -114,6 +135,7 @@ class OAuthProviderRepository:
             raise RuntimeError("OAuth provider repository is not enabled")
 
         self._table.put_item(Item=provider.to_dynamo_item())
+        config_cache.invalidate_oauth_providers()
         logger.info("Upserted OAuth provider: %s", provider.provider_id)
         return provider
 
@@ -165,6 +187,7 @@ class OAuthProviderRepository:
 
         existing.updated_at = utc_now_iso()
         self._table.put_item(Item=existing.to_dynamo_item())
+        config_cache.invalidate_oauth_providers()
         logger.info("Updated OAuth provider metadata: %s", provider_id)
         return existing
 
@@ -180,6 +203,7 @@ class OAuthProviderRepository:
             self._table.delete_item(
                 Key={"PK": f"PROVIDER#{provider_id}", "SK": "CONFIG"}
             )
+            config_cache.invalidate_oauth_providers()
             logger.info("Deleted OAuth provider: %s", provider_id)
             return True
         except ClientError as e:

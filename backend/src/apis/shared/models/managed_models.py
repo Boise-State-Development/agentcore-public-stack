@@ -4,6 +4,7 @@ This service handles CRUD operations for managed models.
 Requires DynamoDB storage via DYNAMODB_MANAGED_MODELS_TABLE_NAME.
 """
 
+import asyncio
 import logging
 import os
 import uuid
@@ -14,6 +15,7 @@ from decimal import Decimal
 import boto3
 from botocore.exceptions import ClientError
 
+from apis.shared.caching import config_cache
 from .models import ManagedModel, ManagedModelCreate, ManagedModelUpdate
 
 logger = logging.getLogger(__name__)
@@ -224,7 +226,11 @@ async def create_managed_model(model_data: ManagedModelCreate) -> ManagedModel:
     managed_models_table = os.environ.get('DYNAMODB_MANAGED_MODELS_TABLE_NAME')
     if not managed_models_table:
         raise RuntimeError("DYNAMODB_MANAGED_MODELS_TABLE_NAME environment variable is required")
-    return await _create_managed_model_cloud(model_data, managed_models_table)
+    created = await _create_managed_model_cloud(model_data, managed_models_table)
+    # Invalidate here rather than in the admin route: every write to this table
+    # funnels through these three functions, so a future caller cannot forget.
+    config_cache.invalidate(config_cache.MANAGED_MODELS)
+    return created
 
 
 async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name: str) -> ManagedModel:
@@ -470,9 +476,41 @@ async def list_all_managed_models() -> List[ManagedModel]:
     return await _list_managed_models_cloud(managed_models_table)
 
 
+def _scan_managed_model_items(table_name: str) -> List[dict]:
+    """Scan the raw MODEL# items. Blocking; call via ``asyncio.to_thread``."""
+    table = dynamodb.Table(table_name)
+
+    response = table.scan(
+        FilterExpression='begins_with(PK, :pk_prefix)',
+        ExpressionAttributeValues={
+            ':pk_prefix': 'MODEL#'
+        }
+    )
+
+    items = response.get('Items', [])
+
+    # Handle pagination
+    while 'LastEvaluatedKey' in response:
+        response = table.scan(
+            FilterExpression='begins_with(PK, :pk_prefix)',
+            ExpressionAttributeValues={
+                ':pk_prefix': 'MODEL#'
+            },
+            ExclusiveStartKey=response['LastEvaluatedKey']
+        )
+        items.extend(response.get('Items', []))
+
+    return items
+
+
 async def _list_managed_models_cloud(table_name: str) -> List[ManagedModel]:
     """
     List all managed models from DynamoDB
+
+    The scan is cached per process (see ``apis.shared.caching.config_cache``);
+    parsing is not. Callers mutate the models they receive — the admin list
+    route hands them straight to ``hydrate_model_roles``, which writes
+    ``allowed_app_roles`` in place — so each caller must get objects it owns.
 
     Args:
         table_name: DynamoDB table name
@@ -480,30 +518,13 @@ async def _list_managed_models_cloud(table_name: str) -> List[ManagedModel]:
     Returns:
         List of ManagedModel objects
     """
-    table = dynamodb.Table(table_name)
     models = []
 
     try:
-        # Scan table for all models (PK starts with MODEL#)
-        response = table.scan(
-            FilterExpression='begins_with(PK, :pk_prefix)',
-            ExpressionAttributeValues={
-                ':pk_prefix': 'MODEL#'
-            }
+        items = await config_cache.get_or_load(
+            config_cache.MANAGED_MODELS,
+            lambda: asyncio.to_thread(_scan_managed_model_items, table_name),
         )
-
-        items = response.get('Items', [])
-
-        # Handle pagination
-        while 'LastEvaluatedKey' in response:
-            response = table.scan(
-                FilterExpression='begins_with(PK, :pk_prefix)',
-                ExpressionAttributeValues={
-                    ':pk_prefix': 'MODEL#'
-                },
-                ExclusiveStartKey=response['LastEvaluatedKey']
-            )
-            items.extend(response.get('Items', []))
 
         # Convert items to ManagedModel objects
         for item in items:
@@ -562,7 +583,9 @@ async def update_managed_model(model_id: str, updates: ManagedModelUpdate) -> Op
     managed_models_table = os.environ.get('DYNAMODB_MANAGED_MODELS_TABLE_NAME')
     if not managed_models_table:
         raise RuntimeError("DYNAMODB_MANAGED_MODELS_TABLE_NAME environment variable is required")
-    return await _update_managed_model_cloud(model_id, updates, managed_models_table)
+    updated = await _update_managed_model_cloud(model_id, updates, managed_models_table)
+    config_cache.invalidate(config_cache.MANAGED_MODELS)
+    return updated
 
 
 async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate, table_name: str) -> Optional[ManagedModel]:
@@ -707,7 +730,9 @@ async def delete_managed_model(model_id: str) -> bool:
     managed_models_table = os.environ.get('DYNAMODB_MANAGED_MODELS_TABLE_NAME')
     if not managed_models_table:
         raise RuntimeError("DYNAMODB_MANAGED_MODELS_TABLE_NAME environment variable is required")
-    return await _delete_managed_model_cloud(model_id, managed_models_table)
+    deleted = await _delete_managed_model_cloud(model_id, managed_models_table)
+    config_cache.invalidate(config_cache.MANAGED_MODELS)
+    return deleted
 
 
 async def _delete_managed_model_cloud(model_id: str, table_name: str) -> bool:

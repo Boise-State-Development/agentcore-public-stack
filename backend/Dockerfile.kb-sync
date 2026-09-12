@@ -34,6 +34,12 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
 COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
 COPY backend/src/apis/shared/dynamo_errors.py ${LAMBDA_TASK_ROOT}/apis/shared/dynamo_errors.py
+# feature_flags.py + caching/ — oauth/provider_repository.py memoizes its
+# provider list in the process-wide config cache, which reads the
+# CONFIG_CACHE_ENABLED kill switch. Both are module-level imports, so a miss
+# here is a cold-start ModuleNotFoundError, not a degraded path.
+COPY backend/src/apis/shared/feature_flags.py ${LAMBDA_TASK_ROOT}/apis/shared/feature_flags.py
+COPY backend/src/apis/shared/caching/ ${LAMBDA_TASK_ROOT}/apis/shared/caching/
 COPY backend/src/apis/shared/sync_policies/ ${LAMBDA_TASK_ROOT}/apis/shared/sync_policies/
 COPY backend/src/apis/shared/oauth/ ${LAMBDA_TASK_ROOT}/apis/shared/oauth/
 COPY backend/src/apis/shared/embeddings/ ${LAMBDA_TASK_ROOT}/apis/shared/embeddings/
