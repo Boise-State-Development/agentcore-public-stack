@@ -124,20 +124,48 @@ describe('ModelDropdownComponent', () => {
     expect(itemLabelled('Beta')).toBeTruthy();
   });
 
-  it('shows the short description under the model name', () => {
+  it('puts the provider on the name line and the description below it', () => {
     const { fixture } = setup({
-      featured: [makeModel({ modelName: 'Alpha', shortDescription: 'For hard problems' })],
+      featured: [
+        makeModel({
+          modelName: 'Alpha',
+          providerName: 'Anthropic',
+          shortDescription: 'For hard problems',
+        }),
+      ],
     });
     openMenu(fixture);
-    expect(itemLabelled('Alpha')?.textContent).toContain('For hard problems');
+    const row = itemLabelled('Alpha')!;
+    expect(row.textContent).toContain('Anthropic');
+    expect(row.textContent).toContain('For hard problems');
+
+    // Name + provider share one line; the description is its own.
+    const lines = row.querySelectorAll('.block');
+    expect(lines.length).toBe(2);
+    expect(lines[0].textContent).toContain('Alpha');
+    expect(lines[0].textContent).toContain('Anthropic');
+    expect(lines[1].textContent).toContain('For hard problems');
   });
 
-  it('falls back to the provider name when a model has no description', () => {
+  it('collapses to a single line when a model has no description', () => {
+    // This is most of what makes the menu shorter — an undescribed model must
+    // not leave an empty second line behind.
     const { fixture } = setup({
       featured: [makeModel({ modelName: 'Alpha', providerName: 'Anthropic' })],
     });
     openMenu(fixture);
-    expect(itemLabelled('Alpha')?.textContent).toContain('Anthropic');
+    const row = itemLabelled('Alpha')!;
+    expect(row.textContent).toContain('Anthropic');
+    expect(row.querySelectorAll('.block').length).toBe(1);
+  });
+
+  it('hides the bullet separator from assistive tech', () => {
+    const { fixture } = setup({
+      featured: [makeModel({ modelName: 'Alpha', providerName: 'Anthropic' })],
+    });
+    openMenu(fixture);
+    const bullet = itemLabelled('Alpha')!.querySelector('[aria-hidden="true"]');
+    expect(bullet?.textContent?.trim()).toBe('\u2022');
   });
 
   it('omits the "More models" entry when nothing is demoted', () => {

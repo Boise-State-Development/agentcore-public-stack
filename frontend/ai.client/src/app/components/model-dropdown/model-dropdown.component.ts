@@ -22,7 +22,7 @@ import { ModelOptionComponent } from './components/model-option.component';
       @if (modelService.agentModelLocked()) {
         <!-- Agent-dictated: the active agent pins this model; the picker is locked. -->
         <div
-          class="flex items-center gap-2 rounded-lg px-2.5 py-1 text-sm/5 text-gray-500 dark:text-gray-400"
+          class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm/5 text-gray-500 dark:text-gray-400"
           title="This agent runs on a fixed model"
         >
           <ng-icon name="heroLockClosed" class="size-3.5 shrink-0" aria-hidden="true" />
@@ -34,7 +34,7 @@ import { ModelOptionComponent } from './components/model-option.component';
           type="button"
           [cdkMenuTriggerFor]="modelMenu"
           [cdkMenuPosition]="menuPositions"
-          class="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm/5 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+          class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm/5 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
           aria-label="Select model"
         >
           <span>{{ modelService.selectedModel().modelName || 'Loading...' }}</span>
@@ -64,16 +64,16 @@ import { ModelOptionComponent } from './components/model-option.component';
           cdkMenu
           (closed)="onMenuClosed()"
           (opened)="onMenuOpened()"
-          class="w-72 rounded-md bg-white p-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10 animate-in fade-in slide-in-from-top-1 duration-200"
+          class="w-72 rounded-md bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10 animate-in fade-in slide-in-from-top-1 duration-200"
           role="menu"
           aria-orientation="vertical"
         >
           @if (modelService.modelsLoading()) {
-            <div class="px-2.5 py-1.5 text-sm/5 text-gray-500 dark:text-gray-400">
+            <div class="px-3 py-2 text-sm/5 text-gray-500 dark:text-gray-400">
               Loading models...
             </div>
           } @else if (modelService.modelsError()) {
-            <div class="px-2.5 py-1.5 text-sm/5 text-state-danger-600 dark:text-state-danger-400">
+            <div class="px-3 py-2 text-sm/5 text-state-danger-600 dark:text-state-danger-400">
               {{ modelService.modelsError() }}
             </div>
           } @else if (modelService.availableModels().length === 0) {
@@ -81,7 +81,7 @@ import { ModelOptionComponent } from './components/model-option.component';
             <button
               cdkMenuItem
               type="button"
-              class="flex w-full items-center justify-between gap-2 rounded-xs px-2.5 py-1.5 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+              class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
               role="menuitem"
               disabled
             >
@@ -111,13 +111,13 @@ import { ModelOptionComponent } from './components/model-option.component';
             }
 
             @if (effortControl(); as effort) {
-              <div class="my-1 border-t border-gray-200 dark:border-gray-700"></div>
+              <div class="my-1.5 border-t border-gray-200 dark:border-gray-700"></div>
               <button
                 cdkMenuItem
                 type="button"
                 [cdkMenuTriggerFor]="effortMenu"
                 [cdkMenuPosition]="submenuPositions"
-                class="flex w-full items-center justify-between gap-2 rounded-xs px-2.5 py-1.5 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
                 role="menuitem"
               >
                 <span>Effort</span>
@@ -136,11 +136,11 @@ import { ModelOptionComponent } from './components/model-option.component';
               <ng-template #effortMenu>
                 <div
                   cdkMenu
-                  class="w-56 rounded-md bg-white p-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                  class="w-56 rounded-md bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
                   role="menu"
                   aria-orientation="vertical"
                 >
-                  <p class="px-2.5 py-1.5 text-xs/4 text-gray-500 dark:text-gray-400">
+                  <p class="px-3 py-2 text-xs/4 text-gray-500 dark:text-gray-400">
                     Higher effort means more thorough responses, but takes longer and costs more.
                   </p>
                   @for (level of effort.levels; track level) {
@@ -148,7 +148,7 @@ import { ModelOptionComponent } from './components/model-option.component';
                       cdkMenuItem
                       type="button"
                       (click)="selectEffort(level)"
-                      class="flex w-full items-center justify-between gap-2 rounded-xs px-2.5 py-1.5 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                      class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
                       role="menuitem"
                     >
                       <span class="flex items-center gap-1.5">
@@ -174,13 +174,13 @@ import { ModelOptionComponent } from './components/model-option.component';
             }
 
             @if (modelService.moreModels().length > 0) {
-              <div class="my-1 border-t border-gray-200 dark:border-gray-700"></div>
+              <div class="my-1.5 border-t border-gray-200 dark:border-gray-700"></div>
               <button
                 cdkMenuItem
                 type="button"
                 [cdkMenuTriggerFor]="moreModelsMenu"
                 [cdkMenuPosition]="submenuPositions"
-                class="flex w-full items-center justify-between gap-2 rounded-xs px-2.5 py-1.5 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
                 role="menuitem"
               >
                 <span>More models</span>
@@ -194,7 +194,7 @@ import { ModelOptionComponent } from './components/model-option.component';
               <ng-template #moreModelsMenu>
                 <div
                   cdkMenu
-                  class="max-h-96 w-72 overflow-y-auto rounded-md bg-white p-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                  class="max-h-96 w-72 overflow-y-auto rounded-md bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
                   role="menu"
                   aria-orientation="vertical"
                 >

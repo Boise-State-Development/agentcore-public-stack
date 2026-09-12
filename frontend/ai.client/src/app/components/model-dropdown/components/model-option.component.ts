@@ -17,6 +17,16 @@ import { ManagedModel } from '../../../admin/manage-models/models/managed-model.
  * `cdkMenuItem` goes on this component's host in the parent template, which is
  * why the row renders spans and no interactive element of its own — a `<button>`
  * inside a `role="menuitem"` host nests two controls and breaks the a11y tree.
+ *
+ * Layout: name and provider share the first line separated by a bullet, with
+ * the description (when there is one) on a second. The bullet is
+ * `aria-hidden` so the row reads as "Claude Sonnet 5 Anthropic" rather than
+ * "Claude Sonnet 5 bullet Anthropic".
+ *
+ * Spacing around the bullet is margin (`ml-1.5` / `mr-1`), NOT template
+ * whitespace: Angular strips whitespace-only text nodes by default
+ * (`preserveWhitespaces: false`), so a space written between the two spans
+ * silently disappears and the row renders "Claude Sonnet 5• Anthropic".
  */
 @Component({
   selector: 'app-model-option',
@@ -25,14 +35,24 @@ import { ManagedModel } from '../../../admin/manage-models/models/managed-model.
   providers: [provideIcons({ heroCheck })],
   host: {
     class:
-      'flex w-full cursor-pointer items-center justify-between gap-2 rounded-xs px-2.5 py-1.5 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700',
+      'flex w-full cursor-pointer items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700',
   },
   template: `
     <span class="min-w-0 text-left">
-      <span class="block truncate font-medium">{{ model().modelName }}</span>
-      <span class="block truncate text-xs/4 text-gray-500 dark:text-gray-400">
-        {{ model().shortDescription || model().providerName }}
+      <span class="block truncate">
+        <span class="font-medium">{{ model().modelName }}</span>
+        <span class="ml-1.5 text-xs/4 text-gray-500 dark:text-gray-400"
+          ><span aria-hidden="true" class="mr-1">&bull;</span>{{ model().providerName }}</span
+        >
       </span>
+      <!-- Second line only when there's something to say. A model with no
+           description collapses to a single line rather than leaving a blank
+           one, which is most of what makes the menu shorter. -->
+      @if (model().shortDescription) {
+        <span class="mt-0.5 block truncate text-xs/4 text-gray-500 dark:text-gray-400">{{
+          model().shortDescription
+        }}</span>
+      }
     </span>
 
     @if (selected()) {
