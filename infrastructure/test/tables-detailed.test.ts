@@ -86,7 +86,7 @@ describe('AuthTablesConstruct — detailed', () => {
     });
   });
 
-  it('AppRoles table has 4 GSIs incl. SkillOwnerIndex', () => {
+  it('AppRoles table has 5 GSIs incl. SkillOwnerIndex and EntityTypeIndex', () => {
     t.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'test-project-app-roles',
       GlobalSecondaryIndexes: Match.arrayWith([
@@ -94,6 +94,26 @@ describe('AuthTablesConstruct — detailed', () => {
         Match.objectLike({ IndexName: 'ToolRoleMappingIndex' }),
         Match.objectLike({ IndexName: 'ModelRoleMappingIndex' }),
         Match.objectLike({ IndexName: 'SkillOwnerIndex' }),
+        Match.objectLike({ IndexName: 'EntityTypeIndex' }),
+      ]),
+    });
+  });
+
+  it('EntityTypeIndex is keyed on GSI5PK/GSI5SK with full projection', () => {
+    // Full projection because the tool catalog is rebuilt from these rows —
+    // an INCLUDE projection would force a base-table read per tool and give
+    // back the amplification the index exists to remove.
+    t.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'test-project-app-roles',
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'EntityTypeIndex',
+          KeySchema: [
+            { AttributeName: 'GSI5PK', KeyType: 'HASH' },
+            { AttributeName: 'GSI5SK', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'ALL' },
+        }),
       ]),
     });
   });

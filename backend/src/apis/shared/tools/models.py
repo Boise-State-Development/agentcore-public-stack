@@ -12,6 +12,15 @@ from typing import Any, Dict, List, Literal, Optional, Set
 from pydantic import BaseModel, Field, field_validator, model_validator
 from apis.shared.timestamps import from_iso, to_iso
 
+# EntityTypeIndex (GSI5) partition value for tool-catalog rows.
+#
+# The index is generic — "list every item of type X" on a table that mixes
+# tools, skills, roles, role grants and one preferences row per user. Only the
+# tool partition is written and read today; a second entity type can be added
+# without another GSI, which matters because DynamoDB allows only one GSI
+# creation per UpdateTable.
+ENTITY_TYPE_TOOL = "ENTITY#TOOL"
+
 
 class ToolCategory(str, Enum):
     """Categories for organizing tools in the UI."""
@@ -743,6 +752,13 @@ class ToolDefinition(BaseModel):
             "SK": "METADATA",
             "GSI1PK": f"CATEGORY#{self.category}",
             "GSI1SK": f"TOOL#{self.tool_id}",
+            # EntityTypeIndex — lets "list every tool" be a Query on one
+            # partition instead of a Scan of a table shared with roles, skills
+            # and a preferences row per user. Sparse: a row without these two
+            # attributes simply is not in the index, which is why existing rows
+            # need backfill_tool_catalog_index.py.
+            "GSI5PK": ENTITY_TYPE_TOOL,
+            "GSI5SK": f"TOOL#{self.tool_id}",
             "toolId": self.tool_id,
             "displayName": self.display_name,
             "description": self.description,
