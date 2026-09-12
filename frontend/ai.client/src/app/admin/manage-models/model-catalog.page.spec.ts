@@ -328,12 +328,16 @@ describe('ModelCatalogPage', () => {
 
         expect(`${model.key}:${params!['max_tokens'].supported}`).toBe(`${model.key}:true`);
 
-        // No published default, and inventing one would silently change how
-        // every turn on these models reasons and bills.
-        expect(
-          params!['reasoning_effort'].default ?? null,
-          `${model.key} must not invent a default effort`,
-        ).toBeNull();
+        // `medium` pins what the provider was already doing implicitly —
+        // measured at ~376 reasoning tokens unset vs ~308 for medium, so this
+        // is cost-neutral-to-cheaper rather than an increase. A default must
+        // stay a member of `allowed` or the backend drops it.
+        expect(`${model.key}:${params!['reasoning_effort'].default}`).toBe(
+          `${model.key}:medium`,
+        );
+        expect(params!['reasoning_effort'].allowed).toContain(
+          params!['reasoning_effort'].default,
+        );
       }
     });
 

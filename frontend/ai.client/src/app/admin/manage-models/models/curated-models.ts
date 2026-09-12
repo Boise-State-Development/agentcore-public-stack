@@ -458,10 +458,34 @@ const bedrockResponsesDefaults = (): Pick<
  * instead — the same failure class the guard inversion was written to close on
  * Claude Opus 4.7.
  *
- * No `default` is declared for `reasoning_effort`: neither the cards nor the
- * blog publish one, and inventing a default would silently change how every
- * turn on these models is priced. Absent a default the param is simply not
- * sent and the provider's own default applies.
+ * `reasoning_effort` defaults to `medium`, which was also measured rather than
+ * assumed. Neither the cards nor the blog publish a default, so the question
+ * was what the provider does when the param is ABSENT — which is not the same
+ * as sending `none`. Sending nothing still reasons; `none` is an explicit
+ * "off". Three samples per level on Luna, in reasoning tokens:
+ *
+ *     unset  285 / 516 / 327   (mean 376)
+ *     none     0 /   0 /   0
+ *     low    221 / 222 / 230   (mean 224)
+ *     medium 274 / 346 / 303   (mean 308)
+ *     high   516 / 363 / 497   (mean 459)
+ *
+ * So the implicit default already sits around medium, and declaring `medium`
+ * is cost-neutral-to-slightly-cheaper (-18% reasoning tokens), NOT an increase.
+ * It is declared anyway because otherwise the provider can move its own
+ * default and our spend follows with no code change and no signal — and
+ * because a declared default is what lets the picker show the level in force
+ * instead of a blank row. Counts are noisy (unset spanned 285-516 across three
+ * identical calls), so treat the middle levels as roughly interchangeable.
+ *
+ * The level that actually moves the bill is `max`: ~2.3x the output tokens of
+ * unset on Terra, and reasoning bills as output. It stays in `allowed`
+ * deliberately — dropping a level from that list is the lever if the exposure
+ * is ever unwanted, since the picker and the backend both read it.
+ *
+ * GPT-6 Astra inherits this default by sharing the helper. Its effort ENUM was
+ * probed directly, but its token counts were not — medium there is an
+ * extrapolation from its GPT-5.6 siblings, not a measurement.
  *
  * The standing rule is unchanged — a declared spec flips the guard from
  * permissive to restrictive, so a wrong entry silently blocks a parameter the
@@ -483,6 +507,9 @@ const openaiResponsesParams = (maxOutputTokens: number | null = null): Supported
     reasoning_effort: {
       supported: true,
       allowed: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+      // Pins what the provider was already doing implicitly — see the block
+      // comment above for the measurement. NOT an increase in reasoning.
+      default: 'medium',
     },
     max_tokens: {
       supported: true,
