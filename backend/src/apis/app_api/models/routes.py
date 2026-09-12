@@ -4,12 +4,13 @@ Provides endpoints for users to list available models based on their roles.
 Supports both AppRole-based access (preferred) and legacy JWT role-based access.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, Request, Response, status
 import logging
 
 from apis.app_api.admin.models import ManagedModelsListResponse
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.models.managed_models import list_all_managed_models
+from apis.app_api.admin.services.model_icons import ModelIconError, read_model_icon
 from apis.app_api.admin.services.model_access import (
     ModelAccessService,
     get_model_access_service,
@@ -88,3 +89,38 @@ async def list_models_for_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error listing models: {str(e)}"
         )
+
+
+@router.get("/{model_id}/icon")
+async def get_model_icon(
+    model_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Serve a model's uploaded icon bytes.
+
+    User-facing, not admin-facing: this renders in the chat model picker for
+    everyone. Signed-in is the whole check — the catalog already hands every user
+    this model's name, provider and pricing, so its logo discloses nothing new.
+
+    The object is immutable — its key *is* its content digest — so this answers
+    with a one-year ``immutable`` directive and the digest as the ETag. A
+    replacement changes ``iconUrl``'s ``?v=``, which is what busts the cache; the
+    ``If-None-Match`` 304 below is for the same URL being asked for twice.
+
+    A missing icon is a 404, so the SPA falls through to the model's ``iconSlug``
+    (or its provider-name match) rather than rendering a broken tile.
+    """
+    try:
+        data, content_type, version = await read_model_icon(model_id)
+    except ModelIconError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error reading model icon: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to read model icon: {str(e)}")
+
+    etag = f'"{version}"'
+    headers = {"Cache-Control": "public, max-age=31536000, immutable", "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=content_type, headers=headers)

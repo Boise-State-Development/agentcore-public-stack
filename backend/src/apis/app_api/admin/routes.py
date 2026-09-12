@@ -4,7 +4,7 @@ Provides privileged endpoints for administrative operations.
 Requires admin role (Admin or SuperAdmin) via JWT token.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query, status
+from fastapi import APIRouter, File, HTTPException, Depends, Query, UploadFile, status
 from typing import List, Literal, Optional
 import logging
 import os
@@ -21,6 +21,7 @@ from .models import (
     OpenAIModelSummary,
     MantleModelsResponse,
     MantleModelSummary,
+    ManagedModelIconResponse,
     ManagedModelsListResponse,
 )
 from apis.shared.models.models import (
@@ -37,6 +38,11 @@ from apis.shared.models.managed_models import (
     list_managed_models,
     update_managed_model,
     delete_managed_model,
+)
+from .services.model_icons import (
+    ModelIconError,
+    remove_model_icon,
+    upload_model_icon,
 )
 from .services.model_roles import get_model_role_service
 
@@ -801,6 +807,58 @@ async def delete_managed_model_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting enabled model: {str(e)}"
         )
+
+
+# ---------------------------------------------------------------- model icons
+# Writing an icon is editing the catalog, so it rides the admin.models scope.
+# Reading is deliberately NOT here: every signed-in user renders these in the
+# chat model picker, so the serve route lives on the user-facing /models router.
+@router.post("/managed-models/{model_id}/icon", response_model=ManagedModelIconResponse)
+async def upload_managed_model_icon(
+    model_id: str,
+    file: UploadFile = File(...),
+    admin_user: User = Depends(require_models_admin),
+):
+    """Upload a custom icon for a model (admin only).
+
+    Square PNG or JPEG, at least 256×256 and at most 400 KB; stored re-encoded at
+    512×512, which is also what strips EXIF. Prefer setting ``iconSlug`` when we
+    ship a logo for the vendor — it stays a crisp, theme-aware vector. Rejections
+    carry the limit and the supplied value, since "invalid image" sends an admin
+    back to the file picker with nothing to change.
+    """
+    content = await file.read()
+    try:
+        icon_key, icon_url = await upload_model_icon(model_id, content)
+    except ModelIconError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error("Unexpected error uploading model icon", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to upload model icon: {str(e)}")
+
+    return ManagedModelIconResponse(model_id=model_id, icon_key=icon_key, icon_url=icon_url)
+
+
+@router.delete("/managed-models/{model_id}/icon", response_model=ManagedModelIconResponse)
+async def delete_managed_model_icon(
+    model_id: str,
+    admin_user: User = Depends(require_models_admin),
+):
+    """Remove the uploaded icon, falling back to the model's ``iconSlug`` (admin only).
+
+    Separate from clearing ``iconSlug`` through the model form on purpose: the two
+    are independent, and an admin who uploaded the wrong file should get their
+    built-in logo back rather than a blank tile.
+    """
+    try:
+        icon_key, icon_url = await remove_model_icon(model_id)
+    except ModelIconError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error("Unexpected error removing model icon", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to remove model icon: {str(e)}")
+
+    return ManagedModelIconResponse(model_id=model_id, icon_key=icon_key, icon_url=icon_url)
 
 
 @router.get("/managed-models/{model_id}/roles", response_model=List[ModelRoleAssignment])

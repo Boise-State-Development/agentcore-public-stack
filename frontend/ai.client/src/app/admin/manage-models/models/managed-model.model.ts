@@ -169,6 +169,22 @@ export interface ManagedModel {
    * ("For your toughest challenges"), not a sentence.
    */
   shortDescription?: string | null;
+  /**
+   * Built-in vendor logo slug (e.g. 'anthropic'), resolved client-side to the
+   * light/dark SVG pair the SPA ships. See `model-icons.ts` for the precedence
+   * against `iconUrl`.
+   */
+  iconSlug?: string | null;
+  /**
+   * S3 object key for an uploaded icon. Server-side detail — read `iconUrl`,
+   * which is derived from it and carries the cache-busting `?v=` digest.
+   */
+  iconKey?: string | null;
+  /**
+   * Relative app-api path serving an uploaded icon (`/models/{id}/icon?v=…`),
+   * or absent when the model has none. Takes precedence over `iconSlug`.
+   */
+  iconUrl?: string | null;
   /** Model provider (AWS, OpenAI, Google) */
   provider: ModelProvider;
   /** Provider name (e.g., 'Anthropic', 'Amazon', 'Meta') */
@@ -272,6 +288,13 @@ export interface ManagedModelFormData {
    * ("For your toughest challenges"), not a sentence.
    */
   shortDescription?: string | null;
+  /**
+   * Built-in vendor logo to show beside this model in the chat picker. Empty
+   * string clears it — not null: the update path drops null fields, so null
+   * could never remove a slug once set (same rule as `shortDescription`).
+   * The uploaded icon, when there is one, wins over this.
+   */
+  iconSlug?: string | null;
   /** Model provider (AWS, OpenAI, Google) */
   provider: ModelProvider;
   /** Provider name (e.g., 'Anthropic', 'Amazon', 'Meta') */

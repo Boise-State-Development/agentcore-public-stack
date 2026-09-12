@@ -1,4 +1,5 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
 import {
   AbstractControl,
@@ -30,6 +31,12 @@ import {
   ModelProvider,
   SupportedParams,
 } from './models/managed-model.model';
+import {
+  BUILTIN_MODEL_ICONS,
+  BUILTIN_MODEL_ICON_LABELS,
+  BuiltinModelIcon,
+} from './models/model-icons';
+import { ModelIconComponent } from '../../components/model-icon/model-icon.component';
 import { ManagedModelsService } from './services/managed-models.service';
 import { CuratedModelPrefillService } from './services/curated-model-prefill.service';
 import { AppRolesService } from '../roles/services/app-roles.service';
@@ -224,6 +231,7 @@ interface ModelFormGroup {
   modelId: FormControl<string>;
   modelName: FormControl<string>;
   shortDescription: FormControl<string>;
+  iconSlug: FormControl<string>;
   provider: FormControl<ModelProvider>;
   providerName: FormControl<string>;
   inputModalities: FormControl<string[]>;
@@ -249,7 +257,7 @@ interface ModelFormGroup {
 
 @Component({
   selector: 'app-model-form-page',
-  imports: [ReactiveFormsModule, RouterLink, NgIcon, SpinnerComponent],
+  imports: [ReactiveFormsModule, RouterLink, NgIcon, ModelIconComponent, SpinnerComponent],
   providers: [provideIcons({ heroArrowLeft, heroChevronDown, heroChevronRight })],
   templateUrl: './model-form.page.html',
   styleUrl: './model-form.page.css',
@@ -347,6 +355,10 @@ export class ModelFormPage implements OnInit {
       nonNullable: true,
       validators: [Validators.maxLength(80)],
     }),
+    // '' is a real value here, not "unset": the update path drops null fields
+    // (`exclude_none`), so null could never clear a slug once set. Same rule as
+    // `shortDescription`.
+    iconSlug: this.fb.control('', { nonNullable: true }),
     provider: this.fb.control<ModelProvider>('bedrock', { nonNullable: true, validators: [Validators.required] }),
     providerName: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
     inputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
@@ -874,6 +886,10 @@ export class ModelFormPage implements OnInit {
     try {
       const model = await this.managedModelsService.getModel(id);
 
+      // The uploaded icon is not a form field — it is written by its own request
+      // against the saved record — so it is held beside the form rather than in it.
+      this.uploadedIconUrl.set(model.iconUrl ?? null);
+
       // Roles that reach this model via a wildcard grant or inheritance. Held
       // outside the form: they're server-derived and not editable here.
       this.inheritedAppRoles.set(model.inheritedAppRoles ?? []);
@@ -883,6 +899,7 @@ export class ModelFormPage implements OnInit {
         modelId: model.modelId,
         modelName: model.modelName,
         shortDescription: model.shortDescription ?? '',
+        iconSlug: model.iconSlug ?? '',
         provider: model.provider as ModelProvider,
         providerName: model.providerName,
         inputModalities: model.inputModalities.map(m => m.toUpperCase()),
@@ -930,6 +947,7 @@ export class ModelFormPage implements OnInit {
       modelId: template.modelId,
       modelName: template.modelName,
       shortDescription: template.shortDescription ?? '',
+      iconSlug: template.iconSlug ?? '',
       provider: template.provider,
       providerName: template.providerName,
       inputModalities: template.inputModalities.map(m => m.toUpperCase()),
@@ -1013,6 +1031,111 @@ export class ModelFormPage implements OnInit {
     return control.value?.includes(value) ?? false;
   }
 
+  // ── icon ───────────────────────────────────────────────────────────────────
+  // Two independent controls that resolve to one avatar. The built-in slug is a
+  // plain form field saved with the rest of the model; the upload is its own
+  // request against an already-saved record, because the object key is derived
+  // from the record id. See `models/model-icons.ts` for the precedence.
+
+  readonly builtinIcons = BUILTIN_MODEL_ICONS;
+  readonly builtinIconLabels = BUILTIN_MODEL_ICON_LABELS;
+
+  /** The uploaded icon's serve path, or null when the model has none. */
+  readonly uploadedIconUrl = signal<string | null>(null);
+  readonly isUploadingIcon = signal<boolean>(false);
+  /** Surfaced verbatim: the server's rejections name the limit that was broken. */
+  readonly iconError = signal<string | null>(null);
+
+  // Mirrors the form control so the live preview and the radio group's checked
+  // state update as the admin clicks, without either of them reading
+  // `modelForm.value` during change detection.
+  private readonly iconSlugValue = toSignal(this.modelForm.controls.iconSlug.valueChanges, {
+    initialValue: this.modelForm.controls.iconSlug.value,
+  });
+
+  /**
+   * What the picker will actually draw for this model right now — the same
+   * resolution the chat picker runs, so the preview cannot promise one thing and
+   * the menu render another.
+   */
+  readonly iconPreviewModel = computed(() => ({
+    iconUrl: this.uploadedIconUrl(),
+    iconSlug: this.iconSlugValue(),
+    providerName: this.providerNameValue(),
+    modelName: this.modelNameValue(),
+  }));
+
+  private readonly providerNameValue = toSignal(
+    this.modelForm.controls.providerName.valueChanges,
+    { initialValue: this.modelForm.controls.providerName.value },
+  );
+  private readonly modelNameValue = toSignal(this.modelForm.controls.modelName.valueChanges, {
+    initialValue: this.modelForm.controls.modelName.value,
+  });
+
+  /** Pick a built-in logo, or clear the selection by picking the active one again. */
+  selectIconSlug(slug: BuiltinModelIcon | ''): void {
+    const control = this.modelForm.controls.iconSlug;
+    control.setValue(control.value === slug ? '' : slug);
+    control.markAsDirty();
+  }
+
+  isIconSlugSelected(slug: string): boolean {
+    return this.iconSlugValue() === slug;
+  }
+
+  /**
+   * Upload the picked file and point the record at it.
+   *
+   * Only reachable in edit mode: the object key is `models/{record id}/icons/…`,
+   * so there is nothing to attach to until the model has been saved once. The
+   * input is reset afterwards so re-picking the same file still fires `change`.
+   */
+  async onIconFileSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+
+    const id = this.modelId();
+    if (!id) return;
+
+    this.iconError.set(null);
+    this.isUploadingIcon.set(true);
+    try {
+      const response = await this.managedModelsService.uploadIcon(id, file);
+      this.uploadedIconUrl.set(response.iconUrl ?? null);
+    } catch (error: any) {
+      // The server's message names the limit and the supplied value ("Icons must
+      // be square (this one is 512×256)"), which is the whole point of showing it
+      // rather than a generic failure.
+      this.iconError.set(
+        error?.error?.detail || error?.message || 'Failed to upload the icon. Please try again.',
+      );
+    } finally {
+      this.isUploadingIcon.set(false);
+    }
+  }
+
+  /** Remove the uploaded icon, falling back to the built-in slug (or the monogram). */
+  async removeUploadedIcon(): Promise<void> {
+    const id = this.modelId();
+    if (!id) return;
+
+    this.iconError.set(null);
+    this.isUploadingIcon.set(true);
+    try {
+      await this.managedModelsService.deleteIcon(id);
+      this.uploadedIconUrl.set(null);
+    } catch (error: any) {
+      this.iconError.set(
+        error?.error?.detail || error?.message || 'Failed to remove the icon. Please try again.',
+      );
+    } finally {
+      this.isUploadingIcon.set(false);
+    }
+  }
+
   /**
    * Submit the form
    */
@@ -1035,6 +1158,7 @@ export class ModelFormPage implements OnInit {
         // Empty string rather than null: the update path drops null fields
         // (`exclude_none`), so null could never clear a description once set.
         shortDescription: v.shortDescription.trim(),
+        iconSlug: v.iconSlug,
         provider: v.provider,
         providerName: v.providerName,
         inputModalities: v.inputModalities,

@@ -13,6 +13,18 @@ export interface ManagedModelsListResponse {
 }
 
 /**
+ * The result of uploading or clearing a model's icon.
+ *
+ * Both fields are absent after a remove, which is the signal the form needs to
+ * fall back to the model's `iconSlug` without re-reading the catalog.
+ */
+export interface ManagedModelIconResponse {
+  id: string;
+  iconKey?: string | null;
+  iconUrl?: string | null;
+}
+
+/**
  * A model on Bedrock Mantle's live roster (`GET /admin/mantle/models`).
  * Mirrors the OpenAI list-models shape the Mantle endpoint speaks.
  */
@@ -188,6 +200,53 @@ export class ManagedModelsService {
     } catch (error) {
       throw error;
     }
+  }
+
+
+  /**
+   * Upload a custom icon for a model.
+   *
+   * Multipart, not JSON: the bytes go straight to S3 and only the key lands on
+   * the record. The server validates and re-encodes to 512×512 — which is also
+   * what strips EXIF — so a rejection here carries an admin-facing reason and
+   * should be surfaced verbatim rather than replaced with "upload failed".
+   *
+   * @param modelId - Model record identifier (the UUID, not the Bedrock model id)
+   * @param file - A square PNG or JPEG, at least 256×256 and at most 400 KB
+   * @returns Promise resolving to the stored key and the path that serves it
+   */
+  async uploadIcon(modelId: string, file: File): Promise<ManagedModelIconResponse> {
+    const body = new FormData();
+    body.append('file', file);
+
+    const response = await firstValueFrom(
+      this.http.post<ManagedModelIconResponse>(`${this.baseUrl()}/${modelId}/icon`, body),
+    );
+
+    // The catalog's cached copy still carries the old iconUrl (or none).
+    this.modelsResource.reload();
+
+    return response;
+  }
+
+  /**
+   * Remove a model's uploaded icon, falling back to its `iconSlug`.
+   *
+   * Distinct from clearing `iconSlug` through the form: the two are independent,
+   * and an admin who uploaded the wrong file should get their built-in logo back
+   * rather than a blank tile.
+   *
+   * @param modelId - Model record identifier
+   * @returns Promise resolving to the cleared icon fields
+   */
+  async deleteIcon(modelId: string): Promise<ManagedModelIconResponse> {
+    const response = await firstValueFrom(
+      this.http.delete<ManagedModelIconResponse>(`${this.baseUrl()}/${modelId}/icon`),
+    );
+
+    this.modelsResource.reload();
+
+    return response;
   }
 
   /**
