@@ -191,6 +191,20 @@ describe('PlatformStack', () => {
       // MCP sandbox: csp-function
       template.resourceCountIs('AWS::CloudFront::Function', 3);
     });
+
+    it('tells app-api which prefix the path-strip function removed', () => {
+      // app-api cannot see the public URL: CloudFront strips `/api`, swaps in
+      // the origin's own hostname, and the ALB terminates TLS. Without this
+      // header a redirect Starlette generates for itself comes back as
+      // `http://api.<domain>/<path>`, which the browser blocks as mixed
+      // content. `ProxiedRedirectMiddleware` reads it to put the redirect
+      // back on the public URL.
+      template.hasResourceProperties('AWS::CloudFront::Function', {
+        FunctionCode: Match.stringLikeRegexp(
+          "x-forwarded-prefix'\\] = \\{ value: '/api' \\}",
+        ),
+      });
+    });
   });
 
   describe('SSM parameters', () => {
