@@ -2,7 +2,8 @@
 
 **Status:** Step 1 (Customize shell: Tools + Skills) SHIPPED — PR #1072, validated on dev.
 Step 3 (drop model + params from the drawer) SHIPPED — PR #1073, validated on dev.
-Step 4 (agent-lock surfacing) in flight. Steps 2, 5–7 queued.
+Step 4 (agent-lock surfacing) SHIPPED — PR #1075, validated on dev.
+Step 2 (Connectors tab) in flight. Steps 5–7 queued.
 **Supersedes:** the composer settings drawer (`components/model-settings/`) as the home for
 tool and skill enablement.
 **Related:** `docs/specs/skills-as-agent-primitive.md` (D6 opt-in), `docs/specs/agent-marketplace.md` (D1 one noun),
@@ -33,7 +34,7 @@ A full page at `/customize` that owns the things a user *adds to* their assistan
 |-----|----------|--------------|
 | **Tools** | The RBAC-granted tool catalog, per-tool and per-server enablement | Drawer § Tools |
 | **Skills** | Accessible skills (catalog-granted ∪ authored), opt-in toggles | Drawer § Skills |
-| **Connectors** | OAuth connection state for external MCP servers | `Settings → Connectors` |
+| **Connectors** | OAuth connection state for external MCP servers | `Settings → Connectors` (folded in, step 2) |
 
 It is deliberately **capabilities only**. See §"What Customize is not".
 
@@ -212,9 +213,9 @@ Each step is independently shippable. 3 and 6 do not depend on Customize at all.
 | # | Step | Depends on |
 |---|------|-----------|
 | 1 | **Customize shell** — `/customize`, Tools + Skills tabs, nav entry. Drawer stays; both live — **shipped (#1072)** | — |
-| 2 | Fold `Settings → Connectors` in as the Connectors tab | 1 |
+| 2 | Fold `Settings → Connectors` in as the Connectors tab — **in flight** | 1 |
 | 3 | Drop model + Advanced params from the drawer (pure dedup + param removal) — **shipped (#1073)** | — |
-| 4 | Agent-lock surfacing moves to the assistant indicator — **in flight** | — |
+| 4 | Agent-lock surfacing moves to the assistant indicator — **shipped (#1075)** | — |
 | 5 | Delete the drawer and the settings icon | 1, 2, 3, 4 |
 | 6 | Conversation Modes retired as an Agent migration | prod-usage check |
 | 7 | `/agents` lands on Discover for users with no agents | — |
@@ -250,3 +251,20 @@ discovered. Resolve before step 5.
 
 **Out:** connectors tab (step 2), tool detail pane / per-sub-tool expansion, any drawer
 deletion, prompt-weight display, marketplace changes.
+
+## Step 2 notes
+
+The page moved wholesale (`git mv`, so history follows it); only the shell changed — tabs
+plus an `h1`, and the row/empty/error containers went to `rounded-2xl` so the three tabs read
+as one surface. The Connect/Disconnect buttons and the `vendor-*` icon tokens were left
+exactly as they were: both carry load-bearing contrast reasoning in their comments.
+
+⚠️ `/settings/connectors` stays as a **redirect**, declared BEFORE the `settings` route whose
+`loadChildren` would otherwise swallow it and land the user on the settings shell with no
+matching child. A test asserts that ordering, because the failure is silent.
+
+The `settings/connectors/` **services** deliberately did not move. `UserConnectorsService` and
+`ConnectorStatusService` have nine importers across the app (oauth-consent, export-dialog,
+knowledge-base, the drawer's tool-detail, the Customize Tools tab…), so relocating them is a
+wide, purely-mechanical diff that belongs on its own. Their real home is probably
+`services/connectors/` — noted, not done here.
