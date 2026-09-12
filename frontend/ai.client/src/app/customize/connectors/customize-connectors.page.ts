@@ -18,15 +18,16 @@ import {
   heroArrowPath,
   heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
-import { UserConnectorsService } from '../../connectors/services/user-connectors.service';
-import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
-import { UserConnector } from '../../connectors/models/user-connector.model';
-import { ToastService } from '../../../services/toast/toast.service';
+import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
+import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
+import { UserConnector } from '../../settings/connectors/models/user-connector.model';
+import { ToastService } from '../../services/toast/toast.service';
 import {
   ConfirmationDialogComponent,
   ConfirmationDialogData,
-} from '../../../components/confirmation-dialog';
-import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+} from '../../components/confirmation-dialog';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
+import { CustomizeTabsComponent } from '../components/customize-tabs.component';
 
 type ConnectState =
   | 'probing'
@@ -37,9 +38,9 @@ type ConnectState =
   | 'error';
 
 @Component({
-  selector: 'app-connectors-settings',
+  selector: 'app-customize-connectors',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, SpinnerComponent],
+  imports: [NgIcon, SpinnerComponent, CustomizeTabsComponent],
   providers: [
     provideIcons({
       heroLink,
@@ -51,15 +52,18 @@ type ConnectState =
       heroExclamationTriangle,
     }),
   ],
-  host: { class: 'block' },
   template: `
-    <div class="flex flex-col gap-8">
-      <div>
-        <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Connectors</h2>
-        <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
-          Connect your third-party accounts so agents can call tools on your behalf.
-        </p>
-      </div>
+    <div class="min-h-dvh">
+      <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+        <app-customize-tabs />
+
+        <div class="mt-6 mb-6">
+          <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Connectors</h1>
+          <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+            Connect your accounts so tools can act on your behalf. A tool that needs a
+            connection is marked on the Tools tab.
+          </p>
+        </div>
 
       @if (resource.isLoading()) {
         <div class="flex items-center gap-3 text-sm/6 text-gray-500 dark:text-gray-400">
@@ -67,7 +71,7 @@ type ConnectState =
           Loading connectors...
         </div>
       } @else if (resource.error()) {
-        <div class="flex items-start gap-3 rounded-sm border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20">
+        <div class="flex items-start gap-3 rounded-2xl border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20">
           <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" />
           <div>
             <h3 class="text-sm/6 font-medium text-state-danger-800 dark:text-state-danger-200">Couldn't load connectors</h3>
@@ -84,7 +88,7 @@ type ConnectState =
           </div>
         </div>
       } @else if (connectors().length === 0) {
-        <div class="rounded-sm border border-dashed border-gray-300 p-8 text-center dark:border-gray-700">
+        <div class="rounded-2xl border border-dashed border-gray-300 p-8 text-center dark:border-gray-700">
           <ng-icon name="heroLink" class="mx-auto size-8 text-gray-400" />
           <p class="mt-3 text-sm/6 font-medium text-gray-700 dark:text-gray-300">
             No connectors are available to you yet.
@@ -97,7 +101,7 @@ type ConnectState =
         <ul class="flex flex-col gap-3">
           @for (connector of connectors(); track connector.providerId) {
             <li
-              class="flex items-center justify-between gap-4 rounded-sm border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
+              class="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600"
             >
               <div class="flex items-center gap-3">
                 @if (connector.iconData) {
@@ -190,10 +194,11 @@ type ConnectState =
           }
         </ul>
       }
+      </div>
     </div>
   `,
 })
-export class ConnectorsSettingsPage {
+export class CustomizeConnectorsPage {
   private readonly connectorsService = inject(UserConnectorsService);
   private readonly consentService = inject(OAuthConsentService);
   private readonly toast = inject(ToastService);

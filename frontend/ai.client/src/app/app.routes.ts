@@ -180,8 +180,25 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'customize/connectors',
+        loadComponent: () =>
+            import('./customize/connectors/customize-connectors.page').then(
+                m => m.CustomizeConnectorsPage,
+            ),
+        canActivate: [authGuard],
+    },
+    {
         path: 'customize',
         redirectTo: 'customize/tools',
+        pathMatch: 'full',
+    },
+    // Connectors moved out of Settings and into Customize (spec step 2):
+    // connecting an account and enabling the tools that need it are one intent.
+    // The old deep link stays as a redirect rather than a deletion — it is in
+    // bookmarks, and `schedules` linked users straight to it for years.
+    {
+        path: 'settings/connectors',
+        redirectTo: 'customize/connectors',
         pathMatch: 'full',
     },
     {
