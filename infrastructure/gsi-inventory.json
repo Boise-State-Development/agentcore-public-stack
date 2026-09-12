@@ -5,6 +5,7 @@
       "KeyHashIndex"
     ],
     "app-roles": [
+      "EntityTypeIndex",
       "JwtRoleMappingIndex",
       "ModelRoleMappingIndex",
       "SkillOwnerIndex",
