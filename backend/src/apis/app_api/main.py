@@ -171,6 +171,17 @@ app.add_middleware(CSRFMiddleware)
 app.add_middleware(SessionRefreshMiddleware)
 logger.info("Added BFF session-refresh + CSRF middlewares (dormant until cookie present)")
 
+# Outermost middleware: repair `Location` headers on redirects this app
+# generates for itself (Starlette's `redirect_slashes`, chiefly). Behind
+# CloudFront those come out as `http://api.<domain>/<path>` — the internal
+# ALB host, over plain HTTP, without the stripped `/api` prefix — which a
+# browser blocks as mixed content. Added last so it wraps every other
+# middleware and sees the final response headers.
+from apis.shared.middleware.proxied_redirect import ProxiedRedirectMiddleware
+
+app.add_middleware(ProxiedRedirectMiddleware)
+logger.info("Added proxied-redirect middleware")
+
 
 # Import routers
 from apis.app_api.health import router as health_router

@@ -156,9 +156,21 @@ export class SpaDistributionConstruct extends Construct {
         runtime: cloudfront.FunctionRuntime.JS_2_0,
         comment:
           'Strip /api prefix before forwarding requests to the app-api ALB origin',
+        // `x-forwarded-prefix` tells app-api what this function removed, so a
+        // redirect it generates for itself (Starlette's trailing-slash
+        // `redirect_slashes`, chiefly) can be put back on the public URL by
+        // `ProxiedRedirectMiddleware`. Without it those redirects come out as
+        // `http://api.<domain>/<path>` — the origin's own hostname, over plain
+        // HTTP, missing the `/api` prefix — and the browser blocks them as
+        // mixed content, so the caller silently gets nothing.
+        //
+        // Set unconditionally (not only on the stripping branches) so a
+        // viewer-supplied `X-Forwarded-Prefix` is always overwritten rather
+        // than passed through to the origin.
         code: cloudfront.FunctionCode.fromInline(`
 function handler(event) {
   var req = event.request;
+  req.headers['x-forwarded-prefix'] = { value: '/api' };
   if (req.uri === '/api') {
     req.uri = '/';
   } else if (req.uri.indexOf('/api/') === 0) {
