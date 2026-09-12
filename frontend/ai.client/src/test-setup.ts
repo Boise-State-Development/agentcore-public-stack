@@ -40,3 +40,47 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
+
+// Fail fast on a real network request.
+//
+// Angular 21 root-provides the entire HttpClient chain: `HttpClient`,
+// `HttpHandler` and `HttpBackend` are all `providedIn: 'root'`, and
+// `HttpBackend` resolves `useExisting: HttpXhrBackend`. A TestBed that omits
+// `provideHttpClientTesting()` therefore does NOT fail with a
+// NullInjectorError — it silently gets a live XHR backend and opens real
+// sockets to the dev API origin.
+//
+// That is how `EnvironmentTeardownError: [vitest-worker]: Closing rpc while
+// "onUserConsoleLog" was pending` reached CI. Services that load in their
+// constructor (`ToolService`, `ModelService`) fired those requests, the
+// connections were refused asynchronously, and the resulting `console.error`
+// landed after the test that created them had already finished. Vitest
+// forwards every console call to the reporter over RPC and rejects any call
+// still in flight when the worker tears down; the rejection is unhandled, so
+// the run exits non-zero with `Errors 4 errors` and every one of 2,750 tests
+// passing. Because worker assignment is timing-dependent (see `isolate: false`
+// above), whether a late log lost that race varied run to run — the same
+// commit went green on re-run, and the error named whichever spec happened to
+// be executing rather than the one that opened the socket.
+//
+// Unit tests never legitimately reach the network, so refuse the request where
+// it is issued rather than letting it fail on a socket some unknown number of
+// milliseconds later. A service that catches its own load error still logs, but
+// it logs synchronously, inside the test that caused it, and the message names
+// the URL — so the next offender is attributable instead of landing on whatever
+// spec the worker had moved on to. Specs that exercise a raw-XHR upload path
+// replace the global wholesale with `vi.stubGlobal`, which this file's
+// `unstubAllGlobals` restores back to the guard.
+if (typeof XMLHttpRequest !== 'undefined') {
+  const blockedOpen: typeof XMLHttpRequest.prototype.open = function (
+    method: string,
+    url: string | URL,
+  ): void {
+    throw new Error(
+      `Unit tests must not make real network requests (attempted ${method} ${String(url)}). ` +
+        'Add provideHttpClient() and provideHttpClientTesting() to this spec\'s TestBed, ' +
+        'or provide a stub for the service that issues the request.',
+    );
+  };
+  XMLHttpRequest.prototype.open = blockedOpen;
+}

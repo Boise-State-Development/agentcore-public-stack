@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { ToolDetailComponent } from './tool-detail.component';
 import { Tool, ToolService } from '../../../services/tool/tool.service';
@@ -76,6 +78,10 @@ describe('ToolDetailComponent', () => {
     TestBed.configureTestingModule({
       imports: [ToolDetailComponent],
       providers: [
+        // ConnectorsService is reached through this component's tree and fetches
+        // in its constructor; without a testing backend that is a real socket.
+        provideHttpClient(),
+        provideHttpClientTesting(),
         { provide: ToolService, useValue: mockToolService },
         { provide: ToolCapabilityService, useValue: mockCapabilityService },
       ],

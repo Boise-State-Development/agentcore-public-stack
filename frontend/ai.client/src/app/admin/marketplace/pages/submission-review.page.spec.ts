@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Dialog } from '@angular/cdk/dialog';
 import { signal } from '@angular/core';
 import { ActivatedRoute, Router, provideRouter } from '@angular/router';
@@ -70,6 +72,8 @@ describe('SubmissionReviewPage', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         { provide: AdminMarketplaceService, useValue: mockService },
         { provide: Dialog, useValue: mockDialog },
         { provide: Router, useValue: { navigate } },
@@ -83,10 +87,32 @@ describe('SubmissionReviewPage', () => {
 
   afterEach(() => TestBed.resetTestingModule());
 
+  /**
+   * Answer the chat tree's own fetches, then wait for the page to settle.
+   *
+   * The test-drive panel mounts the real chat tree, and both `ModelService` and
+   * `FileUploadService` fetch from their constructors. Nothing here asserts on
+   * either, but neither can simply be left alone: a live backend opens a real
+   * socket (blocked in test-setup.ts) and the testing backend never answers on
+   * its own, so the request sits on Angular's `PendingTasks` queue and
+   * `whenStable()` never resolves. Flush them with an empty but well-formed
+   * payload so the tree reaches a stable state in silence.
+   */
+  async function settle(fixture: ComponentFixture<SubmissionReviewPage>): Promise<void> {
+    for (const req of TestBed.inject(HttpTestingController).match(() => true)) {
+      req.flush(
+        req.request.url.endsWith('/quota')
+          ? { usedBytes: 0, maxBytes: 1, fileCount: 0 }
+          : { models: [] },
+      );
+    }
+    await fixture.whenStable();
+  }
+
   async function render(): Promise<ComponentFixture<SubmissionReviewPage>> {
     const fixture = TestBed.createComponent(SubmissionReviewPage);
     fixture.detectChanges();
-    await fixture.whenStable();
+    await settle(fixture);
     fixture.detectChanges();
     return fixture;
   }
@@ -147,7 +173,7 @@ describe('SubmissionReviewPage', () => {
   it('declines through review with the reason and returns to the queue', async () => {
     const fixture = await render();
     button(fixture, 'Decline').click();
-    await fixture.whenStable();
+    await settle(fixture);
 
     expect(mockService.review).toHaveBeenCalledWith('ast-001', {
       decision: 'reject',
@@ -160,7 +186,7 @@ describe('SubmissionReviewPage', () => {
     mockDialog.open.mockReturnValue({ closed: of(undefined) });
     const fixture = await render();
     button(fixture, 'Decline').click();
-    await fixture.whenStable();
+    await settle(fixture);
 
     expect(mockService.review).not.toHaveBeenCalled();
   });
@@ -168,7 +194,7 @@ describe('SubmissionReviewPage', () => {
   it('approves without a dialog', async () => {
     const fixture = await render();
     button(fixture, 'Approve').click();
-    await fixture.whenStable();
+    await settle(fixture);
 
     expect(mockService.review).toHaveBeenCalledWith('ast-001', { decision: 'approve' });
   });
@@ -244,7 +270,7 @@ describe('SubmissionReviewPage', () => {
     mockService.review.mockRejectedValue({ error: { detail: 'Visibility is now Private.' } });
     const fixture = await render();
     button(fixture, 'Approve').click();
-    await fixture.whenStable();
+    await settle(fixture);
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
@@ -261,7 +287,7 @@ describe('SubmissionReviewPage', () => {
     mockService.review.mockRejectedValue({ error: { detail: 'Visibility is now Private.' } });
     const fixture = await render();
     button(fixture, 'Approve').click();
-    await fixture.whenStable();
+    await settle(fixture);
     fixture.detectChanges();
 
     expect(navigate).not.toHaveBeenCalled();

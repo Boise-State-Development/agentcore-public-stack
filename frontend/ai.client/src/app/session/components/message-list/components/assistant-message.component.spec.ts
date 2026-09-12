@@ -1,4 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { provideMarkdown, MarkdownService } from 'ngx-markdown';
 import { AssistantMessageComponent } from './assistant-message.component';
@@ -63,7 +65,10 @@ describe('AssistantMessageComponent', () => {
   beforeEach(async () => {
     await TestBed.configureTestingModule({
       imports: [AssistantMessageComponent],
-      providers: [provideMarkdown()],
+      // The MCP App frame in this tree injects ToolService and ModelService, both
+      // of which fetch in their constructor. Without a testing backend Angular's
+      // root-provided HttpXhrBackend opens a real socket — see test-setup.ts.
+      providers: [provideMarkdown(), provideHttpClient(), provideHttpClientTesting()],
     }).compileComponents();
 
     // Stub render before component creation to prevent unhandled
