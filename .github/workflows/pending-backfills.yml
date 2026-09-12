@@ -1,0 +1,106 @@
+name: "Pending Backfills"
+
+# Release gate: a release that ships a data backfill must say so in RELEASE_NOTES.md.
+#
+# A backfill script is not code that runs itself. Someone has to run it, against
+# each environment, in a window that matters — and the release notes are the only
+# place an operator looks for that. A backfill that ships unannounced is a
+# migration nobody performs.
+#
+# This only triggers on PRs into `main`, for the same reason the GSI gate does:
+# whoever writes a backfill runs it against dev by hand the day they write it, so
+# `develop` is always fine. Prod is the environment with nobody assigned, and a
+# release is the only moment the instruction can still reach someone.
+#
+# The failure mode is silent. Backfills populate a sparse index or a new
+# attribute, and the code that reads them does not error when the data is
+# missing — a sparse index returns FEWER ROWS, not an exception. An unrun
+# backfill therefore looks like a short list (half the tool catalog, the older
+# artifacts missing), not an outage. Nothing goes red.
+#
+# See .claude/skills/cutting-a-release/SKILL.md §1b.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# Safe to cancel superseded runs: this reads a git diff and a markdown file and
+# does no AWS work, so there is no deploy hazard in interrupting it.
+concurrency:
+  group: pending-backfills-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pending-backfills:
+    name: Pending Backfills
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Fetch main branch
+        run: |
+          git fetch origin main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      # Diffs backend/scripts/backfill_*.py between origin/main and this PR and
+      # requires each ADDED script to be named in RELEASE_NOTES.md. No install
+      # needed — both sides are already in git.
+      #
+      # This gate cannot verify the backfill was RUN; no CI job can know that. It
+      # guarantees the instruction reaches the person who can.
+      - name: Check pending backfills
+        id: backfill-check
+        continue-on-error: true
+        run: |
+          node scripts/release/check-pending-backfills.mjs --base origin/main \
+            2>&1 | tee /tmp/backfill-check-output.txt
+
+          # tee masks the script's exit status, so read it back from PIPESTATUS.
+          exit "${PIPESTATUS[0]}"
+
+      - name: Generate summary
+        if: always()
+        run: |
+          source scripts/common/summary.sh
+
+          if [ "${{ steps.backfill-check.outcome }}" = "success" ]; then
+            STATUS="success"
+          else
+            STATUS="failure"
+          fi
+
+          write_workflow_header "Pending Backfills" "${STATUS}"
+
+          {
+            echo '```'
+            cat /tmp/backfill-check-output.txt 2>/dev/null || echo "(no output captured)"
+            echo '```'
+            echo ""
+            if [ "${STATUS}" != "success" ]; then
+              echo "This release adds a backfill script that the release notes do not name."
+              echo "Add it, with the exact command and the environments it must run against,"
+              echo "so whoever deploys knows there is a step to perform. An unrun backfill"
+              echo "fails **silently** — as a short list, not an error."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Evaluate result
+        run: |
+          if [ "${{ steps.backfill-check.outcome }}" != "success" ]; then
+            echo "::error::This release adds a backfill script that RELEASE_NOTES.md does not name. Add it with the command to run and the environments it applies to — see .claude/skills/cutting-a-release/SKILL.md §1b."
+            exit 1
+          fi
+          echo "Pending-backfill check passed."

@@ -806,6 +806,14 @@ def seed_default_tools(
             "SK": sk,
             "GSI1PK": f"CATEGORY#{tool_def['category']}",
             "GSI1SK": pk,
+            # EntityTypeIndex (GSI5) — mirrors ToolDefinition.to_dynamo_item.
+            # This seeder hand-builds the item rather than going through the
+            # model, so a new index key has to be added in BOTH places. Miss it
+            # here and a freshly bootstrapped deployment lists zero tools once
+            # the catalog read moves to the index — with no error, because a
+            # sparse index answers "nothing matched", not "something is wrong".
+            "GSI5PK": "ENTITY#TOOL",
+            "GSI5SK": pk,
             "toolId": tool_id,
             "displayName": tool_def["displayName"],
             "description": tool_def["description"],
