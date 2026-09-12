@@ -283,6 +283,14 @@ class AgentFactory:
         # "strips only message-level cachePoints, never system ones" was a
         # 1.51-era fact and is NOT the reason this is safe — do not restore it.
         #
+        # Measured on the pinned 1.55.0 (2026-09-11) rather than read off the
+        # source: formatting a request with this block present yields exactly
+        # ONE system cachePoint, and with it absent upstream injects exactly one
+        # of its own. The same probe shows the converse, which is why the
+        # bedrock_cache_points_supported() gate below cannot be dropped —
+        # on a NON-Anthropic model this block is passed through untouched and
+        # Bedrock rejects the call with AccessDeniedException.
+        #
         # RE-VERIFY BEFORE ANY BUMP PAST 1.55.0. This is a statement about
         # upstream internals and it has already rotted once. Re-check
         # _should_cache_system's guard, CacheConfig.system_prompt_ttl's
