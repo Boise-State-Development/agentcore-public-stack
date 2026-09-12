@@ -205,6 +205,8 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       modelId: 'us.anthropic.claude-sonnet-4-6',
       modelName: 'Claude Sonnet 4.6',
       shortDescription: 'Balanced reasoning for everyday work',
+      // Superseded by Claude Sonnet 5 in this same catalog.
+      isFeatured: false,
       maxOutputTokens: 64_000,
       // Regional (CRIS): $3.30 / $16.50. Global is $3.00 / $15.00.
       ...ratesWithDerivedCache(3.3, 16.5),
@@ -326,6 +328,8 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
       modelId: 'qwen.qwen3-coder-30b-a3b-instruct',
       modelName: 'Qwen3 Coder 30B',
       shortDescription: 'Long-context coding',
+      // Specialist coding model, not a general chat default.
+      isFeatured: false,
       providerName: 'Qwen',
       inputModalities: ['TEXT'],
       maxInputTokens: 256_000,
@@ -535,7 +539,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       ...bedrockResponsesDefaults(),
       modelId: 'us.openai.gpt-5.6-sol',
       modelName: 'GPT-5.6 Sol',
-      shortDescription: "OpenAI's most capable model",
+      shortDescription: 'Strong reasoning and agentic work',
       // Geo CRIS: $4.40 / $22.00. Global CRIS is $4.00 / $20.00.
       ...ratesWithDerivedCache(4.4, 22.0),
       knowledgeCutoffDate: null,
@@ -568,6 +572,9 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       modelId: 'us.openai.gpt-5.6-luna',
       modelName: 'GPT-5.6 Luna',
       shortDescription: 'Fast and affordable, for high volume',
+      // Its own card pitches it for classification, routing and high
+      // volume — a batch workhorse rather than a chat default.
+      isFeatured: false,
       // Geo CRIS: $0.22 / $1.32. Global CRIS is $0.20 / $1.20.
       ...ratesWithDerivedCache(0.22, 1.32),
       knowledgeCutoffDate: null,

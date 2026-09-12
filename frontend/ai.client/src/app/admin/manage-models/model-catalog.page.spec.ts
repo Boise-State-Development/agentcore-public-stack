@@ -377,4 +377,65 @@ describe('ModelCatalogPage', () => {
     expect(gpt54?.template.cacheReadPricePerMillionTokens).toBeCloseTo(0.275, 6);
     expect(gpt54?.template.cacheWritePricePerMillionTokens).toBe(0);
   });
+
+  describe('curated picker placement', () => {
+    const ALL = [
+      ...CURATED_BEDROCK_MODELS,
+      ...CURATED_MANTLE_MODELS,
+      ...CURATED_BEDROCK_RESPONSES_MODELS,
+    ];
+
+    // Demoted = superseded by a newer sibling ON THE SAME PROVIDER SURFACE, or
+    // specialist enough that it isn't a general chat default. Everything else
+    // stays at the picker's top level. This list is a change-detector: adding a
+    // model or re-ranking one should be a deliberate edit here, not a drift.
+    //
+    // "Same surface" is load-bearing. GPT-5.4 (mantle) looks superseded by the
+    // GPT-5.6 family until you notice those are bedrock-responses — a different
+    // provider an install may not use at all. Demoting it left Mantle with no
+    // featured model but a specialist coding one, which the family check below
+    // now catches. A template default cannot assume what else gets added.
+    const DEMOTED = ['claude-sonnet-4-6', 'qwen3-coder-30b', 'gpt-5-6-luna'];
+
+    it('demotes exactly the superseded and specialist models', () => {
+      const demoted = ALL.filter(m => m.template.isFeatured === false)
+        .map(m => m.key)
+        .sort();
+      expect(demoted).toEqual([...DEMOTED].sort());
+    });
+
+    it('leaves featured models undeclared so they inherit the backend default', () => {
+      // `isFeatured` defaults true server-side. Featured rows say nothing
+      // rather than `true`, so the default stays in exactly one place.
+      for (const model of ALL) {
+        if (DEMOTED.includes(model.key)) continue;
+        expect(
+          model.template.isFeatured,
+          `${model.key} should not declare isFeatured`,
+        ).toBeUndefined();
+      }
+    });
+
+    it('keeps a featured model in every provider family', () => {
+      // A catalog tab whose every entry is demoted would put an entire
+      // provider behind the submenu, which is never the intent.
+      for (const [label, group] of [
+        ['bedrock', CURATED_BEDROCK_MODELS],
+        ['mantle', CURATED_MANTLE_MODELS],
+        ['bedrock-responses', CURATED_BEDROCK_RESPONSES_MODELS],
+      ] as const) {
+        const featured = group.filter(m => m.template.isFeatured !== false);
+        expect(featured.length, `${label} must keep a featured model`).toBeGreaterThan(0);
+      }
+    });
+
+    it('does not let two featured models both claim to be the most capable', () => {
+      // GPT-6 Astra outranks (and out-prices) GPT-5.6 Sol in the same catalog,
+      // so Sol's copy must not say "most capable".
+      const featuredCopy = ALL.filter(m => m.template.isFeatured !== false)
+        .map(m => m.template.shortDescription ?? '');
+      const superlatives = featuredCopy.filter(d => /most capable/i.test(d));
+      expect(superlatives).toEqual([]);
+    });
+  });
 });
