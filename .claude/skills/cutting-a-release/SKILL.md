@@ -181,6 +181,67 @@ flag, or skip path**. So a failed two-index deploy costs two patch releases
 
 ---
 
+## 1b. Pre-merge prerequisite — data backfills
+
+A backfill script is not code that runs itself. Someone has to run it, against
+each environment, in a window that matters. **If this release adds one, the
+release notes must name it** — that is the only place an operator looks.
+
+### Why this is its own gate
+
+The failure is silent, and in the same shape as §1. Backfills populate a sparse
+index or a new attribute, and the read path does not error when the data is
+missing — a sparse index returns **fewer rows**, not an exception. An unrun
+backfill therefore looks like a short list, not an outage: the tool catalog
+missing half its tools, the artifact library missing the older entries. Nothing
+goes red, and no alarm fires.
+
+`develop` cannot surface it either. Whoever wrote the script ran it against dev
+by hand the day they wrote it, so dev is always fine. **Prod is the environment
+with nobody assigned**, and the release is the last moment the instruction can
+still reach someone.
+
+### How to check
+
+CI enforces this on every PR into `main`
+(`.github/workflows/pending-backfills.yml`). Locally:
+
+```bash
+node scripts/release/check-pending-backfills.mjs
+```
+
+It diffs `backend/scripts/backfill_*.py` between `origin/main` and your branch
+and fails when a script added in the range is not named in `RELEASE_NOTES.md`.
+
+It cannot verify the backfill was actually **run** — no CI job can know that.
+It guarantees the instruction reaches the person who can.
+
+### What to write
+
+Name the script, the command, and the environments. Not "a backfill is
+required" — that is the note that sends someone digging through `git log`:
+
+> **Manual step — run before/with this deploy.** Populates `EntityTypeIndex`
+> for tool rows written before it existed. Idempotent; dry-run by default.
+>
+> ```bash
+> AWS_PROFILE=<env> python backend/scripts/backfill_tool_catalog_index.py \
+>     --table <prefix>-app-roles --region us-west-2 --apply
+> ```
+>
+> Verify `skipped=0 failed=0` and that the index item count matches the tool
+> count before considering the deploy complete.
+
+### Ordering, when the release also switches a read onto the backfilled data
+
+Deploy → backfill → *then* the read. If the release carries both the backfill
+and the code that depends on it, the backfill runs **inside the release
+window**, not afterwards. A fresh deployment is exempt only if its seed path
+already writes the new keys — check, do not assume: `seed_bootstrap_data.py`
+hand-builds its items rather than going through the model.
+
+---
+
 ## 2. Branch workflow
 
 ```bash
