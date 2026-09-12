@@ -150,6 +150,7 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       ...claude4xDefaults(),
       modelId: 'us.anthropic.claude-opus-4-7',
       modelName: 'Claude Opus 4.7',
+      shortDescription: 'For your toughest challenges',
       maxOutputTokens: 64_000,
       // Regional (CRIS): $5.50 / $27.50. Global is $5.00 / $25.00.
       ...ratesWithDerivedCache(5.5, 27.5),
@@ -175,6 +176,7 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       ...claude4xDefaults(),
       modelId: 'global.anthropic.claude-sonnet-5',
       modelName: 'Claude Sonnet 5',
+      shortDescription: 'Strong reasoning over very long context',
       maxInputTokens: 1_000_000,
       maxOutputTokens: 128_000,
       // Global: $2.00 / $10.00 — correct as declared, this id really is
@@ -202,6 +204,7 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       ...claude4xDefaults(),
       modelId: 'us.anthropic.claude-sonnet-4-6',
       modelName: 'Claude Sonnet 4.6',
+      shortDescription: 'Balanced reasoning for everyday work',
       maxOutputTokens: 64_000,
       // Regional (CRIS): $3.30 / $16.50. Global is $3.00 / $15.00.
       ...ratesWithDerivedCache(3.3, 16.5),
@@ -226,6 +229,7 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       ...claude4xDefaults(),
       modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
       modelName: 'Claude Haiku 4.5',
+      shortDescription: 'Fastest for quick answers',
       maxOutputTokens: 64_000,
       // Regional (CRIS): $1.10 / $5.50. Global is $1.00 / $5.00. This is the
       // platform default model, so this is the row every cost number rides on.
@@ -291,6 +295,7 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
       ...mantleDefaults(),
       modelId: 'openai.gpt-5.4',
       modelName: 'GPT-5.4',
+      shortDescription: 'Multimodal reasoning',
       providerName: 'OpenAI',
       inputModalities: ['TEXT', 'IMAGE'],
       maxInputTokens: 272_000,
@@ -320,6 +325,7 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
       ...mantleDefaults(),
       modelId: 'qwen.qwen3-coder-30b-a3b-instruct',
       modelName: 'Qwen3 Coder 30B',
+      shortDescription: 'Long-context coding',
       providerName: 'Qwen',
       inputModalities: ['TEXT'],
       maxInputTokens: 256_000,
@@ -453,6 +459,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       // chip, not a mispriced bill.
       modelId: 'us.openai.gpt-6-astra',
       modelName: 'GPT-6 Astra',
+      shortDescription: 'Frontier reasoning, coding and research',
       // Geo CRIS Short Context: $11.00 / $55.00. Global CRIS is $10.00 /
       // $50.00. Long Context (1.05M) would be $22.00 / $82.50 — unreachable
       // while maxInputTokens stays pinned at the 272K boundary.
@@ -476,6 +483,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       ...bedrockResponsesDefaults(),
       modelId: 'us.openai.gpt-5.6-sol',
       modelName: 'GPT-5.6 Sol',
+      shortDescription: "OpenAI's most capable model",
       // Geo CRIS: $4.40 / $22.00. Global CRIS is $4.00 / $20.00.
       ...ratesWithDerivedCache(4.4, 22.0),
       knowledgeCutoffDate: null,
@@ -490,6 +498,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       ...bedrockResponsesDefaults(),
       modelId: 'us.openai.gpt-5.6-terra',
       modelName: 'GPT-5.6 Terra',
+      shortDescription: 'Balanced performance per dollar',
       // Geo CRIS: $2.20 / $13.20. Global CRIS is $2.00 / $12.00.
       ...ratesWithDerivedCache(2.2, 13.2),
       knowledgeCutoffDate: null,
@@ -504,6 +513,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       ...bedrockResponsesDefaults(),
       modelId: 'us.openai.gpt-5.6-luna',
       modelName: 'GPT-5.6 Luna',
+      shortDescription: 'Fast and affordable, for high volume',
       // Geo CRIS: $0.22 / $1.32. Global CRIS is $0.20 / $1.20.
       ...ratesWithDerivedCache(0.22, 1.32),
       knowledgeCutoffDate: null,

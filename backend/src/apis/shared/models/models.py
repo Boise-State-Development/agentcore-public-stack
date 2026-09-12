@@ -151,6 +151,13 @@ class ManagedModelCreate(BaseModel):
 
     model_id: str = Field(..., alias="modelId", min_length=1)
     model_name: str = Field(..., alias="modelName", min_length=1)
+    short_description: Optional[str] = Field(
+        None,
+        alias="shortDescription",
+        max_length=80,
+        description="One-line reason a user would pick this model, shown under its name "
+                    "in the chat model picker. Keep it short — the picker truncates.",
+    )
     provider: str = Field(..., min_length=1)
     provider_name: str = Field(..., alias="providerName", min_length=1)
     input_modalities: List[str] = Field(..., alias="inputModalities", min_length=1)
@@ -201,6 +208,14 @@ class ManagedModelCreate(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
     )
+    is_featured: bool = Field(
+        True,
+        alias="isFeatured",
+        description="Whether the model appears at the top level of the chat model "
+                    "picker. False collapses it into the picker's 'More models' "
+                    "submenu. Defaults to True so an uncurated catalog keeps showing "
+                    "every model where it always has."
+    )
     mantle_api_mode: Optional[str] = Field(
         None,
         alias="apiMode",
@@ -247,6 +262,13 @@ class ManagedModelUpdate(BaseModel):
 
     model_id: Optional[str] = Field(None, alias="modelId", min_length=1)
     model_name: Optional[str] = Field(None, alias="modelName")
+    short_description: Optional[str] = Field(
+        None,
+        alias="shortDescription",
+        max_length=80,
+        description="One-line reason a user would pick this model, shown under its name "
+                    "in the chat model picker. Keep it short — the picker truncates.",
+    )
     provider: Optional[str] = None
     provider_name: Optional[str] = Field(None, alias="providerName")
     input_modalities: Optional[List[str]] = Field(None, alias="inputModalities")
@@ -293,6 +315,14 @@ class ManagedModelUpdate(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions."
     )
+    is_featured: Optional[bool] = Field(
+        None,
+        alias="isFeatured",
+        description="Whether the model appears at the top level of the chat model "
+                    "picker. False collapses it into the picker's 'More models' "
+                    "submenu. Defaults to True so an uncurated catalog keeps showing "
+                    "every model where it always has."
+    )
     mantle_api_mode: Optional[str] = Field(
         None,
         alias="apiMode",
@@ -332,6 +362,18 @@ class ManagedModel(BaseModel):
     id: str
     model_id: str = Field(..., alias="modelId")
     model_name: str = Field(..., alias="modelName")
+    short_description: Optional[str] = Field(
+        None,
+        alias="shortDescription",
+        # Deliberately NOT length-capped here, unlike the create/update models.
+        # This is the READ model: a stored value longer than the write-path cap
+        # (hand-edited record, or a future cap that shrinks) would fail
+        # validation and take the whole /models listing down with it. Bound the
+        # input, be permissive about what is already persisted; the picker
+        # truncates visually anyway.
+        description="One-line reason a user would pick this model, shown under its name "
+                    "in the chat model picker.",
+    )
     provider: str
     provider_name: str = Field(..., alias="providerName")
     input_modalities: List[str] = Field(..., alias="inputModalities")
@@ -384,6 +426,14 @@ class ManagedModel(BaseModel):
         False,
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
+    )
+    is_featured: bool = Field(
+        True,
+        alias="isFeatured",
+        description="Whether the model appears at the top level of the chat model "
+                    "picker. False collapses it into the picker's 'More models' "
+                    "submenu. Defaults to True so an uncurated catalog keeps showing "
+                    "every model where it always has."
     )
     mantle_api_mode: Optional[str] = Field(
         None,

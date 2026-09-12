@@ -2,7 +2,11 @@ import { Injectable, signal, computed, effect, inject, untracked } from '@angula
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { ManagedModel } from '../../../admin/manage-models/models/managed-model.model';
+import {
+  EffortControl,
+  ManagedModel,
+  resolveEffortControl,
+} from '../../../admin/manage-models/models/managed-model.model';
 import { UserSettingsService } from '../../../services/user-settings.service';
 
 interface ManagedModelsListResponse {
@@ -93,6 +97,54 @@ export class ModelService {
     const model = this.selectedModel();
     if (!model) return {};
     return this._inferenceOverrides()[model.modelId] ?? {};
+  });
+
+  /**
+   * Models shown at the top level of the chat model picker.
+   *
+   * `isFeatured !== false` rather than `=== true` on purpose: a record written
+   * before the field existed has it absent, and those models must keep showing
+   * where they always have. Only an explicit `false` demotes one.
+   *
+   * The selected model is always included even when demoted — a picker whose
+   * trigger names a model you can't find in the open menu (and that shows no
+   * check mark) reads as broken.
+   */
+  readonly featuredModels = computed<ManagedModel[]>(() => {
+    const selectedId = this.selectedModel()?.modelId;
+    return this.models().filter(m => m.isFeatured !== false || m.modelId === selectedId);
+  });
+
+  /** Models collapsed behind the picker's "More models" submenu. */
+  readonly moreModels = computed<ManagedModel[]>(() => {
+    const selectedId = this.selectedModel()?.modelId;
+    return this.models().filter(m => m.isFeatured === false && m.modelId !== selectedId);
+  });
+
+  /**
+   * The effort control the selected model offers, or null when it offers none.
+   * Null is the common case — only models whose admin enumerated the `allowed`
+   * effort levels get a control (see `resolveEffortControl`).
+   */
+  readonly effortControl = computed<EffortControl | null>(() =>
+    resolveEffortControl(this.selectedModel()),
+  );
+
+  /**
+   * The effort level in force for the selected model: the user's override when
+   * they've set one, otherwise the admin's default. Null when the model has no
+   * effort control, or has one with no admin default and no user choice yet —
+   * in which case the provider's own default applies and we don't claim to
+   * know what it is.
+   */
+  readonly selectedEffort = computed<string | null>(() => {
+    const control = this.effortControl();
+    if (!control) return null;
+    const override = this.selectedModelOverrides()[control.key];
+    if (typeof override === 'string' && control.levels.includes(override)) {
+      return override;
+    }
+    return control.defaultLevel;
   });
 
   constructor() {
@@ -361,6 +413,21 @@ export class ModelService {
     }
     this._inferenceOverrides.set(next);
     this.persistOverrides(next);
+  }
+
+  /**
+   * Set the effort level for the selected model. Writes through the same
+   * per-model override store as every other inference param, so it rides the
+   * existing `inference_params` request path with no special casing.
+   *
+   * A level the model doesn't declare is ignored rather than stored — the
+   * backend would drop it anyway, and a stored value that never takes effect
+   * would keep showing as the active level in the picker.
+   */
+  setEffort(level: string): void {
+    const control = this.effortControl();
+    if (!control || !control.levels.includes(level)) return;
+    this.setInferenceParamOverride(control.key, level);
   }
 
   /** Clear all inference param overrides for the currently selected model. */

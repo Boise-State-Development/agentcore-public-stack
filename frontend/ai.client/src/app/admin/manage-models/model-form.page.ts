@@ -223,6 +223,7 @@ function knownParamKeyControl(fb: FormBuilder, key: string): FormControl<string>
 interface ModelFormGroup {
   modelId: FormControl<string>;
   modelName: FormControl<string>;
+  shortDescription: FormControl<string>;
   provider: FormControl<ModelProvider>;
   providerName: FormControl<string>;
   inputModalities: FormControl<string[]>;
@@ -233,6 +234,7 @@ interface ModelFormGroup {
   availableToRoles: FormControl<string[]>;
   enabled: FormControl<boolean>;
   isDefault: FormControl<boolean>;
+  isFeatured: FormControl<boolean>;
   inputPricePerMillionTokens: FormControl<number>;
   outputPricePerMillionTokens: FormControl<number>;
   cacheWritePricePerMillionTokens: FormControl<number | null>;
@@ -341,6 +343,10 @@ export class ModelFormPage implements OnInit {
   readonly modelForm: FormGroup<ModelFormGroup> = this.fb.group({
     modelId: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
     modelName: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
+    shortDescription: this.fb.control('', {
+      nonNullable: true,
+      validators: [Validators.maxLength(80)],
+    }),
     provider: this.fb.control<ModelProvider>('bedrock', { nonNullable: true, validators: [Validators.required] }),
     providerName: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
     inputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
@@ -354,6 +360,7 @@ export class ModelFormPage implements OnInit {
     availableToRoles: this.fb.control<string[]>([], { nonNullable: true }),
     enabled: this.fb.control(true, { nonNullable: true }),
     isDefault: this.fb.control(false, { nonNullable: true }),
+    isFeatured: this.fb.control(true, { nonNullable: true }),
     inputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     outputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     cacheWritePricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
@@ -875,6 +882,7 @@ export class ModelFormPage implements OnInit {
       this.modelForm.patchValue({
         modelId: model.modelId,
         modelName: model.modelName,
+        shortDescription: model.shortDescription ?? '',
         provider: model.provider as ModelProvider,
         providerName: model.providerName,
         inputModalities: model.inputModalities.map(m => m.toUpperCase()),
@@ -885,6 +893,9 @@ export class ModelFormPage implements OnInit {
         availableToRoles: model.availableToRoles ?? [],
         enabled: model.enabled,
         isDefault: model.isDefault ?? false,
+        // Absent on records written before the field existed, and those
+        // models are featured today — mirror the backend default.
+        isFeatured: model.isFeatured ?? true,
         inputPricePerMillionTokens: model.inputPricePerMillionTokens,
         outputPricePerMillionTokens: model.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: model.cacheWritePricePerMillionTokens ?? null,
@@ -918,6 +929,7 @@ export class ModelFormPage implements OnInit {
     this.modelForm.patchValue({
       modelId: template.modelId,
       modelName: template.modelName,
+      shortDescription: template.shortDescription ?? '',
       provider: template.provider,
       providerName: template.providerName,
       inputModalities: template.inputModalities.map(m => m.toUpperCase()),
@@ -928,6 +940,7 @@ export class ModelFormPage implements OnInit {
       availableToRoles: template.availableToRoles ?? [],
       enabled: template.enabled,
       isDefault: template.isDefault,
+      isFeatured: template.isFeatured ?? true,
       inputPricePerMillionTokens: template.inputPricePerMillionTokens,
       outputPricePerMillionTokens: template.outputPricePerMillionTokens,
       cacheWritePricePerMillionTokens: template.cacheWritePricePerMillionTokens ?? null,
@@ -949,6 +962,7 @@ export class ModelFormPage implements OnInit {
       this.modelForm.patchValue({
         modelId: params['modelId'] || '',
         modelName: params['modelName'] || '',
+        shortDescription: params['shortDescription'] || '',
         provider: params['provider'] || 'bedrock',
         providerName: params['providerName'] || '',
         inputModalities: params['inputModalities'] ? params['inputModalities'].split(',') : [],
@@ -1018,6 +1032,9 @@ export class ModelFormPage implements OnInit {
       const formData: ManagedModelFormData = {
         modelId: v.modelId,
         modelName: v.modelName,
+        // Empty string rather than null: the update path drops null fields
+        // (`exclude_none`), so null could never clear a description once set.
+        shortDescription: v.shortDescription.trim(),
         provider: v.provider,
         providerName: v.providerName,
         inputModalities: v.inputModalities,
@@ -1029,6 +1046,7 @@ export class ModelFormPage implements OnInit {
         availableToRoles: v.availableToRoles,
         enabled: v.enabled,
         isDefault: v.isDefault,
+        isFeatured: v.isFeatured,
         inputPricePerMillionTokens: v.inputPricePerMillionTokens,
         outputPricePerMillionTokens: v.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: v.cacheWritePricePerMillionTokens,
