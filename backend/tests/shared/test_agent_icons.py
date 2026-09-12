@@ -144,7 +144,9 @@ def test_the_encode_ladder_degrades_an_opaque_png_to_jpeg(monkeypatch):
     input — a 512² of pure noise — is ~770 KB and never gets past the upload gate. The
     ladder is still what runs; only the number it is measured against moves.
     """
-    import apis.shared.assistants.icons as icons_module
+    # The ladder lives in the shared image module now; the agent module re-exports
+    # the constant but the ceiling that matters is the one the ladder itself reads.
+    import apis.shared.images.icons as icons_module
 
     monkeypatch.setattr(icons_module, "ICON_MAX_BYTES", 300_000)
     noise = Image.open(io.BytesIO(_noise_png())).convert("RGBA")
@@ -157,7 +159,9 @@ def test_the_encode_ladder_degrades_an_opaque_png_to_jpeg(monkeypatch):
 def test_the_encode_ladder_keeps_alpha_by_quantizing(monkeypatch):
     """A transparent PNG cannot become a JPEG without losing its alpha, so it loses
     colors instead."""
-    import apis.shared.assistants.icons as icons_module
+    # The ladder lives in the shared image module now; the agent module re-exports
+    # the constant but the ceiling that matters is the one the ladder itself reads.
+    import apis.shared.images.icons as icons_module
 
     monkeypatch.setattr(icons_module, "ICON_MAX_BYTES", 300_000)
     noise = Image.open(io.BytesIO(_noise_png())).convert("RGBA")
