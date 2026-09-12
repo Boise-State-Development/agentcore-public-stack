@@ -5,6 +5,7 @@ DynamoDB operations for tool catalog and user preferences.
 Uses the same table as AppRoles with different PK patterns.
 """
 
+import asyncio
 import os
 import logging
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from typing import Dict, List, Optional, Any
 import boto3
 from botocore.exceptions import ClientError
 
+from apis.shared.caching import config_cache
 from .models import (
     ToolCapabilitySnapshot,
     ToolDefinition,
@@ -131,42 +133,17 @@ class ToolCatalogRepository:
         """
         try:
             if category:
-                # Use GSI1 for category queries
-                response = self._table.query(
-                    IndexName="JwtRoleMappingIndex",
-                    KeyConditionExpression="GSI1PK = :pk",
-                    ExpressionAttributeValues={":pk": f"CATEGORY#{category}"},
-                )
-                items = response.get("Items", [])
-
-                # Handle pagination
-                while "LastEvaluatedKey" in response:
-                    response = self._table.query(
-                        IndexName="JwtRoleMappingIndex",
-                        KeyConditionExpression="GSI1PK = :pk",
-                        ExpressionAttributeValues={":pk": f"CATEGORY#{category}"},
-                        ExclusiveStartKey=response["LastEvaluatedKey"],
-                    )
-                    items.extend(response.get("Items", []))
+                items = await asyncio.to_thread(self._query_tool_items_by_category, category)
             else:
-                # Scan for all tools
-                filter_expr = "begins_with(PK, :pk_prefix) AND SK = :sk"
-                expr_values = {":pk_prefix": "TOOL#", ":sk": "METADATA"}
-
-                response = self._table.scan(
-                    FilterExpression=filter_expr,
-                    ExpressionAttributeValues=expr_values,
+                # The whole-catalog read is the one on the SPA's first-load path
+                # (GET /tools/), so it is cached per process; parsing below is
+                # not, because callers mutate what they get back — see
+                # `list_tools_with_roles`, which writes `allowed_app_roles` onto
+                # each ToolDefinition in place.
+                items = await config_cache.get_or_load(
+                    config_cache.TOOL_CATALOG,
+                    lambda: asyncio.to_thread(self._scan_tool_items),
                 )
-                items = response.get("Items", [])
-
-                # Handle pagination
-                while "LastEvaluatedKey" in response:
-                    response = self._table.scan(
-                        FilterExpression=filter_expr,
-                        ExpressionAttributeValues=expr_values,
-                        ExclusiveStartKey=response["LastEvaluatedKey"],
-                    )
-                    items.extend(response.get("Items", []))
 
             tools = [ToolDefinition.from_dynamo_item(item) for item in items]
 
@@ -182,6 +159,52 @@ class ToolCatalogRepository:
         except ClientError as e:
             logger.error(f"Error listing tools: {e}")
             raise
+
+    def _scan_tool_items(self) -> List[dict]:
+        """Scan the raw TOOL#/METADATA items. Blocking; call via ``to_thread``."""
+        filter_expr = "begins_with(PK, :pk_prefix) AND SK = :sk"
+        expr_values = {":pk_prefix": "TOOL#", ":sk": "METADATA"}
+
+        response = self._table.scan(
+            FilterExpression=filter_expr,
+            ExpressionAttributeValues=expr_values,
+        )
+        items = response.get("Items", [])
+
+        while "LastEvaluatedKey" in response:
+            response = self._table.scan(
+                FilterExpression=filter_expr,
+                ExpressionAttributeValues=expr_values,
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+            )
+            items.extend(response.get("Items", []))
+
+        return items
+
+    def _query_tool_items_by_category(self, category: str) -> List[dict]:
+        """Query raw items for one category. Blocking; call via ``to_thread``.
+
+        Not cached: it is a bounded GSI query off the first-load path, and
+        caching per category would multiply the invalidation surface for no
+        measured gain.
+        """
+        response = self._table.query(
+            IndexName="JwtRoleMappingIndex",
+            KeyConditionExpression="GSI1PK = :pk",
+            ExpressionAttributeValues={":pk": f"CATEGORY#{category}"},
+        )
+        items = response.get("Items", [])
+
+        while "LastEvaluatedKey" in response:
+            response = self._table.query(
+                IndexName="JwtRoleMappingIndex",
+                KeyConditionExpression="GSI1PK = :pk",
+                ExpressionAttributeValues={":pk": f"CATEGORY#{category}"},
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+            )
+            items.extend(response.get("Items", []))
+
+        return items
 
     async def create_tool(self, tool: ToolDefinition) -> ToolDefinition:
         """
@@ -214,6 +237,9 @@ class ToolCatalogRepository:
                 ConditionExpression="attribute_not_exists(PK)",
             )
 
+            # Invalidate in the repository, not the admin route: every write
+            # to the catalog lands here, so a new caller cannot forget to.
+            config_cache.invalidate(config_cache.TOOL_CATALOG)
             logger.info(f"Created tool: {tool.tool_id}")
             return tool
 
@@ -256,6 +282,7 @@ class ToolCatalogRepository:
             item = existing.to_dynamo_item()
             self._table.put_item(Item=item)
 
+            config_cache.invalidate(config_cache.TOOL_CATALOG)
             logger.info(f"Updated tool: {tool_id}")
             return existing
 
@@ -282,6 +309,7 @@ class ToolCatalogRepository:
                 Key={"PK": f"TOOL#{tool_id}", "SK": "METADATA"}
             )
 
+            config_cache.invalidate(config_cache.TOOL_CATALOG)
             logger.info(f"Deleted tool: {tool_id}")
             return True
 
@@ -496,6 +524,7 @@ class ToolCatalogRepository:
                     item = tool.to_dynamo_item()
                     batch.put_item(Item=item)
 
+            config_cache.invalidate(config_cache.TOOL_CATALOG)
             logger.info(f"Batch created {len(tools)} tools")
             return tools
 

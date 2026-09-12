@@ -106,6 +106,30 @@ _ENV_CONFIG_BLEED_PREFIXES = (
 
 
 @pytest.fixture(autouse=True)
+def _clear_config_cache():
+    """Drop the process-wide config-catalog cache between tests.
+
+    ``apis.shared.caching.config_cache`` memoizes the model / tool /
+    system-prompt / provider catalogs for the life of the process. In
+    production that is invalidated by the write paths themselves, but tests
+    swap the whole table out underneath it — fixtures already reset the
+    module-level repo and service singletons for the same reason, and this is
+    the same class of state. Without it, a test that seeds a catalog leaves the
+    next test reading the previous one's rows.
+
+    A backstop, not the primary contract: production correctness comes from the
+    invalidation in the repositories, not from here.
+    """
+    from apis.shared.caching import config_cache
+
+    config_cache.get_config_cache().clear()
+    try:
+        yield
+    finally:
+        config_cache.get_config_cache().clear()
+
+
+@pytest.fixture(autouse=True)
 def _clear_env_config_bleed():
     saved = {
         k: os.environ.pop(k)
