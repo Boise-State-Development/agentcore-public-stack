@@ -302,12 +302,38 @@ describe('ModelCatalogPage', () => {
       }
     });
 
-    it('declares no supportedParams rather than an invented one', () => {
-      // AWS publishes no parameter table for GPT-5.6. A declared spec flips the
-      // #915 guard from permissive to restrictive, so a guessed one would
-      // silently block params the model actually accepts.
+    it('declares only the MEASURED supportedParams, never a guessed one', () => {
+      // Supersedes an earlier invariant that required NO spec at all. The bar
+      // was never "no spec" — it was "no invented spec": a declared spec flips
+      // the #915 guard from permissive to restrictive, so a guess silently
+      // blocks params the model really accepts. AWS still publishes no
+      // parameter table, so this spec comes from probing all four ids in
+      // us-west-2 on 2026-09-12 (see the block comment on the array).
+      //
+      // If a future sibling is added without re-probing, this fails — which is
+      // the point.
       for (const model of CURATED_BEDROCK_RESPONSES_MODELS) {
-        expect(model.template.supportedParams ?? null).toBeNull();
+        const params = model.template.supportedParams?.params;
+        expect(params, `${model.key} must declare a measured spec`).toBeTruthy();
+
+        // The endpoint's own 400 enumerates exactly these, identically on all four.
+        expect(`${model.key}:${params!['reasoning_effort'].allowed?.join(',')}`).toBe(
+          `${model.key}:none,low,medium,high,xhigh,max`,
+        );
+
+        // Measured 400: "Unsupported parameter: 'temperature' is not supported
+        // with this model." Declared false so the request never carries them.
+        expect(`${model.key}:${params!['temperature'].supported}`).toBe(`${model.key}:false`);
+        expect(`${model.key}:${params!['top_p'].supported}`).toBe(`${model.key}:false`);
+
+        expect(`${model.key}:${params!['max_tokens'].supported}`).toBe(`${model.key}:true`);
+
+        // No published default, and inventing one would silently change how
+        // every turn on these models reasons and bills.
+        expect(
+          params!['reasoning_effort'].default ?? null,
+          `${model.key} must not invent a default effort`,
+        ).toBeNull();
       }
     });
 

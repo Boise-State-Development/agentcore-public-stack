@@ -464,8 +464,19 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
     label: 'Reasoning Effort',
     description:
       'Reasoning depth (OpenAI o-series and reasoning models on the ' +
-      'OpenAI-compatible Bedrock surfaces).',
-    kind: 'number',
+      'OpenAI-compatible Bedrock surfaces). Check the levels this model ' +
+      'supports; pick a default.',
+    // A string enum, not a number — `kind: 'number'` here was simply wrong,
+    // and it was load-bearing: the admin form renders the `allowed` checklist
+    // only for `kind: 'select'`, so there was no way to declare the levels a
+    // model accepts, and anything that reads `allowed` (the chat picker's
+    // Effort submenu, the backend's enum branch) could never see one.
+    kind: 'select',
+    // The union across the OpenAI-compatible surfaces. Per-model subsets are
+    // declared in each model's `allowed`, which is what actually gates a
+    // request — `none` and `max` are real GPT-5.6 levels but absent from the
+    // older o-series, so this list is a superset by design.
+    options: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     providers: ['openai', 'mantle', 'bedrock-responses'],
   },
 ];

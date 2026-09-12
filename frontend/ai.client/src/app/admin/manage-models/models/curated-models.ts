@@ -1,4 +1,4 @@
-import { ManagedModelFormData, ModelProvider } from './managed-model.model';
+import { ManagedModelFormData, ModelProvider, SupportedParams } from './managed-model.model';
 
 /**
  * A curated entry shown in the model catalog. Carries everything needed to
@@ -432,13 +432,64 @@ const bedrockResponsesDefaults = (): Pick<
  * because a request that crosses 272K bills input at 2x, output at 1.5x and
  * both cache buckets at 2x. Raising it silently UNDER-charges every long turn.
  *
- * `supportedParams` is deliberately absent. AWS publishes no parameter table
- * for these models (`model-parameters-openai.html` documents only the
- * open-weight gpt-oss family), and an invented spec would be worse than none:
- * a declared spec flips the #915 guard from permissive to restrictive, so a
- * wrong entry silently blocks a parameter the model actually accepts. Add one
- * only from published or measured evidence.
+ * `supportedParams` was deliberately absent here until 2026-09-12, when it was
+ * MEASURED — the bar this comment has always set. AWS still publishes no
+ * parameter table for these models (`model-parameters-openai.html` documents
+ * only the open-weight gpt-oss family), so the evidence is the endpoint's own
+ * responses, probed against all four ids in us-west-2:
+ *
+ *   - `reasoning.effort` — sending a deliberately invalid value returns a 400
+ *     that ENUMERATES the enum: "Supported values are: 'none', 'low',
+ *     'medium', 'high', 'xhigh', and 'max'." Identical on Sol, Terra, Luna and
+ *     Astra, and it matches the launch blog ("They also support none, low,
+ *     medium, high, xhigh, and max reasoning effort"). Two independent sources.
+ *   - `temperature` and `top_p` — hard 400 on all four: "Unsupported
+ *     parameter: 'temperature' is not supported with this model."
+ *   - `max_output_tokens` — accepted.
+ *
+ * That last pair is why declaring a spec here is a FIX, not just an enabler.
+ * With no spec the #915 guard stays permissive, so a `temperature` reaching
+ * this family from any caller that can set one kills the turn with a 400
+ * mid-stream. Declaring them `supported: false` drops them before the request
+ * instead — the same failure class the guard inversion was written to close on
+ * Claude Opus 4.7.
+ *
+ * No `default` is declared for `reasoning_effort`: neither the cards nor the
+ * blog publish one, and inventing a default would silently change how every
+ * turn on these models is priced. Absent a default the param is simply not
+ * sent and the provider's own default applies.
+ *
+ * The standing rule is unchanged — a declared spec flips the guard from
+ * permissive to restrictive, so a wrong entry silently blocks a parameter the
+ * model really accepts. Add or widen one only from published or measured
+ * evidence, and re-probe rather than assume when a new sibling ships.
  */
+/**
+ * Measured Responses-API parameter profile for the OpenAI family on
+ * `bedrock-runtime`. See the block comment on
+ * {@link CURATED_BEDROCK_RESPONSES_MODELS} for the probe and its evidence.
+ *
+ * `temperature` / `top_p` are declared `supported: false` rather than omitted:
+ * omission drops them too (an authoritative spec treats silence as
+ * unsupported), but an explicit false records the measured fact and logs the
+ * clearer "unsupported inference param" line when one is dropped.
+ */
+const openaiResponsesParams = (maxOutputTokens: number | null = null): SupportedParams => ({
+  params: {
+    reasoning_effort: {
+      supported: true,
+      allowed: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    },
+    max_tokens: {
+      supported: true,
+      min: 1,
+      ...(maxOutputTokens === null ? {} : { max: maxOutputTokens }),
+    },
+    temperature: { supported: false },
+    top_p: { supported: false },
+  },
+});
+
 export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
   {
     key: 'gpt-6-astra',
@@ -472,6 +523,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       // Published on the card as April 30, 2026 — again unlike the GPT-5.6
       // cards, which state none.
       knowledgeCutoffDate: '2026-04-30',
+      supportedParams: openaiResponsesParams(128_000),
     },
   },
   {
@@ -487,6 +539,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       // Geo CRIS: $4.40 / $22.00. Global CRIS is $4.00 / $20.00.
       ...ratesWithDerivedCache(4.4, 22.0),
       knowledgeCutoffDate: null,
+      supportedParams: openaiResponsesParams(),
     },
   },
   {
@@ -502,6 +555,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       // Geo CRIS: $2.20 / $13.20. Global CRIS is $2.00 / $12.00.
       ...ratesWithDerivedCache(2.2, 13.2),
       knowledgeCutoffDate: null,
+      supportedParams: openaiResponsesParams(),
     },
   },
   {
@@ -517,6 +571,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       // Geo CRIS: $0.22 / $1.32. Global CRIS is $0.20 / $1.20.
       ...ratesWithDerivedCache(0.22, 1.32),
       knowledgeCutoffDate: null,
+      supportedParams: openaiResponsesParams(),
     },
   },
 ];
