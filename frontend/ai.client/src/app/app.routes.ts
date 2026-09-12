@@ -160,6 +160,30 @@ export const routes: Routes = [
         loadComponent: () => import('./my-skills/my-skills.page').then(m => m.MySkillsPage),
         canActivate: [authGuard],
     },
+    // ── Customize ───────────────────────────────────────────────────────────────
+    // The capabilities hub: what the user adds to their assistant. Tools and
+    // Skills in PR-1; Connectors folds in from `Settings → Connectors` in step 2.
+    // Deliberately NOT the Agent Marketplace — an Agent is something you talk to,
+    // not a capability you toggle, and splitting that noun across two surfaces is
+    // the failure Marketplace D1 exists to prevent.
+    // See `docs/specs/customize-surface.md`.
+    {
+        path: 'customize/tools',
+        loadComponent: () =>
+            import('./customize/tools/customize-tools.page').then(m => m.CustomizeToolsPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'customize/skills',
+        loadComponent: () =>
+            import('./customize/skills/customize-skills.page').then(m => m.CustomizeSkillsPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'customize',
+        redirectTo: 'customize/tools',
+        pathMatch: 'full',
+    },
     {
         path: 'memories',
         loadComponent: () => import('./memory/memory-dashboard.page').then(m => m.MemoryDashboardPage),
