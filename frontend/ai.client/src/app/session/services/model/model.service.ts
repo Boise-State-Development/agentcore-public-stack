@@ -6,6 +6,7 @@ import {
   EffortControl,
   ManagedModel,
   resolveEffortControl,
+  EFFORT_PARAM_KEYS,
 } from '../../../admin/manage-models/models/managed-model.model';
 import { UserSettingsService } from '../../../services/user-settings.service';
 
@@ -452,11 +453,57 @@ export class ModelService {
       const raw = sessionStorage.getItem(this.INFERENCE_OVERRIDES_KEY);
       if (!raw) return {};
       const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : {};
+      if (!parsed || typeof parsed !== 'object') return {};
+      return this.dropRetiredOverrides(parsed as Record<string, Record<string, unknown>>);
     } catch (e) {
       console.warn('Could not read inference overrides from sessionStorage:', e);
       return {};
     }
+  }
+
+  /**
+   * Strip overrides for params that no longer have a user-facing control.
+   *
+   * The drawer's Advanced form is gone: effort (in the model picker) is the one
+   * knob a user sets, and the rest are the admin's to govern. But this store is
+   * `sessionStorage`, so a tab open across that change still holds whatever the
+   * user last typed — a temperature or max_tokens that would keep riding every
+   * request with nothing in the UI to show it or reset it. Invisible state that
+   * changes model behaviour is worse than either keeping the form or having
+   * never had it.
+   *
+   * Effort is deliberately preserved: it writes through this same store
+   * (`setEffort` → `setInferenceParamOverride`), so a blanket purge would clear
+   * a control the user can still see and is still using.
+   */
+  private dropRetiredOverrides(
+    stored: Record<string, Record<string, unknown>>,
+  ): Record<string, Record<string, unknown>> {
+    const keep = new Set<string>(EFFORT_PARAM_KEYS);
+    const next: Record<string, Record<string, unknown>> = {};
+    let changed = false;
+
+    for (const [modelId, params] of Object.entries(stored)) {
+      if (!params || typeof params !== 'object') {
+        changed = true;
+        continue;
+      }
+      const kept = Object.fromEntries(
+        Object.entries(params).filter(([key]) => keep.has(key)),
+      );
+      if (Object.keys(kept).length !== Object.keys(params).length) {
+        changed = true;
+      }
+      if (Object.keys(kept).length > 0) {
+        next[modelId] = kept;
+      }
+    }
+
+    // Rewrite storage so the strip happens once rather than on every read.
+    if (changed) {
+      this.persistOverrides(next);
+    }
+    return next;
   }
 
   private persistOverrides(value: Record<string, Record<string, unknown>>): void {

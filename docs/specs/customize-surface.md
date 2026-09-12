@@ -1,6 +1,7 @@
 # Customize — a browse surface for tools, skills and connectors
 
-**Status:** PR-1 (Customize shell: Tools + Skills) in flight. Steps 2–7 queued.
+**Status:** Step 1 (Customize shell: Tools + Skills) SHIPPED — PR #1072, validated on dev.
+Step 3 (drop model + params from the drawer) in flight. Steps 2, 4–7 queued.
 **Supersedes:** the composer settings drawer (`components/model-settings/`) as the home for
 tool and skill enablement.
 **Related:** `docs/specs/skills-as-agent-primitive.md` (D6 opt-in), `docs/specs/agent-marketplace.md` (D1 one noun),
@@ -55,23 +56,54 @@ The drawer holds four things. Three of them are already redundant or dead:
 `session/components/chat-input/chat-input.component.html:274`. The drawer's model section is
 a second copy of a control the user can already see.
 
-**Advanced params — superseded by effort, and already lying.** Effort lives in the model
-dropdown's submenu with the active level in the trigger
+**Advanced params — superseded by effort, already lying, and partly duplicated.** Effort
+lives in the model dropdown's submenu with the active level in the trigger
 (`components/model-dropdown/model-dropdown.component.ts:41`). Meanwhile GPT-5.6
 **hard-rejects** `temperature` and `top_p` (measured; see `docs/specs/gpt-5-6-prompt-caching.md`
 and the inference-params findings), so a per-model numeric param form already misrepresents
 part of the catalog. Effort is the portable abstraction; the form is not.
 
-Removing the param form also retires the `max_tokens` ↔ extended-thinking coupling —
-Anthropic requires `thinking budget < max_tokens`, which is the entire reason
-`model-settings.ts:132-180` carries `unsatisfiable`, `clampNotices`, `disabledByConflict`
-and the post-edit re-check in `reconcileThinkingAfterMaxTokens`. That machinery, and its
-whole error-state vocabulary, goes with it.
+**Measured on dev before cutting** (all 9 enabled models, via the live picker + drawer):
 
-⚠️ `max_tokens` is a **truncation guard**, not a tuning knob. Before step 3 lands, confirm
-the admin-side default is generous enough that removing user control does not start clipping
-long outputs. Admin-locked params (`row.locked`, "locked by admin") are unaffected — this
-removes the *user-facing form*, not the governance behind it.
+| Model | Advanced rows the drawer offered | Effort in the picker |
+|-------|----------------------------------|----------------------|
+| GPT-5.6 Sol / Luna | Max Output Tokens, **Reasoning Effort** | yes |
+| Claude Sonnet 5, Opus 4.7 | Max Output Tokens, **Effort** | yes |
+| Claude Sonnet 4.6 | Temperature, Top P, Max Output Tokens, **Effort** | yes |
+| Claude Haiku 4.5 | Temperature, Top P, Max Output Tokens | **no** |
+| Gemma 4 31B, GPT-5.4 | *(none — section already hidden)* | no |
+
+Two things that changes:
+
+1. **No enabled model exposes Extended Thinking to users.** The `thinking` param is declared
+   in `curated-models.ts` for Sonnet 4.6 and Haiku 4.5, but the *deployed* records don't
+   enable it, so the row never renders. The feared capability loss does not exist — but note
+   the trap: the curated template is not the catalog, and only the live records answer this.
+   Re-check before removing anything param-shaped in an environment other than dev.
+2. **Effort was rendered twice** — in the picker AND as a row in the drawer's Advanced list.
+   So the Advanced section was not merely superseded; for five of nine models its headline
+   control was a literal duplicate of one three inches away.
+
+What is left once Effort is deduped is Temperature, Top P and Max Output Tokens — sampling
+knobs and a truncation guard.
+
+Removing the form also retires the `max_tokens` ↔ extended-thinking coupling — Anthropic
+requires `thinking budget < max_tokens`, which is the entire reason `model-settings.ts`
+carried `unsatisfiable`, `clampNotices`, `disabledByConflict` and the post-edit re-check in
+`reconcileThinkingAfterMaxTokens`. That machinery and its whole error-state vocabulary go
+with it: ~410 lines of component and ~330 of template.
+
+⚠️ `max_tokens` is a **truncation guard**, not a tuning knob. Removing the user control means
+the admin default applies — which is already what every untouched user gets (the drawer read
+"Defaults" for them). Admin-locked params (`row.locked`, "locked by admin") are unaffected:
+this removes the *user-facing form*, not the governance behind it.
+
+⚠️ **Stale overrides are the real hazard, not the missing form.** Overrides live in
+`sessionStorage` under `inferenceParamOverrides`, so a tab open across the deploy still holds
+whatever the user last typed, and it would keep riding every request with nothing in the UI
+to show or reset it. `ModelService.dropRetiredOverrides` strips non-effort keys once, on load,
+and rewrites storage. Effort is preserved explicitly — `setEffort` writes through this same
+store, so a blanket purge would clear a control the user can still see and is still using.
 
 **Conversation Mode — a strictly weaker Agent.** An admin-authored system prompt attached to
 a conversation, with no tools, no skills, no bindings, no icon and no `@`-mention. That is
@@ -167,9 +199,9 @@ Each step is independently shippable. 3 and 6 do not depend on Customize at all.
 
 | # | Step | Depends on |
 |---|------|-----------|
-| 1 | **Customize shell** — `/customize`, Tools + Skills tabs, nav entry. Drawer stays; both live | — |
+| 1 | **Customize shell** — `/customize`, Tools + Skills tabs, nav entry. Drawer stays; both live — **shipped (#1072)** | — |
 | 2 | Fold `Settings → Connectors` in as the Connectors tab | 1 |
-| 3 | Drop model + Advanced params from the drawer (pure dedup + param removal) | — |
+| 3 | Drop model + Advanced params from the drawer (pure dedup + param removal) — **in flight** | — |
 | 4 | Agent-lock surfacing moves to the assistant indicator | — |
 | 5 | Delete the drawer and the settings icon | 1, 2, 3, 4 |
 | 6 | Conversation Modes retired as an Agent migration | prod-usage check |
