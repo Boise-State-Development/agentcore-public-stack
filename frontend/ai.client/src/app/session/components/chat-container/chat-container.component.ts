@@ -25,7 +25,11 @@ import {
   AgentLaunchCardView,
   agentLaunchCardView,
 } from '../../../agents/components/agent-launch-card.component';
-import { AssistantIndicatorComponent } from '../assistant-indicator/assistant-indicator.component';
+import {
+  AgentGovernance,
+  AssistantIndicatorComponent,
+} from '../assistant-indicator/assistant-indicator.component';
+import { ModelService } from '../../services/model/model.service';
 import { SessionCostBadgeComponent } from '../session-cost-badge/session-cost-badge.component';
 import { VoiceOverlayComponent } from '../voice-overlay';
 import { VoiceChatService } from '../../services/voice';
@@ -94,6 +98,40 @@ export class ChatContainerComponent {
   private messageListComponent = viewChild(MessageListComponent);
 
   private readonly chatState = inject(ChatStateService);
+  private readonly modelService = inject(ModelService);
+
+  /**
+   * What the bound Agent fixes for this conversation, for the indicator.
+   *
+   * Derived from the Agent record itself rather than from the picker locks,
+   * which live on root singletons and outlive the view that set them. It also
+   * makes the preview surfaces correct for free: the Designer preview and the
+   * marketplace test-drive render this component without passing `[agent]`, so
+   * they get null and the indicator says nothing — which is right, because a
+   * draft being previewed is not a conversation anyone's saved settings apply to.
+   */
+  protected readonly agentGovernance = computed<AgentGovernance | null>(() => {
+    const agent = this.agent();
+    if (!agent) return null;
+
+    const bindings = agent.bindings ?? [];
+    const toolCount = bindings.filter(b => b.kind === 'tool').length;
+    const skillCount = bindings.filter(b => b.kind === 'skill').length;
+
+    const modelId = agent.modelConfig?.modelId ?? null;
+    // Fall back to the raw id: the catalog may not have loaded yet, and naming
+    // the model badly beats dropping the row that says one is pinned at all.
+    const modelName = modelId
+      ? (this.modelService.availableModels().find(m => m.modelId === modelId)?.modelName ?? modelId)
+      : null;
+
+    if (!modelName && toolCount === 0 && skillCount === 0) return null;
+    return {
+      modelName,
+      toolCount: toolCount || null,
+      skillCount: skillCount || null,
+    };
+  });
 
   // Non-composer submit paths (e.g. an MCP App widget's ui/message) bump
   // ChatStateService.scrollToLastUserTick to get the same "scroll the new
@@ -114,6 +152,7 @@ export class ChatContainerComponent {
 
   // Optional inputs
   assistant = input<Assistant | null>(null);
+
   /**
    * The governed Agent behind this conversation, when it resolves (`agentId ==
    * assistantId`). The launch card reads from this rather than `assistant` because

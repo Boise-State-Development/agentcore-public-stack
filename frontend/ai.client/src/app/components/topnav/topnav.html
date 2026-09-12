@@ -145,6 +145,7 @@
           [emoji]="assistant()!.emoji ?? ''"
           [ownerName]="assistant()!.ownerName"
           [isOwner]="isAssistantOwner()"
+          [governance]="agentGovernance()"
           menuPlacement="down"
           (newSessionClicked)="assistantNewSession.emit()"
           (editClicked)="assistantEdit.emit()"

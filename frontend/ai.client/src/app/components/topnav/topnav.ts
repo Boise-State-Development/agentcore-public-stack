@@ -15,7 +15,10 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../confirmation-dialog';
 import { Assistant } from '../../assistants/models/assistant.model';
-import { AssistantIndicatorComponent } from '../../session/components/assistant-indicator/assistant-indicator.component';
+import {
+  AgentGovernance,
+  AssistantIndicatorComponent,
+} from '../../session/components/assistant-indicator/assistant-indicator.component';
 
 @Component({
   selector: 'app-topnav',
@@ -43,6 +46,11 @@ export class Topnav {
    * Owned by the session page and threaded through the chat container.
    */
   readonly assistant = input<Assistant | null>(null);
+  /**
+   * What the attached Agent fixes for this conversation. Passed straight through
+   * to the indicator; null when unknown or unbound. See `AgentGovernance`.
+   */
+  readonly agentGovernance = input<AgentGovernance | null>(null);
   /** Whether the current user owns the assistant (gates Edit/Share actions). */
   readonly isAssistantOwner = input<boolean>(false);
   /** True while the attached assistant is still being fetched. */

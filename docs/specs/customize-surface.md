@@ -1,7 +1,8 @@
 # Customize — a browse surface for tools, skills and connectors
 
 **Status:** Step 1 (Customize shell: Tools + Skills) SHIPPED — PR #1072, validated on dev.
-Step 3 (drop model + params from the drawer) in flight. Steps 2, 4–7 queued.
+Step 3 (drop model + params from the drawer) SHIPPED — PR #1073, validated on dev.
+Step 4 (agent-lock surfacing) in flight. Steps 2, 5–7 queued.
 **Supersedes:** the composer settings drawer (`components/model-settings/`) as the home for
 tool and skill enablement.
 **Related:** `docs/specs/skills-as-agent-primitive.md` (D6 opt-in), `docs/specs/agent-marketplace.md` (D1 one noun),
@@ -172,9 +173,20 @@ destroy-time clear would drop and re-apply the lock mid-flow.
 The proper resolution is step 4 — the lock is a fact about the *conversation*, so it belongs
 on the assistant indicator pill
 (`session/components/assistant-indicator/assistant-indicator.component.ts`), which is already
-in the conversation and already has an actions menu, but says nothing about bindings today.
-Until then, a user toggling a skill in Customize has no way to know their agent-bound
-conversation will ignore it.
+in the conversation and already has an actions menu.
+
+**Step 4's shape.** The indicator takes an `AgentGovernance` input (`modelName`, `toolCount`,
+`skillCount`; `null` on a field means "the user's own setting applies"), renders a lock glyph
+on the chip, and lists what is fixed in its menu — ending with the line that closes the loop:
+*"Your own choices in Customize don't apply in this conversation."*
+
+⚠️ It is derived from the **Agent record** (`chat-container`'s `agent()` input), NOT from
+`ToolService.agentLocked()` & friends. Those are the leaking singletons this section is about;
+reading them here would reintroduce the same staleness on the surface whose whole job is to
+tell the truth about the current conversation. Deriving from the record also makes the preview
+surfaces correct for free: the Designer preview and the marketplace test-drive render the
+indicator without passing `[agent]`, so they get `null` and say nothing — right, because a
+draft being previewed is not a conversation anyone's saved settings apply to.
 
 ## Cost consequence
 
@@ -201,8 +213,8 @@ Each step is independently shippable. 3 and 6 do not depend on Customize at all.
 |---|------|-----------|
 | 1 | **Customize shell** — `/customize`, Tools + Skills tabs, nav entry. Drawer stays; both live — **shipped (#1072)** | — |
 | 2 | Fold `Settings → Connectors` in as the Connectors tab | 1 |
-| 3 | Drop model + Advanced params from the drawer (pure dedup + param removal) — **in flight** | — |
-| 4 | Agent-lock surfacing moves to the assistant indicator | — |
+| 3 | Drop model + Advanced params from the drawer (pure dedup + param removal) — **shipped (#1073)** | — |
+| 4 | Agent-lock surfacing moves to the assistant indicator — **in flight** | — |
 | 5 | Delete the drawer and the settings icon | 1, 2, 3, 4 |
 | 6 | Conversation Modes retired as an Agent migration | prod-usage check |
 | 7 | `/agents` lands on Discover for users with no agents | — |
