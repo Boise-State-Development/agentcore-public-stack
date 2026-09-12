@@ -1,4 +1,4 @@
-import { ManagedModelFormData, ModelProvider } from './managed-model.model';
+import { ManagedModelFormData, ModelProvider, SupportedParams } from './managed-model.model';
 
 /**
  * A curated entry shown in the model catalog. Carries everything needed to
@@ -150,6 +150,7 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       ...claude4xDefaults(),
       modelId: 'us.anthropic.claude-opus-4-7',
       modelName: 'Claude Opus 4.7',
+      shortDescription: 'For your toughest challenges',
       maxOutputTokens: 64_000,
       // Regional (CRIS): $5.50 / $27.50. Global is $5.00 / $25.00.
       ...ratesWithDerivedCache(5.5, 27.5),
@@ -175,6 +176,7 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       ...claude4xDefaults(),
       modelId: 'global.anthropic.claude-sonnet-5',
       modelName: 'Claude Sonnet 5',
+      shortDescription: 'Strong reasoning over very long context',
       maxInputTokens: 1_000_000,
       maxOutputTokens: 128_000,
       // Global: $2.00 / $10.00 — correct as declared, this id really is
@@ -202,6 +204,9 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       ...claude4xDefaults(),
       modelId: 'us.anthropic.claude-sonnet-4-6',
       modelName: 'Claude Sonnet 4.6',
+      shortDescription: 'Balanced reasoning for everyday work',
+      // Superseded by Claude Sonnet 5 in this same catalog.
+      isFeatured: false,
       maxOutputTokens: 64_000,
       // Regional (CRIS): $3.30 / $16.50. Global is $3.00 / $15.00.
       ...ratesWithDerivedCache(3.3, 16.5),
@@ -226,6 +231,7 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       ...claude4xDefaults(),
       modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
       modelName: 'Claude Haiku 4.5',
+      shortDescription: 'Fastest for quick answers',
       maxOutputTokens: 64_000,
       // Regional (CRIS): $1.10 / $5.50. Global is $1.00 / $5.00. This is the
       // platform default model, so this is the row every cost number rides on.
@@ -291,6 +297,7 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
       ...mantleDefaults(),
       modelId: 'openai.gpt-5.4',
       modelName: 'GPT-5.4',
+      shortDescription: 'Multimodal reasoning',
       providerName: 'OpenAI',
       inputModalities: ['TEXT', 'IMAGE'],
       maxInputTokens: 272_000,
@@ -320,6 +327,9 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
       ...mantleDefaults(),
       modelId: 'qwen.qwen3-coder-30b-a3b-instruct',
       modelName: 'Qwen3 Coder 30B',
+      shortDescription: 'Long-context coding',
+      // Specialist coding model, not a general chat default.
+      isFeatured: false,
       providerName: 'Qwen',
       inputModalities: ['TEXT'],
       maxInputTokens: 256_000,
@@ -426,13 +436,91 @@ const bedrockResponsesDefaults = (): Pick<
  * because a request that crosses 272K bills input at 2x, output at 1.5x and
  * both cache buckets at 2x. Raising it silently UNDER-charges every long turn.
  *
- * `supportedParams` is deliberately absent. AWS publishes no parameter table
- * for these models (`model-parameters-openai.html` documents only the
- * open-weight gpt-oss family), and an invented spec would be worse than none:
- * a declared spec flips the #915 guard from permissive to restrictive, so a
- * wrong entry silently blocks a parameter the model actually accepts. Add one
- * only from published or measured evidence.
+ * `supportedParams` was deliberately absent here until 2026-09-12, when it was
+ * MEASURED — the bar this comment has always set. AWS still publishes no
+ * parameter table for these models (`model-parameters-openai.html` documents
+ * only the open-weight gpt-oss family), so the evidence is the endpoint's own
+ * responses, probed against all four ids in us-west-2:
+ *
+ *   - `reasoning.effort` — sending a deliberately invalid value returns a 400
+ *     that ENUMERATES the enum: "Supported values are: 'none', 'low',
+ *     'medium', 'high', 'xhigh', and 'max'." Identical on Sol, Terra, Luna and
+ *     Astra, and it matches the launch blog ("They also support none, low,
+ *     medium, high, xhigh, and max reasoning effort"). Two independent sources.
+ *   - `temperature` and `top_p` — hard 400 on all four: "Unsupported
+ *     parameter: 'temperature' is not supported with this model."
+ *   - `max_output_tokens` — accepted.
+ *
+ * That last pair is why declaring a spec here is a FIX, not just an enabler.
+ * With no spec the #915 guard stays permissive, so a `temperature` reaching
+ * this family from any caller that can set one kills the turn with a 400
+ * mid-stream. Declaring them `supported: false` drops them before the request
+ * instead — the same failure class the guard inversion was written to close on
+ * Claude Opus 4.7.
+ *
+ * `reasoning_effort` defaults to `medium`, which was also measured rather than
+ * assumed. Neither the cards nor the blog publish a default, so the question
+ * was what the provider does when the param is ABSENT — which is not the same
+ * as sending `none`. Sending nothing still reasons; `none` is an explicit
+ * "off". Three samples per level on Luna, in reasoning tokens:
+ *
+ *     unset  285 / 516 / 327   (mean 376)
+ *     none     0 /   0 /   0
+ *     low    221 / 222 / 230   (mean 224)
+ *     medium 274 / 346 / 303   (mean 308)
+ *     high   516 / 363 / 497   (mean 459)
+ *
+ * So the implicit default already sits around medium, and declaring `medium`
+ * is cost-neutral-to-slightly-cheaper (-18% reasoning tokens), NOT an increase.
+ * It is declared anyway because otherwise the provider can move its own
+ * default and our spend follows with no code change and no signal — and
+ * because a declared default is what lets the picker show the level in force
+ * instead of a blank row. Counts are noisy (unset spanned 285-516 across three
+ * identical calls), so treat the middle levels as roughly interchangeable.
+ *
+ * The level that actually moves the bill is `max`: ~2.3x the output tokens of
+ * unset on Terra, and reasoning bills as output. It stays in `allowed`
+ * deliberately — dropping a level from that list is the lever if the exposure
+ * is ever unwanted, since the picker and the backend both read it.
+ *
+ * GPT-6 Astra inherits this default by sharing the helper. Its effort ENUM was
+ * probed directly, but its token counts were not — medium there is an
+ * extrapolation from its GPT-5.6 siblings, not a measurement.
+ *
+ * The standing rule is unchanged — a declared spec flips the guard from
+ * permissive to restrictive, so a wrong entry silently blocks a parameter the
+ * model really accepts. Add or widen one only from published or measured
+ * evidence, and re-probe rather than assume when a new sibling ships.
  */
+/**
+ * Measured Responses-API parameter profile for the OpenAI family on
+ * `bedrock-runtime`. See the block comment on
+ * {@link CURATED_BEDROCK_RESPONSES_MODELS} for the probe and its evidence.
+ *
+ * `temperature` / `top_p` are declared `supported: false` rather than omitted:
+ * omission drops them too (an authoritative spec treats silence as
+ * unsupported), but an explicit false records the measured fact and logs the
+ * clearer "unsupported inference param" line when one is dropped.
+ */
+const openaiResponsesParams = (maxOutputTokens: number | null = null): SupportedParams => ({
+  params: {
+    reasoning_effort: {
+      supported: true,
+      allowed: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+      // Pins what the provider was already doing implicitly — see the block
+      // comment above for the measurement. NOT an increase in reasoning.
+      default: 'medium',
+    },
+    max_tokens: {
+      supported: true,
+      min: 1,
+      ...(maxOutputTokens === null ? {} : { max: maxOutputTokens }),
+    },
+    temperature: { supported: false },
+    top_p: { supported: false },
+  },
+});
+
 export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
   {
     key: 'gpt-6-astra',
@@ -453,6 +541,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       // chip, not a mispriced bill.
       modelId: 'us.openai.gpt-6-astra',
       modelName: 'GPT-6 Astra',
+      shortDescription: 'Frontier reasoning, coding and research',
       // Geo CRIS Short Context: $11.00 / $55.00. Global CRIS is $10.00 /
       // $50.00. Long Context (1.05M) would be $22.00 / $82.50 — unreachable
       // while maxInputTokens stays pinned at the 272K boundary.
@@ -465,6 +554,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       // Published on the card as April 30, 2026 — again unlike the GPT-5.6
       // cards, which state none.
       knowledgeCutoffDate: '2026-04-30',
+      supportedParams: openaiResponsesParams(128_000),
     },
   },
   {
@@ -476,9 +566,11 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       ...bedrockResponsesDefaults(),
       modelId: 'us.openai.gpt-5.6-sol',
       modelName: 'GPT-5.6 Sol',
+      shortDescription: 'Strong reasoning and agentic work',
       // Geo CRIS: $4.40 / $22.00. Global CRIS is $4.00 / $20.00.
       ...ratesWithDerivedCache(4.4, 22.0),
       knowledgeCutoffDate: null,
+      supportedParams: openaiResponsesParams(),
     },
   },
   {
@@ -490,9 +582,11 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       ...bedrockResponsesDefaults(),
       modelId: 'us.openai.gpt-5.6-terra',
       modelName: 'GPT-5.6 Terra',
+      shortDescription: 'Balanced performance per dollar',
       // Geo CRIS: $2.20 / $13.20. Global CRIS is $2.00 / $12.00.
       ...ratesWithDerivedCache(2.2, 13.2),
       knowledgeCutoffDate: null,
+      supportedParams: openaiResponsesParams(),
     },
   },
   {
@@ -504,9 +598,14 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       ...bedrockResponsesDefaults(),
       modelId: 'us.openai.gpt-5.6-luna',
       modelName: 'GPT-5.6 Luna',
+      shortDescription: 'Fast and affordable, for high volume',
+      // Its own card pitches it for classification, routing and high
+      // volume — a batch workhorse rather than a chat default.
+      isFeatured: false,
       // Geo CRIS: $0.22 / $1.32. Global CRIS is $0.20 / $1.20.
       ...ratesWithDerivedCache(0.22, 1.32),
       knowledgeCutoffDate: null,
+      supportedParams: openaiResponsesParams(),
     },
   },
 ];

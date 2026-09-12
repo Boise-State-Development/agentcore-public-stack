@@ -162,6 +162,13 @@ export interface ManagedModel {
   modelId: string;
   /** Human-readable name of the model */
   modelName: string;
+  /**
+   * One-line reason a user would pick this model, shown under its name in the
+   * chat model picker. Deliberately shorter than the catalog card's `tagline`
+   * — the picker is a narrow menu, not a card, so this reads as a fragment
+   * ("For your toughest challenges"), not a sentence.
+   */
+  shortDescription?: string | null;
   /** Model provider (AWS, OpenAI, Google) */
   provider: ModelProvider;
   /** Provider name (e.g., 'Anthropic', 'Amazon', 'Meta') */
@@ -212,6 +219,18 @@ export interface ManagedModel {
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
   /**
+   * Whether the model sits at the top level of the chat model picker. `false`
+   * collapses it into the picker's "More models" submenu — the model stays
+   * fully available, it just stops competing for the first glance.
+   *
+   * Defaults to `true` on the backend so a catalog nobody has curated keeps
+   * showing every model exactly where it always has.
+   *
+   * Optional because a record stored before this field existed genuinely has
+   * no value for it. Read it as `isFeatured !== false`, never `=== true`.
+   */
+  isFeatured?: boolean;
+  /**
    * OpenAI-compatible API surface: `chat` (OpenAI Chat Completions, the
    * default) or `responses` (OpenAI Responses API — required by models that
    * don't serve Chat Completions, e.g. openai.gpt-5.x).
@@ -246,6 +265,13 @@ export interface ManagedModelFormData {
   modelId: string;
   /** Human-readable name of the model */
   modelName: string;
+  /**
+   * One-line reason a user would pick this model, shown under its name in the
+   * chat model picker. Deliberately shorter than the catalog card's `tagline`
+   * — the picker is a narrow menu, not a card, so this reads as a fragment
+   * ("For your toughest challenges"), not a sentence.
+   */
+  shortDescription?: string | null;
   /** Model provider (AWS, OpenAI, Google) */
   provider: ModelProvider;
   /** Provider name (e.g., 'Anthropic', 'Amazon', 'Meta') */
@@ -286,6 +312,15 @@ export interface ManagedModelFormData {
   supportsCaching?: boolean;
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
+  /**
+   * Whether the model sits at the top level of the chat model picker. `false`
+   * collapses it into the picker's "More models" submenu — the model stays
+   * fully available, it just stops competing for the first glance.
+   *
+   * Defaults to `true` on the backend so a catalog nobody has curated keeps
+   * showing every model exactly where it always has.
+   */
+  isFeatured?: boolean;
   /**
    * OpenAI-compatible API surface: `chat` or `responses`. Selectable for
    * `mantle`; forced to `responses` for `bedrock-responses`. Inert for other
@@ -429,8 +464,19 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
     label: 'Reasoning Effort',
     description:
       'Reasoning depth (OpenAI o-series and reasoning models on the ' +
-      'OpenAI-compatible Bedrock surfaces).',
-    kind: 'number',
+      'OpenAI-compatible Bedrock surfaces). Check the levels this model ' +
+      'supports; pick a default.',
+    // A string enum, not a number — `kind: 'number'` here was simply wrong,
+    // and it was load-bearing: the admin form renders the `allowed` checklist
+    // only for `kind: 'select'`, so there was no way to declare the levels a
+    // model accepts, and anything that reads `allowed` (the chat picker's
+    // Effort submenu, the backend's enum branch) could never see one.
+    kind: 'select',
+    // The union across the OpenAI-compatible surfaces. Per-model subsets are
+    // declared in each model's `allowed`, which is what actually gates a
+    // request — `none` and `max` are real GPT-5.6 levels but absent from the
+    // older o-series, so this list is a superset by design.
+    options: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     providers: ['openai', 'mantle', 'bedrock-responses'],
   },
 ];
@@ -446,3 +492,63 @@ export const AVAILABLE_ROLES = [
   'User',
   'Guest',
 ] as const;
+
+/**
+ * Canonical param keys that express reasoning/output effort, in the order the
+ * picker prefers them. Anthropic calls it `effort` (output_config.effort);
+ * the OpenAI-compatible surfaces call it `reasoning_effort`. A model declares
+ * at most one.
+ */
+export const EFFORT_PARAM_KEYS = ['effort', 'reasoning_effort'] as const;
+
+/** An effort control the chat model picker can render for a model. */
+export interface EffortControl {
+  /** Canonical param key to send in `inference_params`. */
+  key: string;
+  /** Selectable levels, admin-declared, ordered low -> high. */
+  levels: string[];
+  /** The admin's default level, or null when they didn't pick one. */
+  defaultLevel: string | null;
+}
+
+/**
+ * Resolve the effort control for a model, or null when it has none.
+ *
+ * Deliberately strict: an effort param is only offered when the admin declared
+ * it `supported`, left it unlocked, AND enumerated the `allowed` levels. That
+ * mirrors `_merge_inference_params` on the backend, whose enum branch keeps a
+ * user override *only* if it's a member of `allowed` and otherwise silently
+ * falls back to the default. Rendering a level the backend would discard would
+ * show the user a choice that does nothing.
+ *
+ * `locked` is excluded for the same reason — the backend pins those to the
+ * admin default and drops overrides without erroring.
+ */
+export function resolveEffortControl(model: ManagedModel | null | undefined): EffortControl | null {
+  const spec = model?.supportedParams?.params;
+  if (!spec) return null;
+
+  for (const key of EFFORT_PARAM_KEYS) {
+    const paramSpec = spec[key];
+    if (!paramSpec?.supported || paramSpec.locked) continue;
+    const levels = (paramSpec.allowed ?? []).map(level => String(level));
+    if (levels.length === 0) continue;
+    const declaredDefault =
+      paramSpec.default === null || paramSpec.default === undefined
+        ? null
+        : String(paramSpec.default);
+    return {
+      key,
+      levels,
+      defaultLevel: declaredDefault !== null && levels.includes(declaredDefault) ? declaredDefault : null,
+    };
+  }
+
+  return null;
+}
+
+/** Title-case an effort level for display ('xhigh' -> 'Extra high'). */
+export function effortLevelLabel(level: string): string {
+  if (level === 'xhigh') return 'Extra high';
+  return level.charAt(0).toUpperCase() + level.slice(1);
+}

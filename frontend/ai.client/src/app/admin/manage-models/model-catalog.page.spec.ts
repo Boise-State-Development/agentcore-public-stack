@@ -302,12 +302,42 @@ describe('ModelCatalogPage', () => {
       }
     });
 
-    it('declares no supportedParams rather than an invented one', () => {
-      // AWS publishes no parameter table for GPT-5.6. A declared spec flips the
-      // #915 guard from permissive to restrictive, so a guessed one would
-      // silently block params the model actually accepts.
+    it('declares only the MEASURED supportedParams, never a guessed one', () => {
+      // Supersedes an earlier invariant that required NO spec at all. The bar
+      // was never "no spec" — it was "no invented spec": a declared spec flips
+      // the #915 guard from permissive to restrictive, so a guess silently
+      // blocks params the model really accepts. AWS still publishes no
+      // parameter table, so this spec comes from probing all four ids in
+      // us-west-2 on 2026-09-12 (see the block comment on the array).
+      //
+      // If a future sibling is added without re-probing, this fails — which is
+      // the point.
       for (const model of CURATED_BEDROCK_RESPONSES_MODELS) {
-        expect(model.template.supportedParams ?? null).toBeNull();
+        const params = model.template.supportedParams?.params;
+        expect(params, `${model.key} must declare a measured spec`).toBeTruthy();
+
+        // The endpoint's own 400 enumerates exactly these, identically on all four.
+        expect(`${model.key}:${params!['reasoning_effort'].allowed?.join(',')}`).toBe(
+          `${model.key}:none,low,medium,high,xhigh,max`,
+        );
+
+        // Measured 400: "Unsupported parameter: 'temperature' is not supported
+        // with this model." Declared false so the request never carries them.
+        expect(`${model.key}:${params!['temperature'].supported}`).toBe(`${model.key}:false`);
+        expect(`${model.key}:${params!['top_p'].supported}`).toBe(`${model.key}:false`);
+
+        expect(`${model.key}:${params!['max_tokens'].supported}`).toBe(`${model.key}:true`);
+
+        // `medium` pins what the provider was already doing implicitly —
+        // measured at ~376 reasoning tokens unset vs ~308 for medium, so this
+        // is cost-neutral-to-cheaper rather than an increase. A default must
+        // stay a member of `allowed` or the backend drops it.
+        expect(`${model.key}:${params!['reasoning_effort'].default}`).toBe(
+          `${model.key}:medium`,
+        );
+        expect(params!['reasoning_effort'].allowed).toContain(
+          params!['reasoning_effort'].default,
+        );
       }
     });
 
@@ -350,5 +380,66 @@ describe('ModelCatalogPage', () => {
     expect(gpt54?.template.supportsCaching).toBe(true);
     expect(gpt54?.template.cacheReadPricePerMillionTokens).toBeCloseTo(0.275, 6);
     expect(gpt54?.template.cacheWritePricePerMillionTokens).toBe(0);
+  });
+
+  describe('curated picker placement', () => {
+    const ALL = [
+      ...CURATED_BEDROCK_MODELS,
+      ...CURATED_MANTLE_MODELS,
+      ...CURATED_BEDROCK_RESPONSES_MODELS,
+    ];
+
+    // Demoted = superseded by a newer sibling ON THE SAME PROVIDER SURFACE, or
+    // specialist enough that it isn't a general chat default. Everything else
+    // stays at the picker's top level. This list is a change-detector: adding a
+    // model or re-ranking one should be a deliberate edit here, not a drift.
+    //
+    // "Same surface" is load-bearing. GPT-5.4 (mantle) looks superseded by the
+    // GPT-5.6 family until you notice those are bedrock-responses — a different
+    // provider an install may not use at all. Demoting it left Mantle with no
+    // featured model but a specialist coding one, which the family check below
+    // now catches. A template default cannot assume what else gets added.
+    const DEMOTED = ['claude-sonnet-4-6', 'qwen3-coder-30b', 'gpt-5-6-luna'];
+
+    it('demotes exactly the superseded and specialist models', () => {
+      const demoted = ALL.filter(m => m.template.isFeatured === false)
+        .map(m => m.key)
+        .sort();
+      expect(demoted).toEqual([...DEMOTED].sort());
+    });
+
+    it('leaves featured models undeclared so they inherit the backend default', () => {
+      // `isFeatured` defaults true server-side. Featured rows say nothing
+      // rather than `true`, so the default stays in exactly one place.
+      for (const model of ALL) {
+        if (DEMOTED.includes(model.key)) continue;
+        expect(
+          model.template.isFeatured,
+          `${model.key} should not declare isFeatured`,
+        ).toBeUndefined();
+      }
+    });
+
+    it('keeps a featured model in every provider family', () => {
+      // A catalog tab whose every entry is demoted would put an entire
+      // provider behind the submenu, which is never the intent.
+      for (const [label, group] of [
+        ['bedrock', CURATED_BEDROCK_MODELS],
+        ['mantle', CURATED_MANTLE_MODELS],
+        ['bedrock-responses', CURATED_BEDROCK_RESPONSES_MODELS],
+      ] as const) {
+        const featured = group.filter(m => m.template.isFeatured !== false);
+        expect(featured.length, `${label} must keep a featured model`).toBeGreaterThan(0);
+      }
+    });
+
+    it('does not let two featured models both claim to be the most capable', () => {
+      // GPT-6 Astra outranks (and out-prices) GPT-5.6 Sol in the same catalog,
+      // so Sol's copy must not say "most capable".
+      const featuredCopy = ALL.filter(m => m.template.isFeatured !== false)
+        .map(m => m.template.shortDescription ?? '');
+      const superlatives = featuredCopy.filter(d => /most capable/i.test(d));
+      expect(superlatives).toEqual([]);
+    });
   });
 });

@@ -338,9 +338,11 @@ export class ChatRequestService implements OnDestroy {
       requestObject['enabled_skills'] = enabledSkillIds;
     }
 
-    // Per-model inference param overrides set in the Settings → Advanced
-    // panel. Backend layers these on top of admin defaults and clamps to the
-    // model's bounds; locked params drop the override silently.
+    // Per-model inference param overrides, set either in the Settings →
+    // Advanced panel or from the model picker's Effort submenu (which writes
+    // the `effort` / `reasoning_effort` param through the same store).
+    // Backend layers these on top of admin defaults and clamps to the model's
+    // bounds; locked params drop the override silently.
     if (!isDefaultModel) {
       const overrides = this.modelService.getInferenceParamOverrides();
       if (Object.keys(overrides).length > 0) {

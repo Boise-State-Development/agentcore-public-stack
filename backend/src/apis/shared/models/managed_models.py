@@ -275,6 +275,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         id=model_id,
         model_id=model_data.model_id,
         model_name=model_data.model_name,
+        short_description=model_data.short_description,
         provider=model_data.provider,
         provider_name=model_data.provider_name,
         input_modalities=model_data.input_modalities,
@@ -293,6 +294,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         knowledge_cutoff_date=model_data.knowledge_cutoff_date,
         supports_caching=_resolve_supports_caching(model_data.supports_caching, model_data.provider),
         is_default=model_data.is_default,
+        is_featured=model_data.is_featured,
         mantle_api_mode=_resolve_mantle_api_mode(model_data.mantle_api_mode, model_data.provider),
         mantle_region=_resolve_mantle_region(model_data.mantle_region, model_data.provider),
         supported_params=model_data.supported_params,
@@ -320,6 +322,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         'outputPricePerMillionTokens': model_data.output_price_per_million_tokens,
         'supportsCaching': _resolve_supports_caching(model_data.supports_caching, model_data.provider),
         'isDefault': model_data.is_default,
+        'isFeatured': model_data.is_featured,
         'createdAt': now.isoformat(),
         'updatedAt': now.isoformat(),
     }
@@ -333,6 +336,8 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         item['cacheReadPricePerMillionTokens'] = model_data.cache_read_price_per_million_tokens
     if model_data.knowledge_cutoff_date is not None:
         item['knowledgeCutoffDate'] = model_data.knowledge_cutoff_date
+    if model_data.short_description:
+        item['shortDescription'] = model_data.short_description
     resolved_api_mode = _resolve_mantle_api_mode(model_data.mantle_api_mode, model_data.provider)
     if resolved_api_mode is not None:
         item['apiMode'] = resolved_api_mode
