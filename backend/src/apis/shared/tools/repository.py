@@ -15,7 +15,9 @@ import boto3
 from botocore.exceptions import ClientError
 
 from apis.shared.caching import config_cache
+from apis.shared.dynamo_errors import is_missing_index_error
 from .models import (
+    ENTITY_TYPE_TOOL,
     ToolCapabilitySnapshot,
     ToolDefinition,
     UserToolPreference,
@@ -23,6 +25,10 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The GSI that makes "list every tool" a Query instead of a Scan of a table
+# shared with roles, skills and a preferences row per user.
+ENTITY_TYPE_INDEX = "EntityTypeIndex"
 
 
 class ToolCatalogRepository:
@@ -142,7 +148,7 @@ class ToolCatalogRepository:
                 # each ToolDefinition in place.
                 items = await config_cache.get_or_load(
                     config_cache.TOOL_CATALOG,
-                    lambda: asyncio.to_thread(self._scan_tool_items),
+                    self._load_all_tool_items,
                 )
 
             tools = [ToolDefinition.from_dynamo_item(item) for item in items]
@@ -159,6 +165,85 @@ class ToolCatalogRepository:
         except ClientError as e:
             logger.error(f"Error listing tools: {e}")
             raise
+
+    async def _load_all_tool_items(self) -> List[dict]:
+        """Every tool row, by Query on EntityTypeIndex, with Scan as the safety net.
+
+        The Query is the point of the index: this table is shared with roles,
+        skills, role grants and one tool-preferences row PER USER, so the Scan
+        reads the whole table to return the tool rows and its cost grows with
+        enrollment rather than with the catalog. Measured on dev, 95 items read
+        to return 24.
+
+        Two ways the index can fail to answer, and neither may take the catalog
+        down with it — an empty tool list is not a degraded experience here, it
+        is a broken one:
+
+        **The index is not there.** `platform.yml` and `backend.yml` are ordered
+        by nothing, a GSI is still CREATING after CloudFormation reports success,
+        and a rolled-back stack ships its images anyway. Unlike the surfaces
+        `dynamo_errors` was written for, we have a *correct* answer available, so
+        we fall back to it rather than degrading to empty.
+
+        **The index is there but unpopulated.** The keys are sparse, so a catalog
+        whose backfill has not run indexes nothing and the Query succeeds with
+        zero rows — no error to catch. A zero result is therefore treated as
+        suspect and re-read via Scan: if the table really is empty (a fresh
+        install before seeding) both agree and it costs one extra read per cache
+        fill; if it is not, we serve the truth and say loudly why.
+
+        A partial backfill is NOT covered — detecting it would mean scanning
+        every time, which is the cost being removed. That is what the release
+        gate and the backfill's own `skipped=0 failed=0` report are for.
+        """
+        try:
+            items = await asyncio.to_thread(self._query_tool_items)
+        except ClientError as exc:
+            if not is_missing_index_error(exc):
+                raise
+            logger.warning(
+                "⚠️ DynamoDB index '%s' does not exist — falling back to Scan for "
+                "the tool catalog. Expected transiently while the GSI is CREATING "
+                "or a deploy is incomplete; if it persists, every catalog read is "
+                "paying a full table scan.",
+                ENTITY_TYPE_INDEX,
+            )
+            return await asyncio.to_thread(self._scan_tool_items)
+
+        if items:
+            return items
+
+        # Zero rows from a sparse index is indistinguishable from "no tools", so
+        # confirm against the base table before believing it.
+        scanned = await asyncio.to_thread(self._scan_tool_items)
+        if scanned:
+            logger.error(
+                "⚠️ DynamoDB index '%s' returned 0 tools but the table holds %d — "
+                "the %s backfill has not been run in this environment. Serving the "
+                "Scan result so the catalog is correct; run the backfill.",
+                ENTITY_TYPE_INDEX,
+                len(scanned),
+                "backfill_tool_catalog_index.py",
+            )
+        return scanned
+
+    def _query_tool_items(self) -> List[dict]:
+        """Query the raw tool rows off EntityTypeIndex. Blocking; via ``to_thread``."""
+        kwargs = {
+            "IndexName": ENTITY_TYPE_INDEX,
+            "KeyConditionExpression": "GSI5PK = :pk",
+            "ExpressionAttributeValues": {":pk": ENTITY_TYPE_TOOL},
+        }
+        response = self._table.query(**kwargs)
+        items = response.get("Items", [])
+
+        while "LastEvaluatedKey" in response:
+            response = self._table.query(
+                **kwargs, ExclusiveStartKey=response["LastEvaluatedKey"]
+            )
+            items.extend(response.get("Items", []))
+
+        return items
 
     def _scan_tool_items(self) -> List[dict]:
         """Scan the raw TOOL#/METADATA items. Blocking; call via ``to_thread``."""
