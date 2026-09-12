@@ -11,7 +11,7 @@ import { signal } from '@angular/core';
 describe('ModelService', () => {
   let service: ModelService;
   let httpMock: HttpTestingController;
-  let mockUserSettings: { fetchSettings: ReturnType<typeof vi.fn> };
+  let mockUserSettings: { getSettings: ReturnType<typeof vi.fn> };
 
   const mockModels: ManagedModel[] = [
     { id: 'm1', modelId: 'claude-haiku', modelName: 'Claude Haiku', provider: 'bedrock', providerName: 'Anthropic', inputModalities: ['TEXT'], outputModalities: ['TEXT'], maxInputTokens: 200000, maxOutputTokens: 4096, allowedAppRoles: [], availableToRoles: [], enabled: true, inputPricePerMillionTokens: 0.25, outputPricePerMillionTokens: 1.25, knowledgeCutoffDate: null, supportsCaching: true, isDefault: false },
@@ -31,7 +31,7 @@ describe('ModelService', () => {
     });
 
     mockUserSettings = {
-      fetchSettings: vi.fn().mockResolvedValue({ defaultModelId: null }),
+      getSettings: vi.fn().mockResolvedValue({ defaultModelId: null }),
     };
 
     TestBed.configureTestingModule({
@@ -115,7 +115,7 @@ describe('ModelService', () => {
         removeItem: vi.fn((k: string) => { delete sessionStore[k]; }),
       });
 
-      mockUserSettings = { fetchSettings: vi.fn().mockResolvedValue({ defaultModelId: null }) };
+      mockUserSettings = { getSettings: vi.fn().mockResolvedValue({ defaultModelId: null }) };
 
       TestBed.configureTestingModule({
         providers: [
@@ -217,7 +217,7 @@ describe('ModelService', () => {
       service['_selectedModel'].set(null);
       service['usingDefaultModel'].set(true);
       delete sessionStore['selectedModelId'];
-      mockUserSettings.fetchSettings.mockResolvedValueOnce({ defaultModelId: 'claude-haiku' });
+      mockUserSettings.getSettings.mockResolvedValueOnce({ defaultModelId: 'claude-haiku' });
 
       const promise = service.loadModels();
       await vi.waitFor(() => {
@@ -228,14 +228,14 @@ describe('ModelService', () => {
       // claude-haiku wins even though claude-sonnet has isDefault=true,
       // because the user's persisted preference is consulted first.
       expect(service.selectedModel().modelId).toBe('claude-haiku');
-      expect(mockUserSettings.fetchSettings).toHaveBeenCalled();
+      expect(mockUserSettings.getSettings).toHaveBeenCalled();
     });
 
     it('should fall back to admin default when user setting is null', async () => {
       service['_selectedModel'].set(null);
       service['usingDefaultModel'].set(true);
       delete sessionStore['selectedModelId'];
-      mockUserSettings.fetchSettings.mockResolvedValueOnce({ defaultModelId: null });
+      mockUserSettings.getSettings.mockResolvedValueOnce({ defaultModelId: null });
 
       const promise = service.loadModels();
       await vi.waitFor(() => {
@@ -250,7 +250,7 @@ describe('ModelService', () => {
       service['_selectedModel'].set(null);
       service['usingDefaultModel'].set(true);
       delete sessionStore['selectedModelId'];
-      mockUserSettings.fetchSettings.mockResolvedValueOnce({ defaultModelId: 'no-longer-here' });
+      mockUserSettings.getSettings.mockResolvedValueOnce({ defaultModelId: 'no-longer-here' });
 
       const promise = service.loadModels();
       await vi.waitFor(() => {

@@ -329,7 +329,7 @@ export class ModelService {
    */
   private async findUserDefaultModel(enabledModels: ManagedModel[]): Promise<ManagedModel | null> {
     try {
-      const settings = await this.userSettings.fetchSettings();
+      const settings = await this.userSettings.getSettings();
       const id = settings?.defaultModelId;
       if (!id) return null;
       return enabledModels.find(m => m.modelId === id) ?? null;
