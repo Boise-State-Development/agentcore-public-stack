@@ -61,6 +61,75 @@ describe('ModelService', () => {
     TestBed.resetTestingModule();
   });
 
+  describe('retired inference-param overrides', () => {
+    // The drawer's Advanced form is gone (step 3 of
+    // docs/specs/customize-surface.md), but this store is sessionStorage — a tab
+    // open across the change still holds whatever the user last typed. Those
+    // values would keep riding every request with nothing in the UI to show or
+    // reset them.
+
+    async function setupWithStoredOverrides(stored: unknown) {
+      sessionStore = { inferenceParamOverrides: JSON.stringify(stored) };
+      vi.stubGlobal('sessionStorage', {
+        getItem: vi.fn((k: string) => sessionStore[k] ?? null),
+        setItem: vi.fn((k: string, v: string) => { sessionStore[k] = v; }),
+        removeItem: vi.fn((k: string) => { delete sessionStore[k]; }),
+      });
+      mockUserSettings = { getSettings: vi.fn().mockResolvedValue({ defaultModelId: null }) };
+      TestBed.configureTestingModule({
+        providers: [
+          provideHttpClient(),
+          provideHttpClientTesting(),
+          ModelService,
+          { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
+          { provide: UserSettingsService, useValue: mockUserSettings },
+        ],
+      });
+      service = TestBed.inject(ModelService);
+      httpMock = TestBed.inject(HttpTestingController);
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/models').flush(mockResponse);
+      });
+    }
+
+    it('drops sampling params that no longer have a control', async () => {
+      await setupWithStoredOverrides({
+        'claude-haiku': { temperature: 0.2, top_p: 0.9, max_tokens: 512 },
+      });
+      service.setSelectedModelById('claude-haiku');
+      expect(service.getInferenceParamOverrides()).toEqual({});
+    });
+
+    it('keeps effort, which the model picker still owns', async () => {
+      // `setEffort` writes through this same store, so a blanket purge would
+      // clear a control the user can still see and is still using.
+      await setupWithStoredOverrides({
+        'claude-haiku': { effort: 'high', temperature: 0.2 },
+        'claude-sonnet': { reasoning_effort: 'low' },
+      });
+      service.setSelectedModelById('claude-haiku');
+      expect(service.getInferenceParamOverrides()).toEqual({ effort: 'high' });
+      service.setSelectedModelById('claude-sonnet');
+      expect(service.getInferenceParamOverrides()).toEqual({ reasoning_effort: 'low' });
+    });
+
+    it('rewrites storage once rather than stripping on every read', async () => {
+      await setupWithStoredOverrides({
+        'claude-haiku': { effort: 'high', temperature: 0.2 },
+      });
+      expect(JSON.parse(sessionStore['inferenceParamOverrides'])).toEqual({
+        'claude-haiku': { effort: 'high' },
+      });
+    });
+
+    it('leaves a clean store untouched', async () => {
+      await setupWithStoredOverrides({ 'claude-haiku': { effort: 'medium' } });
+      expect(JSON.parse(sessionStore['inferenceParamOverrides'])).toEqual({
+        'claude-haiku': { effort: 'medium' },
+      });
+    });
+  });
+
   describe('agent model lock', () => {
     beforeEach(setup);
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { ElementRef, signal } from '@angular/core';
+import { signal } from '@angular/core';
 import { ModelService } from '../../session/services/model/model.service';
 import { ToolService } from '../../services/tool/tool.service';
 import { SkillService } from '../../services/skill/skill.service';
@@ -68,7 +68,6 @@ describe('ModelSettings', () => {
             toggleSkill: vi.fn(),
           },
         },
-        { provide: ElementRef, useValue: { nativeElement: document.createElement('div') } },
       ],
     });
   });
@@ -82,25 +81,32 @@ describe('ModelSettings', () => {
     return TestBed.runInInjectionContext(() => new ModelSettings());
   }
 
-  it('should initialize with closed dropdown state', async () => {
+  it('owns neither the model picker nor the inference-param form', async () => {
+    // Step 3 of docs/specs/customize-surface.md. The model section was a second
+    // copy of `<app-model-dropdown />` (which lives in the chat input and carries
+    // the Effort submenu with it), and the Advanced form's only remaining rows
+    // were sampling knobs plus a duplicate of that same Effort control.
+    //
+    // Asserted on the API surface because this harness constructs the component
+    // directly, with no fixture to query — but these are exactly the members a
+    // reintroduction would bring back.
     const component = await createComponent();
-    expect(component['isModelDropdownOpen']()).toBe(false);
-    expect(component['focusedOptionIndex']()).toBe(-1);
-  });
-
-  it('should toggle model dropdown', async () => {
-    const component = await createComponent();
-    component.toggleModelDropdown();
-    expect(component['isModelDropdownOpen']()).toBe(true);
-    component.toggleModelDropdown();
-    expect(component['isModelDropdownOpen']()).toBe(false);
-  });
-
-  it('should select model and close dropdown', async () => {
-    const component = await createComponent();
-    component.selectModel(mockModel);
-    expect(mockModelService.setSelectedModel).toHaveBeenCalledWith(mockModel);
-    expect(component['isModelDropdownOpen']()).toBe(false);
+    const gone = [
+      'toggleModelDropdown',
+      'selectModel',
+      'isModelSelected',
+      'onDropdownKeydown',
+      'isModelDropdownOpen',
+      'advancedRows',
+      'hasAdvancedParams',
+      'overriddenCount',
+      'toggleAdvanced',
+      'resetAllParams',
+    ];
+    const present = gone.filter(
+      name => (component as unknown as Record<string, unknown>)[name] !== undefined,
+    );
+    expect(present).toEqual([]);
   });
 
   describe('tool detail pane', () => {
@@ -166,16 +172,6 @@ describe('ModelSettings', () => {
 
       expect(component['detailTool']()).toBeNull();
       expect(prevented).toHaveBeenCalled();
-    });
-
-    it('escape leaves the detail alone while the model dropdown owns it', async () => {
-      const component = await createComponent();
-      component.openToolDetail('gmail_employee');
-      component.toggleModelDropdown();
-
-      component.onEscape(new KeyboardEvent('keydown', { key: 'Escape' }));
-
-      expect(component['detailTool']()?.toolId).toBe('gmail_employee');
     });
 
     it('leads the subtitle with the partial count when only some tools are on', async () => {
