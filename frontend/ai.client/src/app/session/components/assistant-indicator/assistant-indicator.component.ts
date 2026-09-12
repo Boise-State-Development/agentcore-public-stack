@@ -14,7 +14,34 @@ import {
   heroPlusCircle,
   heroChevronDown,
   heroUserGroup,
+  heroLockClosed,
 } from '@ng-icons/heroicons/outline';
+
+/**
+ * What an Agent fixes for the conversation it is bound to.
+ *
+ * A bound Agent governs its own model, tools and skills: the backend applies
+ * them at invocation regardless of what the client sends, so the user's own
+ * preferences — the ones they set in Customize — do not apply here. Before this
+ * existed, that fact was only legible inside the composer's settings drawer, as
+ * greyed switches. With the drawer gone (step 5 of
+ * `docs/specs/customize-surface.md`) a user could toggle a skill in Customize,
+ * return to an agent conversation and watch it be ignored, with nothing
+ * anywhere saying why.
+ *
+ * `null` on any field means "not governed — the user's own setting applies".
+ * The whole input defaults to null, so a surface that does not know the answer
+ * (the Designer preview and the marketplace test-drive both render this
+ * component without ever applying the locks) says nothing rather than guessing.
+ */
+export interface AgentGovernance {
+  /** Display name of the model the Agent pins, or null when it pins none. */
+  modelName: string | null;
+  /** How many tools the Agent binds, or null when it binds none. */
+  toolCount: number | null;
+  /** How many skills the Agent binds, or null when it binds none. */
+  skillCount: number | null;
+}
 
 /**
  * A prominent assistant indicator chip with gradient accent and
@@ -29,6 +56,7 @@ import {
       heroPlusCircle,
       heroChevronDown,
       heroUserGroup,
+      heroLockClosed,
     }),
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -53,6 +81,13 @@ import {
             <span class="pill-emoji leading-none">{{ emoji() }}</span>
           }
           <span class="pill-name">{{ name() }}</span>
+          @if (isGoverned()) {
+            <ng-icon
+              name="heroLockClosed"
+              class="pill-lock"
+              [attr.aria-label]="governanceLabel()"
+            />
+          }
         </button>
       } @else {
         <button
@@ -74,7 +109,16 @@ import {
 
           <!-- Name + owner -->
           <div class="indicator-text">
-            <span class="indicator-name">{{ name() }}</span>
+            <span class="indicator-name">
+              {{ name() }}
+              @if (isGoverned()) {
+                <ng-icon
+                  name="heroLockClosed"
+                  class="indicator-lock"
+                  [attr.aria-label]="governanceLabel()"
+                />
+              }
+            </span>
             @if (ownerName()) {
               <span class="indicator-owner">by {{ ownerName() }}</span>
             }
@@ -98,6 +142,29 @@ import {
           role="menu"
           aria-label="Agent actions"
         >
+          @if (isGoverned()) {
+            <div class="menu-governance">
+              <p class="governance-title">
+                <ng-icon name="heroLockClosed" class="governance-icon" aria-hidden="true" />
+                <span>Fixed by this agent</span>
+              </p>
+              <ul class="governance-list">
+                @if (governance()?.modelName; as modelName) {
+                  <li><span class="governance-key">Model</span><span>{{ modelName }}</span></li>
+                }
+                @if (toolLabel(); as tools) {
+                  <li><span class="governance-key">Tools</span><span>{{ tools }}</span></li>
+                }
+                @if (skillLabel(); as skills) {
+                  <li><span class="governance-key">Skills</span><span>{{ skills }}</span></li>
+                }
+              </ul>
+              <p class="governance-note">
+                Your own choices in Customize don't apply in this conversation.
+              </p>
+            </div>
+          }
+
           <button
             type="button"
             class="menu-item"
@@ -318,12 +385,111 @@ import {
     }
 
     /* ── Dropdown menu ── */
+    .pill-lock,
+    .indicator-lock {
+      width: 0.75rem;
+      height: 0.75rem;
+      flex-shrink: 0;
+      color: var(--color-gray-400);
+    }
+
+    .indicator-lock {
+      display: inline-block;
+      vertical-align: -0.0625rem;
+      margin-left: 0.25rem;
+    }
+
+    :host-context(html.dark) .pill-lock,
+    :host-context(html.dark) .indicator-lock {
+      color: var(--color-gray-500);
+    }
+
+    .menu-governance {
+      padding: 0.5rem 0.625rem 0.625rem;
+      border-bottom: 1px solid var(--color-gray-200);
+      margin-bottom: 0.25rem;
+    }
+
+    :host-context(html.dark) .menu-governance {
+      border-bottom-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .governance-title {
+      display: flex;
+      align-items: center;
+      gap: 0.375rem;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: var(--color-gray-500);
+    }
+
+    .governance-icon {
+      width: 0.75rem;
+      height: 0.75rem;
+      flex-shrink: 0;
+    }
+
+    .governance-list {
+      margin: 0.375rem 0 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 0.125rem;
+      font-size: 0.75rem;
+      line-height: 1.25rem;
+      color: var(--color-gray-700);
+    }
+
+    .governance-list li {
+      display: flex;
+      gap: 0.5rem;
+      /* The value is the interesting half: let a long model name truncate
+         rather than wrap the label away from it. */
+      min-width: 0;
+    }
+
+    .governance-list li > :not(.governance-key) {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .governance-key {
+      flex-shrink: 0;
+      min-width: 2.75rem;
+      color: var(--color-gray-500);
+    }
+
+    .governance-note {
+      margin-top: 0.375rem;
+      font-size: 0.6875rem;
+      line-height: 1rem;
+      color: var(--color-gray-500);
+    }
+
+    :host-context(html.dark) .governance-list {
+      color: var(--color-gray-300);
+    }
+
+    :host-context(html.dark) .governance-title,
+    :host-context(html.dark) .governance-key,
+    :host-context(html.dark) .governance-note {
+      color: var(--color-gray-400);
+    }
+
     .indicator-menu {
       position: absolute;
       bottom: calc(100% + 0.375rem);
       left: 50%;
       transform: translateX(-50%);
+      /* Sizes to content so a governance row like "Model  Claude Sonnet 5"
+         reads on one line, but never wider than the viewport allows. */
+      width: max-content;
       min-width: 11rem;
+      max-width: min(20rem, 90vw);
       padding: 0.25rem;
       border-radius: 0.75rem;
       background: var(--color-white);
@@ -447,6 +613,11 @@ export class AssistantIndicatorComponent {
    * subtle name-only pill for dense contexts like the top nav.
    */
   readonly variant = input<'card' | 'compact'>('card');
+  /**
+   * What this Agent fixes for the conversation. Null (the default) means the
+   * caller does not know — say nothing rather than guess. See `AgentGovernance`.
+   */
+  readonly governance = input<AgentGovernance | null>(null);
 
   // Outputs
   readonly newSessionClicked = output<void>();
@@ -455,6 +626,38 @@ export class AssistantIndicatorComponent {
 
   // Menu state
   readonly menuOpen = signal(false);
+
+  /** True when the Agent fixes at least one of model / tools / skills. */
+  readonly isGoverned = computed(() => {
+    const g = this.governance();
+    if (!g) return false;
+    return !!g.modelName || !!g.toolCount || !!g.skillCount;
+  });
+
+  /** "4 tools", or null when tools are the user's own to choose. */
+  readonly toolLabel = computed(() => countLabel(this.governance()?.toolCount ?? null, 'tool'));
+
+  /** "2 skills", or null when skills are the user's own to choose. */
+  readonly skillLabel = computed(() => countLabel(this.governance()?.skillCount ?? null, 'skill'));
+
+  /**
+   * Accessible name for the lock glyph. The glyph is the only governance cue on
+   * the collapsed chip, so it names what is fixed rather than just saying
+   * "locked" — a screen-reader user should not have to open the menu to learn
+   * which of their settings this conversation overrides.
+   */
+  readonly governanceLabel = computed(() => {
+    const g = this.governance();
+    if (!g) return '';
+    const parts: string[] = [];
+    if (g.modelName) parts.push(`model ${g.modelName}`);
+    const tools = this.toolLabel();
+    if (tools) parts.push(tools);
+    const skills = this.skillLabel();
+    if (skills) parts.push(skills);
+    if (parts.length === 0) return '';
+    return `This agent fixes ${joinList(parts)} for this conversation.`;
+  });
 
   // Computed: first letter for avatar fallback
   readonly firstLetter = computed(() => {
@@ -524,4 +727,16 @@ export class AssistantIndicatorComponent {
     this.menuOpen.set(false);
     this.shareClicked.emit();
   }
+}
+
+/** `3` + `'tool'` -> `'3 tools'`; 0 and null both mean "not governed". */
+function countLabel(count: number | null, noun: string): string | null {
+  if (!count) return null;
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/** `['a','b','c']` -> `'a, b and c'`. */
+function joinList(parts: string[]): string {
+  if (parts.length === 1) return parts[0];
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }

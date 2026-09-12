@@ -8,6 +8,7 @@
     [class.artifact-pane-open]="artifactPanelOpen()">
     <app-topnav
       [assistant]="assistant()"
+      [agentGovernance]="agentGovernance()"
       [isAssistantOwner]="isAssistantOwner()"
       [isLoadingAssistant]="isLoadingAssistant()"
       (assistantNewSession)="onAssistantNewSession()"
@@ -296,6 +297,7 @@
               [emoji]="assistant()!.emoji ?? ''"
               [ownerName]="assistant()!.ownerName"
               [isOwner]="isAssistantOwner()"
+              [governance]="agentGovernance()"
               (newSessionClicked)="onAssistantNewSession()"
               (editClicked)="onAssistantEdit()"
               (shareClicked)="onAssistantShare()" />
