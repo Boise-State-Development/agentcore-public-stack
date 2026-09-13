@@ -139,8 +139,10 @@ describe('ModelDropdownComponent', () => {
     expect(row.textContent).toContain('Anthropic');
     expect(row.textContent).toContain('For hard problems');
 
-    // Name + provider share one line; the description is its own.
-    const lines = row.querySelectorAll('.block');
+    // Name + provider share one line; the description is its own. Scoped to the
+    // text wrapper: the leading avatar's light/dark <img> pair also carries
+    // `block`, and it is not a line of text.
+    const lines = row.querySelector('.text-left')!.querySelectorAll('.block');
     expect(lines.length).toBe(2);
     expect(lines[0].textContent).toContain('Alpha');
     expect(lines[0].textContent).toContain('Anthropic');
@@ -156,7 +158,7 @@ describe('ModelDropdownComponent', () => {
     openMenu(fixture);
     const row = itemLabelled('Alpha')!;
     expect(row.textContent).toContain('Anthropic');
-    expect(row.querySelectorAll('.block').length).toBe(1);
+    expect(row.querySelector('.text-left')!.querySelectorAll('.block').length).toBe(1);
   });
 
   it('hides the bullet separator from assistive tech', () => {
@@ -164,8 +166,22 @@ describe('ModelDropdownComponent', () => {
       featured: [makeModel({ modelName: 'Alpha', providerName: 'Anthropic' })],
     });
     openMenu(fixture);
-    const bullet = itemLabelled('Alpha')!.querySelector('[aria-hidden="true"]');
+    // Scoped past the leading avatar, which is aria-hidden for the same reason.
+    const bullet = itemLabelled('Alpha')!
+      .querySelector('.text-left')!
+      .querySelector('[aria-hidden="true"]');
     expect(bullet?.textContent?.trim()).toBe('\u2022');
+  });
+
+  it('leads each row with the model\'s vendor avatar', () => {
+    // Left-aligned identity: the picker is scanned, not read, and a logo lands
+    // before the name does.
+    const { fixture } = setup({
+      featured: [makeModel({ modelName: 'Alpha', providerName: 'Anthropic' })],
+    });
+    openMenu(fixture);
+    const logo = itemLabelled('Alpha')!.querySelector('img');
+    expect(logo?.getAttribute('src')).toBe('/img/provider-logos/anthropic/light.svg');
   });
 
   it('omits the "More models" entry when nothing is demoted', () => {

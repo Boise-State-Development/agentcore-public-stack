@@ -109,6 +109,122 @@
             }
           </div>
 
+          <!-- Icon -->
+          <div>
+            <span class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Icon</span>
+            <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+              Shown beside the model name in the chat model picker. Pick a built-in
+              logo where we ship one — it stays a crisp, theme-aware vector at every
+              size. Upload an image only for a model that maps to no vendor here.
+            </p>
+
+            <div class="mt-3 flex flex-wrap items-center gap-4">
+              <!-- Live preview: the same resolution the picker runs, so this can't
+                   promise one thing and the menu render another. -->
+              <div class="flex items-center gap-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/50">
+                <app-model-icon [model]="iconPreviewModel()" [size]="40" alt="Icon preview" />
+                <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ iconPreviewSource() }}</span>
+              </div>
+
+              <!-- Built-in logo picker. Radio semantics, rendered as tiles: the
+                   options are logos, and a list of vendor names next to radio
+                   circles asks the admin to read what they could recognize. -->
+              <div role="radiogroup" aria-label="Built-in logo" class="flex flex-wrap items-center gap-2">
+                @for (slug of builtinIcons; track slug) {
+                  <button
+                    type="button"
+                    role="radio"
+                    [attr.aria-checked]="isIconSlugSelected(slug)"
+                    [title]="builtinIconLabels[slug]"
+                    (click)="selectIconSlug(slug)"
+                    class="flex size-10 items-center justify-center rounded-xl border bg-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:bg-gray-800"
+                    [class.border-primary-500]="isIconSlugSelected(slug)"
+                    [class.ring-2]="isIconSlugSelected(slug)"
+                    [class.ring-primary-500]="isIconSlugSelected(slug)"
+                    [class.border-gray-300]="!isIconSlugSelected(slug)"
+                    [class.dark:border-gray-600]="!isIconSlugSelected(slug)"
+                  >
+                    <img
+                      [src]="'/img/provider-logos/' + slug + '/light.svg'"
+                      alt=""
+                      class="block size-6 object-contain dark:hidden"
+                    />
+                    <img
+                      [src]="'/img/provider-logos/' + slug + '/dark.svg'"
+                      alt=""
+                      class="hidden size-6 object-contain dark:block"
+                    />
+                    <span class="sr-only">{{ builtinIconLabels[slug] }}</span>
+                  </button>
+                }
+                <button
+                  type="button"
+                  role="radio"
+                  [attr.aria-checked]="isIconSlugSelected('')"
+                  (click)="selectIconSlug('')"
+                  class="rounded-xl border px-3 py-2 text-xs/5 font-medium text-gray-600 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-300"
+                  [class.border-primary-500]="isIconSlugSelected('')"
+                  [class.ring-2]="isIconSlugSelected('')"
+                  [class.ring-primary-500]="isIconSlugSelected('')"
+                  [class.border-gray-300]="!isIconSlugSelected('')"
+                  [class.dark:border-gray-600]="!isIconSlugSelected('')"
+                >
+                  None
+                </button>
+              </div>
+            </div>
+
+            <!-- Upload. Its own request, not a form field: the object key is
+                 derived from the record id, so there is nothing to attach to
+                 until the model has been saved once. -->
+            <div class="mt-3">
+              @if (isEditMode()) {
+                <div class="flex flex-wrap items-center gap-3">
+                  <label
+                    class="cursor-pointer rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--color-primary)] dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                    [class.pointer-events-none]="isUploadingIcon()"
+                    [class.opacity-60]="isUploadingIcon()"
+                  >
+                    {{ uploadedIconUrl() ? 'Replace image' : 'Upload image' }}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg"
+                      class="sr-only"
+                      [disabled]="isUploadingIcon()"
+                      (change)="onIconFileSelected($event)"
+                    />
+                  </label>
+                  @if (uploadedIconUrl()) {
+                    <button
+                      type="button"
+                      class="rounded-2xl px-3 py-2 text-sm/6 font-medium text-state-danger-600 hover:bg-state-danger-50 disabled:opacity-60 dark:text-state-danger-400 dark:hover:bg-state-danger-900/30"
+                      [disabled]="isUploadingIcon()"
+                      (click)="removeUploadedIcon()"
+                    >
+                      Remove image
+                    </button>
+                  }
+                  @if (isUploadingIcon()) {
+                    <span class="text-xs/5 text-gray-500 dark:text-gray-400">Working…</span>
+                  }
+                </div>
+                <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                  Square PNG or JPEG, at least 256×256 and at most 400 KB. Stored
+                  re-encoded at 512×512, which also strips any camera metadata.
+                  An uploaded image takes precedence over the built-in logo.
+                </p>
+              } @else {
+                <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  Save the model first to upload a custom image — the stored file is
+                  keyed to the saved record.
+                </p>
+              }
+              @if (iconError(); as error) {
+                <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error }}</p>
+              }
+            </div>
+          </div>
+
           <!-- Provider + Provider Name Row -->
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>

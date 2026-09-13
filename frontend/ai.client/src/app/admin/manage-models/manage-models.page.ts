@@ -16,6 +16,7 @@ import { ManagedModelsService } from './services/managed-models.service';
 import { AppRolesService } from '../roles/services/app-roles.service';
 import type { ManagedModel } from './models/managed-model.model';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
+import { ModelIconComponent } from '../../components/model-icon/model-icon.component';
 import {
   DeleteModelDialogComponent,
   DeleteModelDialogData,
@@ -24,7 +25,7 @@ import {
 
 @Component({
   selector: 'app-manage-models-page',
-  imports: [RouterLink, FormsModule, NgIcon, SpinnerComponent],
+  imports: [RouterLink, FormsModule, NgIcon, ModelIconComponent, SpinnerComponent],
   providers: [
     provideIcons({
       heroPlus,

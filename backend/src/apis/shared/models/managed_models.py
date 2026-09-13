@@ -282,6 +282,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         model_id=model_data.model_id,
         model_name=model_data.model_name,
         short_description=model_data.short_description,
+        icon_slug=model_data.icon_slug,
         provider=model_data.provider,
         provider_name=model_data.provider_name,
         input_modalities=model_data.input_modalities,
@@ -344,6 +345,8 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         item['knowledgeCutoffDate'] = model_data.knowledge_cutoff_date
     if model_data.short_description:
         item['shortDescription'] = model_data.short_description
+    if model_data.icon_slug:
+        item['iconSlug'] = model_data.icon_slug
     resolved_api_mode = _resolve_mantle_api_mode(model_data.mantle_api_mode, model_data.provider)
     if resolved_api_mode is not None:
         item['apiMode'] = resolved_api_mode
@@ -654,8 +657,18 @@ async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate
 
     # Build update expression
     update_expression_parts = []
+    remove_expression_parts = []
     expression_attribute_names = {}
     expression_attribute_values = {}
+
+    # '' on iconSlug is the wire value for "clear it" — None can't be, because
+    # the model_dump above drops None fields, which is what makes a PATCH a
+    # PATCH. Removing the attribute rather than storing '' keeps the record
+    # shaped like one that never had an icon.
+    if update_data.get('iconSlug') == '':
+        update_data.pop('iconSlug')
+        remove_expression_parts.append('#iconSlug')
+        expression_attribute_names['#iconSlug'] = 'iconSlug'
 
     # Add updatedAt timestamp
     update_data['updatedAt'] = datetime.now(timezone.utc).isoformat()
@@ -678,6 +691,8 @@ async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate
         update_expression_parts.append('#GSI1PK = :GSI1PK')
 
     update_expression = "SET " + ", ".join(update_expression_parts)
+    if remove_expression_parts:
+        update_expression += " REMOVE " + ", ".join(remove_expression_parts)
 
     try:
         response = table.update_item(
@@ -715,6 +730,53 @@ async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate
             return None  # Model not found
         logger.error(f"Failed to update managed model in DynamoDB: {e}")
         raise
+
+
+async def write_model_icon_key(model_id: str, icon_key: Optional[str]) -> None:
+    """Set or clear a model's uploaded-icon key, and nothing else.
+
+    A dedicated writer rather than a field on ``ManagedModelUpdate`` because the
+    key is not admin-supplied data: it is produced by the upload path from the
+    bytes it just stored. Routing it through the general update model would make
+    it forgeable from the model form — an admin could point one model's record at
+    another's object, or at any key in the bucket.
+
+    Invalidates the catalog cache, or the new icon would not appear for up to a
+    minute on the task that served the upload.
+    """
+    table_name = os.environ.get('DYNAMODB_MANAGED_MODELS_TABLE_NAME')
+    if not table_name:
+        raise RuntimeError("DYNAMODB_MANAGED_MODELS_TABLE_NAME environment variable is required")
+
+    table = dynamodb.Table(table_name)
+    key = {'PK': f'MODEL#{model_id}', 'SK': f'MODEL#{model_id}'}
+    now = datetime.now(timezone.utc).isoformat()
+
+    try:
+        if icon_key:
+            table.update_item(
+                Key=key,
+                UpdateExpression='SET #iconKey = :iconKey, #updatedAt = :updatedAt',
+                ExpressionAttributeNames={'#iconKey': 'iconKey', '#updatedAt': 'updatedAt'},
+                ExpressionAttributeValues={':iconKey': icon_key, ':updatedAt': now},
+                ConditionExpression='attribute_exists(PK)',
+            )
+        else:
+            table.update_item(
+                Key=key,
+                UpdateExpression='SET #updatedAt = :updatedAt REMOVE #iconKey',
+                ExpressionAttributeNames={'#iconKey': 'iconKey', '#updatedAt': 'updatedAt'},
+                ExpressionAttributeValues={':updatedAt': now},
+                ConditionExpression='attribute_exists(PK)',
+            )
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            raise ValueError(f"Model not found: {model_id}") from e
+        logger.error(f"Failed to write icon key for model {model_id}: {e}")
+        raise
+
+    config_cache.invalidate(config_cache.MANAGED_MODELS)
+    logger.info(f"🖼️ model-icons: record {model_id} now points at {icon_key or '(none)'}")
 
 
 async def delete_managed_model(model_id: str) -> bool:
@@ -759,7 +821,16 @@ async def _delete_managed_model_cloud(model_id: str, table_name: str) -> bool:
         )
 
         # Check if item was actually deleted
-        if response.get('Attributes'):
+        attributes = response.get('Attributes')
+        if attributes:
+            # The record is gone; its uploaded icon should go with it. Best-effort
+            # and after the fact — an orphaned object costs pennies, while failing
+            # the delete over one would leave the admin with a model they can't
+            # remove. A built-in iconSlug has no object to clean up.
+            icon_key = attributes.get('iconKey')
+            if icon_key:
+                from apis.shared.models.model_icons import get_model_icon_store
+                get_model_icon_store().delete(icon_key)
             logger.info(f"🗑️  Deleted managed model from DynamoDB: {model_id}")
             return True
         return False

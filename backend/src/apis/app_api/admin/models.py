@@ -138,3 +138,21 @@ class ManagedModelsListResponse(BaseModel):
 
     models: List[ManagedModel]
     total_count: int = Field(..., alias="totalCount")
+
+
+class ManagedModelIconResponse(BaseModel):
+    """The result of uploading or clearing a managed model's icon.
+
+    Both fields are ``None`` after a remove, which is the signal the SPA needs to
+    fall back to the model's ``iconSlug`` (or its provider-name match) without
+    re-reading the whole catalog.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_id: str = Field(..., alias="id", description="Managed model record id")
+    icon_key: Optional[str] = Field(
+        None, alias="iconKey", description="S3 object key now on the record; None after a remove"
+    )
+    icon_url: Optional[str] = Field(
+        None, alias="iconUrl", description="Where to render it from; None → the iconSlug fallback"
+    )
