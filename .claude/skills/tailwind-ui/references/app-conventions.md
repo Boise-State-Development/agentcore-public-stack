@@ -15,11 +15,29 @@ older boxed-card style in `model-form.page.html`.
 | Helper & meta text | `text-xs/5` |
 | Page title (`h1`) | `text-2xl/8 font-bold` |
 | Section heading (`h2`) | `text-base/7 font-semibold` |
-| Accent color | `blue` (600/500) — never `indigo` |
-| Focus ring (inputs) | `focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500` |
-| Focus ring (buttons/links) | `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500` |
+| Accent color | brand `primary-*` — never raw `blue-*` for an affordance, never `indigo` |
+| Solid brand fill / brand text | `primary-accessible` (+ `dark:*-accessible-dark` for text) |
+| Focus ring (inputs) | `focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500` |
+| Focus ring (buttons/links) | `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500` |
 
 Every token has a dark-mode pair (`dark:*`). Test both modes.
+
+**Brand colour, not Tailwind blue.** These rows used to say `blue-600/500`, which
+predates the generated brand theme. The palette now comes from `brand.config.ts`
+via `styles/generated/brand-theme.css`, which emits an 11-step `--color-primary-*`
+scale plus two contrast-guaranteed aliases: `primary-accessible` (AA against the
+light surface) and `primary-accessible-dark` (AA against the dark one). Use the
+alias for solid fills with white text and for brand-coloured text; use
+`primary-500` for focus rings. Raw `blue-*` is a different hue from the brand
+(`#2563eb` vs `#0033a0`) and does not follow a rebrand. The code agrees — zero
+files use `focus:ring-blue-500` or `focus-visible:outline-blue-500`, against 74
+and 94 respectively for the `primary` equivalents.
+
+The one sanctioned exception is *decorative* colour that isn't standing in for the
+brand — e.g. the agent-detail hero's `bg-linear-to-br from-blue-700 to-sky-500`
+backdrop and the near-white pill on top of it. That is a picture, not an
+affordance. Anything a user clicks, focuses, or reads as "this is the product's
+colour" uses the brand tokens.
 
 ## Page shell
 
@@ -55,7 +73,7 @@ Field:
 </label>
 <input
   id="x"
-  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
   [class.border-red-500]="ctrl.invalid && ctrl.touched"
 />
 <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Error message</p>
@@ -65,7 +83,7 @@ Select (`rounded-2xl` selects need a custom chevron — see "Selects" below):
 
 ```html
 <div class="relative inline-flex">
-  <select class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white">…</select>
+  <select class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white">…</select>
   <ng-icon name="heroChevronDown" class="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-gray-400 dark:text-gray-500" aria-hidden="true" />
 </div>
 ```
@@ -74,10 +92,10 @@ Buttons:
 
 ```html
 <!-- Primary -->
-<button class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600">Save</button>
+<button class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50">Save</button>
 
 <!-- Secondary (bordered) -->
-<button class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700">Share</button>
+<button class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700">Share</button>
 
 <!-- Tertiary (ghost — Cancel) -->
 <button class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white">Cancel</button>
@@ -90,7 +108,7 @@ Buttons:
 
 Underline tabs inside a dialog or section — use `aria-selected` to drive the active
 state so styling rides an attribute-selector variant. Do **not** use parallel
-`[class.border-b-blue-600]` bindings (see "Common gotchas").
+`[class.border-b-primary-accessible]` bindings (see "Common gotchas").
 
 ```html
 <div class="flex gap-1 border-b border-gray-200 dark:border-gray-700" role="tablist">
@@ -99,7 +117,7 @@ state so styling rides an attribute-selector variant. Do **not** use parallel
     role="tab"
     [attr.aria-selected]="active()"
     (click)="active.set(true)"
-    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 aria-selected:border-b-blue-600 aria-selected:font-semibold aria-selected:text-blue-600 dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-blue-400 dark:aria-selected:text-blue-400"
+    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-selected:border-b-primary-accessible aria-selected:font-semibold aria-selected:text-primary-accessible dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-primary-accessible-dark dark:aria-selected:text-primary-accessible-dark"
   >
     Tab label
   </button>
@@ -118,7 +136,7 @@ state so styling rides an attribute-selector variant. Do **not** use parallel
 ### Conditional Tailwind classes can lose the cascade
 
 Two classes that set the same property at the same specificity (`border-b-transparent`
-base + `[class.border-b-blue-600]="active()"`) collide. Whichever Tailwind emits **later**
+base + `[class.border-b-primary-accessible]="active()"`) collide. Whichever Tailwind emits **later**
 in the stylesheet wins, regardless of class order in your `class="…"` string. In practice
 the transparent base wins and the active underline never appears.
 
@@ -129,7 +147,7 @@ base utility (`0,1,0`):
 
 ```html
 <button [attr.aria-selected]="active()"
-        class="border-b-2 border-b-transparent aria-selected:border-b-blue-600">…</button>
+        class="border-b-2 border-b-transparent aria-selected:border-b-primary-accessible">…</button>
 ```
 
 DevTools symptom: the conditional class IS on the DOM, but `getComputedStyle(el).borderBottomColor` returns `rgba(0, 0, 0, 0)`. If you see that, this is the bug.
@@ -167,4 +185,7 @@ Empty state:
 Chip / badge: `inline-flex items-center rounded-2xl px-2.5 py-0.5 text-xs/5 font-medium` plus a
 tinted `bg-*-100 text-*-800` pair (status: green/yellow/red/blue; role tags: purple).
 
-Spinner: `animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400` (use `border-2` at `size-5` or smaller).
+Spinner: use the shared `<app-spinner size="sm" label="…" />` (`components/spinner/`), which
+92 files already do — hand-rolling one is almost always wrong. If you must inline one:
+`animate-spin rounded-full border-4 border-gray-300 border-t-primary-accessible dark:border-gray-600 dark:border-t-primary-accessible-dark`
+(use `border-2` at `size-5` or smaller).
