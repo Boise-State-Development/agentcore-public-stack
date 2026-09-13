@@ -48,7 +48,7 @@
             <div class="flex items-start justify-between gap-2">
               <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ task.display_name }}</span>
               @if (selectedTaskType() === task.task_type) {
-                <ng-icon name="heroCheck" class="size-5 shrink-0 text-primary-600 dark:text-primary-400" />
+                <ng-icon name="heroCheck" class="size-5 shrink-0 text-primary-accessible dark:text-primary-accessible-dark" />
               }
             </div>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ task.description }}</p>

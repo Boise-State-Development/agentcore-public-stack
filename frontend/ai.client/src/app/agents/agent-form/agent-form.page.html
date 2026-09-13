@@ -208,7 +208,7 @@
       <div class="mt-4" formArrayName="starters">
         <div class="flex items-center justify-between">
           <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Conversation starters</label>
-          <button type="button" (click)="addStarter()" class="inline-flex items-center gap-1 text-xs/5 font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+          <button type="button" (click)="addStarter()" class="inline-flex items-center gap-1 text-xs/5 font-medium text-primary-accessible hover:text-primary-700 dark:text-primary-accessible-dark">
             <ng-icon name="heroPlus" class="size-3.5" /> Add
           </button>
         </div>
@@ -413,7 +413,7 @@
                         <span class="mt-0.5 block text-xs/5 text-gray-500 dark:text-gray-400">{{ sub.summary }}</span>
                       }
                       @if (sub.detail) {
-                        <button type="button" (click)="toggleToolDetail(t.ref + '::' + sub.name)" [attr.aria-expanded]="isToolDetailExpanded(t.ref + '::' + sub.name)" [attr.aria-controls]="'agent-subtool-detail-' + t.ref + '-' + sub.name" class="mt-1 text-xs/5 font-medium text-primary-600 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-400">
+                        <button type="button" (click)="toggleToolDetail(t.ref + '::' + sub.name)" [attr.aria-expanded]="isToolDetailExpanded(t.ref + '::' + sub.name)" [attr.aria-controls]="'agent-subtool-detail-' + t.ref + '-' + sub.name" class="mt-1 text-xs/5 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark">
                           {{ isToolDetailExpanded(t.ref + '::' + sub.name) ? 'Hide details' : 'Show details' }}
                         </button>
                         @if (isToolDetailExpanded(t.ref + '::' + sub.name)) {
