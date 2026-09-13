@@ -15,6 +15,8 @@ interface SkillCard {
   description: string;
   monogram: string;
   enabled: boolean;
+  /** Where the card's name drills in to. Encoded: ids are opaque catalog keys. */
+  detailLink: string;
 }
 
 /**
@@ -151,6 +153,7 @@ interface SkillCard {
                   [description]="card.description"
                   [monogram]="card.monogram"
                   [enabled]="card.enabled"
+                  [detailLink]="card.detailLink"
                   [pending]="pending().has(card.skill.skillId)"
                   (toggled)="onToggle(card.skill)"
                 />
@@ -218,6 +221,7 @@ export class CustomizeSkillsPage {
       monogram: monogramFor(skill.displayName),
       // `isEnabled`, never `isSkillShownEnabled()` — see the class comment.
       enabled: skill.isEnabled,
+      detailLink: `/customize/skills/${encodeURIComponent(skill.skillId)}`,
     }));
   });
 
