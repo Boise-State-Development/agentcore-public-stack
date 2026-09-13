@@ -54,6 +54,7 @@ from apis.shared.skills.resource_types import (
     safe_download_content_type,
 )
 
+from .service import get_skill_catalog_service
 from .user_service import (
     UserSkillError,
     UserSkillLimitError,
@@ -450,3 +451,153 @@ async def delete_my_skill_resource(
         raise _resource_value_error(e)
 
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
+
+
+# -----------------------------------------------------------------------------
+# One accessible skill (read-only detail)
+#
+# ⚠️ REGISTRATION ORDER IS LOAD-BEARING. These routes must stay BELOW every
+# ``/mine`` route in this module. Starlette matches in registration order and
+# ``SKILL_ID_PATTERN`` happily matches the literal string ``mine`` — declare
+# ``/{skill_id}`` first and ``GET /skills/mine`` becomes a lookup for a skill
+# called "mine", which 404s for every user in the product.
+# -----------------------------------------------------------------------------
+
+
+class SkillDetailResponse(BaseModel):
+    """One skill the user can reach, with everything the picker line omits.
+
+    The fat sibling of ``UserSkillResponse``. ``GET /skills/`` stays thin on
+    purpose — it is a first-load payload, and putting every granted skill's
+    SKILL.md body on it would buy nothing for the list and cost on every load.
+    This is fetched once, for the one skill the user opened.
+
+    ``instructions`` is served to anyone the skill is granted to. It is not a
+    secret from them: it is the text their own turns load on dispatch, so the
+    page is showing the user what they are already talking to.
+
+    Deliberately absent: ``ownerId`` (``isOwned`` is the only part of it this
+    surface needs, and a raw owner id would leak one user's identity to
+    another) and ``allowedAppRoles`` (an admin-display projection — see the
+    RBAC note in CLAUDE.md — which would expose the role topology to any user
+    holding the skill).
+    """
+
+    skill_id: str = Field(..., alias="skillId")
+    display_name: str = Field(..., alias="displayName")
+    description: str
+    instructions: str = ""
+    compose: List[str] = Field(default_factory=list)
+    allowed_tools: List[str] = Field(default_factory=list, alias="allowedTools")
+    skill_metadata: Dict = Field(default_factory=dict, alias="skillMetadata")
+    resources: List[SkillResourceRef] = Field(default_factory=list)
+    status: str = SkillStatus.ACTIVE.value
+    category: Optional[str] = None
+    user_enabled: Optional[bool] = Field(None, alias="userEnabled")
+    is_enabled: bool = Field(..., alias="isEnabled")
+    #: True when the caller authored this skill — drives the SPA's "Edit in My
+    #: Skills" affordance. Ownership is its own grant (``access.py``), so this
+    #: can be true for a user with no skill-granting role at all.
+    is_owned: bool = Field(..., alias="isOwned")
+    created_at: Optional[str] = Field(None, alias="createdAt")
+    updated_at: Optional[str] = Field(None, alias="updatedAt")
+
+    model_config = {"populate_by_name": True}
+
+
+async def _require_accessible_skill(skill_id: str, user: User) -> SkillDefinition:
+    """Load a skill the user can reach, or raise 404.
+
+    Access is ``resolve_accessible_skill_ids`` — the *same* resolution that
+    builds the picker and that the runtime uses to decide what a turn may
+    activate. A skill the user cannot reach and a skill that does not exist
+    both 404, so this never discloses the existence of a skill someone else
+    was granted.
+
+    Status is checked too: ``GET /skills/`` filters to ACTIVE, so a drilled-in
+    DRAFT or DISABLED catalog skill would otherwise be reachable by id from a
+    surface that never listed it.
+    """
+    accessible = await resolve_accessible_skill_ids(user)
+    if skill_id not in accessible:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+
+    skill = await get_skill_catalog_service().get_skill(skill_id)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+
+    status = skill.status.value if hasattr(skill.status, "value") else skill.status
+    if status != SkillStatus.ACTIVE.value and skill.owner_id != user.user_id:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+
+    return skill
+
+
+@router.get("/{skill_id}", response_model=SkillDetailResponse)
+async def get_accessible_skill(
+    skill_id: str,
+    user: User = Depends(get_current_user_from_session),
+) -> SkillDetailResponse:
+    """Read one skill the current user can reach, catalog or self-authored."""
+    logger.info(f"User {user.name} reading skill '{skill_id}'")
+
+    skill = await _require_accessible_skill(skill_id, user)
+
+    repo = get_skill_catalog_repository()
+    preferences = (await repo.get_user_preferences(user.user_id)).skill_preferences
+
+    status = skill.status.value if hasattr(skill.status, "value") else skill.status
+    return SkillDetailResponse(
+        skill_id=skill.skill_id,
+        display_name=skill.display_name,
+        description=skill.description,
+        instructions=skill.instructions,
+        compose=list(skill.compose),
+        allowed_tools=list(skill.allowed_tools),
+        skill_metadata=dict(skill.skill_metadata),
+        resources=list(skill.resources),
+        status=str(status),
+        category=skill.category,
+        user_enabled=preferences.get(skill.skill_id),
+        # Skills v2 D6 opt-in: untouched is OFF. Same default as the picker —
+        # the two must agree or the page would contradict the list it came from.
+        is_enabled=preferences.get(skill.skill_id, False),
+        is_owned=skill.owner_id == user.user_id,
+        created_at=skill.created_at.isoformat() if skill.created_at else None,
+        updated_at=skill.updated_at.isoformat() if skill.updated_at else None,
+    )
+
+
+@router.get("/{skill_id}/resources/{filename}")
+async def read_accessible_skill_resource(
+    skill_id: str,
+    filename: str,
+    user: User = Depends(get_current_user_from_session),
+):
+    """Return the raw bytes of one supporting file on an accessible skill.
+
+    The read counterpart of ``/mine/{id}/resources/{filename}``, scoped by
+    *access* rather than ownership so a user granted a catalog skill can open
+    its reference files — the level-3 half of the same progressive disclosure
+    whose level-2 body this page already renders. Read-only by construction:
+    there is no accessible-scoped upload or delete.
+
+    Hardened identically to the owner and admin read routes: the media type is
+    re-derived from the filename and the body is served ``attachment`` +
+    ``nosniff`` + inert CSP, so a resource can never become a script-bearing
+    document on the SPA's origin (``apis.shared.skills.resource_types``).
+    """
+    await _require_accessible_skill(skill_id, user)
+
+    try:
+        ref, content = await get_skill_catalog_service().read_resource(
+            skill_id, filename
+        )
+    except ValueError as e:
+        raise _resource_value_error(e)
+
+    return Response(
+        content=content,
+        media_type=safe_download_content_type(ref.filename),
+        headers=resource_download_headers(ref.filename),
+    )

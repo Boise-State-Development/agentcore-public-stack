@@ -189,6 +189,17 @@ export const routes: Routes = [
             import('./customize/skills/customize-skills.page').then(m => m.CustomizeSkillsPage),
         canActivate: [authGuard],
     },
+    // One skill: its SKILL.md body, supporting files and catalog facts. The id
+    // is bound straight to the page's `skillId` input by
+    // `withComponentInputBinding()`.
+    {
+        path: 'customize/skills/:skillId',
+        loadComponent: () =>
+            import('./customize/skills/customize-skill-detail.page').then(
+                m => m.CustomizeSkillDetailPage,
+            ),
+        canActivate: [authGuard],
+    },
     {
         path: 'customize/connectors',
         loadComponent: () =>

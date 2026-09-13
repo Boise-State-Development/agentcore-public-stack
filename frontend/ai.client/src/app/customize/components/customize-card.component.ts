@@ -19,7 +19,7 @@ export type CustomizeCardBadge = 'connected' | 'connect' | null;
  * following the link. The link's `after:absolute inset-0` makes the whole card a
  * click target for the navigation while the switch, raised on its own stacking
  * context, keeps its own hit area. Without a `detailLink` the body renders as
- * plain text, so Skills — which have no detail page — are unchanged.
+ * plain text, so a surface with no detail page to drill into is unchanged.
  */
 @Component({
   selector: 'app-customize-card',

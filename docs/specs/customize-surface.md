@@ -346,6 +346,71 @@ because the prose precedes any `Args:` heading, so `splitToolDescription` return
 modest (median 344 chars). Clamping the summary is the fix; moving the detail behind a modal
 would not touch it.
 
+## Skill detail
+
+`/customize/skills/:skillId` — the sibling drill-in, reached the same way: the card's name is
+a link, the switch stays its sibling. It carries the SKILL.md body the skill actually injects,
+its supporting files, any composed skills, the advisory `allowed-tools` frontmatter, and the
+catalog facts.
+
+⚠️ **Unlike the tool page, this one needed backend work.** `GET /tools/` already returns the
+whole `Tool` including `serverTools`, so `/customize/tools/:toolId` is pure frontend.
+`GET /skills/` returns six thin fields — id, name, description, category, `userEnabled`,
+`isEnabled` — and *everything* worth opening a page for lives on `SkillDefinition` and never
+reaches the SPA. The only per-skill read that existed, `GET /skills/mine/{id}`, is
+**owner-scoped**: a catalog skill granted to you 404s there.
+
+So this adds **`GET /skills/{id}`**, access-checked by `resolve_accessible_skill_ids` — the
+same resolution that builds the picker and that the runtime uses to decide what a turn may
+activate — plus **`GET /skills/{id}/resources/{filename}`**, the access-scoped read
+counterpart of the owner route, so a granted user can open a catalog skill's reference files.
+
+⚠️ **Route registration order is load-bearing.** Both live at the BOTTOM of
+`apis/app_api/skills/routes.py`, below every `/mine` route. Starlette matches in registration
+order and `SKILL_ID_PATTERN` happily matches the literal string `mine` — declare `/{skill_id}`
+first and `GET /skills/mine` becomes a lookup for a skill called "mine", which 404s for every
+user in the product. A test asserts it.
+
+`GET /skills/` was **not** fattened instead. It is a first-load payload covering every granted
+skill; a SKILL.md body per row would be paid on every load to render a list that shows neither
+the body nor the files.
+
+**What the detail response deliberately omits.** `ownerId` — `isOwned` is the only part of
+ownership this surface needs, and a raw owner id would name one user to another. And
+`allowedAppRoles`, which is an admin-display projection of RBAC (see the RBAC §in CLAUDE.md)
+and has no business on a page any granted user can open. A skill the caller cannot reach 404s
+rather than 403s, so the endpoint never confirms the existence of a skill someone else holds;
+a non-ACTIVE catalog skill 404s too, matching the ACTIVE filter `GET /skills/` already applies
+— though an owner still reads their own draft, because ownership is its own grant.
+
+**Instructions render expanded**, not behind a disclosure like the tool page's `Args:` block.
+They are not a secret from a user the skill is granted to: this is the text their own turns
+load on dispatch, so the honest answer to "what does this skill do" is to show it. Rendered
+through `ngx-markdown` **with sanitization on** — do not add `[disableSanitizer]`; a SKILL.md
+body can be authored by a non-admin (Skills v2 PR-3 user tier), and the reasoning recorded on
+`announcement-modal.component.ts` applies unchanged.
+
+**`allowedTools` is rendered with its advisory status stated in the copy**, not as a bare list.
+Skills v2 D4: the platform never grants, mounts or folds a tool because a skill names it. A
+bare list of tool names on a page about a skill you just enabled would read as a grant.
+
+**A skill the user authored links out to `/my-skills/{id}/edit`** rather than growing a second
+editor here. One destination for every card; the read view stays useful for your own skill.
+
+**This page closes no functional gap**, and that is the difference from the tool detail page.
+That one had to exist the moment #1079 deleted the drawer, because per-sub-tool enablement had
+nowhere else to live. A skill has no sub-unit — the only control here is the same on/off the
+card already offers — so this page is informational, and was queued rather than rushed.
+
+⚠️ The switch stays **disabled until the picker list lands**. `SkillService.toggleSkill`
+silently returns on a skill it has never loaded, so on a deep link a click before the list
+arrived would look like a broken switch rather than a dead moment. The page warms
+`loadSkills()` in its constructor and gates the control on `initialized()`.
+
+**Cost:** none against the model. Everything here is catalog data read for display; nothing
+reaches the system prompt or `toolConfig`, so the cacheable prefix is untouched. The added
+traffic is one `GET /skills/{id}` per drill-in, cached for the life of the page.
+
 The `settings/connectors/` **services** deliberately did not move. `UserConnectorsService` and
 `ConnectorStatusService` have nine importers across the app (oauth-consent, export-dialog,
 knowledge-base, the drawer's tool-detail, the Customize Tools tab…), so relocating them is a

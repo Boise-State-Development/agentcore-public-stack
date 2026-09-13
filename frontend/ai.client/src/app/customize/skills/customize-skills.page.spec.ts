@@ -67,6 +67,26 @@ describe('CustomizeSkillsPage', () => {
     expect(fixture.nativeElement.querySelectorAll('app-customize-card')).toHaveLength(3);
   });
 
+  it('links each card to its detail page', async () => {
+    const fixture = await create();
+    const links = [...fixture.nativeElement.querySelectorAll('app-customize-card a')].map(
+      (a: Element) => a.getAttribute('href'),
+    );
+    expect(links).toEqual([
+      '/customize/skills/sk_apa',
+      '/customize/skills/sk_syllabus',
+      '/customize/skills/sk_rubric',
+    ]);
+  });
+
+  it('keeps the switch out of the card link', async () => {
+    // A control nested inside a link is a control the user cannot operate with
+    // the keyboard without also following the link.
+    const fixture = await create();
+    const toggle = fixture.nativeElement.querySelector('app-customize-card button[role="switch"]');
+    expect(toggle.closest('a')).toBeNull();
+  });
+
   it('counts what is on — skills default off, so most of the catalog is', async () => {
     const fixture = await create();
     expect(text(fixture)).toContain('1 of 3 skills on');
