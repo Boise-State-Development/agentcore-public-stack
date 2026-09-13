@@ -118,7 +118,6 @@ import { ModelService } from '../../../session/services/model/model.service';
                 [isChatLoading]="preview.isLoading()"
                 [showFileControls]="true"
                 [showVoiceControl]="false"
-                [showSettingsControl]="false"
                 [autoFocus]="false"
                 [showAgentMentions]="false"
                 [showAnnouncements]="false"
@@ -214,7 +213,6 @@ export class AgentPreviewComponent implements OnDestroy {
     allowCloseAssistant: false,
     showFileControls: true,
     showVoiceControl: false,
-    showSettingsControl: false,
   };
 
   constructor() {

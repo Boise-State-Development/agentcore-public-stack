@@ -178,19 +178,12 @@
             </div>
           }
 
-          @if (showSettingsControl()) {
-            <!-- Settings Button -->
-            <button
-              type="button"
-              (click)="toggleSettings()"
-              class="flex size-10 items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
-              aria-label="Open settings"
-              appTooltip="Settings"
-              appTooltipPosition="top"
-            >
-              <ng-icon name="heroAdjustmentsHorizontal" class="size-5" aria-hidden="true" />
-            </button>
-          }
+          <!--
+            Conversation Mode. Sits with the model and effort controls because all
+            three answer the same question — how should *this* conversation run.
+            Renders nothing until an admin authors a mode.
+          -->
+          <app-conversation-mode-picker [sessionId]="sessionId()" />
 
           @if (showVoiceControl()) {
           <!-- Voice Toggle Button -->
@@ -248,24 +241,6 @@
             </div>
           }
 
-          <!-- Active Conversation Mode Chip -->
-          @if (systemPromptsService.activePrompt()) {
-            <div
-              class="flex items-center gap-1 rounded-full border border-primary-200 bg-primary-50 pl-2.5 pr-1 py-1 text-xs font-medium text-primary-700 dark:border-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
-              role="status"
-              [attr.aria-label]="'Active mode: ' + systemPromptsService.activePrompt()?.name"
-            >
-              <span class="max-w-28 truncate">{{ systemPromptsService.activePrompt()?.name }}</span>
-              <button
-                type="button"
-                (click)="dismissActivePrompt()"
-                class="flex size-4 shrink-0 items-center justify-center rounded-full text-primary-500 transition-colors hover:bg-primary-200 hover:text-primary-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:bg-primary-700 dark:hover:text-primary-200"
-                aria-label="Clear conversation mode"
-              >
-                <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
-              </button>
-            </div>
-          }
         </div>
 
         <!-- Right Controls -->

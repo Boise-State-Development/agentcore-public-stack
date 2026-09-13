@@ -12,7 +12,6 @@ import { ChatStateService } from './services/chat/chat-state.service';
 import { SidenavService } from '../services/sidenav/sidenav.service';
 import { HeaderService } from '../services/header/header.service';
 import { ModelService } from './services/model/model.service';
-import { ModelSettings } from '../components/model-settings/model-settings';
 import { UserService } from '../auth/user.service';
 import { ChatHttpService } from './services/chat/chat-http.service';
 import { StreamParserService } from './services/chat/stream-parser.service';
@@ -43,7 +42,7 @@ import { GreetingProvider } from '../../branding/greeting.provider';
 
 @Component({
   selector: 'app-session-page',
-  imports: [ChatContainerComponent, ModelSettings],
+  imports: [ChatContainerComponent],
   templateUrl: './session.page.html',
   styleUrl: './session.page.css',
 })
@@ -118,7 +117,6 @@ export class ConversationPage implements OnDestroy {
    */
   runnability = signal<AgentRunnability | null>(null);
   isLoadingAssistant = signal(false);
-  isSettingsOpen = signal(false);
 
   /**
    * Staged session ID for file uploads before the first message is sent.
@@ -239,7 +237,10 @@ export class ConversationPage implements OnDestroy {
       const session = this.sessionConversation();
 
       if (!id || session?.sessionId !== id) {
-        this.systemPromptsService.hydrateFromSession(id, null);
+        // Provisional: clears the previous conversation's selection without
+        // claiming this session, so the real hydration below is not blocked
+        // when the metadata arrives a tick later.
+        this.systemPromptsService.hydrateFromSession(id, null, false);
         return;
       }
 
@@ -723,14 +724,6 @@ export class ConversationPage implements OnDestroy {
           console.warn('Failed to generate voice session title:', err);
         });
     }
-  }
-
-  toggleSettings() {
-    this.isSettingsOpen.update(open => !open);
-  }
-
-  closeSettings() {
-    this.isSettingsOpen.set(false);
   }
 
   /**

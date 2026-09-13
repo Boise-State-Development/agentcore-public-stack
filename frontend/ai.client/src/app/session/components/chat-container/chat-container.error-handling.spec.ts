@@ -34,13 +34,11 @@ describe('ChatContainerComponent — branding logo theme swap and error handling
     readonly isChatLoading = input<boolean>(false);
     readonly showFileControls = input<boolean>(true);
     readonly showVoiceControl = input<boolean>(true);
-    readonly showSettingsControl = input<boolean>(true);
     readonly showAnnouncements = input<boolean>(true);
     readonly announcementPlacement = input<'above' | 'below'>('above');
     readonly messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string }>();
     readonly messageCancelled = output<void>();
     readonly fileAttached = output<File>();
-    readonly settingsToggled = output<void>();
   }
 
   beforeEach(() => {
