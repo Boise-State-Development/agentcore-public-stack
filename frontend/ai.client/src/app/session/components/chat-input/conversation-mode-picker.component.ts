@@ -67,7 +67,7 @@ import { SystemPromptsService } from '../../../services/system-prompts/system-pr
               @if (activePromptId() === null) {
                 <ng-icon
                   name="heroCheck"
-                  class="mt-0.5 size-4 shrink-0 text-primary-600 dark:text-primary-400"
+                  class="mt-0.5 size-4 shrink-0 text-primary-accessible dark:text-primary-accessible-dark"
                   aria-hidden="true"
                 />
               }
@@ -91,7 +91,7 @@ import { SystemPromptsService } from '../../../services/system-prompts/system-pr
                 @if (activePromptId() === prompt.prompt_id) {
                   <ng-icon
                     name="heroCheck"
-                    class="mt-0.5 size-4 shrink-0 text-primary-600 dark:text-primary-400"
+                    class="mt-0.5 size-4 shrink-0 text-primary-accessible dark:text-primary-accessible-dark"
                     aria-hidden="true"
                   />
                 }
