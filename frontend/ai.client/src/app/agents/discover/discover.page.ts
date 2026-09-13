@@ -65,12 +65,12 @@ const PINNED_STRIP_LIMIT = 8;
   providers: [provideIcons({ heroMagnifyingGlass, heroSparkles })],
   template: `
     <div class="min-h-dvh">
-      <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <app-agents-tabs />
 
-        <div class="mt-6 mb-6">
-          <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Discover agents</h1>
-          <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+        <div class="mt-6 mb-10">
+          <h1 class="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl dark:text-white">Discover agents</h1>
+          <p class="mt-1.5 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
             Agents published by teams across the university.
           </p>
         </div>

@@ -10,7 +10,7 @@
           <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-3xl">
             Agents
           </h1>
-          <p class="mt-1.5 text-sm text-gray-500 dark:text-gray-400">
+          <p class="mt-1.5 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
             Compose an agent from a model, tools, skills and memory — governed by your role.
           </p>
         </div>
@@ -65,7 +65,7 @@
             type="button"
             (click)="onCreateNew()"
             [disabled]="loading()"
-            class="group relative inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-semibold text-white shadow-xs transition-all duration-200 hover:bg-primary-600 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] dark:focus-visible:ring-offset-gray-900"
+            class="group inline-flex items-center gap-2 rounded-xl bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition duration-200 hover:brightness-95 hover:shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <ng-icon name="heroPlus" class="size-4 transition-transform duration-200 group-hover:rotate-90" aria-hidden="true" />
             {{ loading() ? 'Creating…' : 'New Agent' }}
@@ -112,7 +112,7 @@
           <button
             type="button"
             (click)="onCreateNew()"
-            class="mt-5 inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white shadow-xs transition hover:bg-primary-600"
+            class="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
           >
             <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
             New Agent

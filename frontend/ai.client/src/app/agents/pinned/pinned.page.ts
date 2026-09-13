@@ -43,12 +43,12 @@ import { SpinnerComponent } from '../../components/spinner/spinner.component';
   providers: [provideIcons({ heroBookmark })],
   template: `
     <div class="min-h-dvh">
-      <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <app-agents-tabs />
 
-        <div class="mt-6 mb-6">
-          <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Pinned agents</h1>
-          <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+        <div class="mt-6 mb-10">
+          <h1 class="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl dark:text-white">Pinned agents</h1>
+          <p class="mt-1.5 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
             The agents you have added, plus any your role starts you with. Removing one
             here does not affect anyone else.
           </p>
@@ -84,7 +84,7 @@ import { SpinnerComponent } from '../../components/spinner/spinner.component';
             </p>
             <a
               routerLink="/agents/discover"
-              class="mt-4 inline-flex rounded-full bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+              class="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
             >
               Browse agents
             </a>

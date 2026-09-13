@@ -26,10 +26,78 @@ Every token has a dark-mode pair (`dark:*`). Test both modes.
 ```html
 <div class="min-h-dvh">
   <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-    <!-- list pages: max-w-5xl · form pages: max-w-3xl -->
+    <!-- admin list pages: max-w-5xl · form pages: max-w-3xl -->
   </div>
 </div>
 ```
+
+## Top-level user-facing pages
+
+The pages a non-admin lands on from the sidenav — `/agents` (all three tabs),
+`/customize` (all three tabs), `/artifacts`, `/my-skills`, `/schedules`,
+`/memory-spaces` — use a **larger header and a wider shell** than the admin
+tables above. These are destinations, not records-management screens, and the
+`text-2xl/8` admin title reads as a section label rather than a page.
+
+```html
+<div class="min-h-dvh">
+  <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+    <app-…-tabs />                     <!-- hub tab strip, if the page is in a hub -->
+
+    <div class="mt-6 mb-10">
+      <h1 class="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl dark:text-white">
+        Title
+      </h1>
+      <p class="mt-1.5 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
+        One sentence on what the page is for.
+      </p>
+    </div>
+  </div>
+</div>
+```
+
+| Element | Token |
+|---------|-------|
+| Shell | `mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8` |
+| Header block | `mt-6 mb-10` (drop `mt-6` when no tab strip sits above it) |
+| `h1` | `text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl dark:text-white` |
+| Subtitle | `mt-1.5 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400` |
+| Card grid | `grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3` (`gap-4` for the denser Customize toggle cards) |
+| Primary button | `inline-flex items-center gap-2 rounded-xl bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500` |
+| Secondary button | same shell, `rounded-xl border border-gray-200 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700` |
+| Search field | `block w-full rounded-full border border-gray-300 bg-white py-2.5 pl-10 pr-4 text-sm/6 …` in a `relative max-w-md` wrapper, with the `heroMagnifyingGlass` icon at `left-4` |
+| Filter chip | `rounded-full border px-3.5 py-1 text-sm/6 font-medium`; active `border-gray-900 bg-gray-900 text-white dark:border-white dark:bg-white dark:text-gray-900` |
+
+Use `bg-primary-accessible`, never a raw `bg-primary-500` fill: the two resolve to
+the same hex for the current brand, but only the alias is guaranteed AA against
+white text after a rebrand.
+
+### Pill tabs (hub strips and in-page filters)
+
+One idiom, whether the tabs are routes (`AgentsTabsComponent`,
+`CustomizeTabsComponent`) or an in-page filter (the Artifacts All/Yours/Shared
+strip). A raised white pill on a recessed gray shell — **not** a solid brand fill,
+and **not** an underline: the brand token is a fixed colour with no dark variant,
+so an underline in it all but disappears on the dark surface.
+
+```html
+<nav class="inline-flex gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800">
+  <a class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:text-white"
+     routerLinkActive="bg-white text-gray-900 shadow-xs dark:bg-gray-900 dark:text-white">Tab</a>
+</nav>
+```
+
+`inline-flex`, never `flex`: a strip stretched to the content width reads as a
+segmented control over the whole page instead of as N choices.
+
+The grid/list view toggle is the same idiom one size down — `rounded-xl` shell,
+`grid size-8 place-items-center rounded-lg` buttons, same raised-active classes —
+and is a `role="radiogroup"` of `role="radio"` buttons, since it is one setting
+with two values rather than two independent toggles. `rounded-lg` is correct
+*there* and nowhere else on these pages: it reads as a segment inside a shell,
+not as a button. Standalone buttons are `rounded-xl`, so they sit between the
+`rounded-2xl` cards and the `rounded-full` chips and search field rather than
+looking squared-off against both.
 
 ## Form pages
 

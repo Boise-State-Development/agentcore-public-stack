@@ -23,7 +23,7 @@
         <div
           role="radiogroup"
           aria-label="Layout"
-          class="inline-flex shrink-0 self-start gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800"
+          class="inline-flex shrink-0 self-start gap-1 rounded-xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800"
         >
           <button
             type="button"
@@ -32,7 +32,7 @@
             (click)="setViewMode('list')"
             [appTooltip]="'List view'"
             appTooltipPosition="top"
-            class="grid size-8 place-items-center rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+            class="grid size-8 place-items-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
             [class]="
               viewMode() === 'list'
                 ? 'bg-white text-gray-900 shadow-xs dark:bg-gray-900 dark:text-white'
@@ -49,7 +49,7 @@
             (click)="setViewMode('grid')"
             [appTooltip]="'Grid view'"
             appTooltipPosition="top"
-            class="grid size-8 place-items-center rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+            class="grid size-8 place-items-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
             [class]="
               viewMode() === 'grid'
                 ? 'bg-white text-gray-900 shadow-xs dark:bg-gray-900 dark:text-white'
@@ -85,14 +85,15 @@
          has one list, and a lone "Yours" tab would be chrome around
          nothing. -->
     @if (sharedAvailable() && !loading()) {
-      <!-- A filled pill, not an underline. Matches the model-catalog tabs
-           and the view toggle in this page's own header, and an underline
-           in brand blue is close to invisible on the dark surface — the
-           token is a fixed brand colour with no dark variant. -->
+      <!-- The shared hub pill strip — the same shell and raised-active
+           treatment as `AgentsTabsComponent` / `CustomizeTabsComponent` and as
+           the view toggle in this page's own header. `inline-flex`, not `flex`:
+           a tab strip stretched to the content width reads as a segmented
+           control over the whole page rather than as three choices. -->
       <div
         role="tablist"
         aria-label="Which artifacts to show"
-        class="mt-6 flex flex-wrap items-center gap-1 rounded-2xl border border-gray-200 bg-white p-1 dark:border-gray-700 dark:bg-gray-800"
+        class="mt-6 inline-flex flex-wrap items-center gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800"
       >
         @for (option of tabOptions; track option.value) {
           <button
@@ -103,11 +104,11 @@
             aria-controls="artifact-tabpanel"
             [tabindex]="tab() === option.value ? 0 : -1"
             (click)="setTab(option.value)"
-            class="rounded-2xl px-4 py-1.5 text-sm/6 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+            class="rounded-xl px-4 py-1.5 text-sm/6 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
             [class]="
               tab() === option.value
-                ? 'bg-primary-accessible text-white'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white'
+                ? 'bg-white text-gray-900 shadow-xs dark:bg-gray-900 dark:text-white'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'
             "
           >
             {{ option.label }}
@@ -119,10 +120,10 @@
     <!-- Filters. Hidden until there is enough to be worth filtering. -->
     @if (totalCount() > 0) {
       <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div class="relative flex-1 sm:max-w-xs">
+        <div class="relative flex-1 sm:max-w-md">
           <ng-icon
             name="heroMagnifyingGlass"
-            class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+            class="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
             aria-hidden="true"
           />
           <label for="artifact-search" class="sr-only">Search artifacts by title</label>
@@ -132,20 +133,26 @@
             [value]="search()"
             (input)="onSearch($event)"
             placeholder="Search by title"
-            class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+            class="block w-full rounded-full border border-gray-300 bg-white py-2.5 pl-10 pr-4 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
           />
         </div>
 
         @if (typeOptions().length > 1) {
           <!-- appearance-none + overlaid chevron: the native chevron sits at a
-               fixed offset and collides with the rounded-2xl corner. -->
-          <div class="relative inline-flex">
+               fixed offset and collides with the pill corner. -->
+          <!-- `self-start` for the same reason the header toggle needs it: below
+               `sm` this row is a flex column, whose default align-items:stretch
+               pulls the wrapper to full width while the native select stays
+               shrink-to-fit — stranding the absolutely-positioned chevron at the
+               far right, detached from the control. `sm:self-auto` hands
+               alignment back to the row's `sm:items-center`. -->
+          <div class="relative inline-flex self-start sm:self-auto">
             <label for="artifact-type" class="sr-only">Filter by type</label>
             <select
               id="artifact-type"
               [value]="typeFilter()"
               (change)="onTypeFilter($event)"
-              class="appearance-none rounded-2xl border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              class="appearance-none rounded-full border border-gray-300 bg-white py-2.5 pl-4 pr-9 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
             >
               <option value="all">All types</option>
               @for (option of typeOptions(); track option.value) {
@@ -214,7 +221,7 @@
         </p>
         <a
           routerLink="/"
-          class="mt-6 inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+          class="mt-6 inline-flex items-center gap-2 rounded-xl bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
         >
           Start a conversation
         </a>

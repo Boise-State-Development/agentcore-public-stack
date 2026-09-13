@@ -45,12 +45,12 @@ interface ToolCard {
   providers: [provideIcons({ heroMagnifyingGlass })],
   template: `
     <div class="min-h-dvh">
-      <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <app-customize-tabs />
 
-        <div class="mt-6 mb-6">
-          <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Tools</h1>
-          <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+        <div class="mt-6 mb-10">
+          <h1 class="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl dark:text-white">Tools</h1>
+          <p class="mt-1.5 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
             What your assistant can do. Changes apply to every conversation, including
             ones already open.
           </p>
@@ -141,7 +141,7 @@ interface ToolCard {
           <p class="mt-6 text-sm/6 text-gray-500 dark:text-gray-400" aria-live="polite">
             {{ enabledLabel() }}
           </p>
-          <ul class="mt-3 grid gap-3 sm:grid-cols-2">
+          <ul class="mt-3 grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
             @for (card of cards(); track card.tool.toolId) {
               <li>
                 <app-customize-card
