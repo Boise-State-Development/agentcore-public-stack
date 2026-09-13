@@ -173,6 +173,16 @@ export const routes: Routes = [
             import('./customize/tools/customize-tools.page').then(m => m.CustomizeToolsPage),
         canActivate: [authGuard],
     },
+    // One tool: its sub-tools, prompts, resources and catalog facts. The id is
+    // bound straight to the page's `toolId` input by `withComponentInputBinding()`.
+    {
+        path: 'customize/tools/:toolId',
+        loadComponent: () =>
+            import('./customize/tools/customize-tool-detail.page').then(
+                m => m.CustomizeToolDetailPage,
+            ),
+        canActivate: [authGuard],
+    },
     {
         path: 'customize/skills',
         loadComponent: () =>

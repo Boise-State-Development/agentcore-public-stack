@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 /** Connection chip shown beside a card's name, or null to draw none. */
 export type CustomizeCardBadge = 'connected' | 'connect' | null;
@@ -12,19 +13,22 @@ export type CustomizeCardBadge = 'connected' | 'connect' | null;
  * enable semantics stay opposite (tools default ON, skills default OFF —
  * Skills v2 D6).
  *
- * The whole card is NOT a button. The switch is the only control, so the card
- * carries no competing click target and the accessible name of the toggle is
- * the thing being toggled. Detail views arrive in a later step; when they do,
- * the body becomes a link and the switch stays a sibling, never a nested
- * button-in-button (see the drawer's own note at `model-settings.html:667`).
+ * The whole card is NOT a button. Given a `detailLink` the card's *body* becomes
+ * a link and the switch stays its sibling — never a nested control-in-control: a
+ * switch inside the link is a control you cannot reach by keyboard without also
+ * following the link. The link's `after:absolute inset-0` makes the whole card a
+ * click target for the navigation while the switch, raised on its own stacking
+ * context, keeps its own hit area. Without a `detailLink` the body renders as
+ * plain text, so Skills — which have no detail page — are unchanged.
  */
 @Component({
   selector: 'app-customize-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterLink],
   host: { class: 'block h-full' },
   template: `
     <div
-      class="flex h-full items-start gap-3 rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600"
+      class="relative flex h-full items-start gap-3 rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600"
     >
       <span
         aria-hidden="true"
@@ -35,7 +39,15 @@ export type CustomizeCardBadge = 'connected' | 'connect' | null;
       <div class="min-w-0 flex-1">
         <div class="flex min-w-0 items-center gap-1.5">
           <h3 class="min-w-0 truncate text-sm/6 font-semibold text-gray-900 dark:text-white">
-            {{ name() }}
+            @if (detailLink(); as link) {
+              <a
+                [routerLink]="link"
+                class="after:absolute after:inset-0 after:rounded-2xl hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+                >{{ name() }}</a
+              >
+            } @else {
+              {{ name() }}
+            }
           </h3>
           @switch (badge()) {
             @case ('connected') {
@@ -64,7 +76,7 @@ export type CustomizeCardBadge = 'connected' | 'connect' | null;
         [attr.aria-label]="(enabled() ? 'Disable ' : 'Enable ') + name()"
         [disabled]="pending()"
         (click)="toggled.emit()"
-        class="relative mt-0.5 inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+        class="relative z-10 mt-0.5 inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
         [class]="enabled() ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'"
       >
         <span
@@ -85,6 +97,11 @@ export class CustomizeCardComponent {
   /** In-flight save: the switch stays visually settled but refuses a second click. */
   readonly pending = input<boolean>(false);
   readonly badge = input<CustomizeCardBadge>(null);
+  /**
+   * Where the card's name links to, or null to render it as plain text. Given a
+   * link, the whole card becomes the navigation target except for the switch.
+   */
+  readonly detailLink = input<string | null>(null);
 
   readonly toggled = output<void>();
 }

@@ -117,6 +117,26 @@ describe('CustomizeToolsPage', () => {
     expect(text(fixture)).toContain('Canvas Faculty');
   });
 
+  it('links each card to its detail page', async () => {
+    const fixture = await create();
+    const links = [...fixture.nativeElement.querySelectorAll('app-customize-card a')].map(
+      (a: Element) => a.getAttribute('href'),
+    );
+    expect(links).toEqual([
+      '/customize/tools/web_search',
+      '/customize/tools/calculator',
+      '/customize/tools/canvas_faculty',
+    ]);
+  });
+
+  it('keeps the switch out of the card link', async () => {
+    // A control nested inside a link is a control the user cannot operate with
+    // the keyboard without also following the link.
+    const fixture = await create();
+    const toggle = fixture.nativeElement.querySelector('app-customize-card button[role="switch"]');
+    expect(toggle.closest('a')).toBeNull();
+  });
+
   it('counts what is on, not what exists', async () => {
     const fixture = await create();
     expect(text(fixture)).toContain('2 of 3 tools on');

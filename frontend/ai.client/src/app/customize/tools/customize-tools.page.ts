@@ -20,6 +20,8 @@ interface ToolCard {
   monogram: string;
   enabled: boolean;
   badge: CustomizeCardBadge;
+  /** Where the card's name drills in to. Encoded: ids are opaque catalog keys. */
+  detailLink: string;
 }
 
 /**
@@ -150,6 +152,7 @@ interface ToolCard {
                   [monogram]="card.monogram"
                   [enabled]="card.enabled"
                   [badge]="card.badge"
+                  [detailLink]="card.detailLink"
                   [pending]="pending().has(card.tool.toolId)"
                   (toggled)="onToggle(card.tool)"
                 />
@@ -224,6 +227,7 @@ export class CustomizeToolsPage {
       // `isEnabled`, never `isToolShownEnabled()` — see the class comment.
       enabled: tool.isEnabled,
       badge: this.badgeFor(tool),
+      detailLink: `/customize/tools/${encodeURIComponent(tool.toolId)}`,
     }));
   });
 

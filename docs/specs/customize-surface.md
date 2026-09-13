@@ -298,6 +298,53 @@ exactly as they were: both carry load-bearing contrast reasoning in their commen
 `loadChildren` would otherwise swallow it and land the user on the settings shell with no
 matching child. A test asserts that ordering, because the failure is silent.
 
+## Tool detail
+
+`/customize/tools/:toolId` — the drill-in the browse grid's cards link to. It carries what
+a card cannot: the full description (summary, with the docstring's reference material behind
+*Show reference*), an MCP server's tools one by one with their own switches, the prompts and
+resources the server exposes, and the catalog facts (protocol, status, granting roles).
+
+⚠️ **Step 5 deleted the drawer, so this is now the only per-sub-tool surface in the app.**
+Between #1079 and this page there is nowhere to say "3 of Canvas's 48 tools"; the gap is worth
+closing promptly rather than queueing.
+
+It is a **new component, not a port of the drawer's `ToolDetailComponent`**, for the same
+reason the list page is not a port of the drawer's list: the drawer was conversation-scoped
+(`isToolShownEnabled()`, writes through the Agent lock) and this surface is global
+(`tool.isEnabled` / `sub.enabled`, `respectAgentLock: false`). See §"The agent-lock seam".
+
+The drawer's **tab strip did not come with it.** Tabs existed there because the pane was 320px;
+on a page, Tools / Prompts / Resources / About are stacked sections, so find-in-page reaches
+all of them and nothing hides behind a tab the user has to guess at. The real problem tabs
+were solving — a 48-tool server — is solved directly: above eight sub-tools the list grows
+its own filter box.
+
+Prompts and resources stay **read-only**, and stay a read of the stored capability snapshot
+rather than a live probe, for the reasons the drawer recorded: probing opens an MCP session
+per server, a 3LO server cannot be reached without a consent token the browser does not hold,
+and acting on an entry needs `prompts/get` / `resources/read`, which this surface has no
+endpoint for. The snapshot is only fetched for `mcp_external` tools — nothing else has a
+server that could have been asked.
+
+⚠️ The card's name is a link whose `after:absolute inset-0` makes the whole card the
+navigation target; the switch is raised out of it with `z-10` rather than nested inside it.
+A switch inside the link is a control the user cannot reach by keyboard without also
+following the link. A test asserts the switch has no `<a>` ancestor.
+
+⚠️ Colored text uses `text-primary-accessible dark:text-primary-accessible-dark`, never the
+numbered ramp. With the brand primary at `#0033a0`, `dark:text-primary-400` measures **2.59:1**
+against the dark page background (`gray-900`, `#101828`) — a WCAG AA failure at the small text
+sizes involved. The accessible alias is generated to clear 4.5:1 against the resolved dark
+surface and measures 4.52:1. See `src/branding/README.md` §7.
+
+**Known gap, not fixed here:** 16% of catalog sub-tools (19 of 116) have docstrings whose first
+paragraph runs past 400 characters — `canvas_faculty/import_course_package` reaches 2,058 —
+because the prose precedes any `Args:` heading, so `splitToolDescription` returns all of it as
+`summary` and the row renders it unclamped. The *detail* behind "Show details" is by comparison
+modest (median 344 chars). Clamping the summary is the fix; moving the detail behind a modal
+would not touch it.
+
 The `settings/connectors/` **services** deliberately did not move. `UserConnectorsService` and
 `ConnectorStatusService` have nine importers across the app (oauth-consent, export-dialog,
 knowledge-base, the drawer's tool-detail, the Customize Tools tab…), so relocating them is a
