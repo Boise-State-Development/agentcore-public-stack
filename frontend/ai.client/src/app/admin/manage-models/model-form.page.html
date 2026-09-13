@@ -123,15 +123,7 @@
                    promise one thing and the menu render another. -->
               <div class="flex items-center gap-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/50">
                 <app-model-icon [model]="iconPreviewModel()" [size]="40" alt="Icon preview" />
-                <span class="text-xs/5 text-gray-500 dark:text-gray-400">
-                  @if (uploadedIconUrl()) {
-                    Uploaded image
-                  } @else if (isIconSlugSelected('')) {
-                    Matched from the provider name
-                  } @else {
-                    Built-in logo
-                  }
-                </span>
+                <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ iconPreviewSource() }}</span>
               </div>
 
               <!-- Built-in logo picker. Radio semantics, rendered as tiles: the

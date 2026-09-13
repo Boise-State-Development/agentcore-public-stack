@@ -318,3 +318,78 @@ async def test_a_rejected_image_names_the_limit_it_broke(aws):
 
     assert excinfo.value.status_code == 400
     assert "square" in excinfo.value.message and "512×256" in excinfo.value.message
+
+
+# ── the serve route's cache directives ───────────────────────────────────────
+#
+# Driven through the real router, not a re-implementation of its branch: a test
+# that mirrors the logic keeps passing when the route changes, which is exactly
+# when it needs to fail.
+
+
+def _icon_app(monkeypatch, *, version: str = "abc123"):
+    """The user-facing models router with auth stubbed and one icon on disk."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from apis.app_api.models import routes
+    from apis.shared.auth.models import User
+
+    app = FastAPI()
+    app.include_router(routes.router)
+    app.dependency_overrides[routes.get_current_user_from_session] = lambda: User(
+        user_id="u-1", email="reader@example.edu", name="Reader", roles=["User"]
+    )
+
+    async def _fake_read(model_id: str):
+        return b"\x89PNG-bytes", "image/png", version
+
+    monkeypatch.setattr(routes, "read_model_icon", _fake_read)
+    return TestClient(app)
+
+
+def test_the_versioned_url_is_cached_immutably(monkeypatch):
+    # ?v=<digest> names one specific object and can never mean anything else.
+    client = _icon_app(monkeypatch)
+
+    response = client.get("/models/m-1/icon", params={"v": "abc123"})
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert response.headers["etag"] == '"abc123"'
+
+
+def test_the_bare_url_revalidates_instead_of_pinning_a_year(monkeypatch):
+    """The bare path tracks whatever the record points at now.
+
+    Serving it ``immutable`` keeps a removed or replaced icon alive in every
+    cache that saw it — the removal simply never becomes visible. Caught in the
+    browser: a year-long response for the un-versioned path kept serving an icon
+    that had already been deleted.
+    """
+    client = _icon_app(monkeypatch)
+
+    response = client.get("/models/m-1/icon")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-cache"
+
+
+def test_a_stale_version_also_revalidates(monkeypatch):
+    # An old ?v= off a cached page must not be answered as if it were current.
+    client = _icon_app(monkeypatch)
+
+    response = client.get("/models/m-1/icon", params={"v": "outdated"})
+
+    assert response.headers["cache-control"] == "no-cache"
+
+
+def test_a_matching_etag_is_answered_304_without_the_bytes(monkeypatch):
+    client = _icon_app(monkeypatch)
+
+    response = client.get(
+        "/models/m-1/icon", params={"v": "abc123"}, headers={"If-None-Match": '"abc123"'}
+    )
+
+    assert response.status_code == 304
+    assert response.content == b""

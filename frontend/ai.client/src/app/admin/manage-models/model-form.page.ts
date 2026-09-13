@@ -35,6 +35,7 @@ import {
   BUILTIN_MODEL_ICONS,
   BUILTIN_MODEL_ICON_LABELS,
   BuiltinModelIcon,
+  resolveModelIcon,
 } from './models/model-icons';
 import { ModelIconComponent } from '../../components/model-icon/model-icon.component';
 import { ManagedModelsService } from './services/managed-models.service';
@@ -1071,6 +1072,21 @@ export class ModelFormPage implements OnInit {
   );
   private readonly modelNameValue = toSignal(this.modelForm.controls.modelName.valueChanges, {
     initialValue: this.modelForm.controls.modelName.value,
+  });
+
+  /**
+   * Where the previewed icon actually came from.
+   *
+   * Read off the same resolution the picker runs, not off which control the
+   * admin last touched: with no slug and a provider we ship no logo for, "the
+   * provider name matched" is simply untrue, and the tile beside this caption
+   * is visibly a monogram.
+   */
+  readonly iconPreviewSource = computed(() => {
+    const icon = resolveModelIcon(this.iconPreviewModel());
+    if (icon.kind === 'upload') return 'Uploaded image';
+    if (icon.kind === 'none') return 'No icon — showing the model\'s initial';
+    return this.iconSlugValue() ? 'Built-in logo' : 'Matched from the provider name';
   });
 
   /** Pick a built-in logo, or clear the selection by picking the active one again. */

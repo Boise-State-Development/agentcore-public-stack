@@ -11,12 +11,11 @@ import {
   effortLevelLabel,
 } from '../../admin/manage-models/models/managed-model.model';
 import { ModelOptionComponent } from './components/model-option.component';
-import { ModelIconComponent } from '../model-icon/model-icon.component';
 
 @Component({
   selector: 'app-model-dropdown',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CdkMenuTrigger, CdkMenu, CdkMenuItem, NgIcon, ModelIconComponent, ModelOptionComponent],
+  imports: [CdkMenuTrigger, CdkMenu, CdkMenuItem, NgIcon, ModelOptionComponent],
   providers: [provideIcons({ heroCheck, heroChevronRight, heroLockClosed })],
   template: `
     <div class="relative">
@@ -38,8 +37,6 @@ import { ModelIconComponent } from '../model-icon/model-icon.component';
           class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm/5 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
           aria-label="Select model"
         >
-          <!-- Decorative: the button already reads the model's name aloud. -->
-          <app-model-icon [model]="modelService.selectedModel()" [size]="20" />
           <span>{{ modelService.selectedModel().modelName || 'Loading...' }}</span>
           @if (activeEffortLabel(); as effort) {
             <!-- The active effort rides in the trigger so it's visible without

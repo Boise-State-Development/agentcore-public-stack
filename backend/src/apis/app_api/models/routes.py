@@ -120,7 +120,17 @@ async def get_model_icon(
         raise HTTPException(status_code=500, detail=f"Failed to read model icon: {str(e)}")
 
     etag = f'"{version}"'
-    headers = {"Cache-Control": "public, max-age=31536000, immutable", "ETag": etag}
+    # `immutable` is only true of the VERSIONED url. `?v=<digest>` names one
+    # specific object and can never mean anything else, so a year is right. The
+    # bare path tracks whatever the record points at now — promising a year for
+    # that pins a replaced or removed icon in every cache that saw it, and the
+    # removal simply never becomes visible. Revalidating costs a 304 against the
+    # ETag below, which is the same round trip the versioned url avoids anyway.
+    if request.query_params.get("v") == version:
+        cache_control = "public, max-age=31536000, immutable"
+    else:
+        cache_control = "no-cache"
+    headers = {"Cache-Control": cache_control, "ETag": etag}
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
     return Response(content=data, media_type=content_type, headers=headers)
