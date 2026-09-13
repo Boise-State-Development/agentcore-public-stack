@@ -15,16 +15,9 @@
   (continueRequested)="onContinueRequested()"
   (messageCancelled)="onMessageCancelled()"
   (fileAttached)="onFileAttached($event)"
-  (settingsToggled)="toggleSettings()"
   (assistantClosed)="closeAssistant()"
   (assistantNewSession)="newAssistantSession()"
   (assistantEdit)="editAssistant()"
   (assistantShare)="shareAssistant()"
   (voiceClosed)="onVoiceClosed()"
 />
-
-<!-- Model Settings Panel -->
-<app-model-settings
-  [isOpen]="isSettingsOpen()"
-  [sessionId]="effectiveSessionId()"
-  (closed)="closeSettings()" />

@@ -3,7 +3,8 @@
 **Status:** Step 1 (Customize shell: Tools + Skills) SHIPPED — PR #1072, validated on dev.
 Step 3 (drop model + params from the drawer) SHIPPED — PR #1073, validated on dev.
 Step 4 (agent-lock surfacing) SHIPPED — PR #1075, validated on dev.
-Step 2 (Connectors tab) in flight. Steps 5–7 queued.
+Step 2 (Connectors tab) SHIPPED — PR #1076, validated on dev.
+Step 5 (drawer deleted) in flight. Steps 6–7 queued.
 **Supersedes:** the composer settings drawer (`components/model-settings/`) as the home for
 tool and skill enablement.
 **Related:** `docs/specs/skills-as-agent-primitive.md` (D6 opt-in), `docs/specs/agent-marketplace.md` (D1 one noun),
@@ -213,10 +214,10 @@ Each step is independently shippable. 3 and 6 do not depend on Customize at all.
 | # | Step | Depends on |
 |---|------|-----------|
 | 1 | **Customize shell** — `/customize`, Tools + Skills tabs, nav entry. Drawer stays; both live — **shipped (#1072)** | — |
-| 2 | Fold `Settings → Connectors` in as the Connectors tab — **in flight** | 1 |
+| 2 | Fold `Settings → Connectors` in as the Connectors tab — **shipped (#1076)** | 1 |
 | 3 | Drop model + Advanced params from the drawer (pure dedup + param removal) — **shipped (#1073)** | — |
 | 4 | Agent-lock surfacing moves to the assistant indicator — **shipped (#1075)** | — |
-| 5 | Delete the drawer and the settings icon | 1, 2, 3, 4 |
+| 5 | Delete the drawer and the settings icon — **in flight** | 1, 2, 3, 4 |
 | 6 | Conversation Modes retired as an Agent migration | prod-usage check |
 | 7 | `/agents` lands on Discover for users with no agents | — |
 
@@ -227,13 +228,47 @@ only path to skills and tools. The end-state composer already renders today —
 test-drive (`admin/marketplace/components/review-test-drive.component.ts:144`). Step 5 flips
 the default and deletes the input.
 
-## Open question
+## Resolved questions
 
-**Does the composer keep a pointer to Customize?** Removing the icon outright is the clean
-version; a menu item under the `+` is the hedged one. Since enablement is global and durable,
-"I need a tool mid-conversation" is rarer than it feels — Claude itself has no in-composer
-skill toggle. But the path has to exist somewhere, and it should be decided rather than
-discovered. Resolve before step 5.
+**Does the composer keep a pointer to Customize?** No. The sidenav entry is the path, always
+visible and one click away — the same shape Claude uses. Adding a composer affordance would
+have reintroduced an icon to replace the one step 5 removes.
+
+**What happens to Conversation Mode?** ⚠️ The spec originally had it retired in step 6 as "a
+strictly weaker Agent", on the premise it was dormant. **That premise was wrong.** Prod carries
+one enabled mode — *Guided Learning*, a Socratic tutoring prompt — and its use is accelerating:
+1 session in July, 20 in August, **60 in the first 12 days of September**. Measured against
+`boisestateai-v2-system-prompts` and `sessions-metadata` in the prod account.
+
+So Mode is not dormant, and it is the one genuinely **per-conversation** control the drawer
+held. It could not follow Skills and Tools to Customize without recreating the exact scope lie
+this epic exists to fix, so it went the other way: into the **composer**, beside the model and
+effort controls. Those three are the same question — how should *this* conversation run.
+
+That also reframes step 6: retiring Modes is much harder to justify against growing usage, and
+the migration is not clean — a Mode applies to the conversation you are already in, whereas an
+Agent is a separate thing you start a chat with. Step 6 is now "reconsider", not "execute".
+
+This is the second time the "git history says dormant" heuristic has misled on this epic (the
+first was `thinking` in step 3, declared in `curated-models.ts` and absent from the deployed
+records). **Check the data in the environment that matters.**
+
+## Step 5 notes
+
+⚠️ **A latent bug surfaced while verifying the new picker, and is fixed here.** The session
+page hydrates the active mode twice on load: once provisionally, before the session's metadata
+arrives, and again with the real value. The provisional call CLAIMED the session id, so the
+clobber guard in `hydrateFromSession` rejected the real hydration that followed.
+
+That was not cosmetic. `chat-request.service` sends `selected_prompt_id` from
+`activePromptId()`, so **after any reload the mode silently stopped being applied to every
+later turn**, while the stored session preference still said it was on. On prod that is every
+Guided Learning user who reloaded mid-conversation. The provisional call now passes
+`claim: false`; a deliberate "None" still claims, so stale metadata cannot undo it.
+
+It is fixed here rather than deferred because step 5 promotes this control to a first-class
+composer affordance, and shipping it more prominently while knowing it silently drops would be
+worse than leaving it where it was.
 
 ## PR-1 scope
 

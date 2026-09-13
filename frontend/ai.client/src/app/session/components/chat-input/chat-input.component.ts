@@ -17,7 +17,6 @@ import { Router } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPlus,
-  heroAdjustmentsHorizontal,
   heroArrowTurnDownRight,
   heroClock,
   heroMicrophone,
@@ -48,6 +47,7 @@ import {
   MentionableAgent,
 } from '../../../agents/services/agent-mention.service';
 import { AgentMentionMenuComponent } from './agent-mention-menu.component';
+import { ConversationModePickerComponent } from './conversation-mode-picker.component';
 import { SteeringService } from '../../services/chat/steering.service';
 
 // Must stay in sync with the inline min-height/max-height on the textarea in
@@ -106,14 +106,13 @@ interface MentionToken {
 
 @Component({
   selector: 'app-chat-input',
-  imports: [AnnouncementBannerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SpinnerComponent],
+  imports: [AnnouncementBannerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SpinnerComponent, ConversationModePickerComponent],
   // `relative` is the anchor the announcement banner floats against — it sits
   // `bottom-full` of this host, above the quota tabs and clear of the composer.
   host: { class: 'relative block' },
   providers: [
     provideIcons({
       heroPlus,
-      heroAdjustmentsHorizontal,
       heroArrowTurnDownRight,
       heroClock,
       heroMicrophone,
@@ -147,10 +146,6 @@ export class ChatInputComponent {
   // Input: show voice mode toggle (defaults to true). Disabled where voice
   // is not meaningful, e.g. the assistant editor preview.
   readonly showVoiceControl = input<boolean>(true);
-
-  // Input: show the settings/tools button (defaults to true). Disabled where
-  // the chat input isn't wired to a settings panel, e.g. the assistant editor preview.
-  readonly showSettingsControl = input<boolean>(true);
 
   // Input: auto-focus the textarea on load and session change (defaults to true).
   // Disabled where the input sits beside an editable form (e.g. assistant preview).
@@ -214,7 +209,6 @@ export class ChatInputComponent {
   fileAttached = output<File>();
   messageSubmitted = output<Message>();
   messageCancelled = output<void>();
-  settingsToggled = output<void>();
 
   // File upload state from service
   readonly pendingUploads = this.fileUploadService.pendingUploadsList;
@@ -621,19 +615,6 @@ export class ChatInputComponent {
 
   cancelChatRequest() {
     this.messageCancelled.emit();
-  }
-
-  toggleSettings() {
-    this.settingsToggled.emit();
-  }
-
-  dismissActivePrompt(): void {
-    const sid = this.sessionId();
-    this.systemPromptsService.setActivePrompt(sid, null)
-      .catch(err => {
-        console.error('Failed to clear prompt selection:', err);
-        this.toastService.error('Could not clear conversation mode', 'Please try again.');
-      });
   }
 
   async toggleVoice() {

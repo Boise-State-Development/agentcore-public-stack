@@ -120,7 +120,6 @@ describe('ChatInputComponent — the `@` menu keyboard path (D11)', () => {
     component = fixture.componentInstance;
     fixture.componentRef.setInput('showFileControls', false);
     fixture.componentRef.setInput('showVoiceControl', false);
-    fixture.componentRef.setInput('showSettingsControl', false);
     fixture.componentRef.setInput('autoFocus', false);
     fixture.detectChanges();
 
@@ -244,7 +243,6 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
     component = fixture.componentInstance;
     fixture.componentRef.setInput('showFileControls', false);
     fixture.componentRef.setInput('showVoiceControl', false);
-    fixture.componentRef.setInput('showSettingsControl', false);
     fixture.componentRef.setInput('autoFocus', false);
 
     submitted = [];
@@ -457,7 +455,6 @@ describe('ChatInputComponent — mid-turn steering (PR-5)', () => {
     steering = TestBed.inject(SteeringService) as unknown as SteeringServiceStub;
     fixture.componentRef.setInput('showFileControls', false);
     fixture.componentRef.setInput('showVoiceControl', false);
-    fixture.componentRef.setInput('showSettingsControl', false);
     fixture.componentRef.setInput('autoFocus', false);
     fixture.componentRef.setInput('sessionId', 'sess-1');
 
@@ -689,7 +686,6 @@ describe('ChatInputComponent — a queue held behind a paused turn (PR-6)', () =
     steering = TestBed.inject(SteeringService) as unknown as SteeringServiceStub;
     fixture.componentRef.setInput('showFileControls', false);
     fixture.componentRef.setInput('showVoiceControl', false);
-    fixture.componentRef.setInput('showSettingsControl', false);
     fixture.componentRef.setInput('autoFocus', false);
     fixture.componentRef.setInput('sessionId', 'sess-1');
 

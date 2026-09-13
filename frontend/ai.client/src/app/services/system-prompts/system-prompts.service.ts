@@ -128,13 +128,28 @@ export class SystemPromptsService {
    * just-made choice. The local ``_activePromptId`` is the source of
    * truth for the session it was claimed against.
    */
-  hydrateFromSession(sessionId: string | null, selectedPromptId: string | null): void {
-    if (sessionId && this._activePromptSessionId() === sessionId) {
+  hydrateFromSession(
+    sessionId: string | null,
+    selectedPromptId: string | null,
+    claim = true,
+  ): void {
+    if (sessionId && claim && this._activePromptSessionId() === sessionId) {
       // Already claimed by this session locally — server is catching up.
       return;
     }
     this._activePromptId.set(selectedPromptId);
-    this._activePromptSessionId.set(sessionId);
+    // ⚠️ `claim: false` is what makes a reload work. The session page calls this
+    // once before the session's metadata has arrived, to clear whatever the
+    // previous conversation had selected. If that provisional call CLAIMED the
+    // session id, the guard above would then reject the real hydration that
+    // follows when metadata lands — so a mode set on a conversation silently
+    // vanished on reload, and because `chat-request.service` sends
+    // `selected_prompt_id` from `activePromptId()`, it silently stopped being
+    // applied to every later turn while the stored preference still said it was
+    // on. Leaving the provisional call unclaimed keeps the clobber protection
+    // (a deliberate "None" IS claimed, so stale metadata can't undo it) while
+    // letting the real value through.
+    this._activePromptSessionId.set(claim ? sessionId : null);
   }
 
   /**

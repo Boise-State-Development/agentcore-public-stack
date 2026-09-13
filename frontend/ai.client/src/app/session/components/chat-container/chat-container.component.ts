@@ -51,7 +51,6 @@ export interface ChatContainerConfig {
   /** Show voice mode toggle in chat input */
   showVoiceControl: boolean;
   /** Show settings/tools button in chat input */
-  showSettingsControl: boolean;
   /** Custom greeting message (overrides default) */
   customGreeting?: string;
   /** Enable embedded mode (flex layout, no fixed positioning) */
@@ -178,7 +177,6 @@ export class ChatContainerComponent {
     allowCloseAssistant: true,
     showFileControls: true,
     showVoiceControl: true,
-    showSettingsControl: true,
     embeddedMode: false,
     fullPageMode: false,
     ...this.config(),
@@ -192,7 +190,6 @@ export class ChatContainerComponent {
   continueRequested = output<void>();
   messageCancelled = output<void>();
   fileAttached = output<File>();
-  settingsToggled = output<void>();
   assistantClosed = output<void>();
   starterSelected = output<string>();
   assistantNewSession = output<void>();
@@ -340,10 +337,6 @@ export class ChatContainerComponent {
 
   onFileAttached(file: File) {
     this.fileAttached.emit(file);
-  }
-
-  onSettingsToggled() {
-    this.settingsToggled.emit();
   }
 
   onAssistantClosed() {

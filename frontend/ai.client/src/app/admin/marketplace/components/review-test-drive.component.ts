@@ -141,7 +141,6 @@ import { PreviewSessionService } from '../../../shared/preview/preview-session.s
               [isChatLoading]="chat.isLoading()"
               [showFileControls]="false"
               [showVoiceControl]="false"
-              [showSettingsControl]="false"
               [autoFocus]="false"
               [showAgentMentions]="false"
               [showAnnouncements]="false"
@@ -214,7 +213,6 @@ export class ReviewTestDriveComponent {
     allowCloseAssistant: false,
     showFileControls: false,
     showVoiceControl: false,
-    showSettingsControl: false,
   };
 
   constructor() {
