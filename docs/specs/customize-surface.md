@@ -4,7 +4,8 @@
 Step 3 (drop model + params from the drawer) SHIPPED — PR #1073, validated on dev.
 Step 4 (agent-lock surfacing) SHIPPED — PR #1075, validated on dev.
 Step 2 (Connectors tab) SHIPPED — PR #1076, validated on dev.
-Step 5 (drawer deleted) in flight. Steps 6–7 queued.
+Step 5 (drawer deleted) SHIPPED — PR #1079, validated on dev.
+**Epic COMPLETE.** Step 6 declined on evidence; step 7 declined by the owner.
 **Supersedes:** the composer settings drawer (`components/model-settings/`) as the home for
 tool and skill enablement.
 **Related:** `docs/specs/skills-as-agent-primitive.md` (D6 opt-in), `docs/specs/agent-marketplace.md` (D1 one noun),
@@ -217,9 +218,9 @@ Each step is independently shippable. 3 and 6 do not depend on Customize at all.
 | 2 | Fold `Settings → Connectors` in as the Connectors tab — **shipped (#1076)** | 1 |
 | 3 | Drop model + Advanced params from the drawer (pure dedup + param removal) — **shipped (#1073)** | — |
 | 4 | Agent-lock surfacing moves to the assistant indicator — **shipped (#1075)** | — |
-| 5 | Delete the drawer and the settings icon — **in flight** | 1, 2, 3, 4 |
-| 6 | Conversation Modes retired as an Agent migration | prod-usage check |
-| 7 | `/agents` lands on Discover for users with no agents | — |
+| 5 | Delete the drawer and the settings icon — **shipped (#1079)** | 1, 2, 3, 4 |
+| 6 | Conversation Modes retired as an Agent migration — **DECLINED**, see below | prod-usage check |
+| 7 | `/agents` lands on Discover for users with no agents — **DECLINED** by the owner, not pursued | — |
 
 Step 5 is last for a reason: pull the icon before Customize exists and you have removed the
 only path to skills and tools. The end-state composer already renders today —
@@ -303,3 +304,62 @@ The `settings/connectors/` **services** deliberately did not move. `UserConnecto
 knowledge-base, the drawer's tool-detail, the Customize Tools tab…), so relocating them is a
 wide, purely-mechanical diff that belongs on its own. Their real home is probably
 `services/connectors/` — noted, not done here.
+
+
+## Outcome
+
+Five of seven steps shipped; two were declined on their merits rather than dropped.
+
+| # | Step | Result |
+|---|------|--------|
+| 1 | Customize shell (Tools + Skills) | #1072 |
+| 2 | Connectors folded in | #1076 |
+| 3 | Model + params out of the drawer | #1073 |
+| 4 | Agent governance on the indicator | #1075 |
+| 5 | Mode to the composer, drawer deleted | #1079 |
+| 6 | Retire Conversation Modes | **Declined** |
+| 7 | `/agents` lands on Discover | **Declined** |
+
+The end state:
+
+- **Composer** — per-conversation: model, effort, conversation mode.
+- **Customize** — global: tools, skills, connectors.
+- **Assistant indicator** — says which of those an Agent has fixed, and that Customize
+  choices do not apply here.
+
+The original defect is closed: nothing global is presented as conversational any more.
+
+### Step 6 — declined
+
+The premise ("a Conversation Mode is a strictly weaker Agent, and they're dormant") did not
+survive contact with the data. Prod carries one enabled mode, *Guided Learning*, used in 81
+sessions and accelerating — 1 in July, 20 in August, 60 in the first 12 days of September. And
+the migration was never clean: a Mode applies to the conversation you are **already in**,
+whereas an Agent is a separate thing you start a chat with. Converting one into the other is a
+product change for its users, not a refactor.
+
+Modes now have a better home than the one the retirement was meant to escape, so the
+motivation is gone too.
+
+### What this epic should be remembered for
+
+**Check the data in the environment that matters.** The plan was wrong twice, in opposite
+directions, and both times the code was the misleading source:
+
+- Step 3: `curated-models.ts` declared `thinking` for two models; the deployed records did not
+  enable it. Reading the file would have blocked a safe removal.
+- Step 6: git history said Conversation Modes were untouched since #411; prod said usage was
+  compounding. Reading the history would have deleted a live feature.
+
+**Verify in a browser before merging.** Every step but one had a defect that only the browser
+found — `1 tools`, a menu wrapping "Claude Sonnet 5" across three lines, and a mode that
+silently stopped applying after a reload. None were caught by 2800 passing tests.
+
+## Known gaps
+
+- **The assistant indicator does not render until a conversation has messages**
+  (`showChatTopnav` requires `!isEmptyState()`). So the first turn of a new agent-bound
+  conversation happens with no governance cue on screen. Raised during step 4, deliberately
+  not fixed: it predates this epic and the launch card already names the agent.
+- **`settings/connectors/` services** live under a feature folder with no page. Nine importers;
+  their real home is `services/connectors/`. Mechanical, deferred (step 2 notes).
