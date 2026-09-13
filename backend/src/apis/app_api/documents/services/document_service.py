@@ -759,10 +759,26 @@ async def soft_delete_document(
 
         if 'Attributes' in response:
             try:
-                return Document.model_validate(response['Attributes'])
+                document = Document.model_validate(response['Attributes'])
             except Exception as e:
                 logger.warning(f"Failed to parse document from DynamoDB response: {e}")
                 return None
+
+            # Deleting a document that never finished ingesting leaves its
+            # request-time byte reservation stranded. Nothing else settles it: the
+            # release paths are ingestion reaching a terminal state, a
+            # client-reported upload failure, and the stale sweep — and a deleted
+            # document reaches none of them.
+            #
+            # Left unreleased the leak is invisible and cumulative. Every cancelled
+            # upload permanently shaves bytes off that assistant's allowance until
+            # uploads start failing for no reason the owner can see, months after
+            # the deletes that caused it. `settle_once` makes this exactly-once
+            # against the other paths, so releasing here cannot double-credit a
+            # document that some other path also settles.
+            await release_reservation_if_managed(document)
+
+            return document
 
         return None
 
