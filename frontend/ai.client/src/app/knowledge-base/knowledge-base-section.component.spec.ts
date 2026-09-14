@@ -690,6 +690,20 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
       expect(text()).toContain('used');
     });
 
+    it('hides the bar for a legacy KB, whose "0 B stored" beside real docs confuses', async () => {
+      // A Classic KB is uncapped and tracks no bytes, so the bar would read
+      // "0 B stored" next to actual documents. Hidden entirely; the per-document
+      // sizes are the only storage signal for legacy.
+      await render(status({ phase: 'none', engine: 'classic' }));
+      fixture.componentInstance.uploadedDocuments.set([doc()]);
+      fixture.componentInstance.kbUsage.set(
+        usage({ engine: 's3vectors', cap: null, storedBytes: 0 }),
+      );
+      fixture.detectChanges();
+      expect(fixture.componentInstance.showUsageBar()).toBe(false);
+      expect(fixture.nativeElement.querySelector('[role="progressbar"]')).toBeNull();
+    });
+
     it('does not render the bar in create mode, where there is no record', () => {
       // No entityId set → create mode, so nothing is stored yet.
       fixture.componentInstance.kbUsage.set(usage());

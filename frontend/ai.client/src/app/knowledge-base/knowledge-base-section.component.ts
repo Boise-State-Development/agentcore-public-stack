@@ -273,7 +273,14 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
   readonly kbHasCap = computed(() => (this.kbUsage()?.cap ?? null) !== null);
 
   /** Show the bar only for an existing record whose usage we have resolved. */
-  readonly showUsageBar = computed(() => this.mode() === 'edit' && this.kbUsage() !== null);
+  // The bar visualises stored bytes against a cap — both of which exist only for
+  // a managed KB (byte tracking is scoped to managed by Requirement 12.11). A
+  // legacy/Classic KB is uncapped and reports zeroed counters, so the bar would
+  // read "0 B stored" beside real documents, which reads as a bug to the user.
+  // Show it only for the managed engine; the per-document sizes carry the rest.
+  readonly showUsageBar = computed(
+    () => this.mode() === 'edit' && this.kbUsage()?.engine === 'managed',
+  );
 
   /** Fraction of the cap used, clamped 0–1. 0 for an uncapped KB (no denominator). */
   readonly kbUsageFraction = computed(() => {
