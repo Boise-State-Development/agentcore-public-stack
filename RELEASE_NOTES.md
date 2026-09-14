@@ -1,3 +1,402 @@
+# Release Notes — v1.21.0
+
+**Release Date:** September 13, 2026
+**Previous Release:** v1.20.0 (September 9, 2026)
+
+---
+
+> 🏗️ **CDK deploy required.** One new GSI (`EntityTypeIndex`) on the **existing** `{prefix}-app-roles` table, `sagemaker:CreateModel` on the app-api task role, a CloudFront `x-forwarded-prefix` header on the `/api/*` behaviour, one new CloudWatch alarm, and a new app-api task-definition revision. **Exactly one GSI operation on one existing table** — the release guard passes — but the index must reach `ACTIVE` before the catalog read is trustworthy. See Deployment notes.
+>
+> 🗂️ **A backfill must be run, in every environment, as part of this deploy.** `backend/scripts/backfill_tool_catalog_index.py` stamps `EntityTypeIndex` keys on tool rows written before they existed. The tool catalog's read moves onto that sparse index in this same release, and a sparse index answers *"nothing matched"*, not *"something is wrong"* — an unrun backfill looks like a short tool list, not an outage. There is a Scan fallback that covers the zero-result case, but it logs an ERROR and costs an extra read per cache fill; it is a safety net, not the plan. Exact command in Deployment notes.
+>
+> ⚠️ **This release removes the only way to select a Conversation Mode.** The composer's settings drawer is deleted, and the picker meant to replace its Mode control was parked before release pending feedback on its placement. Prod carries one enabled mode — **Guided Learning**, a Socratic tutoring prompt — and its use is accelerating: 1 session in July, 20 in August, **60 in the first 12 days of September**. The backend is entirely untouched, so restoring the control is a revert rather than a rebuild. **This is a decision to take knowingly before deploying**, not a detail to discover afterwards. See Breaking changes.
+>
+> 🎨 **Two brand tokens are now banned in new code.** `dark:text-primary-400` for colored text and `bg-primary-50|100|200` as a tint fill. The `primary` scale is generated from #0033a0 by lightness offset alone and keeps full chroma at every step, so `primary-50` is a saturated mid-blue, not the pale wash its name implies — and both fail WCAG AA. Existing occurrences are swept in this release.
+
+---
+
+## Highlights
+
+Global preferences finally have a home. **Customize** — `/customize/tools`, `/customize/skills`, `/customize/connectors` — replaces the composer's settings drawer, which had been quietly lying about scope: tool and skill enablement is durable, account-wide state, and it lived in a container that reads as "settings for this conversation." A user who switched on a tool to get through one question had changed the `toolConfig` of every future turn, and nothing in the UI said so. Tools and skills now have real detail pages, an MCP server's sub-tools can be enabled one at a time, and typing **`/skill-name`** in the composer invokes a skill for a single message the way `@agent` already did.
+
+Chat stops guessing about itself. A four-tool answer used to render as five separate assistant cards, each paying full chrome, so the actual answer was pushed below the fold; it is now **one card**. The loading indicator's twenty invented phrases ("Pondering", "Consulting the archives") are replaced by two states that are literally true — `Thinking 12s`, `Running browse_web 4s` — fed by a new **`agent_status`** SSE event, and each finished tool batch gets a model-written summary line ("Found the Syllabus Acknowledgment assignment in BIO 101") from a **`tool_group_summary`** side-channel that never touches the conversation or the cacheable prefix.
+
+Three cost reductions land on the same request path. The tool catalog moves off a full-table Scan onto a new sparse index — the `app-roles` table is shared with one preferences row **per user**, so that read's cost had been growing with *enrollment* rather than with the number of tools. Four tenant-global catalogs gain a TTL + single-flight cache, so 300 students signing in together no longer issue 300 concurrent scans. And the per-request user-profile upsert is throttled: one SPA first load had been issuing **24 DynamoDB operations against a single item**, all writing identical values except `last_login_at`.
+
+Two fixes are worth reading even if you don't use what they sit under. Loading any conversation page on a CloudFront deployment logged **blocked mixed content** — Starlette's own trailing-slash redirect, rendered from the internal ALB hostname over plain HTTP, leaking that hostname into a page the user can read while the caller silently got nothing. And the agent designer's preview pane was **silently dropping tool calls**: one requested `upload_course_file` produced ~316 attempts and zero invocations of the backing Lambda, because the preview ran a second SSE parser that implemented 9 of ~27 events and dropped the rest without so much as a parse error.
+
+---
+
+## Customize — a home for global preferences
+
+Tool and skill enablement is per-user, durable and account-wide. Until this release it lived in a ~320px drawer hanging off the composer, which is the wrong container for it in two distinct ways: it presented global state as conversational, and per-tool MCP enablement means a single server can exceed the drawer's comfortable length on its own.
+
+### Frontend
+
+- `customize/tools/customize-tools.page.ts`, `customize/skills/customize-skills.page.ts` — search, category chips and a responsive grid, borrowing the browse idiom from `agents/discover`. Both read the existing root services, so a toggle here and (while it lived) the drawer stayed in sync with **no new endpoints and no new state**.
+- `customize/tools/customize-tool-detail.page.ts` — `/customize/tools/:toolId`. The full description, an MCP server's tools one by one with their own switches, the prompts and resources the server exposes, and the catalog facts behind it. The drawer's tab strip did not come along: tabs existed because the pane was 320px, and on a page Tools / Prompts / Resources / About are stacked sections that find-in-page can reach. The problem tabs were solving — a 48-tool server — is solved directly, with a filter box above eight sub-tools.
+- `customize/skills/customize-skill-detail.page.ts` — the SKILL.md body rendered expanded (sanitized markdown; it is text the user's own turns already load), supporting files, composed skills, and the advisory `allowed-tools` frontmatter labelled as advisory.
+- `customize/connectors/customize-connectors.page.ts` — moved wholesale from Settings via `git mv`, so history follows. Connecting an account and enabling the tools that need it are one user intent; the Tools tab marks a tool "connect", and the place to act on that had lived under a different top-level page.
+- `customize/components/customize-card.component.ts`, `customize-tabs.component.ts` — the shared card (with a `detailLink` input) and tab strip.
+
+A deliberate hazard the pages are written around: **the Agent binding lock is conversation-scoped state held on root singletons that `session.page.ts` never releases on teardown**, so a user arriving from an agent-bound chat carries it. A global preference page must not consult it. These pages read `tools()` / `skills()` and `isEnabled` rather than the `visible*` / `isShownEnabled` display shims, and write with `respectAgentLock: false`. Without that, the catalog would show the Agent's bound subset and every switch would silently do nothing.
+
+The detail page is a new component rather than a port of the drawer's `ToolDetailComponent`, for the same reason: the drawer was conversation-scoped and wrote through the Agent lock, and reusing it would reopen the exact seam this epic exists to close.
+
+### Skills, consolidated
+
+`/my-skills` was a top-level route reachable only by a link-out from `/customize/skills`, so the same noun lived in two places with two different answers to "what skills do I have?" — one page listed what you authored, the other what you could turn on, and neither showed the whole set. Both now live under `/customize/skills`, split by a `scope` query param: **Yours** (authored at any status, plus catalog skills you turned on) and **Discover** (granted catalog skills still off).
+
+No backend change was needed for the merge — it combines `GET /skills/` (accessible + ACTIVE, with the preference) and `GET /skills/mine` (the authored tier at every status). That merge is what keeps a DRAFT skill visible to its author: widening `GET /skills/` to carry drafts would surface them in the composer picker, which the runtime refuses to activate, so a draft would get a dead toggle. It has no toggle at all instead.
+
+### Backend
+
+- `apis/app_api/skills/routes.py` — new `GET /skills/{id}` and `GET /skills/{id}/resources/{filename}`, access-checked by `resolve_accessible_skill_ids`, the same resolution that builds the picker. The only per-skill read that existed was owner-scoped, so a catalog skill granted to you 404'd there. The response omits `ownerId` and `allowedAppRoles` on purpose.
+- Both register **below** every `/mine` route. `SKILL_ID_PATTERN` matches the literal string `mine`, so the reverse order turns `GET /skills/mine` into a lookup for a skill named "mine".
+
+### Routing traps, each covered by a test
+
+`/settings/connectors` stays as a redirect rather than a deletion — it is in bookmarks and the schedules page linked users straight to it — and must be declared **before** the `settings` route, whose `loadChildren` would otherwise swallow the path and land the user on the settings shell with no matching child. Likewise `customize/skills/new` must stay above `customize/skills/:skillId`. Both failures are silent, which is why both are asserted.
+
+---
+
+## Slash commands — invoking a skill for one message
+
+Typing `/web-research` in the composer invokes that skill for that message: the sibling of the `@`-mention, with the same menu shape, keyboard handling and rides-one-turn semantics. The menu's last row is "Browse skills →".
+
+**Scope is what makes it cheap.** Only skills the user already has enabled can be invoked, so the invoked skill is already in `enabled_skills` and the system prompt, `toolConfig` and `<available_skills>` block are **byte-identical** whether or not a command was used. The cacheable prefix is untouched; the entire cost is one line appended to the turn's user message — which is exactly what the prompt-cache contract in `CLAUDE.md` asks of anything added to the model call path.
+
+**The composer text is the binding.** Unlike the `@` menu there is no remembered pick: the invoked set is derived from the text, so a hand-typed command works like a menu pick and the chip cannot disagree with what is sent. The chip's ✕ edits the text, because that is where the binding lives.
+
+`/` is ordinary punctuation, so a command must start a word **and** not be followed by another `/`. That second clause is what keeps `/usr/bin/env` prose — an absolute path starts a word exactly like a command does. The rule is implemented three times (composer token, `findSkillCommands`, thread renderer) and all three must agree.
+
+### Backend
+
+`GET /skills/` now serves the runtime activation `slug` rather than letting the SPA re-derive it. `invoked_skills` on the invocation request is intersected against the turn's **effective** set — re-run after Agent bindings can replace it — and becomes a directive appended last, riding `original_message` so the thread shows only what the user typed.
+
+Spec: `docs/specs/skill-slash-commands.md`.
+
+---
+
+## Chat tells you what it is doing
+
+### One card per assistant run
+
+A four-tool answer rendered as five separate assistant cards, each paying full chrome — card padding, a copy button, a metadata row and a 1.5rem gap — so a single response became a column of near-empty boxes with the answer pushed below the fold.
+
+The cause was message boundaries, not the tool rail. The agent loop starts a new Bedrock message at every tool round trip and the SPA rendered one card per message; worse, the existing tool-grouping pass could never fire, because two consecutive tool calls were always in different messages. `AssistantMessageComponent` now takes a **run** of messages and flattens it into one block stream, and `message-list` splits each turn into segments. A tool group deliberately spans message boundaries — only text and reasoning break it, because those are where the agent actually said something.
+
+The trap this has to handle: **Bedrock returns tool results as USER-role messages carrying nothing but `toolResult` blocks.** They render at zero height — invisible — but sit between every pair of assistant messages, so treating them as real user messages breaks the run at every single tool call. They were also already starting a spurious turn group per tool call, which moved the last group's scroll reserve out from under a streaming response. Both are now guarded by `isProtocolScaffolding`. A mid-turn steer is a real user message with real text and still breaks the run, which is correct.
+
+The rail itself now stays **collapsed** while tools run — it used to force itself open on any pending call, so it was at its tallest exactly while the user was watching — and leads with one line that does not grow with the group.
+
+### `agent_status`
+
+A multi-tool turn spends most of its wall-clock time in places the content stream says nothing about. A new `AgentStatusHook` records the boundaries the event loop already crosses (`BeforeModelCall`, `Before`/`AfterToolCall`) and `stream_coordinator` drains them exactly like `steering_applied`, before the event they precede — so "Using list_assignments" reaches the client **while** that tool is running rather than after its result.
+
+Phases are `thinking` (one per event-loop cycle, with `cycle` distinguishing them), `tool_start` and `tool_end`. Durations come from Strands' own `AfterToolCallEvent.duration` rather than being inferred from stream arrival times on the client, and `ok=false` covers both a raised exception and a result with `status: "error"`.
+
+There is deliberately **no `responding` phase**: the SPA already knows text is streaming from the deltas, and a backend-derived duplicate of a fact the client holds first-hand would only disagree at the edges. Durations are live-only and deliberately not persisted — a reloaded conversation shows summaries without timings, where a client-invented number would be one the user could not trust.
+
+It costs nothing against the model: nothing it produces reaches the prompt, so the cacheable prefix is untouched. Gated by `AGENT_STATUS_ENABLED` (default on, kill switch); while off the hook is registered but every callback returns immediately and the SPA stays on its cycling phrases.
+
+### `tool_group_summary`
+
+A Nova Micro summarizer (`apis/shared/tool_summaries/summarizer.py`) turns each finished tool batch into one line naming what was actually found. It is a **side-channel**, structured exactly like `session_title`: its own Bedrock call on its own messages, run concurrently with the agent stream. It never appends to the conversation, so it adds nothing to the cacheable prefix and cannot cause a cache re-write. Spend is one bounded call per batch, with inputs and results truncated at capture in the hook **and** again in the summarizer.
+
+Summaries persist as `TSUM#` rows in the existing sessions-metadata table — reusing the `SessionLookupIndex` GSI, so **zero new infra** — and replay on `GET /messages` as `toolSummaries`, because the live event is emitted once and never re-streams. They are deliberately **not** written onto the message content blocks: that is the Bedrock Converse payload and the cacheable prefix, so a display string there would be paid at model rates on every subsequent turn.
+
+Gated by `TOOL_SUMMARIES_ENABLED`, separately from `AGENT_STATUS_ENABLED`, so a deployment can take one without the other. While off, the SPA's deterministic client-side formatter still renders ("Listed 4 assignments") — absence is a downgrade in specificity, never a blank. That formatter reads the shape of the tool name (`verb_subject`, near-universal across MCP) plus result cardinality, because almost every tool here arrives at runtime from an MCP server and a per-tool table would leave the ones users actually see rendering as raw identifiers.
+
+### The loading indicator
+
+Twenty invented phrases, typed out character by character, were charming and were fiction — identical whether the model was generating, waiting nine seconds on a Canvas round trip, or hung. It now says only what we know: `● Thinking 12s` and `● Running browse_web 4s`. "Running" shows only while a tool really is executing, and the tool's own identifier is the label — the same name the tool rail and the admin catalog use, so humanising it would invent a second name for one thing. It renders in the routine colour, distinct from the amber `model_retry` notice.
+
+---
+
+## MCP prompts and resources
+
+An MCP server exposes three listings — tools, prompts and resources — and this stack had only ever called `tools/list`. Grepping the backend for `prompts/list` or `resources/list` returned nothing, so two thirds of what our servers offer was invisible to every surface in the product.
+
+### Backend
+
+- Capability discovery attempts each listing **independently**, degrading to `supports_*=False` on failure. A server that implements tools but not prompts answers `prompts/list` with a JSON-RPC "method not found" — that is normal, and it must not cost us the resources listing or the whole snapshot. "Offers nothing" and "we could not ask" are recorded as **different facts**, because the UI has to say different things about each.
+- `prompts/get` is now called for the first time anywhere in the stack. `MCPPromptArgument` carries `required` and `description` alongside the name — `_prompt_entries` had been flattening arguments to names alone, which is enough to describe a prompt and not enough to fill one in. `from_dict` accepts a bare string so snapshots taken before this rehydrate rather than break.
+- `POST /admin/tools/{id}/capabilities/refresh` existed and **nothing in the frontend called it**, with no cron or sync job either, so a snapshot was written once by hand and never rewritten. In dev, `canvas_faculty` and `student_myboisestate` were probed at 05:02 UTC and gained their first prompts at 16:01 the same day; both snapshots still read `supportsPrompts=true` with zero prompts, rendering a supported-but-empty state indistinguishable from a server that genuinely offers nothing. `gmail_employee` had never been probed at all.
+
+### Frontend
+
+On a tool's detail page each prompt becomes **Try it** → a field per argument → **Compose** → the server's composition rendered inline, with copy. Prompts and resources stay a read of the stored capability snapshot rather than a live probe — probing opens an MCP session per server, and a 3LO server needs a consent token the browser does not hold — and the snapshot is fetched only for `mcp_external` tools, since nothing else has a server that could be asked. The admin tool list gains a refresh action.
+
+---
+
+## Scoped tool bindings on Agents
+
+An Agent's `binding.ref` accepted only a bare catalog id, so binding an MCP server loaded **every** one of its tools. The live Rubric Builder agent needs 7 of `canvas_faculty`'s 44 and was carrying `grade_submission`, `delete_rubric` and the rest — held back only by wording in its system prompt, which is a fence for ordinary use and none at all against a determined one. It also put ~13.2k of tool definitions in the cacheable prefix every turn where ~1.8k would do.
+
+The scoping machinery already existed and the runtime already honoured it (`scoped_ids.py`, `collect_tool_name_filters`, `load_external_tools`); user-facing tool selection has used it all along. Three things blocked the bindings axis, and the first is the one worth noting: `AppRoleService.can_access_tool` exact-matched the id, so a scoped ref was denied **even for a user holding the whole server**, while its sibling `filter_requested_tools` base-collapsed correctly on the `enabled_tools` axis. The two now agree, which a test asserts directly.
+
+---
+
+## Model picker
+
+### Short descriptions
+
+New `shortDescription` on the managed model (create/update/read plus the DynamoDB create path), surfaced in the admin form and rendered under the model name in the picker, falling back to the provider name when unset — so an uncurated catalog looks exactly as it did. The 10 curated catalog templates are seeded with purpose-written picker copy, deliberately shorter than the catalog card's `tagline`, which is a sentence where this is a fragment.
+
+The 80-char cap is on the create/update models but **not** on the read model: a stored value longer than the cap would otherwise fail validation and take the whole `/models` listing down with it. Bound the input, stay permissive about what is already persisted.
+
+### Effort selection
+
+Surfaces the existing per-model inference-param system rather than inventing a parallel one. The Effort submenu appears only when an admin marked the param supported, left it unlocked, and enumerated `allowed` levels — mirroring `_merge_inference_params`, whose enum branch keeps an override only if it is a member of that set and pins locked params to the admin default. Offering a level the backend would silently discard would show the user a choice that does nothing. Selections write through the same per-model override store every other inference param uses.
+
+### Icons
+
+Every row leads with a left-aligned vendor avatar, set two deliberately different ways. `iconSlug` points at a logo the SPA already ships (anthropic, openai, amazon, meta) — a string on the record, no storage, no round trip, and a crisp theme-aware vector at any size; for a vendor we ship, that is the better answer and not the fallback. An upload covers the rest (an in-house fine-tune, a vendor we ship no logo for): bytes to S3 under `models/{id}/icons/{digest}.{ext}`, with the record carrying only the key — the same 400 KB item-limit lesson agent icons learned. An upload wins over a slug, being the more deliberate act. With neither set the client matches on `providerName`, so every existing model keeps an icon.
+
+### GPT-6 Astra
+
+`us.openai.gpt-6-astra` is registered at the Geo CRIS **Short Context** rate card — $11.00 in / $13.75 cache-write / $1.10 cache-read / $55.00 out per MTok — with `maxInputTokens` inherited at 272,000.
+
+**The cap is load-bearing.** The context price tier is selected by the *actual* token count of the request, so nothing stops us being billed on the Long Context card except staying under the boundary. Crossing it bills input at 2×, output at 1.5× and both cache buckets at 2×, while a `CuratedModel` holds one flat rate per bucket — so raising the cap would silently **under-charge** every long turn. Two card-backed deviations from the GPT-5.6 family defaults: `maxOutputTokens: 128_000` and `knowledgeCutoffDate: '2026-04-30'`, both published where the sibling cards say N/A. `supportedParams` is deliberately still absent — a declared spec flips the guard from permissive to restrictive, and a wrong entry would block a parameter the model accepts.
+
+---
+
+## Knowledge bases
+
+### Chunk inspector
+
+`GET /assistants/{id}/documents/{doc}/chunks` — owner/editor only, read-only, one bounded Retrieve, no new chunking or ingestion path.
+
+This is the tooling half of a decision that was otherwise "guidance, not code": the managed backend's vision step flattens a column-structured flowchart or a 2-D table at ingestion, so a per-column question gets a **confident wrong answer with no trace**, and fixing a managed parser is not on the table. But guidance nobody can verify is not guidance — an owner cannot act on "convert your flowchart to a text table" without first seeing that their flowchart came out wrong. This is where they look.
+
+Three things are deliberate, each mutation-guarded by a test:
+
+1. The document filter is `equals` on `document_id`, **never a prefix operator** — a prefix match for `DOC-1` also admits `DOC-10`, so the operator choice *is* the isolation boundary, not a query-tuning detail.
+2. A post-filter drops any chunk whose `document_id` is not the requested one, on top of the backend filter. Belt and braces, because the failure mode is silent and its blast radius is one owner reading another's document.
+3. **Full chunk text, untruncated.** The existing citation trace caps excerpts at 500 chars, which is exactly why it cannot serve this purpose: a flattened table's damage is usually past the cut, so a truncated excerpt of a mangled table reads like a fine excerpt of a fine table.
+
+### Born-managed knowledge bases
+
+`MANAGED_KB_NEW_DEFAULT` (rollout ladder step 2) was a **no-op**: no backend code read it, and the app-api Lambda never received it. Both are now wired. `maybe_enroll_new_default()` makes a newly finalized agent born managed by reusing `enroll()` — a new agent has no corpus, so migrating an empty one provisions the KB, converges instantly, and promotes through the proven, crash-safe, dispatcher-driven worker, with `catch_up` covering documents uploaded mid-flight. Flag-gated, idempotent, and error-swallowing so it can never fail agent creation.
+
+**Ships dark** (flag default off). Turning it on at fleet scale is gated by the ~10k Bedrock KB per-account quota, since managed is one KB per assistant.
+
+### Byte cap at upload time
+
+The interactive upload path was the last byte-adding path still uncapped (migration was already covered). A request-time pre-check reserves the client-declared size against `min(per_owner_cap, per_kb_ceiling)` **before** creating the `DOC#` row or issuing a presigned URL, returning HTTP 413 with the numbers. The reservation is provisional; an authoritative reconcile at ingestion takes the true size from an S3 HEAD and commits, releases the difference, or fails the document and deletes the orphaned S3 object. `settle_once()` makes commit/release exactly-once across EventBridge redeliveries and racing failure paths. Managed KBs only — legacy S3-Vectors KBs stay uncapped.
+
+---
+
+## Fine-tuning
+
+### Checkpoint and resume
+
+Two things restart a training job: a spot interruption, and SageMaker killing it at `MaxRuntimeInSeconds` — which the dollar-quota clamp makes routine, since a $14 balance buys 3.7h on the 34B instance while a real run needs far longer. Until now `save_strategy="no"` meant the adapter was written only after `trainer.train()` returned, so **either restart produced nothing at all for the money already spent**.
+
+The interval is computed, not fixed. `save_steps` counts *optimizer* steps, and a 34B VLM trains at batch 1 with 16-step accumulation — a 90-sample epoch is about 6 steps. Against a hardcoded `save_steps=50` the longest, most interruption-exposed job in the catalog would never checkpoint, while a text classifier with thousands of steps would checkpoint constantly. `resolve_save_steps` scales to the run's own step count targeting ~10 checkpoints, so an interruption costs at most about a tenth of the run. `save_total_limit=1` keeps the mirror bounded. Checkpoints go to a `checkpoints/` prefix rather than inside the job's output prefix, where SageMaker writes the finished `model.tar.gz`.
+
+### Managed spot
+
+Roughly a 65% discount for a longer queue and the risk of interruption. It is only safe now that checkpointing landed: simulated at a 0.15/hr hazard, a 48h job costs **~3,200 billed hours without checkpointing and ~18 with it**. The two are enforced together — asking for spot with `checkpointing=false` is refused at submit rather than sold.
+
+Off by default. Measured on-demand capacity waits for these GPU families ran 28–58 minutes in us-west-2, and spot draws from the surplus of the same constrained pools, so a researcher who needs a result this afternoon should be able to pay for certainty. `MaxWaitTimeInSeconds` covers waiting for capacity *and* training and must exceed `MaxRuntimeInSeconds`, so it is the runtime plus a four-hour queue allowance; waiting is not billed. `MaxRuntime` itself is untouched — spot must not quietly extend the budget clamp. Cost accounting needs no spot branch: AWS expresses the discount by shrinking `BillableTimeInSeconds` against the same on-demand rate.
+
+### VLM context length
+
+Three of five VLM catalog models could not train on their own defaults. SmolVLM-Instruct spends **1377 tokens on a single image** against a default `context_length` of 1024, so truncation cut the image placeholder run to 891 and the processor rejected the batch — the image alone did not fit in the budget, let alone the prompt. LLaVA-1.6's AnyRes tiling and Qwen2.5-VL's dynamic resolution both go well past the 2048 those entries defaulted to.
+
+A fixed default cannot be right, because the token cost depends on the checkpoint's tiling **and** on the resolution of the images the user uploaded. The trainer now renders a sample of records untruncated, raises the context length to fit, and logs the adjustment, failing only when a single record genuinely exceeds the model's own maximum. Defaults are raised too (2048 for SmolVLM and LLaVA-1.5, 4096 for the three AnyRes/dynamic-resolution models) so the measured path stays a safety net rather than the norm; headroom is close to free because the collator pads to the longest item in the batch, not to `max_length`.
+
+---
+
+## 🐛 Bug fixes
+
+**Loading a conversation page logged blocked mixed content, twice.** `https://dev.boisestate.ai/s/<id>` requested `http://api.dev.boisestate.ai/agents` — a URL built nowhere in the SPA. It was Starlette's own `redirect_slashes` answer to `GET /api/agents/`, rendered from the only things app-api can see behind CloudFront: the ALB's hostname (the `/api/*` behaviour uses `ALL_VIEWER_EXCEPT_HOST_HEADER`), plain HTTP (the ALB terminates TLS), and a path with `/api` already stripped. Every part of that `Location` is wrong — the browser blocks it so the caller silently gets nothing, the internal ALB hostname leaks into a page the user can read, and a client that did follow it would land on a different origin where the `__Host-` BFF cookies are not sent and the request 401s. CloudFront now sets `x-forwarded-prefix: /api` and `ProxiedRedirectMiddleware` restores the public URL. Not specific to `/agents`: `/models/`, `/files/` and `/auth/login/` produced the same thing. (#1074)
+
+**The agent designer's preview silently dropped tool calls.** Measured on dev against the `canvas_faculty` MCP server: one requested `upload_course_file` produced ~316 attempts and **zero** invocations of the backing Lambda; `import_course_package` 647 attempts, zero invocations. The identical calls in the full chat succeeded first try, and nothing was surfaced to the user. The root cause was not a divergent dispatch path but a divergent SSE *consumer* — `PreviewChatService` implemented 9 of the ~27 events `processStreamEvent` dispatches, and every callback in that parser is invoked with `?.`, so an unimplemented handler drops its event in total silence: no error, not even `onParseError`. Among the dropped events were `oauth_required` and `tool_approval_required`, **the two that gate dispatch** — so the tool paused server-side waiting for an answer the preview had no way to ask for. The fork is deleted; both preview surfaces run on `ChatRequestService` / `ChatHttpService` / `StreamParserService`. (#1060)
+
+**Conversation Mode silently stopped applying after a reload.** The session page hydrates the active mode twice on load — provisionally, before metadata arrives, then for real — and the provisional call claimed the session id, so the clobber guard rejected the real hydration. Because chat-request sends `selected_prompt_id` from `activePromptId()`, the mode stopped being applied to every turn after a reload while the stored preference still said it was on. The provisional call now passes `claim:false`; a deliberate "None" still claims, so stale metadata cannot undo it. (#1079)
+
+**Fine-tuning inference had never worked from the deployed app.** Batch Transform is a two-step API — `CreateModel` registers the trained artifact, then `CreateTransformJob` runs against it — and the task role was granted the job actions but not `CreateModel`, so every inference job died at step one with `AccessDeniedException`. It went unnoticed because the failure is invisible from a developer machine: CloudTrail shows every successful `CreateModel` in dev was called by a human's SSO credentials running app-api locally against dev data. The ARN is the subtle part — `sagemaker_service` names the model `model-{job_name}` and `job_name` already starts with the project prefix, so the resource is `model/model-<prefix>-*` with the literal `model-` **ahead of** the prefix; a pattern written to match the training-job and transform-job ARNs looks correct and denies every call. (#1023)
+
+**Connector edits were rejected with an instruction the admin could not follow.** The discovery guard in `update_provider` treated any non-None `oauth_discovery_url` as a discovery change, and a discovery change requires a credential rotation — but the edit form round-trips the discovery URL on every save, so changing scopes, display name, icon or enabled state failed with "Discovery config can only be updated together with a credential rotation." The admin could not comply: the client secret is never readable back. The guard now compares against the stored record, so it means what its error message says. (#1029)
+
+**A fresh deployment would have listed zero tools.** `seed_bootstrap_data.py` hand-builds its tool item instead of calling `ToolDefinition.to_dynamo_item`, so it wrote `GSI1PK`/`GSI1SK` by hand and had no `GSI5PK`. Once the catalog read moved to that sparse index, a freshly bootstrapped deployment — a fork, a new environment, a rebuilt dev — would have listed **nothing**, with no error to notice, and a backfill would not even be the obvious remedy because nothing about that install is legacy. A test now derives the expected key set from the model and asserts the seeder writes all of it. (#1070)
+
+**`/users/me/settings` was read twice on every first load.** `settingsResource` fetched eagerly the moment `UserSettingsService` is injected; `ModelService.findUserDefaultModel` fetched again once `/models` had landed. Measured on dev they land ~280ms apart (t=863ms, t=1146ms) — **sequential, not concurrent**, so a single-flight guard would not have caught the second. `getSettings()` memoizes the promise instead. A rejected read is deliberately not cached, and `updateSettings` drops the memo before reloading. (#1067)
+
+**Nightly Build & Test failed seven consecutive nights** (2026-09-05 → 09-11) after being green the five before. Six filesystem-reading specs failed only under `--coverage`, which the nightly passes and PR CI did not. Under `--coverage`, @angular/build's unit-test builder bundles each spec into a flattened chunk emitted at the **project root** rather than handing Vitest the spec at its own source path, so `import.meta.url` and the `__dirname` shim move with it. That is an absolute relocation, not a fixed-depth shift, so every `resolve(SPEC_DIR, '..')` silently changed meaning: a doc-presence spec read the wrong README, a parity spec ENOENT'd at collection, and two hygiene guards walked the whole package — including generated Tailwind CSS, full of literal hex — and so "found" violations. New `src/testing/project-root.ts` walks up from `process.cwd()` to the directory holding `angular.json`, the same way the Angular CLI locates the workspace. The coverage build now also runs on PR CI. (#1048)
+
+**The new `agentcore-runtime-active-sessions` alarm fired on every load test.** Validated against 7 days of real prod `ActiveSessionCount` it would have fired three times in three nights, every one a planned load test, peaking at 241, 608 and 1404. No threshold fixes that: load tests still trip it at 500, and it only goes quiet around 1500, which is *above* the ~99 sustained by the `/ping` reaper regression the alarm exists to catch. Duration does separate them — the regression sustained ~99 for three months, the load tests ran 15–30 minutes. At threshold 75 over a 60-minute window, simulated firings drop to zero on that week's data while the regression would still be caught. (#1058)
+
+Also: the tool summary no longer eats its closing quote (#1039); the tool row's hover highlight runs the full drawer width (#1042); the tool rail's hover is scoped to the rail (#1043); the prose margin under the tool batch summary is dropped (#1044).
+
+---
+
+## 🔒 Security
+
+**Scoped bindings make an Agent's tool restriction structural.** A bound MCP server previously loaded all of its tools, with the agent's system prompt as the only thing standing between a user and `grade_submission` or `delete_rubric` — prompt wording is a fence for ordinary use and none at all against a determined one. (#1047)
+
+**The chunk inspector's document filter is the isolation boundary.** `equals` on `document_id`, never a prefix operator, because a prefix match for `DOC-1` also admits `DOC-10`; a post-filter backs it up, because the failure mode is silent and its blast radius is one owner reading another owner's document. (#1057)
+
+**WCAG AA contrast sweep.** `dark:text-primary-400` resolves to #1e53c1 and fails AA in dark mode; the repo already generates `--color-primary-accessible-dark` (#437cee) for exactly this. Six legacy occurrences swept across four files, measured with `getComputedStyle` against each site's real composited backdrop — e.g. the agent-form "+Add" text moved from 2.23:1 to 3.90:1, the create-training-job check icon from 2.59:1 to 4.53:1 against a 3.0 threshold. Separately, `bg-primary-50|100|200` as a tint fill measured 4.13:1, 3.52:1, 2.23:1 and 2.63:1 across four real sites, all failing. (#1082, #1091)
+
+---
+
+## ⚡ Performance
+
+### The tool catalog is Queried, not Scanned
+
+The `{prefix}-app-roles` table is shared: tools, skills, roles, role grants, JWT mappings **and one tool-preferences row per user** all live in it. `list_tools` scanned it and filtered, and Scan cost tracks table size rather than result size — so that read's cost grew with **enrollment**, not with the number of tools. Measured on dev: 95 items read to return 24 tools, 17 of them per-user rows. In prod that is thousands of preference rows read to return ~24 tools. The Query reads 24 to return 24, and stays flat as the campus grows.
+
+**The fallbacks are why this is safe to ship, not incidental hardening.** An empty tool catalog is not a degraded experience — every user loses every tool — and both ways this index can fail to answer produce exactly that:
+
+- **The index is absent.** `platform.yml` and `backend.yml` are ordered by nothing, a GSI is still CREATING after CloudFormation reports success, and a rolled-back stack ships its images anyway. Falls back to the Scan. It deliberately does *not* use `dynamo_errors.log_missing_index`: that helper is written for surfaces that degrade to empty and its message says so, which would be a lie here.
+- **The index is present but unpopulated.** This raises nothing at all — the keys are sparse, so a catalog whose backfill has not run indexes nothing and the Query succeeds with **zero rows**. A zero result is therefore treated as suspect and re-read via Scan: if the table really holds tools we serve them and log an ERROR naming the backfill script; if it is genuinely empty (a fresh install before seeding) both agree, at the cost of one extra read per cache fill.
+
+### Tenant-global catalogs are cached
+
+Every SPA first load read four catalogs identical for every user on the deployment — models, tools, system prompts and connectors — none cached, three of the four full table scans. New `apis.shared.caching.config_cache` adds a TTL (60s, via `CONFIG_CACHE_TTL_SECONDS`) plus **single flight**, which is the half that matters under the case this exists for: with a cold cache, 300 simultaneous requests would otherwise issue 300 concurrent scans, and that stampede lands at exactly the moment the burst does. The scans also move onto `asyncio.to_thread` — they were blocking boto3 calls made from `async def`, so each stalled the whole event loop rather than just its own request.
+
+**Entries hold raw DynamoDB items and callers re-parse on every read**, deliberately. Callers mutate what these lists produce: `hydrate_model_roles` documents itself as "mutated in place and returned" and writes `allowed_app_roles` onto each model. Caching parsed objects would hand every caller one shared instance, so an admin opening the models page would write derived, display-only role fields onto the objects then served to every user — and `allowedAppRoles` is precisely the field the RBAC contract says must never be mistaken for a grant. Re-parsing is microseconds of CPU against a 50–100ms round trip.
+
+### The user-profile upsert is throttled
+
+`get_current_user_from_session` fired `sync_user_from_jwt` on every authenticated request, and that upsert is a GetItem followed by a PutItem that rewrites the whole profile row **and its GSI projections**. One SPA first load is 12 API calls, so a single page load issued **24 DynamoDB operations against one item**, writing identical values except `last_login_at`. A classroom signing in together multiplied that by the class size, each student's writes landing on their own hot partition.
+
+Throttling is safe because this was never the authoritative write — the BFF callback's `_sync_user_from_id_token` syncs on every login off the ID token (the only place the full claim set exists), and `POST /users/me/sync` writes through the repository directly. What remained here is a periodic refresh, so it only needs to run periodically: default 5 minutes via `USER_SYNC_THROTTLE_SECONDS`. The claim is recorded **before** the sync runs rather than on completion, because the 12 requests of a page load overlap and a marker written on completion would let most of them through before the first one landed. A brand-new user is unaffected: with no entry recorded, the first request always claims the sync.
+
+This also fixes a latent bug at the same site — the dispatched task was not referenced anywhere, and the event loop holds only a weak reference to a bare `asyncio.create_task(...)`, so the GC could collect it mid-await.
+
+---
+
+## ⚠️ Breaking changes
+
+### The composer settings drawer is gone, and with it the only way to select a Conversation Mode
+
+This is the one item in the release that needs a decision rather than a note.
+
+The Customize epic removed the drawer in stages: Skills and Tools left for `/customize` because they are global; the model picker and inference-param form moved to the composer; agent-lock state moved to the assistant indicator. **Conversation Mode could not follow Skills and Tools** — it applies to *this* conversation, and putting it on a global page would have recreated the exact scope lie the epic exists to fix. So it went the other way, into the composer beside the model and effort controls, replacing the old passive chip that could display an active mode but never select one.
+
+That picker was then **parked before release** (#1088). The placement was verified end to end on dev and works; the reasoning for pulling it is that a permanent composer slot is a bigger commitment than the current evidence supports, and it should come back on user feedback about where it belongs.
+
+The consequence is that this release is the first to carry both the drawer's deletion and no replacement picker. **Prod selects Guided Learning — a Socratic tutoring prompt — through that drawer today**, and use is accelerating: 1 session in July, 20 in August, 60 in the first 12 days of September. After this deploy there is no UI anywhere to select a mode.
+
+Only the control was removed. `SystemPromptsService`, `GET /system-prompts/`, `selected_prompt_id` on `SessionPreferences` and the admin CRUD are all untouched, and sessions that already carry a mode keep applying it. Restoring `ConversationModePickerComponent` is a revert, not a rebuild.
+
+**Three options, in order of preference:** restore the picker before merging; land a replacement placement; or take the regression knowingly with a plan for when the control returns.
+
+### Route redirects
+
+`/settings/connectors` and the three `/my-skills` paths are now redirects rather than pages. Bookmarks and the schedules page's deep link continue to work, and the ordering that keeps them working is asserted by tests — but a fork that has customised either route should re-check it.
+
+### Token bans
+
+`dark:text-primary-400` (colored text and icons) and `bg-primary-50|100|200` (tint fills) must not be used in new code. The `primary` scale is generated from #0033a0 by lightness offset alone and keeps full chroma at every step, so `primary-50` resolves to rgb(118, 179, 255) — a saturated mid-blue, not a wash. Used as a chip, badge, icon tile or selected-row fill it reads as a blue blob behind small text and fails AA. The `state-*` scales **are** real tints (`state-success-50` = rgb(240, 253, 244)), which is exactly why the pattern looked safe by analogy and wasn't. Use `text-primary-accessible dark:text-primary-accessible-dark` and neutral surfaces with the brand blue in the text.
+
+### `last_login_at` granularity
+
+Accurate to within `USER_SYNC_THROTTLE_SECONDS` (default 300) rather than to the last request. Anything reading it as a precise last-seen timestamp should be adjusted or the throttle lowered.
+
+---
+
+## 🏗️ Infrastructure
+
+- **`EntityTypeIndex` on the existing `{prefix}-app-roles` table** — `GSI5PK=ENTITY#{type}`, `GSI5SK=` the item's own PK, `ProjectionType.ALL`. Full projection because the catalog is rebuilt from these rows; an INCLUDE projection would force a base-table read per tool and give back the amplification the index exists to remove. Deliberately generic rather than TOOL-only: `list_roles` and the skills catalog scan the same table for the same reason, and DynamoDB permits only **one GSI creation per `UpdateTable`** — so giving a second entity type its own index later would need its own release, and two accumulating into one release rolls the whole stack back (the 1.12.0 lesson of 2026-08-01). One partition per entity type costs nothing now and leaves that door open. Sparse by construction, so adding it changes nothing until rows are stamped. `infrastructure/gsi-inventory.json` shows exactly one index added to one existing table.
+- **`sagemaker:CreateModel`** on the app-api task role, as its own `SageMakerModelManagement` statement scoped to `arn:aws:sagemaker:<region>:<account>:model/model-<prefix>-*`. Its own statement because the literal `model-` sits ahead of the project prefix, so a pattern that matches the training-job and transform-job ARNs denies every call. Grants only `CreateModel` — `create_model` is the sole model API the service calls. Models are left behind after each transform job, which is a tidiness follow-up, not a reason to grant `DeleteModel` here.
+- **CloudFront `x-forwarded-prefix: /api`** on the `/api/*` behaviour, set unconditionally rather than only on the stripping branches, so a viewer-supplied header is always overwritten rather than passed through to the origin.
+- **`agentcore-runtime-active-sessions` alarm** on `ActiveSessionCount` / `AgentCore.Runtime`, threshold `CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD` (default **75**) over 12 evaluation periods — a **60-minute** window, which is what separates a real regression from a load test. Runtime bills memory for a session's whole lifetime and AWS still exposes no API to list or force-terminate one, so session accumulation is the leading indicator; the `/ping` reaper bug ran undetected for three months at 73% of the platform bill. The threshold is deliberately **not** a fraction of the 5,000-session account quota — quota exhaustion is already owned by `agentcore-throttles`.
+- **`MANAGED_KB_NEW_DEFAULT`** threaded into the app-api environment as an explicit `'false'` rather than omitted, for the same visibility reason as its siblings.
+
+---
+
+## 🔧 CI/CD
+
+- **`pending-backfills.yml`** — a new gate on every PR into `main`. `scripts/release/check-pending-backfills.mjs` diffs `backend/scripts/backfill_*.py` against `origin/main` and fails when a script added in the range is not named in `RELEASE_NOTES.md`. There are now six backfill scripts and no step that surfaced "this release needs one run"; they reached the changelog only when whoever wrote it remembered. It cannot verify a backfill was actually *run* — no CI job can — but it guarantees the instruction reaches the person who can.
+- **`tests.yml`** gains a `run_frontend_coverage` input and a `Test frontend (coverage build)` job, which `ci.yml` sets true. The coverage build had been running only in the nightly, which is why six specs could break for seven consecutive nights without a single PR going red.
+- **`platform.yml`** gains job-level `CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD`, plumbed through `load-env.sh` like every other observability threshold.
+
+---
+
+## 📦 Dependencies
+
+| Component | Change | From | To |
+|---|---|---|---|
+| Backend (uv constraint) | `mcp` — transitive, via `strands-agents` | unbounded within `>=1.23.0,<2.2` | `<2` |
+
+`mcp` reaches us only through `strands-agents`; we do not depend on it directly. `strands-agents==1.55.0` declares `mcp>=1.23.0,<2.2`, so the resolver was free to cross into 2.x at any time. The only thing holding us on the 1.x line was **incidental**: `mcp` 2.x pulls `httpx2>=2.5.0`, which needs `idna>=3.18`, and we pin `idna==3.15` for an unrelated Dependabot alert. A routine security bump of `idna` would have quietly unblocked the major crossing — nobody would be choosing it, and nothing in that diff would mention MCP.
+
+The crossing lands under `integrations/mcp_apps.py`, which substitutes `strands.tools.mcp.mcp_client.ClientSession` to advertise the MCP Apps UI extension on `initialize`. That seam reaches through a Strands internal into an MCP SDK class and has never been exercised against 2.x, where the transport dependency changed (httpx → httpx2) and the types moved to a separate distribution. The failure is silent: App frame headers degrade to a generic glyph rather than raising. `[tool.uv] constraint-dependencies` bounds the version **if** `mcp` is in the resolution graph, without adding it to our dependency metadata.
+
+---
+
+## 🧪 Test coverage
+
+Roughly 5,000 lines of new backend and frontend tests. Notable scopes: the Customize pages and both detail views (~1,100 lines of specs); `test_tool_catalog_index_read.py` (240 lines) covering both index-absent and index-unpopulated fallbacks; `test_backfill_tool_catalog_index.py` (202 lines) including the idempotency and never-resurrect-a-deleted-row guards; route-ordering assertions for the four redirect/parameterised-route traps, all of which fail silently; `pending-backfills.test.ts` and the infra tests for the new IAM statement and alarm; and a mutation-verified seeder test that derives the expected GSI key set from `ToolDefinition` so the next index added to tools cannot be forgotten in the one place that mirrors the model by hand.
+
+---
+
+## 🚀 Deployment notes
+
+**Order: `platform.yml` (CDK) → wait for the index → run the backfill → `backend.yml` → `frontend-deploy.yml`.**
+
+### 1. Deploy the platform stack
+
+One GSI operation on one existing table. The release guard confirms it:
+
+```bash
+node scripts/release/check-gsi-update-limit.mjs
+```
+
+### 2. Wait for `EntityTypeIndex` to report `ACTIVE`
+
+CloudFormation reporting `UPDATE_COMPLETE` is **not** the same as the index being usable:
+
+```bash
+aws dynamodb describe-table --table-name <prefix>-app-roles \
+  --query 'Table.GlobalSecondaryIndexes[?IndexName==`EntityTypeIndex`].{Name:IndexName,Status:IndexStatus}'
+```
+
+### 3. Run the tool-catalog backfill — required, in every environment
+
+Populates `GSI5PK`/`GSI5SK` on tool rows written before the keys existed. **Dry-run by default; idempotent; guarded by `attribute_not_exists(GSI5PK)` and `attribute_exists(SK)`, so it never resurrects a deleted row and never overwrites one the writer has since stamped.** It touches only tool metadata rows — `CAPABILITIES` snapshots, skills, roles and user preferences are left alone.
+
+```bash
+AWS_PROFILE=<env> python backend/scripts/backfill_tool_catalog_index.py \
+    --table <prefix>-app-roles --region us-west-2
+```
+
+Then, once the dry run looks right:
+
+```bash
+AWS_PROFILE=<env> python backend/scripts/backfill_tool_catalog_index.py \
+    --table <prefix>-app-roles --region us-west-2 --apply
+```
+
+**Verify `skipped=0 failed=0` and that the index item count matches the tool count before considering the deploy complete.** Run against dev first, then prod. If the backfill is skipped, the Query returns zero rows, the zero-result fallback re-reads via Scan and logs an ERROR naming this script — so the catalog still serves, but at Scan cost and with a standing error in the logs.
+
+### 4. Decide on the Conversation Mode regression
+
+See Breaking changes. There is no operational workaround after the deploy: sessions that already carry a mode keep applying it, but no user can select or change one. Restore `ConversationModePickerComponent`, land a replacement placement, or accept the regression deliberately.
+
+### 5. Optional configuration
+
+| Variable | Default | Effect |
+|---|---|---|
+| `AGENT_STATUS_ENABLED` | on | `=false` stops `agent_status` emission; the SPA falls back to cycling phrases |
+| `TOOL_SUMMARIES_ENABLED` | on | `=false` stops the Nova Micro side-channel; the SPA's deterministic formatter still renders |
+| `CONFIG_CACHE_TTL_SECONDS` | `60` | Lifetime of the tenant-global catalog cache |
+| `USER_SYNC_THROTTLE_SECONDS` | `300` | Minimum interval between per-request user-profile upserts |
+| `CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD` | `75` | Concurrent-Runtime-session alarm threshold, over a 60-minute window |
+| `MANAGED_KB_NEW_DEFAULT` | `false` | Born-managed knowledge bases. Requires the migration worker running; gated at fleet scale by the ~10k Bedrock KB account quota |
+
+### 6. No action required
+
+No new table. No seeder run is required for this release. No agent, session or artifact data migration. The `mcp<2` constraint takes effect on the next `uv sync` with no code change.
+
+---
+
 # Release Notes — v1.20.0
 
 **Release Date:** September 9, 2026
