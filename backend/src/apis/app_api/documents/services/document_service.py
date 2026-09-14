@@ -516,6 +516,60 @@ async def update_document_import_metadata(
         return None
 
 
+async def assistant_has_documents(assistant_id: str) -> bool:
+    """Whether this assistant already has any ``DOC#`` rows.
+
+    A cheap existence probe — ``Select='COUNT'`` with ``Limit=1`` so DynamoDB
+    stops at the first match and returns no item bodies. Deliberately does NOT run
+    the ownership check ``list_assistant_documents`` does: the only caller
+    (born-managed) has already authorised the upload, and this answers a question
+    about the data, not about access.
+
+    Born-managed uses this to tell a genuinely new agent (no documents → provision
+    a managed knowledge base) apart from an established legacy agent (already has
+    documents on the shared S3-Vectors index → must stay legacy). Legacy knowledge
+    bases are not first-class and carry no ``KB_Record``, so the absence of a
+    record cannot make that distinction on its own.
+
+    Fails toward "has documents" (returns ``True``) on any error or missing table
+    config. That is the safe direction: wrongly provisioning managed on an
+    established legacy agent silently breaks retrieval of its existing corpus,
+    whereas wrongly staying legacy on a new agent is benign (it can still Upgrade).
+    """
+    import asyncio
+
+    table_name = os.environ.get('DYNAMODB_ASSISTANTS_TABLE_NAME')
+    if not table_name:
+        logger.error(
+            "assistant_has_documents: DYNAMODB_ASSISTANTS_TABLE_NAME unset; "
+            "assuming documents exist so born-managed stays on legacy"
+        )
+        return True
+
+    def _count() -> bool:
+        import boto3
+        from boto3.dynamodb.conditions import Key
+
+        table = boto3.resource('dynamodb').Table(table_name)
+        resp = table.query(
+            KeyConditionExpression=Key('PK').eq(f'AST#{assistant_id}')
+            & Key('SK').begins_with('DOC#'),
+            Select='COUNT',
+            Limit=1,
+        )
+        return int(resp.get('Count', 0)) > 0
+
+    try:
+        return await asyncio.to_thread(_count)
+    except Exception as e:  # noqa: BLE001 — fail toward legacy, never fail the upload
+        logger.warning(
+            f"assistant_has_documents: existence probe for {assistant_id} failed "
+            f"({e}); assuming documents exist so born-managed stays on legacy",
+            exc_info=True,
+        )
+        return True
+
+
 async def list_assistant_documents(
     assistant_id: str,
     owner_id: str,
