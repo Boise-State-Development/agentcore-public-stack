@@ -156,7 +156,11 @@ jobs:
         run: npm ci --prefer-offline
       - name: Run tests
         working-directory: infrastructure
-        run: npx jest --maxWorkers=2
+        # Use all runner cores. ubuntu-24.04 has 4 vCPU / 16 GB; the previous
+        # --maxWorkers=2 left half the cores idle (jest's own default on a
+        # 4-core box is 3). ts-jest + CDK synth is CPU-bound, so this is the
+        # PR long pole once the backend suite went parallel (#1111).
+        run: npx jest --maxWorkers=100%
 
   # Unit tests for tests/load — the SSE parser, the Cognito login-form parser,
   # and the config guards. Pure logic: no AWS credentials, no network, and no
