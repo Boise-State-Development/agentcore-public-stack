@@ -62,7 +62,10 @@ jobs:
         run: uv sync --extra agentcore --extra dev
       - name: Run pytest
         working-directory: backend
-        run: uv run pytest tests/ -v
+        # `-n auto` fans the suite across all runner cores (pytest-xdist).
+        # Verbosity/--tb live in backend/pytest.ini. The nightly coverage run
+        # (scripts/backend/test.sh) is deliberately left serial.
+        run: uv run pytest tests/ -n auto
 
   test-frontend:
     if: ${{ inputs.run_frontend }}

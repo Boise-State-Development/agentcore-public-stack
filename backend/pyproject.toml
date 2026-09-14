@@ -85,6 +85,10 @@ dev = [
     "pytest==9.0.3",
     "pytest-asyncio==1.3.0",
     "pytest-cov==7.1.0",
+    # Parallelises the suite across CPU cores (CI runs `pytest -n auto`). The
+    # tests are xdist-safe: moto mocks and hypothesis are per-worker, and no
+    # test mutates shared on-disk state.
+    "pytest-xdist==3.6.1",
     "hypothesis==6.152.3",
     "moto[dynamodb,cognitoidp]==5.1.22",
     "black==26.3.1",
