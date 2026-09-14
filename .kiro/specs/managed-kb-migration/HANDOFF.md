@@ -57,8 +57,9 @@ Four things invalidate earlier versions of this document:
 | Implementation | **Build phase done.** Groups 1–14 except 14.4 (retry endpoint) and 14.5 (admin surface); all of group 16; born-managed provision-then-ingest. A migration has completed `shadow → verify → promote → retain` in dev and serves from the managed backend |
 | Tests | Counts drift with every merge — read the latest `develop` run rather than a number pasted here. CI is green on `develop` (backend pytest, frontend, infra jest, load suite, scan) |
 | Deployed | **dev and prod.** In dev: `migrationEnabled` on, everything else off. In prod: **every flag off**, so none of it can fire |
-| Open PRs | **none** for this feature. Last merged: **#1027** born-managed (`f1e11bd3`, 2026-09-10), **#1019** upload-time byte cap, **#1018** doc-reconciler flag forwarding, **#1017** task-16.2 docs |
+| Open PRs | **none** for this feature. Last merged: **#1059** mid-upload delete fix (`0d109b7c`), **#1057** chunk inspector (`415b13c8`), **#1056** this handoff's previous refresh (`07a1e636`), **#1027** born-managed (`f1e11bd3`), **#1019** upload-time byte cap, **#1018** doc-reconciler flag forwarding, **#1017** task-16.2 docs |
 | Uncommitted | none |
+| Exercised for real? | **Born-managed: as of 2026-09-14, being exercised in dev for the first time** (see the flag table). The chunk inspector is live in dev and needs no flag. The Upgrade path has completed a real migration in dev. |
 
 **What is left is not build work.** It is (a) the three pre-promotion probes in
 group 15, (b) turning flags on in prod, and (c) two deferred surfaces (14.4, 14.5).
@@ -69,10 +70,24 @@ See §6.
 | Flag | development | production |
 |---|---|---|
 | `CDK_MANAGED_KB_MIGRATION_ENABLED` | `true` | `false` |
-| `CDK_MANAGED_KB_NEW_DEFAULT` | `false` | `false` |
+| `CDK_MANAGED_KB_NEW_DEFAULT` | **`true`** (armed 2026-09-14) | `false` |
 | `CDK_MANAGED_KB_RECONCILER_ARMED` | `false` | `false` |
-| `CDK_MANAGED_KB_DOC_RECONCILER_ARMED` | `false` | `false` |
+| `CDK_MANAGED_KB_DOC_RECONCILER_ARMED` | unset (= off) | `false` |
 | `CDK_TAG_ENVIRONMENT` | `dev` | `prod` |
+
+⚠️ **`NEW_DEFAULT` was armed in dev on 2026-09-14 to exercise born-managed for the
+first time.** Until then the feature had been merged, deployed and never once
+executed — every test was a unit test against fakes, which cannot tell you that AWS
+accepts the `CreateKnowledgeBase` call or that a work key the trigger writes is one the
+dispatcher's index actually returns. In dev, therefore, **both rungs 2 and 3 of the
+ladder are live at once**; keep that in mind when reading logs, because an agent can
+reach the managed backend by either path.
+
+Setting the GitHub variable alone changes nothing: it is read by `platform.yml` and
+threaded through CDK, so it takes effect only on the next Platform Stack deploy — which
+is what publishes both the dispatcher's schedule state and the app-api task
+environment. Flipping the variable without deploying looks exactly like the feature
+being broken.
 
 `CDK_MANAGED_KB_DOC_RECONCILER_ARMED` is the fourth flag, added by task 16.5. It was
 settable only by hand-editing `cdk.context.json` until PR #1018 added the missing
@@ -1020,22 +1035,31 @@ answer than legacy** on a question it retrieves *better*. Both are open.
 
 ### Do these first
 
-The build is done. What remains is proving it against prod's constraints and then
-turning flags on. In order:
+The build is done. What remains is proving it against real AWS and then turning flags
+on in prod. In order:
 
 | | |
 |---|---|
-| **1. Task 15.1 — the live SDK probe** | The only item that can invalidate the whole feature in prod. The *static* half passes (`boto3==1.43.68` carries `MANAGED`, the embedding members, `FLOAT32`, all four document ops, with no `AWS_DATA_PATH`), and a real create → ingest → retrieve → promote has succeeded in dev. What is missing is doing it deliberately, with the checked-in environment and **no** side-loaded service model, and recording the result. If this fails, managed knowledge bases do not work in prod at all |
-| **2. Flip `CDK_MANAGED_KB_NEW_DEFAULT` in prod** | Ladder step 2. New agents are born managed on their first document; not one existing knowledge base is touched. Lowest-blast-radius rung: each agent is independent, so a problem affects that agent and no other. Deploy first, confirm the deploy, *then* set the variable — never both in one motion |
-| **3. Task 15.2 — the ingestion-concurrency probe** | Gates ladder step 3 (`MIGRATION_ENABLED`), **not** step 2. The quota page lists no account-level ingestion-concurrency limit, which is not evidence there is none. Do not size a wide fleet migration before this is answered |
-| **4. Task 14.5 — the admin surface** | Also gates step 3 rather than step 2. The moment existing knowledge bases start migrating you have a mixed fleet and no view of who is on which engine — and "how many are affected?" is the first question anyone asks when something goes wrong |
-| **5. Task 15.3 — full matrix in the dev container** | Housekeeping; CI already covers most of it |
+| **1. Observe born-managed actually running in dev** | ⏳ IN PROGRESS — `NEW_DEFAULT` was armed in dev on 2026-09-14. Create an agent, upload one document, and watch the whole chain: the `DOC#` row reads `provisioning`, the dispatcher picks the `born_managed` work key up, `provision_managed_kb` succeeds against real Bedrock, the worker hands the document to ingestion, it reaches `complete`, and the agent answers from it. **The first document will sit on "Provisioning knowledge base…" for up to 15 minutes** before anything starts — that is the known dispatcher-interval latency, not a hang, and it is the thing most likely to be misread as a failure |
+| **2. Task 15.1 — the live SDK probe** | Largely SATISFIED BY step 1, which is why step 1 comes first. 15.1 asks for a real create → ingest → retrieve with the checked-in environment and **no** side-loaded service model, and born-managed's happy path is exactly that. Record the result against 15.1 rather than running a separate probe. If it fails, managed knowledge bases do not work in prod at all — which is why nothing below matters until it passes |
+| **3. Flip `CDK_MANAGED_KB_NEW_DEFAULT` in prod** | Ladder rung 2. New agents are born managed on their first document; not one existing knowledge base is touched. Lowest blast radius: each agent is independent. Deploy first, confirm the deploy, *then* set the variable — never both in one motion |
+| **4. Task 15.2 — the ingestion-concurrency probe** | Gates rung 3 (`MIGRATION_ENABLED`), **not** rung 2. The quota page lists no account-level ingestion-concurrency limit, which is not evidence there is none. Do not size a wide fleet migration before this is answered |
+| **5. Task 14.5 — the admin surface** | Also gates rung 3. The moment existing knowledge bases start migrating you have a mixed fleet and no view of who is on which engine — and "how many are affected?" is the first question anyone asks when something goes wrong |
+| **6. Task 15.3 — full matrix in the dev container** | Housekeeping; CI already covers most of it |
 
-⚠️ **Before flipping anything, re-read §5.41.** Managed is *worse* than legacy for
+⚠️ **Before flipping anything in prod, re-read §5.41.** Managed is *worse* than legacy for
 column-structured diagrams and two-dimensional tables: legacy returned nothing,
 managed returns a confident wrong answer. Born-managed makes managed the default for
 every new agent, so that trade stops being opt-in. The agreed mitigation is guidance,
-not code — and the `kb-chunk-inspector` spec is the tooling half of that guidance.
+not code — and the chunk inspector (now live in dev) is the tooling half of it.
+
+### Known open defects, none blocking the above
+
+| | |
+|---|---|
+| **Ingestion does not check for a deleted document** | Neither the managed consumer nor the legacy handler checks whether a `DOC#` row is `deleting` before ingesting. If an S3 object lands *after* a delete, the document is indexed and its status overwritten to `complete` — so deleted content becomes answerable again and its vectors are orphaned in the knowledge base past the cleanup that already ran. **Retrieval is not the hole**: `_filter_vectors_by_document_status` serves only `complete` and fails closed, so a `deleting` row is already invisible to queries. The bug is that ingestion *promotes the row back* to a state the filter accepts. Not reachable from a single-tab device upload (the delete control only appears after the S3 PUT resolves) but plainly reachable from a connector import or a web crawl, where rows appear with delete controls while staging is still in flight, and from a page refresh mid-upload |
+| **Cancelling a large upload may be impossible** | The delete control appears only once the row joins the document list, which is after the S3 PUT resolves. So there may be no way to abandon a wrong or oversized file mid-flight. Unconfirmed; worth a look |
+| **Chunking strategy is not configurable** | Managed KBs accept `DEFAULT` / `FIXED_SIZE` / `NONE` via `vectorIngestionConfiguration` (semantic is refused, hierarchical is not offered), and it is **immutable after the data source is created**. We send no configuration, so every KB gets the default 300 tokens / 20% overlap — which is why a single image's generated description is split across chunks, the second half orphaned from its subject. A per-agent selector at creation time is the natural shape, since creation is the only moment it can be chosen. Deferred by decision, not forgotten |
 
 ### Open, in rough order
 

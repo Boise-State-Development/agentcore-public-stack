@@ -1,6 +1,16 @@
 # KB Chunk Inspector — Design
 
-**Status:** Draft · Reads only. Built entirely on the existing retrieval facade.
+**Status:** **BUILT** (PR #1057, live in dev). Reads only. Built entirely on the existing
+retrieval facade.
+
+> **AMENDED DURING IMPLEMENTATION — managed only.** §2 below lists
+> `backend.search(kb_ref, query, top_k, retrieval_filter=None)` as available on both
+> adapters. It is not: `retrieval_filter` exists only on `ManagedKbBackend.search`. The
+> legacy adapter is `search(kb_ref, query, top_k)` — no filter, and it ignores `top_k`,
+> always returning five results from the whole knowledge base. So on legacy the
+> inspector would render *other documents'* chunks under this document's name. As built,
+> a legacy document returns `available=false` with a reason, as a 200 rather than an
+> error. See the amendment note in `requirements.md` under Requirement 2.
 
 ## 1. The one hard constraint
 

@@ -1,8 +1,12 @@
 # Born-managed: provision-then-ingest on first upload
 
-**Status:** Draft (supersedes the enroll-reuse design in `new-default-wiring.md`) ·
-**Part of:** `managed-kb-migration` (rollout ladder step 2) ·
-**Supersedes the approach in:** PR #1027 (keeps its flag reader + infra wiring)
+**Status:** **BUILT AND MERGED** ([PR #1027](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1027), `f1e11bd3`, 2026-09-10).
+Tasks 1–7 complete; task 8 is a turn-on gate, not build work.
+**Armed in dev 2026-09-14** — until that date the feature had never executed, in any
+environment. Still dark in production. ·
+**Part of:** `managed-kb-migration` (rollout ladder rung 2) ·
+**Supersedes the approach in:** `new-default-wiring.md` (kept, banner-marked, for the
+record of why)
 
 ## Decision
 

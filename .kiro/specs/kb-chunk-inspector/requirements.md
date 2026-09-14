@@ -1,6 +1,16 @@
 # KB Chunk Inspector — Requirements
 
-**Status:** Draft · **Related:** `managed-kb-migration` (§5.41 diagram answer quality, task 16.2)
+**Status:** **BUILT AND MERGED** ([PR #1057](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1057), `415b13c8`, 2026-09-11) and **live in dev** — no flag gates it, since it is a read-only view.
+Tasks 1–5 complete; task 6 (eyeball it against the real §5.41 corpus) is the remaining
+acceptance check and needs a human, not code. Requirement 2 was **amended during
+implementation** — see the note under it. ·
+**Related:** `managed-kb-migration` (§5.41 diagram answer quality, task 16.2)
+
+> It has already earned its place: the first thing it revealed in dev was that a single
+> image's generated description is split across chunks, the second half orphaned from
+> the image it describes. That is invisible without this view, and it is a plausible
+> contributor to §5.41's wrong answers. See the handoff's "Chunking strategy is not
+> configurable" entry.
 
 ## Problem
 
