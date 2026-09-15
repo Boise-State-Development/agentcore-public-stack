@@ -43,6 +43,7 @@ from apis.shared.oauth.provider_repository import (
     get_provider_repository,
 )
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.kb_backend.byte_cap import ByteCapExceeded
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,11 @@ async def _resolve_kb_usage(assistant_id: str) -> Optional[KbUsage]:
             elevated=elevated,
         )
     except Exception as exc:  # noqa: BLE001 — enrichment must not fail the list
-        logger.warning(f"Could not resolve KB usage for {assistant_id}: {exc}")
+        logger.warning(
+            "Could not resolve KB usage for %s: %s",
+            scrub_log(assistant_id),
+            scrub_log(exc),
+        )
         return None
 
 
