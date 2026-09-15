@@ -39,6 +39,7 @@ import { PickerComponent } from '@ctrl/ngx-emoji-mart';
 import { CdkConnectedOverlay, CdkOverlayOrigin, ConnectedPosition } from '@angular/cdk/overlay';
 import { AgentService } from '../services/agent.service';
 import {
+  Agent,
   AgentBinding,
   BindableItem,
   BindableServerTool,
@@ -359,57 +360,73 @@ export class AgentFormPage implements OnInit, OnDestroy {
       const agent = await this.agentService.getAgent(id);
       this.userPermission.set(agent.userPermission ?? 'owner');
       this.iconUrl.set(agent.iconUrl);
-      this.form.patchValue({
-        name: agent.name,
-        description: agent.description,
-        // Marketplace Phase 3 gates `instructions` to owner/editor. Reaching this form
-        // means one of those, so the fallback is defensive, not an expected path — the
-        // field's own `required` validator surfaces it if the gate ever changes.
-        instructions: agent.instructions ?? '',
-        visibility: agent.visibility,
-        tags: agent.tags ?? [],
-        emoji: agent.emoji ?? '',
-      });
-      this.starters.clear();
-      (agent.starters ?? []).forEach((s) => this.starters.push(new FormControl(s, Validators.required)));
-
-      this.selectedModelId.set(agent.modelConfig?.modelId ?? null);
-      this.modelParams.set(
-        stripHiddenParams(
-          (agent.modelConfig?.params ?? {}) as Record<string, number | string>,
-        ),
-      );
-
-      const toolRefs = new Set<string>();
-      const skillRefs = new Set<string>();
-      const memory: MemorySelection[] = [];
-      for (const b of agent.bindings ?? []) {
-        if (b.kind === 'tool') toolRefs.add(b.ref);
-        else if (b.kind === 'skill') skillRefs.add(b.ref);
-        else if (b.kind === 'memory_space') {
-          const cfg = (b.config ?? {}) as Partial<MemorySpaceBindingConfig>;
-          memory.push({
-            ref: b.ref,
-            label: this.spaceLabel(b.ref),
-            role: this.spaceRole(b.ref),
-            access: cfg.access === 'readwrite' ? 'readwrite' : 'read',
-            alwaysLoadIndex: (cfg.alwaysLoad ?? []).includes('MEMORY.md'),
-          });
-        }
-        // knowledge_base bindings are welded/synthesized and managed live by
-        // the knowledge-base section — no read-only display state to hydrate.
-      }
-      this.selectedToolRefs.set(toolRefs);
-      this.selectedSkillRefs.set(skillRefs);
-      this.memorySelections.set(memory);
+      this.applyAgentToForm(agent);
       // Freshly loaded state is clean — the preview matches the saved record.
-      this.syncFormToSignals();
       this.form.markAsPristine();
       this.bindingsDirty.set(false);
     } catch (err) {
       console.error('Error loading agent:', err);
       this.toast.error('Could not load this agent.');
     }
+  }
+
+  /**
+   * Map an agent-shaped object into form + selection state: the persona fields,
+   * starters, model + params, and the tool/skill/memory `bindings` decomposition,
+   * finishing by mirroring the form into the live-preview signals.
+   *
+   * Deliberately does NOT touch cleanliness (`markAsPristine` / `bindingsDirty`) or
+   * record-identity state (`userPermission` / `iconUrl`). `loadAgent` marks the form
+   * pristine *after* calling this because a freshly fetched record is clean; a later
+   * prefill-from-template path reuses this exact mapping but must leave the form DIRTY
+   * so the author is prompted to save. Takes `Partial<Agent>` so a template draft that
+   * carries only some fields hydrates through the identical path.
+   */
+  private applyAgentToForm(agent: Partial<Agent>): void {
+    this.form.patchValue({
+      name: agent.name,
+      description: agent.description,
+      // Marketplace Phase 3 gates `instructions` to owner/editor. Reaching this form
+      // means one of those, so the fallback is defensive, not an expected path — the
+      // field's own `required` validator surfaces it if the gate ever changes.
+      instructions: agent.instructions ?? '',
+      visibility: agent.visibility,
+      tags: agent.tags ?? [],
+      emoji: agent.emoji ?? '',
+    });
+    this.starters.clear();
+    (agent.starters ?? []).forEach((s) => this.starters.push(new FormControl(s, Validators.required)));
+
+    this.selectedModelId.set(agent.modelConfig?.modelId ?? null);
+    this.modelParams.set(
+      stripHiddenParams(
+        (agent.modelConfig?.params ?? {}) as Record<string, number | string>,
+      ),
+    );
+
+    const toolRefs = new Set<string>();
+    const skillRefs = new Set<string>();
+    const memory: MemorySelection[] = [];
+    for (const b of agent.bindings ?? []) {
+      if (b.kind === 'tool') toolRefs.add(b.ref);
+      else if (b.kind === 'skill') skillRefs.add(b.ref);
+      else if (b.kind === 'memory_space') {
+        const cfg = (b.config ?? {}) as Partial<MemorySpaceBindingConfig>;
+        memory.push({
+          ref: b.ref,
+          label: this.spaceLabel(b.ref),
+          role: this.spaceRole(b.ref),
+          access: cfg.access === 'readwrite' ? 'readwrite' : 'read',
+          alwaysLoadIndex: (cfg.alwaysLoad ?? []).includes('MEMORY.md'),
+        });
+      }
+      // knowledge_base bindings are welded/synthesized and managed live by
+      // the knowledge-base section — no read-only display state to hydrate.
+    }
+    this.selectedToolRefs.set(toolRefs);
+    this.selectedSkillRefs.set(skillRefs);
+    this.memorySelections.set(memory);
+    this.syncFormToSignals();
   }
 
   private spaceLabel(ref: string): string {
