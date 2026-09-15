@@ -154,6 +154,12 @@ jobs:
       - name: Install
         working-directory: infrastructure
         run: npm ci --prefer-offline
+      - name: Type-check (tsc --noEmit)
+        working-directory: infrastructure
+        # Single shared type-check for the whole project. jest now transpiles
+        # only (isolatedModules), so this is where infra type errors are caught
+        # on a PR — cheaper once here than re-run inside every jest worker.
+        run: npm run build
       - name: Run tests
         working-directory: infrastructure
         run: npx jest --maxWorkers=2
