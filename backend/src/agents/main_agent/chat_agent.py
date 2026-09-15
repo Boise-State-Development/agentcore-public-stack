@@ -68,7 +68,7 @@ class ChatAgent(BaseAgent):
 
             self.agent = AgentFactory.create_agent(
                 model_config=self.model_config,
-                system_prompt=self.system_prompt,
+                system_prompt=self._system_prompt_for(tools),
                 tools=tools,
                 session_manager=self.session_manager,
                 hooks=hooks,
@@ -78,6 +78,45 @@ class ChatAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Error creating agent: {e}")
             raise
+
+    def _system_prompt_for(self, tools: List[Any]) -> str:
+        """The system prompt this turn actually sends.
+
+        Adds ``ask_user_question``'s guidance when that tool is in the turn's
+        effective tool list. Without it the model overwhelmingly answers an
+        ambiguous request in prose instead of asking (measured 4/24 vs 24/24);
+        see ``SYSTEM_PROMPT_GUIDANCE`` for why the text is load-bearing.
+
+        Three deliberate choices:
+
+        * **Gated on the tool, not shipped to everyone.** A user without the
+          tool would otherwise carry an instruction to call something they do
+          not have.
+        * **Keyed on the POST-FILTER list**, not the request's
+          ``enabled_tools``. The two diverge — a tool id the catalog knows but
+          the registry does not is dropped by ``ToolFilter`` with a log line
+          (``canvas_faculty`` does this today) — and keying on the request
+          would advertise a tool absent from ``toolConfig``. It also picks up
+          the ``ASK_USER_QUESTION_ENABLED`` kill switch for free: while off the
+          tool is never registered, so it cannot appear here.
+        * **Applied to the prompt handed to the agent, not to
+          ``self.system_prompt``.** That field is snapshotted for resume and
+          hashed into the agent cache key; this text is derived from
+          ``enabled_tools``, which the cache key already covers via
+          ``tools_hash``, so mutating it would change resume's cache slot for
+          no benefit. ``PrefixFingerprintHook`` reads the prompt off the built
+          agent, so ``systemPromptHash`` still reflects what was really sent.
+
+        Cost: ~70 tokens, constant per configuration, inside the cacheable
+        prefix — it is written once per session, never re-written per turn.
+        """
+        from agents.builtin_tools.ask_user_question import SYSTEM_PROMPT_GUIDANCE
+
+        for tool in tools:
+            spec = getattr(tool, "tool_spec", None)
+            if isinstance(spec, dict) and spec.get("name") == "ask_user_question":
+                return f"{self.system_prompt}\n\n{SYSTEM_PROMPT_GUIDANCE}"
+        return self.system_prompt
 
     async def stream_async(
         self,

@@ -49,11 +49,16 @@ SAFETY
 * **Invents nothing.** Both key values derive from the row's own PK, so a
   stamped row is byte-identical to what the writer would have written.
 
-Run against dev first, then prod::
+Run from the repo root, against dev first, then prod. The interpreter is the
+backend venv's, not the system ``python`` — this script needs ``boto3``, and a
+bare ``python`` fails with ``ModuleNotFoundError: No module named 'boto3'``
+(hit for real during the v1.21.0 prod run). Nothing here imports ``apis.*``, so
+the venv's interpreter is the only requirement; ``uv run --project backend
+python …`` works too::
 
-    AWS_PROFILE=dev-ai python backend/scripts/backfill_tool_catalog_index.py \\
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_tool_catalog_index.py \\
         --table dev-boisestateai-v2-app-roles --region us-west-2
-    AWS_PROFILE=dev-ai python backend/scripts/backfill_tool_catalog_index.py \\
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_tool_catalog_index.py \\
         --table dev-boisestateai-v2-app-roles --region us-west-2 --apply
 """
 

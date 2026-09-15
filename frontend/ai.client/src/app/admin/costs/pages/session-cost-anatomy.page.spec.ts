@@ -5,7 +5,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { of, throwError } from 'rxjs';
 import { SessionCostAnatomyPage } from './session-cost-anatomy.page';
 import { AdminCostHttpService } from '../services/admin-cost-http.service';
-import { SessionCostAnatomy } from '../models';
+import { SessionCostAnatomy, SessionProfile } from '../models';
 
 const MOCK_ANATOMY: SessionCostAnatomy = {
   sessionId: 'sess-1',
@@ -51,16 +51,73 @@ const MOCK_ANATOMY: SessionCostAnatomy = {
   ],
 };
 
+const MOCK_PROFILE: SessionProfile = {
+  sessionId: 'sess-1',
+  userId: 'user-9',
+  session: {
+    sessionId: 'sess-1',
+    messageCount: 8,
+    modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+    enabledToolCount: 3,
+    agentBound: false,
+    lastContextTokens: 24_000,
+    contextWindow: 200_000,
+    totalCost: 0.42,
+    costKnown: true,
+    toolCallCount: null,
+    compactionCount: null,
+    diagnosisCount: 2,
+    topDiagnosisSeverity: 'warn',
+  },
+  callCount: 2,
+  peakContextTokens: 24_000,
+  compactionThreshold: 100_000,
+  writeReadRatio: 0.25,
+  attachments: { count: 1, totalBytes: 2_048, byMime: { 'application/pdf': 1 } },
+  contextTrajectory: [
+    { callIndex: 0, timestamp: '2026-07-19T10:00:00Z', contextTokens: 5_100, cacheStatus: 'first_write' },
+    { callIndex: 1, timestamp: '2026-07-19T10:01:00Z', contextTokens: 24_000, cacheStatus: 'miss_avoidable' },
+  ],
+  modelMix: { 'us.anthropic.claude-haiku-4-5-20251001-v1:0': 2 },
+  fingerprintChanges: { systemPrompt: 0, toolConfig: 1, explainedByAgentSwitch: 0 },
+  toolCensus: {},
+  enabledToolIds: ['browse_web', 'calculator', 'create_artifact'],
+  diagnoses: [
+    {
+      code: 'TOOLCONFIG_MUTATED',
+      severity: 'warn',
+      headline: 'Tool configuration changed mid-conversation',
+      evidence: { distinctToolConfigHashes: 2, callCount: 2 },
+      suggestion: 'Check the ordering of the tool list.',
+      ref: 'docs/one-pagers/fleet-prefix-spend-anatomy.md',
+    },
+    {
+      code: 'LARGE_TOOLSET',
+      severity: 'info',
+      headline: 'Large enabled tool set',
+      evidence: { enabledToolCount: 3 },
+      suggestion: 'Trim.',
+      ref: 'docs/one-pagers/cost-effectiveness-roadmap.md',
+    },
+  ],
+  dataCoverage: { toolCensus: false, compactionCount: false, fingerprints: true, cost: true },
+};
+
 describe('SessionCostAnatomyPage', () => {
   let getSessionCostAnatomy: ReturnType<typeof vi.fn>;
+  let getSessionProfile: ReturnType<typeof vi.fn>;
 
-  function setup(mock: ReturnType<typeof vi.fn>) {
+  function setup(
+    mock: ReturnType<typeof vi.fn>,
+    profileMock: ReturnType<typeof vi.fn> = vi.fn().mockReturnValue(of(MOCK_PROFILE)),
+  ) {
     getSessionCostAnatomy = mock;
+    getSessionProfile = profileMock;
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: AdminCostHttpService, useValue: { getSessionCostAnatomy } },
+        { provide: AdminCostHttpService, useValue: { getSessionCostAnatomy, getSessionProfile } },
       ],
     });
     TestBed.overrideComponent(SessionCostAnatomyPage, {
@@ -172,6 +229,93 @@ describe('SessionCostAnatomyPage', () => {
     expect(page.getStatusLabel('partial_miss')).toBe('Miss (Partial)');
     expect(page.getStatusLabel('miss_avoidable')).toBe('Miss (Avoidable)');
     expect(page.getStatusLabel('hit')).toBe('Hit');
+  });
+
+  // ── Profile: what the user was doing, loaded independently of the anatomy ────
+  describe('profile', () => {
+    it('loads the profile for the routed id and exposes the owning user for the back link', async () => {
+      const page = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY))).componentInstance;
+      await vi.waitFor(() => expect(page.profileResource.hasValue()).toBe(true));
+      expect(getSessionProfile).toHaveBeenCalledWith('sess-1');
+      expect(page.profileUserId()).toBe('user-9');
+      expect(page.modelMixLine()).toBe('2 × claude-haiku-4-5');
+      expect(page.profileNotFound()).toBe(false);
+    });
+
+    it('survives a missing profile without touching the anatomy', async () => {
+      const page = setup(
+        vi.fn().mockReturnValue(of(MOCK_ANATOMY)),
+        vi.fn().mockReturnValue(throwError(() => new HttpErrorResponse({ status: 404 }))),
+      ).componentInstance;
+      await vi.waitFor(() => expect(page.profileResource.error()).toBeTruthy());
+      await vi.waitFor(() => expect(page.anatomyResource.hasValue()).toBe(true));
+      expect(page.profileNotFound()).toBe(true);
+      expect(page.profileUserId()).toBeNull();
+      expect(page.rows()).toHaveLength(2);
+    });
+
+    it('toggles a diagnosis open and closed', () => {
+      const page = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY))).componentInstance;
+      expect(page.isDiagnosisOpen('LARGE_TOOLSET')).toBe(false);
+      page.toggleDiagnosis('LARGE_TOOLSET');
+      expect(page.isDiagnosisOpen('LARGE_TOOLSET')).toBe(true);
+      page.toggleDiagnosis('LARGE_TOOLSET');
+      expect(page.isDiagnosisOpen('LARGE_TOOLSET')).toBe(false);
+    });
+
+    it('renders evidence as humanized label + formatted value', () => {
+      const page = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY))).componentInstance;
+      const entries = page.evidenceEntries(MOCK_PROFILE.diagnoses[0]);
+      expect(entries).toEqual([
+        { key: 'distinctToolConfigHashes', label: 'Distinct tool config hashes', value: '2' },
+        { key: 'callCount', label: 'Call count', value: '2' },
+      ]);
+      expect(page.severityLabel('warn')).toBe('Warning');
+      expect(page.chipClass('high')).toContain('danger');
+      expect(page.bytes(2_048)).toBe('2.0 KB');
+    });
+
+    // ⚠️ Never replace the `navigator` global here (e.g. `vi.stubGlobal('navigator',
+    // {...navigator, clipboard})`): a spread drops prototype getters such as
+    // `userAgent`, and with the suite running `isolate: false` Angular's forms
+    // `DefaultValueAccessor` in a *later* spec file then throws on
+    // `navigator.userAgent.toLowerCase()`. Override only the `clipboard`
+    // property and put it back.
+    function withClipboard<T>(clipboard: unknown, run: () => Promise<T>): Promise<T> {
+      const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+      Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true });
+      return run().finally(() => {
+        if (original) Object.defineProperty(navigator, 'clipboard', original);
+        else delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+      });
+    }
+
+    it('copies profile + anatomy as one JSON document and flips the button label', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      await withClipboard({ writeText }, async () => {
+        const page = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY))).componentInstance;
+        await vi.waitFor(() => expect(page.profileResource.hasValue()).toBe(true));
+        await vi.waitFor(() => expect(page.anatomyResource.hasValue()).toBe(true));
+
+        await page.copyDiagnosticJson();
+
+        expect(writeText).toHaveBeenCalledTimes(1);
+        const doc = JSON.parse(writeText.mock.calls[0][0]);
+        expect(doc.profile.sessionId).toBe('sess-1');
+        expect(doc.anatomy.calls).toHaveLength(2);
+        expect(doc._about).toContain('Content-free');
+        expect(page.copied()).toBe(true);
+      });
+    });
+
+    it('does not throw when the clipboard is unavailable', async () => {
+      await withClipboard(undefined, async () => {
+        const page = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY))).componentInstance;
+        await vi.waitFor(() => expect(page.profileResource.hasValue()).toBe(true));
+        await expect(page.copyDiagnosticJson()).resolves.toBeUndefined();
+        expect(page.copied()).toBe(false);
+      });
+    });
   });
 
   // ── #756 — explained vs unexplained avoidable misses ──────────────────────────

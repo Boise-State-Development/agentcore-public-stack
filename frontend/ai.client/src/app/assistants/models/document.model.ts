@@ -80,11 +80,34 @@ export interface Document {
 }
 
 /**
+ * Knowledge-base storage usage, returned alongside the documents list.
+ *
+ * Only managed KBs are byte-capped (Requirement 12.11): `cap` is the binding
+ * limit (the smaller of the owner tier and the per-KB ceiling). A legacy
+ * (S3-Vectors) KB is uncapped and tracks no bytes, so `cap` is null and the
+ * counters are 0 — the UI renders an uncapped indicator.
+ */
+export interface KbUsage {
+  /** 'managed' | 's3vectors'. */
+  engine: string;
+  /** Bytes committed to the KB. */
+  storedBytes: number;
+  /** Bytes reserved by in-flight uploads. */
+  reservedBytes: number;
+  /** Binding byte cap, or null for an uncapped legacy KB. */
+  cap: number | null;
+  /** Whether the elevated owner tier applies. */
+  elevated: boolean;
+}
+
+/**
  * Response from GET /assistants/{assistantId}/documents
  */
 export interface DocumentsListResponse {
   documents: Document[];
   nextToken?: string;
+  /** Storage usage + cap for the assistant's KB; absent when not resolved. */
+  kbUsage?: KbUsage | null;
 }
 
 /**

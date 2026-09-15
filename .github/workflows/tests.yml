@@ -62,7 +62,10 @@ jobs:
         run: uv sync --extra agentcore --extra dev
       - name: Run pytest
         working-directory: backend
-        run: uv run pytest tests/ -v
+        # `-n auto` fans the suite across all runner cores (pytest-xdist).
+        # Verbosity/--tb live in backend/pytest.ini. The nightly coverage run
+        # (scripts/backend/test.sh) is deliberately left serial.
+        run: uv run pytest tests/ -n auto
 
   test-frontend:
     if: ${{ inputs.run_frontend }}
@@ -151,6 +154,12 @@ jobs:
       - name: Install
         working-directory: infrastructure
         run: npm ci --prefer-offline
+      - name: Type-check (tsc --noEmit)
+        working-directory: infrastructure
+        # Single shared type-check for the whole project. jest now transpiles
+        # only (isolatedModules), so this is where infra type errors are caught
+        # on a PR — cheaper once here than re-run inside every jest worker.
+        run: npm run build
       - name: Run tests
         working-directory: infrastructure
         run: npx jest --maxWorkers=2

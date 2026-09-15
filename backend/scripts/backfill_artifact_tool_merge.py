@@ -48,10 +48,10 @@ SAFETY
 
 Run against dev first, then prod::
 
-    AWS_PROFILE=dev-ai python backend/scripts/backfill_artifact_tool_merge.py \\
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_artifact_tool_merge.py \\
         --table dev-boisestateai-v2-app-roles \\
         --assistants-table dev-boisestateai-v2-assistants          # dry-run
-    AWS_PROFILE=dev-ai python backend/scripts/backfill_artifact_tool_merge.py \\
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_artifact_tool_merge.py \\
         --table dev-boisestateai-v2-app-roles \\
         --assistants-table dev-boisestateai-v2-assistants --apply
 """

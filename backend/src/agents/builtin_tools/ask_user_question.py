@@ -48,6 +48,27 @@ from apis.shared.user_questions.models import (
 
 logger = logging.getLogger(__name__)
 
+# Appended to the system prompt of any turn whose effective tool list contains
+# this tool. Measured, not guessed: with the app's real system prompt and a
+# production-shaped tool set, the model called this tool on 4/24 deliberately
+# ambiguous requests. With these sentences added it called it on 24/24, and
+# still on 0/18 unambiguous ones — the lift comes without turning clear
+# requests into interrogations.
+#
+# ⚠️ Do not reword without re-running the harness. The same *idea* placed in
+# this tool's own description measured no better than baseline (44-56% across
+# variants, against a baseline band of 17-44%), so the effect belongs to these
+# sentences in this position, not to the concept. Nor is it explained by the
+# story a model tells about itself: removing the system prompt's "Cost
+# Awareness" clause — the thing the model blamed when asked — moved the rate
+# far less than this does.
+SYSTEM_PROMPT_GUIDANCE = (
+    "When gathering structured input upfront would be more efficient than "
+    "presenting multiple scenarios and hoping the user clarifies, use the "
+    "ask_user_question tool. Prefer it over long prose when the user's answer "
+    "would let you skip 50%+ of your response."
+)
+
 # Interrupt name. Scoped by toolUseId upstream — `ToolContext._interrupt_id`
 # builds `v1:tool_call:{toolUseId}:{uuid5(name)}` — so two parallel calls in one
 # turn produce distinct interrupts the SPA can correlate per prompt.

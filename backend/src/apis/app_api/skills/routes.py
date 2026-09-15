@@ -44,6 +44,7 @@ from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.skills.access import resolve_accessible_skill_ids
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.models import (
+    SKILL_DESCRIPTION_MAX_LENGTH,
     SkillDefinition,
     SkillResourceRef,
     SkillResourcesResponse,
@@ -62,6 +63,7 @@ from .user_service import (
     UserSkillNotFoundError,
     get_user_skill_service,
 )
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +179,7 @@ async def update_skill_preferences(
 
 
 class MySkillResponse(BaseModel):
-    """One skill the caller authored, as shown on the My Skills page."""
+    """One skill the caller authored, as shown under Customize → Skills."""
 
     skill_id: str = Field(..., alias="skillId")
     display_name: str = Field(..., alias="displayName")
@@ -229,7 +231,7 @@ class CreateMySkillRequest(BaseModel):
     """
 
     display_name: str = Field(..., alias="displayName", max_length=200)
-    description: str = Field(..., max_length=2000)
+    description: str = Field(..., max_length=SKILL_DESCRIPTION_MAX_LENGTH)
     instructions: str = ""
     allowed_tools: List[str] = Field(default_factory=list, alias="allowedTools")
     skill_metadata: Dict = Field(default_factory=dict, alias="skillMetadata")
@@ -247,7 +249,9 @@ class UpdateMySkillRequest(BaseModel):
     """
 
     display_name: Optional[str] = Field(None, alias="displayName", max_length=200)
-    description: Optional[str] = Field(None, max_length=2000)
+    description: Optional[str] = Field(
+        None, max_length=SKILL_DESCRIPTION_MAX_LENGTH
+    )
     instructions: Optional[str] = None
     allowed_tools: Optional[List[str]] = Field(None, alias="allowedTools")
     skill_metadata: Optional[Dict] = Field(None, alias="skillMetadata")
@@ -548,7 +552,9 @@ async def get_accessible_skill(
     user: User = Depends(get_current_user_from_session),
 ) -> SkillDetailResponse:
     """Read one skill the current user can reach, catalog or self-authored."""
-    logger.info(f"User {user.name} reading skill '{skill_id}'")
+    logger.info(
+        f"User {scrub_log(user.name)} reading skill '{scrub_log(skill_id)}'"
+    )
 
     skill = await _require_accessible_skill(skill_id, user)
 

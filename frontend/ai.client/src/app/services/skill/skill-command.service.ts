@@ -24,8 +24,8 @@ const MAX_RESULTS = 8;
  * at the cache-write premium on a keystroke) or showing a command that does nothing. The
  * menu's last row is "Browse skills →" instead, which is where turning one on belongs.
  *
- * The source is {@link SkillService}, already loaded by the model-settings panel and
- * session-cached, so the menu costs nothing on the keystroke path. A source that has not
+ * The source is {@link SkillService}, loaded on demand and session-cached, so the menu
+ * costs nothing on the keystroke path once anything has warmed it. A source that has not
  * loaded is simply absent — the composer must never fail because a list behind an optional
  * affordance did not arrive.
  */

@@ -496,6 +496,37 @@
           </span>
         }
       </div>
+      @if (showUsageBar()) {
+        <!-- KB storage usage (byte-cap visibility, Requirement 12.11). Managed
+             KBs are byte-capped, so the bar shows usage against the binding cap
+             and moves green→yellow→red as it fills. A legacy KB is uncapped, so
+             it shows only what is stored and stays green. Both arrive on the
+             documents-list response (kbUsage), so there is no extra request. -->
+        <div class="mb-3">
+          <div class="mb-1 flex items-center justify-between text-xs/5 text-gray-600 dark:text-gray-400">
+            <span>{{ kbUsageLabel() }}</span>
+            @if (kbHasCap()) {
+              <span class="tabular-nums">{{ kbUsagePercentLabel() }}</span>
+            }
+          </div>
+          <div
+            class="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700"
+            role="progressbar"
+            [attr.aria-valuenow]="kbHasCap() ? kbUsedBytes() : null"
+            [attr.aria-valuemin]="0"
+            [attr.aria-valuemax]="kbUsage()?.cap ?? null"
+            [attr.aria-label]="kbUsageLabel()"
+          >
+            <div
+              class="h-full rounded-full transition-all"
+              [class.bg-state-success-500]="kbUsageLevel() === 'green'"
+              [class.bg-state-warning-500]="kbUsageLevel() === 'yellow'"
+              [class.bg-state-danger-500]="kbUsageLevel() === 'red'"
+              [style.width]="kbUsageBarWidth()"
+            ></div>
+          </div>
+        </div>
+      }
       <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
         @for (doc of uploadedDocuments(); track doc.documentId) {
           <li class="flex items-start gap-3 px-3 py-2.5 sm:px-4">

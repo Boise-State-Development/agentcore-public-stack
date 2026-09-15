@@ -1,6 +1,6 @@
 # Structured clarifying questions (`ask_user_question`)
 
-Status: **PR-1 (backend), PR-2 (picker) and PR-3 (rehydration) landed. PR-4 open.**
+Status: **Complete.** PR-1 (backend), PR-2 (picker), PR-3 (rehydration), PR-4 (trigger rate + default on).
 
 The agent pauses mid-turn to ask the user one to four multiple-choice
 questions, the SPA renders a picker, and the turn continues in place with the
@@ -128,20 +128,56 @@ a paused turn with no picker is a worse failure than a guessed assumption.
 | ~~1~~ | ~~Tool, interrupt, SSE event, `PendingInterrupt` kind, integration proof~~ |
 | ~~2~~ | ~~`UserQuestionService`, stream-parser wiring, the picker (pager + multi-select + Other + Skip), object-carrying resume~~ |
 | ~~3~~ | ~~Reload rehydration, and clearing breadcrumbs for abandoned prompts~~ |
-| 4 | Flip `enabledByDefault`, **trigger-rate work**, RBAC grants. |
+| ~~4~~ | ~~Trigger-rate guidance, `enabledByDefault` on~~ |
 
-### PR-4 is not polish
+## Trigger rate: what actually moved it
 
-Measured against real Bedrock: the model reaches for the tool **4/4** when it is
-the only tool under the real default system prompt, **1–2/4** once `browse_web`
-and `calculator` sit beside it, and **0/4** through the full app (which also
-injects the artifact/Office/workspace tools). Temperature is not the variable —
-0.0, 0.7 and 1.0 behave identically. Richly-described "do the work" tools
-crowd it out.
+The tool worked end to end from PR-2 but the model rarely reached for it — 4/24
+on deliberately ambiguous requests against a production-shaped tool set. Four
+interventions were measured against that baseline, 16-24 trials each, Haiku 4.5:
 
-So the feature is correct end to end but rarely fires on its own. Getting it
-called reliably is the remaining work, and a tool description alone may not be
-enough — a clause in the system prompt is the other lever.
+| Intervention | Ambiguous | Clear |
+|---|---|---|
+| Baseline | 4/24 (17%) | 0/18 |
+| Reword the tool **description** | 44-56% — within noise | — |
+| Change the tool's position in the list | 25-38% — no effect | — |
+| Remove the prompt's "Cost Awareness" clause | 38% — small, not significant | — |
+| **Clause in the system prompt** | **24/24 (100%)** | **0/18** |
+
+Only the last escapes the noise band, and it buys the ambiguous case without
+turning clear requests into interrogations — the result that decided it was
+shippable.
+
+Three findings worth keeping:
+
+* **The description is a weak vehicle.** The *same sentences* in the tool's own
+  description measured no better than baseline. Position matters, not just
+  wording — which is why `SYSTEM_PROMPT_GUIDANCE` carries a do-not-reword
+  warning and a byte-equality test against the measured text.
+* **Baseline is noisy.** Six nominally identical baselines measured 17-44%.
+  Anything under ~25 points of separation at n≈16 is not a result. Two earlier
+  conclusions in this epic were drawn from n=4 and had to be withdrawn.
+* **A model's account of its own behaviour is a hypothesis, not evidence.**
+  Asked why it wasn't calling the tool, the platform's own model gave a fluent
+  explanation (its "be concise / every token costs the university" principle
+  was fighting the tool) and proposed a fix. The fix worked. The explanation
+  did not survive testing — removing that exact clause moved the rate far less
+  than the fix did. Take the suggestion, test the story.
+
+## Cost
+
+Measured on real sessions via `GET /admin/costs/sessions/{id}/calls`:
+
+* The tool's spec is ~630 tokens, **2.6%** of the ~24k prefix a turn carries
+  here, and it sits in the cacheable segment.
+* `SYSTEM_PROMPT_GUIDANCE` is ~63 tokens, constant per configuration, likewise
+  cached.
+* The real cost is structural: a question turn is **two** model calls, not one.
+  Both cached, the extra call is ~$0.005. If the pause outlives the cache TTL
+  the resume re-writes the prefix at ~$0.036 — about 7x.
+* For scale, the ~24k prefix is dominated by the seven per-request injected
+  tools (artifact/Office/workspace), not by anything in this feature. With them
+  disabled the prefix fell to 2,766 tokens and stopped being cached at all.
 
 Open decisions for PR-2/3:
 

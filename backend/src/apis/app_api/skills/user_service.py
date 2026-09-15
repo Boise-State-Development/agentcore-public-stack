@@ -183,7 +183,7 @@ class UserSkillService:
             f"User {scrub_log(user.email)} created skill: {scrub_log(skill_id)}",
             extra={
                 "event": "user_skill_created",
-                "skill_id": skill_id,
+                "skill_id": scrub_log(skill_id),
                 "owner_user_id": user.user_id,
             },
         )
@@ -213,7 +213,7 @@ class UserSkillService:
             f"User {scrub_log(user.email)} updated skill: {scrub_log(skill_id)}",
             extra={
                 "event": "user_skill_updated",
-                "skill_id": skill_id,
+                "skill_id": scrub_log(skill_id),
                 "owner_user_id": user.user_id,
                 "changes": list(updates.keys()),
             },
@@ -242,7 +242,7 @@ class UserSkillService:
             f"User {scrub_log(user.email)} deleted skill: {scrub_log(skill_id)}",
             extra={
                 "event": "user_skill_deleted",
-                "skill_id": skill_id,
+                "skill_id": scrub_log(skill_id),
                 "owner_user_id": user.user_id,
             },
         )

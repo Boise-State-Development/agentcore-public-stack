@@ -122,6 +122,33 @@ class DocumentResponse(BaseModel):
     last_synced_at: Optional[str] = Field(None, alias="lastSyncedAt", description="ISO 8601 timestamp of last successful sync run")
 
 
+class KbUsage(BaseModel):
+    """Storage usage for the assistant's knowledge base, for the UI usage bar.
+
+    Only managed knowledge bases are byte-capped (Requirement 12.11). A managed
+    KB reports its committed and in-flight reserved bytes and the binding cap —
+    ``effective_cap``, the smaller of the owner tier and the per-KB ceiling. A
+    legacy (S3-Vectors) KB is uncapped and tracks no bytes, so it reports
+    ``cap=None`` with zeroed counters and the UI renders an uncapped indicator.
+
+    ``elevated`` is READ from the KB record's ``elevatedByteCap`` flag; granting
+    the elevated tier is a separate feature and nothing writes it here.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    engine: str = Field(..., description="Engine serving this KB: 'managed' or 's3vectors'")
+    stored_bytes: int = Field(0, alias="storedBytes", description="Bytes committed to the KB")
+    reserved_bytes: int = Field(
+        0, alias="reservedBytes", description="Bytes reserved by in-flight uploads"
+    )
+    cap: Optional[int] = Field(
+        None,
+        description="Binding byte cap (min of owner tier and per-KB ceiling); null for uncapped legacy KBs",
+    )
+    elevated: bool = Field(False, description="Whether the elevated owner tier applies")
+
+
 class DocumentsListResponse(BaseModel):
     """Response for listing documents with pagination support"""
 
@@ -129,6 +156,11 @@ class DocumentsListResponse(BaseModel):
 
     documents: List[DocumentResponse] = Field(..., description="List of documents for the assistant")
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for next page")
+    kb_usage: Optional[KbUsage] = Field(
+        None,
+        alias="kbUsage",
+        description="Storage usage + cap for the assistant's knowledge base; null when not resolved",
+    )
 
 
 class DownloadUrlResponse(BaseModel):

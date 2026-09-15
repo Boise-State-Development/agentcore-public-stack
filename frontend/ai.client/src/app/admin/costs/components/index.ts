@@ -4,3 +4,5 @@ export * from './top-users-table.component';
 export * from './top-sessions-table.component';
 export * from './cost-trends-chart.component';
 export * from './model-breakdown.component';
+export * from './user-conversations.component';
+export * from './context-trajectory-chart.component';

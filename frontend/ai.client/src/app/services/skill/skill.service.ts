@@ -45,8 +45,9 @@ export interface SkillsResponse {
  *
  * Unlike ToolService this does NOT load in its constructor. Skills are opt-in
  * and the feature is off in every deployed env until PR-5, so the load is
- * deferred to the first open of the model-settings panel (and to an
- * Agent-bound conversation, which needs the names to render locked rows).
+ * deferred to the first open of a Customize → Skills page or the composer's
+ * skill-command menu (and to an Agent-bound conversation, which needs the
+ * names to render locked rows).
  */
 @Injectable({
   providedIn: 'root'

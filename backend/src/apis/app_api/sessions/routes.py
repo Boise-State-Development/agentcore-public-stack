@@ -724,7 +724,7 @@ async def signal_turn_interrupted_endpoint(
             if not await is_session_lease_held(session_id, user_id):
                 logger.info(
                     "Ignoring navigated_away for session %s — no turn in flight",
-                    session_id,
+                    scrub_log(session_id),
                 )
                 return Response(status_code=204)
 

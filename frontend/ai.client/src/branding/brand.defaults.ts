@@ -27,12 +27,23 @@ export const DEFAULT_ALT_LABEL = 'Logo';
 
 /**
  * Default greeting templates (use {name} as placeholder for first name).
- * Copied verbatim from the current `greetingTemplates` array in
- * `session.page.ts`.
+ *
+ * **Every greeting in this file has to fit the Chat_Greeting_Block on one
+ * line.** That block is a 720px column with 1rem of side padding, a 56px
+ * logo and a 1rem gap, which leaves the `text-4xl/tight` heading a 616px
+ * text column — and `AnimatedTextComponent` types it out a character at a
+ * time, so a line that wraps does it visibly, mid-animation. Every greeting
+ * below was checked in a browser against that column with a 12-character
+ * first name substituted for `{name}`, and `greeting-line-length.spec.ts`
+ * holds the line from here using the font's own advance widths. Keep new
+ * greetings short, and prefer a terse line to a clever one that wraps.
+ *
+ * Originally copied verbatim from the `greetingTemplates` array in
+ * `session.page.ts`; the first two entries were shortened to fit the budget.
  */
 export const DEFAULT_GREETING_TEMPLATES: readonly string[] = Object.freeze([
-  'How can I help you today, {name}?',
-  'What would you like to know, {name}?',
+  'How can I help, {name}?',
+  "What's on your mind, {name}?",
   'Ready to assist you, {name}!',
   'What can I do for you, {name}?',
   "Let's get started, {name}!",
@@ -59,9 +70,8 @@ export const DEFAULT_FALLBACK_GREETINGS: readonly string[] = Object.freeze([
  * Pooling rather than replacing is what keeps the app from feeling like it has
  * exactly one thing to say each morning.
  *
- * The two arrays above are deliberately left alone — they are pinned verbatim
- * by `brand.defaults.golden.spec.ts` as the pre-branding-refactor greetings,
- * and that guard is worth more than tidiness.
+ * Like every greeting here, these are written to the 616px one-line budget
+ * documented on `DEFAULT_GREETING_TEMPLATES`.
  */
 export const DEFAULT_TIME_OF_DAY_GREETING_TEMPLATES: Readonly<
   Record<PartOfDay, readonly string[]>
@@ -69,30 +79,30 @@ export const DEFAULT_TIME_OF_DAY_GREETING_TEMPLATES: Readonly<
   morning: Object.freeze([
     'Good morning, {name}!',
     'Bright and early, {name}.',
-    "Morning, {name} — what's first today?",
-    "Coffee's on. What are we working on, {name}?",
-    'Fresh start, {name}. Where do we begin?',
+    "Morning, {name}. What's first?",
+    "Coffee's on, {name}.",
+    'Fresh start, {name}. Where to?',
   ]),
   afternoon: Object.freeze([
     'Good afternoon, {name}!',
-    'Afternoon, {name}. What are we working on?',
+    "Afternoon, {name}. What's up?",
     'Back at it, {name}?',
-    "What's next on the list, {name}?",
-    'Afternoon, {name} — where should we pick up?',
+    "What's next, {name}?",
+    'Where were we, {name}?',
   ]),
   evening: Object.freeze([
     'Good evening, {name}!',
-    'Evening, {name}. What can I take off your plate?',
-    'One more thing before you log off, {name}?',
-    'Still going, {name}? What do you need?',
-    'Evening, {name}. Where should we start?',
+    'Need a hand, {name}?',
+    'One more thing, {name}?',
+    'Still going, {name}?',
+    "Evening, {name}. What's left?",
   ]),
   night: Object.freeze([
-    'Burning the midnight oil, {name}?',
+    'Midnight oil, {name}?',
     'Working late tonight, {name}?',
-    'The quiet hours, {name}. What are we tackling?',
+    'The quiet hours, {name}.',
     'Still up, {name}? Let me help.',
-    'Late one, {name}. Where should we start?',
+    "Late one, {name}. What's up?",
   ]),
 });
 
@@ -104,19 +114,19 @@ export const DEFAULT_TIME_OF_DAY_FALLBACK_GREETINGS: Readonly<
     'Good morning!',
     'Bright and early.',
     "Morning — what's first today?",
-    "Coffee's on. What are we working on?",
+    "Coffee's on. What's first?",
     'Fresh start. Where do we begin?',
   ]),
   afternoon: Object.freeze([
     'Good afternoon!',
-    'What are we working on this afternoon?',
+    'What are we working on?',
     'Back at it?',
     "What's next on the list?",
-    'Afternoon — where should we pick up?',
+    'Where should we pick up?',
   ]),
   evening: Object.freeze([
     'Good evening!',
-    'What can I take off your plate tonight?',
+    'What can I take off your plate?',
     'One more thing before you log off?',
     'Still going? What do you need?',
     'Evening. Where should we start?',
@@ -124,7 +134,7 @@ export const DEFAULT_TIME_OF_DAY_FALLBACK_GREETINGS: Readonly<
   night: Object.freeze([
     'Burning the midnight oil?',
     'Working late tonight?',
-    'The quiet hours. What are we tackling?',
+    'What are we tackling tonight?',
     'Still up? Let me help.',
     'Late one. Where should we start?',
   ]),

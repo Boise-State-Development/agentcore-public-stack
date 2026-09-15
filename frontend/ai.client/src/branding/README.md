@@ -76,6 +76,12 @@ Each bucket follows the same rules as the flat arrays (1–50 entries, 1–500 c
 - Both objects are **optional**. Omit either one, or any single bucket, and the built-in defaults apply for what you left out.
 - An **explicitly empty** bucket (`night: []`) is honoured as "stay quiet at that hour" rather than replaced with the defaults — it is the only way to turn a bucket off.
 
+### Keep each greeting to one line
+
+The 500-character bound is a validation limit, not a design budget. The greeting is set at `text-4xl` beside the logo, which leaves it a **616px text column** — about 35 characters once a long first name is substituted in. Longer than that and it wraps to a second line, in full view, because the greeting is typed out one character at a time.
+
+`greeting-line-length.spec.ts` measures every greeting in `brand.config.ts` (and in the worked example) against that column using the real font's advance widths, with an 11-character stress name standing in for `{name}`. If you add a greeting that would wrap, that test fails and names the string. Write short lines — "Good morning, {name}!" survives a long name; "Good morning, {name} — what shall we work on today?" does not.
+
 ## 4. Surface colors (page background, dark background, raised surfaces)
 
 Three additional anchors — `surfaces.light`, `surfaces.dark`, and `surfaces.raised` — control the app's neutral (`gray-*`/`white`) surfaces: the light-mode page background, the dark-mode page background, and the light-mode raised surface (cards, dropdowns, dialogs, table zebra-striping). Edit them alongside `colors` in `brand.config.ts`:

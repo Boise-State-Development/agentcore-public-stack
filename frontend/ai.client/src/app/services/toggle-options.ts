@@ -9,8 +9,10 @@
  * conversation). A user who leaves an agent-bound chat therefore carries the
  * lock with them.
  *
- * Conversation surfaces — the composer settings drawer — leave this `true`, so
- * locked rows stay honestly inert. Global surfaces — Customize — pass `false`:
+ * The `true` default is the conversation-scoped behaviour — locked rows stay
+ * honestly inert — and has no caller today: the composer settings drawer that
+ * needed it was removed with the Customize surface. Global surfaces — every
+ * page under Customize — pass `false`:
  * a user's own preference page must not be silently read-only because of
  * whichever conversation they happened to visit last.
  *

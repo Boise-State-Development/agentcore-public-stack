@@ -5,7 +5,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { KnowledgeBaseSectionComponent } from './knowledge-base-section.component';
 import { KbUpgradeService, UpgradeStatus, DocumentNotCarried } from './kb-upgrade.service';
-import { Document, PROCESSING_STATUSES } from '../assistants/models/document.model';
+import { Document, KbUsage, PROCESSING_STATUSES } from '../assistants/models/document.model';
 import { ConfigService } from '../services/config.service';
 import { ToastService } from '../services/toast/toast.service';
 import { DocumentService } from '../assistants/services/document.service';
@@ -613,6 +613,101 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
         fixture.detectChanges();
         expect(fixture.componentInstance.showEngineBadge()).toBe(false);
       });
+    });
+  });
+
+  describe('storage usage bar (Requirement 12.11)', () => {
+    function usage(overrides: Partial<KbUsage> = {}): KbUsage {
+      return {
+        engine: 'managed',
+        storedBytes: 0,
+        reservedBytes: 0,
+        cap: 100 * 1024 * 1024,
+        elevated: false,
+        ...overrides,
+      };
+    }
+
+    function doc(): Document {
+      return {
+        documentId: 'doc-1',
+        assistantId: 'ast-1',
+        filename: 'notes.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1234,
+        status: 'complete',
+        createdAt: '2026-09-01T00:00:00Z',
+        updatedAt: '2026-09-01T00:00:00Z',
+      } as Document;
+    }
+
+    it('is green well under the cap and shows "of the cap" copy', () => {
+      const c = fixture.componentInstance;
+      c.kbUsage.set(usage({ storedBytes: 10 * 1024 * 1024 })); // 10%
+      expect(c.kbHasCap()).toBe(true);
+      expect(c.kbUsageLevel()).toBe('green');
+      expect(c.kbUsageLabel()).toContain('of');
+      expect(c.kbUsagePercentLabel()).toBe('10%');
+    });
+
+    it('turns yellow at 75% of the cap', () => {
+      const c = fixture.componentInstance;
+      c.kbUsage.set(usage({ storedBytes: 80 * 1024 * 1024 })); // 80%
+      expect(c.kbUsageLevel()).toBe('yellow');
+    });
+
+    it('turns red at 90% of the cap', () => {
+      const c = fixture.componentInstance;
+      c.kbUsage.set(usage({ storedBytes: 95 * 1024 * 1024 })); // 95%
+      expect(c.kbUsageLevel()).toBe('red');
+    });
+
+    it('counts in-flight reserved bytes toward usage', () => {
+      const c = fixture.componentInstance;
+      // 70 MB stored + 20 MB reserved = 90 MB of 100 MB → red.
+      c.kbUsage.set(usage({ storedBytes: 70 * 1024 * 1024, reservedBytes: 20 * 1024 * 1024 }));
+      expect(c.kbUsedBytes()).toBe(90 * 1024 * 1024);
+      expect(c.kbUsageLevel()).toBe('red');
+    });
+
+    it('is uncapped and always green for a legacy knowledge base', () => {
+      const c = fixture.componentInstance;
+      c.kbUsage.set(usage({ engine: 's3vectors', cap: null, storedBytes: 42 * 1024 * 1024 }));
+      expect(c.kbHasCap()).toBe(false);
+      expect(c.kbUsageLevel()).toBe('green');
+      expect(c.kbUsageLabel()).toContain('stored');
+      expect(c.kbUsageLabel()).not.toContain('of');
+      expect(c.kbUsagePercentLabel()).toBe('');
+    });
+
+    it('renders the bar alongside the documents list for a managed KB', async () => {
+      await render(status({ phase: 'succeeded', engine: 'managed' }));
+      fixture.componentInstance.uploadedDocuments.set([doc()]);
+      fixture.componentInstance.kbUsage.set(usage({ storedBytes: 50 * 1024 * 1024 }));
+      fixture.detectChanges();
+      expect(fixture.componentInstance.showUsageBar()).toBe(true);
+      expect(fixture.nativeElement.querySelector('[role="progressbar"]')).not.toBeNull();
+      expect(text()).toContain('used');
+    });
+
+    it('hides the bar for a legacy KB, whose "0 B stored" beside real docs confuses', async () => {
+      // A Classic KB is uncapped and tracks no bytes, so the bar would read
+      // "0 B stored" next to actual documents. Hidden entirely; the per-document
+      // sizes are the only storage signal for legacy.
+      await render(status({ phase: 'none', engine: 'classic' }));
+      fixture.componentInstance.uploadedDocuments.set([doc()]);
+      fixture.componentInstance.kbUsage.set(
+        usage({ engine: 's3vectors', cap: null, storedBytes: 0 }),
+      );
+      fixture.detectChanges();
+      expect(fixture.componentInstance.showUsageBar()).toBe(false);
+      expect(fixture.nativeElement.querySelector('[role="progressbar"]')).toBeNull();
+    });
+
+    it('does not render the bar in create mode, where there is no record', () => {
+      // No entityId set → create mode, so nothing is stored yet.
+      fixture.componentInstance.kbUsage.set(usage());
+      expect(fixture.componentInstance.showUsageBar()).toBe(false);
     });
   });
 });

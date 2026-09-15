@@ -115,6 +115,24 @@ async def begin_born_managed(
         # app_kb_id == assistant_id this phase.
         record = await asyncio.to_thread(r.get_kb_record, assistant_id, assistant_id)
         if record is None:
+            # No KB_Record. A brand-new agent has none — but so does an ESTABLISHED
+            # LEGACY agent: legacy knowledge bases are not first-class, share one
+            # S3-Vectors index, and never wrote a record. Absence of a record
+            # therefore cannot, on its own, mean "new". Guard on the corpus: if the
+            # agent has already ingested any document, it is a legacy KB and must
+            # stay legacy — provisioning managed here would strand its existing
+            # documents on the legacy index (retrieval flips to the empty managed
+            # KB) and only re-ingest the one being uploaded now.
+            from apis.app_api.documents.services.document_service import (
+                assistant_has_documents,
+            )
+
+            if await assistant_has_documents(assistant_id):
+                logger.info(
+                    f"kb {assistant_id}: existing documents present and no managed "
+                    f"record — established legacy agent, staying on legacy"
+                )
+                return False
             return await _start(assistant_id, owner_user_id, visibility)
         return await _join(assistant_id, record)
     except Exception as exc:  # noqa: BLE001 — born-managed must never fail an upload
