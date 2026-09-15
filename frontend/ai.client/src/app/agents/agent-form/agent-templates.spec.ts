@@ -40,8 +40,9 @@ describe('agent templates', () => {
       expect(lower).toContain('course materials');
     });
 
-    it('leaves the model on the platform default', () => {
-      expect(draft.modelConfig.modelId).toBeNull();
+    it('pins a concrete default model from the catalog', () => {
+      expect(typeof draft.modelConfig.modelId).toBe('string');
+      expect((draft.modelConfig.modelId as string).length).toBeGreaterThan(0);
     });
 
     it('uses only valid binding kinds', () => {
@@ -115,9 +116,10 @@ describe('agent templates — full catalog', () => {
         }
       });
 
-      it('starts PRIVATE and leaves the model on the platform default', () => {
+      it('starts PRIVATE and pins a concrete default model', () => {
         expect(draft.visibility).toBe('PRIVATE');
-        expect(draft.modelConfig.modelId).toBeNull();
+        expect(typeof draft.modelConfig.modelId).toBe('string');
+        expect((draft.modelConfig.modelId as string).length).toBeGreaterThan(0);
       });
     });
   }

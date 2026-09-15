@@ -112,7 +112,7 @@ Be encouraging, patient and concrete. Assume good faith. You are a study partner
     'Can you explain this week\u2019s concept with a simple example?',
     'Where in the materials is this covered?',
   ],
-  modelConfig: { modelId: null, params: {} },
+  modelConfig: { modelId: 'us.anthropic.claude-sonnet-5', params: {} },
   bindings: [{ kind: 'tool', ref: 'gateway_search_boise_state', config: {} }],
 };
 
@@ -153,7 +153,7 @@ Be clear, direct and neutral. A good answer is one the reader can trust and chec
     'Where in the material is this covered?',
     'Is this addressed anywhere in the documents?',
   ],
-  modelConfig: { modelId: null, params: {} },
+  modelConfig: { modelId: 'us.anthropic.claude-sonnet-5', params: {} },
   bindings: [{ kind: 'tool', ref: 'gateway_search_boise_state', config: {} }],
 };
 
@@ -198,7 +198,7 @@ When the user wants to stop or debrief, give brief, kind, concrete feedback: wha
     'Roleplay a customer with a complaint so I can practice responding.',
     'Help me rehearse a difficult conversation with a coworker.',
   ],
-  modelConfig: { modelId: null, params: {} },
+  modelConfig: { modelId: 'us.anthropic.claude-sonnet-5', params: {} },
   bindings: [],
 };
 
@@ -232,7 +232,7 @@ You are a plain, helpful assistant. Answer the user's questions clearly and hone
     'What is this demo showing?',
     'Say hello so I can check the form populated.',
   ],
-  modelConfig: { modelId: null, params: {} },
+  modelConfig: { modelId: 'us.anthropic.claude-sonnet-5', params: {} },
   bindings: [
     // A real, active tool so the template still populates a normal binding.
     { kind: 'tool', ref: 'gateway_search_boise_state', config: {} },

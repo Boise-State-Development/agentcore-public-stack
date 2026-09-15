@@ -470,6 +470,9 @@ describe('AgentFormPage — template prefill (create mode)', () => {
     expect(component.form.get('visibility')?.value).toBe('PRIVATE');
     expect(component.form.get('emoji')?.value).toBe('🎓');
     expect(component.starters.length).toBe(draft.starters.length);
+    // The template's chosen model is selected (P1's applyAgentToForm sets selectedModelId).
+    expect(draft.modelConfig.modelId).toBeTruthy();
+    expect(component.selectedModelId()).toBe(draft.modelConfig.modelId);
     // The single active tool binding is applied.
     expect(component.selectedToolRefs().has('gateway_search_boise_state')).toBe(true);
     // One-shot: the key is consumed.
