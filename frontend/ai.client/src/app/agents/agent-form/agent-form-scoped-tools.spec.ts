@@ -10,6 +10,7 @@ import { AgentService } from '../services/agent.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ThemeService } from '../../components/topnav/components/theme-toggle/theme.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { ToolService } from '../../services/tool/tool.service';
 
 /**
  * Binding a subset of an MCP server's tools.
@@ -104,6 +105,12 @@ async function mount(bindings: { kind: string; ref: string }[]): Promise<{
     imports: [ReactiveFormsModule],
     providers: [
       provideRouter([{ path: 'agents', children: [] }]),
+      // The create-mode form injects ToolService; stub it so the root service's
+      // constructor doesn't attempt a (blocked) real GET /tools/.
+      {
+        provide: ToolService,
+        useValue: { initialized: () => true, tools: () => [], loadTools: vi.fn() },
+      },
       { provide: AgentService, useValue: agentService },
       {
         provide: ToastService,
