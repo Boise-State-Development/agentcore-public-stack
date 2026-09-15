@@ -18,6 +18,7 @@ import { StreamParserService } from './services/chat/stream-parser.service';
 import { CompactionSummaryService } from './services/chat/compaction-summary.service';
 import { SteeringService } from './services/chat/steering.service';
 import { ArtifactStateService } from './services/artifacts/artifact-state.service';
+import { FilePreviewStateService } from './services/file-preview/file-preview-state.service';
 import { ArtifactHttpService } from './services/artifacts/artifact-http.service';
 import { McpAppCardStateService } from './services/mcp-apps/mcp-app-card-state.service';
 import { McpAppCardHttpService } from './services/mcp-apps/mcp-app-card-http.service';
@@ -64,6 +65,7 @@ export class ConversationPage implements OnDestroy {
   private compactionSummary = inject(CompactionSummaryService);
   private steering = inject(SteeringService);
   private artifactState = inject(ArtifactStateService);
+  private filePreviewState = inject(FilePreviewStateService);
   private mcpAppCardState = inject(McpAppCardStateService);
   private mcpAppCardHttp = inject(McpAppCardHttpService);
   private mcpAppTeardown = inject(McpAppTeardownService);
@@ -424,6 +426,12 @@ export class ConversationPage implements OnDestroy {
       // loads so a prior session's cards don't bleed in, then re-hydrate
       // from the app-api list endpoint below.
       this.artifactState.reset();
+
+      // Same scoping for a docked .docx preview: it points at an upload
+      // owned by the conversation being left, and the two panes share
+      // one rail, so leaving it open would also hold the gutter for a
+      // session that has nothing to show in it.
+      this.filePreviewState.reset();
 
       // Tell every open MCP App it is going away BEFORE its iframe
       // unmounts with the message list (SEP-1865: the host sends

@@ -269,6 +269,12 @@ def make_create_word_document_tool(session_id: str, user_id: str):
                     table = doc.add_table(rows=2, cols=2)
                     table.style = 'Light Grid Accent 1'
                     table.rows[0].cells[0].text = 'Quarter'
+                    # ALWAYS bold a header row this way. A table style's
+                    # own header emphasis is conditional formatting that
+                    # not every viewer applies, so set it on the runs:
+                    for cell in table.rows[0].cells:
+                        for run in cell.paragraphs[0].runs:
+                            run.bold = True
 
                 To embed a chart, save a PNG with matplotlib then insert it:
                     import matplotlib.pyplot as plt
@@ -277,6 +283,13 @@ def make_create_word_document_tool(session_id: str, user_id: str):
                     plt.savefig('chart.png', dpi=200, bbox_inches='tight')
                     plt.close()
                     doc.add_picture('chart.png', width=Inches(6))
+
+                Start a major section on a fresh page with an explicit
+                break -- python-docx does no layout, so a document that
+                should be several pages contains no page boundaries at
+                all unless you add them:
+                    doc.add_page_break()
+                    doc.add_heading('Appendix A', level=1)
 
             document_name: File name WITHOUT extension (.docx is added
                 automatically). Use only letters, numbers, hyphens, and

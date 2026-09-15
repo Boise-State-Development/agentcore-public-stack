@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { downloadUrlFor, durableDownloadUrlFromHref } from './file-download-url';
+import {
+  downloadUrlFor,
+  durableDownloadUrlFromHref,
+  uploadIdFromHref,
+} from './file-download-url';
 
 const API = '/api';
 
@@ -52,5 +56,27 @@ describe('durableDownloadUrlFromHref', () => {
     ['garbage', 'not a url'],
   ])('leaves %s alone', (_label, href) => {
     expect(durableDownloadUrlFromHref(API, href)).toBeNull();
+  });
+
+  describe('uploadIdFromHref', () => {
+    it('recovers the upload id from a signed user-files URL', () => {
+      expect(uploadIdFromHref(SIGNED)).toBe(
+        durableDownloadUrlFromHref(API, SIGNED)?.replace(
+          `${API}/files/`,
+          '',
+        ).replace('/download', ''),
+      );
+      expect(uploadIdFromHref(SIGNED)).not.toBeNull();
+    });
+
+    it('returns null for anything that is not a user-files object URL', () => {
+      expect(uploadIdFromHref('https://example.com/plan.docx')).toBeNull();
+      expect(uploadIdFromHref('not a url')).toBeNull();
+      expect(
+        uploadIdFromHref(
+          'https://bucket.s3.us-west-2.amazonaws.com/other/prefix/plan.docx',
+        ),
+      ).toBeNull();
+    });
   });
 });

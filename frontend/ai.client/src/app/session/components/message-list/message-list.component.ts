@@ -14,6 +14,7 @@ import { UserQuestionPromptComponent } from './components/user-question-prompt/u
 import { CompactionSummaryComponent } from './components/compaction-summary/compaction-summary.component';
 import { ArtifactCardComponent } from './components/artifact/artifact-card.component';
 import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
+import { FilePreviewPanelComponent } from './components/file-preview/file-preview-panel.component';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
 import { SharedArtifactCardComponent } from '../../../shared/artifact/shared-artifact-card.component';
 import type { SharedConversationArtifact } from '../../services/share/share.service';
@@ -125,6 +126,7 @@ function segmentTurn(messages: readonly Message[]): TurnSegment[] {
     CompactionSummaryComponent,
     ArtifactCardComponent,
     ArtifactPanelComponent,
+    FilePreviewPanelComponent,
     SharedArtifactCardComponent,
     McpAppActionsComponent,
     AgentFeedbackLinkComponent,

@@ -32,15 +32,17 @@ export function downloadUrlFor(appApiUrl: string, uploadId: string): string {
 }
 
 /**
- * Rewrite a raw user-files S3 URL to the durable download route.
+ * Recover the upload id from a raw user-files S3 URL.
  *
  * Returns `null` for every other href — including S3 URLs that don't match the
  * user-files key shape — so callers leave unrelated links untouched.
+ *
+ * Split out from `durableDownloadUrlFromHref` because the preview pane needs
+ * the id itself, not a download link: `/files/{id}/preview-url` is a different
+ * route, and re-parsing the href a second way would be two places to get the
+ * key layout wrong.
  */
-export function durableDownloadUrlFromHref(
-  appApiUrl: string,
-  href: string,
-): string | null {
+export function uploadIdFromHref(href: string): string | null {
   let url: URL;
   try {
     url = new URL(href);
@@ -51,5 +53,19 @@ export function durableDownloadUrlFromHref(
   if (url.protocol !== 'https:' || !S3_HOST.test(url.hostname)) return null;
 
   const uploadId = USER_FILES_KEY.exec(url.pathname)?.[1];
-  return uploadId ? downloadUrlFor(appApiUrl, decodeURIComponent(uploadId)) : null;
+  return uploadId ? decodeURIComponent(uploadId) : null;
+}
+
+/**
+ * Rewrite a raw user-files S3 URL to the durable download route.
+ *
+ * Returns `null` for every other href — including S3 URLs that don't match the
+ * user-files key shape — so callers leave unrelated links untouched.
+ */
+export function durableDownloadUrlFromHref(
+  appApiUrl: string,
+  href: string,
+): string | null {
+  const uploadId = uploadIdFromHref(href);
+  return uploadId ? downloadUrlFor(appApiUrl, uploadId) : null;
 }

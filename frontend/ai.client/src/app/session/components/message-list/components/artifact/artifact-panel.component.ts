@@ -31,6 +31,7 @@ import type {
   OpenArtifactRef,
 } from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
+import { DockedPaneService } from '../../../../services/docked-pane/docked-pane.service';
 import {
   ArtifactHttpService,
   type ArtifactContent,
@@ -357,6 +358,7 @@ import {
 })
 export class ArtifactPanelComponent {
   private artifactState = inject(ArtifactStateService);
+  private dockedPane = inject(DockedPaneService);
   private artifactHttp = inject(ArtifactHttpService);
   private sessionService = inject(SessionService);
   private sanitizer = inject(DomSanitizer);
@@ -397,14 +399,14 @@ export class ArtifactPanelComponent {
   private loadedSourceKey: string | null = null;
   private copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Resize handle state. Width itself lives in ArtifactStateService so
-  // the layout (content padding + fixed footer/topnav) can reserve the
-  // same amount via a CSS var.
-  protected readonly paneWidth = this.artifactState.paneWidth;
-  protected readonly paneWidthMin = this.artifactState.paneWidthMin;
-  protected readonly paneWidthMax = this.artifactState.paneWidthMax;
+  // Resize handle state. Width itself lives in DockedPaneService — it
+  // belongs to the rail, not to this pane (the .docx preview shares it),
+  // and the layout reserves the same amount via a CSS var.
+  protected readonly paneWidth = this.dockedPane.width;
+  protected readonly paneWidthMin = this.dockedPane.widthMin;
+  protected readonly paneWidthMax = this.dockedPane.widthMax;
   protected readonly paneWidthCss = computed(
-    () => `${this.artifactState.paneWidth()}px`,
+    () => `${this.dockedPane.width()}px`,
   );
   protected readonly dragging = signal(false);
   private dragStartX = 0;
@@ -464,7 +466,7 @@ export class ArtifactPanelComponent {
       /* not all pointer types/environments allow capture — drag still works */
     }
     this.dragStartX = e.clientX;
-    this.dragStartWidth = this.artifactState.paneWidth();
+    this.dragStartWidth = this.dockedPane.width();
     this.dragging.set(true);
   }
 
@@ -491,7 +493,7 @@ export class ArtifactPanelComponent {
 
   protected onHandleKeydown(e: KeyboardEvent): void {
     const step = e.shiftKey ? 64 : 16;
-    const w = this.artifactState.paneWidth();
+    const w = this.dockedPane.width();
     switch (e.key) {
       case 'ArrowLeft': // widen (boundary moves left)
         this.applyWidth(w + step);
@@ -522,7 +524,7 @@ export class ArtifactPanelComponent {
       );
       target = Math.min(target, maxByViewport);
     }
-    this.artifactState.setPaneWidth(target);
+    this.dockedPane.setWidth(target);
   }
 
   protected onEscape(): void {

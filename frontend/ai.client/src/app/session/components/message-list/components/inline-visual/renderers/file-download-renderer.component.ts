@@ -2,8 +2,10 @@ import { ChangeDetectionStrategy, Component, computed, inject, input } from '@an
 import { ConfigService } from '../../../../../../services/config.service';
 import {
   downloadUrlFor,
-  durableDownloadUrlFromHref,
+  uploadIdFromHref,
 } from '../../../../../../shared/utils/file-download-url';
+import { FilePreviewStateService } from '../../../../../services/file-preview/file-preview-state.service';
+import { isPreviewableFilename } from '../../../../../services/file-preview/file-preview.model';
 
 /**
  * Payload for the file_download inline visual, produced by the office document
@@ -116,6 +118,37 @@ function styleForFilename(filename: string): FileKindStyle {
           }
         </div>
 
+        <!-- Preview: only for formats the docked pane can render, and
+             only when an upload id resolved (a malformed legacy card
+             still gets its download link). -->
+        @if (f.previewable && f.uploadId; as uploadId) {
+          <button
+            type="button"
+            class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-gray-300 px-3.5 py-1.5
+                   text-sm/5 font-semibold text-gray-700 transition-colors
+                   hover:bg-gray-50
+                   focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500
+                   dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+            (click)="preview(uploadId, f.filename)"
+          >
+            <svg class="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+              />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+              />
+            </svg>
+            <span>Preview</span>
+          </button>
+        }
+
         <!-- Download button -->
         <a
           class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl bg-primary-accessible px-3.5 py-1.5
@@ -145,27 +178,39 @@ export class FileDownloadRendererComponent {
   payload = input.required<unknown>();
 
   private readonly config = inject(ConfigService);
+  private readonly filePreview = inject(FilePreviewStateService);
 
   /** Narrowed, validated payload with resolved icon styling (null when malformed). */
-  file = computed<(FileDownloadPayload & FileKindStyle & { href: string }) | null>(() => {
+  file = computed<
+    | (FileDownloadPayload &
+        FileKindStyle & { href: string; uploadId: string | null; previewable: boolean })
+    | null
+  >(() => {
     const raw = this.payload();
     if (!raw || typeof raw !== 'object') return null;
     const p = raw as Partial<FileDownloadPayload>;
     if (!p.filename) return null;
 
     const appApiUrl = this.config.appApiUrl();
-    const href = p.upload_id
-      ? downloadUrlFor(appApiUrl, p.upload_id)
-      : p.download_url
-        ? durableDownloadUrlFromHref(appApiUrl, p.download_url)
-        : null;
+    // Legacy cards carry only an expired presigned S3 URL; the upload id
+    // is still recoverable from its key, and preview needs the id rather
+    // than the link, so resolve it once and derive both from it.
+    const uploadId = p.upload_id ?? (p.download_url ? uploadIdFromHref(p.download_url) : null);
+    const href = uploadId ? downloadUrlFor(appApiUrl, uploadId) : null;
     if (!href) return null;
 
     return {
       filename: p.filename,
       href,
+      uploadId,
+      previewable: isPreviewableFilename(p.filename),
       size_kb: p.size_kb,
       ...styleForFilename(p.filename),
     };
   });
+
+  /** Open the docked preview pane on this file. */
+  protected preview(uploadId: string, filename: string): void {
+    this.filePreview.open({ uploadId, filename });
+  }
 }

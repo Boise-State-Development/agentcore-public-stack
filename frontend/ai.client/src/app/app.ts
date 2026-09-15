@@ -12,7 +12,7 @@ import { HeaderService } from './services/header/header.service';
 import { TooltipDirective } from './components/tooltip/tooltip.directive';
 import { SessionService } from './auth/session.service';
 import { SessionService as SessionListService } from './session/services/session/session.service';
-import { ArtifactStateService } from './session/services/artifacts/artifact-state.service';
+import { DockedPaneService } from './session/services/docked-pane/docked-pane.service';
 import { isMinimalChromeRoute } from './shared/utils/route-chrome';
 import { BrandingService } from '../branding/branding.service';
 
@@ -36,7 +36,7 @@ export class App {
   private router = inject(Router);
   private session = inject(SessionService);
   private sessionList = inject(SessionListService);
-  private artifactState = inject(ArtifactStateService);
+  private dockedPane = inject(DockedPaneService);
   private titleService = inject(Title);
   private branding = inject(BrandingService);
 
@@ -72,17 +72,19 @@ export class App {
     () => this.sidenavService.isHidden() || this.minimalChrome(),
   );
 
-  /** True while an artifact pane is docked — content reserves right-side
-   *  space for it (desktop only) so the fixed panel doesn't occlude chat. */
-  protected readonly artifactPanelOpen = computed(
-    () => this.artifactState.openArtifact() !== null,
-  );
+  /** True while any pane is docked — an artifact or a .docx preview.
+   *  Content reserves right-side space for it (desktop only) so the
+   *  fixed panel doesn't occlude chat. The class name is unchanged from
+   *  when the artifact pane was the only tenant; the rail is one gutter
+   *  whatever is in it, and renaming it would churn seven templates for
+   *  no behavioural gain. */
+  protected readonly artifactPanelOpen = this.dockedPane.isOpen;
 
   /** Exposed as a CSS var on the content wrapper so the desktop-only
    *  media-query rules (here and in chat-container) reserve exactly the
    *  user-chosen pane width. */
   protected readonly artifactPaneWidthCss = computed(
-    () => `${this.artifactState.paneWidth()}px`,
+    () => `${this.dockedPane.width()}px`,
   );
 
   constructor() {

@@ -42,6 +42,7 @@
     "@ng-icons/heroicons": "33.2.2",
     "chart.js": "4.5.1",
     "clipboard": "2.0.11",
+    "docx-preview": "0.4.0",
     "katex": "0.16.45",
     "marked": "17.0.6",
     "mermaid": "11.16.1",
