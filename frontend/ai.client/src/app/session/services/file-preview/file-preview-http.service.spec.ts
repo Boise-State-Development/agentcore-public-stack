@@ -12,7 +12,7 @@ import {
   FilePreviewError,
   FilePreviewHttpService,
 } from './file-preview-http.service';
-import { DOCX_MIME } from './file-preview.model';
+import { DOCX_MIME, PPTX_MIME } from './file-preview.model';
 import { ConfigService } from '../../../services/config.service';
 
 describe('FilePreviewHttpService', () => {
@@ -69,6 +69,46 @@ describe('FilePreviewHttpService', () => {
     expect(doc.bytes).toBe(bytes);
     expect(doc.filename).toBe('plan.docx');
     expect(doc.mimeType).toBe(DOCX_MIME);
+    expect(doc.kind).toBe('docx');
+  });
+
+  it('resolves a .pptx to the pptx viewer', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    });
+
+    const pending = service.fetchDocument('up1');
+    flushPreviewUrl({ mimeType: PPTX_MIME, filename: 'deck.pptx' });
+    const doc = await pending;
+
+    expect(doc.kind).toBe('pptx');
+    expect(doc.mimeType).toBe(PPTX_MIME);
+  });
+
+  it('refuses a file whose MIME type contradicts its extension', async () => {
+    // The extension picked the viewer before any request was made, so a
+    // file named .pptx that the server knows to be a .docx has to fail
+    // here rather than reach a renderer that cannot read it.
+    const pending = service.fetchDocument('up1');
+    flushPreviewUrl({ mimeType: DOCX_MIME, filename: 'deck.pptx' });
+
+    await expect(pending).rejects.toThrow(FilePreviewError);
+    await expect(pending).rejects.toMatchObject({ retryable: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a format the pane has no renderer for', async () => {
+    const pending = service.fetchDocument('up1');
+    flushPreviewUrl({
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      filename: 'budget.xlsx',
+    });
+
+    await expect(pending).rejects.toThrow(FilePreviewError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('fetches S3 without credentials', async () => {

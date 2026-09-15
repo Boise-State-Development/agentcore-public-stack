@@ -23,6 +23,8 @@ import { CompactionSummaryService } from './compaction-summary.service';
 import { SteeringService } from './steering.service';
 import { buildSteeringMessage } from './steering';
 import { ArtifactStateService } from '../artifacts/artifact-state.service';
+import { FilePreviewStateService } from '../file-preview/file-preview-state.service';
+import { isPreviewableFilename } from '../file-preview/file-preview.model';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { ToolInsightService } from './tool-insight.service';
 import { SessionService } from '../session/session.service';
@@ -168,6 +170,7 @@ export class StreamParserService {
   private compactionSummary = inject(CompactionSummaryService);
   private steering = inject(SteeringService);
   private artifactState = inject(ArtifactStateService);
+  private filePreview = inject(FilePreviewStateService);
   private mcpAppState = inject(McpAppStateService);
   private sessionService = inject(SessionService);
   private toolInsight = inject(ToolInsightService);
@@ -483,6 +486,48 @@ export class StreamParserService {
    * and re-hydrate from the server, so a background stream must not push
    * into them while another conversation is on screen.
    */
+  /**
+   * Surface a file the turn just produced in the docked preview pane.
+   *
+   * Parity with artifacts, which pop their panel from `onArtifact`. The
+   * office tools have no SSE event of their own — the download card is
+   * just a `file_download` inline visual inside the tool result — so the
+   * hook lives here instead. That is the right place for a second reason:
+   * `tool_result` only ever arrives mid-stream, so reopening an old
+   * conversation replays the card without reopening the pane, matching
+   * `seedFromHydration` on the artifact side.
+   *
+   * Viewed-session only, for the same reason as `onArtifact`: a
+   * conversation streaming in the background must never seize the rail.
+   *
+   * A turn that writes several files opens each in turn and the last one
+   * wins, which is also how the artifact panel behaves. Formats the pane
+   * cannot render (.xlsx today) are skipped, so the card is left to speak
+   * for itself rather than opening a pane that would only show an error.
+   */
+  private maybeOpenFilePreview(
+    state: ParserSessionState,
+    resultContent: ReadonlyArray<{ json?: unknown }>,
+  ): void {
+    if (!this.isViewedSession(state)) return;
+
+    for (const entry of resultContent) {
+      const json = entry.json as
+        | { ui_type?: string; payload?: { filename?: string; upload_id?: string } }
+        | undefined;
+      if (!json || json.ui_type !== 'file_download') continue;
+
+      const filename = json.payload?.filename;
+      const uploadId = json.payload?.upload_id;
+      // `upload_id` is the current contract; cards persisted before it
+      // carry only an expired presigned URL, and those never stream live.
+      if (!filename || !uploadId) continue;
+      if (!isPreviewableFilename(filename)) continue;
+
+      this.filePreview.open({ uploadId, filename });
+    }
+  }
+
   private isViewedSession(state: ParserSessionState): boolean {
     return this.chatStateService.viewedSessionId() === state.sessionId;
   }
@@ -865,6 +910,13 @@ export class StreamParserService {
       return;
     }
 
+    // Parsed before the block lookup, and the pane opened from it, so
+    // surfacing a file the turn produced does not depend on the block
+    // bookkeeping below finding its tool_use — an unmatched result still
+    // means the file exists.
+    const resultContent = parseToolResultContent(content);
+    this.maybeOpenFilePreview(state, resultContent);
+
     // Find the tool_use block
     let foundIndex: number | null = null;
     for (const [index, block] of currentBuilder.contentBlocks.entries()) {
@@ -880,8 +932,6 @@ export class StreamParserService {
     if (foundIndex === null) {
       return; // Tool use block not found
     }
-
-    const resultContent = parseToolResultContent(content);
 
     state.currentMessageBuilder.update((builder) => {
       if (!builder) return builder;

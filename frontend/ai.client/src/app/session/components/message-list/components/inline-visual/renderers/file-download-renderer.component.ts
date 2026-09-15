@@ -43,15 +43,15 @@ const PRESENTATION_ICON =
 
 const WORD_STYLE: FileKindStyle = {
   iconPath: DOCUMENT_ICON,
-  badgeClass: 'bg-filetype-doc-50 text-filetype-doc-600 dark:bg-filetype-doc-900/30 dark:text-filetype-doc-400',
+  badgeClass: 'bg-filetype-doc-50 text-filetype-doc-700 dark:bg-filetype-doc-900/30 dark:text-filetype-doc-400',
 };
 const EXCEL_STYLE: FileKindStyle = {
   iconPath: SPREADSHEET_ICON,
-  badgeClass: 'bg-filetype-sheet-50 text-filetype-sheet-600 dark:bg-filetype-sheet-900/30 dark:text-filetype-sheet-400',
+  badgeClass: 'bg-filetype-sheet-50 text-filetype-sheet-700 dark:bg-filetype-sheet-900/30 dark:text-filetype-sheet-400',
 };
 const POWERPOINT_STYLE: FileKindStyle = {
   iconPath: PRESENTATION_ICON,
-  badgeClass: 'bg-filetype-presentation-50 text-filetype-presentation-600 dark:bg-filetype-presentation-900/30 dark:text-filetype-presentation-400',
+  badgeClass: 'bg-filetype-presentation-50 text-filetype-presentation-700 dark:bg-filetype-presentation-900/30 dark:text-filetype-presentation-400',
 };
 const GENERIC_STYLE: FileKindStyle = {
   iconPath: DOCUMENT_ICON,

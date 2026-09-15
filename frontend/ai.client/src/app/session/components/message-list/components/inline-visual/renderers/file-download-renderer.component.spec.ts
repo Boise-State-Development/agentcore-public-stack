@@ -90,10 +90,21 @@ describe('FileDownloadRendererComponent', () => {
     });
   });
 
+  it('offers a preview for a .pptx as well as a .docx', () => {
+    expect(render({ filename: 'deck.pptx', upload_id: 'up2' })).not.toBeNull();
+    expect(previewButton()).not.toBeNull();
+  });
+
   it('offers no preview for formats the pane cannot render', () => {
-    // .xlsx and legacy binary .doc both still get their download link;
-    // only the button is withheld.
-    for (const filename of ['budget.xlsx', 'deck.pptx', 'old.doc', 'notes.txt']) {
+    // .xlsx has no renderer we are willing to ship, and the legacy
+    // binary .doc/.ppt formats are not OOXML at all. All of them still
+    // get their download link; only the button is withheld.
+    for (const filename of [
+      'budget.xlsx',
+      'old.doc',
+      'old.ppt',
+      'notes.txt',
+    ]) {
       expect(render({ filename, upload_id: 'up1' })).not.toBeNull();
       expect(previewButton()).toBeNull();
     }

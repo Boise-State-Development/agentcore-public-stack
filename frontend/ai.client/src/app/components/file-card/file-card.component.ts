@@ -48,12 +48,12 @@ const FILE_TYPE_ICONS: Record<string, string> = {
 const FILE_TYPE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   'application/pdf': {
     bg: 'bg-filetype-pdf-100 dark:bg-filetype-pdf-900/60',
-    text: 'text-filetype-pdf-600 dark:text-filetype-pdf-300',
+    text: 'text-filetype-pdf-700 dark:text-filetype-pdf-300',
     border: 'border-filetype-pdf-300 dark:border-filetype-pdf-700'
   },
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': {
     bg: 'bg-filetype-doc-100 dark:bg-filetype-doc-900/60',
-    text: 'text-filetype-doc-600 dark:text-filetype-doc-300',
+    text: 'text-filetype-doc-700 dark:text-filetype-doc-300',
     border: 'border-filetype-doc-300 dark:border-filetype-doc-700'
   },
   'text/plain': {
@@ -63,48 +63,48 @@ const FILE_TYPE_COLORS: Record<string, { bg: string; text: string; border: strin
   },
   'text/html': {
     bg: 'bg-filetype-code-100 dark:bg-filetype-code-900/60',
-    text: 'text-filetype-code-600 dark:text-filetype-code-300',
+    text: 'text-filetype-code-700 dark:text-filetype-code-300',
     border: 'border-filetype-code-300 dark:border-filetype-code-700'
   },
   'text/csv': {
     bg: 'bg-filetype-sheet-100 dark:bg-filetype-sheet-900/60',
-    text: 'text-filetype-sheet-600 dark:text-filetype-sheet-300',
+    text: 'text-filetype-sheet-700 dark:text-filetype-sheet-300',
     border: 'border-filetype-sheet-300 dark:border-filetype-sheet-700'
   },
   'application/vnd.ms-excel': {
     bg: 'bg-filetype-sheet-100 dark:bg-filetype-sheet-900/60',
-    text: 'text-filetype-sheet-600 dark:text-filetype-sheet-300',
+    text: 'text-filetype-sheet-700 dark:text-filetype-sheet-300',
     border: 'border-filetype-sheet-300 dark:border-filetype-sheet-700'
   },
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
     bg: 'bg-filetype-sheet-100 dark:bg-filetype-sheet-900/60',
-    text: 'text-filetype-sheet-600 dark:text-filetype-sheet-300',
+    text: 'text-filetype-sheet-700 dark:text-filetype-sheet-300',
     border: 'border-filetype-sheet-300 dark:border-filetype-sheet-700'
   },
   'text/markdown': {
     bg: 'bg-filetype-markdown-100 dark:bg-filetype-markdown-900/60',
-    text: 'text-filetype-markdown-600 dark:text-filetype-markdown-300',
+    text: 'text-filetype-markdown-700 dark:text-filetype-markdown-300',
     border: 'border-filetype-markdown-300 dark:border-filetype-markdown-700'
   },
   // Image types
   'image/png': {
     bg: 'bg-filetype-image-100 dark:bg-filetype-image-900/60',
-    text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    text: 'text-filetype-image-700 dark:text-filetype-image-300',
     border: 'border-filetype-image-300 dark:border-filetype-image-700'
   },
   'image/jpeg': {
     bg: 'bg-filetype-image-100 dark:bg-filetype-image-900/60',
-    text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    text: 'text-filetype-image-700 dark:text-filetype-image-300',
     border: 'border-filetype-image-300 dark:border-filetype-image-700'
   },
   'image/gif': {
     bg: 'bg-filetype-image-100 dark:bg-filetype-image-900/60',
-    text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    text: 'text-filetype-image-700 dark:text-filetype-image-300',
     border: 'border-filetype-image-300 dark:border-filetype-image-700'
   },
   'image/webp': {
     bg: 'bg-filetype-image-100 dark:bg-filetype-image-900/60',
-    text: 'text-filetype-image-600 dark:text-filetype-image-300',
+    text: 'text-filetype-image-700 dark:text-filetype-image-300',
     border: 'border-filetype-image-300 dark:border-filetype-image-700'
   },
 };

@@ -23,9 +23,16 @@ import { ConfigService } from '../../../../../services/config.service';
 import { downloadUrlFor } from '../../../../../shared/utils/file-download-url';
 import { TooltipDirective } from '../../../../../components/tooltip/tooltip.directive';
 import { DocxViewerComponent } from './docx-viewer.component';
+import { PptxViewerComponent } from './pptx-viewer.component';
+import {
+  PREVIEW_KIND_LABELS,
+  PreviewKind,
+  previewKindFor,
+} from '../../../../services/file-preview/file-preview.model';
 
 /**
- * Right-docked pane that previews one uploaded `.docx` in the browser.
+ * Right-docked pane that previews one uploaded Office file in the
+ * browser — `.docx` and `.pptx` today.
  *
  * Shares the rail with `ArtifactPanelComponent` through
  * `DockedPaneService` — same width, same resize affordance, same
@@ -45,7 +52,7 @@ import { DocxViewerComponent } from './docx-viewer.component';
 @Component({
   selector: 'app-file-preview-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, TooltipDirective, DocxViewerComponent],
+  imports: [NgIcon, TooltipDirective, DocxViewerComponent, PptxViewerComponent],
   providers: [
     provideIcons({
       heroArrowDownTray,
@@ -63,7 +70,7 @@ import { DocxViewerComponent } from './docx-viewer.component';
         class="fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900"
         [style.maxWidth]="paneWidthCss()"
         [class.select-none]="dragging()"
-        [attr.aria-label]="'Document preview: ' + ref.filename"
+        [attr.aria-label]="'File preview: ' + ref.filename"
       >
         <div
           role="separator"
@@ -96,7 +103,7 @@ import { DocxViewerComponent } from './docx-viewer.component';
               {{ ref.filename }}
             </h2>
             <p class="text-xs text-gray-500 dark:text-gray-400">
-              Word document
+              {{ kindLabel() }}
             </p>
           </div>
 
@@ -151,11 +158,22 @@ import { DocxViewerComponent } from './docx-viewer.component';
               }
             </div>
           } @else {
-            <app-docx-viewer
-              [bytes]="bytes()"
-              (renderFailed)="onRenderFailed($event)"
-              (rendered)="onRendered()"
-            />
+            @switch (kind()) {
+              @case ('pptx') {
+                <app-pptx-viewer
+                  [bytes]="bytes()"
+                  (renderFailed)="onRenderFailed($event)"
+                  (rendered)="onRendered()"
+                />
+              }
+              @default {
+                <app-docx-viewer
+                  [bytes]="bytes()"
+                  (renderFailed)="onRenderFailed($event)"
+                  (rendered)="onRendered()"
+                />
+              }
+            }
             @if (!ready()) {
               <div
                 class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gray-100 dark:bg-gray-950"
@@ -167,7 +185,7 @@ import { DocxViewerComponent } from './docx-viewer.component';
                   aria-hidden="true"
                 />
                 <p class="text-sm text-gray-500 dark:text-gray-400">
-                  Loading document…
+                  Loading preview…
                 </p>
               </div>
             }
@@ -191,6 +209,17 @@ export class FilePreviewPanelComponent {
   protected readonly open = this.previewState.openFile;
 
   protected readonly bytes = signal<ArrayBuffer | null>(null);
+  /** Which viewer renders the current file. Derived from the filename so
+   *  the header reads correctly while the fetch is still in flight, then
+   *  confirmed against the server's MIME type in
+   *  `FilePreviewHttpService.fetchDocument` before any bytes are shown. */
+  protected readonly kind = computed<PreviewKind>(() => {
+    const ref = this.open();
+    return (ref && previewKindFor(ref.filename)) || 'docx';
+  });
+  protected readonly kindLabel = computed(
+    () => PREVIEW_KIND_LABELS[this.kind()],
+  );
   protected readonly error = signal<string | null>(null);
   protected readonly retryable = signal(false);
   /** Cleared only once the renderer reports a painted document, so the
@@ -251,7 +280,7 @@ export class FilePreviewPanelComponent {
       const failure =
         e instanceof FilePreviewError
           ? e
-          : new FilePreviewError('Something went wrong loading this document.', true);
+          : new FilePreviewError('Something went wrong loading this file.', true);
       this.error.set(failure.message);
       this.retryable.set(failure.retryable);
     }

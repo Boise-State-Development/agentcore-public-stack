@@ -74,7 +74,7 @@ describe('FilePreviewPanelComponent', () => {
     const aside = fixture.nativeElement.querySelector('aside');
     expect(aside).not.toBeNull();
     expect(aside.getAttribute('aria-label')).toBe(
-      'Document preview: plan.docx',
+      'File preview: plan.docx',
     );
     expect(fixture.nativeElement.textContent).toContain('plan.docx');
     expect(fetchDocument).toHaveBeenCalledExactlyOnceWith('up1');
@@ -91,7 +91,7 @@ describe('FilePreviewPanelComponent', () => {
   it('clears the loading state once the document paints', async () => {
     await openPreview();
 
-    expect(fixture.nativeElement.textContent).not.toContain('Loading document');
+    expect(fixture.nativeElement.textContent).not.toContain('Loading preview');
   });
 
   it('shows a retry affordance for a retryable failure', async () => {

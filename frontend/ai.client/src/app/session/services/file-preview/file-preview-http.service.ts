@@ -2,7 +2,11 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { DOCX_MIME } from './file-preview.model';
+import {
+  PREVIEW_KIND_MIMES,
+  PreviewKind,
+  previewKindFor,
+} from './file-preview.model';
 
 /** `GET /files/{uploadId}/preview-url` — camelCase aliases on the wire. */
 interface PreviewUrlResponseDto {
@@ -18,6 +22,8 @@ export interface PreviewDocument {
   bytes: ArrayBuffer;
   mimeType: string;
   filename: string;
+  /** Which viewer should render these bytes. */
+  kind: PreviewKind;
 }
 
 /** The preview failed in a way the pane should explain, not swallow. */
@@ -66,16 +72,23 @@ export class FilePreviewHttpService {
   private readonly config = inject(ConfigService);
 
   /**
-   * Resolve `uploadId` to a Word document's bytes.
+   * Resolve `uploadId` to a previewable document's bytes.
    *
    * Rejects with a `FilePreviewError` on every failure path so the pane
    * has one thing to catch and a `retryable` flag to decide whether to
    * offer the button.
+   *
+   * The MIME type the server recorded must agree with the extension the
+   * card was rendered from. Checking both directions is the point: the
+   * extension chose the viewer before any request was made, so a file
+   * named `.pptx` that the server knows to be a `.docx` has to fail here
+   * rather than reach a renderer that cannot read it.
    */
   async fetchDocument(uploadId: string): Promise<PreviewDocument> {
     const meta = await this.requestPreviewUrl(uploadId);
 
-    if (meta.mimeType !== DOCX_MIME) {
+    const kind = previewKindFor(meta.filename);
+    if (kind === null || meta.mimeType !== PREVIEW_KIND_MIMES[kind]) {
       throw new FilePreviewError(
         `This file is a ${meta.mimeType || 'unknown type'}, which can't be previewed here.`,
         false,
@@ -83,7 +96,7 @@ export class FilePreviewHttpService {
     }
 
     const bytes = await this.fetchBytes(meta.url);
-    return { bytes, mimeType: meta.mimeType, filename: meta.filename };
+    return { bytes, mimeType: meta.mimeType, filename: meta.filename, kind };
   }
 
   private async requestPreviewUrl(
