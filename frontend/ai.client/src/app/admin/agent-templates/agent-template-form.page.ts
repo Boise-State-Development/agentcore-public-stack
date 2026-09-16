@@ -18,6 +18,7 @@ import {
 } from './models/agent-template-admin.model';
 import { AgentService } from '../../agents/services/agent.service';
 import { BindableItem } from '../../agents/models/agent.model';
+import { EmojiPickerComponent } from '../../shared/emoji-picker/emoji-picker.component';
 
 const MAX_NAME = 128;
 const MAX_DESCRIPTION = 1024;
@@ -46,7 +47,7 @@ type BindingGroup = FormGroup<{
  */
 @Component({
   selector: 'app-agent-template-form-page',
-  imports: [RouterLink, ReactiveFormsModule, NgIcon],
+  imports: [RouterLink, ReactiveFormsModule, NgIcon, EmojiPickerComponent],
   providers: [provideIcons({ heroArrowLeft, heroPlus, heroTrash })],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -73,15 +74,8 @@ type BindingGroup = FormGroup<{
         <!-- Name + emoji -->
         <div class="flex gap-3">
           <div class="w-24">
-            <label for="emoji" class="mb-1.5 block text-sm/6 font-medium text-gray-900 dark:text-white">Emoji</label>
-            <input
-              id="emoji"
-              type="text"
-              formControlName="emoji"
-              maxlength="16"
-              placeholder="🧩"
-              class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-center text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-            />
+            <label class="mb-1.5 block text-sm/6 font-medium text-gray-900 dark:text-white">Emoji</label>
+            <app-emoji-picker formControlName="emoji" />
           </div>
           <div class="flex-1">
             <label for="name" class="mb-1.5 block text-sm/6 font-medium text-gray-900 dark:text-white">
