@@ -16,6 +16,8 @@ import {
   TemplateStatus,
   TemplateVisibility,
 } from './models/agent-template-admin.model';
+import { AgentService } from '../../agents/services/agent.service';
+import { BindableItem } from '../../agents/models/agent.model';
 
 const MAX_NAME = 128;
 const MAX_DESCRIPTION = 1024;
@@ -161,16 +163,28 @@ type BindingGroup = FormGroup<{
         <!-- Model -->
         <div>
           <label for="modelId" class="mb-1.5 block text-sm/6 font-medium text-gray-900 dark:text-white">Default model</label>
-          <input
+          <select
             id="modelId"
-            type="text"
             formControlName="modelId"
-            placeholder="Leave blank for the platform default"
-            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-          />
-          <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-            A concrete model id (e.g. <code>us.anthropic.claude-sonnet-5</code>) only prefills if it exists in the deployment's model catalog; otherwise the form falls back to the default. Blank = platform default.
-          </p>
+            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          >
+            <option value="">Platform default</option>
+            @for (m of models(); track m.ref) {
+              <option [value]="m.ref">{{ m.label }}</option>
+            }
+            @if (staleModelId()) {
+              <option [value]="staleModelId()">{{ staleModelId() }} — unavailable</option>
+            }
+          </select>
+          @if (staleModelId()) {
+            <p class="mt-1 text-xs/5 text-state-warning-600 dark:text-state-warning-400" role="alert">
+              This template's saved model (<code>{{ staleModelId() }}</code>) is no longer in the model catalog. It's kept selected as “unavailable” — pick a listed model or Platform default to replace it.
+            </p>
+          } @else {
+            <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+              Platform default lets each agent use the deployment's default model. Pick a specific model to pin it.
+            </p>
+          }
         </div>
 
         <!-- Tags -->
@@ -287,6 +301,7 @@ type BindingGroup = FormGroup<{
 })
 export class AgentTemplateFormPage implements OnInit {
   private readonly service = inject(AdminAgentTemplatesService);
+  private readonly agents = inject(AgentService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
 
@@ -299,6 +314,15 @@ export class AgentTemplateFormPage implements OnInit {
   protected readonly saving = signal(false);
   protected readonly loadError = signal<string | null>(null);
   protected readonly submitError = signal<string | null>(null);
+
+  /** RBAC-filtered model palette (`GET /agents/bindable?kind=model`, reused via AgentService). */
+  protected readonly models = signal<BindableItem[]>([]);
+  /**
+   * A saved `modelId` that is NOT in the current catalog (stale/removed model). Rendered as
+   * a clearly-labelled "unavailable" option so an edit doesn't silently drop the admin's
+   * choice. `null` when the saved model is present, blank/default, or on create.
+   */
+  protected readonly staleModelId = signal<string | null>(null);
 
   /** Model params preserved from an existing template (no UI editor for them). */
   private modelParams: Record<string, unknown> = {};
@@ -328,6 +352,10 @@ export class AgentTemplateFormPage implements OnInit {
   }
 
   async ngOnInit(): Promise<void> {
+    // Load the model palette first so the dropdown is populated and the edit-mode
+    // preselect (and stale-model detection) can compare against it.
+    this.models.set(await this.agents.loadBindable('model'));
+
     const templateId = this.route.snapshot.paramMap.get('id');
     if (!templateId) return;
 
@@ -342,18 +370,25 @@ export class AgentTemplateFormPage implements OnInit {
 
   private populate(tpl: AgentTemplateAdmin): void {
     this.modelParams = tpl.modelConfig?.params ?? {};
+    const savedModelId = tpl.modelConfig?.modelId ?? '';
     this.form.patchValue({
       name: tpl.name,
       emoji: tpl.emoji,
       pitch: tpl.pitch,
       description: tpl.description,
       instructions: tpl.instructions,
-      modelId: tpl.modelConfig?.modelId ?? '',
+      modelId: savedModelId,
       tagsCsv: (tpl.tags ?? []).join(', '),
       visibility: tpl.visibility,
       status: tpl.status,
       sortOrder: tpl.sort_order,
     });
+
+    // A saved model that isn't in the current catalog is surfaced as an "unavailable"
+    // option rather than silently dropped, so the dropdown can keep it selected.
+    this.staleModelId.set(
+      savedModelId && !this.models().some(m => m.ref === savedModelId) ? savedModelId : null,
+    );
 
     this.starters.clear();
     for (const s of tpl.starters ?? []) {

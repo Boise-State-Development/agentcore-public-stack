@@ -4,6 +4,14 @@ import { ActivatedRoute, provideRouter } from '@angular/router';
 import { AgentTemplateFormPage } from './agent-template-form.page';
 import { AdminAgentTemplatesService } from './services/admin-agent-templates.service';
 import { AgentTemplateAdmin } from './models/agent-template-admin.model';
+import { AgentService } from '../../agents/services/agent.service';
+import { BindableItem } from '../../agents/models/agent.model';
+
+/** The RBAC-filtered model palette the dropdown reuses (via AgentService.loadBindable). */
+const MODELS: BindableItem[] = [
+  { kind: 'model', ref: 'us.anthropic.claude-sonnet-5', label: 'Claude Sonnet 5', description: '', meta: {} },
+  { kind: 'model', ref: 'us.anthropic.claude-haiku-4', label: 'Claude Haiku 4', description: '', meta: {} },
+];
 
 function fullTemplate(): AgentTemplateAdmin {
   return {
@@ -25,12 +33,17 @@ function fullTemplate(): AgentTemplateAdmin {
   };
 }
 
-function configure(id: string | null, service: Partial<AdminAgentTemplatesService>) {
+function configure(
+  id: string | null,
+  service: Partial<AdminAgentTemplatesService>,
+  models: BindableItem[] = MODELS,
+) {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
     providers: [
       provideRouter([]),
       { provide: AdminAgentTemplatesService, useValue: service },
+      { provide: AgentService, useValue: { loadBindable: vi.fn().mockResolvedValue(models) } },
       { provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: () => id } } } },
     ],
   });
@@ -84,6 +97,28 @@ describe('AgentTemplateFormPage', () => {
       expect(service.createTemplate).toHaveBeenCalledTimes(1);
       expect(service.updateTemplate).not.toHaveBeenCalled();
     });
+
+    it('defaults to Platform default (modelId null) for a new template', async () => {
+      const c = configure(null, service);
+      await c.ngOnInit(); // create mode: loads the model palette, no template
+      // The control's default is '' (Platform default), which serializes to null.
+      expect(c.form.controls.modelId.value).toBe('');
+      expect(c.models().length).toBe(MODELS.length);
+      c.form.patchValue({ name: 'Blank Model' });
+      expect(c.buildPayload().modelConfig).toEqual({ modelId: null, params: {} });
+      expect(c.staleModelId()).toBeNull();
+    });
+
+    it('sets modelConfig.modelId to the chosen model ref when one is selected', async () => {
+      const c = configure(null, service);
+      await c.ngOnInit();
+      c.form.patchValue({ name: 'Pinned Model', modelId: 'us.anthropic.claude-haiku-4' });
+      expect(c.buildPayload().modelConfig).toEqual({
+        modelId: 'us.anthropic.claude-haiku-4',
+        params: {},
+      });
+      expect(c.staleModelId()).toBeNull();
+    });
   });
 
   describe('edit mode', () => {
@@ -99,6 +134,8 @@ describe('AgentTemplateFormPage', () => {
       expect(c.isEdit()).toBe(true);
       expect(c.form.controls.name.value).toBe('Course Helper');
       expect(c.form.controls.modelId.value).toBe('us.anthropic.claude-sonnet-5');
+      // The saved model is in the catalog, so it preselects cleanly (not flagged stale).
+      expect(c.staleModelId()).toBeNull();
       expect(c.form.controls.tagsCsv.value).toBe('edu, study');
       expect(c.starters.length).toBe(2);
       expect(c.bindings.length).toBe(1);
@@ -111,6 +148,25 @@ describe('AgentTemplateFormPage', () => {
       expect(payload.modelConfig.params).toEqual({ temperature: 0.4 });
       expect(payload.bindings[0].config).toEqual({ scoped: true });
       expect(service.createTemplate).not.toHaveBeenCalled();
+    });
+
+    it('flags a saved model that is no longer in the catalog as unavailable, keeping it selected', async () => {
+      const stale = fullTemplate();
+      stale.modelConfig = { modelId: 'us.anthropic.retired-model-v1', params: {} };
+      const service = {
+        getTemplate: vi.fn().mockResolvedValue(stale),
+        updateTemplate: vi.fn().mockResolvedValue(stale),
+        createTemplate: vi.fn(),
+      };
+      // Catalog does NOT contain the saved model.
+      const c = configure('course-helper', service, MODELS);
+      await c.ngOnInit();
+
+      // Kept selected (not dropped) and surfaced as the "unavailable" option.
+      expect(c.form.controls.modelId.value).toBe('us.anthropic.retired-model-v1');
+      expect(c.staleModelId()).toBe('us.anthropic.retired-model-v1');
+      // Saving preserves the admin's value rather than silently nulling it.
+      expect(c.buildPayload().modelConfig.modelId).toBe('us.anthropic.retired-model-v1');
     });
   });
 });
