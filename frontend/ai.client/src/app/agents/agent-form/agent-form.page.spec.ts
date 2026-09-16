@@ -11,7 +11,28 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ThemeService } from '../../components/topnav/components/theme-toggle/theme.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ToolService } from '../../services/tool/tool.service';
-import { AGENT_TEMPLATE_DRAFT_KEY, findTemplate, TemplateDraft } from './agent-templates';
+import { AGENT_TEMPLATE_DRAFT_KEY, TemplateDraft } from './agent-templates';
+
+/**
+ * A representative "finished" template draft, inlined here now that the hardcoded catalog
+ * has moved to the backend. This suite tests the FORM's prefill/reconcile behavior, not
+ * catalog content, so a local fixture is the right dependency — it exercises the same
+ * population path (name/emoji/description/instructions/starters/model/tool binding) the
+ * real templates flow through, without coupling the form test to any org's template data.
+ */
+const COURSE_HELPER_DRAFT: TemplateDraft = {
+  templateId: 'course-helper',
+  name: 'Course Helper',
+  description: 'A study assistant for a single course, grounded in your materials.',
+  emoji: '🎓',
+  instructions:
+    'You are a Course Helper.\n\n## Academic integrity\nDo not do graded work for the student; teach the concept instead.',
+  visibility: 'PRIVATE',
+  tags: [],
+  starters: ['What topics does this course cover?', 'When is the next assignment due?'],
+  modelConfig: { modelId: 'us.anthropic.claude-sonnet-5', params: {} },
+  bindings: [{ kind: 'tool', ref: 'gateway_search_boise_state', config: {} }],
+};
 
 /**
  * A stand-in for the root {@link ToolService}. The real one loads `/tools/` from its
@@ -459,7 +480,7 @@ describe('AgentFormPage — template prefill (create mode)', () => {
   });
 
   it('populates every field from a valid draft and clears the key (one-shot)', async () => {
-    const draft = findTemplate('course-helper') as TemplateDraft;
+    const draft = COURSE_HELPER_DRAFT;
     localStorage.setItem(AGENT_TEMPLATE_DRAFT_KEY, JSON.stringify(draft));
 
     await bootstrap([{ toolId: 'gateway_search_boise_state', status: 'active' }]);
