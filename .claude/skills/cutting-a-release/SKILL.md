@@ -225,12 +225,27 @@ required" — that is the note that sends someone digging through `git log`:
 > for tool rows written before it existed. Idempotent; dry-run by default.
 >
 > ```bash
-> AWS_PROFILE=<env> python backend/scripts/backfill_tool_catalog_index.py \
+> AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_tool_catalog_index.py \
 >     --table <prefix>-app-roles --region us-west-2 --apply
 > ```
 >
-> Verify `skipped=0 failed=0` and that the index item count matches the tool
-> count before considering the deploy complete.
+> Verify `skipped=0 failed=0`, then confirm with a live Query on the index.
+
+Two details that cost real time on the v1.21.0 prod run, both worth carrying
+into whatever backfill note you write:
+
+- **Give the backend venv's interpreter, not a bare `python`.** These scripts
+  need `boto3`, which is not in the system Python — a bare `python` fails with
+  `ModuleNotFoundError: No module named 'boto3'` before it does anything. All
+  six `backfill_*.py` scripts are runnable as
+  `backend/.venv/bin/python backend/scripts/<script>.py …` from the repo root
+  (`uv run --project backend python …` works too).
+- **Never tell an operator to verify with `describe-table` `ItemCount`.**
+  DynamoDB refreshes table and index item counts roughly every **six hours**,
+  so a correct backfill still reports `0` immediately afterwards and reads as a
+  failure. Name a live `query … --select COUNT` instead, and pair it with a
+  scan for rows the backfill missed — a *partial* backfill is silent, and is
+  exactly what a sparse-index read path's fallback does not cover.
 
 ### Ordering, when the release also switches a read onto the backfilled data
 

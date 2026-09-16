@@ -23,8 +23,8 @@ export const BRAND_CONFIG: BrandConfig = {
   },
   appName: "Athletic Club Boise Logo",
   greetingTemplates: [
-  'How can I help you today, {name}?',
-  'What would you like to know, {name}?',
+  'How can I help, {name}?',
+  "What's on your mind, {name}?",
   'Ready to assist you, {name}!',
   'What can I do for you, {name}?',
   "Let's get started, {name}!",
@@ -42,7 +42,7 @@ export const BRAND_CONFIG: BrandConfig = {
   // bucket set to [] stays quiet at that hour — here, nobody is at the club at
   // 3am, so the night bucket says nothing club-specific.
   timeOfDayGreetings: {
-    morning: ['Good morning, {name}! Ready to train?', 'Early session, {name}?'],
+    morning: ['Ready to train, {name}?', 'Early session, {name}?'],
     afternoon: ['Good afternoon, {name}!', 'Squeezing one in, {name}?'],
     evening: ['Good evening, {name}!', 'Evening session, {name}?'],
     night: [],

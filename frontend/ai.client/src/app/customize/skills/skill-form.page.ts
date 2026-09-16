@@ -14,6 +14,7 @@ import {
   RESOURCE_ACCEPT_ATTR,
   isAllowedResourceFilename,
 } from '../../shared/skills/skill-resource-types';
+import { SKILL_DESCRIPTION_MAX_LENGTH } from '../../shared/skills/skill-field-limits';
 import {
   MAX_RESOURCE_BYTES,
   MAX_RESOURCES_PER_SKILL,
@@ -81,7 +82,7 @@ export class SkillFormPage {
 
   protected readonly form = this.fb.nonNullable.group({
     displayName: ['', [Validators.required, Validators.maxLength(200)]],
-    description: ['', [Validators.required, Validators.maxLength(2000)]],
+    description: ['', [Validators.required, Validators.maxLength(SKILL_DESCRIPTION_MAX_LENGTH)]],
     instructions: [''],
   });
 

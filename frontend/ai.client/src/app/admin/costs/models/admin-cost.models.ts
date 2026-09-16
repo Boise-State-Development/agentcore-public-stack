@@ -217,6 +217,141 @@ export interface TopSessionsResponse {
   truncated: boolean;
 }
 
+// ========== Content-free drill-down: user → conversations → profile ==========
+//
+// Nothing below carries user text or model-generated prose. The backend enforces
+// that at the storage boundary (`apis.shared.observability.content_policy`) and
+// walks its response models in a test; these interfaces mirror those models.
+
+export type DiagnosisSeverity = 'high' | 'warn' | 'info';
+
+/** One named finding from the backend's diagnosis rules. */
+export interface SessionDiagnosis {
+  code: string;
+  severity: DiagnosisSeverity;
+  headline: string;
+  /** The numbers the rule compared and the threshold it compared them to. */
+  evidence: Record<string, unknown>;
+  suggestion: string;
+  /** Repo-relative path of the spec or one-pager that argued the rule. */
+  ref: string;
+}
+
+/**
+ * One conversation in a user's content-free conversation list.
+ *
+ * `costKnown=false` means the cost aggregate was never written — the cost is
+ * *unrecorded*, not zero. Optional counters are `null` on rows written before
+ * they shipped, so the UI says "not tracked" rather than "0".
+ */
+export interface UserSessionSummary {
+  sessionId: string;
+  createdAt?: string | null;
+  lastMessageAt?: string | null;
+  status?: string | null;
+  messageCount?: number | null;
+  modelId?: string | null;
+  enabledToolCount?: number | null;
+  agentBound: boolean;
+  lastContextTokens?: number | null;
+  contextWindow?: number | null;
+  /** lastContextTokens / contextWindow, 0..1, when both are known. */
+  contextShare?: number | null;
+  totalCost?: number | null;
+  costKnown: boolean;
+  shareOfUserPeriod?: number | null;
+  cacheEfficiency?: number | null;
+  wastedUsd?: number | null;
+  partialMissUsd?: number | null;
+  summarizedTurns?: number | null;
+  summaryApproxTokens?: number | null;
+  toolCallCount?: number | null;
+  toolErrorCount?: number | null;
+  compactionCount?: number | null;
+  diagnosisCount: number;
+  topDiagnosisSeverity?: DiagnosisSeverity | null;
+}
+
+export interface UserSessionsResponse {
+  userId: string;
+  /** The period the list was scoped to (YYYY-MM), or null for all time. */
+  period?: string | null;
+  /** The user's recorded cost for `period` — the denominator of each row's share. */
+  userPeriodCost?: number | null;
+  sessions: UserSessionSummary[];
+  /** Rows before `limit` was applied. */
+  total: number;
+  /** Rows whose cost is unrecorded (listed, flagged, trailing under cost-sort). */
+  unknownCostCount: number;
+}
+
+export type UserSessionsSort = 'cost' | 'recent' | 'context' | 'messages';
+
+export interface UserSessionsRequestOptions {
+  period?: string;
+  allTime?: boolean;
+  sort?: UserSessionsSort;
+  limit?: number;
+}
+
+/** Per-session upload stats. Never filenames. */
+export interface AttachmentProfile {
+  count: number;
+  totalBytes: number;
+  byMime: Record<string, number>;
+}
+
+/** One model call's context occupancy (input + cacheRead + cacheWrite). */
+export interface ContextTrajectoryPoint {
+  callIndex: number;
+  timestamp: string;
+  contextTokens: number;
+  cacheStatus?: CacheStatus | null;
+  modelId?: string | null;
+  cost?: number | null;
+  /** Per-call tool census when recorded: tool name → calls. */
+  toolCalls?: Record<string, number> | null;
+}
+
+export interface FingerprintChanges {
+  systemPrompt: number;
+  toolConfig: number;
+  /** The subset of the two figures above that an Agent switch explains. */
+  explainedByAgentSwitch: number;
+}
+
+export interface ToolCensusEntry {
+  calls: number;
+  errors: number;
+}
+
+/** Which optional signals this session actually has ("not tracked" vs "0"). */
+export interface DataCoverage {
+  toolCensus: boolean;
+  compactionCount: boolean;
+  fingerprints: boolean;
+  cost: boolean;
+}
+
+/** The content-free diagnostic profile of one conversation. */
+export interface SessionProfile {
+  sessionId: string;
+  userId?: string | null;
+  session: UserSessionSummary;
+  callCount: number;
+  peakContextTokens?: number | null;
+  compactionThreshold: number;
+  writeReadRatio?: number | null;
+  attachments: AttachmentProfile;
+  contextTrajectory: ContextTrajectoryPoint[];
+  modelMix: Record<string, number>;
+  fingerprintChanges: FingerprintChanges;
+  toolCensus: Record<string, ToolCensusEntry>;
+  enabledToolIds: string[];
+  diagnoses: SessionDiagnosis[];
+  dataCoverage: DataCoverage;
+}
+
 // ========== API Request Options ==========
 
 export interface DashboardRequestOptions {

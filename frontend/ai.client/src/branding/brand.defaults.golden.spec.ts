@@ -30,13 +30,20 @@ describe('Default_Branding golden regression (logo paths + greetings)', () => {
     });
   });
 
-  it('DEFAULT_GREETING_TEMPLATES matches the historical session.page.ts greetingTemplates array', () => {
-    // Historical `greetingTemplates` array from session.page.ts (removed in
-    // task 7.3, superseded by GreetingProvider.resolveGreeting), preserved
-    // here as the Default_Branding golden value per Requirement 7.4.
+  it('DEFAULT_GREETING_TEMPLATES matches the committed Default_Branding greetings', () => {
+    // Originally the historical `greetingTemplates` array from session.page.ts
+    // (removed in task 7.3, superseded by GreetingProvider.resolveGreeting),
+    // pinned here as the Default_Branding golden value per Requirement 7.4.
+    //
+    // The first two entries were deliberately shortened: at `text-4xl` in the
+    // Chat_Greeting_Block's 616px text column, "How can I help you today,
+    // {name}?" wrapped to a second line for any first name of 8 characters or
+    // more, and "What would you like to know, {name}?" for 6 or more. The rest
+    // of the array is unchanged, and the one-line budget is enforced for every
+    // greeting by `greeting-line-length.spec.ts`.
     expect(DEFAULT_GREETING_TEMPLATES).toEqual([
-      'How can I help you today, {name}?',
-      'What would you like to know, {name}?',
+      'How can I help, {name}?',
+      "What's on your mind, {name}?",
       'Ready to assist you, {name}!',
       'What can I do for you, {name}?',
       "Let's get started, {name}!",

@@ -20,6 +20,7 @@ import {
   ConfirmationDialogData,
 } from '../components/confirmation-dialog/confirmation-dialog.component';
 import { ShareAgentDialogComponent, ShareAgentDialogData } from './components/share-agent-dialog.component';
+import { TemplatePickerDialogComponent } from './components/template-picker-dialog.component';
 import { TooltipDirective } from '../components/tooltip/tooltip.directive';
 import { AgentsTabsComponent } from './components/agents-tabs.component';
 import { AgentIconComponent } from './components/agent-icon.component';
@@ -94,6 +95,15 @@ export class AgentsPage implements OnInit {
 
   setViewMode(mode: AgentsViewMode): void {
     this.localSettings.setAgentsViewMode(mode);
+  }
+
+  /**
+   * Open the "Start from a template" picker. The dialog owns the whole flow — it stashes
+   * the chosen template in `localStorage` and navigates to the create-agent form — so
+   * there is nothing to do with its result here.
+   */
+  onStartFromTemplate(): void {
+    this.dialog.open(TemplatePickerDialogComponent, {});
   }
 
   async onCreateNew(): Promise<void> {

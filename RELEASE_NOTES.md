@@ -1,3 +1,254 @@
+# Release Notes — v1.22.0
+
+**Release Date:** September 14, 2026
+**Previous Release:** v1.21.0 (September 13, 2026)
+
+---
+
+> ✅ **No CDK deploy required.** The only infrastructure changes in this release are a jest config and a version bump. Deploy `backend.yml` then `frontend-deploy.yml`. No new AWS resources, no GSI operation, no SSM parameter, no IAM change, no data backfill.
+>
+> 🛠️ **One operator step, per environment: enable the Clarifying Questions tool.** `seed_bootstrap_data.py` **skips any tool row that already exists**, so flipping `enabledByDefault: True` in the seed reaches a fresh bootstrap only. Wherever an `ask_user_question` row is already in the catalog, an admin has to turn it on; wherever the row has never existed, the seed will create it enabled — but a role whose `grantedTools` is not `*` still needs the grant added. Without this, the feature ships invisible: the model simply keeps asking in prose, exactly as before. See Deployment notes.
+>
+> ⚠️ **An `@`-mention now binds the conversation.** Mentioning an Agent into an **empty** thread binds it, like launching from its card; mentioning into a thread that **already has messages** opens a **new** conversation with that Agent. There is no third outcome — the mention no longer runs one turn and reverts. This reverses design decision D11 on measured evidence, and it retires a failure mode where the Agent's tools vanished silently after the first turn. See Breaking changes.
+>
+> 🗂️ **Nothing carries forward from v1.21.0's backfill note if you have already run it.** If you have *not*, `backend/scripts/backfill_tool_catalog_index.py` is still required in that environment — it is unaffected by this release, but the tool catalog's sparse-index read still answers "nothing matched" rather than "something is wrong".
+
+---
+
+## Highlights
+
+The agent can stop guessing. **Clarifying questions** ship end to end: when a request is genuinely ambiguous, the agent pauses the turn, the SPA renders a multiple-choice picker inline in the transcript, and the answer resumes that same tool call — surviving a page refresh. The tool itself worked from the second PR; the interesting part is that the model almost never reached for it — 4 times in 24 deliberately ambiguous requests. Rewording the tool description and moving it in the tool list both stayed inside the noise band. A short system-prompt clause, added only when the tool is actually in the turn's effective list, took it to **24/24 on ambiguous requests while leaving clear requests at 0/18** — it asks when asking helps, and does not turn direct questions into interrogations.
+
+Administrators can now follow a cost number to its cause. The **cost drill-down** closes the gap between "top users by cost" and the per-session anatomy: user → conversations → session profile, with 15 diagnosis rules that encode classifications prior quota investigations reached by hand, a per-call context trajectory chart with the compaction threshold always in view, and a "Copy diagnostic JSON" button meant to be handed to a model for a second opinion. It is **content-free by construction** — a denylist of every content-bearing attribute on the session, cost and upload row families, enforced by a test that walks every admin cost response model and a moto test that seeds real content and proves none of it comes back.
+
+Two silent data bugs are fixed, both of the worst shape: invisible, cumulative, and delayed. Deleting a knowledge-base document **while it was still uploading permanently stranded its byte reservation** — every cancelled upload shaved bytes off that assistant's allowance forever, and would have surfaced months later as "uploads stopped working" with no failure anywhere near the deletes that caused it. And **born-managed provisioning could not tell an established legacy agent from a new one** — legacy KBs share one S3-Vectors index and never write a `KB_Record` — so an established agent's *next* upload was mistaken for its first, flipping retrieval to an empty managed KB and stranding the existing corpus.
+
+Generated documents are downloadable again. A `.docx` from `create_word_document` rendered a card whose button worked while the markdown link beside it returned `AccessDenied`: the tool result handed the model a ~1,400-character presigned S3 URL, and the model re-emitted it in prose truncated at the `?`. Signed URLs no longer go anywhere they can be copied or persisted, which also drops that tool result from ~1,500 to ~330 characters **inside the cacheable prefix, for the life of the session**.
+
+---
+
+## Clarifying questions
+
+When a request is genuinely ambiguous, the agent stops and asks instead of guessing — and the user answers with two clicks rather than by retyping the request.
+
+### Backend
+
+- `agents/builtin_tools/ask_user_question.py` — the tool. Unlike `oauth_required` and `tool_approval_required`, the interrupt is raised by the **tool itself** through `ToolContext`, not by a `BeforeToolCall` hook. Strands routes both through `_stop_for_interrupts`, so the `PausedTurnSnapshot`, the resume route and the `PendingInterrupt` breadcrumb (`kind: "user_question"`, questions JSON-encoded) needed no special case.
+- `apis/shared/user_questions/models.py` — the question schema, and the normalizer that **strips model-supplied Other/Skip options**. The picker always offers both, so a model that includes them produces duplicates. The same module discourages a second round of questions.
+- New `user_question_required` SSE event, emitted after `message_stop` in the same `done` block as `oauth_required`. Payload `{type, interruptId, toolUseId, questions}`, each question `{header, question, multiSelect, options: [{label, description?}]}`.
+- The resume contract has one sharp edge, and it is pinned by tests: the POSTed `response` must **always be an object**, never `null`. `ToolContext.interrupt` only treats a non-`None` response as an answer, so a null re-raises the interrupt forever. "Skip" sends `{skipped: true}`.
+- `apis/shared/sessions/metadata.py` — the breadcrumb that lets a pending prompt survive a reload.
+- `chat_agent.py` — `_system_prompt_for(tools)` appends the guidance clause. Three deliberate choices: gated on the tool so a user without it never carries an instruction to call it; keyed on the **post-filter** tool list rather than the request's `enabled_tools`, because the two diverge (`ToolFilter` drops a catalog id the registry does not know — `canvas_faculty` does this in dev today) and keying on the request would advertise a tool absent from `toolConfig`; and applied to the prompt handed to the agent, **never** to `self.system_prompt`, which is snapshotted for resume and hashed into the agent cache key.
+
+Three approaches were measured and ruled out, recorded so they are not retried: rewording the tool description (44–56%, inside a 17–44% baseline band), moving the tool's position in the list (25–38%), and removing the prompt's "Cost Awareness" clause (38%). Only the system-prompt clause escapes the noise, so the text is load-bearing in that position and ships byte-identical to what was measured, with a test pinning it.
+
+### Frontend
+
+- `services/user-question/user-question.service.ts` and `user-question-prompt.component.ts` — the picker in the transcript: full-width, one stroke on a selected option, Other and Skip always offered.
+- `stream-parser-core.ts` / `stream-parser-types.ts` — `user_question_required` parsing.
+- `session/user-question-hydration` — rehydrates a pending prompt from `GET /messages` after a refresh, so a reload lands back on the question rather than a turn that can never finish.
+
+### Cost
+
+The tool spec is a constant in the cacheable `toolConfig` prefix (~630 tokens) and the questions travel on the SSE channel only — just the one-line formatted answer block re-enters the conversation. The system-prompt clause is ~63 tokens, constant per configuration. Gated by `ASK_USER_QUESTION_ENABLED` (default on with a kill switch); while off the tool is never registered, so the model falls back to asking in prose.
+
+Spec: `docs/specs/ask-user-question.md`.
+
+---
+
+## Admin cost drill-down
+
+An admin can start from a user, list their conversations **without reading any of them**, and open one for the diagnostic profile a developer — or a model handed the JSON — needs to find cost-effectiveness work.
+
+### Backend
+
+- `apis/shared/observability/content_policy.py` — the denylist of every content-bearing attribute on the session/cost/upload row families, three aliased allowlist projections, and the walkers. Enforced two ways: a test that walks **every** admin cost response model (one named exemption, `TopSessionCost.title`, kept by decision) and a moto test that seeds content and proves none of it returns.
+- `GET /admin/costs/users/{id}/sessions` and `GET /admin/costs/sessions/{id}/profile`, scope `admin.costs`. Unrecorded cost renders `costKnown=false` — never `$0`, which would read as "this conversation was free."
+- `admin/costs/diagnoses.py` — 15 pure rules with numeric evidence and a stated fix: prefix spiral, partial-miss heavy, over-threshold, summary over budget, prompt/`toolConfig` mutation, agent-cache bypass, attachment-heavy, and more.
+- `get_session_cost_records` now projects the twelve attributes the anatomy consumes, which closes the `citations[].text` read on the existing path.
+- Top-users enrichment (email, tier, quota %) replaces a hard-coded `None`.
+
+No new table, no GSI operation, no feature flag — read-only, admin-only, and it degrades to "not tracked" wherever a counter predates the session.
+
+### Frontend
+
+- `/admin/users/:userId` gains a **Conversations** section (owned by the costs feature, rendered only for admins holding `admin.costs`): period and sort controls, per-row model, tools on, a context bar against the window, cost with share of the user's month, cache waste, and a severity dot for the diagnoses that fired. A row opens the anatomy.
+- `/admin/costs/sessions/:id` gains a **profile band** (messages, model calls and mix, tool calls, attachments, compactions, peak context of window, write:read), an expandable **Diagnoses** list (severity chip, headline, code, suggestion, evidence, ref), a **context trajectory chart** with the compaction threshold always in view, a back-to-user link, and **Copy diagnostic JSON**. The profile loads independently of the anatomy, so one failing does not hide the other.
+
+Verified in-browser against dev data: 93 conversations listed for September's top user, profile + diagnoses + chart rendered, dark mode through both levers, and the copy produced a 15.8 KB document with no denylisted keys.
+
+### The one signal that had to be recorded
+
+Which tools a conversation called, how often, and how often they failed could not be derived from existing rows. `ToolCensusHook` tallies tool name → `{calls, errors}` per model call using the same cycle counter `AgentStatusHook` uses; the stream coordinator attaches each call's tally to that call's `C#` cost row as `toolCalls`. `toolCallCount` / `toolErrorCount` ride the existing session-aggregate `UpdateItem` alongside `totalCost`, and a monotonic `compactionCount` rides the compaction-state update — the persisted `compaction` map is last-write-wins and cannot count occurrences.
+
+Everything here is **additive attributes on rows the turn already writes**: no table, no index, no backfill, and nothing reaches the prompt, so the cacheable prefix is untouched. Sessions that predate it read "not tracked" rather than `0`. Gated by `COST_DIAGNOSTICS_ENABLED` (default on with a kill switch).
+
+Spec: `docs/specs/admin-cost-drilldown.md`.
+
+---
+
+## Knowledge base — storage usage, and two silent data bugs
+
+### Storage usage on the KB card
+
+The agent's knowledge-base card now shows how much of the byte cap is in use. `_resolve_kb_usage` reads the `KB_Record` once: managed KBs report their bytes and the binding's effective cap (the min of owner tier and per-KB ceiling); legacy S3-Vectors KBs are uncapped and show "X stored" with no denominator and no colour ramp. Green / yellow / red at <75 / 75–90 / ≥90%. Best-effort throughout — a record-read failure never breaks the documents list.
+
+### Deleting mid-upload leaked bytes, permanently
+
+The request-time byte reservation is released on every abandon path except one: deletion. Ingestion reaching terminal, a client-reported upload failure and the stale sweep all release; a deleted document reached none of them, so its reservation was stranded forever. Each cancelled upload permanently shaved bytes off that assistant's allowance — surfacing months later as "uploads stopped working", with no failure anywhere near the deletes that caused it, which is exactly what `byte_cap.release`'s own docstring warns about. `soft_delete_document` now releases through `release_reservation_if_managed`, whose `settle_once` stamp makes it exactly-once against the other three paths.
+
+The same delete also popped **five "Not found" dialogs**. The polling loop tolerates five consecutive 404s and the component already handled `DOCUMENT_NOT_FOUND` cleanly — but the global `errorInterceptor` pops a dialog for every failed request *before* any caller's catch runs, so correct handling was invisible and the user got one dialog per tolerated retry. The poll's reads now set `SUPPRESS_ERROR_TOAST`, and the loop is finally stoppable: `deleteDocument` had always dropped the id from `pollingDocuments`, but that signal was display-only and the running loop never read it.
+
+**Known and deliberately not fixed here:** neither ingestion pipeline checks whether a document is `deleting`. If the S3 PUT completes after the delete, the managed consumer ingests it and writes `complete` over `deleting` — deleted content becomes answerable again and the row returns. That is a data-correctness bug on the live ingest path and needs its own change with its own mutation guards.
+
+### Born-managed provisioned over an established legacy agent
+
+Born-managed treated the absence of a `KB_Record` as "brand-new agent". But legacy KBs are not first-class — they share one S3-Vectors index and never write a record — so an established legacy agent looked identical to a new one. Its **next** upload was therefore mistaken for a first upload, flipping retrieval to an empty managed KB and stranding the existing corpus on the legacy index. The record-is-`None` branch is now guarded on an existing-documents check (`assistant_has_documents`: cheap COUNT, `Limit=1`), provisioning only at zero documents and failing toward legacy on any probe error.
+
+---
+
+## Generated documents download reliably
+
+A `.docx` produced by `create_word_document` rendered a download card whose button worked, while the markdown link the model wrote underneath it returned S3 `AccessDenied` (reported on prod session `6b247682`). The conversation shows why: the tool result handed the model a ~1,400-character presigned S3 URL, and the model re-emitted it in prose **truncated at the `?`** — signature gone. Two turns in that one session did it. The card's own button was on a clock too: the signature expired an hour after the message was written, so reopening an older thread would have failed the same way.
+
+Signed URLs no longer go anywhere they can be copied or persisted:
+
+- The office tools and `workspace_write` put `upload_id` in the card payload instead of a presigned URL, and the summary tells the model the card is already on screen so it does not compose a link of its own. **The tool result drops from ~1,500 to ~330 characters — per document, in the cacheable prefix, for the life of the session.**
+- New `GET /files/{uploadId}/download` on app-api: cookie-authed, owner-scoped, 302 to a freshly minted presigned URL with `Cache-Control: no-store`. A link to it works for as long as the file does.
+- The SPA card resolves `upload_id` through that route and falls back to recovering the upload id out of a legacy `download_url`'s S3 key, so cards already persisted in conversations heal on render. The global `marked` `renderer.link` rewrites raw user-files S3 hrefs the same way — which fixes the links already sitting in shipped conversations.
+
+Verified against dev: the route 302s for an owned file and 404s otherwise, the minted URL serves 200 while the truncated form is 403, and the exact link from the bug report renders as `/api/files/{uploadId}/download` while unrelated links are untouched.
+
+---
+
+## 🐛 Bug fixes
+
+- **A mentioned Agent silently lost its tools after the first turn.** The thread still looked like the Agent's while its tools, skills and model were gone, and nothing surfaced the change — not the UI, and not the model, which cannot know its own toolset shrank. Asked to use a tool it had used a moment earlier it got `Unknown tool: create_rubric`, and told the user to toggle that tool in the picker: a confident wrong diagnosis sending them to fix a setting that was already correct. Fixed by the binding change under Breaking changes.
+- **"Continue" after a `max_tokens` truncation dropped the Agent entirely** — on the path users are explicitly told to use. The SPA was already resending `rag_assistant_id` (`continueTruncatedTurn`'s own comment says "so the backend rebuilds the same model/tools/assistant agent"); only a `not is_continuation` guard discarded it, so a properly launched Agent finished its reply with none of its tools, skills, model or instructions. The block now runs for a continuation, with binding validation and persistence skipped (it binds nothing new) and RAG skipped (the turn carries an empty message, so a KB search would spend a query on `""`).
+- **19 of 51 chat greetings wrapped to a second line.** The greeting heading sits in a 616px text column at `text-4xl/tight`, and because it types out a character at a time, the wrap happened in full view and pushed the composer down mid-animation. Twenty offenders rewritten shorter, keeping the voice. Two were stock `DEFAULT_GREETING_TEMPLATES` entries pinned verbatim by a golden spec — "How can I help you today, {name}?" wrapped for any first name of 8 characters or more, so the pin was preserving a bug. A new `greeting-line-length.spec.ts` holds the line: jsdom has no font metrics, so it sums per-character advance widths captured from the real InterVariable woff2 in the app's own `<h1>`, which tracks browser layout to within ±7px across 455 name/greeting combinations. Narrow viewports are deliberately out of scope — below ~720px the column is the viewport, and no greeting worth writing fits a phone on one line.
+- **The KB storage usage bar showed for legacy (Classic) KBs**, which are uncapped and have no denominator to show.
+- **Cost diagnostics crashed the scheduled-runs image** — `feature_flags` was not shipped in `Dockerfile.scheduled-runs`.
+
+---
+
+## 🔒 Security
+
+- **The remaining log-injection sinks are sanitized.** User-controlled values reaching `logger` calls in admin role pins, model icons, fine-tuning routes, sessions, skills (routes, service and user service), tool discovery, and the inference-api chat routes now pass through `scrub_log()`.
+- **The nightly workflow's ref allowlist is guarded by a test** — `tests/supply_chain/test_nightly_ref_allowlist.py` pins which refs the nightly build may check out, so widening it is a reviewed change rather than an edit nobody notices.
+
+---
+
+## ⚠️ Breaking changes
+
+### An `@`-mention binds the conversation instead of borrowing one turn
+
+Mentioning an Agent used to run **that turn** as the Agent and silently revert the next one. A mention now *means* "talk to this Agent", with two outcomes and no third:
+
+| Thread state | What a mention does |
+|---|---|
+| **Empty** | The Agent **binds** the conversation, exactly like launching it from its card. Safe, because there is no history for the binding to misrepresent. |
+| **Has messages** | The message opens a **new conversation** with that Agent, and the SPA says so. The Agent cannot be bound to history written under other instructions. |
+
+This reverses design decision D11 rather than repairing an oversight — D11 chose the per-turn reading deliberately. **What changed is the evidence.** Measured on prod `sessions-metadata` via `turnAgentId` on the `C#` rows: of **247 mentions, 247 started the conversation.** Zero were mid-thread consults; zero mentioned a second Agent inside a thread bound to a first. (Dev: 60 of 61.) The borrow was paying an invisible failure mode for a case that has never occurred.
+
+**Migration:** none required. Persisting `preferences.assistant_id` is necessary but not sufficient — every turn's Agent is resolved from the request, the SPA's only carrier is the `assistantId` query param, and the self-heal that refills it from preferences runs on session *load*. So the SPA now sets the param and stops sending `agent_mention` at all. The backend still honours that flag for clients that predate this change, and `binds_conversation` gains `thread_is_empty` so a stale tab mentioning into a fresh thread lands where a current one does. The thread lookup runs only for mention turns, so no bound-Agent turn pays a query it cannot act on.
+
+**Two known costs retire with the borrow:** the ~$0.12-per-mention prefix re-write (a bound conversation swaps once and stays, instead of swapping back), and the history fork, where the mention agent and the plain agent were two cached instances that never saw each other's turns.
+
+A resume still skips the binding block, and always did keep its tools — it rebuilds from `PausedTurnSnapshot`, replaying the original turn's exact `enabled_tools` / `system_prompt` / `enabled_skills` to reconstruct the same prompt-cache key. Worth stating because resume rows carry no `turnAgentId`, so a census of "turns with no Agent" reads them as losses and overcounts badly.
+
+The rule lives in one testable place at each end — `mention-routing.ts` on the client, `agent_binding_policy.py` on the server.
+
+Spec: `docs/specs/agent-marketplace.md` (D11 + Phase 7 notes).
+
+### The chat send button is an up arrow
+
+Cosmetic, listed only because it changes a control users reach for without looking.
+
+---
+
+## 🏗️ Infrastructure
+
+**No CDK deploy is required for this release.** The only files that changed under `infrastructure/` are `jest.config.js` and the version in `package.json`. No new AWS resources, no GSI operation, no SSM parameter, no IAM change.
+
+Two new environment variables are read by the backend, and **both default to enabled when unset**, so neither needs to be plumbed to ship the features:
+
+| Variable | Default | Effect when `false` |
+|---|---|---|
+| `ASK_USER_QUESTION_ENABLED` | on | The tool is never registered, never reaches `toolConfig`, and the agent falls back to asking in prose |
+| `COST_DIAGNOSTICS_ENABLED` | on | No census / counter attributes are written; the admin profile reads "not tracked" rather than `0` |
+
+Flipping `ASK_USER_QUESTION_ENABLED` changes `toolConfig` and therefore re-writes the cacheable prefix once for each session in flight at the time — the ordinary cost of a deploy-time tool change, not a per-turn one.
+
+---
+
+## 🔧 CI/CD
+
+The PR gate got meaningfully faster, without giving up any coverage or type safety.
+
+- **Backend pytest runs in parallel.** `pytest -n auto` fans ~3k tests across all runner cores instead of running single-threaded. The suite is xdist-safe: moto mocks and hypothesis are per-worker, and no test mutates shared on-disk state. `-v` is dropped from `backend/pytest.ini`, which had produced thousands of `PASSED` lines with no diagnostic value. The nightly coverage run (`scripts/backend/test.sh`) stays serial on purpose.
+- **Infra jest is transpile-only.** `isolatedModules` stops each jest worker re-type-checking the whole project — the dominant cost of the infra suite, and the long pole once backend went parallel. Type safety is preserved by adding a single `tsc --noEmit` step to the infra CI job; previously only ts-jest enforced it on PRs, with `tsc` running only in `teardown.yml`. Workers stay at 2 — the `--maxWorkers` bump regressed 2.5×. There is no `const enum` in the tree, so `isolatedModules` is safe.
+
+---
+
+## 📦 Dependencies
+
+| Component | Package | From | To |
+|---|---|---|---|
+| Backend (dev) | `pytest-xdist` | — | 3.6.1 |
+
+---
+
+## 🧪 Test coverage
+
+**5,500+ lines of new tests**, including 17 new backend test modules and 9 new frontend specs:
+
+- **Clarifying questions** — the tool, the question models and the Other/Skip normalizer, the SSE events, an end-to-end interrupt/resume integration test, the system-prompt guidance (pinned byte-identical to what was measured), the SPA service, and refresh rehydration.
+- **Cost drill-down** — the content policy walked across every admin cost response model, a moto test that seeds content and proves none returns, the diagnosis rules, the drill-down routes, the session-profile and user-sessions services, top-users enrichment, and content-free projections; plus the trajectory chart, the conversations component and the profile util on the frontend.
+- **Tool census** — the hook, the stream-coordinator attach, persistence, and the session-manager rollups.
+- **Knowledge base** — 6 tests covering reservation release on delete across the paths that must not double-settle, and the born-managed mutation guards.
+- **Downloads** — the new route (owned / not-owned / legacy-key recovery), the download URL util, and the card renderer.
+- **Mention routing** — the client-side rule, matched against the server-side `agent_binding_policy` tests.
+- **Greetings** — 455 name/greeting combinations measured against real font advance widths.
+- **Supply chain** — the nightly ref allowlist.
+
+---
+
+## 🚀 Deployment notes
+
+**Deploy order:** `backend.yml` → `frontend-deploy.yml`. **Skip `platform.yml`** — there is no infrastructure change in this release.
+
+### Required: enable the Clarifying Questions tool, per environment
+
+The feature is otherwise invisible. `seed_bootstrap_data.py` **skips any tool row that already exists** (`Tool '…' already exists — skipped`), so the seed's `enabledByDefault: True` only takes effect on a fresh bootstrap.
+
+1. Check whether the environment's tool catalog already has an `ask_user_question` row.
+   - **It does** (any environment where the seed has run since this release's first PR): flip it on in the admin tool catalog. The seed will not do it for you.
+   - **It does not**: run `seed_bootstrap_data.py`, which creates it enabled.
+2. Confirm the grant. The tool ships `isPublic: False`. The `default` role carries `grantedTools: ["*"]` and so picks it up automatically; **any role with an explicit tool list needs `ask_user_question` added.** Per the RBAC rule in `CLAUDE.md`, the grant lives on the role record — listing the role on the tool grants nothing.
+3. Verify by sending a deliberately ambiguous request and confirming the picker renders.
+
+To opt an environment out entirely instead, set `ASK_USER_QUESTION_ENABLED=false`.
+
+### No backfill in this release
+
+No `backend/scripts/backfill_*.py` script was added, and the release guard confirms it. The cost-diagnostics counters are additive attributes on rows the turn already writes — sessions that predate them read "not tracked", by design, so there is nothing to populate retroactively.
+
+If v1.21.0's `backfill_tool_catalog_index.py` has **not** yet been run in an environment, it is still outstanding there. Nothing in this release changes it, but the tool catalog's sparse-index read still answers "nothing matched" rather than "something is wrong":
+
+```bash
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_tool_catalog_index.py \
+    --table <prefix>-app-roles --region us-west-2 --apply
+```
+
+Verify `skipped=0 failed=0`, then confirm with a live `query … --select COUNT` on the index — **not** `describe-table` `ItemCount`, which DynamoDB refreshes roughly every six hours and which therefore reports `0` right after a correct backfill.
+
+### Rollback
+
+Every new surface in this release is additive and read-tolerant. The two kill switches (`ASK_USER_QUESTION_ENABLED=false`, `COST_DIAGNOSTICS_ENABLED=false`) disable the clarifying-questions tool and the cost counters without a redeploy of the previous image. The `@`-mention binding change has no kill switch — it is a code path, and reverting it means reverting the release.
+
+---
+
 # Release Notes — v1.21.0
 
 **Release Date:** September 13, 2026
@@ -363,18 +614,43 @@ aws dynamodb describe-table --table-name <prefix>-app-roles \
 Populates `GSI5PK`/`GSI5SK` on tool rows written before the keys existed. **Dry-run by default; idempotent; guarded by `attribute_not_exists(GSI5PK)` and `attribute_exists(SK)`, so it never resurrects a deleted row and never overwrites one the writer has since stamped.** It touches only tool metadata rows — `CAPABILITIES` snapshots, skills, roles and user preferences are left alone.
 
 ```bash
-AWS_PROFILE=<env> python backend/scripts/backfill_tool_catalog_index.py \
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_tool_catalog_index.py \
     --table <prefix>-app-roles --region us-west-2
 ```
+
+> Use the backend venv's interpreter, not the system `python` — the script needs `boto3`
+> and a bare `python` fails with `ModuleNotFoundError: No module named 'boto3'`.
+> `uv run --project backend python …` works equally well.
 
 Then, once the dry run looks right:
 
 ```bash
-AWS_PROFILE=<env> python backend/scripts/backfill_tool_catalog_index.py \
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_tool_catalog_index.py \
     --table <prefix>-app-roles --region us-west-2 --apply
 ```
 
-**Verify `skipped=0 failed=0` and that the index item count matches the tool count before considering the deploy complete.** Run against dev first, then prod. If the backfill is skipped, the Query returns zero rows, the zero-result fallback re-reads via Scan and logs an ERROR naming this script — so the catalog still serves, but at Scan cost and with a standing error in the logs.
+**Verify `skipped=0 failed=0`, then confirm the index is populated with a live Query.** Run against dev first, then prod.
+
+```bash
+aws dynamodb query --table-name <prefix>-app-roles --index-name EntityTypeIndex \
+  --key-condition-expression "GSI5PK = :pk" \
+  --expression-attribute-values '{":pk":{"S":"ENTITY#TOOL"}}' --select COUNT
+```
+
+> ⚠️ **Do not verify with `describe-table` `ItemCount`.** DynamoDB refreshes table and index
+> item counts roughly every **six hours**, so immediately after a successful backfill it still
+> reads `0` and looks like a failure. A Query is the only live check.
+
+Pair it with a scan for rows the backfill missed — a **partial** backfill is the one case the
+read path's zero-result fallback deliberately does not cover, so it is silent:
+
+```bash
+aws dynamodb scan --table-name <prefix>-app-roles \
+  --filter-expression "begins_with(PK, :p) AND SK = :s AND attribute_not_exists(GSI5PK)" \
+  --expression-attribute-values '{":p":{"S":"TOOL#"},":s":{"S":"METADATA"}}' --select COUNT
+```
+
+That must return `Count: 0`. If the backfill is skipped, the Query returns zero rows, the zero-result fallback re-reads via Scan and logs an ERROR naming this script — so the catalog still serves, but at Scan cost and with a standing error in the logs.
 
 ### 4. Decide on the Conversation Mode regression
 

@@ -14,7 +14,6 @@ import {
   heroChevronLeft,
   heroChevronRight,
   heroPencil,
-  heroQuestionMarkCircle,
 } from '@ng-icons/heroicons/outline';
 import {
   UserQuestionAnswer,
@@ -26,20 +25,32 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
 /**
  * Inline picker for the clarifying questions the agent paused its turn to ask.
  *
- * Visual language follows its sibling `ToolApprovalPromptComponent` — the 2px
- * primary-500 left accent, the shared `.action-btn`, the lift-on-mount
- * animation — so a paused turn looks the same whatever paused it.
+ * **Full width, soft, and unhurried** — deliberately NOT the visual language of
+ * `ToolApprovalPromptComponent`, which it was first modelled on. That component
+ * is a narrow pill with a hard 2px accent bar and hairline dividers, and it is
+ * right for what it does: a two-button yes/no that should stay out of the way.
+ * This one is a form the reader has to think about, so it takes the assistant
+ * column's full width and trades the boxy chrome for rounded surfaces, roomy
+ * hit areas and a calm ground. No border on the card at all — a soft ring and
+ * a faint tint carry the edge instead.
  *
  * **One question at a time, with a pager.** Measured against real models, both
  * Haiku 4.5 and Sonnet 4.6 routinely ask three or four questions in a single
  * call, so rendering them stacked would drop a wall of radio groups into the
- * transcript. The pager keeps the prompt the size of a message bubble and lets
- * the user move at their own pace; answers accumulate locally and post once.
+ * transcript.
  *
  * **The picker owns "Other" and "Skip".** The backend strips any model-supplied
  * lookalike (a supplied "Other" carries no free-text field, so selecting it
  * would record a bare string that teaches the model nothing), which is why they
  * are added here rather than rendered from `options`.
+ *
+ * Two house traps this component has already been bitten by — don't reintroduce
+ * either when editing:
+ * - Dark rules use `:host-context(.dark)`. Angular's emulated encapsulation
+ *   stamps `[_ngcontent-…]` inside `:where()`, so `:where(.dark, .dark *)`
+ *   compiles to `.dark[_ngcontent-…]` and silently never matches.
+ * - Utility classes set directly on an `<ng-icon>` element do not apply. Put
+ *   colour on the wrapper and let the icon inherit `currentColor`.
  */
 @Component({
   selector: 'app-user-question-prompt',
@@ -52,49 +63,26 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
       heroChevronLeft,
       heroChevronRight,
       heroPencil,
-      heroQuestionMarkCircle,
     }),
   ],
   host: { class: 'block' },
   template: `
-    <div
-      class="question-prompt group relative w-full max-w-xl overflow-hidden rounded-lg border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-white/10 dark:bg-slate-800/70"
-      role="group"
+    <section
+      class="question-card w-full rounded-2xl bg-gray-50/80 p-5 ring-1 ring-gray-200/70 dark:bg-white/[0.035] dark:ring-white/10"
       [attr.aria-label]="'Clarifying question ' + (index() + 1) + ' of ' + total()"
     >
-      <span
-        class="absolute inset-y-0 left-0 w-[2px] bg-primary-500 dark:bg-primary-400"
-        aria-hidden="true"
-      ></span>
-
-      <!-- Header: question text + pager -->
-      <div class="flex items-start gap-2.5 py-2 pr-2 pl-3">
-        <!-- The colour lives on this wrapper, not on the ng-icon element:
-             utility classes set directly on ng-icon do not take (measured in
-             the browser — even text-gray-700 and size-5 were ignored, leaving
-             the glyph on the inherited near-white at 1.10 contrast against
-             this circle). The icon inherits currentColor from here instead,
-             which lands the sanctioned bg-gray-100 / text-primary-accessible
-             pairing at 9.63. -->
-        <div
-          class="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md bg-gray-100 text-primary-accessible ring-1 ring-gray-200/70 dark:bg-gray-700 dark:text-primary-50 dark:ring-white/10"
-        >
-          <ng-icon name="heroQuestionMarkCircle" aria-hidden="true" />
-        </div>
-
-        <div class="min-w-0 flex-1">
-          <p
-            class="text-[10px] leading-none font-semibold uppercase tracking-[0.08em] text-primary-600 dark:text-primary-300"
-          >
-            {{ current().header }}
-          </p>
-          <p class="mt-1 text-xs/5 text-gray-900 dark:text-gray-100">
+      <!-- Heading: eyebrow + question. The pager sits with the eyebrow so the
+           question line is never crowded by controls. -->
+      <header class="mb-4 flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <p class="eyebrow">{{ current().header }}</p>
+          <h3 class="mt-2 text-sm/6 font-medium text-balance text-gray-900 dark:text-gray-50">
             {{ current().question }}
-          </p>
+          </h3>
         </div>
 
         @if (total() > 1) {
-          <div class="flex shrink-0 items-center gap-0.5 pt-0.5">
+          <div class="flex shrink-0 items-center gap-1 pt-0.5">
             <button
               type="button"
               class="pager-btn"
@@ -102,13 +90,10 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
               [disabled]="index() === 0 || resolving()"
               aria-label="Previous question"
             >
-              <ng-icon name="heroChevronLeft" class="size-3.5" aria-hidden="true" />
+              <ng-icon name="heroChevronLeft" />
             </button>
-            <span
-              class="px-1 text-[11px] tabular-nums text-gray-600 dark:text-gray-300"
-              aria-live="polite"
-            >
-              {{ index() + 1 }} of {{ total() }}
+            <span class="pager-count" aria-live="polite">
+              {{ index() + 1 }} / {{ total() }}
             </span>
             <button
               type="button"
@@ -117,46 +102,44 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
               [disabled]="index() === total() - 1 || resolving()"
               aria-label="Next question"
             >
-              <ng-icon name="heroChevronRight" class="size-3.5" aria-hidden="true" />
+              <ng-icon name="heroChevronRight" />
             </button>
           </div>
         }
-      </div>
+      </header>
 
-      <!-- Options -->
+      <!-- Options: discrete rounded rows with air between them, rather than a
+           divided list. Selection reads from the tinted surface and the filled
+           marker together, never from colour alone. -->
       <div
-        class="border-t border-gray-200/80 dark:border-white/10"
+        class="grid gap-2"
         [attr.role]="current().multiSelect ? 'group' : 'radiogroup'"
         [attr.aria-label]="current().question"
       >
-        @for (option of current().options; track option.label; let i = $index) {
+        @for (option of current().options; track option.label) {
           <button
             type="button"
-            class="option-row"
-            [class.option-row--on]="isSelected(option.label)"
+            class="option"
+            [class.option--on]="isSelected(option.label)"
             [attr.role]="current().multiSelect ? 'checkbox' : 'radio'"
             [attr.aria-checked]="isSelected(option.label)"
             [disabled]="resolving()"
             (click)="toggle(option.label)"
           >
             <span
-              class="option-marker"
-              [class.option-marker--multi]="current().multiSelect"
-              [class.option-marker--on]="isSelected(option.label)"
+              class="marker"
+              [class.marker--multi]="current().multiSelect"
+              [class.marker--on]="isSelected(option.label)"
               aria-hidden="true"
             >
-              @if (isSelected(option.label)) {
-                <ng-icon name="heroCheck" class="size-3" />
-              } @else {
-                <span class="option-index">{{ i + 1 }}</span>
-              }
+              <ng-icon name="heroCheck" />
             </span>
             <span class="min-w-0 flex-1">
-              <span class="block text-xs/5 font-medium text-gray-900 dark:text-gray-100">
+              <span class="block text-sm/6 font-medium text-gray-900 dark:text-gray-50">
                 {{ option.label }}
               </span>
               @if (option.description) {
-                <span class="block text-[11px]/4 text-gray-600 dark:text-gray-300">
+                <span class="mt-0.5 block text-xs/5 text-gray-600 dark:text-gray-300">
                   {{ option.description }}
                 </span>
               }
@@ -164,52 +147,46 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
           </button>
         }
 
-        <!-- "Other": always offered, never supplied by the model. -->
-        <div class="other-row">
-          <span class="option-marker" aria-hidden="true">
-            <ng-icon name="heroPencil" class="size-3" />
+        <!-- "Other": always offered, never supplied by the model. Shares the
+             option row's shape so it reads as one more choice. -->
+        <label class="option option--other">
+          <span class="marker marker--quiet" aria-hidden="true">
+            <ng-icon name="heroPencil" />
           </span>
           <input
             type="text"
             class="other-input"
-            [placeholder]="'Something else…'"
+            placeholder="Something else…"
             [ngModel]="otherText()"
             (ngModelChange)="setOther($event)"
             [disabled]="resolving()"
             [attr.aria-label]="'Other answer for ' + current().header"
             (keydown.enter)="submitIfReady()"
           />
-        </div>
+        </label>
       </div>
 
-      <!-- Footer: skip + submit -->
-      <div
-        class="flex items-center justify-between gap-2 border-t border-gray-200/80 px-3 py-2 dark:border-white/10"
-      >
-        <button
-          type="button"
-          class="skip-btn"
-          (click)="skip()"
-          [disabled]="resolving()"
-        >
+      <!-- Footer -->
+      <footer class="mt-4 flex items-center justify-between gap-3">
+        <button type="button" class="ghost-btn" (click)="skip()" [disabled]="resolving()">
           Skip
         </button>
 
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-3">
           @if (answeredCount() > 0 && total() > 1) {
-            <span class="text-[11px] tabular-nums text-gray-600 dark:text-gray-300">
-              {{ answeredCount() }}/{{ total() }} answered
+            <span class="text-xs tabular-nums text-gray-600 dark:text-gray-300">
+              {{ answeredCount() }} of {{ total() }} answered
             </span>
           }
           @if (index() < total() - 1) {
-            <button type="button" class="action-btn" (click)="next()" [disabled]="resolving()">
+            <button type="button" class="primary-btn" (click)="next()" [disabled]="resolving()">
               <span>Next</span>
-              <ng-icon name="heroArrowRight" class="size-3" aria-hidden="true" />
+              <ng-icon name="heroArrowRight" />
             </button>
           } @else {
             <button
               type="button"
-              class="action-btn"
+              class="primary-btn"
               (click)="submit()"
               [disabled]="resolving() || answeredCount() === 0"
             >
@@ -217,14 +194,13 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
                 <app-spinner size="sm" variant="on-solid" label="Working" />
                 <span>Working…</span>
               } @else {
-                <ng-icon name="heroCheck" class="size-3" aria-hidden="true" />
                 <span>Submit</span>
               }
             </button>
           }
         </div>
-      </div>
-    </div>
+      </footer>
+    </section>
   `,
   styles: `
     @reference "../../../../../../styles/theme.css";
@@ -233,119 +209,166 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
       display: block;
     }
 
-    .question-prompt {
-      animation: question-rise 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+    .question-card {
+      animation: card-rise 0.36s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    /* Override the global \`.message-block p\` 16px margin (styles.css): inside
-       the prompt these are a tight label + question pair. */
-    .question-prompt p {
+    /* The global \`.message-block p\` rule adds 16px below prose paragraphs;
+       inside the card the eyebrow is a label, not a paragraph. */
+    .question-card p {
       margin-bottom: 0;
     }
 
-    .option-row {
+    /* Deliberately unadorned. An icon here would be pure decoration — the
+       card already announces itself by shape and position, and a little
+       glyph on an AI prompt is the first thing that makes it look generated. */
+    .eyebrow {
+      font-size: 0.6875rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--color-primary-accessible);
+    }
+
+    :host-context(.dark) .eyebrow {
+      color: var(--color-primary-50);
+    }
+
+    /* ---- options ---- */
+
+    .option {
       display: flex;
-      width: 100%;
       align-items: flex-start;
-      gap: 0.5rem;
-      padding: 0.4rem 0.75rem;
+      gap: 0.75rem;
+      width: 100%;
+      padding: 0.75rem 0.875rem;
+      border-radius: 0.875rem;
       text-align: left;
-      transition: background-color 120ms ease;
+      background: var(--color-white);
+      box-shadow: inset 0 0 0 1px var(--color-gray-200);
+      transition:
+        background-color 140ms ease,
+        box-shadow 140ms ease;
     }
 
-    .option-row:hover:not(:disabled) {
+    .option:hover:not(:disabled):not(.option--on) {
       background: var(--color-gray-50);
+      box-shadow: inset 0 0 0 1px var(--color-gray-300);
     }
 
-    .option-row:focus-visible {
+    .option:focus-visible {
       outline: 2px solid var(--color-secondary-500);
-      outline-offset: -2px;
+      outline-offset: 2px;
     }
 
-    .option-row:disabled {
-      opacity: 0.6;
+    /* Only the "Other" row needs this: it is a <label>, so the thing that
+       actually takes focus is the input inside it. Applying it to every
+       option also matched a plain MOUSE click on a button (:focus-within is
+       true after one), stacking an outline outside the row. */
+    .option--other:focus-within {
+      outline: 2px solid var(--color-secondary-500);
+      outline-offset: 2px;
+    }
+
+    .option:disabled {
+      opacity: 0.55;
       cursor: default;
     }
 
-    .option-row--on {
-      background: var(--color-gray-100);
+    /* Selection is a fill change, never an added stroke. Every row carries
+       exactly one hairline whatever its state, so a selected row cannot read
+       as a double stroke — which is what stacking a coloured ring under the
+       focus outline produced. The warm tint and the filled marker carry the
+       state together, so it is never colour alone. */
+    .option--on {
+      background: color-mix(in oklab, var(--color-secondary-500) 10%, var(--color-white));
+      box-shadow: inset 0 0 0 1px
+        color-mix(in oklab, var(--color-secondary-500) 38%, transparent);
     }
 
-    /* Dark overrides use :host-context, NOT \`:where(.dark, .dark *)\`.
-       Angular's emulated encapsulation stamps its \`[_ngcontent-…]\` attribute
-       onto every compound selector *inside* \`:where()\`, producing
-       \`.dark[_ngcontent-…]\` — and <html class="dark"> carries no such
-       attribute, so the rule silently never matches. That shipped a near-white
-       selected row under near-white text in dark mode. */
-    :host-context(.dark) .option-row:hover:not(:disabled) {
+    .option--other {
+      cursor: text;
+    }
+
+    :host-context(.dark) .option {
       background: rgb(255 255 255 / 0.04);
+      box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
     }
 
-    :host-context(.dark) .option-row--on {
-      background: var(--color-gray-700);
+    :host-context(.dark) .option:hover:not(:disabled):not(.option--on) {
+      background: rgb(255 255 255 / 0.07);
+      box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14);
     }
 
-    .option-marker {
+    :host-context(.dark) .option--on {
+      background: color-mix(in oklab, var(--color-secondary-500) 20%, transparent);
+      box-shadow: inset 0 0 0 1px
+        color-mix(in oklab, var(--color-secondary-500) 52%, transparent);
+    }
+
+    /* ---- selection marker ---- */
+
+    .marker {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
-      width: 1.125rem;
-      height: 1.125rem;
-      margin-top: 0.1rem;
+      width: 1.25rem;
+      height: 1.25rem;
+      margin-top: 0.1875rem;
       border-radius: 9999px;
-      border: 1px solid var(--color-gray-300);
-      color: var(--color-gray-600);
-      font-size: 10px;
-      line-height: 1;
+      background: transparent;
+      box-shadow: inset 0 0 0 1.5px var(--color-gray-300);
+      color: transparent;
+      font-size: 0.75rem;
       transition:
-        background-color 120ms ease,
-        border-color 120ms ease,
-        color 120ms ease;
+        background-color 140ms ease,
+        box-shadow 140ms ease,
+        color 140ms ease;
     }
 
     /* Multi-select reads as a checkbox, single-select as a radio. */
-    .option-marker--multi {
-      border-radius: 0.25rem;
+    .marker--multi {
+      border-radius: 0.4375rem;
     }
 
-    .option-marker--on {
+    .marker--on {
       background: var(--color-secondary-500);
-      border-color: var(--color-secondary-500);
+      box-shadow: inset 0 0 0 1.5px var(--color-secondary-500);
       color: white;
     }
 
-    :host-context(.dark) .option-marker {
-      border-color: rgb(255 255 255 / 0.2);
-      color: var(--color-gray-300);
+    .marker--quiet {
+      color: var(--color-gray-500);
+      box-shadow: inset 0 0 0 1.5px transparent;
     }
 
-    :host-context(.dark) .option-marker--on {
+    :host-context(.dark) .marker {
+      box-shadow: inset 0 0 0 1.5px rgb(255 255 255 / 0.22);
+    }
+
+    :host-context(.dark) .marker--on {
       background: var(--color-secondary-500);
-      border-color: var(--color-secondary-500);
+      box-shadow: inset 0 0 0 1.5px var(--color-secondary-500);
       color: white;
     }
 
-    .option-index {
-      font-variant-numeric: tabular-nums;
+    :host-context(.dark) .marker--quiet {
+      color: var(--color-gray-400);
+      box-shadow: inset 0 0 0 1.5px transparent;
     }
 
-    .other-row {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.35rem 0.75rem 0.5rem;
-    }
+    /* ---- other ---- */
 
     .other-input {
       flex: 1 1 auto;
       min-width: 0;
+      align-self: center;
       background: transparent;
       border: 0;
-      border-bottom: 1px dashed var(--color-gray-300);
-      padding: 0.15rem 0;
-      font-size: 0.75rem;
-      line-height: 1.25rem;
+      padding: 0;
+      font-size: 0.875rem;
+      line-height: 1.5rem;
       color: var(--color-gray-900);
     }
 
@@ -355,44 +378,51 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
 
     .other-input:focus {
       outline: none;
-      border-bottom-color: var(--color-secondary-500);
     }
 
     :host-context(.dark) .other-input {
-      border-bottom-color: rgb(255 255 255 / 0.2);
-      color: var(--color-gray-100);
+      color: var(--color-gray-50);
     }
 
     :host-context(.dark) .other-input::placeholder {
       color: var(--color-gray-400);
     }
 
+    /* ---- pager ---- */
+
     .pager-btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 1.25rem;
-      height: 1.25rem;
-      border-radius: 0.25rem;
+      width: 1.75rem;
+      height: 1.75rem;
+      border-radius: 9999px;
+      font-size: 0.875rem;
       color: var(--color-gray-600);
       transition:
-        background-color 120ms ease,
-        color 120ms ease;
+        background-color 140ms ease,
+        color 140ms ease;
     }
 
     .pager-btn:hover:not(:disabled) {
-      background: var(--color-gray-100);
+      background: var(--color-gray-200);
       color: var(--color-gray-900);
     }
 
     .pager-btn:disabled {
-      opacity: 0.35;
+      opacity: 0.3;
       cursor: default;
     }
 
     .pager-btn:focus-visible {
-      outline: 2px solid var(--color-gray-400);
-      outline-offset: 1px;
+      outline: 2px solid var(--color-secondary-500);
+      outline-offset: 2px;
+    }
+
+    .pager-count {
+      font-size: 0.75rem;
+      font-variant-numeric: tabular-nums;
+      color: var(--color-gray-600);
     }
 
     :host-context(.dark) .pager-btn {
@@ -400,83 +430,89 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
     }
 
     :host-context(.dark) .pager-btn:hover:not(:disabled) {
-      background: rgb(255 255 255 / 0.08);
+      background: rgb(255 255 255 / 0.1);
       color: white;
     }
 
-    .action-btn {
+    :host-context(.dark) .pager-count {
+      color: var(--color-gray-300);
+    }
+
+    /* ---- actions ---- */
+
+    .primary-btn {
       display: inline-flex;
       align-items: center;
-      gap: 0.25rem;
-      border-radius: 0.375rem;
-      padding: 0.25rem 0.625rem;
-      font-size: 0.75rem;
+      gap: 0.375rem;
+      border-radius: 1rem;
+      padding: 0.5rem 1rem;
+      font-size: 0.8125rem;
       font-weight: 600;
       color: white;
       background: var(--color-secondary-500);
       transition:
-        background-color 120ms ease,
-        transform 120ms ease;
+        background-color 140ms ease,
+        transform 140ms ease;
     }
 
-    .action-btn:hover:not(:disabled) {
+    .primary-btn:hover:not(:disabled) {
       background: var(--color-secondary-600);
     }
 
-    .action-btn:active:not(:disabled) {
+    .primary-btn:active:not(:disabled) {
       transform: translateY(1px);
     }
 
-    .action-btn:focus-visible {
+    .primary-btn:focus-visible {
       outline: 2px solid var(--color-secondary-500);
       outline-offset: 2px;
     }
 
-    .action-btn:disabled {
-      opacity: 0.5;
+    .primary-btn:disabled {
+      opacity: 0.45;
       cursor: default;
     }
 
-    .skip-btn {
-      border-radius: 0.375rem;
-      padding: 0.25rem 0.5rem;
-      font-size: 0.75rem;
+    .ghost-btn {
+      border-radius: 1rem;
+      padding: 0.5rem 0.875rem;
+      font-size: 0.8125rem;
       font-weight: 500;
       color: var(--color-gray-600);
       background: transparent;
       transition:
-        background-color 120ms ease,
-        color 120ms ease;
+        background-color 140ms ease,
+        color 140ms ease;
     }
 
-    .skip-btn:hover:not(:disabled) {
-      background: var(--color-gray-100);
+    .ghost-btn:hover:not(:disabled) {
+      background: var(--color-gray-200);
       color: var(--color-gray-900);
     }
 
-    .skip-btn:focus-visible {
+    .ghost-btn:focus-visible {
       outline: 2px solid var(--color-gray-400);
       outline-offset: 2px;
     }
 
-    .skip-btn:disabled {
+    .ghost-btn:disabled {
       opacity: 0.5;
       cursor: default;
     }
 
-    :host-context(.dark) .skip-btn {
+    :host-context(.dark) .ghost-btn {
       color: var(--color-gray-300);
     }
 
-    :host-context(.dark) .skip-btn:hover:not(:disabled) {
-      background: rgb(255 255 255 / 0.08);
+    :host-context(.dark) .ghost-btn:hover:not(:disabled) {
+      background: rgb(255 255 255 / 0.1);
       color: white;
     }
 
-    @keyframes question-rise {
+    @keyframes card-rise {
       from {
         opacity: 0;
-        transform: translateY(6px);
+        transform: translateY(8px);
       }
       to {
         opacity: 1;
@@ -485,13 +521,13 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
     }
 
     @media (prefers-reduced-motion: reduce) {
-      .question-prompt {
+      .question-card {
         animation: none;
       }
-      .option-row,
-      .option-marker,
-      .action-btn,
-      .skip-btn,
+      .option,
+      .marker,
+      .primary-btn,
+      .ghost-btn,
       .pager-btn {
         transition: none;
       }

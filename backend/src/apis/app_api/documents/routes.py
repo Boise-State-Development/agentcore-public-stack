@@ -18,6 +18,7 @@ from apis.app_api.documents.models import (
     ExtractedChunksResponse,
     ImportDocumentsRequest,
     ImportDocumentsResponse,
+    KbUsage,
     ReportUploadFailureRequest,
     UploadUrlResponse,
 )
@@ -42,6 +43,7 @@ from apis.shared.oauth.provider_repository import (
     get_provider_repository,
 )
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.kb_backend.byte_cap import ByteCapExceeded
 
 logger = logging.getLogger(__name__)
@@ -85,6 +87,52 @@ async def _resolve_managed_kb(assistant_id: str) -> tuple[bool, bool]:
     if resolve_engine(record) != ENGINE_MANAGED:
         return False, False
     return True, bool((record or {}).get("elevatedByteCap"))
+
+
+async def _resolve_kb_usage(assistant_id: str) -> Optional[KbUsage]:
+    """Storage usage + binding cap for this assistant's knowledge base.
+
+    Read once from the KB_Record and shaped for the UI usage bar. A managed KB
+    reports its committed and reserved bytes plus the binding cap
+    (``effective_cap``, the smaller of the owner tier and the per-KB ceiling). A
+    legacy S3-Vectors KB — an absent record, or one whose engine is not the exact
+    managed literal — is uncapped and tracks no bytes (the cap is scoped to
+    managed KBs by Requirement 12.11), so it reports ``cap=None`` with zeroed
+    counters and the UI renders an uncapped indicator. The elevated tier is READ
+    from ``elevatedByteCap``, never written here.
+
+    Best-effort: the usage bar is enrichment, not the point of the endpoint, so a
+    failed record read returns ``None`` (the bar is simply not shown) rather than
+    failing the whole documents list.
+    """
+    from apis.shared.kb_backend import byte_cap
+    from apis.shared.kb_backend.records import (
+        ENGINE_LEGACY,
+        ENGINE_MANAGED,
+        get_kb_record,
+        resolve_engine,
+    )
+
+    try:
+        # app_kb_id == assistant_id this phase. get_kb_record is a blocking boto3 call.
+        record = await asyncio.to_thread(get_kb_record, assistant_id, assistant_id)
+        if resolve_engine(record) != ENGINE_MANAGED:
+            return KbUsage(engine=ENGINE_LEGACY)
+        elevated = bool((record or {}).get("elevatedByteCap"))
+        return KbUsage(
+            engine=ENGINE_MANAGED,
+            storedBytes=int((record or {}).get("storedBytes") or 0),
+            reservedBytes=int((record or {}).get("reservedBytes") or 0),
+            cap=byte_cap.effective_cap(elevated),
+            elevated=elevated,
+        )
+    except Exception as exc:  # noqa: BLE001 — enrichment must not fail the list
+        logger.warning(
+            "Could not resolve KB usage for %s: %s",
+            scrub_log(assistant_id),
+            scrub_log(exc),
+        )
+        return None
 
 
 async def _reserve_managed_upload(assistant_id: str, size_bytes: int) -> int:
@@ -406,7 +454,14 @@ async def list_documents(
         # Convert to response models
         document_responses = [DocumentResponse.model_validate(doc.model_dump(by_alias=True)) for doc in documents]
 
-        return DocumentsListResponse(documents=document_responses, nextToken=next_page_token)
+        # Storage usage + cap for the assistant's knowledge base, so the UI can
+        # render the usage bar without a second round-trip (Requirement 12.11
+        # visibility). Legacy KBs return cap=None and the bar shows uncapped.
+        kb_usage = await _resolve_kb_usage(assistant_id)
+
+        return DocumentsListResponse(
+            documents=document_responses, nextToken=next_page_token, kbUsage=kb_usage
+        )
 
     except HTTPException:
         raise

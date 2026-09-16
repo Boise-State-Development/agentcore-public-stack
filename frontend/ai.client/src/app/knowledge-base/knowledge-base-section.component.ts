@@ -29,6 +29,7 @@ import { DocumentService, DocumentUploadError } from '../assistants/services/doc
 import {
   Document,
   DocumentStatus,
+  KbUsage,
   PROCESSING_STATUSES,
   STALE_DOCUMENT_THRESHOLD_MS,
 } from '../assistants/models/document.model';
@@ -248,6 +249,84 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
   readonly showEngineBadge = computed(
     () => this.mode() === 'edit' && this.uploadedDocuments().length > 0,
   );
+
+  // ── KB storage usage bar (byte-cap visibility, Requirement 12.11) ────────
+  //
+  // Managed knowledge bases are byte-capped, so the fleet's managed-storage
+  // cost stays bounded — but a cap the user cannot see is a cap they cannot act
+  // on. The usage bar makes their consumption visible against the binding cap
+  // and turns green→yellow→red as it fills. A legacy KB is uncapped: it shows
+  // only what is stored and stays green. Both come back on the documents list
+  // (`kbUsage`), so there is no extra round-trip.
+
+  /** Storage usage for this KB, from the documents-list response. `null` until read. */
+  readonly kbUsage = signal<KbUsage | null>(null);
+
+  /** Committed + in-flight reserved bytes — what the owner is actually consuming. */
+  readonly kbUsedBytes = computed(() => {
+    const usage = this.kbUsage();
+    if (!usage) return 0;
+    return (usage.storedBytes ?? 0) + (usage.reservedBytes ?? 0);
+  });
+
+  /** Managed KBs carry a cap; a legacy KB returns `cap: null` (uncapped). */
+  readonly kbHasCap = computed(() => (this.kbUsage()?.cap ?? null) !== null);
+
+  /** Show the bar only for an existing record whose usage we have resolved. */
+  // The bar visualises stored bytes against a cap — both of which exist only for
+  // a managed KB (byte tracking is scoped to managed by Requirement 12.11). A
+  // legacy/Classic KB is uncapped and reports zeroed counters, so the bar would
+  // read "0 B stored" beside real documents, which reads as a bug to the user.
+  // Show it only for the managed engine; the per-document sizes carry the rest.
+  readonly showUsageBar = computed(
+    () => this.mode() === 'edit' && this.kbUsage()?.engine === 'managed',
+  );
+
+  /** Fraction of the cap used, clamped 0–1. 0 for an uncapped KB (no denominator). */
+  readonly kbUsageFraction = computed(() => {
+    const usage = this.kbUsage();
+    if (!usage || usage.cap == null || usage.cap <= 0) return 0;
+    return Math.min(this.kbUsedBytes() / usage.cap, 1);
+  });
+
+  /** Percent label ("83%"), shown only when there is a cap. */
+  readonly kbUsagePercentLabel = computed(() =>
+    this.kbHasCap() ? `${Math.round(this.kbUsageFraction() * 100)}%` : '',
+  );
+
+  /**
+   * Bar colour: green under 75%, yellow 75–<90%, red at 90%+ of the cap. An
+   * uncapped legacy KB has no meaningful ratio, so it is always green.
+   */
+  readonly kbUsageLevel = computed<'green' | 'yellow' | 'red'>(() => {
+    if (!this.kbHasCap()) return 'green';
+    const fraction = this.kbUsageFraction();
+    if (fraction >= 0.9) return 'red';
+    if (fraction >= 0.75) return 'yellow';
+    return 'green';
+  });
+
+  /**
+   * Bar fill width. Capped KBs fill to the used fraction (with a 2% floor so a
+   * tiny non-zero usage is still visible). An uncapped legacy KB has no
+   * denominator, so it renders a small fixed sliver rather than a misleading
+   * full or empty bar.
+   */
+  readonly kbUsageBarWidth = computed(() => {
+    if (!this.kbHasCap()) return '8%';
+    const used = this.kbUsedBytes();
+    if (used <= 0) return '0%';
+    return `${Math.max(this.kbUsageFraction() * 100, 2)}%`;
+  });
+
+  /** Caption under the bar: "12 MB of 100 MB used", or uncapped "12 MB stored". */
+  readonly kbUsageLabel = computed(() => {
+    const usage = this.kbUsage();
+    if (!usage) return '';
+    const used = this.formatBytes(this.kbUsedBytes());
+    if (usage.cap == null) return `${used} stored`;
+    return `${used} of ${this.formatBytes(usage.cap)} used`;
+  });
 
   /**
    * The user-facing label for a document's processing status, in the vocabulary
@@ -933,6 +1012,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     }
     try {
       const response = await this.documentService.listDocuments(recordId);
+      this.kbUsage.set(response.kbUsage ?? null);
       const existing = new Set(this.uploadedDocuments().map((doc) => doc.documentId));
       const newDocs = response.documents.filter((doc) => !existing.has(doc.documentId));
       if (newDocs.length === 0) {
@@ -1044,6 +1124,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     try {
       const response = await this.documentService.listDocuments(recordId);
       this.uploadedDocuments.set(response.documents);
+      this.kbUsage.set(response.kbUsage ?? null);
 
       // Start polling for any documents that are still processing (and not stale)
       for (const doc of response.documents) {

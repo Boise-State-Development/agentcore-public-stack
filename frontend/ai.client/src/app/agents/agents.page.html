@@ -63,6 +63,16 @@
 
           <button
             type="button"
+            (click)="onStartFromTemplate()"
+            [disabled]="loading()"
+            class="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm/6 font-semibold text-gray-900 shadow-xs ring-1 ring-gray-300 ring-inset transition duration-200 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:ring-white/5 dark:hover:bg-white/20"
+          >
+            <ng-icon name="heroSparkles" class="size-4" aria-hidden="true" />
+            Start from a template
+          </button>
+
+          <button
+            type="button"
             (click)="onCreateNew()"
             [disabled]="loading()"
             class="group inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition duration-200 hover:brightness-95 hover:shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"

@@ -52,9 +52,9 @@ SAFETY
 
 Run against dev first, then prod::
 
-    AWS_PROFILE=dev-ai python backend/scripts/backfill_artifact_user_index_keys.py \\
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_artifact_user_index_keys.py \\
         --table dev-boisestateai-v2-user-artifacts --region us-west-2
-    AWS_PROFILE=dev-ai python backend/scripts/backfill_artifact_user_index_keys.py \\
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_artifact_user_index_keys.py \\
         --table dev-boisestateai-v2-user-artifacts --region us-west-2 --apply
 """
 

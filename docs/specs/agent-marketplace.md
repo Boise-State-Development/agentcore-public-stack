@@ -415,8 +415,42 @@ a fixed partition, per-item records with an explicit `order: int`, sorted on rea
 ## D11 — `@`-mention is scoped to your own and pinned Agents
 
 Typing `@` in the composer offers the user's own Agents plus everything pinned (including role-seeded
-pins), grouped, with the publisher as secondary text. Mentioning one hands that turn to the Agent's
-model, tools and skills without leaving the thread.
+pins), grouped, with the publisher as secondary text. Mentioning one starts a conversation with that
+Agent's model, tools and skills.
+
+> **Revised 2026-09-14 — a mention binds; it is no longer a one-turn borrow.** This paragraph
+> originally read "hands **that turn** to the Agent … without leaving the thread", and the phase-7
+> notes below record how much that one sentence cost to implement. It was also wrong about how the
+> feature would be used, and the per-turn reading had an invisible failure mode:
+>
+> - **It broke silently.** The mentioned turn ran as the Agent; the next one did not. The thread
+>   still looked like the Agent's while its tools, skills and model were gone. Nothing surfaced the
+>   change — not the UI, and not the model, which has no way to know its own toolset shrank. Asked
+>   to use a tool it had used a moment earlier, it got `Unknown tool: create_rubric` and told the
+>   user to toggle the tool in the picker, sending them to fix a setting that was already correct.
+> - **Nobody used what it was protecting.** Of **247 mentions in prod, 247 started the
+>   conversation**; zero were mid-thread consults, and zero mentioned a second Agent inside a thread
+>   bound to a first. (Dev: 60 of 61 started the conversation.) The borrow was paying that failure
+>   mode for a case that has never occurred.
+>
+> So an `@`-mention now means "talk to this Agent", with exactly two outcomes and no third:
+>
+> | Thread state | Behaviour |
+> |---|---|
+> | No messages yet | The Agent **binds** the conversation, exactly as launching it from its card does. Safe because there is no history for the binding to misrepresent. |
+> | Already has messages | The message opens a **new** conversation with that Agent, and the SPA says so. The Agent cannot be bound to history written under other instructions, and must not be borrowed either. |
+>
+> The SPA no longer sends `agent_mention` at all — a mention sets the `assistantId` query param, so
+> the Agent rides every following turn like any bound Agent. The backend still honours the flag for
+> clients that predate the change, and now binds when such a client mentions into an **empty**
+> thread, which is the case that actually happens. Client rule in
+> `session/services/chat/mention-routing.ts`, server rule in `chat/agent_binding_policy.py`; they
+> mirror each other and their tests say so.
+>
+> **This also retires two known costs.** The prefix re-write measured below (~$0.12 per mention) was
+> the price of swapping the Agent in and back out; a bound conversation swaps once and stays. And
+> the history fork — the mention agent and the plain agent being two cached instances that never saw
+> each other's turns — cannot arise when one Agent runs every turn.
 
 Scope is deliberately narrow. Making the `@` menu search the whole store turns an autocomplete into a
 directory query, which is what the store page is for, and it exposes every user to every Agent's name
@@ -915,6 +949,24 @@ thread" in one sentence, and that sentence turned out to be the whole phase:
 - **Known edge, pre-existing:** `continue_truncated` skips the whole assistant block, so a
   "Continue" after a max_tokens truncation runs without the Agent — true for bound Agent
   conversations before this phase, and unchanged by it.
+
+  **Fixed 2026-09-14**, alongside the D11 revision above, because it is the same invisible
+  capability loss on the path users are *told* to use: a properly launched Agent finished its
+  reply with none of its tools, skills, model or instructions. The SPA was already resending
+  `rag_assistant_id` on a continuation for exactly this reason (`continueTruncatedTurn` passes
+  it, and its comment says "so the backend rebuilds the same model/tools/assistant agent");
+  only the `not is_continuation` guard on the block discarded it. The block now runs for a
+  continuation, with binding **validation** and **persistence** still skipped (a continuation
+  binds nothing new) and **RAG** still skipped (the turn carries an empty message, so a
+  knowledge-base search would spend a query on `""` and augment nothing — the original turn's
+  context is already in the history being continued).
+
+  ⚠️ **A resume is a different animal and still skips the block.** It rebuilds from its
+  `PausedTurnSnapshot`, replaying the original turn's exact `enabled_tools` / `system_prompt` /
+  `enabled_skills` so the prompt-cache key is reconstructed and the paused agent is not
+  orphaned. Tool-approval, OAuth and `ask_user_question` resumes therefore never lost their
+  tools — worth stating because `turnAgentId` is *not* stamped on those rows, so a census of
+  "turns with no Agent" reads them as losses and overcounts badly.
 
 **Phase 8 notes (as built).** Six, the first of which is a contradiction inside this spec
 and the fourth of which was a live trap:

@@ -42,10 +42,10 @@ SAFETY
 * Idempotent: a second run finds nothing left to do.
 
 USAGE
-    python scripts/backfill_false_interrupted_markers.py \
+    backend/.venv/bin/python backend/scripts/backfill_false_interrupted_markers.py \
         --table boisestateai-v2-sessions-metadata --profile prod-ai
     # …review the dry-run summary, then:
-    python scripts/backfill_false_interrupted_markers.py \
+    backend/.venv/bin/python backend/scripts/backfill_false_interrupted_markers.py \
         --table boisestateai-v2-sessions-metadata --profile prod-ai --apply
 """
 

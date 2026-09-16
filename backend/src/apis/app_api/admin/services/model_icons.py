@@ -24,6 +24,7 @@ from apis.shared.models.model_icons import (
     model_icon_version,
     normalize_icon,
 )
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,9 @@ async def upload_model_icon(model_id: str, content: bytes) -> Tuple[Optional[str
     try:
         key = store.put(model_id=model_id, content=data, ext=ext, content_type=content_type)
     except IconStoreError as e:
-        logger.error(f"Icon storage unavailable for model {model_id}: {e}")
+        logger.error(
+            f"Icon storage unavailable for model {scrub_log(model_id)}: {scrub_log(e)}"
+        )
         raise ModelIconError("Icon storage is unavailable.", status_code=503) from e
 
     previous = model.icon_key
@@ -76,7 +79,7 @@ async def upload_model_icon(model_id: str, content: bytes) -> Tuple[Optional[str
     if previous and previous != key:
         store.delete(previous)
 
-    logger.info(f"🖼️ model-icons: uploaded icon for model {model_id}")
+    logger.info(f"🖼️ model-icons: uploaded icon for model {scrub_log(model_id)}")
     return key, model_icon_url(model_id, key)
 
 
@@ -90,7 +93,7 @@ async def remove_model_icon(model_id: str) -> Tuple[Optional[str], Optional[str]
     if previous:
         get_model_icon_store().delete(previous)
 
-    logger.info(f"🖼️ model-icons: removed icon for model {model_id}")
+    logger.info(f"🖼️ model-icons: removed icon for model {scrub_log(model_id)}")
     return None, None
 
 

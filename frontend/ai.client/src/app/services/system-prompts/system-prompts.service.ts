@@ -100,8 +100,10 @@ export class SystemPromptsService {
 
   /**
    * Set the active prompt for the current session and persist to the BFF.
-   * Pass `null` to clear. Both UI sites (settings panel + chat-input chip)
-   * route through here so the wire convention lives in one place.
+   * Pass `null` to clear. Every UI site routes through here so the wire
+   * convention lives in one place — though no picker ships today, the two that
+   * did (the composer settings drawer and its chat-input chip) having been
+   * removed with the Customize surface.
    *
    * The BFF treats `selectedPromptId: null` as an explicit clear and an
    * omitted field as "leave unchanged".

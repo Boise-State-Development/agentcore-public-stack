@@ -20,11 +20,13 @@ import { UserStateService } from '../../services/user-state.service';
 import { QuotaEventSummary } from '../../models';
 import { parseIso } from '../../../../utils/date';
 import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
+import { UserService } from '../../../../auth/user.service';
+import { UserConversationsComponent } from '../../../costs/components/user-conversations.component';
 
 @Component({
   selector: 'app-user-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, SpinnerComponent],
+  imports: [NgIcon, SpinnerComponent, UserConversationsComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -266,6 +268,18 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
         }
       </div>
 
+      <!--
+        Conversations — the cost drill-down. Gated on the *costs* scope, not
+        this page's: it is cost data and its drill-down target is
+        admin.costs-gated, so a users-only delegate sees the page without the
+        section rather than a 403 inside it.
+      -->
+      @if (canSeeCosts()) {
+        <div class="mt-6">
+          <app-user-conversations [userId]="detail.profile.userId" />
+        </div>
+      }
+
       <!-- Admin Actions -->
       <div class="flex gap-4 mt-6">
         <button
@@ -288,8 +302,12 @@ export class UserDetailPage implements OnInit {
   state = inject(UserStateService);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
+  private userService = inject(UserService);
 
   user = computed(() => this.state.selectedUser());
+
+  /** Whether the viewer may see cost data (system_admin or the admin.costs scope). */
+  canSeeCosts = computed(() => this.userService.hasAdminScope('admin.costs'));
 
   ngOnInit(): void {
     const userId = this.route.snapshot.paramMap.get('userId');

@@ -39,6 +39,7 @@ import { PickerComponent } from '@ctrl/ngx-emoji-mart';
 import { CdkConnectedOverlay, CdkOverlayOrigin, ConnectedPosition } from '@angular/cdk/overlay';
 import { AgentService } from '../services/agent.service';
 import {
+  Agent,
   AgentBinding,
   BindableItem,
   BindableServerTool,
@@ -63,6 +64,9 @@ import {
   ShareAgentDialogData,
 } from '../components/share-agent-dialog.component';
 import { KnowledgeBaseSectionComponent } from '../../knowledge-base/knowledge-base-section.component';
+import { ToolService } from '../../services/tool/tool.service';
+import { AGENT_TEMPLATE_DRAFT_KEY, TemplateDraft } from './agent-templates';
+import { reconcileToolRefs } from './tool-ref-reconcile';
 
 /** A model param rendered as an editable control (numeric or enum). */
 interface ParamView {
@@ -169,6 +173,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
   private toast = inject(ToastService);
   private dialog = inject(Dialog);
   private host = inject(ElementRef<HTMLElement>);
+  private toolService = inject(ToolService);
 
   form!: FormGroup;
   private formSub?: Subscription;
@@ -194,6 +199,18 @@ export class AgentFormPage implements OnInit, OnDestroy {
   readonly permissionResolved = signal(false);
   readonly isEmojiPickerOpen = signal(false);
   readonly isDarkMode = this.themeService.theme;
+
+  /**
+   * Prefill-from-template notices (Agent Template Prefill — Phase 2). When a template
+   * draft is applied in create mode, tool refs are reconciled against the live catalog;
+   * a deprecated-but-present ref is still applied but flagged here, and an unknown ref is
+   * dropped and reported here. Both are dismissible and purely informational.
+   */
+  readonly templateFlaggedNotice = signal<string | null>(null);
+  readonly templateDroppedNotice = signal<string | null>(null);
+  readonly hasTemplateNotice = computed(
+    () => this.templateFlaggedNotice() !== null || this.templateDroppedNotice() !== null,
+  );
 
   readonly mode = computed<'create' | 'edit'>(() => (this.agentId() ? 'edit' : 'create'));
   readonly isViewer = computed(() => this.userPermission() === 'viewer');
@@ -303,7 +320,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
     this.formSub = this.form.valueChanges.subscribe(() => this.syncFormToSignals());
 
     // Load the RBAC-filtered palettes in parallel; then hydrate an existing agent.
-    void this.loadPalettes().finally(() => this.loadingPalettes.set(false));
+    const palettesLoaded = this.loadPalettes().finally(() => this.loadingPalettes.set(false));
 
     const id = this.route.snapshot.paramMap.get('id');
     this.agentId.set(id);
@@ -318,6 +335,10 @@ export class AgentFormPage implements OnInit, OnDestroy {
     } else {
       // Create mode: the user is implicitly the owner — no record to resolve.
       this.permissionResolved.set(true);
+      // A "Start from a template" click stashes the chosen draft in localStorage and
+      // routes here. Apply it once the binding palettes have settled so tool refs
+      // reconcile against a loaded catalog rather than being spuriously dropped.
+      void palettesLoaded.then(() => this.applyTemplateDraftIfPresent());
     }
   }
 
@@ -359,57 +380,160 @@ export class AgentFormPage implements OnInit, OnDestroy {
       const agent = await this.agentService.getAgent(id);
       this.userPermission.set(agent.userPermission ?? 'owner');
       this.iconUrl.set(agent.iconUrl);
-      this.form.patchValue({
-        name: agent.name,
-        description: agent.description,
-        // Marketplace Phase 3 gates `instructions` to owner/editor. Reaching this form
-        // means one of those, so the fallback is defensive, not an expected path — the
-        // field's own `required` validator surfaces it if the gate ever changes.
-        instructions: agent.instructions ?? '',
-        visibility: agent.visibility,
-        tags: agent.tags ?? [],
-        emoji: agent.emoji ?? '',
-      });
-      this.starters.clear();
-      (agent.starters ?? []).forEach((s) => this.starters.push(new FormControl(s, Validators.required)));
-
-      this.selectedModelId.set(agent.modelConfig?.modelId ?? null);
-      this.modelParams.set(
-        stripHiddenParams(
-          (agent.modelConfig?.params ?? {}) as Record<string, number | string>,
-        ),
-      );
-
-      const toolRefs = new Set<string>();
-      const skillRefs = new Set<string>();
-      const memory: MemorySelection[] = [];
-      for (const b of agent.bindings ?? []) {
-        if (b.kind === 'tool') toolRefs.add(b.ref);
-        else if (b.kind === 'skill') skillRefs.add(b.ref);
-        else if (b.kind === 'memory_space') {
-          const cfg = (b.config ?? {}) as Partial<MemorySpaceBindingConfig>;
-          memory.push({
-            ref: b.ref,
-            label: this.spaceLabel(b.ref),
-            role: this.spaceRole(b.ref),
-            access: cfg.access === 'readwrite' ? 'readwrite' : 'read',
-            alwaysLoadIndex: (cfg.alwaysLoad ?? []).includes('MEMORY.md'),
-          });
-        }
-        // knowledge_base bindings are welded/synthesized and managed live by
-        // the knowledge-base section — no read-only display state to hydrate.
-      }
-      this.selectedToolRefs.set(toolRefs);
-      this.selectedSkillRefs.set(skillRefs);
-      this.memorySelections.set(memory);
+      this.applyAgentToForm(agent);
       // Freshly loaded state is clean — the preview matches the saved record.
-      this.syncFormToSignals();
       this.form.markAsPristine();
       this.bindingsDirty.set(false);
     } catch (err) {
       console.error('Error loading agent:', err);
       this.toast.error('Could not load this agent.');
     }
+  }
+
+  /**
+   * Agent Template Prefill — Phase 2 (create-mode entry path).
+   *
+   * The "Start from a template" picker writes the chosen {@link TemplateDraft} to
+   * `localStorage[AGENT_TEMPLATE_DRAFT_KEY]` and routes to this create form. Here we
+   * read it once, reconcile its tool bindings against the live tool catalog, feed the
+   * whole draft through the same {@link applyAgentToForm} path edit mode uses, and leave
+   * the form DIRTY so it reads as an unsaved draft the author must Save.
+   *
+   * One-shot: the key is cleared whatever the outcome, so a stale or malformed draft can
+   * never wedge every future "New Agent". Absent key ⇒ ordinary blank create.
+   */
+  private async applyTemplateDraftIfPresent(): Promise<void> {
+    const raw = localStorage.getItem(AGENT_TEMPLATE_DRAFT_KEY);
+    if (raw === null) return; // no template chosen — behave exactly as a blank create.
+    // Consume the key up front: this is a one-shot handoff, and clearing before we parse
+    // means even a malformed payload can't re-fire on the next visit.
+    localStorage.removeItem(AGENT_TEMPLATE_DRAFT_KEY);
+
+    let draft: TemplateDraft;
+    try {
+      draft = JSON.parse(raw) as TemplateDraft;
+    } catch {
+      this.toast.error('That template could not be read; starting from a blank agent.');
+      return;
+    }
+    if (!draft || typeof draft !== 'object') return;
+
+    // Reconcile requires the live tool catalog (toolId + status). It auto-loads at app
+    // start; ensure it's present so a deprecated ref is flagged, not mistaken for unknown.
+    if (!this.toolService.initialized()) {
+      await this.toolService.loadTools();
+    }
+    const catalog = this.toolService.tools();
+
+    // Only tool bindings are reconciled; skill / memory / KB bindings pass through as-is.
+    const bindings = draft.bindings ?? [];
+    const toolRefs = bindings.filter((b) => b.kind === 'tool').map((b) => b.ref);
+    const { apply, flagged, dropped } = reconcileToolRefs(toolRefs, catalog);
+    const applySet = new Set(apply);
+    const reconciledBindings = [
+      ...bindings.filter((b) => b.kind !== 'tool'),
+      ...bindings.filter((b) => b.kind === 'tool' && applySet.has(b.ref)),
+    ] as AgentBinding[];
+
+    // Feed the reconciled draft through the identical population path edit mode uses.
+    // `modelConfig.modelId === null` (platform default) ⇒ leave no model pinned.
+    this.applyAgentToForm({
+      name: draft.name,
+      description: draft.description,
+      instructions: draft.instructions,
+      visibility: draft.visibility,
+      tags: draft.tags,
+      starters: draft.starters,
+      emoji: draft.emoji,
+      modelConfig: draft.modelConfig?.modelId
+        ? { modelId: draft.modelConfig.modelId, params: draft.modelConfig.params }
+        : undefined,
+      bindings: reconciledBindings,
+    });
+
+    // A prefilled-but-unsaved template must read as a dirty draft. `patchValue` does not
+    // mark controls dirty, and `applyAgentToForm` deliberately leaves cleanliness alone,
+    // so mark both the form and the out-of-form binding signals dirty explicitly.
+    this.form.markAsDirty();
+    this.bindingsDirty.set(true);
+
+    // Surface reconcile outcomes as a dismissible, one-line-each notice.
+    if (flagged.length > 0) {
+      const detail = flagged.map((f) => `${f.ref} (${f.status})`).join(', ');
+      this.templateFlaggedNotice.set(
+        `${flagged.length} ${flagged.length === 1 ? 'tool is' : 'tools are'} deprecated but still added: ${detail}`,
+      );
+    }
+    if (dropped.length > 0) {
+      this.templateDroppedNotice.set(
+        `${dropped.length} ${dropped.length === 1 ? 'tool was' : 'tools were'} unavailable and dropped: ${dropped.join(', ')}`,
+      );
+    }
+  }
+
+  /** Dismiss the prefill-from-template notice. */
+  dismissTemplateNotice(): void {
+    this.templateFlaggedNotice.set(null);
+    this.templateDroppedNotice.set(null);
+  }
+
+  /**
+   * Map an agent-shaped object into form + selection state: the persona fields,
+   * starters, model + params, and the tool/skill/memory `bindings` decomposition,
+   * finishing by mirroring the form into the live-preview signals.
+   *
+   * Deliberately does NOT touch cleanliness (`markAsPristine` / `bindingsDirty`) or
+   * record-identity state (`userPermission` / `iconUrl`). `loadAgent` marks the form
+   * pristine *after* calling this because a freshly fetched record is clean; a later
+   * prefill-from-template path reuses this exact mapping but must leave the form DIRTY
+   * so the author is prompted to save. Takes `Partial<Agent>` so a template draft that
+   * carries only some fields hydrates through the identical path.
+   */
+  private applyAgentToForm(agent: Partial<Agent>): void {
+    this.form.patchValue({
+      name: agent.name,
+      description: agent.description,
+      // Marketplace Phase 3 gates `instructions` to owner/editor. Reaching this form
+      // means one of those, so the fallback is defensive, not an expected path — the
+      // field's own `required` validator surfaces it if the gate ever changes.
+      instructions: agent.instructions ?? '',
+      visibility: agent.visibility,
+      tags: agent.tags ?? [],
+      emoji: agent.emoji ?? '',
+    });
+    this.starters.clear();
+    (agent.starters ?? []).forEach((s) => this.starters.push(new FormControl(s, Validators.required)));
+
+    this.selectedModelId.set(agent.modelConfig?.modelId ?? null);
+    this.modelParams.set(
+      stripHiddenParams(
+        (agent.modelConfig?.params ?? {}) as Record<string, number | string>,
+      ),
+    );
+
+    const toolRefs = new Set<string>();
+    const skillRefs = new Set<string>();
+    const memory: MemorySelection[] = [];
+    for (const b of agent.bindings ?? []) {
+      if (b.kind === 'tool') toolRefs.add(b.ref);
+      else if (b.kind === 'skill') skillRefs.add(b.ref);
+      else if (b.kind === 'memory_space') {
+        const cfg = (b.config ?? {}) as Partial<MemorySpaceBindingConfig>;
+        memory.push({
+          ref: b.ref,
+          label: this.spaceLabel(b.ref),
+          role: this.spaceRole(b.ref),
+          access: cfg.access === 'readwrite' ? 'readwrite' : 'read',
+          alwaysLoadIndex: (cfg.alwaysLoad ?? []).includes('MEMORY.md'),
+        });
+      }
+      // knowledge_base bindings are welded/synthesized and managed live by
+      // the knowledge-base section — no read-only display state to hydrate.
+    }
+    this.selectedToolRefs.set(toolRefs);
+    this.selectedSkillRefs.set(skillRefs);
+    this.memorySelections.set(memory);
+    this.syncFormToSignals();
   }
 
   private spaceLabel(ref: string): string {

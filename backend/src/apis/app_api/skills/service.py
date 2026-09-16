@@ -144,7 +144,7 @@ class SkillCatalogService:
                 "as not found",
                 extra={
                     "event": "admin_skill_cross_tier_denied",
-                    "skill_id": skill_id,
+                    "skill_id": scrub_log(skill_id),
                 },
             )
             return None
@@ -237,7 +237,7 @@ class SkillCatalogService:
                 f"Admin {scrub_log(admin.email)} updated skill: {scrub_log(skill_id)}",
                 extra={
                     "event": "skill_updated",
-                    "skill_id": skill_id,
+                    "skill_id": scrub_log(skill_id),
                     "admin_user_id": admin.user_id,
                     "admin_email": admin.email,
                     "changes": list(updates.keys()),
@@ -279,7 +279,7 @@ class SkillCatalogService:
                 f"Admin {scrub_log(admin.email)} deleted skill: {scrub_log(skill_id)}",
                 extra={
                     "event": "skill_deleted",
-                    "skill_id": skill_id,
+                    "skill_id": scrub_log(skill_id),
                     "admin_user_id": admin.user_id,
                     "admin_email": admin.email,
                     "soft_delete": soft,
@@ -401,10 +401,10 @@ class SkillCatalogService:
             f"Admin {scrub_log(admin.email)} uploaded reference file to skill {scrub_log(skill_id)}",
             extra={
                 "event": "skill_resource_added",
-                "skill_id": skill_id,
+                "skill_id": scrub_log(skill_id),
                 # NB: not "filename" — that key is reserved on LogRecord and
                 # raises KeyError when the record is actually emitted.
-                "resource_filename": filename,
+                "resource_filename": scrub_log(filename),
                 "size": len(content),
                 "admin_user_id": admin.user_id,
             },
@@ -460,9 +460,9 @@ class SkillCatalogService:
             f"Admin {scrub_log(admin.email)} deleted reference file from skill {scrub_log(skill_id)}",
             extra={
                 "event": "skill_resource_deleted",
-                "skill_id": skill_id,
+                "skill_id": scrub_log(skill_id),
                 # NB: not "filename" — reserved on LogRecord (see add_resource).
-                "resource_filename": filename,
+                "resource_filename": scrub_log(filename),
                 "admin_user_id": admin.user_id,
             },
         )
@@ -632,7 +632,7 @@ class SkillCatalogService:
             f"Admin {scrub_log(admin.email)} set roles for skill {scrub_log(skill_id)}",
             extra={
                 "event": "skill_roles_updated",
-                "skill_id": skill_id,
+                "skill_id": scrub_log(skill_id),
                 "admin_user_id": admin.user_id,
                 "roles_added": list(to_add),
                 "roles_removed": list(to_remove),

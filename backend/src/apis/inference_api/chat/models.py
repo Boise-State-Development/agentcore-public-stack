@@ -128,13 +128,24 @@ class InvocationRequest(BaseModel):
     # Marketplace D11: this turn was handed to the Agent by an `@`-mention in
     # the composer, rather than the whole conversation being bound to it.
     #
-    # A mention borrows the Agent for ONE turn: the route skips the
-    # bind-once-per-session validation (a mention is legitimate in a thread
-    # that already has messages, and in a thread bound to a different Agent),
-    # and skips writing `preferences.assistant_id`, so the next plain turn is
-    # plain again. Everything else — access check, RAG, binding resolution,
-    # memory injection — is identical to a bound turn, because the same Agent
-    # is running with the same governance.
+    # ⚠️ **LEGACY as of 2026-09-14 — the current SPA never sends this.** A mention now
+    # means "talk to this Agent": on an empty thread it binds like a launch, and in a
+    # thread that already has messages the SPA opens a *new* conversation with the Agent
+    # instead of sending a borrowed turn. The one-turn borrow this flag requests failed
+    # silently — the next message lost the Agent's tools, skills and model with no signal
+    # to the user or the model — and prod said nobody used what it was protecting (247 of
+    # 247 mentions started their conversation). See D11 in docs/specs/agent-marketplace.md.
+    #
+    # Still honoured for clients that predate the change, with one correction:
+    # `binds_conversation` now BINDS such a mention when the thread is empty, so a stale
+    # tab lands in the same place a current one does. A mention into a thread that already
+    # has messages keeps the old borrow semantics — that path is unreachable from the
+    # current SPA, and changing it for old clients would annex their conversation.
+    #
+    # A borrowed turn skips the bind-once-per-session validation and skips writing
+    # `preferences.assistant_id`. Everything else — access check, RAG, binding resolution,
+    # memory injection — is identical to a bound turn, because the same Agent is running
+    # with the same governance.
     #
     # ⚠️ It is the *client's* claim about intent, never an access decision:
     # `get_assistant_with_access_check` still gates the Agent itself, so the

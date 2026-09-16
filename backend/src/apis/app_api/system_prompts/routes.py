@@ -1,7 +1,8 @@
 """User-facing read endpoint for system prompts.
 
-Signed-in users fetch the list of enabled prompts to display in the
-conversation settings panel. The prompt_text is never returned here —
+Signed-in users fetch the list of enabled prompts to display in whichever
+picker surfaces them (the composer settings drawer that used to was removed
+with the Customize surface). The prompt_text is never returned here —
 only the name and description. Admin writes go through /admin/system-prompts.
 """
 

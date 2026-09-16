@@ -42,6 +42,7 @@ from .inference_models import (
 from .inference_repository import InferenceRepository, get_inference_repository
 from .script_packaging_service import ScriptPackagingService, get_script_packaging_service
 from .dependencies import require_fine_tuning_access
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +286,9 @@ async def preflight_huggingface_model(hf_id: str, spec) -> None:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(f"https://huggingface.co/api/models/{hf_id}")
     except httpx.HTTPError as e:
-        logger.warning(f"HuggingFace pre-flight unavailable for {hf_id}: {e}")
+        logger.warning(
+            f"HuggingFace pre-flight unavailable for {scrub_log(hf_id)}: {scrub_log(e)}"
+        )
         return
 
     if response.status_code == 404:
@@ -298,7 +301,7 @@ async def preflight_huggingface_model(hf_id: str, spec) -> None:
         )
     if response.status_code >= 400:
         logger.warning(
-            f"HuggingFace pre-flight returned {response.status_code} for {hf_id}"
+            f"HuggingFace pre-flight returned {response.status_code} for {scrub_log(hf_id)}"
         )
         return
 
@@ -425,7 +428,7 @@ def _budgeted_runtime(
     if effective < requested_seconds:
         logger.info(
             f"Clamped max runtime from {requested_seconds}s to {effective}s "
-            f"to fit ${remaining_usd:.2f} remaining on {instance_type}"
+            f"to fit ${remaining_usd:.2f} remaining on {scrub_log(instance_type)}"
         )
     return effective
 

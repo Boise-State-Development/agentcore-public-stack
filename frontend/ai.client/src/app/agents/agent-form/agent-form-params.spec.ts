@@ -10,6 +10,7 @@ import { AgentService } from '../services/agent.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ThemeService } from '../../components/topnav/components/theme-toggle/theme.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { ToolService } from '../../services/tool/tool.service';
 
 /**
  * `max_tokens` is deliberately not an author-facing knob — see the
@@ -120,6 +121,12 @@ function setup(options: { agent?: unknown } = {}) {
     imports: [ReactiveFormsModule],
     providers: [
       provideRouter([{ path: 'agents', children: [] }]),
+      // The create-mode form injects ToolService; stub it so the root service's
+      // constructor doesn't attempt a (blocked) real GET /tools/.
+      {
+        provide: ToolService,
+        useValue: { initialized: () => true, tools: () => [], loadTools: vi.fn() },
+      },
       { provide: AgentService, useValue: mockAgentService },
       { provide: ToastService, useValue: mockToast },
       { provide: SidenavService, useValue: { hide: vi.fn(), show: vi.fn() } },

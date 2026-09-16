@@ -27,6 +27,9 @@ import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
 import { AgentService } from '../agents/services/agent.service';
+import { AgentMentionService } from '../agents/services/agent-mention.service';
+import { routeMention } from './services/chat/mention-routing';
+import { ToastService } from '../services/toast/toast.service';
 import { Agent, AgentRunnability } from '../agents/models/agent.model';
 import { ToolService } from '../services/tool/tool.service';
 import { SkillService } from '../services/skill/skill.service';
@@ -77,6 +80,8 @@ export class ConversationPage implements OnDestroy {
   private systemPromptsService = inject(SystemPromptsService);
   private greetingProvider = inject(GreetingProvider);
   private scrollPositions = inject(ScrollPositionService);
+  private agentMentionService = inject(AgentMentionService);
+  private toast = inject(ToastService);
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
 
@@ -590,22 +595,40 @@ export class ConversationPage implements OnDestroy {
     // `assistant()` signal guards the brief window during the `/` → `/s/:id`
     // route transition where the component is recreated and the query
     // param hasn't yet propagated to the new instance.
-    const assistantIdToUse =
+    const boundAssistantId =
       this.assistantIdFromQuery() || this.assistant()?.assistantId || undefined;
+
+    // An `@`-mention means "talk to this Agent", and always yields a conversation the
+    // Agent keeps its tools in — never the one-turn borrow that used to leave the *next*
+    // message agent-less with no signal to the user or the model. Rule in
+    // `mention-routing.ts` so it is testable without this component's ~30 injections.
+    const routed = routeMention({
+      mentionedAgentId: message.mentionAgentId,
+      boundAssistantId,
+      sessionId: sessionIdToUse,
+      threadHasMessages: this.hasMessages(),
+    });
+
+    if (routed.handedOff && message.mentionAgentId) {
+      this.toast.info(
+        `Starting a new conversation with ${this.mentionedAgentName(message.mentionAgentId)}`,
+        'Agents keep their tools and knowledge in their own conversation, so this message opens one.',
+      );
+    }
 
     // Loading state is set inside submitChatRequest once the (possibly
     // freshly generated) session id is known — it's per-session now.
 
-    // Submit the chat request with file upload IDs and assistant ID if present.
-    // A `@`-mention (Marketplace D11) rides alongside rather than replacing the bound
-    // assistant: it runs this one turn, the URL keeps whatever the conversation is bound
-    // to, and the next unmentioned message goes back to that.
+    // `mentionAgentId` is deliberately not forwarded any more: the backend's
+    // `agent_mention` flag exists only to suppress binding, which is the behaviour being
+    // removed. Sending the Agent as the bound `assistantId` is what puts it on the URL
+    // and keeps it on every following turn.
     this.chatRequestService.submitChatRequest(
       message.content,
-      sessionIdToUse,
+      routed.sessionId,
       message.fileUploadIds,
-      assistantIdToUse,
-      message.mentionAgentId,
+      routed.assistantId,
+      undefined,
       message.invokedSkillIds
     ).catch((error) => {
       console.error('Error sending chat request:', error);
@@ -615,6 +638,19 @@ export class ConversationPage implements OnDestroy {
     if (this.stagedSessionId()) {
       this.stagedSessionId.set(null);
     }
+  }
+
+  /**
+   * Display name for a mentioned Agent, for the hand-off notice.
+   *
+   * Falls back to a generic noun rather than an id: the toast explains what just happened
+   * to the user's message, and a raw `ast-…` in that sentence is worse than no name.
+   */
+  private mentionedAgentName(agentId: string): string {
+    const match = this.agentMentionService
+      .mentionable()
+      .find((candidate) => candidate.agentId === agentId);
+    return match?.name || 'this agent';
   }
 
   /**

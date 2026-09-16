@@ -38,6 +38,7 @@ from apis.shared.tools.models import (
     ToolDefinition,
     _clip,
 )
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -367,7 +368,10 @@ async def resolve_prompt_for_saved_tool(
         return await asyncio.to_thread(_get)
     except Exception as exc:  # noqa: BLE001 - surfaced as a 502 by the route
         logger.warning(
-            "prompts/get failed for %s/%s: %s", tool.tool_id, prompt_name, exc
+            "prompts/get failed for %s/%s: %s",
+            scrub_log(tool.tool_id),
+            scrub_log(prompt_name),
+            scrub_log(exc),
         )
         raise RuntimeError(f"The server could not compose that prompt: {exc}") from exc
 

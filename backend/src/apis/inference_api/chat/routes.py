@@ -195,6 +195,22 @@ async def _release_turn_lease(heartbeat_task, lease) -> None:
         logger.debug("lease-release shield cancelled; inner release continues")
 
 
+async def _session_has_messages(*, session_id: str, user_id: str) -> bool:
+    """True when the session already carries at least one persisted message.
+
+    Both binding rules turn on this: an Agent may only be attached to a thread that
+    has no history, because history produced under other instructions, tools and
+    skills is exactly what a binding would misrepresent.
+
+    Deliberately `limit=1` — the question is existence, not count, and this runs on
+    the invocation path.
+    """
+    from apis.shared.sessions.messages import get_messages
+
+    response = await get_messages(session_id=session_id, user_id=user_id, limit=1)
+    return bool(response.messages)
+
+
 def is_preview_session(session_id: str) -> bool:
     """Check if a session ID is a preview session (should skip persistence).
 
@@ -859,8 +875,8 @@ def _build_attachment_guidance(
             parts.append(
                 f"_Attached spreadsheet(s) {names} can't be read inline at "
                 f"this size. To analyze them, enable **Spreadsheet Analysis** "
-                f"in the Tools section of the settings panel (gear icon next "
-                f"to the message input), then re-send your message._"
+                f"under Customize → Tools in the sidebar, then re-send "
+                f"your message._"
             )
 
     if diverted_presentations:
@@ -879,9 +895,9 @@ def _build_attachment_guidance(
         else:
             parts.append(
                 f"_Attached presentation(s) {names} can't be read inline. To "
-                f"work with them, enable **PowerPoint Presentations** in the "
-                f"Tools section of the settings panel (gear icon next to the "
-                f"message input), then re-send your message._"
+                f"work with them, enable **PowerPoint Presentations** under "
+                f"Customize → Tools in the sidebar, then re-send your "
+                f"message._"
             )
 
     if oversized_inline:
@@ -1773,7 +1789,26 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         "Invocation request - processing with assistant context"
     )
 
-    if input_data.rag_assistant_id and not is_resume and not is_continuation:
+    # A **continuation** runs this block too, and that is the fix for a long-standing
+    # invisible failure: "Continue" after a max_tokens truncation used to skip the whole
+    # block, so a properly launched Agent conversation finished its reply with none of the
+    # Agent's tools, skills, model or instructions — the same silent capability loss the
+    # `@`-mention used to cause, on the path users are told to use. The SPA already resends
+    # `rag_assistant_id` on a continuation for exactly this reason; only this guard
+    # discarded it.
+    #
+    # Three steps inside stay gated on `not is_continuation`, each for its own reason:
+    # binding **validation** and **persistence** (steps 1 and 6) because a continuation
+    # binds nothing new — it is finishing a turn the binding already governs — and **RAG**
+    # (steps 3/4) because a continuation carries an empty message, so a knowledge-base
+    # search would spend a query on "" and augment nothing. The context the original turn
+    # retrieved is already in the history being continued.
+    #
+    # A **resume** still skips the block entirely: it rebuilds from its `PausedTurnSnapshot`,
+    # which replays the original turn's exact `enabled_tools` / `system_prompt` /
+    # `enabled_skills` in order to reconstruct the same prompt-cache key. Re-resolving here
+    # would risk a different effective set and orphan the paused agent.
+    if input_data.rag_assistant_id and not is_resume:
         # Local imports to avoid circular dependency
         from apis.shared.assistants.kb_access import granted
         from apis.shared.assistants.rag_service import (
@@ -1790,7 +1825,6 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             resolve_invocation_agent,
             resolve_review_agent,
         )
-        from apis.shared.sessions.messages import get_messages
         from apis.shared.sessions.metadata import (
             get_session_metadata,
             store_session_metadata,
@@ -1803,21 +1837,39 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         logger.info("Assistant RAG requested")
         logger.info("Processing for authenticated user")
 
+        # Does the thread already have messages? Only a *mention* turn needs the
+        # answer — for every other turn `binds_conversation` says True regardless —
+        # so this read stays off the hot path rather than costing every bound Agent
+        # turn a query it cannot act on. `None` means "not looked up yet"; the
+        # validation below reuses the value when it is already known.
+        thread_is_empty: Optional[bool] = None
+        if (
+            is_agent_mention
+            and not is_continuation
+            and not is_preview_session(input_data.session_id)
+        ):
+            thread_is_empty = not await _session_has_messages(
+                session_id=input_data.session_id, user_id=user_id
+            )
+
         # 1. Check if session already has an assistant attached
         # If it does, verify it's the same assistant (can't change assistants mid-session)
         # If it doesn't, verify session has no messages (can only attach to new sessions)
         # Skip validation for preview sessions (they don't persist state)
         #
-        # Marketplace D11: an `@`-mention turn skips BOTH rules on purpose. It
-        # borrows the Agent for one turn without binding the conversation, so
-        # "you already have a different Agent" and "this thread already has
-        # messages" are the normal case rather than the error case. The Agent's
-        # own access check below is untouched — skipping this block relaxes
-        # *binding* semantics, never authorization. Rule in
-        # ``agent_binding_policy`` so it is testable without this stack.
-        if binds_conversation(
+        # A mention that *starts* a thread binds it, exactly like launching the Agent:
+        # there is no history produced under other instructions for either rule to
+        # protect, and leaving it unbound is what made the next message silently lose
+        # the Agent's tools. A mention into a thread that already has messages still
+        # skips both rules — the current SPA opens a new conversation instead of
+        # sending one, so this is the legacy-client path. The Agent's own access check
+        # below is untouched either way: this relaxes *binding* semantics, never
+        # authorization. Rule in ``agent_binding_policy`` so it is testable without
+        # this stack.
+        if not is_continuation and binds_conversation(
             is_agent_mention=is_agent_mention,
             is_preview=is_preview_session(input_data.session_id),
+            thread_is_empty=bool(thread_is_empty),
         ):
             try:
                 existing_metadata = await get_session_metadata(input_data.session_id, user_id)
@@ -1836,12 +1888,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     logger.info("Continuing with existing assistant in session")
                 else:
                     # No assistant attached - verify session has no messages (can only attach to new sessions)
-                    messages_response = await get_messages(
-                        session_id=input_data.session_id,
-                        user_id=user_id,
-                        limit=1,  # Only need to check if any messages exist
-                    )
-                    if messages_response.messages and len(messages_response.messages) > 0:
+                    # Reuse the mention path's lookup rather than repeating it.
+                    if thread_is_empty is None:
+                        thread_is_empty = not await _session_has_messages(
+                            session_id=input_data.session_id, user_id=user_id
+                        )
+                    if not thread_is_empty:
                         logger.warning(
                             "Attempted to attach assistant to session with existing messages"
                         )
@@ -2012,7 +2064,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 if await bump_last_used_at(input_data.rag_assistant_id):
                     await resume_inactive_policies(input_data.rag_assistant_id)
             except Exception as bump_err:
-                logger.warning(f"lastUsedAt bump failed for assistant {input_data.rag_assistant_id}: {bump_err}")
+                logger.warning(
+                    f"lastUsedAt bump failed for assistant "
+                    f"{scrub_log(input_data.rag_assistant_id)}: {scrub_log(bump_err)}"
+                )
 
         # 2b. Agent Designer Phase 3 — resolve the Agent's governed capabilities
         # for the INVOKING user (D5), before the expensive KB search. v1 blocks
@@ -2041,39 +2096,43 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": input_data.session_id},
                 )
 
-        # 3. Search assistant knowledge base
-        logger.info("Starting knowledge base search for assistant...")
-        try:
-            logger.info("Searching knowledge base for assistant...")
-            context_chunks = await search_assistant_knowledgebase_with_formatting(
-                assistant_id=input_data.rag_assistant_id,
-                query=input_data.message,
-                top_k=5,
-                access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
-            )
-            logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
-            if context_chunks:
-                for i, chunk in enumerate(context_chunks):
-                    logger.info(f"Chunk {i + 1} retrieved")
-                    logger.info(f"Chunk {i + 1} metadata retrieved")
-
-            # 4. Augment message with context
-            if context_chunks:
-                # Engine-aware cap (Requirement 3.2): managed gets 8,000 so
-                # reranking's top_k chunks actually reach the model; legacy keeps
-                # 2,000. See rag_service.resolve_context_cap / HANDOFF §5.40.
-                cap = resolve_context_cap(input_data.rag_assistant_id)
-                augmented_message = augment_prompt_with_context(user_message=input_data.message, context_chunks=context_chunks, max_context_length=cap)
-                logger.info(
-                    f"Augmented message with {len(context_chunks)} context chunks"
+        # Skipped on a continuation: the turn carries an empty message, so a
+        # knowledge-base search would spend a query on "" and augment nothing. The
+        # context the original turn retrieved is already in the history being continued.
+        if not is_continuation:
+            # 3. Search assistant knowledge base
+            logger.info("Starting knowledge base search for assistant...")
+            try:
+                logger.info("Searching knowledge base for assistant...")
+                context_chunks = await search_assistant_knowledgebase_with_formatting(
+                    assistant_id=input_data.rag_assistant_id,
+                    query=input_data.message,
+                    top_k=5,
+                    access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
                 )
-                logger.info("Augmented message preview available")
-            else:
-                logger.info("No context chunks found for assistant - using original message without augmentation")
-        except Exception as e:
-            logger.error("Error searching assistant knowledge base", exc_info=True)
-            logger.error(f"Exception type: {type(e).__name__}")
-            # Continue without RAG context rather than failing
+                logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
+                if context_chunks:
+                    for i, chunk in enumerate(context_chunks):
+                        logger.info(f"Chunk {i + 1} retrieved")
+                        logger.info(f"Chunk {i + 1} metadata retrieved")
+
+                # 4. Augment message with context
+                if context_chunks:
+                    # Engine-aware cap (Requirement 3.2): managed gets 8,000 so
+                    # reranking's top_k chunks actually reach the model; legacy keeps
+                    # 2,000. See rag_service.resolve_context_cap / HANDOFF §5.40.
+                    cap = resolve_context_cap(input_data.rag_assistant_id)
+                    augmented_message = augment_prompt_with_context(user_message=input_data.message, context_chunks=context_chunks, max_context_length=cap)
+                    logger.info(
+                        f"Augmented message with {len(context_chunks)} context chunks"
+                    )
+                    logger.info("Augmented message preview available")
+                else:
+                    logger.info("No context chunks found for assistant - using original message without augmentation")
+            except Exception as e:
+                logger.error("Error searching assistant knowledge base", exc_info=True)
+                logger.error(f"Exception type: {type(e).__name__}")
+                # Continue without RAG context rather than failing
 
         # 5. Append assistant's instructions to the base system prompt (don't replace)
         # For preview sessions, prefer the system_prompt from the request (live form edits)
@@ -2139,19 +2198,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 logger.error("Failed to hydrate bound Memory Space; continuing", exc_info=True)
 
         # 6. Save assistant_id to session preferences (persist for future loads)
-        # Skip persistence for preview sessions
+        # Skip persistence for preview sessions and for continuations (a continuation
+        # binds nothing new — it is finishing a turn the binding already governs).
         #
-        # Marketplace D11: a mention turn deliberately writes nothing. Persisting
-        # here would silently convert the whole conversation to the Agent — the
-        # SPA self-heals its `assistantId` query param from these preferences on
-        # reload — so one `@` would bind the thread forever, which is the exact
-        # behavior the per-turn design rejects. Same predicate as the validation
-        # above, deliberately: validating without persisting would refuse the
-        # second mention in a thread, and persisting without validating would let
-        # a mention annex the conversation.
-        if binds_conversation(
+        # ⚠️ Must use the SAME predicate, with the same arguments, as the validation
+        # above. Validating without persisting refuses the second mention in a thread;
+        # persisting without validating lets a mention annex a conversation whose
+        # history was produced under other instructions. `thread_is_empty` is the
+        # argument that makes a thread-starting mention bind, so it has to be passed
+        # here too — dropping it is a silent one-turn Agent all over again.
+        if not is_continuation and binds_conversation(
             is_agent_mention=is_agent_mention,
             is_preview=is_preview_session(input_data.session_id),
+            thread_is_empty=bool(thread_is_empty),
         ):
             try:
                 existing_metadata = await get_session_metadata(input_data.session_id, user_id)

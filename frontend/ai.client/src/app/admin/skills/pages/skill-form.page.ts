@@ -27,6 +27,7 @@ import {
   SKILL_ID_PATTERN,
 } from '../models/admin-skill.model';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import { SKILL_DESCRIPTION_MAX_LENGTH } from '../../../shared/skills/skill-field-limits';
 import {
   parseSkillMarkdown,
   slugifySkillId,
@@ -167,7 +168,7 @@ import {
                   [class.border-state-danger-500]="form.get('description')?.invalid && form.get('description')?.touched"
                 ></textarea>
                 @if (form.get('description')?.invalid && form.get('description')?.touched) {
-                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Description is required (max 500 characters).</p>
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Description is required (max {{ SKILL_DESCRIPTION_MAX_LENGTH }} characters).</p>
                 }
               </div>
 
@@ -417,6 +418,9 @@ export class SkillFormPage implements OnInit {
   readonly acceptedFileTypes = RESOURCE_ACCEPT_ATTR;
   readonly viewing = signal<{ filename: string; content: string } | null>(null);
 
+  /** Exposed for the template's max-length hint. */
+  readonly SKILL_DESCRIPTION_MAX_LENGTH = SKILL_DESCRIPTION_MAX_LENGTH;
+
   // Inline new-file authoring.
   readonly showNewFile = signal(false);
   readonly newFileName = signal('');
@@ -425,7 +429,7 @@ export class SkillFormPage implements OnInit {
   form: FormGroup = this.fb.group({
     skillId: ['', [Validators.required, Validators.pattern(SKILL_ID_PATTERN)]],
     displayName: ['', [Validators.required, Validators.minLength(1), Validators.maxLength(100)]],
-    description: ['', [Validators.required, Validators.maxLength(500)]],
+    description: ['', [Validators.required, Validators.maxLength(SKILL_DESCRIPTION_MAX_LENGTH)]],
     instructions: [''],
     status: ['active' as SkillStatus],
     category: [''],

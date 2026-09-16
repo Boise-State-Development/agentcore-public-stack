@@ -149,7 +149,35 @@ class TestFirstUploadTrigger:
         assert record["upgradeNoticeDismissedAt"]
 
     @pytest.mark.asyncio
-    async def test_a_second_upload_during_provisioning_also_waits(self, table, flag_on):
+    async def test_established_legacy_agent_with_documents_stays_legacy(self, table, flag_on):
+        """MUTATION GUARD: the bug this file's fix addresses. An established legacy
+        agent has documents but NO ``KB_Record`` — legacy knowledge bases are not
+        first-class, share one S3-Vectors index, and never wrote a record. So the
+        absence of a record looks identical to a brand-new agent's. Without the
+        existing-documents guard, the agent's *next* upload is mistaken for a first
+        upload and provisions a managed knowledge base: retrieval flips to the empty
+        managed KB and the existing corpus is stranded on the legacy index, never
+        re-ingested. Remove the guard and this fails — a managed record appears."""
+        _seed_doc(table, document_id="DOC-existing", status="complete")
+
+        assert await bm.begin_born_managed(ASSISTANT_ID, owner_user_id=OWNER) is False
+        # Untouched: no record written, so the next upload takes the legacy pipeline.
+        assert _kb(table) is None
+
+    @pytest.mark.asyncio
+    async def test_probe_that_cannot_tell_keeps_the_agent_on_legacy(self, table, flag_on):
+        """Fail-safe direction. When existence cannot be determined, born-managed
+        must NOT provision. Wrongly provisioning on a legacy agent loses its corpus
+        from retrieval; wrongly staying legacy is benign (Upgrade still works). The
+        helper returns True on any error, so this asserts the trigger honours that."""
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        with patch(
+            "apis.app_api.documents.services.document_service.assistant_has_documents",
+            new=_AsyncMock(return_value=True),
+        ):
+            assert await bm.begin_born_managed(ASSISTANT_ID, owner_user_id=OWNER) is False
+        assert _kb(table) is None
         await bm.begin_born_managed(ASSISTANT_ID, owner_user_id=OWNER)
         before = _kb(table)["GSI7_SK"]
 
@@ -613,3 +641,41 @@ def test_the_two_halves_agree_on_the_status_string():
     They live in different Lambda images, so the constant is defined once and
     re-exported rather than spelled twice."""
     assert bm.STATUS_PROVISIONING == ic.STATUS_PROVISIONING == "provisioning"
+
+
+# ── 8. The existing-documents existence probe ────────────────────────────────
+class TestAssistantHasDocuments:
+    """The cheap COUNT probe born-managed uses to tell a new agent apart from an
+    established legacy one. It must not consult ownership (the caller already
+    authorised the upload) and must fail toward 'has documents' so uncertainty
+    keeps an agent on legacy rather than provisioning over its corpus."""
+
+    @pytest.mark.asyncio
+    async def test_true_when_a_document_row_exists(self, table):
+        from apis.app_api.documents.services.document_service import (
+            assistant_has_documents,
+        )
+
+        _seed_doc(table, document_id="DOC-x", status="complete")
+        assert await assistant_has_documents(ASSISTANT_ID) is True
+
+    @pytest.mark.asyncio
+    async def test_false_when_no_document_rows_exist(self, table):
+        from apis.app_api.documents.services.document_service import (
+            assistant_has_documents,
+        )
+
+        # A KB_Record is not a DOC# row: a record-only agent still counts as empty.
+        table.put_item(Item={"PK": r.kb_pk(ASSISTANT_ID), "SK": r.kb_sk(ASSISTANT_ID)})
+        assert await assistant_has_documents(ASSISTANT_ID) is False
+
+    @pytest.mark.asyncio
+    async def test_fails_toward_legacy_when_the_table_is_unconfigured(self, monkeypatch):
+        """No table name means the probe cannot answer — it returns True so
+        born-managed stays on legacy rather than provisioning blind."""
+        from apis.app_api.documents.services.document_service import (
+            assistant_has_documents,
+        )
+
+        monkeypatch.delenv("DYNAMODB_ASSISTANTS_TABLE_NAME", raising=False)
+        assert await assistant_has_documents(ASSISTANT_ID) is True
