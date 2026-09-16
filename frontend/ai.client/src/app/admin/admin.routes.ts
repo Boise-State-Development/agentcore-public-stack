@@ -341,4 +341,22 @@ export const adminRoutes: Routes = [
     data: { scope: 'admin.system_prompts' } satisfies AdminScopeRouteData,
     loadComponent: () => import('./system-prompts/system-prompt-form.page').then(m => m.SystemPromptFormPage),
   },
+  {
+    path: 'agent-templates',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.agent_templates' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./agent-templates/manage-agent-templates.page').then(m => m.ManageAgentTemplatesPage),
+  },
+  {
+    path: 'agent-templates/new',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.agent_templates' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./agent-templates/agent-template-form.page').then(m => m.AgentTemplateFormPage),
+  },
+  {
+    path: 'agent-templates/edit/:id',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.agent_templates' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./agent-templates/agent-template-form.page').then(m => m.AgentTemplateFormPage),
+  },
 ];
