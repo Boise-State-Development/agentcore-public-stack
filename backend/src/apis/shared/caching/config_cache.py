@@ -67,6 +67,7 @@ DEFAULT_TTL_SECONDS = 60
 MANAGED_MODELS = "managed_models"
 TOOL_CATALOG = "tool_catalog"
 SYSTEM_PROMPTS = "system_prompts"
+AGENT_TEMPLATES = "agent_templates"
 
 # Providers are read two ways — the enabled-only GSI query that `/connectors/`
 # uses on first load, and the full scan the admin console uses. They are

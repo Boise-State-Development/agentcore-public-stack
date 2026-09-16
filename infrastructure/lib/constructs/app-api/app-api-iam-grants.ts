@@ -130,6 +130,21 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Agent templates (create-agent picker catalog) ──
+  // Admin-managed CRUD; per-user reads (the enabled catalog) go through the
+  // user-facing `/templates` endpoint, which uses the same table.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'AgentTemplatesTableAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+        'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
+      ],
+      resources: [props.refs.agentTemplatesTable.tableArn, `${props.refs.agentTemplatesTable.tableArn}/index/*`],
+    }),
+  );
+
   // ── RAG assistants table ──
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({

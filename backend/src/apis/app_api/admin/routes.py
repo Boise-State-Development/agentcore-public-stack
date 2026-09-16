@@ -1000,6 +1000,11 @@ from .system_prompts.routes import router as system_prompts_admin_router
 
 router.include_router(system_prompts_admin_router)
 
+# ========== Include Agent Templates Admin Subrouter ==========
+from .agent_templates.routes import router as agent_templates_admin_router
+
+router.include_router(agent_templates_admin_router)
+
 # ========== Include Announcements Admin Subrouter (conditional) ==========
 # Default ON with a kill switch. While ANNOUNCEMENTS_ENABLED=false the admin
 # authoring API is unmounted so the surface 404s, but the data and code remain

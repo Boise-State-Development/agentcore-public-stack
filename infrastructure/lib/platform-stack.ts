@@ -185,6 +185,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly userMenuLinksTable: dynamodb.ITable;
   public readonly announcementsTable: dynamodb.ITable;
   public readonly systemPromptsTable: dynamodb.ITable;
+  public readonly agentTemplatesTable: dynamodb.ITable;
   public readonly sharedConversationsTable: dynamodb.ITable;
   public readonly sharedConversationsBucket: s3.IBucket;
   public readonly fileUploadBucket: s3.IBucket;
@@ -426,6 +427,7 @@ export class PlatformStack extends cdk.Stack {
     this.userMenuLinksTable = adminTables.userMenuLinksTable;
     this.announcementsTable = adminTables.announcementsTable;
     this.systemPromptsTable = adminTables.systemPromptsTable;
+    this.agentTemplatesTable = adminTables.agentTemplatesTable;
 
     const fileUpload = new FileUploadConstruct(this, 'FileUpload', { config });
     this.fileUploadBucket = fileUpload.bucket;
@@ -830,6 +832,7 @@ export class PlatformStack extends cdk.Stack {
       userMenuLinksTable: this.userMenuLinksTable,
       announcementsTable: this.announcementsTable,
       systemPromptsTable: this.systemPromptsTable,
+      agentTemplatesTable: this.agentTemplatesTable,
       sharedConversationsTable: this.sharedConversationsTable,
       sharedConversationsBucket: this.sharedConversationsBucket,
       fileUploadBucket: this.fileUploadBucket,
@@ -1005,6 +1008,7 @@ export class PlatformStack extends cdk.Stack {
         { name: 'user-menu-links', table: this.userMenuLinksTable },
         { name: 'announcements', table: this.announcementsTable },
         { name: 'system-prompts', table: this.systemPromptsTable },
+        { name: 'agent-templates', table: this.agentTemplatesTable },
         { name: 'shared-conversations', table: this.sharedConversationsTable },
         { name: 'user-file-uploads', table: this.fileUploadTable },
         { name: 'rag-assistants', table: this.ragAssistantsTable },

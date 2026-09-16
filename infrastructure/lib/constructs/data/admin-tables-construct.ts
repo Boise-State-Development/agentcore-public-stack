@@ -34,6 +34,7 @@ export class AdminTablesConstruct extends Construct {
   public readonly userMenuLinksTable: dynamodb.Table;
   public readonly announcementsTable: dynamodb.Table;
   public readonly systemPromptsTable: dynamodb.Table;
+  public readonly agentTemplatesTable: dynamodb.Table;
 
   constructor(
     scope: Construct,
@@ -90,6 +91,20 @@ export class AdminTablesConstruct extends Construct {
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
+    // Agent templates: admin-managed catalog of curated starting points for new
+    // agents. PK `TEMPLATE#<template_id>`, SK `METADATA`. Read by the public
+    // `/templates` endpoint (create-agent picker) and admin CRUD. No GSI — the
+    // catalog is small, so listing is a Scan (mirrors SystemPromptsTable).
+    this.agentTemplatesTable = new dynamodb.Table(this, 'AgentTemplatesTable', {
+      tableName: getResourceName(config, 'agent-templates'),
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
     // ── SSM publications (consumed by restore tooling, app-api runtime) ──
     new ssm.StringParameter(this, 'UserSettingsTableNameParameter', {
       parameterName: `/${config.projectPrefix}/settings/user-settings-table-name`,
@@ -127,6 +142,21 @@ export class AdminTablesConstruct extends Construct {
       parameterName: `/${config.projectPrefix}/admin/system-prompts-table-arn`,
       stringValue: this.systemPromptsTable.tableArn,
       description: 'System prompts DynamoDB table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // Agent templates: name + arn published, mirroring system prompts.
+    new ssm.StringParameter(this, 'AgentTemplatesTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/admin/agent-templates-table-name`,
+      stringValue: this.agentTemplatesTable.tableName,
+      description: 'Agent templates DynamoDB table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'AgentTemplatesTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/admin/agent-templates-table-arn`,
+      stringValue: this.agentTemplatesTable.tableArn,
+      description: 'Agent templates DynamoDB table ARN',
       tier: ssm.ParameterTier.STANDARD,
     });
 
