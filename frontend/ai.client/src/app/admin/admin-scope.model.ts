@@ -25,6 +25,7 @@ export const ADMIN_SCOPE_IDS = [
   'admin.marketplace',
   'admin.users',
   'admin.system_prompts',
+  'admin.agent_templates',
   'admin.user_menu_links',
   'admin.announcements',
   'admin.roles',

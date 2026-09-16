@@ -34,6 +34,7 @@ import {
   heroBuildingLibrary,
   heroTag,
   heroBookmark,
+  heroSquares2x2,
 } from '@ng-icons/heroicons/outline';
 
 interface NavItem {
@@ -87,6 +88,7 @@ interface NavGroup {
       heroBuildingLibrary,
       heroTag,
       heroBookmark,
+      heroSquares2x2,
     }),
   ],
   host: { class: 'block' },
@@ -203,6 +205,7 @@ export class AdminLayout implements OnInit {
         { label: 'Models', icon: 'heroPencilSquare', route: '/admin/manage-models', scope: 'admin.models' },
         { label: 'Tools', icon: 'heroWrenchScrewdriver', route: '/admin/tools', scope: 'admin.tools' },
         { label: 'Skills', icon: 'heroSparkles', route: '/admin/skills', scope: 'admin.skills' },
+        { label: 'Agent Templates', icon: 'heroSquares2x2', route: '/admin/agent-templates', scope: 'admin.agent_templates' },
         { label: 'Connectors', icon: 'heroLink', route: '/admin/connectors', scope: 'admin.connectors' },
       ],
     },
