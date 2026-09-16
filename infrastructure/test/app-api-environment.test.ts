@@ -55,6 +55,21 @@ describe('buildAppApiEnvironment — Memory Spaces', () => {  it('wires the tabl
 });
 
 /**
+ * Agent Templates: the admin CRUD routes and the public `/templates` picker
+ * feed read the table name from `DYNAMODB_AGENT_TEMPLATES_TABLE_NAME`. Mirrors
+ * the system-prompts wiring. Read by app-api only — inference-api never sets it.
+ */
+describe('buildAppApiEnvironment — Agent Templates', () => {
+  it('wires DYNAMODB_AGENT_TEMPLATES_TABLE_NAME from the resolved table name', () => {
+    const env = buildAppApiEnvironment(
+      createMockConfig(),
+      stubParams({ agentTemplatesTableName: 'test-project-agent-templates' }),
+    );
+    expect(env.DYNAMODB_AGENT_TEMPLATES_TABLE_NAME).toBe('test-project-agent-templates');
+  });
+});
+
+/**
  * Guards the owner-facing upgrade offer's flag wiring.
  *
  * `apis/app_api/kb_upgrade/service.py` reads `MANAGED_KB_MIGRATION_ENABLED` from

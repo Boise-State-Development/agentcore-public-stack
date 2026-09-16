@@ -211,12 +211,33 @@ describe('CostTrackingTablesConstruct', () => {
 });
 
 describe('AdminTablesConstruct', () => {
-  it('creates 4 DDB tables', () => {
+  it('creates 5 DDB tables', () => {
     const stack = testStack();
     new AdminTablesConstruct(stack, 'Admin', { config: createMockConfig() });
     const t = Template.fromStack(stack);
-    // user-settings, user-menu-links, announcements, system-prompts.
-    t.resourceCountIs('AWS::DynamoDB::Table', 4);
+    // user-settings, user-menu-links, announcements, system-prompts,
+    // agent-templates.
+    t.resourceCountIs('AWS::DynamoDB::Table', 5);
+  });
+
+  it('creates the agent-templates table with PK/SK and no GSI', () => {
+    // Mirrors SystemPromptsTable exactly: PK/SK string keys, AWS-managed
+    // encryption, no secondary index (the repository lists via Scan).
+    const stack = testStack();
+    new AdminTablesConstruct(stack, 'Admin', { config: createMockConfig() });
+    const t = Template.fromStack(stack);
+    const agentTemplates = Object.values(t.findResources('AWS::DynamoDB::Table'))
+      .filter((table: any) =>
+        (table.Properties.TableName as string)?.includes('agent-templates'),
+      );
+    expect(agentTemplates).toHaveLength(1);
+    const props = (agentTemplates[0] as any).Properties;
+    expect(props.KeySchema).toEqual([
+      { AttributeName: 'PK', KeyType: 'HASH' },
+      { AttributeName: 'SK', KeyType: 'RANGE' },
+    ]);
+    expect(props.GlobalSecondaryIndexes).toBeUndefined();
+    expect(props.SSESpecification).toEqual({ SSEEnabled: true }); // AWS_MANAGED (aws/dynamodb key)
   });
 
   it('gives only the announcements table a TTL attribute', () => {

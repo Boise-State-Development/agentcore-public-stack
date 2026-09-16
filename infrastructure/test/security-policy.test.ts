@@ -277,6 +277,30 @@ describe('Security policy hardening', () => {
     });
   });
 
+  describe('App-api agent-templates grant', () => {
+    // The admin CRUD routes and the public /templates picker feed both run on
+    // app-api and read/write this table. Mirrors SystemPromptsTableAccess and
+    // must stay scoped — never Action:* / Resource:*.
+    it('app-api role has scoped read/write on the agent-templates table', () => {
+      const matches = statementsWithSid('AgentTemplatesTableAccess');
+      if (matches.length === 0) {
+        throw new Error(
+          "Could not locate the app-api agent-templates grant. " +
+            "Looked for Sid 'AgentTemplatesTableAccess'. If the Sid was renamed, update this test.",
+        );
+      }
+      for (const s of matches) {
+        const actions = asArray(s.Action);
+        for (const a of ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+                         'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan']) {
+          expect(actions).toContain(a);
+        }
+        const resources = asArray(s.Resource);
+        expect(resources).not.toContain('*');
+      }
+    });
+  });
+
   describe('AgentCore runtime user-settings grant', () => {
     // Regression guard: inference-agentcore-construct.ts injects
     // DYNAMODB_USER_SETTINGS_TABLE_NAME, which makes UserSettingsRepository

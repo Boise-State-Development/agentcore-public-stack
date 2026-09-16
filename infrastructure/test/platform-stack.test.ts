@@ -152,18 +152,20 @@ describe('PlatformStack', () => {
 
   describe('DynamoDB tables', () => {
     it('creates all shared tables', () => {
-      // 27 tables. Was 26 — the announcements table was added for the
-      // feature-announcement system (admin-authored notices + per-user
-      // acknowledgement rows). Prior note: the audit-log table was added
-      // for the administrative audit trail (delegated admin scopes, PR-5);
-      // before that the memory-spaces table was added for the Memory Spaces
-      // feature; before that the system-prompts table was added for
-      // admin-managed Conversation Modes (custom system prompt catalog);
-      // previously 24 before the standalone "assistants" table was
-      // decommissioned (the python app uses rag-assistants for both
-      // assistant config and document metadata via
+      // 28 tables. Was 27 — the agent-templates table was added for the
+      // admin-managed Agent Templates catalog (mirrors system-prompts,
+      // read by app_api only). Before that: the announcements table was
+      // added for the feature-announcement system (admin-authored notices
+      // + per-user acknowledgement rows). Prior note: the audit-log table
+      // was added for the administrative audit trail (delegated admin
+      // scopes, PR-5); before that the memory-spaces table was added for
+      // the Memory Spaces feature; before that the system-prompts table
+      // was added for admin-managed Conversation Modes (custom system
+      // prompt catalog); previously 24 before the standalone "assistants"
+      // table was decommissioned (the python app uses rag-assistants for
+      // both assistant config and document metadata via
       // DYNAMODB_ASSISTANTS_TABLE_NAME).
-      template.resourceCountIs('AWS::DynamoDB::Table', 27);
+      template.resourceCountIs('AWS::DynamoDB::Table', 28);
     });
   });
 
@@ -228,9 +230,13 @@ describe('PlatformStack', () => {
       // CDK generates their physical names, which means the backend
       // workflow's `update-function-code` step has no way to find them
       // except through SSM — the deploy-time-discovery bucket above.
+      //
+      // Raised 49 → 51 for the agent-templates table name + ARN publishes
+      // (mirrors the system-prompts name+arn pair; consumed by restore
+      // tooling and ad-hoc IAM scoping).
       const params = template.findResources('AWS::SSM::Parameter');
       expect(Object.keys(params).length).toBeGreaterThanOrEqual(30);
-      expect(Object.keys(params).length).toBeLessThanOrEqual(49);
+      expect(Object.keys(params).length).toBeLessThanOrEqual(51);
     });
   });
 
