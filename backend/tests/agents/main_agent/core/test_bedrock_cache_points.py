@@ -358,3 +358,64 @@ class TestSteeringInjectionDoesNotDisturbCachePoints:
         assert steered["system"] == plain["system"]
         # Everything before the mixed message is identical too.
         assert steered["messages"][:-1] == plain["messages"][:-1]
+
+
+# ---------------------------------------------------------------------------
+# PR-5: selective 1h TTL on the STATIC prefix (thresholds spec §3.6)
+# ---------------------------------------------------------------------------
+
+class TestStaticPrefixLongTtl:
+    """AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL=1h puts a 1h TTL on the tools
+    and system points only; the message point stays at the 5m default, and
+    the flag off emits exactly today's bytes."""
+
+    def _model(self, monkeypatch, value):
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        if value is None:
+            monkeypatch.delenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", raising=False)
+        else:
+            monkeypatch.setenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", value)
+        from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
+
+        config = ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True)
+        return config, CountTokensBedrockModel(**config.to_bedrock_config())
+
+    def _request(self, model):
+        return model.format_request(
+            [{"role": "user", "content": [{"text": "hi"}]}],
+            [{"name": "t", "description": "d", "inputSchema": {"json": {"type": "object", "properties": {}}}}],
+            system_prompt_content=[{"text": "sys"}, {"cachePoint": {"type": "default"}}],
+        )
+
+    def test_flag_on_sets_1h_on_tools_and_system_only(self, monkeypatch):
+        config, model = self._model(monkeypatch, "1h")
+        cc = config.to_bedrock_config()["cache_config"]
+        assert cc.tools_ttl == "1h" and cc.system_prompt_ttl == "1h" and cc.ttl is None
+        assert config.long_ttl_static_prefix() is True
+        req = self._request(model)
+        assert req["toolConfig"]["tools"][-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+        assert req["system"][-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+        assert req["messages"][-1]["content"][-1] == {"cachePoint": {"type": "default"}}
+        assert _count_cache_points(req) == 3
+
+    @pytest.mark.parametrize("value", [None, "", "5m", "2h", "true"])
+    def test_anything_but_1h_is_todays_bytes(self, monkeypatch, value):
+        config, model = self._model(monkeypatch, value)
+        cc = config.to_bedrock_config()["cache_config"]
+        assert cc.tools_ttl is True and cc.system_prompt_ttl is True
+        assert config.long_ttl_static_prefix() is False
+        req = self._request(model)
+        assert req["toolConfig"]["tools"][-1] == {"cachePoint": {"type": "default"}}
+        assert req["system"][-1] == {"cachePoint": {"type": "default"}}
+        assert _count_cache_points(req) == 3
+
+    def test_non_anthropic_model_is_unaffected(self, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", "1h")
+        config = ModelConfig(model_id="us.amazon.nova-micro-v1:0", caching_enabled=True)
+        cc = config.to_bedrock_config()["cache_config"]
+        assert cc.tools_ttl is False
+        assert config.long_ttl_static_prefix() is False
+
+    def test_caching_disabled_means_no_long_ttl(self, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", "1h")
+        assert ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=False).long_ttl_static_prefix() is False

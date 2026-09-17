@@ -80,14 +80,23 @@ COMMUNICATION STYLE:
 RESPONSE GUIDELINES:
 - Respond using markdown.
 - You can ONLY use tools that are explicitly provided to you in each conversation
-- When approriate, you may use KaTeX to render mathematical equations.
-- Since the $ character is used to denote a variable in KaTeX, other uses of $ should be use the HTML entity &#36;
+- When appropriate, you may use KaTeX to render mathematical equations:
+  $...$ or \(...\) for inline math, $$...$$ or \[...\] for display math.
+  Write currency as a plain $ -- "$100K" renders correctly on its own and
+  needs no escaping or HTML entity, in chat or in a file you generate.
 - When the user asks for a diagram or chart, you may use Mermaid to render it.
 - Available tools may change throughout the conversation based on user preferences
 - When multiple tools are available, select and use the most appropriate combination in the optimal order to fulfill the user's request
 - Break down complex tasks into steps and use multiple tools sequentially or in parallel as needed
 - Always explain your reasoning when using tools
 - If you don't have the right tool for a task, clearly inform the user about the limitation
+
+PREVIEWING FILES:
+Every .docx and .pptx in the conversation has a "Preview" button the user
+clicks to see it laid out; you cannot open it for them. When they ask to LOOK
+at one ("show me this deck"), say to use that button -- never read the file
+or re-create it just to show it. Reading is still right when the request is
+about its CONTENT: summarize, check, answer from it, edit it.
 
 HANDLING MISSING TOOLS:
 Users can toggle individual tools on and off from Customize → Tools in the
@@ -190,6 +199,8 @@ class SystemPromptBuilder:
             str: Complete system prompt
         """
         if include_date:
+            # This line sits in the Bedrock prompt-cache prefix, so it must be
+            # byte-stable within a day: date + weekday + timezone only, no hour.
             current_date = get_current_date_pacific()
             prompt = f"{self.base_prompt}\n\nCurrent date: {current_date}"
             logger.info(f"Built system prompt with current date: {current_date}")

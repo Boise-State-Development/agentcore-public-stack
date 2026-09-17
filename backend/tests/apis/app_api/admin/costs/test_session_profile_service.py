@@ -206,3 +206,169 @@ async def test_the_whole_profile_serializes_without_content_bearing_keys():
     files = [{"uploadId": "a", "mimeType": "application/pdf", "sizeBytes": 1}]
     p = await _service(_row(), [_call(0, tool_calls={"t": {"calls": 1, "errors": 0}})], files=files).get_session_profile("s1")
     assert content_bearing_paths(p.model_dump(by_alias=True)) == []
+
+
+@pytest.mark.asyncio
+async def test_context_ledger_is_decoded_diffed_and_covered():
+    records = [
+        _call(0, read=10_000),
+        _call(1, read=10_000),
+        _call(2, read=10_000),
+        _call(3, read=10_000),
+    ]
+    # Rows carry the ledger from call 1 on: a stable prefix split, a window
+    # count that rises before call 3 (a trim), and one compaction decision
+    # with the summary's size at that moment.
+    records[1]["prefixTokens"] = {"system": 12_000, "tools": 48_000}
+    records[1]["windowRemovedMessages"] = 0
+    records[2]["windowRemovedMessages"] = 0
+    records[3]["windowRemovedMessages"] = 8
+    records[3]["compactionEvents"] = [{"kind": "applied", "checkpoint": 12, "summaryTokens": 2_300}]
+
+    p = await _service(_row(), records).get_session_profile("s1")
+
+    assert p.prefix_tokens.system == 12_000 and p.prefix_tokens.tools == 48_000
+    assert p.window_trim_calls == 1
+    assert p.window_removed_messages == 8
+    assert p.compaction_event_counts == {"applied": 1}
+    assert p.last_summary_tokens == 2_300
+    assert p.data_coverage.prefix_tokens and p.data_coverage.window_trim and p.data_coverage.compaction_events
+    trimmed = [pt.window_trimmed for pt in p.context_trajectory]
+    assert trimmed == [None, 0, 0, 8]
+    assert p.context_trajectory[3].compaction == ["applied"]
+
+
+@pytest.mark.asyncio
+async def test_rows_without_a_ledger_read_not_tracked():
+    p = await _service(_row(), [_call(0), _call(1)]).get_session_profile("s1")
+    assert p.prefix_tokens is None
+    assert p.window_removed_messages is None and p.window_trim_calls == 0
+    assert p.compaction_event_counts == {} and p.last_summary_tokens is None
+    assert not p.data_coverage.prefix_tokens and not p.data_coverage.window_trim
+    assert not p.data_coverage.compaction_events
+    assert all(pt.window_trimmed is None and pt.compaction is None for pt in p.context_trajectory)
+
+
+@pytest.mark.asyncio
+async def test_session_row_counters_alone_mark_compaction_events_as_tracked():
+    p = await _service(_row(compactionAppliedCount=0), [_call(0)]).get_session_profile("s1")
+    assert p.data_coverage.compaction_events
+    assert p.session.compaction_applied_count == 0
+
+
+# ── feedback join (document-context offload PR-7) ───────────────────────────
+
+
+def _feedback(message_id, value, reason=None):
+    row = {"sessionId": "s1", "messageId": message_id, "value": value, "updatedAt": "2026-09-16T00:00:00Z"}
+    if reason:
+        row["reason"] = reason
+    return row
+
+
+def _service_with_feedback(row, records, feedback):
+    service = _service(row, records)
+    service.storage.get_session_feedback_rows = AsyncMock(return_value=feedback)
+    return service
+
+
+@pytest.mark.asyncio
+async def test_feedback_joins_the_turn_class_when_the_rows_carry_it():
+    records = [
+        _call(0),  # attach turn: full document inline
+        _call(1),  # follow-up: digest only
+        _call(2),  # follow-up that read pages back
+        _call(3),  # no documents at all
+    ]
+    records[0]["hasDocuments"] = True
+    records[1]["hasDocuments"] = False
+    records[1]["documentDigests"] = 1
+    records[2]["hasDocuments"] = False
+    records[2]["documentDigests"] = 1
+    records[2]["documentReads"] = {"calls": 1, "pages": 4, "bytes": 1000}
+    records[3]["hasDocuments"] = False
+    records[3]["documentDigests"] = 0
+    feedback = [
+        _feedback(0, 1),
+        _feedback(1, -1, "wrong"),
+        _feedback(2, 1),
+        _feedback(3, -1, "tool_failed"),
+        _feedback(9, -1),  # no cost row for this message
+    ]
+    p = await _service_with_feedback(_row(), records, feedback).get_session_profile("s1")
+
+    assert (p.feedback.up, p.feedback.down, p.feedback.unjoined) == (2, 3, 1)
+    by = p.feedback.by_turn_class
+    assert by is not None
+    assert (by.full.up, by.full.down) == (1, 0)
+    assert (by.digest_only.up, by.digest_only.down) == (0, 1)
+    assert (by.retrieved.up, by.retrieved.down) == (1, 0)
+    assert (by.none.up, by.none.down) == (0, 1)
+    assert p.data_coverage.feedback is True
+    # Wire shape the SPA reads.
+    wire = p.model_dump(by_alias=True)["feedback"]
+    assert wire["byTurnClass"]["digestOnly"] == {"up": 0, "down": 1}
+
+
+@pytest.mark.asyncio
+async def test_feedback_counts_without_turn_class_when_rows_predate_1137():
+    records = [_call(0), _call(1)]  # no hasDocuments / documentDigests / documentReads
+    feedback = [_feedback(0, 1), _feedback(1, -1, "instructions")]
+    p = await _service_with_feedback(_row(), records, feedback).get_session_profile("s1")
+    assert (p.feedback.up, p.feedback.down) == (1, 1)
+    assert p.feedback.by_turn_class is None, "turn class is 'not tracked', not 'none'"
+    assert p.feedback.unjoined == 0
+    assert p.data_coverage.feedback is True
+
+
+@pytest.mark.asyncio
+async def test_no_feedback_rows_falls_back_to_rollups_and_coverage_is_honest():
+    p = await _service_with_feedback(_row(), [_call(0)], []).get_session_profile("s1")
+    assert (p.feedback.up, p.feedback.down) == (0, 0)
+    assert p.data_coverage.feedback is False
+
+    p = await _service_with_feedback(_row(thumbsUp=2, thumbsDown=1), [_call(0)], []).get_session_profile("s1")
+    assert (p.feedback.up, p.feedback.down) == (2, 1)
+    assert p.data_coverage.feedback is True
+    assert p.feedback.by_turn_class is None
+
+
+@pytest.mark.asyncio
+async def test_retries_are_counted_and_rework_is_priced_from_the_cost_rows():
+    # Turn A: assistant 1 (thumbed down, $0.10). Retry sent as user message 2;
+    # its turn is assistant 3 + 4 ($0.20 + $0.05, a tool round trip). User 5,
+    # assistant 6 ($0.99) is the NEXT turn and must not be counted.
+    records = [_call(1, cost=0.10), _call(3, cost=0.20), _call(4, cost=0.05), _call(6, cost=0.99)]
+    feedback = [{**_feedback(1, -1, "wrong"), "retryMessageId": 2}, _feedback(6, 1)]
+    p = await _service_with_feedback(_row(), records, feedback).get_session_profile("s1")
+    assert p.feedback.retried == 1
+    assert p.feedback.rework_usd == 0.35
+    assert (p.feedback.up, p.feedback.down) == (1, 1)
+
+    # A retry whose turn has no cost rows yet (still streaming) counts, but prices only the thumbed side.
+    feedback = [{**_feedback(1, -1, "wrong"), "retryMessageId": 7}]
+    p = await _service_with_feedback(_row(), records, feedback).get_session_profile("s1")
+    assert p.feedback.retried == 1 and p.feedback.rework_usd == 0.10
+
+    # Nothing priced at all → None, not 0.
+    feedback = [{**_feedback(9, -1), "retryMessageId": 10}]
+    p = await _service_with_feedback(_row(), records, feedback).get_session_profile("s1")
+    assert p.feedback.retried == 1 and p.feedback.rework_usd is None
+
+
+@pytest.mark.asyncio
+async def test_implicit_signal_rows_are_never_summed_into_the_thumb_counts():
+    records = [_call(0)]
+    records[0]["hasDocuments"] = True
+    feedback = [_feedback(0, 1), {**_feedback(0, -1), "signal": "implicit"}, {**_feedback(0, -1), "signal": "explicit"}]
+    p = await _service_with_feedback(_row(), records, feedback).get_session_profile("s1")
+    assert (p.feedback.up, p.feedback.down) == (1, 1)
+    assert (p.feedback.by_turn_class.full.up, p.feedback.by_turn_class.full.down) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_feedback_reader_failure_never_breaks_the_profile():
+    service = _service(_row(), [_call(0)])
+    service.storage.get_session_feedback_rows = AsyncMock(side_effect=RuntimeError("boom"))
+    p = await service.get_session_profile("s1")
+    assert p is not None and p.feedback.up == 0 and p.data_coverage.feedback is False

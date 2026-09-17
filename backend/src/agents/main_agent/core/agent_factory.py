@@ -5,13 +5,14 @@ import os
 import logging
 from typing import List, Optional, Any
 from strands import Agent
+from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.models import BedrockModel
 from strands.models.openai import OpenAIModel
 from strands.models.gemini import GeminiModel
 from strands.tools.executors import SequentialToolExecutor
 from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider
-from agents.main_agent.config.constants import EnvVars
+from agents.main_agent.config.constants import EnvVars, Defaults
 from apis.shared.models.bedrock_responses import build_bedrock_responses_model
 from apis.shared.models.mantle import build_mantle_model
 from apis.shared.models.usage_normalization import usage_normalized
@@ -291,6 +292,13 @@ class AgentFactory:
         # on a NON-Anthropic model this block is passed through untouched and
         # Bedrock rejects the call with AccessDeniedException.
         #
+        # PR-5 (thresholds spec §3.6): the point is placed TTL-less on purpose.
+        # With AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL=1h, ModelConfig sets
+        # CacheConfig(system_prompt_ttl="1h", tools_ttl="1h") and upstream's
+        # _apply_system_cache_ttl rewrites THIS point's ttl ("an explicit
+        # system_prompt_ttl string is honored as written"); the tools point
+        # gets its own. Flag unset → no ttl key anywhere → today's bytes.
+        #
         # RE-VERIFY BEFORE ANY BUMP PAST 1.55.0. This is a statement about
         # upstream internals and it has already rotted once. Re-check
         # _should_cache_system's guard, CacheConfig.system_prompt_ttl's
@@ -318,9 +326,38 @@ class AgentFactory:
             tools=tools,
             tool_executor=SequentialToolExecutor(),
             session_manager=session_manager,
+            conversation_manager=AgentFactory.build_conversation_manager(),
             hooks=hooks if hooks else None,
             plugins=plugins if plugins else None,
             retry_strategy=retry_strategy,
         )
 
         return agent
+
+    @staticmethod
+    def build_conversation_manager() -> SlidingWindowConversationManager:
+        """The Strands conversation manager for the chat agent.
+
+        Left unset, Strands installs ``SlidingWindowConversationManager()`` with
+        a **40-message** window and runs it after every event-loop cycle. Past
+        40 messages that slides the front of ``agent.messages`` every turn,
+        which (a) re-writes the whole cached prefix each turn — the 2026-09-15
+        prod cost audit saw fingerprint ``messageCount`` pinned at 39–41 with
+        every turn reading only tools+system — and (b) moves the list our
+        compaction checkpoint is expressed in (spiral-spec D3, ANCHOR_MISMATCH
+        on 14 of 20 audited sessions). History size is ``TurnBasedSessionManager``'s
+        job (docs/specs/compaction-model-relative-thresholds.md), so the window
+        is set large enough never to trim on its own. The manager is kept
+        (rather than ``NullConversationManager``) because its ``reduce_context``
+        is the only ``ContextWindowOverflowException`` recovery in the stack,
+        and that path does not depend on the window size.
+
+        ``AGENTCORE_CONVERSATION_WINDOW_MESSAGES=40`` restores the SDK default.
+        """
+        raw = os.environ.get(EnvVars.CONVERSATION_WINDOW_MESSAGES, "").strip()
+        try:
+            window = int(raw) if raw else Defaults.CONVERSATION_WINDOW_MESSAGES
+        except ValueError:
+            window = Defaults.CONVERSATION_WINDOW_MESSAGES
+        window = max(2, window)
+        return SlidingWindowConversationManager(window_size=window, should_truncate_results=True)

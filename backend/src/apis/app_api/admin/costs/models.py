@@ -106,6 +106,56 @@ class PrefixFingerprints(BaseModel):
     message_count: Optional[int] = Field(None, alias="messageCount")
 
 
+class PrefixTokens(BaseModel):
+    """The agent's stable static prefix, split: system prompt vs tool schemas."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    system: int = 0
+    tools: int = 0
+
+
+class CompactionEvent(BaseModel):
+    """One compaction decision recorded before a model call (numbers only).
+
+    ``kind``: ``applied`` (restore-time slice ran), ``checkpoint`` (a new
+    checkpoint was cut after the previous turn), ``forced`` / ``floor_unreachable``
+    (reserved for the scheduling policy). ``summaryTokens`` is the summary's
+    size at that moment — the number a summary cap has to move.
+    """
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    kind: str
+    checkpoint: Optional[int] = None
+    summary_tokens: Optional[int] = Field(None, alias="summaryTokens")
+    summarized_turns: Optional[int] = Field(None, alias="summarizedTurns")
+    retained_messages: Optional[int] = Field(None, alias="retainedMessages")
+    truncated_tool_results: Optional[int] = Field(None, alias="truncatedToolResults")
+    input_tokens: Optional[int] = Field(None, alias="inputTokens")
+    # Document lifecycle kinds (`document_stripped` / `document_rehydrated` /
+    # `document_offload`): how many documents the event touched, their
+    # estimated token weight, and — for an offload — the prompt-cache gap at
+    # the moment it fired (an offload while the cache is live is the
+    # regression the trigger must never produce).
+    documents: Optional[int] = None
+    document_tokens: Optional[int] = Field(None, alias="documentTokens")
+    cache_gap_seconds: Optional[int] = Field(None, alias="cacheGapSeconds")
+    # `document_offload` only: what the evicted documents were replaced with,
+    # and how many document_read page slices were aged in the same pass.
+    digest_tokens: Optional[int] = Field(None, alias="digestTokens")
+    slices: Optional[int] = None
+    slice_tokens: Optional[int] = Field(None, alias="sliceTokens")
+
+
+class DocumentReads(BaseModel):
+    """``document_read`` retrievals one model call requested: calls, pages
+    returned as native document blocks, and their byte size."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    calls: int = 0
+    pages: int = 0
+    bytes: int = 0
+
+
 class SessionCallRow(BaseModel):
     """One model call within a session's cost anatomy."""
     model_config = ConfigDict(populate_by_name=True)
@@ -144,6 +194,31 @@ class SessionCallRow(BaseModel):
     prefix_fingerprints: Optional[PrefixFingerprints] = Field(
         None, alias="prefixFingerprints"
     )
+    # Context ledger (optional; absent on rows written before it shipped or
+    # while COST_DIAGNOSTICS_ENABLED=false).
+    prefix_tokens: Optional[PrefixTokens] = Field(None, alias="prefixTokens")
+    # The conversation window's cumulative trimmed-message count at this call.
+    window_removed_messages: Optional[int] = Field(None, alias="windowRemovedMessages")
+    # Messages trimmed since the previous ledger-bearing call — derived, so a
+    # reader does not have to diff consecutive rows. A positive value means
+    # the prefix changed before this call.
+    window_trimmed: Optional[int] = Field(None, alias="windowTrimmed")
+    compaction_events: Optional[List[CompactionEvent]] = Field(None, alias="compactionEvents")
+    # Document context at this call (optional; absent on rows written before
+    # it shipped or with diagnostics off). `hasDocuments` + `documentDigests`
+    # classify the call: full document inline, digest only, or neither.
+    # `documentTokens` is the compaction estimator's heuristic (bytes/4, flat
+    # per image), comparable across rows; `documentMime` is keyed by Bedrock's
+    # format enum plus `image` — never a filename.
+    has_documents: Optional[bool] = Field(None, alias="hasDocuments")
+    document_count: Optional[int] = Field(None, alias="documentCount")
+    document_tokens: Optional[int] = Field(None, alias="documentTokens")
+    document_digests: Optional[int] = Field(None, alias="documentDigests")
+    documents_attached: Optional[int] = Field(None, alias="documentsAttached")
+    document_slices: Optional[int] = Field(None, alias="documentSlices")
+    document_slice_tokens: Optional[int] = Field(None, alias="documentSliceTokens")
+    document_mime: Optional[Dict[str, int]] = Field(None, alias="documentMime")
+    document_reads: Optional[DocumentReads] = Field(None, alias="documentReads")
 
 
 class SessionCostAnatomy(BaseModel):
@@ -306,6 +381,11 @@ class UserSessionSummary(BaseModel):
     tool_call_count: Optional[int] = Field(None, alias="toolCallCount")
     tool_error_count: Optional[int] = Field(None, alias="toolErrorCount")
     compaction_count: Optional[int] = Field(None, alias="compactionCount")
+    compaction_applied_count: Optional[int] = Field(None, alias="compactionAppliedCount")
+    compaction_forced_count: Optional[int] = Field(None, alias="compactionForcedCount")
+    compaction_floor_unreachable_count: Optional[int] = Field(
+        None, alias="compactionFloorUnreachableCount"
+    )
 
     diagnosis_count: int = Field(0, alias="diagnosisCount")
     top_diagnosis_severity: Optional[str] = Field(None, alias="topDiagnosisSeverity")
@@ -327,6 +407,12 @@ class UserSessionsResponse(BaseModel):
     # Sessions excluded because their cost is unrecorded (they are still listed,
     # with costKnown=False, when sort != "cost"; under cost-sort they trail).
     unknown_cost_count: int = Field(0, alias="unknownCostCount")
+    # Soft-deleted conversations in the list (status="deleted"). Listed, not
+    # hidden: a delete removes the row from the user's sidebar, not its cost
+    # rows or its share of `userPeriodCost`, so an audit that dropped them
+    # could not account for the period total.
+    deleted_session_count: int = Field(0, alias="deletedSessionCount")
+    deleted_session_cost: float = Field(0.0, alias="deletedSessionCost")
 
 
 class AttachmentProfile(BaseModel):
@@ -336,6 +422,10 @@ class AttachmentProfile(BaseModel):
     count: int = 0
     total_bytes: int = Field(0, alias="totalBytes")
     by_mime: Dict[str, int] = Field(default_factory=dict, alias="byMime")
+    # DocumentDigest coverage: uploads with a ready digest and the rendered
+    # token estimate they would cost in context (offload spec §4A).
+    digested: int = 0
+    digest_tokens: int = Field(0, alias="digestTokens")
 
 
 class ContextTrajectoryPoint(BaseModel):
@@ -350,6 +440,10 @@ class ContextTrajectoryPoint(BaseModel):
     cost: Optional[float] = None
     # Per-call tool census when recorded (PR-3): tool name -> calls
     tool_calls: Optional[Dict[str, int]] = Field(None, alias="toolCalls")
+    # Context ledger when recorded: messages trimmed before this call, and the
+    # kinds of compaction decision taken before it.
+    window_trimmed: Optional[int] = Field(None, alias="windowTrimmed")
+    compaction: Optional[List[str]] = None
 
 
 class FingerprintChanges(BaseModel):
@@ -369,6 +463,50 @@ class ToolCensusEntry(BaseModel):
     errors: int = 0
 
 
+class FeedbackCounts(BaseModel):
+    """Thumbs on one bucket of calls: ``up`` / ``down`` are counts of live
+    feedback rows, never the text of anything."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    up: int = 0
+    down: int = 0
+
+
+class FeedbackByTurnClass(BaseModel):
+    """Feedback split by the call's document turn class (document-context
+    offload spec §6.1): *full* (``hasDocuments``), *retrieved*
+    (``documentReads.pages > 0``), *digestOnly* (``documentDigests > 0``),
+    else *none* — in that precedence, since a retrieving call still holds
+    the digest. ``n`` per class is ``up + down``; the down-thumb rate is
+    ``down / n``."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    full: FeedbackCounts = Field(default_factory=FeedbackCounts)
+    digest_only: FeedbackCounts = Field(default_factory=FeedbackCounts, alias="digestOnly")
+    retrieved: FeedbackCounts = Field(default_factory=FeedbackCounts)
+    none: FeedbackCounts = Field(default_factory=FeedbackCounts)
+
+
+class FeedbackProfile(BaseModel):
+    """The outcome signal joined to the session's cost rows. ``byTurnClass``
+    is ``None`` when no cost row carries the turn-class fields (they arrive
+    with #1137; rows written before it have none) — "not tracked", not zero.
+    ``unjoined`` counts thumbs whose message has no cost row at all (the row
+    expired, or the call was never recorded)."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    up: int = 0
+    down: int = 0
+    by_turn_class: Optional[FeedbackByTurnClass] = Field(None, alias="byTurnClass")
+    unjoined: int = 0
+    # Down-thumbs the user followed with a retry-with-correction, and what
+    # that rework cost: the thumbed call(s) plus the retry turn's calls
+    # (response-feedback spec §7 "rework cost"). ``None`` when no retry has
+    # a cost row to price.
+    retried: int = 0
+    rework_usd: Optional[float] = Field(None, alias="reworkUsd")
+
+
 class DataCoverage(BaseModel):
     """Which optional signals this session actually has, so the UI can say
     "not tracked" instead of rendering an honest-looking zero."""
@@ -378,6 +516,12 @@ class DataCoverage(BaseModel):
     compaction_count: bool = Field(False, alias="compactionCount")
     fingerprints: bool = False
     cost: bool = False
+    prefix_tokens: bool = Field(False, alias="prefixTokens")
+    window_trim: bool = Field(False, alias="windowTrim")
+    compaction_events: bool = Field(False, alias="compactionEvents")
+    # Any F# row, or a session rollup written while diagnostics were on.
+    feedback: bool = False
+    documents: bool = False
 
 
 class SessionProfile(BaseModel):
@@ -408,3 +552,26 @@ class SessionProfile(BaseModel):
 
     diagnoses: List[SessionDiagnosis] = Field(default_factory=list)
     data_coverage: DataCoverage = Field(default_factory=DataCoverage, alias="dataCoverage")
+    # Latest recorded static prefix split (system prompt vs tool schemas).
+    prefix_tokens: Optional[PrefixTokens] = Field(None, alias="prefixTokens")
+    # How many calls in this session were preceded by a window trim, and the
+    # messages the window has removed in total (last ledger-bearing call).
+    window_trim_calls: int = Field(0, alias="windowTrimCalls")
+    window_removed_messages: Optional[int] = Field(None, alias="windowRemovedMessages")
+    # Compaction decisions by kind across the session's calls.
+    compaction_event_counts: Dict[str, int] = Field(
+        default_factory=dict, alias="compactionEventCounts"
+    )
+    # The summary's token size at the most recent compaction decision.
+    last_summary_tokens: Optional[int] = Field(None, alias="lastSummaryTokens")
+    # Thumbs up/down joined to the cost rows by (sessionId, messageId).
+    feedback: FeedbackProfile = Field(default_factory=FeedbackProfile)
+    # Document lifecycle across the session's calls: how many calls ran with
+    # the full document inline vs. a digest only (the digest-vs-full turn
+    # shares), the largest estimated document footprint seen, and what
+    # document_read pulled back in total.
+    full_document_calls: int = Field(0, alias="fullDocumentCalls")
+    digest_only_calls: int = Field(0, alias="digestOnlyCalls")
+    peak_document_tokens: Optional[int] = Field(None, alias="peakDocumentTokens")
+    document_read_calls: int = Field(0, alias="documentReadCalls")
+    document_read_pages: int = Field(0, alias="documentReadPages")

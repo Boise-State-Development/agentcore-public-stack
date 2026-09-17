@@ -28,6 +28,35 @@
  * extending on almost every migration.
  *
  * Source hues: danger=red, warning=amber, success=green, info=blue.
+ *
+ * CONTRAST: the step that clears WCAG AA (4.5:1, normal-size text) is NOT
+ * the same for every role, because these ramps come from three different
+ * Tailwind hues and amber/green are far lighter than red at the same step.
+ * Measured in-browser against a white card (light) and gray-900 (dark):
+ *
+ *            light -600   light -700   dark -400   dark -700
+ *   danger      4.77 AA      6.42 AA      6.14 AA     2.76
+ *   warning     3.20 ✗       5.03 AA     10.30 AA     3.53
+ *   success     3.22 ✗       4.95 AA      9.98 AA     3.59
+ *
+ * So for TEXT the pairing is `-700` light / `-400` dark for warning and
+ * success, and `-600` / `-400` for danger. Note -700 is a light-mode step
+ * only: it fails in dark mode for every role, so never pair it with itself.
+ *
+ * Icons, checkbox fills and other non-text content are governed by the 3:1
+ * rule (WCAG 1.4.11) instead, which -600 already clears on white — those
+ * call sites deliberately stay at -600. The exception is a -600 glyph on
+ * its own -100 tint (warning 2.87, success 2.93, danger 3.91), which fails
+ * even 3:1 for the two light hues. The composer's voice button is the one
+ * place that stacks them, so all three of its branches use -700 on -100
+ * (warning 4.52, success 4.50, danger 5.27); danger moves with them for
+ * switch-internal consistency even though 3.91 already passed.
+ *
+ * The same 3:1 floor catches a -600 icon on a gray-100 HOVER fill
+ * (success 2.92, warning 2.91). An icon button that pairs
+ * `hover:text-*-600` with `hover:bg-gray-100` therefore uses -700
+ * (success 4.49, warning 4.57); one that only recolors on hover, over
+ * the page background, stays at -600 (3.22 on white, 3.08 on gray-50).
  */
 
 @theme {

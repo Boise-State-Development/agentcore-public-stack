@@ -16,7 +16,7 @@ import { AnimatedTextComponent } from '../../../components/animated-text';
 import { ParagraphSkeletonComponent } from '../../../components/paragraph-skeleton';
 import { Topnav } from '../../../components/topnav/topnav';
 import { SidenavService } from '../../../services/sidenav/sidenav.service';
-import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
+import { DockedPaneService } from '../../services/docked-pane/docked-pane.service';
 import { BrandingService } from '../../../../branding/branding.service';
 import { Assistant } from '../../../assistants/models/assistant.model';
 import { Agent, AgentRunnability } from '../../../agents/models/agent.model';
@@ -85,7 +85,7 @@ export interface ChatContainerConfig {
 export class ChatContainerComponent {
   // Inject sidenav service for full-page mode positioning
   protected sidenavService = inject(SidenavService);
-  private artifactState = inject(ArtifactStateService);
+  private dockedPane = inject(DockedPaneService);
   private voiceChatService = inject(VoiceChatService);
   protected readonly isVoiceActive = this.voiceChatService.isVoiceActive;
   protected branding = inject(BrandingService);
@@ -298,11 +298,10 @@ export class ChatContainerComponent {
   protected readonly isSidenavCollapsed = computed(() =>
     this.sidenavService.isCollapsed()
   );
-  /** True while the docked artifact pane is open — the fixed footer /
-   *  topnav reserve right-side space so the pane doesn't cover them. */
-  protected readonly artifactPanelOpen = computed(
-    () => this.artifactState.openArtifact() !== null
-  );
+  /** True while any pane is docked (artifact or .docx preview) — the
+   *  fixed footer / topnav reserve right-side space so the pane doesn't
+   *  cover them. */
+  protected readonly artifactPanelOpen = this.dockedPane.isOpen;
   protected readonly isAssistantOwner = computed(() => {
     const a = this.assistant();
     if (!a) return false;

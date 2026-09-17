@@ -151,11 +151,11 @@ import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
                   <!-- Password requirements -->
                   <ul class="mt-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5">
-                    <li [class.text-state-success-600]="passwordMeetsLength()" [class.dark:text-state-success-400]="passwordMeetsLength()">• At least 8 characters</li>
-                    <li [class.text-state-success-600]="passwordHasUppercase()" [class.dark:text-state-success-400]="passwordHasUppercase()">• One uppercase letter</li>
-                    <li [class.text-state-success-600]="passwordHasLowercase()" [class.dark:text-state-success-400]="passwordHasLowercase()">• One lowercase letter</li>
-                    <li [class.text-state-success-600]="passwordHasDigit()" [class.dark:text-state-success-400]="passwordHasDigit()">• One digit</li>
-                    <li [class.text-state-success-600]="passwordHasSymbol()" [class.dark:text-state-success-400]="passwordHasSymbol()">• One special character</li>
+                    <li [class.text-state-success-700]="passwordMeetsLength()" [class.dark:text-state-success-400]="passwordMeetsLength()">• At least 8 characters</li>
+                    <li [class.text-state-success-700]="passwordHasUppercase()" [class.dark:text-state-success-400]="passwordHasUppercase()">• One uppercase letter</li>
+                    <li [class.text-state-success-700]="passwordHasLowercase()" [class.dark:text-state-success-400]="passwordHasLowercase()">• One lowercase letter</li>
+                    <li [class.text-state-success-700]="passwordHasDigit()" [class.dark:text-state-success-400]="passwordHasDigit()">• One digit</li>
+                    <li [class.text-state-success-700]="passwordHasSymbol()" [class.dark:text-state-success-400]="passwordHasSymbol()">• One special character</li>
                   </ul>
                 </div>
 

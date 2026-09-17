@@ -6,17 +6,25 @@ This module handles:
 - Multi-provider cost support (Bedrock, OpenAI, Gemini)
 """
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 from .models import CostBreakdown
 
 
 class CostCalculator:
     """Calculate costs from token usage and pricing"""
 
+    # Bedrock's cache-write premium for a 1-hour TTL, as a multiple of the
+    # model's base input rate (5m is 1.25x — that is what the catalog's
+    # cacheWritePricePerMtok already carries). See the prompt-cache contract
+    # in CLAUDE.md.
+    LONG_TTL_CACHE_WRITE_MULTIPLIER = 2.0
+
     @staticmethod
     def calculate_message_cost(
         usage: Dict[str, int],
-        pricing: Dict[str, float]
+        pricing: Dict[str, float],
+        *,
+        long_ttl_static_prefix_tokens: Optional[int] = None,
     ) -> Tuple[float, CostBreakdown]:
         """
         Calculate cost for a single message
@@ -24,6 +32,15 @@ class CostCalculator:
         Args:
             usage: Token usage dict with inputTokens, outputTokens, etc.
             pricing: Pricing dict with inputPricePerMtok, etc.
+            long_ttl_static_prefix_tokens: When the turn ran with the 1h TTL on
+                the static (tools + system) cachePoints, the size of that static
+                segment. Cache writes that cover it are billed at the 1h premium
+                (2x base) instead of the 5m one. Which part of the write was
+                static is inferred from the read: a static segment that was
+                read (cacheRead >= static) was not written, so the write is all
+                history at 5m; otherwise the unread remainder of the static
+                segment was written at 1h. ``None`` (the default) prices every
+                cache write at the catalog's 5m rate — today's behavior.
 
         Returns:
             Tuple of (total_cost, cost_breakdown)
@@ -79,7 +96,15 @@ class CostCalculator:
         input_cost = (input_tokens / 1_000_000) * input_price
         output_cost = (output_tokens / 1_000_000) * output_price
         cache_read_cost = (cache_read_tokens / 1_000_000) * cache_read_price
-        cache_write_cost = (cache_write_tokens / 1_000_000) * cache_write_price
+
+        long_ttl_written = 0
+        if long_ttl_static_prefix_tokens and long_ttl_static_prefix_tokens > 0 and cache_write_tokens > 0:
+            long_ttl_written = max(0, min(cache_write_tokens, int(long_ttl_static_prefix_tokens) - cache_read_tokens))
+        long_ttl_write_price = input_price * CostCalculator.LONG_TTL_CACHE_WRITE_MULTIPLIER
+        cache_write_cost = (
+            (long_ttl_written / 1_000_000) * long_ttl_write_price
+            + ((cache_write_tokens - long_ttl_written) / 1_000_000) * cache_write_price
+        )
 
         total_cost = input_cost + output_cost + cache_read_cost + cache_write_cost
 

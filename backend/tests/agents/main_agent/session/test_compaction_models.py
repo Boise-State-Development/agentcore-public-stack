@@ -50,6 +50,13 @@ class TestCompactionStateToDict:
             "updatedAt",
             "totalSummarizedTurns",
             "truncationAnchor",
+            "armed",
+            "policy",
+            "pendingCheckpoint",
+            "pendingSummary",
+            "pendingHardCeiling",
+            "pendingSince",
+            "lastPrefixKey",
         }
 
     def test_to_dict_values_match(self):
@@ -174,3 +181,24 @@ class TestCompactionConfigDefaults:
         assert config.token_threshold == 100_000
         assert config.protected_turns == 3
         assert config.max_tool_content_length == 500
+
+
+# ---------------------------------------------------------------------------
+# Hysteresis fields (docs/specs/compaction-model-relative-thresholds.md §3.3)
+# ---------------------------------------------------------------------------
+
+class TestCompactionStateArmed:
+    def test_default_is_armed_with_no_policy(self):
+        state = CompactionState()
+        assert state.armed is True
+        assert state.policy is None
+
+    def test_legacy_record_without_armed_defaults_to_armed(self):
+        state = CompactionState.from_dict({"checkpoint": 3})
+        assert state.armed is True
+
+    def test_roundtrips_armed_and_policy(self):
+        state = CompactionState(armed=False, policy={"ceiling": 100, "floor": 25})
+        again = CompactionState.from_dict(state.to_dict())
+        assert again.armed is False
+        assert again.policy == {"ceiling": 100, "floor": 25}

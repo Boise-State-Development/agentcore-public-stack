@@ -114,7 +114,7 @@ async def test_all_time_drops_the_period_and_the_share():
     assert resp.period is None and resp.user_period_cost is None
     assert resp.sessions[0].share_of_user_period is None
     # No period → no active_since filter reaches storage.
-    service.storage.get_user_session_diagnostics.assert_awaited_once_with(user_id="u1", active_since=None)
+    service.storage.get_user_session_diagnostics.assert_awaited_once_with(user_id="u1", active_since=None, include_deleted=True)
     service.storage.get_user_cost_summary.assert_not_awaited()
 
 
@@ -123,7 +123,7 @@ async def test_period_scoping_passes_the_month_start_to_storage():
     service = _service([])
     await service.get_user_sessions("u1", period="2026-09")
     service.storage.get_user_session_diagnostics.assert_awaited_once_with(
-        user_id="u1", active_since="2026-09-01"
+        user_id="u1", active_since="2026-09-01", include_deleted=True
     )
 
 
@@ -160,3 +160,43 @@ async def test_a_broken_period_cost_lookup_degrades_to_no_share():
     resp = await service.get_user_sessions("u1", period="2026-09")
     assert resp.user_period_cost is None
     assert resp.sessions[0].share_of_user_period is None
+
+
+@pytest.mark.asyncio
+async def test_deleted_conversations_are_listed_flagged_and_rolled_up():
+    service = _service(
+        [
+            _row("live", totalCost=0.5),
+            _row("gone", totalCost=2.25, deleted=True, status="deleted"),
+            _row("legacy-tombstone", totalCost=1.0, deleted=True, status="active"),
+            _row("gone-unpriced", totalCost=None, deleted=True, status="deleted"),
+        ],
+        period_cost=4.0,
+    )
+
+    response = await service.get_user_sessions(user_id="u1", period="2026-09")
+
+    # The storage reader is asked for tombstones explicitly — the default
+    # reader hides them, which is what left a $20 month showing one $3 row.
+    service.storage.get_user_session_diagnostics.assert_awaited_once()
+    assert service.storage.get_user_session_diagnostics.await_args.kwargs["include_deleted"] is True
+
+    by_id = {s.session_id: s for s in response.sessions}
+    assert by_id["live"].status == "active"
+    assert by_id["gone"].status == "deleted"
+    # A legacy tombstone carries `deleted` without the status flip; the page
+    # gets one normalised signal.
+    assert by_id["legacy-tombstone"].status == "deleted"
+    assert response.total == 4
+    assert response.deleted_session_count == 3
+    assert response.deleted_session_cost == pytest.approx(3.25)
+    # Deleted rows still take their share of the period total.
+    assert by_id["gone"].share_of_user_period == pytest.approx(56.25)
+
+
+@pytest.mark.asyncio
+async def test_no_deleted_conversations_reports_zero():
+    service = _service([_row("live")], period_cost=1.0)
+    response = await service.get_user_sessions(user_id="u1", period="2026-09")
+    assert response.deleted_session_count == 0
+    assert response.deleted_session_cost == 0.0

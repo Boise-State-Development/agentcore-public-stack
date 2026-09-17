@@ -118,7 +118,7 @@ export class ToolUseComponent {
   /** Status icon color classes */
   statusIconColor = computed(() => {
     const status = this.toolStatus();
-    if (status === 'complete') return 'text-state-success-600 dark:text-state-success-400';
+    if (status === 'complete') return 'text-state-success-700 dark:text-state-success-400';
     if (status === 'error') return 'text-state-danger-600 dark:text-state-danger-400';
     return 'text-state-info-600 dark:text-state-info-400';
   });

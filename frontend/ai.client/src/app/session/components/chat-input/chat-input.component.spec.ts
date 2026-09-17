@@ -10,6 +10,7 @@ import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { VoiceChatService } from '../../services/voice';
 import { SteeringService } from '../../services/chat/steering.service';
+import { ComposerDraftService } from '../../services/session/composer-draft.service';
 import { ChatInputComponent } from './chat-input.component';
 
 const AGENTS: MentionableAgent[] = [
@@ -1236,5 +1237,72 @@ describe('ChatInputComponent — rotating discovery hints', () => {
     // state, and it outranks a discovery hint.
     expect(hint()).toBeNull();
     expect(textarea.getAttribute('placeholder')).toContain('when this response finishes');
+  });
+});
+
+describe('ChatInputComponent — composer drafts (feedback retry-with-correction)', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+          },
+        },
+        { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
+        { provide: ToolService, useValue: {} },
+        {
+          provide: VoiceChatService,
+          useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('showFileControls', false);
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.componentRef.setInput('sessionId', 's1');
+    fixture.detectChanges();
+  });
+
+  it('takes a draft for its own session into the textarea without submitting', () => {
+    const drafts = TestBed.inject(ComposerDraftService);
+    let submitted = 0;
+    component.messageSubmitted.subscribe(() => submitted++);
+
+    drafts.request('s1', 'That answer ignored my instructions. ');
+    fixture.detectChanges();
+
+    expect(component.userInput()).toBe('That answer ignored my instructions. ');
+    const textarea = fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe('That answer ignored my instructions. ');
+    expect(drafts.pending()).toBeNull();
+    expect(submitted).toBe(0);
+  });
+
+  it('leaves another session\'s draft alone', () => {
+    const drafts = TestBed.inject(ComposerDraftService);
+    drafts.request('s2', 'not mine');
+    fixture.detectChanges();
+    expect(component.userInput()).toBe('');
+    expect(drafts.pending()?.text).toBe('not mine');
   });
 });

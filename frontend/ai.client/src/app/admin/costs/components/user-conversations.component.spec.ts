@@ -112,4 +112,24 @@ describe('UserConversationsComponent', () => {
     await vi.waitFor(() => expect(fixture.componentInstance.sessionsResource.error()).toBeTruthy());
     expect(fixture.componentInstance.summaryLine()).toBe('');
   });
+
+  it('lists deleted conversations and says their cost still counts', async () => {
+    const fixture = setup(
+      vi.fn().mockReturnValue(
+        of({
+          ...RESPONSE,
+          total: 2,
+          deletedSessionCount: 1,
+          deletedSessionCost: 2.25,
+          sessions: [RESPONSE.sessions[0], { ...RESPONSE.sessions[0], sessionId: 'gone-1234-5678', status: 'deleted', totalCost: 2.25 }],
+        }),
+      ),
+    );
+    const c = fixture.componentInstance;
+    await vi.waitFor(() => expect(c.sessionsResource.hasValue()).toBe(true));
+    expect(c.summaryLine()).toBe('2 conversations · $5.12 recorded this month · 2 with unrecorded cost · 1 deleted ($2.25 still counted in the total)');
+    // Deleted rows stay in the list, flagged, rather than being dropped.
+    const deleted = (c.sessionsResource.value()?.sessions ?? []).filter((s) => s.status === 'deleted');
+    expect(deleted.map((s) => s.sessionId)).toEqual(['gone-1234-5678']);
+  });
 });

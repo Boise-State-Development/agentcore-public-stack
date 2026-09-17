@@ -32,17 +32,17 @@ class TestBuildWithDateTrue:
 
     @patch(
         "agents.main_agent.core.system_prompt_builder.get_current_date_pacific",
-        return_value="2024-06-15 (Saturday) 10:00 PDT",
+        return_value="2024-06-15 (Saturday) PDT",
     )
     def test_appends_current_date_line(self, mock_date):
         builder = SystemPromptBuilder()
         result = builder.build(include_date=True)
 
-        assert result.endswith("Current date: 2024-06-15 (Saturday) 10:00 PDT")
+        assert result.endswith("Current date: 2024-06-15 (Saturday) PDT")
 
     @patch(
         "agents.main_agent.core.system_prompt_builder.get_current_date_pacific",
-        return_value="2024-06-15 (Saturday) 10:00 PDT",
+        return_value="2024-06-15 (Saturday) PDT",
     )
     def test_includes_base_prompt(self, mock_date):
         builder = SystemPromptBuilder()
@@ -52,13 +52,13 @@ class TestBuildWithDateTrue:
 
     @patch(
         "agents.main_agent.core.system_prompt_builder.get_current_date_pacific",
-        return_value="2024-01-01 (Monday) 08:00 PST",
+        return_value="2024-01-01 (Monday) PST",
     )
     def test_date_separated_by_blank_line(self, mock_date):
         builder = SystemPromptBuilder()
         result = builder.build(include_date=True)
 
-        expected = f"{DEFAULT_SYSTEM_PROMPT}\n\nCurrent date: 2024-01-01 (Monday) 08:00 PST"
+        expected = f"{DEFAULT_SYSTEM_PROMPT}\n\nCurrent date: 2024-01-01 (Monday) PST"
         assert result == expected
 
 
@@ -102,14 +102,14 @@ class TestCustomBasePrompt:
 
     @patch(
         "agents.main_agent.core.system_prompt_builder.get_current_date_pacific",
-        return_value="2024-03-20 (Wednesday) 15:00 PDT",
+        return_value="2024-03-20 (Wednesday) PDT",
     )
     def test_build_with_date_uses_custom_prompt(self, mock_date):
         custom = "Custom prompt."
         builder = SystemPromptBuilder(base_prompt=custom)
         result = builder.build(include_date=True)
 
-        assert result == "Custom prompt.\n\nCurrent date: 2024-03-20 (Wednesday) 15:00 PDT"
+        assert result == "Custom prompt.\n\nCurrent date: 2024-03-20 (Wednesday) PDT"
 
     def test_none_base_prompt_falls_back_to_default(self):
         builder = SystemPromptBuilder(base_prompt=None)
@@ -159,3 +159,28 @@ class TestFromUserPrompt:
 
         assert result.startswith(PLATFORM_SAFETY_FLOOR)
         assert user_prompt in result
+
+
+# ---------------------------------------------------------------------------
+# KaTeX guidance: the SPA does not treat a bare "$" as a math delimiter
+# ---------------------------------------------------------------------------
+class TestKatexGuidance:
+    """The prompt must not resurrect the HTML-entity workaround for "$".
+
+    The prompt once told the model to write other uses of "$" as "&#36;".
+    That never worked: marked emits the entity into innerHTML, the browser
+    decodes it to a literal "$" in the text node, and KaTeX walks the DOM
+    afterwards -- so the entity form broke identically. It did, however, leak
+    the 9-character string "&#36;100K" into generated .pptx/.xlsx cells. The
+    real fix is in the SPA (see katex-delimiters.ts), which drops the bare
+    "$...$" delimiter, so the model should write currency as a plain "$".
+    """
+
+    def test_does_not_tell_the_model_to_escape_dollar_signs(self):
+        assert "&#36;" not in DEFAULT_SYSTEM_PROMPT
+
+    def test_names_the_supported_inline_math_delimiters(self):
+        assert r"$...$ or \(...\) for inline math" in DEFAULT_SYSTEM_PROMPT
+
+    def test_still_offers_katex_for_equations(self):
+        assert "KaTeX" in DEFAULT_SYSTEM_PROMPT

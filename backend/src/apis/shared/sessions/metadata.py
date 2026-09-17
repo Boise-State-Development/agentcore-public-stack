@@ -5,6 +5,22 @@ streaming completes. It uses DynamoDB for storage.
 
 Architecture:
 - Cloud: Stores metadata in DynamoDB table specified by DYNAMODB_SESSIONS_METADATA_TABLE_NAME
+
+Row families on the ``sessions-metadata`` table (PK = ``USER#{user_id}``; all
+carry ``GSI_PK = SESSION#{session_id}`` so ``SessionLookupIndex`` lists one
+session's rows by prefix):
+
+    S#{session_id}                    session row (rollups, preferences, compaction state)
+    C#{timestamp}#{uuid}              one model call's cost/usage record; ``messageId`` = the
+                                      assistant message's 0-based index (``_store_message_metadata_cloud``)
+    D#{session_id}#{message_id}       the user's original prompt text for display (``store_user_display_text``)
+    F#{session_id}#{message_id}       the user's thumb on an assistant message — value ±1, optional
+                                      reason code, timestamp; content-free (``apis.shared.sessions.feedback``).
+                                      Same ``messageId`` as the ``C#`` row, so feedback joins the call's
+                                      turn class on ``(sessionId, messageId)`` in one lookup.
+
+``GSI_SK`` is ``META`` / ``C#{timestamp}`` / ``D#{message_id}`` / ``F#{message_id}``
+respectively. Only ``C#`` / ``D#`` / ``F#`` rows carry a ``ttl``.
 """
 
 import logging
@@ -1742,6 +1758,21 @@ async def _bump_session_aggregates(
             update_parts_add.append("toolErrorCount :toolErrors")
             values[":toolCalls"] = tool_calls_total
             values[":toolErrors"] = tool_errors_total
+            # Compaction decisions, counted per kind from the call's
+            # `compactionEvents` ledger. `checkpoint` is deliberately not
+            # here — `_save_compaction_state(record_event=True)` already
+            # bumps `compactionCount` for it, and two counters for one event
+            # would disagree under concurrency.
+            for kind, attr in _COMPACTION_EVENT_COUNTERS.items():
+                update_parts_add.append(f"{attr} :{attr}")
+                values[f":{attr}"] = _compaction_event_count(message_metadata, kind)
+            # Document lifecycle rollups (docs/specs/document-context-offload.md
+            # §6.1): how many calls ran with the full document inline vs. a
+            # digest only, and how much document_read pulled back. Written
+            # as 0 while the diagnostics are on, like the counters above.
+            for attr, value in _document_rollups(message_metadata).items():
+                update_parts_add.append(f"{attr} :{attr}")
+                values[f":{attr}"] = value
 
         update_expression = (
             "ADD " + ", ".join(update_parts_add) + " SET " + ", ".join(update_parts_set)
@@ -1762,6 +1793,63 @@ async def _bump_session_aggregates(
     except Exception as e:
         # Non-fatal — lazy backfill compensates on next read.
         logger.debug("bump_session_aggregates failed (will be backfilled on read): %s", e)
+
+
+#: Session-row counter per compaction event kind (see
+#: ``TurnBasedSessionManager.record_compaction_event``). Written as 0 while
+#: the diagnostics are on so the attribute exists from the first call.
+_COMPACTION_EVENT_COUNTERS = {
+    "applied": "compactionAppliedCount",
+    "forced": "compactionForcedCount",
+    "floor_unreachable": "compactionFloorUnreachableCount",
+}
+
+
+#: Session-row counters derived from a call's document fields. ``fullDocumentCalls``
+#: and ``digestOnlyCalls`` are the digest-vs-full turn shares; the two
+#: ``documentRead*`` counters sum the call's ``documentReads`` ledger entry.
+DOCUMENT_ROLLUP_ATTRS = ("fullDocumentCalls", "digestOnlyCalls", "documentReadCalls", "documentReadPages")
+
+
+def _document_rollups(message_metadata: Any) -> Dict[str, int]:
+    """``{attr: delta}`` for every ``DOCUMENT_ROLLUP_ATTRS`` entry, from the
+    call's ``hasDocuments`` / ``documentDigests`` / ``documentReads`` extras.
+    Absent or malformed fields count as zero — the bump must never fail."""
+    extra = getattr(message_metadata, "model_extra", None)
+    extra = extra if isinstance(extra, dict) else {}
+    has_documents = bool(extra.get("hasDocuments"))
+    try:
+        digests = int(extra.get("documentDigests") or 0)
+    except (TypeError, ValueError):
+        digests = 0
+    reads = extra.get("documentReads")
+    reads = reads if isinstance(reads, dict) else {}
+
+    def _int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "fullDocumentCalls": 1 if has_documents else 0,
+        "digestOnlyCalls": 1 if (digests > 0 and not has_documents) else 0,
+        "documentReadCalls": _int(reads.get("calls")),
+        "documentReadPages": _int(reads.get("pages")),
+    }
+
+
+def _compaction_event_count(message_metadata: Any, kind: str) -> int:
+    """How many events of ``kind`` the call's ``compactionEvents`` extra carries.
+
+    Malformed entries count as zero rather than raising — the aggregate bump
+    must never fail on them.
+    """
+    extra = getattr(message_metadata, "model_extra", None)
+    events = extra.get("compactionEvents") if isinstance(extra, dict) else None
+    if not isinstance(events, list):
+        return 0
+    return sum(1 for e in events if isinstance(e, dict) and e.get("kind") == kind)
 
 
 def _tool_census_totals(message_metadata: Any) -> tuple[int, int]:
@@ -2088,6 +2176,20 @@ async def _get_all_message_metadata_cloud(session_id: str, user_id: str, table_n
                 else:
                     metadata_index[message_id] = {"displayText": display_text}
                 logger.debug(f"🔗 Merged displayText for user message {message_id}")
+
+        # Merge this user's thumbs (F# rows) so a reload restores the SPA's
+        # pressed state. Skipped while the feature is off — the rows stay.
+        from apis.shared.feature_flags import response_feedback_enabled
+
+        if response_feedback_enabled():
+            from .feedback import query_session_feedback
+
+            try:
+                for message_id, feedback in query_session_feedback(table, session_id, user_id).items():
+                    entry = metadata_index.setdefault(message_id, {})
+                    entry["feedback"] = feedback.model_dump(by_alias=True, exclude_none=True)
+            except Exception as e:  # noqa: BLE001 - feedback is a UI enhancement, never block history
+                logger.warning(f"Failed to merge message feedback: {e}")
 
         logger.info(f"📋 Metadata keys: {sorted(metadata_index.keys())}")
         return metadata_index

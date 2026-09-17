@@ -21,7 +21,10 @@ import {
 import { AdminCostHttpService } from '../services/admin-cost-http.service';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { ContextTrajectoryChartComponent } from '../components/context-trajectory-chart.component';
-import { CacheStatus, DiagnosisSeverity, SessionDiagnosis } from '../models';
+import { CacheStatus, DiagnosisSeverity, SessionDiagnosis,
+  CompactionEvent,
+  SessionCallRow,
+} from '../models';
 import {
   AnatomyRow,
   FINGERPRINT_KEYS,
@@ -33,6 +36,9 @@ import {
 import {
   SEVERITY_LABELS,
   buildDiagnosticJson,
+  downRate,
+  feedbackByTurnClassLine,
+  feedbackRetryLine,
   formatBytes,
   formatEvidenceValue,
   humanizeKey,
@@ -112,7 +118,7 @@ import {
         @let profile = profileResource.value();
         <section class="mb-6" aria-labelledby="profile-heading">
           <h2 id="profile-heading" class="sr-only">Conversation profile</h2>
-          <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-7">
+          <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-5">
             <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
               <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Messages</p>
               <p class="mt-1 text-lg/7 font-semibold text-gray-900 dark:text-white">{{ profile.session.messageCount ?? '—' }}</p>
@@ -139,7 +145,13 @@ import {
             <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
               <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Attachments</p>
               <p class="mt-1 text-lg/7 font-semibold text-gray-900 dark:text-white">{{ profile.attachments.count }}</p>
-              @if (profile.attachments.count > 0) {
+              @if (documentsLine(); as documents) {
+                <!-- How the documents were actually consumed: calls with the
+                     full document inline vs. a digest only, and what
+                     document_read pulled back. The digest-vs-full split is
+                     the quantity the offload work is judged on. -->
+                <p class="mt-1 truncate text-xs/5 text-gray-500 dark:text-gray-400" [title]="documents">{{ documents }}</p>
+              } @else if (profile.attachments.count > 0) {
                 <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">{{ bytes(profile.attachments.totalBytes) }}</p>
               }
             </div>
@@ -147,6 +159,9 @@ import {
               <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Compactions</p>
               @if (profile.dataCoverage.compactionCount) {
                 <p class="mt-1 text-lg/7 font-semibold text-gray-900 dark:text-white">{{ profile.session.compactionCount ?? 0 }}</p>
+                @if (compactionEventsLine(); as events) {
+                  <p class="mt-1 truncate text-xs/5 text-gray-500 dark:text-gray-400" [title]="events">{{ events }}</p>
+                }
               } @else {
                 <p class="mt-1 text-lg/7 font-semibold text-gray-400 dark:text-gray-500">—</p>
                 <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
@@ -171,6 +186,35 @@ import {
               }
             </div>
             <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Static prefix</p>
+              @if (profile.dataCoverage.prefixTokens && profile.prefixTokens; as prefix) {
+                <!-- Read on every call, re-written on every cold turn: the
+                     part of the prompt the user never typed. Tool schemas are
+                     the part that curation can shrink. -->
+                <p class="mt-1 text-lg/7 font-semibold text-gray-900 dark:text-white">{{ formatTokens(prefix.system + prefix.tools) }}</p>
+                <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                  {{ formatTokens(prefix.system) }} system · {{ formatTokens(prefix.tools) }} tools
+                </p>
+              } @else {
+                <p class="mt-1 text-lg/7 font-semibold text-gray-400 dark:text-gray-500">—</p>
+                <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">not tracked</p>
+              }
+            </div>
+            <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Window trims</p>
+              @if (profile.dataCoverage.windowTrim) {
+                <!-- Each trim moves the front of the history, which re-writes
+                     the cached prefix on the next call. -->
+                <p class="mt-1 text-lg/7 font-semibold text-gray-900 dark:text-white">{{ profile.windowTrimCalls ?? 0 }}</p>
+                <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                  {{ profile.windowRemovedMessages ?? 0 }} messages removed
+                </p>
+              } @else {
+                <p class="mt-1 text-lg/7 font-semibold text-gray-400 dark:text-gray-500">—</p>
+                <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">not tracked</p>
+              }
+            </div>
+            <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
               <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Write : read</p>
               <p
                 class="mt-1 text-lg/7 font-semibold"
@@ -183,6 +227,40 @@ import {
                 {{ profile.writeReadRatio != null ? profile.writeReadRatio.toFixed(2) : '—' }}
               </p>
               <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">healthy ≈ 0.1</p>
+            </div>
+            <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Feedback</p>
+              @if (profile.dataCoverage.feedback && profile.feedback; as feedback) {
+                <!-- The outcome signal: thumbs joined to the call they rate.
+                     Headline is the down-thumb rate; the line under it splits
+                     it by document turn class (offload spec §6.1) once the
+                     cost rows carry one. -->
+                <p
+                  class="mt-1 text-lg/7 font-semibold"
+                  [class]="
+                    (feedbackDownRate() ?? 0) >= 50
+                      ? 'text-state-danger-600 dark:text-state-danger-400'
+                      : 'text-gray-900 dark:text-white'
+                  "
+                >
+                  {{ feedbackDownRate() != null ? feedbackDownRate() + '% down' : '—' }}
+                </p>
+                <p class="mt-1 truncate text-xs/5 text-gray-500 dark:text-gray-400" [title]="feedbackTurnClassLine() ?? ''">
+                  {{ feedback.up }} up · {{ feedback.down }} down
+                  @if (feedbackTurnClassLine(); as byClass) {
+                    · {{ byClass }}
+                  } @else {
+                    · turn class not tracked
+                  }
+                </p>
+                @if (feedbackRetryLine(); as retries) {
+                  <!-- Quality in dollars: the thumbed answer plus the retry it took. -->
+                  <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">{{ retries }}</p>
+                }
+              } @else {
+                <p class="mt-1 text-lg/7 font-semibold text-gray-400 dark:text-gray-500">—</p>
+                <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">not tracked</p>
+              }
             </div>
           </div>
         </section>
@@ -468,6 +546,31 @@ import {
                       } @else {
                         <span class="text-gray-400 dark:text-gray-500">—</span>
                       }
+                      @if (row.call.windowTrimmed; as trimmed) {
+                        <!-- The window slid before this call — the prefix changed. -->
+                        <span
+                          class="ml-1 rounded-sm bg-gray-100 px-1.5 font-mono text-[10px]/5 text-gray-600 dark:bg-white/10 dark:text-gray-300"
+                          [title]="trimmed + ' messages trimmed from the window before this call'"
+                          >trim −{{ trimmed }}</span
+                        >
+                      }
+                      @for (event of row.call.compactionEvents ?? []; track $index) {
+                        <span
+                          class="ml-1 rounded-sm bg-gray-100 px-1.5 font-mono text-[10px]/5 text-gray-600 dark:bg-white/10 dark:text-gray-300"
+                          [title]="compactionEventTitle(event)"
+                          >{{ event.kind }}</span
+                        >
+                      }
+                      @if (documentBadge(row.call); as badge) {
+                        <!-- What the model had of the attachments on this call:
+                             the full document inline, a digest only, or pages
+                             it retrieved with document_read. -->
+                        <span
+                          class="ml-1 rounded-sm bg-gray-100 px-1.5 font-mono text-[10px]/5 text-gray-600 dark:bg-white/10 dark:text-gray-300"
+                          [title]="documentDetail(row.call)"
+                          >{{ badge }}</span
+                        >
+                      }
                     </td>
                     <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                       {{ formatGap(row.call.cacheGapSeconds) }}
@@ -538,6 +641,51 @@ import {
                             </dt>
                             <dd class="mt-0.5 font-mono text-xs/5 text-gray-700 dark:text-gray-300">
                               {{ row.call.prefixFingerprints?.messageCount ?? '—' }}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                              Window Removed
+                            </dt>
+                            <dd class="mt-0.5 font-mono text-xs/5 text-gray-700 dark:text-gray-300">
+                              {{ row.call.windowRemovedMessages ?? '—' }}
+                              @if (row.call.windowTrimmed) {
+                                <span class="text-gray-500 dark:text-gray-400">(+{{ row.call.windowTrimmed }} before this call)</span>
+                              }
+                            </dd>
+                          </div>
+                          <div>
+                            <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                              Static Prefix
+                            </dt>
+                            <dd class="mt-0.5 font-mono text-xs/5 text-gray-700 dark:text-gray-300">
+                              @if (row.call.prefixTokens; as prefix) {
+                                {{ formatTokens(prefix.system) }} system · {{ formatTokens(prefix.tools) }} tools
+                              } @else {
+                                —
+                              }
+                            </dd>
+                          </div>
+                          <div>
+                            <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                              Compaction
+                            </dt>
+                            <dd class="mt-0.5 font-mono text-xs/5 text-gray-700 dark:text-gray-300">
+                              @if (row.call.compactionEvents?.length) {
+                                @for (event of row.call.compactionEvents; track $index) {
+                                  <div>{{ compactionEventTitle(event) }}</div>
+                                }
+                              } @else {
+                                —
+                              }
+                            </dd>
+                          </div>
+                          <div>
+                            <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                              Documents
+                            </dt>
+                            <dd class="mt-0.5 font-mono text-xs/5 text-gray-700 dark:text-gray-300">
+                              {{ documentDetail(row.call) || '—' }}
                             </dd>
                           </div>
                           @for (key of fingerprintKeys; track key) {
@@ -688,6 +836,90 @@ export class SessionCostAnatomyPage {
    * money but are not a regression. The backend reports the explained subset rather than
    * deducting it, so the page does the subtraction where a reader can see both halves.
    */
+  /** "3 applied · 1 forced · summary 2.3K" — the compaction decisions by kind. */
+  readonly feedbackDownRate = computed(() => {
+    if (!this.profileResource.hasValue()) return null;
+    const feedback = this.profileResource.value().feedback;
+    return feedback ? downRate(feedback) : null;
+  });
+
+  readonly feedbackRetryLine = computed(() =>
+    this.profileResource.hasValue() ? feedbackRetryLine(this.profileResource.value().feedback) : null,
+  );
+
+  readonly feedbackTurnClassLine = computed(() =>
+    this.profileResource.hasValue() ? feedbackByTurnClassLine(this.profileResource.value().feedback) : null,
+  );
+
+  readonly compactionEventsLine = computed(() => {
+    if (!this.profileResource.hasValue()) return '';
+    const p = this.profileResource.value();
+    const counts = p.compactionEventCounts ?? {};
+    const parts = Object.keys(counts)
+      .sort()
+      .map((kind) => `${counts[kind]} ${kind.replace('_', ' ')}`);
+    if (p.lastSummaryTokens != null) parts.push(`summary ${this.formatTokens(p.lastSummaryTokens)}`);
+    return parts.join(' · ');
+  });
+
+  compactionEventTitle(event: CompactionEvent): string {
+    const parts = [event.kind.replace(/_/g, ' ')];
+    if (event.checkpoint != null) parts.push(`checkpoint ${event.checkpoint}`);
+    if (event.summaryTokens != null) parts.push(`summary ${this.formatTokens(event.summaryTokens)}`);
+    if (event.summarizedTurns != null) parts.push(`${event.summarizedTurns} turns summarized`);
+    if (event.retainedMessages != null) parts.push(`${event.retainedMessages} messages retained`);
+    if (event.truncatedToolResults) parts.push(`${event.truncatedToolResults} tool results truncated`);
+    if (event.documents != null) parts.push(`${event.documents} document${event.documents === 1 ? '' : 's'}`);
+    if (event.documentTokens != null) parts.push(`~${this.formatTokens(event.documentTokens)} tokens`);
+    if (event.digestTokens != null) parts.push(`→ ~${this.formatTokens(event.digestTokens)} digest`);
+    if (event.slices) parts.push(`${event.slices} page slice${event.slices === 1 ? '' : 's'} aged`);
+    if (event.cacheGapSeconds != null) parts.push(`cache gap ${this.formatGap(event.cacheGapSeconds)}`);
+    return parts.join(' · ');
+  }
+
+  /**
+   * "2 full · 1 digest-only · read 4 pages · peak ~12K" — how the session's
+   * documents were consumed, call by call. Empty when the rows predate the
+   * document fields, so the card falls back to the upload byte total.
+   */
+  readonly documentsLine = computed(() => {
+    if (!this.profileResource.hasValue()) return '';
+    const p = this.profileResource.value();
+    if (!p.dataCoverage.documents) return '';
+    const parts: string[] = [];
+    if (p.fullDocumentCalls) parts.push(`${p.fullDocumentCalls} full`);
+    if (p.digestOnlyCalls) parts.push(`${p.digestOnlyCalls} digest-only`);
+    if (p.documentReadCalls) parts.push(`read ${p.documentReadPages ?? 0} pages in ${p.documentReadCalls} calls`);
+    if (p.peakDocumentTokens != null) parts.push(`peak ~${this.formatTokens(p.peakDocumentTokens)}`);
+    return parts.join(' · ');
+  });
+
+  /** Short row badge: `doc`, `digest`, or `+Np` for pages retrieved this call. */
+  documentBadge(call: SessionCallRow): string {
+    const reads = call.documentReads;
+    if (reads && reads.pages > 0) return `+${reads.pages}p`;
+    if (call.hasDocuments) return 'doc';
+    if (call.documentDigests) return 'digest';
+    return '';
+  }
+
+  /** The expanded-row line for the call's document context. */
+  documentDetail(call: SessionCallRow): string {
+    if (call.hasDocuments == null && !call.documentReads) return '';
+    const parts: string[] = [];
+    if (call.hasDocuments) {
+      const mime = Object.entries(call.documentMime ?? {})
+        .map(([fmt, n]) => `${fmt}×${n}`)
+        .join(' ');
+      parts.push(`${call.documentCount ?? 0} inline ~${this.formatTokens(call.documentTokens ?? 0)}${mime ? ` (${mime})` : ''}`);
+    }
+    if (call.documentDigests) parts.push(`${call.documentDigests} digest${call.documentDigests === 1 ? '' : 's'}`);
+    if (call.documentsAttached) parts.push(`${call.documentsAttached} attached this turn`);
+    if (call.documentSlices) parts.push(`${call.documentSlices} retrieved slice${call.documentSlices === 1 ? '' : 's'} ~${this.formatTokens(call.documentSliceTokens ?? 0)}`);
+    if (call.documentReads?.calls) parts.push(`document_read ×${call.documentReads.calls} → ${call.documentReads.pages} pages`);
+    return parts.length ? parts.join(' · ') : 'no documents in context';
+  }
+
   readonly unexplainedMisses = computed(() => {
     const anatomy = this.anatomyResource.value();
     if (!anatomy) return 0;

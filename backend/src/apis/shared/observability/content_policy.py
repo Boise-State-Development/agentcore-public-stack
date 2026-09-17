@@ -64,6 +64,8 @@ CONTENT_BEARING: FrozenSet[str] = frozenset({
     "filename",                       # user-chosen
     "s3Key",                          # embeds the filename
     "s3Uri",
+    "digest.abstract",                # model-generated abstract of the document
+    "digest.sections",                # heading text lifted from the document
 })
 
 #: The one path a content-free reader may *request* but must never *return*.
@@ -127,6 +129,21 @@ SESSION_ROW_PROJECTION: Tuple[str, ...] = (
     "toolCallCount",
     "toolErrorCount",
     "compactionCount",
+    # Compaction decisions by kind (per-call ledger rolled up; see
+    # `TurnBasedSessionManager.record_compaction_event`)
+    "compactionAppliedCount",
+    "compactionForcedCount",
+    "compactionFloorUnreachableCount",
+    # Message-feedback rollups (live F# rows written while diagnostics were
+    # on; see `apis.shared.sessions.feedback`)
+    "thumbsUp",
+    "thumbsDown",
+    # Document lifecycle rollups (per-call document fields summed; see
+    # `apis.shared.sessions.metadata.DOCUMENT_ROLLUP_ATTRS`)
+    "fullDocumentCalls",
+    "digestOnlyCalls",
+    "documentReadCalls",
+    "documentReadPages",
 )
 
 #: C# rows for the cost anatomy and the session profile's trajectory.
@@ -146,6 +163,26 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     "prefixFingerprints",
     "contextWindow",
     "toolCalls",            # per-call census, optional (PR-3)
+    # Context ledger, optional: the agent's stable prefix split
+    # ({system, tools} tokens), the conversation window's cumulative trim
+    # count, and the compaction decisions taken before this call — all
+    # numbers, never text.
+    "prefixTokens",
+    "windowRemovedMessages",
+    "compactionEvents",
+    # Document context, optional: the attachment footprint of the live
+    # context at this call (counts, estimated tokens, a format→count map keyed
+    # by Bedrock's format enum) and the document_read retrievals the call
+    # requested. Numbers and enum keys only — never a filename or a byte.
+    "hasDocuments",
+    "documentCount",
+    "documentTokens",
+    "documentDigests",
+    "documentsAttached",
+    "documentSlices",
+    "documentSliceTokens",
+    "documentMime",
+    "documentReads",
 )
 
 #: FILE# rows for the session profile's attachment summary.
@@ -157,12 +194,33 @@ FILE_ROW_PROJECTION: Tuple[str, ...] = (
     "source",
     "status",
     "createdAt",
+    # DocumentDigest coverage (numbers and the format enum only; the
+    # abstract and section titles are denylisted above).
+    "digest.status",
+    "digest.format",
+    "digest.count",
+    "digest.tokens",
+)
+
+#: F# rows for the session profile's feedback join. A thumb is a ±1, an
+#: optional reason *code*, a `signal` discriminator (explicit / implicit,
+#: response-feedback spec §10) and a timestamp — never text, by the request
+#: model's closed enum (`apis.shared.sessions.models.FEEDBACK_REASONS`).
+FEEDBACK_ROW_PROJECTION: Tuple[str, ...] = (
+    "sessionId",
+    "messageId",
+    "value",
+    "reason",
+    "signal",
+    "retryMessageId",   # a message index, the retry-with-correction link
+    "updatedAt",
 )
 
 ALL_PROJECTIONS: Dict[str, Tuple[str, ...]] = {
     "SESSION_ROW_PROJECTION": SESSION_ROW_PROJECTION,
     "CALL_ROW_PROJECTION": CALL_ROW_PROJECTION,
     "FILE_ROW_PROJECTION": FILE_ROW_PROJECTION,
+    "FEEDBACK_ROW_PROJECTION": FEEDBACK_ROW_PROJECTION,
 }
 
 

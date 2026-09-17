@@ -31,7 +31,7 @@ so the numbers are approximate there.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from strands.hooks import BeforeModelCallEvent, HookProvider, HookRegistry
 
@@ -48,6 +48,26 @@ def get_context_breakdown(agent: Any) -> Optional[dict]:
     Used by the stream coordinator to enrich the final ``metadata`` SSE event.
     """
     return getattr(agent, _BREAKDOWN_ATTR, None)
+
+
+def get_prefix_token_split(agent: Any) -> Optional[Dict[str, int]]:
+    """The stable ``{"system": n, "tools": n}`` split for this agent, or ``None``.
+
+    Persisted on each call's cost row (as ``prefixTokens``) so the static
+    prefix a session carries — and which part of it is tool schemas — is a
+    stored fact rather than a scan-and-guess. Same numbers the SSE breakdown
+    reports; this just reads the cached split without re-counting.
+    """
+    split = getattr(agent, _SPLIT_ATTR, None)
+    if not isinstance(split, dict):
+        return None
+    try:
+        return {
+            "system": int(split.get("systemTokens") or 0),
+            "tools": int(split.get("toolTokens") or 0),
+        }
+    except (TypeError, ValueError):
+        return None
 
 
 class ContextAttributionHook(HookProvider):

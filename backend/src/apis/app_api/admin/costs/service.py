@@ -20,9 +20,15 @@ from .diagnoses import (
     top_severity,
 )
 from .models import (
+    CompactionEvent,
+    DocumentReads,
+    PrefixTokens,
     AttachmentProfile,
     ContextTrajectoryPoint,
     DataCoverage,
+    FeedbackByTurnClass,
+    FeedbackCounts,
+    FeedbackProfile,
     FingerprintChanges,
     SessionDiagnosis,
     SessionProfile,
@@ -75,6 +81,121 @@ def _record_cost(record: Dict[str, Any]) -> Optional[float]:
     return _as_float(raw)
 
 
+def _turn_class(record: Dict[str, Any]) -> Optional[str]:
+    """Turn class of one ``C#`` row from its document-context fields (spec
+    §6.1): ``full`` (``hasDocuments``), ``retrieved`` (``documentReads.pages
+    > 0``), ``digestOnly`` (``documentDigests > 0``), else ``none``.
+
+    Precedence is full > retrieved > digestOnly: a call that pulled pages back
+    still holds the digest, so testing the digest first would leave the
+    retrieved arm — the one the quality gate is about — permanently empty.
+    ``None`` when the row carries none of the fields (written before #1137
+    or with diagnostics off), so the caller says "not tracked", not "none".
+    """
+    has_documents = record.get("hasDocuments")
+    digests = record.get("documentDigests")
+    reads = record.get("documentReads")
+    if has_documents is None and digests is None and reads is None:
+        return None
+    if has_documents:
+        return "full"
+    pages = _as_int(reads.get("pages")) if isinstance(reads, dict) else _as_int(reads)
+    if (pages or 0) > 0:
+        return "retrieved"
+    if (_as_int(digests) or 0) > 0:
+        return "digestOnly"
+    return "none"
+
+
+def _join_feedback(
+    records: List[Dict[str, Any]],
+    feedback_rows: List[Dict[str, Any]],
+) -> FeedbackProfile:
+    """Join ``F#`` rows to ``C#`` rows on ``messageId`` and bucket by turn
+    class. Pure; the profile's numbers, never any content. Explicit thumbs
+    only (``signal`` absent or ``"explicit"``)."""
+    by_message: Dict[int, Dict[str, Any]] = {}
+    for record in records:
+        message_id = _as_int(record.get("messageId"))
+        if message_id is not None:
+            # The last call of a multi-call turn is the one the user thumbed;
+            # rows share a messageId only across the turn's tool round trips
+            # and later rows have the fuller context, so last write wins.
+            by_message[message_id] = record
+
+    any_turn_class = any(_turn_class(r) is not None for r in records)
+    buckets = FeedbackByTurnClass() if any_turn_class else None
+    profile = FeedbackProfile()
+    # Every cost row per assistant message index, for pricing rework.
+    cost_by_message: Dict[int, float] = {}
+    for record in records:
+        message_id = _as_int(record.get("messageId"))
+        if message_id is not None:
+            cost_by_message[message_id] = cost_by_message.get(message_id, 0.0) + (_record_cost(record) or 0.0)
+    rework_total: Optional[float] = None
+    for row in feedback_rows:
+        # Explicit thumbs only — implicit signals (spec §10) share the row
+        # family but answer a different question and must never be summed in.
+        if row.get("signal") not in (None, "explicit"):
+            continue
+        value = _as_int(row.get("value"))
+        if value not in (1, -1):
+            continue
+        if value == 1:
+            profile.up += 1
+        else:
+            profile.down += 1
+        message_id = _as_int(row.get("messageId"))
+        retry_id = _as_int(row.get("retryMessageId"))
+        if value == -1 and retry_id is not None:
+            profile.retried += 1
+            rework = _rework_cost(cost_by_message, message_id, retry_id)
+            if rework is not None:
+                rework_total = (rework_total or 0.0) + rework
+        record = by_message.get(message_id) if message_id is not None else None
+        if record is None:
+            profile.unjoined += 1
+            continue
+        if buckets is None:
+            continue
+        klass = _turn_class(record) or "none"
+        bucket: FeedbackCounts = {
+            "full": buckets.full,
+            "digestOnly": buckets.digest_only,
+            "retrieved": buckets.retrieved,
+        }.get(klass, buckets.none)
+        if value == 1:
+            bucket.up += 1
+        else:
+            bucket.down += 1
+    profile.by_turn_class = buckets
+    profile.rework_usd = round(rework_total, 6) if rework_total is not None else None
+    return profile
+
+
+def _rework_cost(
+    cost_by_message: Dict[int, float],
+    thumbed_message_id: Optional[int],
+    retry_message_id: int,
+) -> Optional[float]:
+    """Dollars spent on a down-thumbed answer plus its retry: the thumbed
+    message's call rows, plus the retry turn's assistant rows. The retry is
+    a *user* message (no cost row); its turn's assistant messages are the
+    consecutive indexes after it — a gap means the next user message. ``None``
+    when neither side has a cost row to price."""
+    found = False
+    total = 0.0
+    if thumbed_message_id is not None and thumbed_message_id in cost_by_message:
+        total += cost_by_message[thumbed_message_id]
+        found = True
+    index = retry_message_id + 1
+    while index in cost_by_message:
+        total += cost_by_message[index]
+        found = True
+        index += 1
+    return total if found else None
+
+
 def _context_tokens(record: Dict[str, Any]) -> int:
     """True context occupancy of one call: uncached input + cached prefix +
     newly cached tokens (Bedrock reports the three disjointly)."""
@@ -84,6 +205,114 @@ def _context_tokens(record: Dict[str, Any]) -> int:
         + int(usage.get("cacheReadInputTokens") or 0)
         + int(usage.get("cacheWriteInputTokens") or 0)
     )
+
+
+from dataclasses import dataclass as _dataclass, field as _field
+
+
+@_dataclass
+class _CallLedger:
+    """The context-ledger fields of one cost row, decoded and diffed."""
+
+    prefix_tokens: Optional[PrefixTokens] = None
+    removed: Optional[int] = None
+    trimmed: Optional[int] = None
+    events: List[CompactionEvent] = _field(default_factory=list)
+    #: The row's document context fields, decoded (``None`` = not tracked).
+    documents: Optional[Dict[str, Any]] = None
+    document_reads: Optional[DocumentReads] = None
+
+
+_DOCUMENT_INT_FIELDS = (
+    "documentCount", "documentTokens", "documentDigests", "documentsAttached",
+    "documentSlices", "documentSliceTokens",
+)
+
+
+def _call_documents(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The row's document context (``hasDocuments`` and the counts), or
+    ``None`` when the row predates the fields. Ints coerced, the format map
+    kept as ``{format: count}``."""
+    if "hasDocuments" not in record:
+        return None
+    out: Dict[str, Any] = {"hasDocuments": bool(record.get("hasDocuments"))}
+    for key in _DOCUMENT_INT_FIELDS:
+        value = _as_int(record.get(key))
+        if value is not None:
+            out[key] = value
+    mime = record.get("documentMime")
+    if isinstance(mime, dict):
+        out["documentMime"] = {
+            str(k): (_as_int(v) or 0) for k, v in mime.items()
+        }
+    return out
+
+
+def _call_document_reads(record: Dict[str, Any]) -> Optional[DocumentReads]:
+    raw = record.get("documentReads")
+    if not isinstance(raw, dict):
+        return None
+    return DocumentReads(
+        calls=_as_int(raw.get("calls")) or 0,
+        pages=_as_int(raw.get("pages")) or 0,
+        bytes=_as_int(raw.get("bytes")) or 0,
+    )
+
+
+def _document_row_fields(ledger: "_CallLedger") -> Dict[str, Any]:
+    """``SessionCallRow`` kwargs for the row's document context — empty when
+    the row predates the fields, so they render as null ("not tracked")."""
+    fields: Dict[str, Any] = {}
+    docs = ledger.documents
+    if docs is not None:
+        fields["has_documents"] = docs.get("hasDocuments")
+        fields["document_count"] = docs.get("documentCount")
+        fields["document_tokens"] = docs.get("documentTokens")
+        fields["document_digests"] = docs.get("documentDigests")
+        fields["documents_attached"] = docs.get("documentsAttached")
+        fields["document_slices"] = docs.get("documentSlices")
+        fields["document_slice_tokens"] = docs.get("documentSliceTokens")
+        fields["document_mime"] = docs.get("documentMime")
+    if ledger.document_reads is not None:
+        fields["document_reads"] = ledger.document_reads
+    return fields
+
+
+def _call_ledger(record: Dict[str, Any], previous_removed: Optional[int]) -> _CallLedger:
+    """Decode a cost row's ``prefixTokens`` / ``windowRemovedMessages`` /
+    ``compactionEvents`` / document context and derive ``trimmed`` (messages
+    removed since the previous ledger-bearing row). Absent fields stay
+    ``None`` — "not tracked", never 0 — and malformed ones are ignored rather
+    than raised.
+    """
+    ledger = _CallLedger()
+    ledger.documents = _call_documents(record)
+    ledger.document_reads = _call_document_reads(record)
+    raw_prefix = record.get("prefixTokens")
+    if isinstance(raw_prefix, dict):
+        try:
+            ledger.prefix_tokens = PrefixTokens(
+                system=int(raw_prefix.get("system") or 0),
+                tools=int(raw_prefix.get("tools") or 0),
+            )
+        except (TypeError, ValueError):
+            ledger.prefix_tokens = None
+    removed = _as_int(record.get("windowRemovedMessages"))
+    if removed is not None:
+        ledger.removed = removed
+        ledger.trimmed = (
+            max(removed - previous_removed, 0) if previous_removed is not None else 0
+        )
+    raw_events = record.get("compactionEvents")
+    if isinstance(raw_events, list):
+        for entry in raw_events:
+            if not isinstance(entry, dict) or not entry.get("kind"):
+                continue
+            try:
+                ledger.events.append(CompactionEvent(**entry))
+            except (TypeError, ValueError):
+                continue
+    return ledger
 
 
 class AdminCostService:
@@ -614,11 +843,15 @@ class AdminCostService:
         wasted_usd = 0.0
         agent_switch_misses = 0
         agent_switch_usd = 0.0
+        previous_removed: Optional[int] = None
 
         for record in records:
             token_usage = record.get("tokenUsage") or {}
             model_info = record.get("modelInfo") or {}
             fingerprints_raw = record.get("prefixFingerprints")
+            ledger = _call_ledger(record, previous_removed)
+            if ledger.removed is not None:
+                previous_removed = ledger.removed
 
             # cost is a breakdown dict ({"total": ...}) on the streaming path
             # or a bare float on the legacy path.
@@ -675,6 +908,11 @@ class AdminCostService:
                     PrefixFingerprints(**fingerprints_raw)
                     if isinstance(fingerprints_raw, dict) else None
                 ),
+                prefix_tokens=ledger.prefix_tokens,
+                window_removed_messages=ledger.removed,
+                window_trimmed=ledger.trimmed,
+                compaction_events=ledger.events or None,
+                **_document_row_fields(ledger),
             ))
 
         cache_traffic = total_cache_read + total_cache_write
@@ -800,6 +1038,11 @@ class AdminCostService:
             tool_call_count=_as_int(row.get("toolCallCount")),
             tool_error_count=_as_int(row.get("toolErrorCount")),
             compaction_count=_as_int(row.get("compactionCount")),
+            compaction_applied_count=_as_int(row.get("compactionAppliedCount")),
+            compaction_forced_count=_as_int(row.get("compactionForcedCount")),
+            compaction_floor_unreachable_count=_as_int(
+                row.get("compactionFloorUnreachableCount")
+            ),
             diagnosis_count=len(findings),
             top_diagnosis_severity=top_severity(findings),
         )
@@ -831,15 +1074,23 @@ class AdminCostService:
         period = None if all_time else (period or self._get_current_period())
         active_since = self._get_period_date_range(period)[0] if period else None
 
+        # Deleted conversations stay in the list: their cost rows and their
+        # share of the period total outlive the delete, so hiding them left
+        # a user's spend unaccounted for (one $3.77 row against $20.32).
         rows = await self.storage.get_user_session_diagnostics(
             user_id=user_id,
             active_since=active_since,
+            include_deleted=True,
         )
         user_period_cost = await self._user_period_cost(user_id, period)
         threshold = compaction_token_threshold()
 
         summaries: List[UserSessionSummary] = []
         for row in rows:
+            if row.get("deleted") or row.get("status") == "deleted":
+                # Legacy tombstones carry `deleted` without the status flip;
+                # normalise so the page has one signal to render.
+                row["status"] = "deleted"
             share = self._share(_as_float(row.get("totalCost")), user_period_cost)
             findings = run_diagnoses(self._row_facts(row, threshold, share))
             summaries.append(self._session_summary(row, findings, share))
@@ -860,9 +1111,11 @@ class AdminCostService:
             )
 
         unknown = sum(1 for s in summaries if not s.cost_known)
+        deleted = [s for s in summaries if s.status == "deleted"]
+        deleted_cost = sum(s.total_cost for s in deleted if s.total_cost is not None)
         logger.info(
-            f"User sessions: {len(summaries)} rows ({unknown} unknown-cost), "
-            f"returning {min(limit, len(summaries))}"
+            f"User sessions: {len(summaries)} rows ({unknown} unknown-cost, "
+            f"{len(deleted)} deleted), returning {min(limit, len(summaries))}"
         )
         return UserSessionsResponse(
             user_id=user_id,
@@ -871,6 +1124,8 @@ class AdminCostService:
             sessions=summaries[:limit],
             total=len(summaries),
             unknown_cost_count=unknown,
+            deleted_session_count=len(deleted),
+            deleted_session_cost=round(deleted_cost, 6),
         )
 
     async def _attachment_profile(self, session_id: str) -> AttachmentProfile:
@@ -883,14 +1138,35 @@ class AdminCostService:
             return AttachmentProfile()
         by_mime: Counter = Counter()
         total_bytes = 0
+        digested = digest_tokens = 0
         for item in stats:
             by_mime[item.get("mimeType") or "unknown"] += 1
             total_bytes += _as_int(item.get("sizeBytes")) or 0
+            digest = item.get("digest")
+            if isinstance(digest, dict) and digest.get("status") == "ready":
+                digested += 1
+                digest_tokens += _as_int(digest.get("tokens")) or 0
         return AttachmentProfile(
             count=len(stats),
             total_bytes=total_bytes,
             by_mime=dict(by_mime),
+            digested=digested,
+            digest_tokens=digest_tokens,
         )
+
+    async def _feedback_rows(self, session_id: str) -> List[Dict[str, Any]]:
+        """The session's ``F#`` rows. Best-effort: a storage fork without the
+        reader, or a transient error, yields none — the profile then falls
+        back to the session rollups and reports coverage honestly."""
+        reader = getattr(self.storage, "get_session_feedback_rows", None)
+        if reader is None:
+            return []
+        try:
+            rows = await reader(session_id)
+        except Exception as e:  # noqa: BLE001 - feedback is one signal of several
+            logger.debug("Feedback rows unavailable for session: %s", e)
+            return []
+        return list(rows or [])
 
     async def get_session_profile(self, session_id: str) -> Optional[SessionProfile]:
         """The content-free diagnostic profile of one conversation, or ``None``
@@ -908,6 +1184,7 @@ class AdminCostService:
 
         records = await self.storage.get_session_cost_records(session_id)
         attachments = await self._attachment_profile(session_id)
+        feedback_rows = await self._feedback_rows(session_id)
         user_period_cost = (
             await self._user_period_cost(user_id, self._get_current_period())
             if user_id else None
@@ -924,6 +1201,17 @@ class AdminCostService:
         read_total = write_total = 0
         any_fingerprints = any_census = False
         previous_fp: Optional[Dict[str, Any]] = None
+        any_prefix_tokens = any_window = any_compaction_events = False
+        prefix_tokens: Optional[PrefixTokens] = None
+        previous_removed: Optional[int] = None
+        last_removed: Optional[int] = None
+        window_trim_calls = 0
+        compaction_event_counts: Counter = Counter()
+        last_summary_tokens: Optional[int] = None
+        any_documents = False
+        full_document_calls = digest_only_calls = 0
+        document_read_calls = document_read_pages = 0
+        peak_document_tokens: Optional[int] = None
 
         for index, record in enumerate(records):
             usage = record.get("tokenUsage") or {}
@@ -969,6 +1257,34 @@ class AdminCostService:
                     slot.calls += calls
                     slot.errors += errors
 
+            ledger = _call_ledger(record, previous_removed)
+            if ledger.prefix_tokens is not None:
+                any_prefix_tokens = True
+                prefix_tokens = ledger.prefix_tokens
+            if ledger.removed is not None:
+                any_window = True
+                previous_removed = last_removed = ledger.removed
+            if ledger.trimmed:
+                window_trim_calls += 1
+            if ledger.events:
+                any_compaction_events = True
+                for event in ledger.events:
+                    compaction_event_counts[event.kind] += 1
+                    if event.summary_tokens is not None:
+                        last_summary_tokens = event.summary_tokens
+            if ledger.documents is not None:
+                any_documents = True
+                if ledger.documents.get("hasDocuments"):
+                    full_document_calls += 1
+                elif (ledger.documents.get("documentDigests") or 0) > 0:
+                    digest_only_calls += 1
+                doc_tokens = ledger.documents.get("documentTokens")
+                if doc_tokens is not None:
+                    peak_document_tokens = max(peak_document_tokens or 0, doc_tokens)
+            if ledger.document_reads is not None:
+                any_documents = True
+                document_read_calls += ledger.document_reads.calls
+                document_read_pages += ledger.document_reads.pages
             trajectory.append(ContextTrajectoryPoint(
                 call_index=index,
                 timestamp=record.get("timestamp", ""),
@@ -977,6 +1293,8 @@ class AdminCostService:
                 model_id=model_id,
                 cost=_record_cost(record),
                 tool_calls=point_tool_calls,
+                window_trimmed=ledger.trimmed,
+                compaction=[e.kind for e in ledger.events] or None,
             ))
 
         # Cache totals: the rows are authoritative when present, else the
@@ -1006,6 +1324,15 @@ class AdminCostService:
         if any_census:
             facts.tool_call_count = sum(e.calls for e in census.values())
             facts.tool_error_count = sum(e.errors for e in census.values())
+
+        # Outcome signal: thumbs joined to the calls they rate. The rows are
+        # authoritative when present; the session rollups cover thumbs whose
+        # rows expired (they share the C# TTL, so this is rare).
+        feedback = _join_feedback(records, feedback_rows)
+        if not feedback_rows:
+            feedback.up = _as_int(row.get("thumbsUp")) or 0
+            feedback.down = _as_int(row.get("thumbsDown")) or 0
+        feedback_tracked = bool(feedback_rows) or row.get("thumbsUp") is not None
 
         findings = run_diagnoses(facts)
         summary = self._session_summary(row, findings, share)
@@ -1039,6 +1366,35 @@ class AdminCostService:
                 compaction_count=row.get("compactionCount") is not None,
                 fingerprints=any_fingerprints,
                 cost=total_cost is not None,
+                prefix_tokens=any_prefix_tokens,
+                window_trim=any_window,
+                compaction_events=(
+                    any_compaction_events or row.get("compactionAppliedCount") is not None
+                ),
+                feedback=feedback_tracked,
+                documents=any_documents or row.get("fullDocumentCalls") is not None,
+            ),
+            feedback=feedback,
+            prefix_tokens=prefix_tokens,
+            window_trim_calls=window_trim_calls,
+            window_removed_messages=last_removed,
+            compaction_event_counts=dict(compaction_event_counts),
+            last_summary_tokens=last_summary_tokens,
+            # Rows are authoritative when present; the session rollups cover
+            # calls whose rows have expired (365-day TTL) or a session read
+            # without its rows.
+            full_document_calls=(
+                full_document_calls if any_documents else (_as_int(row.get("fullDocumentCalls")) or 0)
+            ),
+            digest_only_calls=(
+                digest_only_calls if any_documents else (_as_int(row.get("digestOnlyCalls")) or 0)
+            ),
+            peak_document_tokens=peak_document_tokens,
+            document_read_calls=(
+                document_read_calls if any_documents else (_as_int(row.get("documentReadCalls")) or 0)
+            ),
+            document_read_pages=(
+                document_read_pages if any_documents else (_as_int(row.get("documentReadPages")) or 0)
             ),
         )
 

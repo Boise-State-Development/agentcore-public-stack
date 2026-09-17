@@ -49,6 +49,18 @@ export interface SpaDistributionConstructProps {
  *     ALL_VIEWER_EXCEPT_HOST_HEADER pass cookies + CSRF + auth headers
  *     untouched. compress=false to preserve `text/event-stream`.
  *
+ *     compress=false does NOT mean `/api/*` responses travel uncompressed:
+ *     it means CloudFront doesn't compress *for* us. app-api gzips its own
+ *     JSON (`apis/shared/middleware/compression.py`), where the response's
+ *     content type is known rather than guessed from a path pattern, and
+ *     CloudFront passes an origin's `Content-Encoding` straight through.
+ *     Accept-Encoding reaches the origin because CACHING_DISABLED leaves
+ *     EnableAcceptEncodingGzip/Brotli off — with both off, CloudFront
+ *     treats Accept-Encoding as an ordinary header, and
+ *     ALL_VIEWER_EXCEPT_HOST_HEADER forwards it verbatim. Turning
+ *     compress=true on would put the edge back in front of the SSE stream
+ *     and gain nothing the origin isn't already doing.
+ *
  * Security headers:
  *   - X-Content-Type-Options, X-Frame-Options=DENY (default-deny iframe
  *     embedding), Referrer-Policy=strict-origin-when-cross-origin, HSTS

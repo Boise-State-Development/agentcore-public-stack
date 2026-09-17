@@ -165,7 +165,7 @@ type AccessLevel = 'public' | 'specific';
         @if (shareResult()) {
           <div class="mt-4 rounded-md bg-state-success-50 p-3 dark:bg-state-success-500/10">
             <p class="text-sm font-medium text-state-success-800 dark:text-state-success-300 mb-2">Chat shared</p>
-            <p class="text-xs text-state-success-600 dark:text-state-success-400 mb-2">Future messages aren't included in the share.</p>
+            <p class="text-xs text-state-success-700 dark:text-state-success-400 mb-2">Future messages aren't included in the share.</p>
             <div class="flex items-center gap-2">
               <input
                 type="text"

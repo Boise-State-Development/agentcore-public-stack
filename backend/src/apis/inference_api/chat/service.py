@@ -61,9 +61,18 @@ def _create_cache_key(
     freshness_hash: str,
     agent_type: Optional[str],
     skills_hash: str = "",
+    document_tools: bool = False,
 ) -> Tuple:
     """
     Create a cache key for agent instances.
+
+    `document_tools` is whether the turn built the session-state-gated
+    ``document_read`` tool (the session has a readable attachment). It is not
+    in `enabled_tools`, so without this element an agent cached before the
+    first upload would be served — without the tool — to every turn after it.
+    The gate is monotonic in practice (files stay once uploaded), so the key
+    flips at most once per session, on the attach turn, when restored history
+    carries no document yet to lose.
 
     `freshness_hash` is a short digest of the enabled tools' current
     `updated_at` values (see `freshness.get_freshness_hash`). When an
@@ -95,6 +104,7 @@ def _create_cache_key(
         provider or "bedrock",
         freshness_hash,
         agent_type or "chat",
+        bool(document_tools),
         skills_hash,
     )
 
@@ -153,7 +163,9 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
     ``agent.messages`` lives inside ``TurnBasedSessionManager.initialize()``
     (document stripping, content-block sanitizing, compaction slicing, pairing
     repair) and so runs before we get here; after construction the list is only
-    appended to. A future compaction that rebinds mid-life would silently break
+    appended to — or, for the pending-cut apply at the head of a turn, sliced
+    **in place** by slice assignment (``messages[:] = ...``), which keeps the
+    alias. A future compaction that rebinds mid-life would silently break
     the alias — ``test_second_cache_key_for_a_session_shares_the_conversation``
     is what catches that.
 
@@ -174,12 +186,14 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
         return
 
     live = None
+    live_wrapper = None
     for key, cached in _agent_cache.items():
         if key[0] != session_id:
             continue
         cached_inner = getattr(cached, "agent", None)
         if isinstance(getattr(cached_inner, "messages", None), list):
             live = cached_inner  # newest wins — dict preserves insertion order
+            live_wrapper = cached
 
     if live is None or live.messages is inner.messages:
         return
@@ -203,6 +217,18 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
     )
     inner.messages = live.messages
 
+    # The list's coordinate system travels with it. Compaction expresses its
+    # checkpoint as ``_live_offset + index into this list`` and the pending-cut
+    # apply slices the list in place at that offset, so an instance that adopts
+    # the list must adopt the offset too or it would slice at the wrong place.
+    try:
+        src_sm = getattr(live_wrapper, "session_manager", None)
+        dst_sm = getattr(agent, "session_manager", None)
+        if src_sm is not None and dst_sm is not None and hasattr(src_sm, "_live_offset"):
+            dst_sm._live_offset = src_sm._live_offset
+    except Exception:  # noqa: BLE001 - never let bookkeeping break a turn
+        logger.debug("Session %s: could not sync compaction live offset", scrub_log(session_id), exc_info=True)
+
 
 async def get_agent(
     session_id: str,
@@ -224,6 +250,7 @@ async def get_agent(
     accessible_skill_ids: Optional[List[str]] = None,
     extra_tools_key_described: bool = False,
     cache_write: bool = True,
+    has_document_tools: bool = False,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -298,6 +325,7 @@ async def get_agent(
         freshness_hash=freshness_hash,
         agent_type=agent_type,
         skills_hash=skills_hash,
+        document_tools=has_document_tools,
     )
 
     # Whether this turn's injected tools (if any) let it use the cache at all.

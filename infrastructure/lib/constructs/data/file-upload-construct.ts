@@ -104,6 +104,20 @@ export class FileUploadConstruct extends Construct {
           expiration: cdk.Duration.days(365),
         },
         {
+          // Compaction's tool-result offload (backend
+          // agents/main_agent/core/tool_result_offload.py) parks oversized
+          // tool results under `compaction-offload/{userId}/{sessionId}/` and
+          // keeps a retrieval reference in the conversation. The plugin never
+          // evicts from the model path (that would turn a retrieval into a
+          // miss mid-turn), so objects expire here instead — 90 days, matching
+          // AgentCore Memory's conversation retention. The shortest matching
+          // expiration wins, so this overrides the 365-day rule for the
+          // prefix only; user uploads are untouched.
+          id: 'expire-compaction-offload',
+          prefix: 'compaction-offload/',
+          expiration: cdk.Duration.days(90),
+        },
+        {
           id: 'abort-incomplete-multipart',
           abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
         },

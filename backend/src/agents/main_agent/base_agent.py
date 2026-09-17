@@ -14,6 +14,7 @@ from agents.main_agent.core import ModelConfig, SystemPromptBuilder, AgentFactor
 from agents.main_agent.session import SessionFactory
 from agents.main_agent.session.hooks import (
     AgentStatusHook,
+    ContextLedgerHook,
     ToolCensusHook,
     DisplayTextHook,
     SteeringHook,
@@ -349,6 +350,13 @@ class BaseAgent(ABC):
         # COST_DIAGNOSTICS_ENABLED=false.
         self.tool_census_hook = ToolCensusHook()
         hooks.append(self.tool_census_hook)
+
+        # Per-model-call context ledger: the conversation window's cumulative
+        # trim count and the compaction decisions taken since the previous
+        # call. Same shape and lifecycle as the census — read per call at
+        # turn end, persisted on the cost row, off with the same kill switch.
+        self.context_ledger_hook = ContextLedgerHook()
+        hooks.append(self.context_ledger_hook)
 
         # Per-model-call prompt-cache prefix fingerprints (toolConfig /
         # system prompt / history hashes). Best-effort; the stream

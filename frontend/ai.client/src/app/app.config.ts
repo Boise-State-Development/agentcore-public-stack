@@ -13,6 +13,8 @@ import { provideBuiltInToolRenderers } from './session/components/message-list/c
 import { AnnouncementModalService } from './services/announcements/announcement-modal.service';
 import { ConfigService } from './services/config.service';
 import { durableDownloadUrlFromHref } from './shared/utils/file-download-url';
+import { installLazyMermaid } from './shared/utils/lazy-mermaid';
+import { installKatexMathExtensions } from './shared/utils/katex-math-markdown';
 
 function markedOptionsFactory(config: ConfigService): MarkedOptions {
   const renderer = new MarkedRenderer();
@@ -81,5 +83,16 @@ export const appConfig: ApplicationConfig = {
     // app.html because a CDK overlay is not a layout element — and because
     // nothing else would ever inject it. Same pattern as ThemeService above.
     provideAppInitializer(() => { inject(AnnouncementModalService); }),
+
+    // ngx-markdown's `mermaid` plugin reads the library off the global scope
+    // and throws if it isn't there. Publishing a stand-in before the first
+    // markdown renders lets the real 3.57 MB library stay in a lazy chunk that
+    // is only fetched when a message actually contains a diagram.
+    provideAppInitializer(() => { installLazyMermaid(); }),
+
+    // marked reads `\(` as an escaped paren and drops the backslash, so
+    // LaTeX's inline-math delimiters never reached KaTeX. These tokenizers
+    // claim the span first and pass the delimiters through verbatim.
+    provideAppInitializer(() => { installKatexMathExtensions(); }),
   ]
 };

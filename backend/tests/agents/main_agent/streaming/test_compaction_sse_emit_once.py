@@ -95,7 +95,11 @@ class _RecordingSessionManager:
         self,
         input_tokens: int,
         current_messages: Optional[List[Dict]] = None,
+        context_window: Optional[int] = None,
+        history_tokens: Optional[int] = None,
     ) -> Optional[CompactionResult]:
+        # Same seam as TurnBasedSessionManager.update_after_turn — the policy
+        # inputs (context_window / history_tokens) are accepted and ignored.
         self.calls.append(input_tokens)
         return self._result
 
@@ -158,6 +162,14 @@ async def test_compaction_sse_emitted_exactly_once_when_checkpoint_advances():
         "newCheckpoint": 4,
         "summarizedTurns": 2,
         "inputTokens": 150_000,
+        # Model-relative policy fields (additive; the stub result leaves
+        # them at their defaults).
+        "contextWindow": None,
+        "ceiling": None,
+        "floor": None,
+        "hardCeiling": None,
+        "forced": False,
+        "retainedTokensEstimate": None,
     }
 
 

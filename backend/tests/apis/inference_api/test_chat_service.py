@@ -548,3 +548,23 @@ class TestInjectedToolCacheEligibility:
             )
 
         assert mentioned.agent.messages, "the second live Agent forked the conversation"
+
+
+def test_adopting_the_conversation_also_adopts_the_compaction_offset(monkeypatch):
+    """The live list's coordinate system travels with it (thresholds spec §3.5).
+
+    Compaction expresses its checkpoint as ``_live_offset + index into the
+    list`` and the pending-cut apply slices the list in place at that offset,
+    so an instance that adopts another instance's list must adopt its offset.
+    """
+    live_inner = SimpleNamespace(messages=[{"role": "user", "t": 1}, {"role": "assistant", "t": 2}])
+    live_wrapper = SimpleNamespace(agent=live_inner, session_manager=SimpleNamespace(_live_offset=7))
+    monkeypatch.setattr(service, "_agent_cache", {("s", "key-a"): live_wrapper})
+
+    fresh_inner = SimpleNamespace(messages=[{"role": "user", "t": 1}])
+    fresh = SimpleNamespace(agent=fresh_inner, session_manager=SimpleNamespace(_live_offset=0))
+
+    service._adopt_session_conversation(fresh, "s")
+
+    assert fresh.agent.messages is live_inner.messages
+    assert fresh.session_manager._live_offset == 7

@@ -69,7 +69,7 @@ export type SummaryCardIcon =
               name="heroArrowTrendingUp"
               class="size-4 text-state-success-500"
             />
-            <span class="text-sm text-state-success-600 dark:text-state-success-400">
+            <span class="text-sm text-state-success-700 dark:text-state-success-400">
               +{{ trend() | number : '1.1-1' }}%
             </span>
           } @else if (trend()! < 0) {

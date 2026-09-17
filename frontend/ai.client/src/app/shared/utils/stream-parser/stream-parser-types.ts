@@ -218,6 +218,19 @@ export interface CompactionEvent {
   newCheckpoint: number;
   summarizedTurns: number;
   inputTokens: number;
+  /**
+   * Model-relative policy the cut was made under (additive, optional —
+   * docs/specs/compaction-model-relative-thresholds.md). `contextWindow` is
+   * the catalog's `maxInputTokens`; `ceiling` is the trigger, `floor` the
+   * target size after the cut, `hardCeiling` the level that forces a cut
+   * while the trigger is disarmed; `forced` says this cut was one of those.
+   */
+  contextWindow?: number | null;
+  ceiling?: number | null;
+  floor?: number | null;
+  hardCeiling?: number | null;
+  forced?: boolean;
+  retainedTokensEstimate?: number | null;
 }
 
 /**

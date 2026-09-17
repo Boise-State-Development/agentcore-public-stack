@@ -3,7 +3,7 @@
 Provides endpoints for managing session metadata.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query, Response, BackgroundTasks, status
+from fastapi import APIRouter, HTTPException, Depends, Path, Query, Response, BackgroundTasks, status
 from typing import Optional
 import logging
 from apis.shared.sessions.models import (
@@ -18,7 +18,14 @@ from apis.shared.sessions.models import (
     BulkDeleteSessionsRequest,
     BulkDeleteSessionsResponse,
     BulkDeleteSessionResult,
-    MessagesListResponse
+    MessagesListResponse,
+    MessageFeedback,
+    MessageFeedbackRequest,
+)
+from apis.shared.sessions.feedback import (
+    SessionNotOwned,
+    delete_message_feedback,
+    put_message_feedback,
 )
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import (
@@ -35,7 +42,7 @@ from .services.session_service import SessionService
 from apis.app_api.shares.service import get_share_service
 from apis.app_api.artifacts.service import get_artifact_share_service
 from apis.shared.auth.dependencies import get_current_user_from_session
-from apis.shared.feature_flags import mid_turn_steering_enabled
+from apis.shared.feature_flags import response_feedback_enabled, mid_turn_steering_enabled
 from apis.shared.auth.models import User
 from apis.shared.system_prompts.service import get_system_prompts_service
 
@@ -660,6 +667,83 @@ async def get_session_messages_endpoint(
             status_code=500,
             detail=f"Failed to retrieve messages: {str(e)}"
         )
+
+
+def _require_message_feedback() -> None:
+    """404 while ``RESPONSE_FEEDBACK_ENABLED=false`` — the surface does not exist."""
+    if not response_feedback_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@router.put(
+    "/{session_id}/messages/{message_id}/feedback",
+    response_model=MessageFeedback,
+    response_model_by_alias=True,
+    response_model_exclude_none=True,
+)
+async def put_message_feedback_endpoint(
+    session_id: str,
+    message_id: int = Path(..., ge=0, description="0-based message index"),
+    body: MessageFeedbackRequest = ...,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Thumb an assistant message up (+1) or down (-1), optionally with a
+    reason code. Idempotent per (user, message): a second click replaces the
+    first. Content-free by construction — the body is a closed enum, so no
+    text can be stored (``apis.shared.sessions.feedback``).
+
+    ``message_id`` is the message's 0-based index in the conversation — the
+    trailing number of the SPA's ``msg-{sessionId}-{index}`` id, and the
+    ``messageId`` the message's cost row carries. ``retryMessageId`` in the
+    body links the user message sent as a retry-with-correction; it is kept
+    across later thumbs on the same message.
+    """
+    _require_message_feedback()
+    try:
+        return await put_message_feedback(
+            session_id=session_id,
+            user_id=current_user.user_id,
+            message_id=message_id,
+            value=body.value,
+            reason=body.reason,
+            retry_message_id=body.retry_message_id,
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except RuntimeError as e:
+        # No metadata table configured (local dev without DynamoDB).
+        logger.warning("Message feedback unavailable: %s", scrub_log(str(e)))
+        raise HTTPException(status_code=503, detail="Message feedback is not available")
+    except Exception:
+        logger.error("Error storing message feedback", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to store message feedback")
+
+
+@router.delete("/{session_id}/messages/{message_id}/feedback", status_code=204)
+async def delete_message_feedback_endpoint(
+    session_id: str,
+    message_id: int = Path(..., ge=0, description="0-based message index"),
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Withdraw this user's thumb on a message. 204 whether or not one existed."""
+    _require_message_feedback()
+    try:
+        await delete_message_feedback(
+            session_id=session_id,
+            user_id=current_user.user_id,
+            message_id=message_id,
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    except RuntimeError as e:
+        logger.warning("Message feedback unavailable: %s", scrub_log(str(e)))
+        raise HTTPException(status_code=503, detail="Message feedback is not available")
+    except Exception:
+        logger.error("Error deleting message feedback", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete message feedback")
+    return Response(status_code=204)
 
 
 @router.post("/{session_id}/interrupt", status_code=204)

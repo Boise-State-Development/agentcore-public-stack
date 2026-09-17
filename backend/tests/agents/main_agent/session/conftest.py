@@ -126,6 +126,10 @@ def compaction_config() -> CompactionConfig:
         token_threshold=1000,
         protected_turns=3,
         max_tool_content_length=50,
+        # These suites pin the immediate-apply path (checkpoint moves at turn
+        # end). Paid-when-free deferral is the default in prod and has its own
+        # suite: test_compaction_deferred_apply.py.
+        deferred_apply_enabled=False,
     )
 
 

@@ -285,6 +285,25 @@ class RetryConfig:
         )
 
 
+# Bedrock's long cache TTL. Only "1h" is a change from the default; anything
+# else (unset, "5m", garbage) means "today's shape" — no ttl key on any point,
+# which is what keeps the static prefix bytes identical across the flip.
+LONG_CACHE_TTL = "1h"
+
+
+def static_prefix_cache_ttl() -> Optional[str]:
+    """The long TTL to put on the tools + system cachePoints, or ``None``.
+
+    Read from ``AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL`` at agent
+    construction (a cached agent keeps the arm it was built under). See
+    docs/specs/compaction-model-relative-thresholds.md §3.6 PR-5 for the
+    economics: 2x write premium on the static segments in exchange for
+    reading them, rather than re-writing them, on every 5–60 minute pause.
+    """
+    raw = os.environ.get(EnvVars.PROMPT_CACHE_STATIC_PREFIX_TTL, "").strip().lower()
+    return LONG_CACHE_TTL if raw == LONG_CACHE_TTL else None
+
+
 @dataclass
 class ModelConfig:
     """Configuration for multi-provider LLM models.
@@ -341,6 +360,15 @@ class ModelConfig:
 
         # Default to configured provider
         return self.provider
+
+    def long_ttl_static_prefix(self) -> bool:
+        """True when this model's tools + system cachePoints carry the 1h TTL.
+
+        The cost path uses it to bill the static segment's cache writes at
+        Bedrock's 1h premium (2x base) instead of the 5m one (1.25x) — the
+        correction that keeps the experiment arm's own cost rows honest.
+        """
+        return bool(self.caching_enabled and self.bedrock_cache_points_supported() and static_prefix_cache_ttl())
 
     def bedrock_cache_points_supported(self) -> bool:
         """Whether a hand-placed Bedrock system cachePoint may be sent.
@@ -471,10 +499,22 @@ class ModelConfig:
         # that reaches Bedrock without going through that factory.
         if self.caching_enabled:
             from strands.models import CacheConfig
+
+            # PR-5 (thresholds spec §3.6): an explicit "1h" on the two STATIC
+            # points only. system_prompt_ttl as a string is "honored as
+            # written" by _apply_system_cache_ttl, which rewrites the TTL on
+            # the hand-placed, TTL-less system point AgentFactory places;
+            # tools_ttl as a string sets the tools point's own TTL. The
+            # message-level auto point carries no ttl (cache_config.ttl stays
+            # unset) and so stays at 5m — tools(1h) → system(1h) → messages(5m)
+            # is the non-increasing order Bedrock requires. Off (the default)
+            # emits exactly today's bytes.
+            supported = self.bedrock_cache_points_supported()
+            long_ttl = static_prefix_cache_ttl() if supported else None
             config["cache_config"] = CacheConfig(
                 strategy="auto",
-                system_prompt_ttl=True,
-                tools_ttl=self.bedrock_cache_points_supported(),
+                system_prompt_ttl=long_ttl or True,
+                tools_ttl=(long_ttl or True) if supported else False,
             )
 
         if self.retry_config:

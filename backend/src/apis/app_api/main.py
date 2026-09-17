@@ -160,8 +160,10 @@ logger.info("Added AgentCore context middleware")
 # Starlette `add_middleware` prepends, so the LAST-added middleware is
 # outermost. Request-side order is therefore the reverse of the call order
 # below:
-#   request:  SessionRefresh → CSRF → AgentCoreContext → CORS → router
-#   response: router → CORS → AgentCoreContext → CSRF → SessionRefresh
+#   request:  ProxiedRedirect → GZip → SessionRefresh → CSRF →
+#             AgentCoreContext → CORS → router
+#   response: router → CORS → AgentCoreContext → CSRF → SessionRefresh →
+#             GZip → ProxiedRedirect
 # This is the order we need: SessionRefresh has to populate
 # `state.bff_session` before CSRF reads it.
 from apis.shared.middleware.csrf import CSRFMiddleware
@@ -170,6 +172,29 @@ from apis.shared.middleware.session_refresh import SessionRefreshMiddleware
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(SessionRefreshMiddleware)
 logger.info("Added BFF session-refresh + CSRF middlewares (dormant until cookie present)")
+
+# gzip the JSON surface. Nothing compressed app-api responses before this:
+# CloudFront's `/api/*` behaviour is deliberately `compress: false` so the
+# edge never buffers a `text/event-stream`, which leaves compression to the
+# origin — the only layer that knows a response's content type rather than
+# guessing from its path. Measured on this repo's own payload shapes at
+# `compresslevel=6`: ~3.0x on a conversation-history response, ~3.9x on a
+# 5,000-row spreadsheet-shaped one. Level 9 (Starlette's default) buys 3%
+# more for 4x the CPU on the large case, so 6 — zlib's own default — it is.
+#
+# `StreamSafeGZipMiddleware` passes `text/event-stream` and already-encoded
+# bodies through untouched *and un-buffered*; see its module docstring for
+# why the second half of that matters on the chat path.
+#
+# Sits one layer inside ProxiedRedirect so it compresses everything the app
+# emits — including the error bodies CSRF and SessionRefresh return — while
+# leaving ProxiedRedirect genuinely outermost. The two never collide:
+# ProxiedRedirect reads and rewrites only `Location`, on responses (3xx)
+# whose bodies are empty or below the compression threshold anyway.
+from apis.shared.middleware.compression import StreamSafeGZipMiddleware
+
+app.add_middleware(StreamSafeGZipMiddleware, minimum_size=500, compresslevel=6)
+logger.info("Added gzip compression middleware (SSE and pre-encoded bodies excluded)")
 
 # Outermost middleware: repair `Location` headers on redirects this app
 # generates for itself (Starlette's `redirect_slashes`, chiefly). Behind

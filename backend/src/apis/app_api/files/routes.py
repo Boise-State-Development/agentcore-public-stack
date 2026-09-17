@@ -18,6 +18,7 @@ from apis.shared.files.models import (
     PresignResponse,
     CompleteUploadResponse,
     PreviewUrlResponse,
+    SheetPreviewResponse,
     TextSnippetResponse,
     ThumbnailResponse,
     FileListResponse,
@@ -34,6 +35,7 @@ from .service import (
     FileNotFoundError,
     FileUploadError,
 )
+from .sheet_preview import WorkbookTooLargeError, WorkbookUnreadableError
 from .thumbnails import ThumbnailRenderError, ThumbnailUnsupportedError
 
 from apis.shared.security.log_sanitize import scrub_log
@@ -224,6 +226,64 @@ async def get_text_snippet(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File {upload_id} not found or not owned by you",
+        )
+
+
+@router.get("/{upload_id}/sheet-preview", response_model=SheetPreviewResponse)
+async def get_sheet_preview(
+    upload_id: str,
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """
+    Read an .xlsx workbook into rows for the UI's data grid.
+
+    The other previews (.docx, .pptx, .csv) hand the browser a presigned
+    URL and parse the bytes client-side. Spreadsheets cannot: the npm
+    build of SheetJS is frozen on a release with unfixed advisories, and
+    ExcelJS raises on any workbook holding a native chart — which is what
+    `create_excel_spreadsheet` produces. So the workbook is read here and
+    only values cross the wire.
+
+    Values only. No fills, fonts, borders, merges or charts; download and
+    open the file for those.
+
+    Status codes:
+    - 200: Sheets read (possibly truncated — see `truncated` on each).
+    - 404: File not found, not owned by the caller, or not readable.
+    - 413: Workbook is past the reader's size cap.
+    - 415: MIME type is not a readable workbook (the UI should not have
+           offered a preview; `.xls` lands here).
+    - 422: File present but unreadable (corrupt, encrypted, not OOXML).
+    """
+    try:
+        return await service.get_sheet_preview(user.user_id, upload_id)
+
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {upload_id} not found or not owned by you",
+        )
+
+    except ThumbnailUnsupportedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=str(e),
+        )
+
+    except WorkbookTooLargeError:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="This workbook is too large to preview. Download it to open in Excel.",
+        )
+
+    except WorkbookUnreadableError:
+        # Deliberately not echoing openpyxl's message: it names internal
+        # XML parts and tells the user nothing they can act on.
+        logger.warning("Workbook could not be parsed")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This workbook could not be read. It may be corrupt or password-protected.",
         )
 
 

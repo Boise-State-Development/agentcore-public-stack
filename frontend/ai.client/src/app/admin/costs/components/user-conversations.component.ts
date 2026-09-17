@@ -133,6 +133,13 @@ import {
                       @if (s.agentBound) {
                         <span class="ml-2 rounded-sm bg-gray-100 px-1.5 font-mono text-[10px]/5 text-gray-600 dark:bg-white/10 dark:text-gray-300">agent</span>
                       }
+                      @if (s.status === 'deleted') {
+                        <span
+                          class="ml-2 rounded-sm bg-gray-100 px-1.5 font-mono text-[10px]/5 text-gray-600 dark:bg-white/10 dark:text-gray-300"
+                          title="Deleted by the user. Its cost rows and its share of the period total survive the delete."
+                          >deleted</span
+                        >
+                      }
                     </td>
                     <td class="whitespace-nowrap px-3 py-2 tabular-nums">
                       {{ s.lastMessageAt ? (s.lastMessageAt | date: 'MMM d, HH:mm') : '—' }}
@@ -217,6 +224,13 @@ export class UserConversationsComponent {
     ];
     if (v.userPeriodCost != null) parts.push(`${this.currency(v.userPeriodCost)} recorded this month`);
     if (v.unknownCostCount > 0) parts.push(`${v.unknownCostCount} with unrecorded cost`);
+    if ((v.deletedSessionCount ?? 0) > 0) {
+      // A delete is a tombstone, not a refund — say so, or the period total
+      // will not add up to the rows on screen.
+      parts.push(
+        `${v.deletedSessionCount} deleted (${this.currency(v.deletedSessionCost ?? 0)} still counted in the total)`,
+      );
+    }
     return parts.join(' · ');
   });
 

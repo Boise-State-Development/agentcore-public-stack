@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ChatStateService } from './chat-state.service';
 import { ChatHttpService } from './chat-http.service';
 import { MessageMapService } from '../session/message-map.service';
+import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
@@ -41,6 +42,7 @@ export class ChatRequestService implements OnDestroy {
   private chatHttpService = inject(ChatHttpService);
   private chatStateService = inject(ChatStateService);
   private messageMapService = inject(MessageMapService);
+  private messageFeedbackService = inject(MessageFeedbackService);
   private sessionService = inject(SessionService);
   private userService = inject(UserService);
   private modelService = inject(ModelService);
@@ -124,7 +126,10 @@ export class ChatRequestService implements OnDestroy {
     const fileAttachments = this.getFileAttachments(fileUploadIds);
 
     // Create and add user message with file attachments
-    this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments);
+    const userMessage = this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments);
+    // If this send is the retry a down-thumb asked for, link it to the thumb
+    // (an index on the feedback row — never the text).
+    this.messageFeedbackService.consumePendingRetry(sessionId, userMessage);
 
     // Start streaming for this conversation
     this.messageMapService.startStreaming(sessionId);
@@ -215,7 +220,8 @@ export class ChatRequestService implements OnDestroy {
     this.chatStateService.setChatLoading(sessionId, true);
 
     const fileAttachments = this.getFileAttachments(fileUploadIds);
-    this.messageMapService.addUserMessage(sessionId, message, fileAttachments);
+    const userMessage = this.messageMapService.addUserMessage(sessionId, message, fileAttachments);
+    this.messageFeedbackService.consumePendingRetry(sessionId, userMessage);
     this.messageMapService.startStreaming(sessionId);
 
     // NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock

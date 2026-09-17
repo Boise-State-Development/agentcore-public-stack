@@ -55,6 +55,7 @@ import {
 } from '../../../services/skill/skill-command.service';
 import { SkillCommandMenuComponent } from './skill-command-menu.component';
 import { SteeringService } from '../../services/chat/steering.service';
+import { ComposerDraftService } from '../../services/session/composer-draft.service';
 
 // Must stay in sync with the inline min-height/max-height on the textarea in
 // chat-input.component.html.
@@ -158,6 +159,7 @@ export class ChatInputComponent {
   private readonly fileUploadService = inject(FileUploadService);
   private readonly toastService = inject(ToastService);
   private readonly steering = inject(SteeringService);
+  private readonly composerDraft = inject(ComposerDraftService);
   private readonly toolService = inject(ToolService);
   private readonly voiceChatService = inject(VoiceChatService);
   protected readonly systemPromptsService = inject(SystemPromptsService);
@@ -424,11 +426,11 @@ export class ChatInputComponent {
     const base = 'flex size-10 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]';
     switch (status) {
       case 'listening':
-        return `${base} bg-state-danger-100 text-state-danger-600 dark:bg-state-danger-900/30 dark:text-state-danger-400 animate-pulse`;
+        return `${base} bg-state-danger-100 text-state-danger-700 dark:bg-state-danger-900/30 dark:text-state-danger-400 animate-pulse`;
       case 'speaking':
-        return `${base} bg-state-success-100 text-state-success-600 dark:bg-state-success-900/30 dark:text-state-success-400`;
+        return `${base} bg-state-success-100 text-state-success-700 dark:bg-state-success-900/30 dark:text-state-success-400`;
       case 'connecting':
-        return `${base} bg-state-warning-100 text-state-warning-600 dark:bg-state-warning-900/30 dark:text-state-warning-400`;
+        return `${base} bg-state-warning-100 text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-400`;
       default:
         return `${base} text-gray-500 dark:text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300`;
     }
@@ -611,6 +613,25 @@ export class ChatInputComponent {
       if (sessionId === null) {
         this.hintStep.set(0);
         this.hintsSettled.set(false);
+      }
+    });
+
+    // A feature (today: the feedback retry-with-correction) can hand this
+    // composer a draft for its session. Set it, size the textarea to it and
+    // focus so the user edits and sends; never submit on their behalf.
+    effect(() => {
+      const draft = this.composerDraft.pending();
+      const sessionId = untracked(this.sessionId);
+      if (!draft || draft.sessionId !== sessionId) return;
+      const taken = untracked(() => this.composerDraft.consume(sessionId));
+      if (!taken) return;
+      this.userInput.set(taken.text);
+      const textarea = this.messageInput()?.nativeElement;
+      if (textarea) {
+        textarea.value = taken.text;
+        this.autoResize(textarea);
+        textarea.focus();
+        textarea.setSelectionRange(taken.text.length, taken.text.length);
       }
     });
 

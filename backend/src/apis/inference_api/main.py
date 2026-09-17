@@ -29,7 +29,6 @@ else:
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import logging
 
@@ -118,14 +117,31 @@ from apis.shared.security import register_aws_client_error_handler
 register_aws_client_error_handler(app)
 logger.info("Registered AWS ClientError handler")
 
-# Add GZip compression middleware for SSE streams
-# Compresses responses over 1KB, reducing bandwidth by 50-70%
+# Compress responses over 1KB. Despite what this block used to claim, it is
+# emphatically *not* "for SSE streams": Starlette excludes `text/event-stream`
+# from compression by content type, so on the one route this service exists to
+# serve — the `/invocations` SSE turn — it compresses nothing at all.
+#
+# What stock `GZipMiddleware` did do on that route is withhold
+# `http.response.start` until the first body chunk, because until then it can't
+# know whether it will need to set `Content-Encoding`. On an SSE turn the first
+# chunk is the model's first token, so the response headers were arriving behind
+# the agent's entire thinking time — measured locally at 2.0s of pure delay on a
+# turn that stalls 2.0s before its first event, with or without `Accept-Encoding:
+# gzip`. app-api's chat proxy reads this response's `content-type` before it can
+# open its own stream to the SPA, so that delay was propagating all the way to
+# the browser.
+#
+# `StreamSafeGZipMiddleware` keeps the compression and forwards an excluded
+# response's headers immediately; see its module docstring.
+from apis.shared.middleware.compression import StreamSafeGZipMiddleware
+
 app.add_middleware(
-    GZipMiddleware,
+    StreamSafeGZipMiddleware,
     minimum_size=1000,  # Only compress responses > 1KB
     compresslevel=6  # Balance between speed and compression ratio (1-9)
 )
-logger.info("Added GZip middleware for response compression")
+logger.info("Added gzip compression middleware (SSE and pre-encoded bodies excluded)")
 
 # Bridge AgentCore Runtime headers (WorkloadAccessToken, OAuth2CallbackUrl,
 # session ID) into BedrockAgentCoreContext so downstream code can look up

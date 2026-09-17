@@ -53,7 +53,7 @@ class FileResolver:
         self,
         user_id: str,
         upload_ids: List[str],
-        max_files: int = 5
+        max_files: Optional[int] = 5
     ) -> List[ResolvedFileContent]:
         """
         Resolve upload IDs to file content objects.
@@ -61,7 +61,11 @@ class FileResolver:
         Args:
             user_id: Owner user ID (for authorization)
             upload_ids: List of upload IDs to resolve
-            max_files: Maximum files to process (Bedrock limit is 5)
+            max_files: Backstop on how many IDs are fetched. ``None`` fetches
+                every ID given. The chat route applies the per-message cap
+                *before* calling this so it can tell the user which files
+                were left out; this cap only exists so no caller can fan out
+                an unbounded number of S3 reads by accident.
 
         Returns:
             List of ResolvedFileContent objects with base64-encoded bytes
@@ -71,7 +75,15 @@ class FileResolver:
         """
         resolved_files = []
 
-        for upload_id in upload_ids[:max_files]:
+        if max_files is not None and len(upload_ids) > max_files:
+            logger.warning(
+                "resolve_files truncating %d upload ID(s) to %d",
+                len(upload_ids),
+                max_files,
+            )
+            upload_ids = upload_ids[:max_files]
+
+        for upload_id in upload_ids:
             try:
                 file_content = await self._resolve_single_file(user_id, upload_id)
                 if file_content:

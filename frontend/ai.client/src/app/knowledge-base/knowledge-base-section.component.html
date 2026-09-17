@@ -362,7 +362,7 @@
             <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ upload.progress }}%</span>
           }
           @if (upload.status === 'complete') {
-            <span class="text-xs/5 text-state-success-600 dark:text-state-success-400">Complete</span>
+            <span class="text-xs/5 text-state-success-700 dark:text-state-success-400">Complete</span>
           }
           @if (upload.status === 'error') {
             <span class="text-xs/5 text-state-danger-600 dark:text-state-danger-400">Error</span>
@@ -555,7 +555,7 @@
                     class="text-xs/5 font-medium"
                     [class.text-state-info-600]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
                     [class.dark:text-state-info-400]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
-                    [class.text-state-success-600]="doc.status === 'complete'"
+                    [class.text-state-success-700]="doc.status === 'complete'"
                     [class.dark:text-state-success-400]="doc.status === 'complete'"
                     [class.text-state-danger-600]="doc.status === 'failed'"
                     [class.dark:text-state-danger-400]="doc.status === 'failed'"

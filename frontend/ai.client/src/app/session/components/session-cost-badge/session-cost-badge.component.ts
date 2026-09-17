@@ -266,7 +266,7 @@ export class SessionCostBadgeComponent {
     if (pct >= 90) return 'text-state-danger-600 dark:text-state-danger-400';
     if (pct >= 70) return 'text-state-warning-600 dark:text-state-warning-400';
     if (pct >= 50) return 'text-state-info-600 dark:text-state-info-400';
-    return 'text-state-success-600 dark:text-state-success-400';
+    return 'text-state-success-700 dark:text-state-success-400';
   });
 
   protected readonly tokensUsedLabel = computed(() =>

@@ -42,9 +42,19 @@ POWERPOINT_PRESENTATION_TOOL_IDS = frozenset({"create_powerpoint_presentation"})
 # Session workspace files. A single toggle that provisions list/read/write.
 WORKSPACE_TOOL_IDS = frozenset({"workspace_files"})
 
-# Every id owned by a per-request factory. Memory-Space tools are deliberately
-# absent: they are gated on an Agent's memory binding rather than on
-# ``enabled_tools``, so they never reach the filter.
+# Document retrieval (bound to session/user). Listed for the record, and
+# deliberately NOT folded into ``INJECTED_TOOL_IDS`` below: ``document_read``
+# is gated on the session having a readable attachment, not on
+# ``enabled_tools`` — there is no catalog entry, no RBAC grant and no picker
+# toggle (docs/specs/document-context-offload.md §4B; the ``workspace_files``
+# key it would otherwise hang off is granted to no prod role). Like the
+# Memory-Space tools it never reaches ``ToolFilter``.
+DOCUMENT_TOOL_IDS = frozenset({"document_read"})
+
+# Every id owned by a per-request factory. Memory-Space and document tools are
+# deliberately absent: they are gated on an Agent's memory binding / the
+# session's attachments rather than on ``enabled_tools``, so they never reach
+# the filter.
 INJECTED_TOOL_IDS = frozenset(
     SPREADSHEET_TOOL_IDS
     | ARTIFACT_TOOL_IDS

@@ -5,6 +5,7 @@ import { ChatRequestService } from './chat-request.service';
 import { ChatHttpService } from './chat-http.service';
 import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
+import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
@@ -60,6 +61,7 @@ describe('ChatRequestService', () => {
         { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn() } },
         { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined) } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
+        { provide: MessageFeedbackService, useValue: { consumePendingRetry: vi.fn() } },
         { provide: UserService, useValue: { getUser: vi.fn().mockReturnValue({ user_id: 'user1' }) } },
         { provide: ModelService, useValue: mockModelService },
         { provide: ToolService, useValue: mockToolService },
@@ -400,6 +402,17 @@ describe('ChatRequestService', () => {
 
       expect(messageMap.addUserMessage).toHaveBeenCalledWith('preview-abc', 'hello', undefined);
       expect(messageMap.startStreaming).toHaveBeenCalledWith('preview-abc');
+    });
+
+    it('offers the added user message to the feedback service as a possible retry', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      const feedback = TestBed.inject(MessageFeedbackService) as any;
+      const added = { id: 'msg-preview-abc-2', role: 'user', content: [] };
+      messageMap.addUserMessage.mockReturnValue(added);
+
+      await service.submitPreviewRequest(preview);
+
+      expect(feedback.consumePendingRetry).toHaveBeenCalledWith('preview-abc', added);
     });
 
     it('forwards file uploads', async () => {

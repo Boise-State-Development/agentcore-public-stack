@@ -284,7 +284,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                   <button
                     (click)="syncPermissions(role)"
                     [disabled]="syncing() === role.roleId"
-                    class="p-2 text-gray-500 hover:text-state-success-600 hover:bg-gray-100 rounded-sm dark:hover:bg-gray-700 dark:hover:text-state-success-400 disabled:opacity-50"
+                    class="p-2 text-gray-500 hover:text-state-success-700 hover:bg-gray-100 rounded-sm dark:hover:bg-gray-700 dark:hover:text-state-success-400 disabled:opacity-50"
                     title="Sync permissions"
                   >
                     <ng-icon

@@ -94,7 +94,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
               {{ formatCurrency(totalCost()) }}
             </p>
             @if (totalCacheSavings() > 0) {
-              <p class="mt-1 text-xs text-state-success-600 dark:text-state-success-400">
+              <p class="mt-1 text-xs text-state-success-700 dark:text-state-success-400">
                 Saved {{ formatCurrency(totalCacheSavings()) }} with caching
                 ({{ cacheSavingsPercentage() | number: '1.1-1' }}%)
               </p>

@@ -11,6 +11,7 @@ import {
 import { isPlatformBrowser } from '@angular/common';
 import { MarkdownComponent } from 'ngx-markdown';
 import { CodeBlockClipboardButtonComponent } from './code-block-clipboard-button.component';
+import { KATEX_OPTIONS } from '../../../../shared/utils/katex-delimiters';
 
 /**
  * StreamingTextComponent provides smooth character-by-character typing animation
@@ -32,6 +33,7 @@ import { CodeBlockClipboardButtonComponent } from './code-block-clipboard-button
       [clipboardButtonComponent]="ClipboardButton"
       mermaid
       katex
+      [katexOptions]="katexOptions"
       [data]="displayedText()"
     ></markdown>
   `,
@@ -46,6 +48,13 @@ export class StreamingTextComponent implements OnDestroy {
   private isBrowser = isPlatformBrowser(this.platformId);
 
   protected readonly ClipboardButton = CodeBlockClipboardButtonComponent;
+
+  /**
+   * Explicit KaTeX delimiters. Without this binding ngx-markdown supplies its
+   * own defaults, which pair bare `$…$` and mangle any line carrying two
+   * currency amounts. See `katex-delimiters.ts`.
+   */
+  protected readonly katexOptions = KATEX_OPTIONS;
 
   /** The full text content to display */
   text = input.required<string>();

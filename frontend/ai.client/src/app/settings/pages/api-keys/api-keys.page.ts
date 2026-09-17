@@ -158,7 +158,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                     @if (!isExpired()) {
                       <div class="mt-1 flex items-center gap-1.5">
                         <span class="inline-block size-2 rounded-full bg-state-success-500"></span>
-                        <span class="text-sm/5 font-medium text-state-success-600 dark:text-state-success-400">Expires {{ daysUntil(key.expires_at) }}</span>
+                        <span class="text-sm/5 font-medium text-state-success-700 dark:text-state-success-400">Expires {{ daysUntil(key.expires_at) }}</span>
                       </div>
                     } @else {
                       <div class="mt-1 flex items-center gap-1.5">

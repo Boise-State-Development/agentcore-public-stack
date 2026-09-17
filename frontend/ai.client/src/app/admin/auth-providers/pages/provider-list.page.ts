@@ -205,7 +205,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                   <button
                     (click)="testProvider(provider)"
                     [disabled]="testing() === provider.provider_id"
-                    class="rounded-xs p-2 text-gray-500 hover:bg-gray-100 hover:text-state-success-600 disabled:opacity-50 dark:hover:bg-gray-700 dark:hover:text-state-success-400"
+                    class="rounded-xs p-2 text-gray-500 hover:bg-gray-100 hover:text-state-success-700 disabled:opacity-50 dark:hover:bg-gray-700 dark:hover:text-state-success-400"
                     title="Test connectivity"
                   >
                     <ng-icon

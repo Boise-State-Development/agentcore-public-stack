@@ -6,6 +6,7 @@ This is the default agent type for standard chat interactions.
 """
 
 import logging
+import os
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from agents.main_agent.base_agent import BaseAgent
@@ -58,13 +59,36 @@ class ChatAgent(BaseAgent):
             # files (added after tool filtering — it is infrastructure, not an
             # RBAC-gated tool, and is implicitly scoped to the turn's skills).
             plugin, read_skill_file = build_skills_runtime(self._accessible_skill_ids)
-            plugins = [plugin] if plugin else None
+            plugins = [plugin] if plugin else []
             if plugin:
                 tools = list(tools) + [read_skill_file]
                 logger.info(
                     "ChatAgent: skills disclosure enabled (%d accessible skill ids)",
                     len(self._accessible_skill_ids or []),
                 )
+
+            # Tool-result offload at intake (compaction PR-4): oversized tool
+            # results become a bounded preview + retrieval references before
+            # they enter the cacheable prefix. Fail-open: None when off or
+            # unconfigured. The plugin registers retrieve_offloaded_content
+            # itself — one stable spec in toolConfig, not an RBAC-gated tool,
+            # like read_skill_file above.
+            from agents.main_agent.core.tool_result_offload import build_tool_result_offloader
+
+            offload_session = getattr(self, "session_id", None)
+            offload_user = getattr(self, "user_id", None)
+            offloader = (
+                build_tool_result_offloader(
+                    session_id=offload_session,
+                    user_id=offload_user,
+                    region=os.environ.get("AWS_REGION"),
+                )
+                if offload_session and offload_user
+                else None
+            )
+            if offloader is not None:
+                plugins.append(offloader)
+            plugins = plugins or None
 
             self.agent = AgentFactory.create_agent(
                 model_config=self.model_config,

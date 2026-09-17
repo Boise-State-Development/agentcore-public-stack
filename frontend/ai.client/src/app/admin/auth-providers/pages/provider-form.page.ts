@@ -243,7 +243,7 @@ interface ProviderFormGroup {
                     <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Issuer URL is required</p>
                   }
                   @if (discoveryResult()) {
-                    <p class="mt-1 text-sm/6 text-state-success-600 dark:text-state-success-400">
+                    <p class="mt-1 text-sm/6 text-state-success-700 dark:text-state-success-400">
                       Endpoints discovered successfully
                     </p>
                   }

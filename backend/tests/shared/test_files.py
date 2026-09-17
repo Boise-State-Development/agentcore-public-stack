@@ -45,6 +45,19 @@ class TestFileUploadRepository:
         assert updated.status == "ready"
 
     @pytest.mark.asyncio
+    async def test_update_digest_round_trips_and_needs_the_row(self, file_repository):
+        await file_repository.create_file(_make_file())
+        digest = {"version": 1, "status": "ready", "format": "pdf", "count": 3,
+                  "sections": [{"start": 1, "title": "Intro"}], "tokens": 120, "abstract": "x"}
+        updated = await file_repository.update_file_digest("u1", "f1", digest)
+        assert updated is not None and updated.digest["count"] == 3
+        assert (await file_repository.get_file("u1", "f1")).digest["sections"] == [{"start": 1, "title": "Intro"}]
+        assert await file_repository.update_file_digest("u1", "missing", digest) is None
+        # Rows without a digest read as None, never as an empty map.
+        await file_repository.create_file(_make_file("f2"))
+        assert (await file_repository.get_file("u1", "f2")).digest is None
+
+    @pytest.mark.asyncio
     async def test_delete_file(self, file_repository):
         await file_repository.create_file(_make_file())
         deleted = await file_repository.delete_file("u1", "f1")
@@ -132,3 +145,18 @@ class TestFileResolver:
         resolver._file_repository = file_repository
         files = await resolver.resolve_files("u1", [f"f{i}" for i in range(10)], max_files=3)
         assert len(files) == 3
+
+    @pytest.mark.asyncio
+    async def test_resolve_files_no_cap_when_max_files_is_none(self, file_repository, s3_bucket, aws):
+        # The chat route applies the per-message cap itself (so it can tell
+        # the user which files were left out) and passes None here.
+        import boto3
+        from apis.shared.files.file_resolver import FileResolver
+        s3 = boto3.client("s3", region_name="us-east-1")
+        for i in range(7):
+            s3.put_object(Bucket=s3_bucket, Key=f"uploads/u1/f{i}", Body=b"x")
+            await file_repository.create_file(_make_file(f"f{i}"))
+        resolver = FileResolver(s3_client=s3)
+        resolver._file_repository = file_repository
+        files = await resolver.resolve_files("u1", [f"f{i}" for i in range(7)], max_files=None)
+        assert len(files) == 7

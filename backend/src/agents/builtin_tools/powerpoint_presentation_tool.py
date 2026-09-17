@@ -368,6 +368,14 @@ def make_create_powerpoint_presentation_tool(session_id: str, user_id: str):
                                                  Inches(8), Inches(2)).table
                     tbl.cell(0, 0).text = 'Quarter'; tbl.cell(0, 1).text = 'Revenue'
 
+                Speaker notes -- add them to every content slide unless
+                the user says otherwise. They are what the presenter
+                actually says, so keep the detail there and the slide
+                itself sparse:
+                    slide.notes_slide.notes_text_frame.text = (
+                        'Revenue grew 15% on enterprise renewals; '
+                        'call out the churn improvement before moving on.')
+
                 A matplotlib chart image:
                     import matplotlib.pyplot as plt
                     plt.figure(figsize=(8, 4.5))

@@ -206,8 +206,11 @@ PK: USER#{userId}, SK: QUOTA
 | `S3_USER_FILES_BUCKET_NAME` | S3 bucket name |
 | `DYNAMODB_USER_FILES_TABLE_NAME` | DynamoDB table name |
 | `FILE_UPLOAD_MAX_SIZE_BYTES` | Max file size (default 4MB) |
-| `FILE_UPLOAD_MAX_FILES_PER_MESSAGE` | Max files per message (default 5) |
+| `FILE_UPLOAD_MAX_FILES_PER_MESSAGE` | Max files per message (default 5). Enforced server-side by the inference API across both `files` and `file_upload_ids`; files beyond the cap are reported to the user in the attachment note, not silently dropped. `0` disables. |
 | `FILE_UPLOAD_USER_QUOTA_BYTES` | User quota (default 1GB) |
+| `INLINE_DOCUMENT_MAX_BYTES` | Per-file inline document cap (default 4MB); larger non-tabular files are skipped with a note |
+| `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES` | Per-turn budget for all inline attachments, images included (default 7.5MB = the 10MB AgentCore Memory event quota ÷ base64's 4/3). Files that would push the turn over it are skipped with a note instead of failing the history write. `0` disables. |
+| `ATTACHMENT_TURN_GUARD_ENABLED` | Kill switch for the two caps above (default on; only `false` disables) |
 
 ## Quota Management
 

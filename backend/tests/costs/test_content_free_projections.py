@@ -148,12 +148,56 @@ async def test_top_sessions_reader_keeps_title_by_decision(storage):
     assert "compaction" not in rows[0]  # and it never widened into the diagnostic fields
 
 
-@pytest.mark.asyncio
-async def test_deleted_sessions_are_excluded_from_the_diagnostic_list(storage):
-    _seed(storage)
+def _seed_deleted(storage):
     storage.sessions_metadata_table.put_item(Item={
         "PK": f"USER#{USER_ID}", "SK": "S#gone", "GSI_PK": "SESSION#gone", "GSI_SK": "META",
-        "sessionId": "gone", "userId": USER_ID, "deleted": True, "totalCost": Decimal("9"),
+        "sessionId": "gone", "userId": USER_ID, "deleted": True, "status": "deleted",
+        "totalCost": Decimal("9"), "title": "DELETED TITLE",
     })
+
+
+@pytest.mark.asyncio
+async def test_deleted_sessions_are_excluded_from_the_diagnostic_list_by_default(storage):
+    _seed(storage)
+    _seed_deleted(storage)
     rows = await storage.get_user_session_diagnostics(USER_ID)
     assert [r["sessionId"] for r in rows] == [SESSION_ID]
+
+
+@pytest.mark.asyncio
+async def test_deleted_sessions_are_listed_on_request_and_stay_content_free(storage):
+    # A delete is a tombstone, not a refund: the row's cost survives it, so
+    # the audit must be able to see it to account for the period total.
+    _seed(storage)
+    _seed_deleted(storage)
+    rows = await storage.get_user_session_diagnostics(USER_ID, include_deleted=True)
+    by_id = {r["sessionId"]: r for r in rows}
+    assert set(by_id) == {SESSION_ID, "gone"}
+    assert by_id["gone"]["deleted"] is True
+    assert by_id["gone"]["status"] == "deleted"
+    assert by_id["gone"]["totalCost"] == 9
+    assert "title" not in by_id["gone"]
+
+
+@pytest.mark.asyncio
+async def test_feedback_rows_come_back_content_free_and_keyed_to_the_call(storage):
+    _seed(storage)
+    storage.sessions_metadata_table.put_item(Item={
+        "PK": f"USER#{USER_ID}", "SK": f"F#{SESSION_ID}#3",
+        "GSI_PK": f"SESSION#{SESSION_ID}", "GSI_SK": "F#3",
+        "sessionId": SESSION_ID, "messageId": Decimal(3), "userId": USER_ID,
+        "value": Decimal(-1), "reason": "wrong", "signal": "explicit", "updatedAt": "2026-09-16T00:00:00Z",
+        "ttl": Decimal(1_800_000_000),
+        # A stray content-bearing attribute must never leave the reader even
+        # if something wrote one (the writer cannot, but the reader is the guard).
+        "displayText": "SECRET",
+    })
+    rows = await storage.get_session_feedback_rows(SESSION_ID)
+    assert len(rows) == 1
+    row = rows[0]
+    assert content_bearing_paths(row) == []
+    assert row == {"sessionId": SESSION_ID, "messageId": 3, "value": -1, "reason": "wrong", "signal": "explicit", "updatedAt": "2026-09-16T00:00:00Z"}
+    # Joins the C# row on messageId.
+    records = await storage.get_session_cost_records(SESSION_ID)
+    assert records[0]["messageId"] == row["messageId"]
+    assert await storage.get_session_feedback_rows("no-such-session") == []

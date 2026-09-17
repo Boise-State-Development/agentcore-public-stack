@@ -22,10 +22,21 @@ except ImportError:
 
 def get_current_date_pacific() -> str:
     """
-    Get current date and hour in US Pacific timezone (America/Los_Angeles)
+    Get the current calendar date in US Pacific timezone (America/Los_Angeles).
+
+    The result is rendered into the system prompt, which is the head of the
+    Bedrock prompt-cache prefix (see the prompt-cache contract in CLAUDE.md).
+    It therefore deliberately contains **no hour**: the string is byte-stable
+    for a whole Pacific day, so the cached prefix is re-written once per day
+    instead of at every hour boundary. Earlier versions appended ``HH:00`` and
+    a 2026-09 prod cost audit attributed ~2.6% of cache-write spend to the
+    resulting hourly ``systemPromptHash`` flips. If a flow ever needs the
+    time of day, put it in the user turn (or another turn-scoped message),
+    never back in this prefix.
 
     Returns:
-        str: Formatted date string with timezone (e.g., "2024-01-15 (Monday) 14:00 PST")
+        str: Date, weekday and timezone abbreviation
+             (e.g., "2024-01-15 (Monday) PST")
     """
     try:
         if TIMEZONE_AVAILABLE:
@@ -44,12 +55,12 @@ def get_current_date_pacific() -> str:
                 # Get timezone abbreviation (PST/PDT)
                 tz_abbr = now.strftime("%Z")
 
-            return now.strftime(f"%Y-%m-%d (%A) %H:00 {tz_abbr}")
+            return now.strftime(f"%Y-%m-%d (%A) {tz_abbr}")
         else:
             # Fallback to UTC if no timezone library available
             now = datetime.now(timezone.utc)
-            return now.strftime("%Y-%m-%d (%A) %H:00 UTC")
+            return now.strftime("%Y-%m-%d (%A) UTC")
     except Exception as e:
         logger.warning(f"Failed to get Pacific time: {e}, using UTC")
         now = datetime.now(timezone.utc)
-        return now.strftime("%Y-%m-%d (%A) %H:00 UTC")
+        return now.strftime("%Y-%m-%d (%A) UTC")

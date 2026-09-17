@@ -145,7 +145,7 @@ import { UserConversationsComponent } from '../../../costs/components/user-conve
               {{ formatTokens(detail.costSummary.totalOutputTokens) }} output tokens
             </div>
             @if (detail.costSummary.cacheSavings > 0) {
-              <div class="text-state-success-600">
+              <div class="text-state-success-700 dark:text-state-success-400">
                 \${{ detail.costSummary.cacheSavings.toFixed(2) }} cache savings
               </div>
             }

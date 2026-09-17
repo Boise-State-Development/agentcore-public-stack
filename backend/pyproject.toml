@@ -36,6 +36,13 @@ dependencies = [
 
     # Security: pin transitive deps to fix Dependabot alerts
     "pillow==12.3.0",
+    # Reads .xlsx workbooks into rows for the UI's spreadsheet preview
+    # (apis/app_api/files/sheet_preview.py). MIT, pure Python, one
+    # dependency (et-xmlfile). Already the library our own
+    # create_excel_spreadsheet tool drives inside Code Interpreter, and
+    # the one the RAG ingestion image uses via docling — this pin brings
+    # it into app-api's own closure, which it was not in before.
+    "openpyxl==3.1.5",
     "cryptography==50.0.1",
     "python-multipart==0.0.31",
     "aiohttp==3.14.3",

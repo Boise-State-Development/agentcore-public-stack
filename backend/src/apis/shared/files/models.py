@@ -165,6 +165,31 @@ INLINE_DOCUMENT_MAX_BYTES = int(
     os.environ.get("INLINE_DOCUMENT_MAX_BYTES", 4 * 1024 * 1024)  # 4MB
 )
 
+# A turn's inline attachments are persisted as ONE message, and the message —
+# not the file — is what AgentCore Memory bounds. Anything over the SDK's
+# ~72 KB conversational limit is written as a base64 ``blob`` payload, so raw
+# attachment bytes inflate by 4/3 on the way in and are then held to the
+# 10 MB event quota. 10 MB × 3/4 = 7.5 MB of raw bytes per turn is the break
+# point. Above it ``create_message`` raises ``SessionException`` — a hole in
+# history — which is strictly worse than the per-file oversized note, so the
+# turn is trimmed to this budget *before* it is built. Prod measurement
+# (docs/specs/document-context-offload-validation.md, Claim 7): ~1.3–1.4% of
+# attachment turns exceed it, several with only 3–4 files, so the per-file
+# cap above and the SPA's 5-file cap do not protect on their own.
+# ``0`` (or any non-positive value) disables the aggregate budget.
+INLINE_ATTACHMENTS_MAX_TOTAL_BYTES = int(
+    os.environ.get("INLINE_ATTACHMENTS_MAX_TOTAL_BYTES", 7_500_000)  # 7.5MB
+)
+
+# Files per message. The SPA enforces the same number client-side
+# (``MAX_FILES_PER_MESSAGE`` in file-upload.service.ts); this is the server
+# side of it, shared by the ``file_upload_ids`` resolver and the direct
+# ``files`` path so a sixth file is reported to the user instead of silently
+# truncated. ``0`` (or any non-positive value) disables the count cap.
+MAX_FILES_PER_MESSAGE = int(
+    os.environ.get("FILE_UPLOAD_MAX_FILES_PER_MESSAGE", 5)
+)
+
 
 # =============================================================================
 # Database Models (stored in DynamoDB)
@@ -204,6 +229,14 @@ class FileMetadata(BaseModel):
     # never part of an access decision.
     source: str = Field(default="upload", description="Origin of the file")
 
+    # DocumentDigest (docs/specs/document-context-offload.md §4A), built once
+    # when a document upload completes and stored as a plain map — see
+    # ``apis.shared.files.document_digest``. ``None`` = never generated (files
+    # uploaded before PR-2, non-documents, or the flag off). Carries model
+    # prose (``abstract``) and heading text (``sections``): content-bearing,
+    # denylisted in the admin projections.
+    digest: Optional[dict] = Field(None, description="DocumentDigest map, when generated")
+
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -230,7 +263,7 @@ class FileMetadata(BaseModel):
         if ttl_value is None:
             ttl_value = int(self.created_at.timestamp()) + (365 * 24 * 60 * 60)
 
-        return {
+        item = {
             "PK": f"USER#{self.user_id}",
             "SK": f"FILE#{self.upload_id}",
             "GSI1PK": f"CONV#{self.session_id}",
@@ -250,6 +283,9 @@ class FileMetadata(BaseModel):
             "updatedAt": to_iso(self.updated_at),
             "ttl": ttl_value,
         }
+        if self.digest:
+            item["digest"] = self.digest
+        return item
 
     @classmethod
     def from_dynamo_item(cls, item: dict) -> "FileMetadata":
@@ -271,6 +307,7 @@ class FileMetadata(BaseModel):
             created_at=from_iso(created_at) if created_at else datetime.now(timezone.utc),
             updated_at=from_iso(updated_at) if updated_at else datetime.now(timezone.utc),
             ttl=item.get("ttl"),
+            digest=item.get("digest") if isinstance(item.get("digest"), dict) else None,
         )
 
 
@@ -375,6 +412,58 @@ class TextSnippetResponse(BaseModel):
     mime_type: str = Field(..., alias="mimeType")
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+class SheetPreview(BaseModel):
+    """One worksheet, read into display-ready strings."""
+
+    name: str = Field(..., description="Worksheet name as it appears on the tab")
+    headers: List[str] = Field(
+        ..., description="First row of the sheet, used as column labels"
+    )
+    rows: List[List[str]] = Field(
+        ..., description="Body rows, each padded to len(headers)"
+    )
+    total_rows: int = Field(
+        ...,
+        alias="totalRows",
+        description="Body rows the sheet claims to have, which may exceed len(rows)",
+    )
+    truncated: bool = Field(
+        ..., description="True when a cap stopped the read short of the sheet's end"
+    )
+    truncated_by: Optional[str] = Field(
+        None,
+        alias="truncatedBy",
+        description="Which cap fired: 'rows' or 'columns'",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SheetPreviewResponse(BaseModel):
+    """Response for GET /api/files/{uploadId}/sheet-preview."""
+
+    upload_id: str = Field(..., alias="uploadId")
+    filename: str
+    sheets: List[SheetPreview] = Field(
+        ..., description="Visible worksheets, in workbook order"
+    )
+    truncated: bool = Field(
+        ...,
+        description="True when any sheet was cut short or sheets were dropped",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+# MIME types the spreadsheet reader can turn into a grid. Deliberately
+# only OOXML: the pre-2007 .xls binary format needs a different library
+# (xlrd), and it is not worth one for a format nothing in the product
+# generates.
+SHEET_PREVIEW_MIME_TYPES = frozenset({
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+})
 
 
 # MIME types the thumbnail renderer can currently produce a preview image for.
