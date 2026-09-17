@@ -18,7 +18,6 @@
  * admin side and carries the whole record.
  */
 
-export type TemplateVisibility = 'PRIVATE' | 'PUBLIC' | 'SHARED';
 export type TemplateStatus = 'enabled' | 'disabled';
 
 /** Model selection on a template. `modelId === null` ⇒ platform default. */
@@ -41,7 +40,6 @@ export interface AgentTemplateAdmin {
   description: string;
   emoji: string;
   instructions: string;
-  visibility: TemplateVisibility;
   tags: string[];
   starters: string[];
   modelConfig: TemplateModelConfig;
@@ -70,7 +68,6 @@ export interface AgentTemplateCreate {
   description: string;
   emoji: string;
   instructions: string;
-  visibility: TemplateVisibility;
   tags: string[];
   starters: string[];
   modelConfig: TemplateModelConfig;

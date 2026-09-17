@@ -148,7 +148,6 @@ class AgentTemplatesRepository:
             description=data.description,
             emoji=data.emoji,
             instructions=data.instructions,
-            visibility=data.visibility,
             tags=list(data.tags),
             starters=list(data.starters),
             model_config_=TemplateModelConfig(

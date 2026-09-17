@@ -441,7 +441,6 @@ export class AgentFormPage implements OnInit, OnDestroy {
       name: draft.name,
       description: draft.description,
       instructions: draft.instructions,
-      visibility: draft.visibility,
       tags: draft.tags,
       starters: draft.starters,
       emoji: draft.emoji,
@@ -497,7 +496,10 @@ export class AgentFormPage implements OnInit, OnDestroy {
       // means one of those, so the fallback is defensive, not an expected path — the
       // field's own `required` validator surfaces it if the gate ever changes.
       instructions: agent.instructions ?? '',
-      visibility: agent.visibility,
+      // A template draft carries no visibility (it's not a template concept) — leave the
+      // form's own default (PRIVATE) rather than blanking it. Edit mode always passes a
+      // concrete visibility, so this only matters for template prefill.
+      visibility: agent.visibility ?? this.form.get('visibility')?.value ?? 'PRIVATE',
       tags: agent.tags ?? [],
       emoji: agent.emoji ?? '',
     });

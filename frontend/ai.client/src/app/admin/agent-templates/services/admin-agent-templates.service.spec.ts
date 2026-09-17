@@ -16,7 +16,6 @@ function sampleCreate(): AgentTemplateCreate {
     pitch: 'Answers from your docs',
     description: 'A document-grounded assistant',
     instructions: 'Answer only from the provided material.',
-    visibility: 'PRIVATE',
     status: 'enabled',
     sort_order: 0,
     tags: ['qa'],

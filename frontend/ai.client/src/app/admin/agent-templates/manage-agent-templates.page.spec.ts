@@ -14,7 +14,6 @@ function tpl(overrides: Partial<AgentTemplateAdmin>): AgentTemplateAdmin {
     description: '',
     emoji: '🎓',
     instructions: '',
-    visibility: 'PRIVATE',
     tags: [],
     starters: [],
     modelConfig: { modelId: null, params: {} },

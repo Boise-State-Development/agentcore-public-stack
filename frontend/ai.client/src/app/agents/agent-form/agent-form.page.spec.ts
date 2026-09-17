@@ -27,7 +27,6 @@ const COURSE_HELPER_DRAFT: TemplateDraft = {
   emoji: '🎓',
   instructions:
     'You are a Course Helper.\n\n## Academic integrity\nDo not do graded work for the student; teach the concept instead.',
-  visibility: 'PRIVATE',
   tags: [],
   starters: ['What topics does this course cover?', 'When is the next assignment due?'],
   modelConfig: { modelId: 'us.anthropic.claude-sonnet-5', params: {} },
@@ -324,7 +323,6 @@ describe('AgentFormPage — saved enum param on reopen', () => {
       name: 'Research Assistant',
       description: 'A short summary of the agent',
       instructions: 'You are a helpful assistant that answers questions.',
-      visibility: 'PRIVATE',
       userPermission: 'owner',
       modelConfig: {
         modelId: 'openai.gpt-5.4',
@@ -511,7 +509,6 @@ describe('AgentFormPage — template prefill (create mode)', () => {
       description: 'A template exercising reconcile outcomes.',
       emoji: '🧪',
       instructions: 'You are a test agent used to verify tool-ref reconciliation behavior.',
-      visibility: 'PRIVATE',
       tags: [],
       starters: [],
       modelConfig: { modelId: null, params: {} },

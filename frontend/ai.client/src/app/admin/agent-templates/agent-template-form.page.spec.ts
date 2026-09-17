@@ -13,6 +13,12 @@ const MODELS: BindableItem[] = [
   { kind: 'model', ref: 'us.anthropic.claude-haiku-4', label: 'Claude Haiku 4', description: '', meta: {} },
 ];
 
+/** The RBAC-filtered tool palette the binding dropdown reuses. */
+const TOOLS: BindableItem[] = [
+  { kind: 'tool', ref: 'gateway_search', label: 'Gateway Search', description: '', meta: {} },
+  { kind: 'tool', ref: 'code_interpreter', label: 'Code Interpreter', description: '', meta: {} },
+];
+
 function fullTemplate(): AgentTemplateAdmin {
   return {
     template_id: 'course-helper',
@@ -20,7 +26,6 @@ function fullTemplate(): AgentTemplateAdmin {
     description: 'A study companion',
     emoji: '🎓',
     instructions: 'Help the student learn.',
-    visibility: 'PRIVATE',
     tags: ['edu', 'study'],
     starters: ['Explain this topic', 'Quiz me'],
     modelConfig: { modelId: 'us.anthropic.claude-sonnet-5', params: { temperature: 0.4 } },
@@ -37,13 +42,23 @@ function configure(
   id: string | null,
   service: Partial<AdminAgentTemplatesService>,
   models: BindableItem[] = MODELS,
+  tools: BindableItem[] = TOOLS,
 ) {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
     providers: [
       provideRouter([]),
       { provide: AdminAgentTemplatesService, useValue: service },
-      { provide: AgentService, useValue: { loadBindable: vi.fn().mockResolvedValue(models) } },
+      {
+        provide: AgentService,
+        useValue: {
+          loadBindable: vi
+            .fn()
+            .mockImplementation((kind: string) =>
+              Promise.resolve(kind === 'tool' ? tools : models),
+            ),
+        },
+      },
       { provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: () => id } } } },
     ],
   });
@@ -119,6 +134,22 @@ describe('AgentTemplateFormPage', () => {
       });
       expect(c.staleModelId()).toBeNull();
     });
+
+    it('loads the tool palette and adds a tool binding chosen from it', async () => {
+      const c = configure(null, service);
+      await c.ngOnInit();
+      expect(c.tools().length).toBe(TOOLS.length);
+
+      c.form.patchValue({ name: 'With Tool' });
+      c.addBinding(); // defaults to kind 'tool', empty ref
+      c.bindings.at(0).patchValue({ kind: 'tool', ref: 'code_interpreter' });
+
+      expect(c.isKnownToolRef('code_interpreter')).toBe(true);
+      expect(c.isKnownToolRef('not_a_tool')).toBe(false);
+      expect(c.buildPayload().bindings).toEqual([
+        { kind: 'tool', ref: 'code_interpreter', config: {} },
+      ]);
+    });
   });
 
   describe('edit mode', () => {
@@ -167,6 +198,27 @@ describe('AgentTemplateFormPage', () => {
       expect(c.staleModelId()).toBe('us.anthropic.retired-model-v1');
       // Saving preserves the admin's value rather than silently nulling it.
       expect(c.buildPayload().modelConfig.modelId).toBe('us.anthropic.retired-model-v1');
+    });
+
+    it('keeps a saved tool ref not in the catalog as unavailable and preserves it on save', async () => {
+      const stale = fullTemplate();
+      stale.bindings = [{ kind: 'tool', ref: 'retired_tool_v1', config: {} }];
+      const service = {
+        getTemplate: vi.fn().mockResolvedValue(stale),
+        updateTemplate: vi.fn().mockResolvedValue(stale),
+        createTemplate: vi.fn(),
+      };
+      const c = configure('course-helper', service);
+      await c.ngOnInit();
+
+      // The saved tool binding stays, flagged unavailable (not in the catalog).
+      expect(c.bindings.at(0).controls.ref.value).toBe('retired_tool_v1');
+      expect(c.isKnownToolRef('retired_tool_v1')).toBe(false);
+      expect(c.isKnownToolRef('gateway_search')).toBe(true);
+      // Preserved on save rather than dropped.
+      expect(c.buildPayload().bindings).toEqual([
+        { kind: 'tool', ref: 'retired_tool_v1', config: {} },
+      ]);
     });
   });
 });

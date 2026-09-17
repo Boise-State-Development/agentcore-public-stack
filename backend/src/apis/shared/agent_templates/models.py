@@ -39,7 +39,6 @@ MAX_TAGS = 16
 MAX_BINDINGS = 64
 
 TemplateStatus = Literal["enabled", "disabled"]
-TemplateVisibility = Literal["PRIVATE", "PUBLIC", "SHARED"]
 
 # BindingKind mirrors the frontend union
 # ('knowledge_base' | 'tool' | 'skill' | 'memory_space'). Stored as a free
@@ -77,7 +76,6 @@ class AgentTemplate:
     description: str
     emoji: str
     instructions: str
-    visibility: TemplateVisibility
     tags: List[str]
     starters: List[str]
     model_config_: TemplateModelConfig
@@ -100,7 +98,6 @@ class AgentTemplate:
             "description": self.description,
             "emoji": self.emoji,
             "instructions": self.instructions,
-            "visibility": self.visibility,
             "tags": list(self.tags),
             "starters": list(self.starters),
             "modelConfig": {
@@ -166,7 +163,6 @@ class AgentTemplate:
             description=item.get("description", ""),
             emoji=item.get("emoji", ""),
             instructions=item.get("instructions", ""),
-            visibility=item.get("visibility", "PRIVATE"),
             tags=list(item.get("tags") or []),
             starters=list(item.get("starters") or []),
             model_config_=model_config,
@@ -224,7 +220,6 @@ class AgentTemplateCreate(BaseModel):
     description: str = Field("", max_length=MAX_DESCRIPTION_LENGTH)
     emoji: str = Field("", max_length=16)
     instructions: str = Field("", max_length=MAX_INSTRUCTIONS_LENGTH)
-    visibility: TemplateVisibility = "PRIVATE"
     tags: List[str] = Field(default_factory=list, max_length=MAX_TAGS)
     starters: List[str] = Field(default_factory=list, max_length=MAX_STARTERS)
     model_cfg: ModelConfigPayload = Field(
@@ -247,7 +242,6 @@ class AgentTemplateUpdate(BaseModel):
     description: Optional[str] = Field(None, max_length=MAX_DESCRIPTION_LENGTH)
     emoji: Optional[str] = Field(None, max_length=16)
     instructions: Optional[str] = Field(None, max_length=MAX_INSTRUCTIONS_LENGTH)
-    visibility: Optional[TemplateVisibility] = None
     tags: Optional[List[str]] = Field(None, max_length=MAX_TAGS)
     starters: Optional[List[str]] = Field(None, max_length=MAX_STARTERS)
     model_cfg: Optional[ModelConfigPayload] = Field(None, alias="modelConfig")
@@ -267,7 +261,6 @@ class AgentTemplateAdminResponse(BaseModel):
     description: str
     emoji: str
     instructions: str
-    visibility: TemplateVisibility
     tags: List[str]
     starters: List[str]
     model_cfg: ModelConfigPayload = Field(serialization_alias="modelConfig")
@@ -290,7 +283,6 @@ class AgentTemplateAdminResponse(BaseModel):
             description=t.description,
             emoji=t.emoji,
             instructions=t.instructions,
-            visibility=t.visibility,
             tags=t.tags,
             starters=t.starters,
             model_cfg=ModelConfigPayload(
@@ -333,7 +325,6 @@ class TemplateDraftResponse(BaseModel):
     description: str
     emoji: str
     instructions: str
-    visibility: TemplateVisibility
     tags: List[str]
     starters: List[str]
     # Serialized as "modelConfig" via the camel alias generator.
@@ -356,7 +347,6 @@ class TemplateCatalogEntryResponse(BaseModel):
                 description=t.description,
                 emoji=t.emoji,
                 instructions=t.instructions,
-                visibility=t.visibility,
                 tags=t.tags,
                 starters=t.starters,
                 model_cfg=ModelConfigPayload(

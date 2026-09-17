@@ -14,7 +14,6 @@ import {
   AgentTemplateAdmin,
   AgentTemplateCreate,
   TemplateStatus,
-  TemplateVisibility,
 } from './models/agent-template-admin.model';
 import { AgentService } from '../../agents/services/agent.service';
 import { BindableItem } from '../../agents/models/agent.model';
@@ -36,7 +35,7 @@ type BindingGroup = FormGroup<{
 
 /**
  * Create / edit an agent template. Mirrors the `agent-form` field set (name,
- * emoji, description, instructions, visibility, tags, starters, model, tool
+ * emoji, description, instructions, tags, starters, model, tool
  * bindings) plus the catalog-management fields (`pitch`, `status`,
  * `sort_order`). POST on create, PATCH on edit — same shape either way.
  *
@@ -225,7 +224,9 @@ type BindingGroup = FormGroup<{
             </button>
           </div>
           <p class="mb-2 text-xs/5 text-gray-500 dark:text-gray-400">
-            A ref names an intended capability. Unknown refs are dropped gracefully at prefill time, so a binding a fork lacks never breaks the template.
+            Tool bindings pick from the enabled tool catalog. Other kinds name an intended
+            capability by ref; an unknown ref is dropped gracefully at prefill time, so a
+            binding a fork lacks never breaks the template.
           </p>
           @for (group of bindings.controls; track $index) {
             <div class="mb-2 flex items-center gap-2" [formGroupName]="$index">
@@ -237,12 +238,27 @@ type BindingGroup = FormGroup<{
                   <option [value]="k">{{ k }}</option>
                 }
               </select>
-              <input
-                formControlName="ref"
-                type="text"
-                placeholder="capability ref"
-                class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-              />
+              @if (group.controls.kind.value === 'tool') {
+                <select
+                  formControlName="ref"
+                  class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                >
+                  <option value="">Select a tool…</option>
+                  @for (t of tools(); track t.ref) {
+                    <option [value]="t.ref">{{ t.label }}</option>
+                  }
+                  @if (group.controls.ref.value && !isKnownToolRef(group.controls.ref.value)) {
+                    <option [value]="group.controls.ref.value">{{ group.controls.ref.value }} — unavailable</option>
+                  }
+                </select>
+              } @else {
+                <input
+                  formControlName="ref"
+                  type="text"
+                  placeholder="capability ref"
+                  class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                />
+              }
               <button type="button" (click)="removeBinding($index)" class="shrink-0 rounded-2xl border border-gray-300 p-1.5 text-gray-500 hover:bg-gray-100 dark:border-gray-500 dark:hover:bg-gray-600" [attr.aria-label]="'Remove binding ' + ($index + 1)">
                 <ng-icon name="heroTrash" class="size-4" />
               </button>
@@ -250,16 +266,8 @@ type BindingGroup = FormGroup<{
           }
         </div>
 
-        <!-- Visibility + status + order -->
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div>
-            <label for="visibility" class="mb-1.5 block text-sm/6 font-medium text-gray-900 dark:text-white">Visibility</label>
-            <select id="visibility" formControlName="visibility" class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
-              <option value="PRIVATE">Private</option>
-              <option value="PUBLIC">Public</option>
-              <option value="SHARED">Shared</option>
-            </select>
-          </div>
+        <!-- Status + order -->
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label for="status" class="mb-1.5 block text-sm/6 font-medium text-gray-900 dark:text-white">Status</label>
             <select id="status" formControlName="status" class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
@@ -311,6 +319,8 @@ export class AgentTemplateFormPage implements OnInit {
 
   /** RBAC-filtered model palette (`GET /agents/bindable?kind=model`, reused via AgentService). */
   protected readonly models = signal<BindableItem[]>([]);
+  /** RBAC-filtered tool palette (`GET /agents/bindable?kind=tool`, reused via AgentService). */
+  protected readonly tools = signal<BindableItem[]>([]);
   /**
    * A saved `modelId` that is NOT in the current catalog (stale/removed model). Rendered as
    * a clearly-labelled "unavailable" option so an edit doesn't silently drop the admin's
@@ -330,7 +340,6 @@ export class AgentTemplateFormPage implements OnInit {
     instructions: new FormControl('', { nonNullable: true, validators: [Validators.maxLength(MAX_INSTRUCTIONS)] }),
     modelId: new FormControl('', { nonNullable: true }),
     tagsCsv: new FormControl('', { nonNullable: true }),
-    visibility: new FormControl<TemplateVisibility>('PRIVATE', { nonNullable: true }),
     status: new FormControl<TemplateStatus>('enabled', { nonNullable: true }),
     sortOrder: new FormControl(0, { nonNullable: true }),
     starters: new FormArray<FormControl<string>>([]),
@@ -346,9 +355,14 @@ export class AgentTemplateFormPage implements OnInit {
   }
 
   async ngOnInit(): Promise<void> {
-    // Load the model palette first so the dropdown is populated and the edit-mode
-    // preselect (and stale-model detection) can compare against it.
-    this.models.set(await this.agents.loadBindable('model'));
+    // Load the model + tool palettes first so the dropdowns are populated and the
+    // edit-mode preselect (and stale detection) can compare against them.
+    const [models, tools] = await Promise.all([
+      this.agents.loadBindable('model'),
+      this.agents.loadBindable('tool'),
+    ]);
+    this.models.set(models);
+    this.tools.set(tools);
 
     const templateId = this.route.snapshot.paramMap.get('id');
     if (!templateId) return;
@@ -373,7 +387,6 @@ export class AgentTemplateFormPage implements OnInit {
       instructions: tpl.instructions,
       modelId: savedModelId,
       tagsCsv: (tpl.tags ?? []).join(', '),
-      visibility: tpl.visibility,
       status: tpl.status,
       sortOrder: tpl.sort_order,
     });
@@ -415,6 +428,15 @@ export class AgentTemplateFormPage implements OnInit {
     this.bindings.push(this.makeBinding('tool', '', {}));
   }
 
+  /**
+   * Is this tool ref in the current catalog? A tool binding whose ref is not known
+   * (removed/renamed tool) is shown as an "unavailable" option rather than dropped, so
+   * an edit preserves the admin's saved ref on save.
+   */
+  protected isKnownToolRef(ref: string): boolean {
+    return this.tools().some(t => t.ref === ref);
+  }
+
   protected removeBinding(index: number): void {
     this.bindings.removeAt(index);
   }
@@ -429,7 +451,6 @@ export class AgentTemplateFormPage implements OnInit {
       pitch: raw.pitch.trim(),
       description: raw.description.trim(),
       instructions: raw.instructions,
-      visibility: raw.visibility,
       status: raw.status,
       sort_order: Number(raw.sortOrder) || 0,
       tags: raw.tagsCsv

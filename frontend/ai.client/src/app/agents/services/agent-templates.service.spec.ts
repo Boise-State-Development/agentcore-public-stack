@@ -31,7 +31,6 @@ describe('AgentTemplatesService', () => {
       description: 'Answers from your documents.',
       emoji: '📚',
       instructions: 'You answer strictly from the provided material.',
-      visibility: 'PRIVATE',
       tags: [],
       starters: ['What does the material say?'],
       modelConfig: { modelId: null, params: {} },

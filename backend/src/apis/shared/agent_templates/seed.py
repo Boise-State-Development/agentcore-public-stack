@@ -64,7 +64,6 @@ def default_seed_templates() -> List[AgentTemplateCreate]:
                 "Be clear, direct and neutral. A good answer is one the reader can "
                 "trust and check."
             ),
-            visibility="PRIVATE",
             tags=[],
             starters=[
                 "What does the material say about this?",
@@ -113,7 +112,6 @@ def default_seed_templates() -> List[AgentTemplateCreate]:
                 "Give brief, kind, concrete feedback: what worked, one or two things "
                 "to try next time, and an offer to run it again."
             ),
-            visibility="PRIVATE",
             tags=[],
             starters=[
                 "Let's practice a job interview for a role I'm applying to.",
@@ -141,7 +139,6 @@ def default_seed_templates() -> List[AgentTemplateCreate]:
                 "ambiguous, and say plainly when you are not sure or do not know rather "
                 "than guessing. Be respectful and constructive."
             ),
-            visibility="PRIVATE",
             tags=[],
             starters=[
                 "Help me draft something.",

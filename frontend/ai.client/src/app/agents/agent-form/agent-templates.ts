@@ -58,7 +58,6 @@ export interface TemplateDraft {
   description: string;
   emoji: string;
   instructions: string;
-  visibility: 'PRIVATE' | 'PUBLIC' | 'SHARED';
   tags: string[];
   starters: string[];
   modelConfig: TemplateModelConfig;

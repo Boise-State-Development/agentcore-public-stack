@@ -77,7 +77,6 @@ _PAYLOAD = {
     "description": "A study assistant for one course.",
     "emoji": "🎓",
     "instructions": "You are a course helper.",
-    "visibility": "PRIVATE",
     "tags": [],
     "starters": ["What topics does this cover?"],
     "modelConfig": {"modelId": "us.anthropic.claude-sonnet-5", "params": {}},
@@ -119,12 +118,6 @@ class TestAdminRoutes:
         admin_client.post("/admin/agent-templates/", json=_PAYLOAD)
         resp = admin_client.post("/admin/agent-templates/", json=_PAYLOAD)
         assert resp.status_code == 409
-
-    def test_create_rejects_bad_visibility(self, admin_client):
-        resp = admin_client.post(
-            "/admin/agent-templates/", json={**_PAYLOAD, "visibility": "SECRET"}
-        )
-        assert resp.status_code == 422
 
     def test_list_all_includes_disabled(self, admin_client):
         admin_client.post("/admin/agent-templates/", json=_PAYLOAD)
