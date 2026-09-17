@@ -1,5 +1,6 @@
 {
   "tables": {
+    "agent-templates": [],
     "announcements": [],
     "api-keys": [
       "KeyHashIndex"
