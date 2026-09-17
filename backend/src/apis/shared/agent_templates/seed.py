@@ -22,7 +22,6 @@ from typing import List
 
 from .models import (
     AgentTemplateCreate,
-    BindingPayload,
     ModelConfigPayload,
 )
 from .service import AgentTemplatesService, get_agent_templates_service
