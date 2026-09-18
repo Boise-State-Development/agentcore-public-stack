@@ -498,6 +498,13 @@ class FeedbackProfile(BaseModel):
     up: int = 0
     down: int = 0
     by_turn_class: Optional[FeedbackByTurnClass] = Field(None, alias="byTurnClass")
+    # Down-thumb reason codes, ``{code: count}``, over the closed set in
+    # ``FEEDBACK_REASONS`` — the field that turns "someone disliked this" into
+    # something to act on ("most of these are tool_failed"). A code, never
+    # free text: the request model's ``reason`` is a ``Literal``, so no user
+    # prose can reach here. Absent codes are simply not keys; an empty map
+    # means thumbs exist but none carried a reason.
+    reasons: Dict[str, int] = Field(default_factory=dict)
     unjoined: int = 0
     # Down-thumbs the user followed with a retry-with-correction, and what
     # that rework cost: the thumbed call(s) plus the retry turn's calls
@@ -505,6 +512,67 @@ class FeedbackProfile(BaseModel):
     # a cost row to price.
     retried: int = 0
     rework_usd: Optional[float] = Field(None, alias="reworkUsd")
+
+
+class FleetFeedbackClass(BaseModel):
+    """One turn class's thumbs across the fleet, with the base it is a rate of.
+
+    ``downRate`` is ``down / n`` and is ``None`` below ``minN`` — a rate over
+    three thumbs is not a number anyone should act on, and returning it anyway
+    invites exactly that. Response-feedback spec §9: comparisons between arms,
+    always carrying ``n``; never a bare score.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    up: int = 0
+    down: int = 0
+    n: int = 0
+    down_rate: Optional[float] = Field(None, alias="downRate")
+    #: Calls of this class in the period — the exposure the thumbs are drawn
+    #: from, so a class with a high rate and tiny coverage reads as such.
+    calls: int = 0
+
+
+class FleetFeedbackSummary(BaseModel):
+    """Fleet-wide outcome signal for one billing period.
+
+    The join the per-session profile does, summed over the period's sessions.
+    Content-free: counts, rates and closed-set reason codes only.
+
+    **Deliberately not a quality score.** There is no single headline number
+    here to be lifted onto a dashboard: every rate carries its ``n``, the
+    reason split says *what kind* of failure, and ``coverage`` says how much
+    of the fleet ever voted. Thumbs run a few percent of turns and skew
+    negative — this is a sampler and a label (spec §2), and reading the
+    absolute rate as "platform quality" is the misuse §9 exists to prevent.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    period: str
+    up: int = 0
+    down: int = 0
+    n: int = 0
+    down_rate: Optional[float] = Field(None, alias="downRate")
+    #: Thumbed assistant messages as a share of assistant calls in the period.
+    #: The denominator for every rate above; 1–5% is the expected band.
+    coverage: Optional[float] = None
+    assistant_calls: int = Field(0, alias="assistantCalls")
+    #: ``{reason_code: count}`` over down-thumbs — the actionable split.
+    reasons: Dict[str, int] = Field(default_factory=dict)
+    #: The document-offload comparison: is a digest-only turn thumbed down
+    #: more often than one holding the full document?
+    by_turn_class: Dict[str, FleetFeedbackClass] = Field(default_factory=dict, alias="byTurnClass")
+    #: Down-thumbs the user followed with a retry, and what the rework cost.
+    retried: int = 0
+    rework_usd: Optional[float] = Field(None, alias="reworkUsd")
+    #: Honesty about the fan-out, mirroring ``TopSessionsResponse``: a
+    #: truncated sweep must never read as "this is the whole fleet".
+    sessions_with_feedback: int = Field(0, alias="sessionsWithFeedback")
+    sessions_scanned: int = Field(0, alias="sessionsScanned")
+    truncated: bool = False
+    #: ``False`` when no session in the period carried a feedback rollup —
+    #: "not tracked", not "nobody complained".
+    tracked: bool = False
 
 
 class DataCoverage(BaseModel):

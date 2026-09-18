@@ -10,6 +10,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, List
 
+from apis.shared.sessions.models import FEEDBACK_REASONS
 from apis.shared.storage.dynamodb_storage import DynamoDBStorage
 from .diagnoses import (
     CHARS_PER_TOKEN,
@@ -21,6 +22,8 @@ from .diagnoses import (
 )
 from .models import (
     CompactionEvent,
+    FleetFeedbackClass,
+    FleetFeedbackSummary,
     DocumentReads,
     PrefixTokens,
     AttachmentProfile,
@@ -145,6 +148,11 @@ def _join_feedback(
             profile.up += 1
         else:
             profile.down += 1
+            reason = row.get("reason")
+            # Closed set only: the write path types ``reason`` as a Literal,
+            # and an unknown code here would mean a row from a future schema.
+            if isinstance(reason, str) and reason in FEEDBACK_REASONS:
+                profile.reasons[reason] = profile.reasons.get(reason, 0) + 1
         message_id = _as_int(row.get("messageId"))
         retry_id = _as_int(row.get("retryMessageId"))
         if value == -1 and retry_id is not None:
@@ -1397,6 +1405,130 @@ class AdminCostService:
                 document_read_pages if any_documents else (_as_int(row.get("documentReadPages")) or 0)
             ),
         )
+
+    #: Below this many thumbs a rate is not reported — see ``FleetFeedbackClass``.
+    FLEET_FEEDBACK_MIN_N = 10
+
+    async def get_fleet_feedback(
+        self,
+        period: Optional[str] = None,
+        users_to_scan: int = 50,
+        sessions_to_scan: int = 200,
+    ) -> FleetFeedbackSummary:
+        """The outcome signal for a whole billing period.
+
+        **How it is assembled, and why not a scan.** ``F#`` rows are keyed by
+        owner and indexed per session, so there is no "all feedback this
+        period" query and adding a GSI is a deploy hazard for one admin view
+        (the same reasoning as ``get_top_sessions``). Instead this reuses two
+        facts that already exist:
+
+        1. the ``S#`` session row carries ``thumbsUp`` / ``thumbsDown``
+           rollups **and** the document-class rollups, and it is already
+           projected — so the period's sessions can be filtered to the ones
+           that actually have thumbs without reading a single ``F#`` row;
+        2. thumbs run a few percent of turns, so that filter is small.
+
+        Only sessions that pass it are fanned out over, and each one runs the
+        *same* ``_join_feedback`` the per-session profile uses — one
+        implementation, so the fleet view and the drill-down can never
+        disagree about what a turn class is.
+
+        Args:
+            period: Billing period (YYYY-MM). Defaults to the current month.
+            users_to_scan: Top-cost users to walk (the ``PeriodCostIndex``
+                fan-out ``get_top_sessions`` already uses).
+            sessions_to_scan: Cap on the feedback-bearing sessions joined.
+                Reported back as ``truncated`` when it bites.
+        """
+        period = period or self._get_current_period()
+        period_start, _ = self._get_period_date_range(period)
+        summary = FleetFeedbackSummary(period=period)
+
+        try:
+            top_users = await self.storage.get_top_users_by_cost(period=period, limit=users_to_scan)
+        except Exception as e:  # noqa: BLE001 - an admin view must not 500 on one bad read
+            logger.warning(f"Fleet feedback: user fan-out failed: {e}")
+            return summary
+
+        candidates: List[str] = []
+        for user_data in top_users:
+            user_id = user_data.get("userId")
+            if not user_id:
+                continue
+            try:
+                sessions = await self.storage.get_user_session_costs(
+                    user_id=user_id, active_since=period_start
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Fleet feedback: skipping a user's sessions: {e}")
+                continue
+            for row in sessions:
+                up = _as_int(row.get("thumbsUp"))
+                down = _as_int(row.get("thumbsDown"))
+                if up is None and down is None:
+                    continue  # rollups absent — diagnostics were off for this session
+                summary.tracked = True
+                summary.assistant_calls += _as_int(row.get("callCount")) or 0
+                if (up or 0) + (down or 0) <= 0:
+                    continue
+                session_id = row.get("sessionId")
+                if session_id:
+                    candidates.append(session_id)
+
+        summary.sessions_with_feedback = len(candidates)
+        summary.truncated = len(candidates) > sessions_to_scan
+        candidates = candidates[:sessions_to_scan]
+        summary.sessions_scanned = len(candidates)
+
+        rework_total: Optional[float] = None
+        classes: Dict[str, FleetFeedbackClass] = {}
+        for session_id in candidates:
+            try:
+                records = await self.storage.get_session_cost_records(session_id)
+                feedback_rows = await self._feedback_rows(session_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Fleet feedback: skipping session {session_id}: {e}")
+                continue
+            if not feedback_rows:
+                continue
+            profile = _join_feedback(records, feedback_rows)
+            summary.up += profile.up
+            summary.down += profile.down
+            summary.retried += profile.retried
+            if profile.rework_usd is not None:
+                rework_total = (rework_total or 0.0) + profile.rework_usd
+            for code, count in profile.reasons.items():
+                summary.reasons[code] = summary.reasons.get(code, 0) + count
+            if profile.by_turn_class is not None:
+                for key, counts in (
+                    ("full", profile.by_turn_class.full),
+                    ("digestOnly", profile.by_turn_class.digest_only),
+                    ("retrieved", profile.by_turn_class.retrieved),
+                    ("none", profile.by_turn_class.none),
+                ):
+                    bucket = classes.setdefault(key, FleetFeedbackClass())
+                    bucket.up += counts.up
+                    bucket.down += counts.down
+            for record in records:
+                klass = _turn_class(record)
+                if klass:
+                    classes.setdefault(klass, FleetFeedbackClass()).calls += 1
+
+        summary.rework_usd = round(rework_total, 6) if rework_total is not None else None
+        summary.n = summary.up + summary.down
+        summary.down_rate = (
+            round(summary.down / summary.n, 4) if summary.n >= self.FLEET_FEEDBACK_MIN_N else None
+        )
+        if summary.assistant_calls > 0:
+            summary.coverage = round(summary.n / summary.assistant_calls, 5)
+        for bucket in classes.values():
+            bucket.n = bucket.up + bucket.down
+            bucket.down_rate = (
+                round(bucket.down / bucket.n, 4) if bucket.n >= self.FLEET_FEEDBACK_MIN_N else None
+            )
+        summary.by_turn_class = {k: v for k, v in classes.items() if v.n or v.calls}
+        return summary
 
     async def get_dashboard(
         self,

@@ -16,6 +16,7 @@ import json
 
 from apis.shared.auth import User, require_admin_scope
 from .models import (
+    FleetFeedbackSummary,
     TopUserCost,
     TopSessionsResponse,
     SystemCostSummary,
@@ -369,6 +370,68 @@ async def get_session_profile(
         )
 
     return profile
+
+
+@router.get("/feedback", response_model=FleetFeedbackSummary)
+async def get_fleet_feedback(
+    period: Optional[str] = Query(None, description="Billing period YYYY-MM (default: current)"),
+    users_to_scan: int = Query(50, ge=1, le=200, description="Top-cost users to fan out over"),
+    sessions_to_scan: int = Query(200, ge=1, le=1000, description="Cap on feedback-bearing sessions joined"),
+    admin_user: User = Depends(require_costs_admin),
+    service: AdminCostService = Depends(get_cost_service),
+):
+    """
+    The fleet's outcome signal for a billing period — thumbs joined to the
+    configuration that produced each answer.
+
+    A thumb on its own says nothing; joined to its `C#` cost row it becomes a
+    *labelled example* of "this configuration produced a bad answer". That is
+    what this endpoint returns, aggregated:
+
+    - `byTurnClass` — down-thumb rate for **full** (document inline) vs
+      **digestOnly** vs **retrieved** turns. The document-offload spec's
+      quality question, answerable from stored rows: if `digestOnly` is
+      thumbed down materially more than `full`, the digest is too thin and the
+      answer is to widen pinning or raise the digest budget.
+    - `reasons` — the closed-set split of *why* (`wrong`, `instructions`,
+      `length`, `tool_failed`, `outdated`, `other`). "40% are tool_failed"
+      points at a fix in a way a bare count never does.
+    - `retried` / `reworkUsd` — what bad answers actually cost, in the same
+      units as the rest of the cost surface.
+
+    **This is not a quality score, by design.** Every rate carries its `n` and
+    is withheld below a floor; `coverage` reports what share of assistant
+    calls were ever thumbed (1-5% is the expected band). Thumbs are
+    self-selected and skew negative, so the absolute rate is noise — the value
+    is *comparison between arms*, and the sampling of turns worth judging.
+    `tracked: false` means no session in the period carried a feedback
+    rollup — "not tracked", never "nobody complained".
+
+    Assembled from the period's top-cost users (`PeriodCostIndex`), filtered
+    to sessions whose `S#` rollups show thumbs, then joined per session.
+    `sessionsScanned` / `truncated` say how much of the fleet this covered, so
+    a truncated sweep never reads as the whole picture.
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks the admin.costs scope
+            - 500 if server error
+    """
+    logger.info("Admin requesting the fleet feedback summary")
+
+    try:
+        return await service.get_fleet_feedback(
+            period=period,
+            users_to_scan=users_to_scan,
+            sessions_to_scan=sessions_to_scan,
+        )
+    except Exception as e:
+        logger.error(f"Error getting fleet feedback summary: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve fleet feedback summary"
+        )
 
 
 @router.get("/top-users", response_model=List[TopUserCost])

@@ -438,10 +438,68 @@ export interface FeedbackProfile {
   up: number;
   down: number;
   byTurnClass?: Record<TurnClass, FeedbackCounts> | null;
+  /**
+   * Down-thumb reason codes, `{code: count}` over `FeedbackReason`. The field
+   * that turns "someone disliked this" into something to act on. A closed set
+   * of codes, never free text. An empty map means thumbs exist but none
+   * carried a reason.
+   */
+  reasons?: Record<string, number>;
   unjoined?: number;
   /** Down-thumbs followed by a retry-with-correction, and what the rework cost. */
   retried?: number;
   reworkUsd?: number | null;
+}
+
+/** The closed set a down-thumb may cite. Matches `FEEDBACK_REASONS`. */
+export type FeedbackReason =
+  | 'wrong'
+  | 'instructions'
+  | 'length'
+  | 'tool_failed'
+  | 'outdated'
+  | 'other';
+
+/**
+ * One turn class's thumbs across the fleet, with the base the rate is drawn
+ * from. `downRate` is null below the service's minimum `n` — a rate over a
+ * handful of thumbs is not a number to act on.
+ */
+export interface FleetFeedbackClass {
+  up: number;
+  down: number;
+  n: number;
+  downRate?: number | null;
+  /** Calls of this class in the period — the exposure behind the rate. */
+  calls: number;
+}
+
+/**
+ * Fleet-wide outcome signal for one billing period
+ * (`GET /admin/costs/feedback`).
+ *
+ * Deliberately not a quality score: every rate carries its `n`, `coverage`
+ * says what share of assistant calls were ever thumbed (1-5% expected), and
+ * `tracked: false` means no session carried a feedback rollup — "not
+ * tracked", never "nobody complained". The value is comparison between arms
+ * (is `digestOnly` thumbed down more than `full`?), not an absolute number.
+ */
+export interface FleetFeedbackSummary {
+  period: string;
+  up: number;
+  down: number;
+  n: number;
+  downRate?: number | null;
+  coverage?: number | null;
+  assistantCalls: number;
+  reasons: Record<string, number>;
+  byTurnClass: Partial<Record<TurnClass, FleetFeedbackClass>>;
+  retried: number;
+  reworkUsd?: number | null;
+  sessionsWithFeedback: number;
+  sessionsScanned: number;
+  truncated: boolean;
+  tracked: boolean;
 }
 
 /** The content-free diagnostic profile of one conversation. */

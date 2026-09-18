@@ -108,7 +108,10 @@ def test_session_profile_returns_200():
         "feedback": False,
         "documents": False,
     }
-    assert body["feedback"] == {"up": 0, "down": 0, "byTurnClass": None, "unjoined": 0, "retried": 0, "reworkUsd": None}
+    assert body["feedback"] == {
+        "up": 0, "down": 0, "byTurnClass": None, "reasons": {},
+        "unjoined": 0, "retried": 0, "reworkUsd": None,
+    }
     service.get_session_profile.assert_awaited_once_with("s1")
 
 
@@ -137,3 +140,61 @@ def test_both_routes_are_denied_without_the_scope():
     client = TestClient(app)
     assert client.get("/costs/users/u1/sessions").status_code == 403
     assert client.get("/costs/sessions/s1/profile").status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /admin/costs/feedback — the fleet outcome signal
+# ---------------------------------------------------------------------------
+
+
+def test_fleet_feedback_returns_200_and_passes_its_params():
+    from apis.app_api.admin.costs.models import FleetFeedbackClass, FleetFeedbackSummary
+
+    summary = FleetFeedbackSummary(
+        period="2026-09", up=30, down=10, n=40, down_rate=0.25,
+        coverage=0.02, assistant_calls=2_000,
+        reasons={"tool_failed": 6, "length": 4},
+        by_turn_class={
+            "full": FleetFeedbackClass(up=18, down=2, n=20, down_rate=0.1, calls=500),
+            "digestOnly": FleetFeedbackClass(up=12, down=8, n=20, down_rate=0.4, calls=900),
+        },
+        retried=7, rework_usd=1.25,
+        sessions_with_feedback=12, sessions_scanned=12, tracked=True,
+    )
+    service = SimpleNamespace(get_fleet_feedback=AsyncMock(return_value=summary))
+    client = TestClient(_app(service))
+
+    # Distinct values so the assertion below cannot pass on a default.
+    resp = client.get(
+        "/costs/feedback",
+        params={"period": "2026-09", "users_to_scan": 17, "sessions_to_scan": 33},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["period"] == "2026-09"
+    assert body["byTurnClass"]["digestOnly"]["downRate"] == 0.4
+    assert body["byTurnClass"]["digestOnly"]["n"] == 20, "a rate is never reported without its base"
+    assert body["reasons"] == {"tool_failed": 6, "length": 4}
+    assert body["coverage"] == 0.02 and body["assistantCalls"] == 2_000
+    assert body["reworkUsd"] == 1.25
+    service.get_fleet_feedback.assert_awaited_once_with(
+        period="2026-09", users_to_scan=17, sessions_to_scan=33
+    )
+
+
+def test_fleet_feedback_reports_untracked_rather_than_zero():
+    from apis.app_api.admin.costs.models import FleetFeedbackSummary
+
+    service = SimpleNamespace(
+        get_fleet_feedback=AsyncMock(return_value=FleetFeedbackSummary(period="2026-08"))
+    )
+    body = TestClient(_app(service)).get("/costs/feedback").json()
+    assert body["tracked"] is False
+    assert body["downRate"] is None and body["coverage"] is None
+
+
+def test_fleet_feedback_500s_cleanly():
+    service = SimpleNamespace(get_fleet_feedback=AsyncMock(side_effect=RuntimeError("boom")))
+    resp = TestClient(_app(service)).get("/costs/feedback")
+    assert resp.status_code == 500
+    assert "boom" not in resp.text, "an internal error message must not reach the client"
