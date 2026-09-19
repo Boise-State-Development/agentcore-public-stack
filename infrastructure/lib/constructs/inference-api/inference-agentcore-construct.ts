@@ -409,9 +409,12 @@ export class InferenceAgentCoreConstruct extends Construct {
         // Authentication
         ENABLE_QUOTA_ENFORCEMENT: 'true',
 
-        // ⚠️ NO ROOM FOR NEW VARIABLES HERE — see the assertion in
-        // test/inference-agentcore-construct.test.ts. `AWS::BedrockAgentCore::Runtime`
-        // caps EnvironmentVariables at 50 and this construct is AT the cap.
+        // ⚠️ ALMOST NO ROOM HERE — see the assertion in
+        // test/runtime-env-var-limit.test.ts, which prints the live headroom.
+        // `AWS::BedrockAgentCore::Runtime` caps EnvironmentVariables at 50.
+        // This construct sat AT the cap until retiring the three dead
+        // directory variables above took it to 47/50; treat those 3 as a
+        // one-off reprieve, not permission to spend them casually.
         // Adding one more fails CloudFormation's *changeset validation* — after
         // synth, after tsc, after jest, after CI is green. It broke the dev
         // Platform Stack deploy on 2026-08-05 (`maximum size: [50], found: [51]`,
