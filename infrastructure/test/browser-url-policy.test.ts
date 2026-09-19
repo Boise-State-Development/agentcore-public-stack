@@ -107,6 +107,35 @@ describe('browser policy in the stack', () => {
     expect(actions.join(',')).not.toMatch(/PutObject|DeleteObject/);
   });
 
+  it('lets the CALLER of StartBrowserSession read the policy object', () => {
+    // The service reads the policy as the caller — the runtime role — not as
+    // the browser's execution role, despite the documented prerequisite
+    // naming the latter. Granting only the browser role produced
+    // "Access denied to S3 object ... Verify that the caller has permission",
+    // and that failure takes down EVERY browser session, not just the policy.
+    // CDK splits an oversized inline policy into managed overflow policies on
+    // the same role, so both resource types must be scanned.
+    const statements = ['AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy'].flatMap((type) =>
+      Object.values(template.findResources(type)).flatMap(
+        (p) =>
+          ((p.Properties as {
+            PolicyDocument?: { Statement?: { Sid?: string; Action?: string | string[] }[] };
+          })?.PolicyDocument?.Statement) ?? [],
+      ),
+    );
+
+    const caller = statements.find((s) => s.Sid === 'BrowserPolicyObjectRead');
+    expect(caller).toBeDefined();
+    const actions = Array.isArray(caller!.Action) ? caller!.Action : [caller!.Action];
+    expect(actions.sort()).toEqual(['s3:GetObject', 's3:GetObjectVersion']);
+
+    // The browser execution role keeps its own grant — the service documents
+    // it as a prerequisite, and it costs one read-only object.
+    expect(
+      statements.find((s) => s.Sid === 'BrowserEnterprisePolicyS3Access'),
+    ).toBeDefined();
+  });
+
   it('passes the policy location to the runtime as a single S3 URI', () => {
     // Single variable on purpose — the runtime's 50-env-var ceiling is full.
     const runtimes = template.findResources('AWS::BedrockAgentCore::Runtime');

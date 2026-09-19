@@ -235,6 +235,27 @@ export class InferenceAgentCoreConstruct extends Construct {
       resources: [props.browserArn],
     }));
 
+    // The Chromium URL policy is passed on every StartBrowserSession, and the
+    // service reads the S3 object as **the caller** — this role — not as the
+    // browser's execution role. Granting only the browser role (which the
+    // service's own prerequisites document) produced:
+    //
+    //   ValidationException ... Access denied to S3 object - bucket: ...,
+    //   key: policies/managed-policies.json. Verify that the caller has
+    //   permission to access this bucket and is the bucket owner.
+    //
+    // and that failure takes down EVERY browser session, not just the policy.
+    // Scoped to the one object rather than the prefix: this role only ever
+    // needs to read the policy it is passing.
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BrowserPolicyObjectRead',
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:GetObjectVersion'],
+      resources: [
+        `arn:aws:s3:::${props.browserPolicyBucketName}/${props.browserPolicyKey}`,
+      ],
+    }));
+
     // ============================================================
     // Import Cognito SSM Parameters for JWT Authorizer
     // ============================================================
