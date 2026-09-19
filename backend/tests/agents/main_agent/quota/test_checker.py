@@ -541,3 +541,146 @@ async def test_blocked_turn_skips_the_session_read(
 
     assert result.allowed is False
     read.assert_not_awaited()
+
+
+# ===================================================================
+# PR-2b — the caller may supply the session cost it already read
+# (docs/specs/turn-latency-preamble.md). The read it replaces was a
+# measured 62ms GSI query in the inference-api preamble.
+# ===================================================================
+
+
+def _resolved(sample_tier, sample_assignment):
+    return ResolvedQuota(
+        user_id="test123",
+        tier=sample_tier,
+        matched_by="direct_user",
+        assignment=sample_assignment,
+    )
+
+
+def _user_summary(total=60.0):
+    return UserCostSummary(
+        userId="test123",
+        periodStart="2025-01-01T00:00:00Z",
+        periodEnd="2025-01-31T23:59:59Z",
+        totalCost=total,
+        models=[],
+        totalRequests=10,
+        totalInputTokens=1000,
+        totalOutputTokens=500,
+        totalCacheSavings=0.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_supplied_session_cost_skips_the_metadata_read(
+    checker, mock_resolver, mock_cost_aggregator, mock_event_recorder,
+    sample_user, sample_tier, sample_assignment
+):
+    """The whole point: a caller that already has the row does not pay again."""
+    mock_resolver.resolve_user_quota.return_value = _resolved(sample_tier, sample_assignment)
+    mock_cost_aggregator.get_user_cost_summary.return_value = _user_summary()
+
+    reader = AsyncMock()
+    with patch("apis.shared.sessions.metadata.get_session_metadata", reader):
+        result = await checker.check_quota(
+            sample_user, session_id="sess-1", session_total_cost=130.0
+        )
+
+    reader.assert_not_awaited()
+    assert float(result.session_cost) == 130.0
+    assert float(result.session_percentage_of_limit) == pytest.approx(26.0)
+    mock_event_recorder.record_session_notice_if_needed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_supplied_cost_below_the_share_still_produces_no_notice(
+    checker, mock_resolver, mock_cost_aggregator, mock_event_recorder,
+    sample_user, sample_tier, sample_assignment
+):
+    """The threshold decision must not change just because the number arrived
+    by a different route."""
+    mock_resolver.resolve_user_quota.return_value = _resolved(sample_tier, sample_assignment)
+    mock_cost_aggregator.get_user_cost_summary.return_value = _user_summary()
+
+    reader = AsyncMock()
+    with patch("apis.shared.sessions.metadata.get_session_metadata", reader):
+        result = await checker.check_quota(
+            sample_user, session_id="sess-1", session_total_cost=10.0
+        )
+
+    reader.assert_not_awaited()
+    assert result.session_cost is None
+    mock_event_recorder.record_session_notice_if_needed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_none_falls_back_to_the_read_and_its_lazy_backfill(
+    checker, mock_resolver, mock_cost_aggregator, mock_event_recorder,
+    sample_user, sample_tier, sample_assignment
+):
+    """`None` means "not known", NEVER "zero".
+
+    A legacy row written before write-time aggregation has no `totalCost`, and
+    `get_session_metadata` backfills it on read. If the caller's absent value
+    were read as 0.0 the backfill would be skipped and the notice would go
+    quiet on exactly the long-lived conversations it exists to catch — a
+    latency fix turning into a silent feature regression.
+    """
+    mock_resolver.resolve_user_quota.return_value = _resolved(sample_tier, sample_assignment)
+    mock_cost_aggregator.get_user_cost_summary.return_value = _user_summary()
+
+    backfilled = Mock()
+    backfilled.total_cost = 130.0
+    reader = AsyncMock(return_value=backfilled)
+
+    with patch("apis.shared.sessions.metadata.get_session_metadata", reader):
+        result = await checker.check_quota(
+            sample_user, session_id="sess-1", session_total_cost=None
+        )
+
+    reader.assert_awaited_once()
+    assert float(result.session_cost) == 130.0
+    mock_event_recorder.record_session_notice_if_needed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_supplied_zero_is_honoured_as_zero_not_as_unknown(
+    checker, mock_resolver, mock_cost_aggregator, mock_event_recorder,
+    sample_user, sample_tier, sample_assignment
+):
+    """A genuinely free session reports 0.0, which is falsy — a truthiness
+    check here would send it back to the read it was meant to avoid."""
+    mock_resolver.resolve_user_quota.return_value = _resolved(sample_tier, sample_assignment)
+    mock_cost_aggregator.get_user_cost_summary.return_value = _user_summary()
+
+    reader = AsyncMock()
+    with patch("apis.shared.sessions.metadata.get_session_metadata", reader):
+        result = await checker.check_quota(
+            sample_user, session_id="sess-1", session_total_cost=0.0
+        )
+
+    reader.assert_not_awaited()
+    assert result.session_cost is None
+
+
+@pytest.mark.asyncio
+async def test_default_call_is_unchanged_for_callers_that_pass_nothing(
+    checker, mock_resolver, mock_cost_aggregator, mock_event_recorder,
+    sample_user, sample_tier, sample_assignment
+):
+    """app-api's converse route calls this without a snapshot and must keep
+    reading exactly as before."""
+    mock_resolver.resolve_user_quota.return_value = _resolved(sample_tier, sample_assignment)
+    mock_cost_aggregator.get_user_cost_summary.return_value = _user_summary()
+
+    meta = Mock()
+    meta.total_cost = 130.0
+    reader = AsyncMock(return_value=meta)
+
+    with patch("apis.shared.sessions.metadata.get_session_metadata", reader):
+        result = await checker.check_quota(sample_user, session_id="sess-1")
+
+    reader.assert_awaited_once()
+    assert float(result.session_cost) == 130.0

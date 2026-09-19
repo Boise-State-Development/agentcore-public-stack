@@ -2185,7 +2185,23 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if is_quota_enforcement_enabled() and not is_resume and not is_continuation:
         try:
             quota_checker = get_quota_checker()
-            quota_result = await quota_checker.check_quota(user=current_user, session_id=input_data.session_id)
+            # Hand the quota checker the session cost we already read (PR-2b).
+            # ONLY when the row actually carries `totalCost`: absent means a
+            # legacy row that `get_session_metadata` still needs to backfill,
+            # and `None` routes the checker back to that read. Passing 0.0 for
+            # a missing attribute would silence the notice on exactly the
+            # long-lived conversations it exists to catch.
+            session_total_cost = None
+            if session_meta.row is not None and "totalCost" in session_meta.row:
+                try:
+                    session_total_cost = float(session_meta.row["totalCost"])
+                except (TypeError, ValueError):
+                    session_total_cost = None
+            quota_result = await quota_checker.check_quota(
+                user=current_user,
+                session_id=input_data.session_id,
+                session_total_cost=session_total_cost,
+            )
 
             if not quota_result.allowed:
                 # Quota blocked - stream as SSE instead of 429 for better UX

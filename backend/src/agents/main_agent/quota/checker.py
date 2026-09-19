@@ -34,7 +34,8 @@ class QuotaChecker:
     async def check_quota(
         self,
         user: User,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        session_total_cost: Optional[float] = None,
     ) -> QuotaCheckResult:
         """
         Check if user is within quota limits (soft + hard limits).
@@ -49,6 +50,13 @@ class QuotaChecker:
         - session_cost / session_percentage_of_limit / session_notice_threshold:
           set only when this session alone has crossed the tier's
           session-notice share of the monthly limit
+
+        ``session_total_cost`` lets a caller that has already read the session
+        row this turn supply its ``totalCost`` instead of making this method
+        read it again — the inference-api preamble does, where that read was a
+        measured 62ms (docs/specs/turn-latency-preamble.md). ``None`` means
+        "not known", and the read happens exactly as before; it is NOT a way to
+        say "zero".
         """
         # Resolve user's quota tier
         resolved = await self.resolver.resolve_user_quota(user)
@@ -167,6 +175,7 @@ class QuotaChecker:
             limit=limit,
             session_id=session_id,
             assignment_id=assignment_id,
+            session_total_cost=session_total_cost,
         )
 
         if current_usage >= limit:  # warn only
@@ -216,6 +225,7 @@ class QuotaChecker:
         limit: float,
         session_id: Optional[str],
         assignment_id: Optional[str],
+        session_total_cost: Optional[float] = None,
     ) -> dict:
         """Return the session-notice fields when *session_id* is a heavy one.
 
@@ -238,15 +248,29 @@ class QuotaChecker:
         if not session_id or threshold_usd is None:
             return {}
 
-        try:
-            from apis.shared.sessions.metadata import get_session_metadata
+        # A caller that already read the session row this turn can hand us its
+        # `totalCost` and save a 62ms GSI query (the preamble does).
+        #
+        # It supplies the value ONLY when the row actually carries the
+        # attribute, and `None` here means "not known" — never "zero". That
+        # distinction is the whole safety of this path: `get_session_metadata`
+        # lazily **backfills** the cost aggregates for legacy rows written
+        # before write-time aggregation, so treating a missing `totalCost` as
+        # 0.0 would skip the backfill AND silently stop producing the notice
+        # for exactly the long-lived conversations it exists to catch. On
+        # `None` we take the original read, backfill and all.
+        session_cost: Optional[float] = session_total_cost
+        if session_cost is None:
+            try:
+                from apis.shared.sessions.metadata import get_session_metadata
 
-            metadata = await get_session_metadata(session_id, user.user_id)
-        except Exception as e:
-            logger.debug("Session notice skipped (metadata read failed): %s", e)
-            return {}
+                metadata = await get_session_metadata(session_id, user.user_id)
+            except Exception as e:
+                logger.debug("Session notice skipped (metadata read failed): %s", e)
+                return {}
 
-        session_cost = getattr(metadata, "total_cost", None) if metadata else None
+            session_cost = getattr(metadata, "total_cost", None) if metadata else None
+
         if session_cost is None:
             return {}
 

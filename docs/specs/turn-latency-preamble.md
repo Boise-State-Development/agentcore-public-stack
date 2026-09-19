@@ -385,7 +385,56 @@ to the next one just as much.
   derived from marks rather than hand-kept. A listed table would have omitted it
   silently.
 
-## PR-2 — read the session row once (BUILT)
+## PR-2 — read the session row once (SHIPPED #1191, VALIDATED on dev)
+
+**Result: the warm preamble fell 455ms -> 163ms (-64%), and the whole
+pre-stream window 591-656ms -> 349-350ms (-46%).** Three turns on dev
+2026-09-19, immediately after the image landed:
+
+| Sub-stage | Before | Predicted | **Measured** |
+|---|---:|---:|---:|
+| `ownership` | 53-55 | ~53 | **59-60** |
+| `skills` | 5-17 | ~10 | **17** |
+| `files` | 53 | ~0 | **4-5** |
+| `session_state` | 272-278 | ~0 | **17-21** |
+| `quota` | 62 | 62 (PR-2b) | **61-65** |
+| **`groups.preamble`** | **451-459** | **~125** | **162-164** |
+| **`totalMs`** | **591-656** | — | **349-350** |
+
+Regression checks, all passing: turns stream normally; a **brand-new session**
+creates its row and generates its title, which is the `is_new_session=True`
+path and therefore direct evidence that a snapshot with `row=None` is read as
+"no row" rather than "nothing prefetched"; the conversation list resolves.
+
+### Where the remaining 163ms is, and the 38ms the prediction missed
+
+Predicted ~125ms, measured ~163ms. The gap is accounted for, not mysterious:
+
+- `session_state` is 17-21ms rather than ~0. Every helper still constructs
+  `boto3.resource("dynamodb")` + `.Table()` before reaching its snapshot
+  short-circuit — six of them, at the **~1.5ms per construction measured
+  independently earlier in this spec**. That is ~9ms, plus dict work. The
+  earlier client-construction measurement reproduces here, which is a small
+  confirmation that both numbers are real.
+- `ownership` drifted 53-55 -> 59-60ms. Same single query, ordinary variance.
+
+So the warm preamble now decomposes as: one GSI read (~59) + the quota read
+(~62) + skills (~17) + ~20ms of repeated boto3 client construction + change.
+
+**The floor is ~80ms**, reachable by PR-2b (removes the quota read) and a
+cached-client helper (removes the ~20ms). The single remaining `ownership`
+read is irreducible — it is the read.
+
+### A note on reading the dashboard across a deploy
+
+The 15-minute CloudWatch window covering this deploy reports
+`PreambleMs` min 162 / avg 457 / max 934 — because it spans two populations,
+the old code and the new. The minimum is the new code; the average is
+meaningless here. This is exactly why the widgets are percentiles over a
+period rather than a single number, and it is worth remembering before reading
+the first window after any future deploy.
+
+
 
 **As built.** `load_session_meta()` performs one `SessionLookupIndex` query and
 returns a `SessionMetaSnapshot` carrying two answers: the caller's own `META`
@@ -447,7 +496,7 @@ recovery — is paid for by a measured 275ms rather than by a guess. Scope widen
 to include `ownership`, `files` and the quota session-notice, which read the
 same item.
 
-## PR-2b — the quota session-notice read (NOT STARTED)
+## PR-2b — the quota session-notice read (BUILT)
 
 The eighth read, worth a measured **62ms**. Left out of PR-2 because it is not
 the same shape as the others.
@@ -460,9 +509,23 @@ would silently stop producing a session notice — turning a latency fix into a
 quiet regression of the feature that exists to catch a conversation eating a
 user's month.
 
-The safe shape: use the snapshot when it already carries `totalCost`, and fall
-back to `get_session_metadata` when it does not. Same saving in the common case,
-backfill preserved in the uncommon one. Worth its own PR and its own test.
+**As built.** `check_quota` and `_resolve_session_notice` take
+`session_total_cost: Optional[float] = None`. The route supplies it **only when
+the snapshot row actually carries `totalCost`**; `None` routes the checker back
+through `get_session_metadata`, backfill and all.
+
+`None` means "not known" and never "zero" — the distinction is the whole safety
+of this path, and it is pinned two ways:
+`test_none_falls_back_to_the_read_and_its_lazy_backfill` and
+`test_a_supplied_zero_is_honoured_as_zero_not_as_unknown`. The second exists
+because a genuinely free session reports `0.0`, which is falsy: a truthiness
+check would send it back to the very read this PR removes, and the bug would be
+invisible — a correct answer, arrived at expensively.
+
+app-api's converse route calls `check_quota` without the kwarg and keeps its
+read, pinned by `test_default_call_is_unchanged_for_callers_that_pass_nothing`.
+
+Expected: `preamble.quota` 62ms -> ~0, warm preamble ~163ms -> ~100ms.
 
 ## PR-3 — `asyncio.to_thread` the blocking DynamoDB calls (NOT STARTED)
 
