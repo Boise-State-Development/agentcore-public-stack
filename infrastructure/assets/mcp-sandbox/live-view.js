@@ -118,7 +118,25 @@
 
     var extras = extraSearchParamsFor(signedUrl);
 
-    dcv.authenticate(signedUrl, {
+    // Strip the query before handing the URL to the SDK. It APPENDS
+    // `httpExtraSearchParams` to whatever URL it is given, so passing the
+    // signed URL with its query still attached sends every SigV4 parameter
+    // twice and the service answers 403 — in the browser, a WebSocket that
+    // opens and immediately closes ("Close received after close"), surfacing
+    // as auth code 10. `connect` below has always stripped it; `authenticate`
+    // did not, which is why the viewer never streamed.
+    var endpoint;
+    try {
+      endpoint = new URL(signedUrl);
+      endpoint.search = '';
+      endpoint = endpoint.toString();
+    } catch (e) {
+      starting = false;
+      setStatus('The session address was not usable.');
+      return;
+    }
+
+    dcv.authenticate(endpoint, {
       // AgentCore's presigned URL *is* the credential, so there is never an
       // interactive prompt. Supplying a no-op is required — the SDK refuses a
       // configuration with a missing auth callback.

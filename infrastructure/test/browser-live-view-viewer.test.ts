@@ -29,6 +29,7 @@ interface Harness {
   authCalls: unknown[];
   post(url?: string): void;
   postFrom(origin: string, url?: string): void;
+  extraSearchParams(): URLSearchParams;
   status(): string;
   failAuth(): void;
   succeedAuth(): void;
@@ -80,6 +81,7 @@ function load(): Harness {
       listeners.forEach((fn) => fn(event));
     },
     status: () => (statusEl.hidden ? '' : statusEl.textContent),
+    extraSearchParams: () => authConfig.httpExtraSearchParams() as URLSearchParams,
     failAuth: () => authConfig.error({}, { code: 10 }),
     succeedAuth: () => authConfig.success({}, [{ sessionId: 's', authToken: 't' }]),
   };
@@ -118,6 +120,31 @@ describe('browser live-view viewer', () => {
     // The latch must release on every terminal outcome, or one bad mint makes
     // the viewer permanently dead for that session.
     expect(h.authCalls).toHaveLength(2);
+  });
+
+  it('hands the SDK a URL with NO query string', () => {
+    const h = load();
+
+    h.post();
+
+    // The SDK APPENDS `httpExtraSearchParams` to whatever URL it is given.
+    // Passing the signed URL with its query still attached sends every SigV4
+    // parameter twice, which the service answers with 403 — measured. That is
+    // why the viewer never streamed on dev.
+    expect(h.authCalls).toHaveLength(1);
+    expect(String(h.authCalls[0])).not.toContain('?');
+    expect(String(h.authCalls[0])).not.toContain('X-Amz-Signature');
+  });
+
+  it('still forwards the signature through httpExtraSearchParams', () => {
+    const h = load();
+
+    h.post();
+
+    // Stripping the query must not mean dropping it: the transport reads it
+    // from this callback when it builds the socket URI.
+    const params = h.extraSearchParams();
+    expect(params.get('X-Amz-Signature')).toBe('abc');
   });
 
   it('ignores a connect message from any other origin', () => {
