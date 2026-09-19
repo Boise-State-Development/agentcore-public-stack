@@ -41,7 +41,7 @@ describe('AgentCore Runtime environment variable ceiling', () => {
     // minimal config under-counts and the guard would report headroom that no
     // real environment has. `tokenExchange` alone adds three
     // (TOKEN_EXCHANGE_URL / _CLIENT_ID / _SECRET_ID) — without it this test
-    // counts 47 while prod and dev deploy 50. Any future conditional block
+    // counts 44 while prod and dev deploy 47. Any future conditional block
     // must be enabled here too, or this guard quietly stops guarding.
     const config = createMockConfig({
       domainName: 'example.com',

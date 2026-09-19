@@ -428,9 +428,12 @@ export class InferenceAgentCoreConstruct extends Construct {
 
         // Authentication
 
-        // ⚠️ NO ROOM FOR NEW VARIABLES HERE — see the assertion in
-        // test/inference-agentcore-construct.test.ts. `AWS::BedrockAgentCore::Runtime`
-        // caps EnvironmentVariables at 50 and this construct is AT the cap.
+        // ⚠️ ALMOST NO ROOM HERE — see the assertion in
+        // test/runtime-env-var-limit.test.ts, which prints the live headroom.
+        // `AWS::BedrockAgentCore::Runtime` caps EnvironmentVariables at 50.
+        // This construct sat AT the cap until retiring the three dead
+        // directory variables above took it to 47/50; treat those 3 as a
+        // one-off reprieve, not permission to spend them casually.
         // Adding one more fails CloudFormation's *changeset validation* — after
         // synth, after tsc, after jest, after CI is green. It broke the dev
         // Platform Stack deploy on 2026-08-05 (`maximum size: [50], found: [51]`,
@@ -444,10 +447,13 @@ export class InferenceAgentCoreConstruct extends Construct {
         // deployed environment requires an out-of-band Runtime update until a
         // slot is freed.
 
-        // Directories
-        UPLOAD_DIR: '/tmp/uploads',
-        OUTPUT_DIR: '/tmp/output',
-        GENERATED_IMAGES_DIR: '/tmp/generated_images',
+        // NOTE: UPLOAD_DIR / OUTPUT_DIR / GENERATED_IMAGES_DIR used to be set
+        // here to /tmp/*. The runtime never read them for anything but a log
+        // line — the directories actually resolved from __file__, inside the
+        // source tree — so they pointed operators at paths nothing used. The
+        // real control is RUNTIME_DATA_DIR, which the image sets (see
+        // backend/Dockerfile.inference-api and apis/shared/runtime_paths.py).
+        // Retiring them freed three of the 50 slots called out below.
 
         // URLs
         FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',

@@ -19,6 +19,8 @@ load_dotenv(dotenv_path=env_path, override=True)
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+
+from apis.shared.runtime_paths import get_static_assets_dir
 from contextlib import asynccontextmanager
 import logging
 
@@ -83,8 +85,10 @@ async def lifespan(app: FastAPI):
     logger.info("=== AgentCore Public Stack API Starting ===")
     logger.info("Agent execution engine initialized")
 
-    # Create output directories if they don't exist
-    base_dir = Path(__file__).parent.parent
+    # Create output directories if they don't exist. base_dir comes from
+    # runtime_paths so it can be moved off the source tree (RUNTIME_DATA_DIR);
+    # creating these in-tree is what forced the image to ship /app writable.
+    base_dir = get_static_assets_dir()
     output_dir = os.path.join(base_dir, "output")
     uploads_dir = os.path.join(base_dir, "uploads")
     generated_images_dir = os.path.join(base_dir, "generated_images")
@@ -92,7 +96,7 @@ async def lifespan(app: FastAPI):
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(uploads_dir, exist_ok=True)
     os.makedirs(generated_images_dir, exist_ok=True)
-    logger.info("Output directories ready")
+    logger.info(f"Output directories ready under {base_dir}")
 
     yield  # Application is running
 
@@ -316,10 +320,12 @@ if os.environ.get("ARTIFACTS_RENDER_TOKEN_SECRET_ARN"):
     app.include_router(shared_artifacts_router)
     logger.info("Artifact render-token and sharing routes enabled")
 
-# Mount static file directories for serving generated content
-# These are created by tools (visualization, code interpreter, etc.)
-# Use parent directory (src/) as base
-base_dir = Path(__file__).parent.parent
+# Mount static file directories for serving generated content.
+# NOTE: despite the name these are NOT where the agents package writes tool
+# output (that is agents.utils.config.Config, one directory level up); this
+# mount has therefore always served empty directories. See
+# apis/shared/runtime_paths.py before "fixing" that.
+base_dir = get_static_assets_dir()
 output_dir = os.path.join(base_dir, "output")
 uploads_dir = os.path.join(base_dir, "uploads")
 generated_images_dir = os.path.join(base_dir, "generated_images")

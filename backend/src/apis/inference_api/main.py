@@ -29,6 +29,8 @@ else:
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+
+from apis.shared.runtime_paths import get_static_assets_dir
 from contextlib import asynccontextmanager
 import logging
 
@@ -69,12 +71,6 @@ async def lifespan(app: FastAPI):
     if code_interpreter_id:
         logger.info(f"AgentCore Code Interpreter ID: {code_interpreter_id}")
     
-    # Log storage directories
-    upload_dir = os.getenv('UPLOAD_DIR', 'uploads')
-    output_dir_name = os.getenv('OUTPUT_DIR', 'output')
-    generated_images_dir_name = os.getenv('GENERATED_IMAGES_DIR', 'generated_images')
-    logger.info(f"Storage directories - Upload: {upload_dir}, Output: {output_dir_name}, Images: {generated_images_dir_name}")
-    
     # Log API URLs (if configured)
     frontend_url = os.getenv('FRONTEND_URL')
     if frontend_url:
@@ -85,8 +81,10 @@ async def lifespan(app: FastAPI):
     if cors_origins:
         logger.info(f"CORS Origins: {cors_origins}")
     
-    # Create output directories if they don't exist
-    base_dir = Path(__file__).parent.parent
+    # Create output directories if they don't exist. base_dir comes from
+    # runtime_paths so it can be moved off the source tree (RUNTIME_DATA_DIR);
+    # creating these in-tree is what forced the image to ship /app writable.
+    base_dir = get_static_assets_dir()
     output_dir = os.path.join(base_dir, "output")
     uploads_dir = os.path.join(base_dir, "uploads")
     generated_images_dir = os.path.join(base_dir, "generated_images")
@@ -94,7 +92,7 @@ async def lifespan(app: FastAPI):
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(uploads_dir, exist_ok=True)
     os.makedirs(generated_images_dir, exist_ok=True)
-    logger.info("Output directories ready")
+    logger.info(f"Output directories ready under {base_dir}")
 
     # Pull the first turn's lazy imports and boto service-model loads forward
     # to container start, off the request path. Daemon thread: /ping answers
@@ -187,10 +185,12 @@ app.include_router(voice_router)  # WebSocket voice streaming endpoint
 # only proxies /invocations and /ping, so user-facing /connectors/* paths can't
 # be reached through this service. See apis/app_api/connectors/routes.py.
 
-# Mount static file directories for serving generated content
-# These are created by tools (visualization, code interpreter, etc.)
-# Use parent directory (src/) as base
-base_dir = Path(__file__).parent.parent
+# Mount static file directories for serving generated content.
+# NOTE: despite the name these are NOT where the agents package writes tool
+# output (that is agents.utils.config.Config, one directory level up); this
+# mount has therefore always served empty directories. See
+# apis/shared/runtime_paths.py before "fixing" that.
+base_dir = get_static_assets_dir()
 output_dir = os.path.join(base_dir, "output")
 uploads_dir = os.path.join(base_dir, "uploads")
 generated_images_dir = os.path.join(base_dir, "generated_images")
