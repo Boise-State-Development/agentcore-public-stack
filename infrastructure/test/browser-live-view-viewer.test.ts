@@ -27,6 +27,7 @@ const SIGNED = 'https://bedrock-agentcore.us-west-2.amazonaws.com/live-view?X-Am
 
 interface Harness {
   authCalls: unknown[];
+  connectCalls: any[];
   post(url?: string): void;
   postFrom(origin: string, url?: string): void;
   extraSearchParams(): URLSearchParams;
@@ -38,6 +39,7 @@ interface Harness {
 function load(): Harness {
   const listeners: ((e: unknown) => void)[] = [];
   const authCalls: unknown[] = [];
+  const connectCalls: any[] = [];
   const statusEl = { textContent: '', hidden: false };
   let authConfig: any = null;
 
@@ -62,7 +64,10 @@ function load(): Harness {
       authCalls.push(url);
       authConfig = cfg;
     },
-    connect: () => new Promise(() => {}), // never settles: mid-connect is the window under test
+    connect(cfg: any) {
+      connectCalls.push(cfg);
+      return new Promise(() => {}); // never settles: mid-connect is the window under test
+    },
   };
 
   vm.createContext(sandbox);
@@ -70,6 +75,7 @@ function load(): Harness {
 
   return {
     authCalls,
+    connectCalls,
     post(url = SIGNED) {
       this.postFrom(PARENT, url);
     },
@@ -145,6 +151,25 @@ describe('browser live-view viewer', () => {
     // from this callback when it builds the socket URI.
     const params = h.extraSearchParams();
     expect(params.get('X-Amz-Signature')).toBe('abc');
+  });
+
+  it('puts httpExtraSearchParams in observers, where connect actually reads it', () => {
+    const h = load();
+    h.post();
+    h.succeedAuth();
+
+    // Measured against the shipped bundle: at the TOP LEVEL this callback is
+    // silently ignored by `connect`, and the stream socket opens with no query
+    // at all — unsigned, and refused by the service. Inside `observers` it is
+    // honoured. (`authenticate` is the opposite and reads it top-level.)
+    const cfg = h.connectCalls[0];
+    expect(typeof cfg.observers?.httpExtraSearchParams).toBe('function');
+    expect(cfg.httpExtraSearchParams).toBeUndefined();
+
+    // Observers or callbacks, never both — the SDK ignores one if both appear.
+    expect(cfg.callbacks).toBeUndefined();
+    expect(typeof cfg.observers.firstFrame).toBe('function');
+    expect(typeof cfg.observers.disconnect).toBe('function');
   });
 
   it('ignores a connect message from any other origin', () => {

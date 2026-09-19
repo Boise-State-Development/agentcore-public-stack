@@ -182,11 +182,21 @@
         // `baseUrl` is deliberately NOT set: the SDK defaults it to `dcvjs`
         // relative to this page, and the fetch script extracts to exactly that
         // name so the default resolves.
-        httpExtraSearchParams: extras,
-        // Callback names are exactly these — no `on` prefix. The SDK wraps
-        // each as an observer invoked with the connection as its FIRST
-        // argument, so the original arguments follow it.
-        callbacks: {
+        // `httpExtraSearchParams` MUST live inside `observers` here. Passed
+        // at the top level it is silently ignored by `connect` — measured
+        // against the shipped bundle: top-level yields
+        // `/live-view/ws` with NO query at all, so the stream socket opens
+        // UNSIGNED and the service refuses it, while `observers` yields the
+        // signed URI. (`authenticate` is the opposite: it reads the callback
+        // from the top level. The two entry points differ.) This is also what
+        // AWS's own BrowserLiveView component does.
+        //
+        // Callback names are exactly these — no `on` prefix. The SDK invokes
+        // each with the connection as its FIRST argument, so the original
+        // arguments follow it. They go in `observers` too: it is observers or
+        // callbacks, never both.
+        observers: {
+          httpExtraSearchParams: extras,
           firstFrame: function (_conn) {
             setStatus('');
           },
