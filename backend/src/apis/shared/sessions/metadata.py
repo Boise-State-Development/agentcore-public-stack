@@ -28,6 +28,7 @@ import json
 import math
 import os
 import base64
+from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
@@ -1107,7 +1108,9 @@ def _recency_gsi_keys(
     return {}
 
 
-async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
+async def ensure_session_metadata_exists(
+    session_id: str, user_id: str, snapshot: Optional["SessionMetaSnapshot"] = None
+) -> bool:
     """Idempotently create a session metadata row if it doesn't exist yet.
 
     Returns ``True`` when a new row was created (caller can use this as the
@@ -1147,7 +1150,16 @@ async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
 
         # Catch a pre-existing row (legacy S#ACTIVE#… or already-migrated S#{id}) so
         # we don't create a second row for the same session.
-        existing = await _get_session_by_gsi(session_id, user_id, table)
+        #
+        # Both this and the ownership check below come out of ONE query when
+        # the caller passes a snapshot (PR-2) — they always could, since a
+        # single `SessionLookupIndex` response contains every META row for the
+        # session; `_get_session_by_gsi` just discarded the half the ownership
+        # check needed. `snapshot=None` keeps both reads exactly as they were.
+        existing = (
+            snapshot.row if snapshot is not None
+            else await _get_session_by_gsi(session_id, user_id, table)
+        )
         if existing is not None:
             return False
 
@@ -1156,7 +1168,11 @@ async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
         # can't see the other row) and fork the session id across two users.
         # The invocations route rejects these turns outright; this is the
         # backstop for every other path that pre-creates metadata.
-        if await session_owned_by_other_user(session_id, user_id):
+        owned_by_other = (
+            snapshot.owned_by_other if snapshot is not None
+            else await session_owned_by_other_user(session_id, user_id)
+        )
+        if owned_by_other:
             logger.warning(
                 "Refusing to create metadata for session %s — already owned by another user",
                 session_id,
@@ -1531,6 +1547,102 @@ async def set_selected_prompt_id(
     except Exception as e:
         logger.error("set_selected_prompt_id failed for %s: %s", session_id, e, exc_info=True)
         return False
+
+
+@dataclass(frozen=True)
+class SessionMetaSnapshot:
+    """One read of a session's ``META`` rows, shared by the whole preamble.
+
+    WHY THIS EXISTS
+    ---------------
+    Measured on dev (docs/specs/turn-latency-preamble.md), a warm turn read
+    this one item **eight times** before the first model call — the ownership
+    guard, the attachment pop, the metadata pre-create, four stale-marker
+    clears, and the quota session-notice — each on its own round trip. A GSI
+    query from inside an AgentCore Runtime container costs **~53ms** (measured,
+    not assumed: ``preamble.ownership`` is exactly one query and nothing else),
+    so those reads were ~445ms of a ~455ms stage.
+
+    This is the single read they now share.
+
+    WHY IT IS PASSED EXPLICITLY, NOT CACHED
+    ---------------------------------------
+    An implicit per-request memo inside ``_get_session_by_gsi`` would be a
+    smaller diff and the wrong shape. CLAUDE.md's rule — *never cache session
+    state; per-session state must be re-read per turn and must never move
+    backwards* — exists because this repo has shipped that bug twice (#741
+    conversation history, #751 compaction state). A snapshot that callers opt
+    into by passing it cannot leak into a caller that needs a fresh read; a
+    memo keyed on the request can, and the failure is silent.
+
+    So every consumer keeps working exactly as before when ``snapshot`` is
+    ``None``, which is the default and what every non-preamble caller gets.
+
+    ``row is None`` is a real answer ("this user has no META row"), not
+    "unknown" — which is why consumers take the snapshot object rather than the
+    row dict. Passing ``row`` alone would make "no row yet" indistinguishable
+    from "nothing was prefetched", and a brand-new session would silently fall
+    back to re-reading.
+    """
+
+    row: Optional[dict]
+    """This user's ``META`` row, decimal-converted, or ``None`` if absent."""
+
+    owned_by_other: bool
+    """``META`` rows exist for this session and none of them are this user's."""
+
+
+async def load_session_meta(session_id: str, user_id: str) -> SessionMetaSnapshot:
+    """Read a session's ``META`` rows once, answering ownership and content.
+
+    Replaces an ownership probe and a row lookup that were separate queries of
+    the same index for the same key. Both answers come out of one response
+    because they were always in it — ``_get_session_by_gsi`` simply discarded
+    the information the ownership check needed (it returns ``None`` both for
+    "no such session" and for "someone else's", which is the ambiguity
+    ``session_owned_by_other_user`` exists to resolve).
+
+    Best-effort in the same direction as the helpers it feeds: any failure
+    yields ``row=None, owned_by_other=False``, i.e. "nothing known, nothing
+    blocked". That matches what a failed ownership probe already did (fail
+    open) and what a failed row read already did (treat as absent), so a
+    DynamoDB outage degrades the preamble exactly as it did before.
+    """
+    empty = SessionMetaSnapshot(row=None, owned_by_other=False)
+
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table or is_preview_session(session_id):
+        return empty
+
+    try:
+        import boto3
+        from boto3.dynamodb.conditions import Key
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        response = table.query(
+            IndexName="SessionLookupIndex",
+            KeyConditionExpression=Key("GSI_PK").eq(f"SESSION#{session_id}")
+            & Key("GSI_SK").eq("META"),
+        )
+        items = response.get("Items", []) or []
+        if not items:
+            return empty
+
+        # Scan ALL rows for this user's rather than trusting items[0] — a
+        # cross-user fork gives two rows sharing GSI_PK/GSI_SK, returned in an
+        # unspecified order. Same reasoning as `_get_session_by_gsi`, which
+        # this consolidates rather than replaces.
+        mine = next((i for i in items if i.get("userId") == user_id), None)
+        if mine is not None:
+            return SessionMetaSnapshot(row=_convert_decimal_to_float(mine), owned_by_other=False)
+
+        logger.warning("Session %s belongs to a different user", session_id)
+        return SessionMetaSnapshot(row=None, owned_by_other=True)
+    except Exception as e:
+        logger.debug("Session meta load failed, treating as absent: %s", e)
+        return empty
 
 
 async def session_owned_by_other_user(session_id: str, user_id: str) -> bool:
@@ -2882,7 +2994,9 @@ async def remove_pending_interrupts(
         logger.error("Failed to remove pending_interrupts: %s", e, exc_info=True)
 
 
-async def clear_pending_interrupts(session_id: str, user_id: str) -> None:
+async def clear_pending_interrupts(
+    session_id: str, user_id: str, snapshot: Optional["SessionMetaSnapshot"] = None
+) -> None:
     """Drop every pending-interrupt breadcrumb for a session.
 
     Distinct from :func:`remove_pending_interrupts`, which drops specific ids
@@ -2918,7 +3032,13 @@ async def clear_pending_interrupts(session_id: str, user_id: str) -> None:
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(sessions_metadata_table)
 
-        existing = await _get_session_by_gsi(session_id, user_id, table)
+        # The preamble reads this row once and shares it (PR-2); `None` keeps
+        # the original per-call read for every other caller.
+        existing = (
+            snapshot.row
+            if snapshot is not None
+            else await _get_session_by_gsi(session_id, user_id, table)
+        )
         if not existing:
             return
 
@@ -3015,7 +3135,9 @@ async def get_paused_turn(session_id: str, user_id: str) -> Optional[PausedTurnS
     return metadata.paused_turn
 
 
-async def clear_paused_turn(session_id: str, user_id: str) -> None:
+async def clear_paused_turn(
+    session_id: str, user_id: str, snapshot: Optional["SessionMetaSnapshot"] = None
+) -> None:
     """Drop the paused-turn snapshot for a session.
 
     Called on successful resume completion, on explicit dismiss, and at the
@@ -3032,7 +3154,13 @@ async def clear_paused_turn(session_id: str, user_id: str) -> None:
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(sessions_metadata_table)
 
-        existing = await _get_session_by_gsi(session_id, user_id, table)
+        # The preamble reads this row once and shares it (PR-2); `None` keeps
+        # the original per-call read for every other caller.
+        existing = (
+            snapshot.row
+            if snapshot is not None
+            else await _get_session_by_gsi(session_id, user_id, table)
+        )
         if not existing:
             return
 
@@ -3212,7 +3340,9 @@ async def set_truncated_turn(session_id: str, user_id: str) -> None:
         logger.error("Failed to persist truncated_turn: %s", e, exc_info=True)
 
 
-async def clear_truncated_turn(session_id: str, user_id: str) -> None:
+async def clear_truncated_turn(
+    session_id: str, user_id: str, snapshot: Optional["SessionMetaSnapshot"] = None
+) -> None:
     """Drop the truncated-turn marker.
 
     Called at the start of any new turn that isn't an interrupt-resume
@@ -3230,7 +3360,13 @@ async def clear_truncated_turn(session_id: str, user_id: str) -> None:
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(sessions_metadata_table)
 
-        existing = await _get_session_by_gsi(session_id, user_id, table)
+        # The preamble reads this row once and shares it (PR-2); `None` keeps
+        # the original per-call read for every other caller.
+        existing = (
+            snapshot.row
+            if snapshot is not None
+            else await _get_session_by_gsi(session_id, user_id, table)
+        )
         if not existing:
             return
 
@@ -3372,7 +3508,9 @@ async def set_interrupted_turn(
         logger.error("Failed to persist interrupted_turn: %s", e, exc_info=True)
 
 
-async def clear_interrupted_turn(session_id: str, user_id: str) -> Optional[str]:
+async def clear_interrupted_turn(
+    session_id: str, user_id: str, snapshot: Optional["SessionMetaSnapshot"] = None
+) -> Optional[str]:
     """Pop the interrupted-turn marker, returning the reason it recorded.
 
     Called at the start of any new turn that isn't an interrupt-resume, so a
@@ -3397,7 +3535,13 @@ async def clear_interrupted_turn(session_id: str, user_id: str) -> Optional[str]
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(sessions_metadata_table)
 
-        existing = await _get_session_by_gsi(session_id, user_id, table)
+        # The preamble reads this row once and shares it (PR-2); `None` keeps
+        # the original per-call read for every other caller.
+        existing = (
+            snapshot.row
+            if snapshot is not None
+            else await _get_session_by_gsi(session_id, user_id, table)
+        )
         if not existing:
             return None
 
@@ -3561,7 +3705,9 @@ async def clear_pending_attachments(session_id: str, user_id: str) -> None:
         logger.error("Failed to clear pending_attachments: %s", e, exc_info=True)
 
 
-async def pop_pending_attachments(session_id: str, user_id: str) -> List[str]:
+async def pop_pending_attachments(
+    session_id: str, user_id: str, snapshot: Optional["SessionMetaSnapshot"] = None
+) -> List[str]:
     """Atomically take the pending-attachment upload IDs, clearing the marker.
 
     Returns the IDs only when the marker is younger than
@@ -3584,7 +3730,13 @@ async def pop_pending_attachments(session_id: str, user_id: str) -> List[str]:
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(sessions_metadata_table)
 
-        existing = await _get_session_by_gsi(session_id, user_id, table)
+        # The preamble reads this row once and shares it (PR-2); `None` keeps
+        # the original per-call read for every other caller.
+        existing = (
+            snapshot.row
+            if snapshot is not None
+            else await _get_session_by_gsi(session_id, user_id, table)
+        )
         if not existing:
             return []
 

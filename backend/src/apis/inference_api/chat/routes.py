@@ -57,7 +57,7 @@ from apis.inference_api.chat.agent_binding_resolver import (
 )
 from apis.shared.sessions.metadata import (
     ensure_session_metadata_exists,
-    session_owned_by_other_user,
+    load_session_meta,
 )
 from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
@@ -1684,7 +1684,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # stops the id from being forked at all. 404 rather than 403 so the
     # response says nothing about whether the session exists, matching what
     # `GET /sessions/{id}/metadata` already returns for the same case.
-    if await session_owned_by_other_user(input_data.session_id, user_id):
+    #
+    # ONE read of the session's META row, shared by everything in the preamble
+    # that used to fetch it again (PR-2, docs/specs/turn-latency-preamble.md).
+    # Measured on dev: eight separate reads of this item cost ~445ms of a
+    # ~455ms stage, because a GSI query from an AgentCore Runtime container is
+    # ~53ms rather than the ~12ms an in-region figure would suggest.
+    #
+    # Deliberately explicit rather than a per-request memo inside
+    # `_get_session_by_gsi`: CLAUDE.md's "never cache session state" rule has
+    # been paid for twice (#741, #751), and a snapshot callers opt into cannot
+    # leak into one that needs a fresh read.
+    session_meta = await load_session_meta(input_data.session_id, user_id)
+    if session_meta.owned_by_other:
         logger.warning(
             "Rejected invocation for session %s — owned by a different user",
             _sanitize_log(input_data.session_id),
@@ -1890,7 +1902,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if not is_resume and not is_continuation:
         try:
             from apis.shared.sessions.metadata import pop_pending_attachments
-            recovered_upload_ids = await pop_pending_attachments(input_data.session_id, user_id)
+            recovered_upload_ids = await pop_pending_attachments(
+                input_data.session_id, user_id, snapshot=session_meta
+            )
         except Exception as e:
             logger.error("Failed to recover pending attachments: %s", e, exc_info=True)
 
@@ -2074,13 +2088,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # already moved past.
     is_new_session = False
     if not is_resume and not is_continuation:
-        is_new_session = await ensure_session_metadata_exists(input_data.session_id, user_id)
+        is_new_session = await ensure_session_metadata_exists(
+            input_data.session_id, user_id, snapshot=session_meta
+        )
         try:
             from apis.shared.sessions.metadata import (
                 clear_paused_turn,
                 clear_pending_interrupts,
             )
-            await clear_paused_turn(input_data.session_id, user_id)
+            await clear_paused_turn(input_data.session_id, user_id, snapshot=session_meta)
             # The snapshot's breadcrumbs go with it. They are the other half of
             # the same record, and a breadcrumb that outlives the snapshot
             # re-renders a prompt the user can no longer answer: the resume
@@ -2088,7 +2104,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # here specifically because this runs at the *head* of a non-resume
             # turn — any breadcrumb this turn goes on to write lands later, on
             # its own `done` event.
-            await clear_pending_interrupts(input_data.session_id, user_id)
+            await clear_pending_interrupts(
+                input_data.session_id, user_id, snapshot=session_meta
+            )
         except Exception as e:
             logger.error("Failed to clear stale paused_turn on new turn: %s", e, exc_info=True)
 
@@ -2100,7 +2118,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if not is_resume:
         try:
             from apis.shared.sessions.metadata import clear_truncated_turn
-            await clear_truncated_turn(input_data.session_id, user_id)
+            await clear_truncated_turn(input_data.session_id, user_id, snapshot=session_meta)
         except Exception as e:
             logger.error("Failed to clear stale truncated_turn on new turn: %s", e, exc_info=True)
 
@@ -2113,7 +2131,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # in the stream generator below.
         try:
             from apis.shared.sessions.metadata import clear_interrupted_turn
-            interrupted_turn_reason = await clear_interrupted_turn(input_data.session_id, user_id)
+            interrupted_turn_reason = await clear_interrupted_turn(
+                input_data.session_id, user_id, snapshot=session_meta
+            )
         except Exception as e:
             logger.error("Failed to clear stale interrupted_turn on new turn: %s", e, exc_info=True)
 

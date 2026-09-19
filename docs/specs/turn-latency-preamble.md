@@ -1,8 +1,9 @@
 # Turn latency: inside the preamble
 
-**Status:** PR-1 (sub-stage instrumentation) + PR-1b (EMF metrics, dashboard,
-validation method) BUILT. PR-2+ NOT STARTED — they are deliberately blocked on
-the measurement PR-1/PR-1b make possible.
+**Status:** PR-1 + PR-1b SHIPPED (#1184) and **VALIDATED on dev 2026-09-19** —
+the measurement ran and is recorded below. PR-2 is now justified by data rather
+than by a code reading, and its expected saving is **~4x larger** than this spec
+originally estimated. PR-3+ still open.
 **Follow-up to:** `docs/specs/agent-state-feedback.md` — its PR-3 measured the
 pre-stream window into four stages and then declined to narrate three of them.
 This spec opens the one that was left closed.
@@ -301,21 +302,167 @@ rounding error and the real win is elsewhere). Either way the answer arrives
 before the refactor is written, which is the entire point of sequencing it this
 way.
 
-## PR-2 — read the session row once (NOT STARTED, blocked on PR-1)
+## THE MEASUREMENT (dev, 2026-09-19) — hypothesis confirmed, magnitude wrong
 
-Sketched, not committed to. Read the `META` row once at the top of the handler
-and pass the item to the five marker helpers, which all need the same two things:
-the row's `SK`, and their own attribute. Collapses reads #3–#8 to one.
+Three turns on dev immediately after deploy: one cold, two warm. All times ms.
 
-Why it should be safe: every one of those helpers is already best-effort and
-fail-open, and the GSI is eventually consistent, so re-reading was never buying
-consistency — two reads 5ms apart see the same stale-or-not row. The ownership
-guard (#1) stays its own eager read because it gates a 404.
+| Turn | total | own | skills | files | **sess_state** | quota | **=preamble** | rag | tools | build | unacct |
+|------|------:|----:|-------:|------:|---------------:|------:|--------------:|----:|------:|------:|-------:|
+| cold | 4110 | 53 | 171 | 56 | **357** | 265 | **902** | 0 | 252 | 2951 | 5 |
+| warm | 656 | 55 | 17 | 53 | **272** | 62 | **459** | 0 | 147 | 47 | 3 |
+| warm | 591 | 53 | 5 | 53 | **278** | 62 | **451** | 0 | 136 | 1 | 3 |
 
-Why it is still gated on PR-1: if `session_state` is not where the time is, this
-buys ~nothing and spends a refactor of the marker helpers — which are load-bearing
-for interrupt resume, the truncation "Continue" path, and unconsumed-attachment
-recovery — on a guess.
+Every acceptance criterion stated in advance passes:
+
+| Claim | Threshold | Measured | Verdict |
+|---|---|---|---|
+| The eight reads are real cost | `session_state` p50 >= 100ms | **272-278ms** | **CONFIRMED** |
+| The decomposition is complete | sub-stages ~= group | unaccounted **3ms** | **CONFIRMED** |
+| The split preserved the baseline | ~= the old flat 494ms | **451-459ms** | **CONFIRMED** |
+
+`session_state` is ~60% of the warm preamble, exactly as predicted.
+
+### What was wrong: the per-read cost, by 4-5x
+
+This spec estimated an in-region GSI query at 10-15ms and concluded PR-2 would
+"recover roughly a quarter of the stage". **That was wrong, conservatively.**
+
+`preamble.ownership` is exactly one GSI query and nothing else. It measures
+**53-55ms**, dead stable across all three turns. `preamble.files` on a turn with
+*no attachments* is also exactly one read (`pop_pending_attachments`) and also
+measures **53ms**. So a DynamoDB GSI query from inside an AgentCore Runtime
+container costs **~53ms**, not 10-15ms — 4-5x the in-region figure assumed here.
+
+That single number closes the arithmetic that previously did not:
+
+| Sub-stage | Reads of the META row | Measured | Implied per read |
+|---|---:|---:|---:|
+| `ownership` | 1 | 53 | 53 |
+| `files` | 1 | 53 | 53 |
+| `session_state` | 5 | 272-278 | ~55 |
+| `quota` (session notice) | 1 | 62 | 62 |
+| **total** | **8** | **~445 of the 451-459ms preamble** | |
+
+**The warm preamble is almost entirely DynamoDB round trips reading one item
+eight times.** The "~300ms unexplained" this spec worried about does not exist;
+it was the per-read cost being four times higher than assumed. The spec offered
+two readings and said the sub-marks would decide between them — the first
+("DynamoDB latency from an AgentCore Runtime container is much worse than
+in-region typical, in which case `session_state` is larger than modelled and
+PR-2 is worth more") is correct.
+
+### What this does to PR-2
+
+Originally scoped as "collapse reads #3-#8". The measurement says go further:
+**one read at the top of the handler can answer all four consumers**, because
+`ownership`, `files`, `session_state` and the quota session-notice all read the
+same item.
+
+| | Now | After | Saved |
+|---|---:|---:|---:|
+| `ownership` | 53 | ~53 (the one read) | 0 |
+| `files` | 53 | ~0 | 53 |
+| `session_state` | 275 | ~0 | 275 |
+| `quota` notice | 62 | ~0 | 62 |
+| `skills` | ~10 | ~10 | 0 |
+| **preamble** | **~455** | **~65** | **~390** |
+
+A ~455ms stage becomes ~65ms, against an original estimate of 50-90ms saved.
+**Still to be proven, not assumed** — the rule that produced this table applies
+to the next one just as much.
+
+### Caveats on this measurement
+
+- **n=3, one session, one container.** Enough to size a 275ms effect against a
+  +/-5ms spread; not enough for a distribution. The EMF percentiles are what
+  make the post-PR-2 comparison sound, and they now have a baseline accruing.
+- `skills` is 171ms cold vs 5-17ms warm — the RBAC/catalog caches working. Not
+  a PR-2 target.
+- `agent_build` 2951ms cold, then 47ms and 1ms warm. The cache works; the cold
+  build remains the largest single number in the table and is the MCP pre-flight
+  item below, untouched by PR-2.
+- `StreamSetupMs` appeared as a metric nobody listed, because metric names are
+  derived from marks rather than hand-kept. A listed table would have omitted it
+  silently.
+
+## PR-2 — read the session row once (BUILT)
+
+**As built.** `load_session_meta()` performs one `SessionLookupIndex` query and
+returns a `SessionMetaSnapshot` carrying two answers: the caller's own `META`
+row, and whether the session belongs to someone else. Both were always in that
+one response — `_get_session_by_gsi` simply discarded the half the ownership
+probe needed, which is why the probe was a second query of the same index for
+the same key.
+
+The route reads once and threads the snapshot into `pop_pending_attachments`,
+`ensure_session_metadata_exists` and the four `clear_*` helpers. Each takes
+`snapshot: Optional[SessionMetaSnapshot] = None`; `None` keeps the original
+per-call read, which is what every non-preamble caller still gets.
+
+**Why the snapshot object and not the row dict.** `row is None` is a real
+answer — "this user has no `META` row yet" — not "nothing was prefetched". Had
+the helpers taken the row alone, a brand-new session would be indistinguishable
+from an absent prefetch and would silently fall back to re-reading, so the first
+turn of every conversation would keep the old cost. Pinned by
+`test_a_snapshot_with_no_row_is_an_answer_not_a_cache_miss`.
+
+**Why explicit and not a per-request memo.** Memoising inside
+`_get_session_by_gsi` would be a smaller diff and the wrong shape. CLAUDE.md's
+"never cache session state; re-read per turn; never move backwards" rule exists
+because this repo shipped that bug twice (#741 conversation history, #751
+compaction state). A snapshot a caller opts into cannot leak into a caller that
+needs a fresh read; a request-scoped memo can, and the failure is silent.
+
+**Scope.** `ownership`, `files` and `session_state` — the three sub-stages that
+read this item. The quota session-notice read is deliberately NOT included; see
+PR-2b.
+
+Expected effect on the warm preamble, from the measured per-read cost:
+
+| Sub-stage | Before | After |
+|---|---:|---:|
+| `ownership` | 53 | ~53 (now the only read) |
+| `files` | 53 | ~0 |
+| `session_state` | 275 | ~0 |
+| `quota` (PR-2b) | 62 | 62 |
+| `skills` | ~10 | ~10 |
+| **preamble** | **~455** | **~125** |
+
+Why it is safe: every one of those helpers is already best-effort and fail-open,
+and the GSI is eventually consistent, so re-reading was never buying consistency
+— two reads 50ms apart see the same stale-or-not row. The session's single-flight
+lease already excludes a concurrent turn on the same session. The `SK` is static
+(`S#{session_id}`), so the key the conditional writes target cannot drift between
+the read and the write. And the atomic parts stay atomic: `pop_pending_attachments`
+and `clear_interrupted_turn` still do their `ReturnValues=UPDATED_OLD` update, so
+the snapshot only replaces the *gate* read, never the write.
+
+The ownership guard keeps its 404, now answered from the same snapshot instead
+of its own query.
+
+**That gate is now passed.** `session_state` is where the time is (272-278ms of
+a 451-459ms preamble), so the refactor of the marker helpers — load-bearing for
+interrupt resume, the truncation "Continue" path and unconsumed-attachment
+recovery — is paid for by a measured 275ms rather than by a guess. Scope widens
+to include `ownership`, `files` and the quota session-notice, which read the
+same item.
+
+## PR-2b — the quota session-notice read (NOT STARTED)
+
+The eighth read, worth a measured **62ms**. Left out of PR-2 because it is not
+the same shape as the others.
+
+`QuotaChecker._resolve_session_notice` calls `get_session_metadata`, which
+returns a `SessionMetadata` model and performs a **lazy backfill** of the
+cost aggregates when `totalCost` is missing from a legacy row. Handing it the
+raw snapshot row would skip that backfill, and a legacy row without `totalCost`
+would silently stop producing a session notice — turning a latency fix into a
+quiet regression of the feature that exists to catch a conversation eating a
+user's month.
+
+The safe shape: use the snapshot when it already carries `totalCost`, and fall
+back to `get_session_metadata` when it does not. Same saving in the common case,
+backfill preserved in the uncommon one. Worth its own PR and its own test.
 
 ## PR-3 — `asyncio.to_thread` the blocking DynamoDB calls (NOT STARTED)
 
