@@ -80,7 +80,17 @@ function buildCspHeader(cspConfig, frameAncestors) {
     ("img-src 'self' data: blob: " + resourceDomains).trim(),
     ("font-src 'self' data: blob: " + resourceDomains).trim(),
     ("media-src 'self' data: blob: " + resourceDomains).trim(),
-    ("connect-src 'self' " + connectDomains).trim(),
+    // `data:` and `blob:` are deliberate, and every sibling directive above
+    // already allows them. The DCV Web Client SDK fetches its WebAssembly
+    // decoder from an inline `data:` URI, so without this the live view dies
+    // with "Display channel is not available" — measured on dev, where the
+    // browser reported: Connecting to 'data:application/octet-stream;base64,
+    // AGFzbQ...' (the `\0asm` magic) violates connect-src.
+    //
+    // This does NOT widen exfiltration: `data:` and `blob:` name in-document
+    // bytes, not a network peer, so nothing can be sent anywhere with them.
+    // The remote origins a page may reach are still exactly `connectDomains`.
+    ("connect-src 'self' data: blob: " + connectDomains).trim(),
     ("worker-src 'self' blob: " + resourceDomains).trim(),
     frameDomains ? ("frame-src " + frameDomains) : "frame-src 'none'",
     "object-src 'none'",

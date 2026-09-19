@@ -102,7 +102,7 @@ describe('buildCspHeader — default (no _meta.ui.csp)', () => {
     expect(csp).toContain("img-src 'self' data: blob:");
     expect(csp).toContain("font-src 'self' data: blob:");
     expect(csp).toContain("media-src 'self' data: blob:");
-    expect(csp).toContain("connect-src 'self'");
+    expect(csp).toContain("connect-src 'self' data: blob:");
     expect(csp).toContain("worker-src 'self' blob:");
   });
 
@@ -141,7 +141,7 @@ describe('buildCspHeader — declared domains', () => {
     expect(csp).toContain("img-src 'self' data: blob: https://esm.sh");
     expect(csp).toContain("media-src 'self' data: blob: https://esm.sh");
     expect(csp).toContain("worker-src 'self' blob: https://esm.sh");
-    expect(csp).toContain('connect-src \'self\' https://esm.sh');
+    expect(csp).toContain('connect-src \'self\' data: blob: https://esm.sh');
   });
 
   test('CesiumJS map-server: multiple domains on connect-src and resource-* directives', () => {
@@ -162,7 +162,7 @@ describe('buildCspHeader — declared domains', () => {
       FRAME_ANCESTORS,
     );
     expect(csp).toContain(
-      'connect-src \'self\' https://*.openstreetmap.org https://cesium.com https://*.cesium.com',
+      'connect-src \'self\' data: blob: https://*.openstreetmap.org https://cesium.com https://*.cesium.com',
     );
     expect(csp).toContain(
       "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data: https://*.openstreetmap.org https://cesium.com https://*.cesium.com",
@@ -199,7 +199,7 @@ describe('buildCspHeader — declared domains', () => {
       { connectDomains: ['https://api.example.com'] },
       FRAME_ANCESTORS,
     );
-    expect(csp).toContain('connect-src \'self\' https://api.example.com');
+    expect(csp).toContain('connect-src \'self\' data: blob: https://api.example.com');
     expect(csp).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:");
     expect(csp).not.toMatch(/script-src[^;]*https:\/\/api\.example\.com/);
   });
@@ -216,7 +216,7 @@ describe('buildCspHeader — declared domains', () => {
       },
       FRAME_ANCESTORS,
     );
-    expect(csp).toContain('connect-src \'self\' https://good.com');
+    expect(csp).toContain('connect-src \'self\' data: blob: https://good.com');
     expect(csp).not.toContain('evil.com');
     expect(csp).not.toContain('X-Injected');
     // And the directive separator structure is intact.
@@ -289,11 +289,11 @@ describe('handler', () => {
     const result = handler(event);
     expect(result.headers['content-security-policy']).toBeDefined();
     expect(result.headers['content-security-policy'].value).toContain(
-      "connect-src 'self'",
+      "connect-src 'self' data: blob:",
     );
     // Default → no resource domains beyond keywords/blob/data
     expect(result.headers['content-security-policy'].value).not.toMatch(
-      /connect-src 'self' \S+/,
+      /connect-src 'self' data: blob: \S+/,
     );
   });
 
@@ -313,7 +313,7 @@ describe('handler', () => {
     };
     const result = handler(event);
     expect(result.headers['content-security-policy'].value).toContain(
-      'connect-src \'self\' https://esm.sh',
+      'connect-src \'self\' data: blob: https://esm.sh',
     );
     expect(result.headers['content-security-policy'].value).not.toBe(
       "default-src 'self'",
@@ -323,10 +323,14 @@ describe('handler', () => {
   test('with malformed ?csp=, falls back to default without throwing', () => {
     const event = makeEvent({ csp: { value: 'not-json' } });
     const result = handler(event);
-    expect(result.headers['content-security-policy'].value).toContain("connect-src 'self'");
-    expect(result.headers['content-security-policy'].value).not.toMatch(
-      /connect-src 'self' \S/,
-    );
+    // The point is that malformed input injects NO domains. `data:` and
+    // `blob:` are unconditional constants (the DCV SDK fetches its WASM from
+    // a data: URI), so pin the directive exactly rather than asserting that
+    // nothing follows 'self'.
+    const connectSrc = result.headers['content-security-policy'].value
+      .split('; ')
+      .find((d: string) => d.startsWith('connect-src'));
+    expect(connectSrc).toBe("connect-src 'self' data: blob:");
   });
 
   test('always emits frame-ancestors so framing control is not lost on the dynamic path', () => {
@@ -353,5 +357,32 @@ describe('handler', () => {
     const result = handler(event);
     expect(result.headers).toBeDefined();
     expect(result.headers['content-security-policy']).toBeDefined();
+  });
+});
+
+describe('connect-src must allow the DCV decoder', () => {
+  test("data: and blob: are present even with no declared connectDomains", () => {
+    // The browser sign-in live view loads the Amazon DCV Web Client SDK, which
+    // fetches its WebAssembly decoder from an inline `data:` URI. Measured on
+    // dev: without this the browser blocks it and DCV fails with
+    // "Display channel is not available", so the viewer shows a black frame.
+    // Every sibling directive already allows data:/blob:; connect-src did not.
+    const csp = buildCspHeader({}, "'none'");
+    const connectSrc = csp.split('; ').find((d: string) => d.startsWith('connect-src'));
+
+    expect(connectSrc).toContain('data:');
+    expect(connectSrc).toContain('blob:');
+  });
+
+  test('declared connect domains are still appended, not replaced', () => {
+    const csp = buildCspHeader(
+      { connectDomains: ['https://bedrock-agentcore.us-west-2.amazonaws.com'] },
+      "'none'",
+    );
+    const connectSrc = csp.split('; ').find((d: string) => d.startsWith('connect-src'));
+
+    expect(connectSrc).toBe(
+      "connect-src 'self' data: blob: https://bedrock-agentcore.us-west-2.amazonaws.com",
+    );
   });
 });
