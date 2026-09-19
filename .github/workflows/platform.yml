@@ -12,7 +12,13 @@ on:
       - 'infrastructure/cdk.context.json'
       - 'infrastructure/bin/infrastructure.ts'
       - 'infrastructure/bootstrap-assets/**'
+      # Staged into the mcp-sandbox bucket at synth (mcp-sandbox-bucket-construct).
+      # Without this a viewer change deploys NOWHERE: frontend-deploy.yml does not
+      # ship it, so the push goes green and the old asset stays live.
+      - 'infrastructure/assets/**'
       - 'scripts/platform/**'
+      # fetch-dcv-sdk.sh runs in THIS workflow, before synth.
+      - 'scripts/build/**'
       - '.github/workflows/platform.yml'
 
 permissions:
