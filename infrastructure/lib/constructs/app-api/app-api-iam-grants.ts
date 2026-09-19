@@ -329,11 +329,41 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       sid: 'BrowserLiveViewAccess',
       effect: iam.Effect.ALLOW,
       actions: [
-        'bedrock-agentcore:ConnectBrowserLiveViewStream',
         'bedrock-agentcore:UpdateBrowserStream',
         'bedrock-agentcore:GetBrowserSession',
       ],
       resources: [props.refs.agentCoreBrowserArn],
+    }),
+  );
+
+  // ⚠️ `ConnectBrowserLiveViewStream` MUST be granted on `*`. AWS's own
+  // service reference lists NO resource types for it, while the two actions
+  // above list `browser` / `browser-custom`:
+  //
+  //   GetBrowserSession            -> ['browser', 'browser-custom']
+  //   UpdateBrowserStream          -> ['browser', 'browser-custom']
+  //   ConnectBrowserLiveViewStream -> []          <- no resource types
+  //
+  // An action with no resource types NEVER matches a resource-scoped
+  // statement, so scoping it alongside the others was an implicit deny. It
+  // failed silently and late: `generate_live_view_url` only signs locally and
+  // makes no API call, so a URL was minted happily and the browser's
+  // WebSocket was closed by the service — surfacing as DCV auth code 10
+  // ("Failed to communicate with server"), which reads like a service fault
+  // rather than a missing permission. Verified with
+  // `iam simulate-principal-policy`: allowed for the two above and
+  // implicitDeny for this one, from the SAME statement on the SAME ARN.
+  //
+  // `*` is as narrow as this action can be expressed; there is no
+  // browser-scoped form to fall back to. It is bounded by what the action
+  // itself permits — attaching to a live view stream — and app-api still
+  // cannot start, stop, or drive a browser.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'BrowserLiveViewConnect',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock-agentcore:ConnectBrowserLiveViewStream'],
+      resources: ['*'],
     }),
   );
 

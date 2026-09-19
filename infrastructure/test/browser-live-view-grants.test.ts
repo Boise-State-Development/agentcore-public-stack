@@ -66,15 +66,38 @@ describe('app-api browser Live View grant', () => {
     const [statement] = matches;
     expect(statement.Effect).toBe('Allow');
     expect(asArray(statement.Action).sort()).toEqual([
-      'bedrock-agentcore:ConnectBrowserLiveViewStream',
       'bedrock-agentcore:GetBrowserSession',
       'bedrock-agentcore:UpdateBrowserStream',
     ]);
   });
 
+  it('grants ConnectBrowserLiveViewStream on *, because it has no resource type', () => {
+    // AWS's service reference lists NO resource types for this action, so a
+    // resource-scoped statement never matches it and it is an implicit deny.
+    // That is not a theoretical concern: it shipped that way, and because
+    // `generate_live_view_url` signs locally without calling AWS, the URL
+    // minted fine and the failure surfaced only as the browser's WebSocket
+    // being closed — DCV auth code 10, which looks like a service fault.
+    const matches = statementsBySid.get('BrowserLiveViewConnect') ?? [];
+    expect(matches).toHaveLength(1);
+
+    const [statement] = matches;
+    expect(statement.Effect).toBe('Allow');
+    expect(asArray(statement.Resource)).toEqual(['*']);
+
+    // `*` is unavoidable here, so the statement must carry NOTHING else.
+    expect(asArray(statement.Action)).toEqual([
+      'bedrock-agentcore:ConnectBrowserLiveViewStream',
+    ]);
+  });
+
   it('does NOT let app-api start, stop or drive a browser', () => {
-    const [statement] = statementsBySid.get('BrowserLiveViewAccess') ?? [];
-    const actions = asArray(statement?.Action);
+    // Both statements together: splitting the grant must not have opened a
+    // side door in the one that had to widen to `*`.
+    const actions = [
+      ...asArray(statementsBySid.get('BrowserLiveViewAccess')?.[0]?.Action),
+      ...asArray(statementsBySid.get('BrowserLiveViewConnect')?.[0]?.Action),
+    ];
 
     // Each of these is on the Runtime's own BrowserAccess statement and must
     // stay off app-api's: the agent owns the session lifecycle, and
@@ -90,7 +113,7 @@ describe('app-api browser Live View grant', () => {
     expect(actions).not.toContain('bedrock-agentcore:*');
   });
 
-  it('is scoped to the browser resource, not to *', () => {
+  it('keeps the resource-typed actions scoped to the browser, not to *', () => {
     const [statement] = statementsBySid.get('BrowserLiveViewAccess') ?? [];
 
     const resources = asArray(statement?.Resource);
