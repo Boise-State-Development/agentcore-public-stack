@@ -73,7 +73,8 @@ export class PlatformDashboardConstruct extends Construct {
           '',
           '**Drill-downs:** '
           + `[AgentCore Runtime detail](/cloudwatch/home?region=${config.awsRegion}#dashboards:name=${getResourceName(config, 'agentcore-observability')}) · `
-          + `[Prompt cache & token economics](/cloudwatch/home?region=${config.awsRegion}#dashboards:name=${getResourceName(config, 'prompt-cache-observability')})`,
+          + `[Prompt cache & token economics](/cloudwatch/home?region=${config.awsRegion}#dashboards:name=${getResourceName(config, 'prompt-cache-observability')}) · `
+          + `[Turn latency — pre-stream stages](/cloudwatch/home?region=${config.awsRegion}#dashboards:name=${getResourceName(config, 'turn-latency-observability')})`,
           '',
           '_The chat path is SSE, so response times of tens of seconds are normal '
           + 'and a sudden DROP in latency can mean turns are failing early._',

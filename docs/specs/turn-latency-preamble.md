@@ -200,19 +200,25 @@ and `sessionId` ride as queryable log properties and the dashboard's Logs
 Insights widgets do the slicing. That is not only metric-stream cost: a
 dimension invites reading a p99 off a slice too thin to have one.
 
-The widgets go on the **existing AgentCore Runtime dashboard**, not a new one.
-That was not the first design: a dedicated `TurnLatencyObservabilityConstruct`
-was built and then removed, because `observability-platform-dashboard.test.ts`
-pins the stack at exactly three dashboards with the note *"CloudWatch charges
-$3/month beyond three"*. The ceiling is a deliberate cost decision with a test
-guarding it, and $3/month is not worth spending silently as a side effect of
-adding widgets.
+`TurnLatencyObservabilityConstruct` graphs p50/p90/p99 per stage on **its own
+dashboard** — the fourth, which costs $3/month.
 
-Folding them in turned out to be the better design anyway. That dashboard
-already graphs AWS's own `Latency` p50/p90/p99 for the runtime, measured at the
-**data plane** — so it sits directly above our stages, and the gap between it
-and `PreludeTotalMs` is another read on the routing overhead no server-side
-stage can see.
+That cost was argued, not absorbed. `observability-platform-dashboard.test.ts`
+pins the dashboard count precisely so crossing CloudWatch's free three stays a
+deliberate trade; the first attempt therefore folded the widgets onto the
+AgentCore Runtime board to stay inside it. That version worked and was still
+worse: this board is read *while shipping a latency change*, side by side with
+load-test output, and burying the stage breakdown under runtime-health widgets
+answering an unrelated question made it harder to use for its one job.
+$3/month against a 450–900ms wait on every turn is not a close call. **The next
+dashboard should have to make the same argument** — the pinned count now reads
+"three free + one bought" rather than being raised to whatever is convenient.
+
+The AgentCore Runtime board stays the natural companion: it graphs AWS's own
+`Latency` p50/p90/p99 measured at the **data plane**, so the gap between it and
+`PreludeTotalMs` is another read on the routing overhead no server-side stage
+can see. Both dashboards' headers point at each other, and the platform health
+dashboard links to all three drill-downs.
 
 Alongside the percentile graphs are two widgets that exist to catch our own
 errors: a split by turn shape (a resume skips most of the preamble, so a

@@ -47,14 +47,25 @@ describe('Unified platform dashboard', () => {
     });
   });
 
-  // CloudWatch charges $3/month beyond three.
-  it('keeps the stack at exactly three dashboards (the CloudWatch free ceiling)', () => {
-    template.resourceCountIs('AWS::CloudWatch::Dashboard', 3);
+  // CloudWatch's free tier is three dashboards and charges $3/month beyond it.
+  // The count is pinned so that crossing the tier stays a deliberate trade
+  // rather than a side effect of someone adding widgets.
+  //
+  // It was crossed once, on purpose: the fourth is
+  // `turn-latency-observability` (docs/specs/turn-latency-preamble.md), which
+  // is read while shipping a latency change, side by side with load-test
+  // output. Folding it into the AgentCore Runtime board was tried first and
+  // buried the stage breakdown under runtime-health widgets answering an
+  // unrelated question. $3/month against a 450-900ms wait on every turn is not
+  // a close call — but the next one should be argued the same way.
+  it('keeps the stack at exactly four dashboards (three free + one bought)', () => {
+    template.resourceCountIs('AWS::CloudWatch::Dashboard', 4);
   });
 
-  it('links to the two drill-down dashboards instead of duplicating them', () => {
+  it('links to the three drill-down dashboards instead of duplicating them', () => {
     expect(dashboardBody).toContain(`${MOCK_PREFIX}-agentcore-observability`);
     expect(dashboardBody).toContain(`${MOCK_PREFIX}-prompt-cache-observability`);
+    expect(dashboardBody).toContain(`${MOCK_PREFIX}-turn-latency-observability`);
   });
 
   it('names the SNS topic alarms route to, so an operator can find it', () => {
