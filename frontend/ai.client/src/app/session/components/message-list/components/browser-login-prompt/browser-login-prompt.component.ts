@@ -315,9 +315,12 @@ export class BrowserLoginPromptComponent {
         return;
       }
       this.open.set(true);
-      // The frame may not exist yet on this tick. Both the iframe's `load` and
-      // the viewer's own `ready` message re-drive postToFrame, so whichever
-      // happens first wins and the other is a no-op.
+      // The frame may not exist yet on this tick, so all three of this call,
+      // the iframe's `load` and the viewer's own `ready` re-drive postToFrame
+      // — whichever arrives first is the one that counts. They are NOT
+      // no-ops: every one of them posts. The viewer is idempotent on the
+      // connection ATTEMPT for exactly this reason; without that it opened a
+      // second DCV socket that closed the first.
       this.postToFrame();
       this.scheduleRefresh(view.expiresAt);
     } catch {

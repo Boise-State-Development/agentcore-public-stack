@@ -36,6 +36,14 @@
   var statusEl = document.getElementById('status');
   var connection = null;
   var currentUrl = null;
+  // Set the instant a connection attempt BEGINS, not when it completes.
+  // The parent posts the URL up to three times (after minting, on the
+  // iframe's `load`, and in reply to our `ready`) because it cannot know
+  // which arrives first. Guarding on `connection` alone is not enough: it is
+  // assigned only after `dcv.connect()` resolves, so two posts milliseconds
+  // apart both reach `dcv.authenticate` and the second socket's open closes
+  // the first — surfacing as `Close received after close` and auth code 10.
+  var starting = false;
 
   function setStatus(text) {
     if (!statusEl) return;
@@ -89,14 +97,16 @@
   }
 
   function start(signedUrl, viewport) {
-    // A re-mint for a still-live session: the stream is fine, and tearing it
-    // down mid-sign-in to reconnect with a fresher signature would be the
-    // opposite of what re-minting is for.
-    if (connection && currentUrl) {
+    // A duplicate post, or a re-mint for a still-live session: keep the
+    // fresher URL for any later use, but never open a second stream. Tearing
+    // a live one down mid-sign-in to reconnect with a newer signature would
+    // be the opposite of what re-minting is for.
+    if (starting || connection) {
       currentUrl = signedUrl;
       return;
     }
     currentUrl = signedUrl;
+    starting = true;
 
     if (!window.dcv) {
       setStatus('The viewer failed to load.');
@@ -114,12 +124,14 @@
       // configuration with a missing auth callback.
       promptCredentials: function () {},
       error: function (_auth, error) {
+        starting = false;
         setStatus('Could not start the session. It may have ended.');
         if (window.console) console.error('dcv.authenticate failed', error);
       },
       success: function (_auth, result) {
         var first = (result && result[0]) || {};
         if (!first.sessionId || !first.authToken) {
+          starting = false;
           setStatus('The session could not be opened.');
           return;
         }
@@ -138,6 +150,7 @@
       base = new URL(currentUrl);
       base.search = '';
     } catch (e) {
+      starting = false;
       setStatus('The session address was not usable.');
       return;
     }
@@ -161,6 +174,7 @@
           },
           disconnect: function (_conn, reason) {
             connection = null;
+            starting = false;
             setStatus('The sign-in session ended.');
             if (window.console) console.info('dcv disconnected', reason);
           },
@@ -187,6 +201,7 @@
         }
       })
       .catch(function (error) {
+        starting = false;
         setStatus('Could not connect to the sign-in session.');
         if (window.console) console.error('dcv.connect failed', error);
       });
