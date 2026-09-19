@@ -3320,6 +3320,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 original_message=input_data.message if message_will_be_modified else None,
                 interrupt_responses=interrupt_responses_payload,
                 continue_truncated=is_continuation,
+                # The turn's true start, so the end-of-turn recap spans the
+                # WHOLE turn. The coordinator's own clock starts when its
+                # generator is iterated, which is AFTER the deferred agent
+                # build — measured on dev, that under-reported a 7.8s turn as
+                # 2.1s.
+                turn_started_at=prelude.started_at,
                 # Which Agent ran this turn (#756). Recorded on the cost row so a
                 # deliberate `@`-mention prefix swap is distinguishable from the
                 # nondeterministic-ordering regression the fingerprints exist to catch.

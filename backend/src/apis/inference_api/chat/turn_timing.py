@@ -59,12 +59,18 @@ class TurnPrelude:
     everything. A measurement must never be able to break the turn it measures.
     """
 
-    __slots__ = ("_t0", "_last", "_marks")
+    __slots__ = ("_t0", "_wall_t0", "_last", "_marks")
 
     def __init__(self) -> None:
         now = time.perf_counter()
         self._t0 = now
         self._last = now
+        # TWO clocks, deliberately. `perf_counter` is monotonic and is what the
+        # stage deltas must use — a clock step mid-turn would otherwise produce
+        # a negative stage. But the stream coordinator measures with
+        # `time.time()`, and a duration is only meaningful within one clock
+        # domain, so the value handed to it is captured here in ITS domain.
+        self._wall_t0 = time.time()
         self._marks: List[Tuple[str, float]] = []
 
     def mark(self, stage: str) -> None:
@@ -75,6 +81,23 @@ class TurnPrelude:
             self._last = now
         except Exception:  # noqa: BLE001 - never break a turn to measure it
             logger.debug("Turn prelude mark skipped", exc_info=True)
+
+    @property
+    def started_at(self) -> float:
+        """``time.time()`` for the moment the handler was entered.
+
+        Wall clock, not ``perf_counter``, because the only consumer is the
+        stream coordinator's turn duration and it subtracts this from a
+        ``time.time()`` reading — mixing the two domains yields a meaningless
+        number, not a slightly wrong one.
+
+        It exists because the coordinator's own ``stream_start_time`` no longer
+        marks the start of the turn: the agent build was deferred into the
+        stream generator (PR-3) and runs before that generator is iterated, so
+        measuring from it excludes the build. On dev, a turn the user waited
+        7.8s for reported 2.1s.
+        """
+        return self._wall_t0
 
     @property
     def total_ms(self) -> int:

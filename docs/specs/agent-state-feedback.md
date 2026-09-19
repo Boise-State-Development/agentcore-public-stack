@@ -354,7 +354,17 @@ turn's last message. One field, one meaning, identical live and reloaded.
 
 - It starts when the invocation reaches inference-api, so it **excludes the
   app-api hop** (~478ms measured). The recap therefore reads slightly lower
-  than the user's own stopwatch. The alternative — a client-measured
+  than the user's own stopwatch.
+- **It must be measured from the handler, not from `stream_response`.** Those
+  were the same thing until PR-3 deferred the agent build into the stream
+  generator, which runs BEFORE that generator is iterated — so the
+  coordinator's own `stream_start_time` now excludes the build. Shipped that
+  way and caught on dev: a turn the user waited 7.8s for reported **2.1s**,
+  exactly the post-build remainder. The route hands the coordinator
+  `TurnPrelude.started_at` instead. Note that property is deliberately WALL
+  clock while the stage marks are `perf_counter`: the coordinator subtracts it
+  from a `time.time()` reading, and mixing domains gives a meaningless number
+  rather than a slightly wrong one. The alternative — a client-measured
   click-to-`done` — is truer to the felt wait but cannot survive a reload,
   which "always on" requires.
 - Turns written before the field show **nothing** rather than a zero. Same

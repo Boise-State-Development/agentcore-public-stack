@@ -154,6 +154,7 @@ class ChatAgent(BaseAgent):
         continue_truncated: bool = False,
         turn_agent_id: Optional[str] = None,
         turn_lease: Any = None,
+        turn_started_at: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -219,5 +220,6 @@ class ChatAgent(BaseAgent):
             original_message=original_message,
             turn_agent_id=turn_agent_id,
             turn_lease=turn_lease,
+            turn_started_at=turn_started_at,
         ):
             yield event

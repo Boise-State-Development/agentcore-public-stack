@@ -249,6 +249,7 @@ class StreamCoordinator:
         original_message: Optional[str] = None,
         turn_agent_id: Optional[str] = None,
         turn_lease: Any = None,
+        turn_started_at: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -744,8 +745,17 @@ class StreamCoordinator:
                         # `endToEndLatency` prefers the provider's API-call
                         # time — so a client reading that field would show one
                         # number live and a smaller one after refresh.
+                        #
+                        # Measured from `turn_started_at` — the moment the
+                        # invocation reached the container — NOT from
+                        # `stream_start_time`, which is when THIS generator
+                        # began. Those diverged the moment the agent build was
+                        # deferred into the stream (PR-3): the build now runs
+                        # before `stream_response` is ever iterated, so
+                        # `stream_start_time` excludes it. Measured on dev, a
+                        # turn the user waited 7.8s for reported 2.1s.
                         final_metadata["turnDurationMs"] = int(
-                            (stream_end_time - stream_start_time) * 1000
+                            (stream_end_time - (turn_started_at or stream_start_time)) * 1000
                         )
 
                         # Cost: sum the FINAL usage of each assistant message in
@@ -1359,7 +1369,10 @@ class StreamCoordinator:
                             # execution and the pre-stream agent build — a turn
                             # the user watched for 9s would read as 3s.
                             turn_duration_ms=(
-                                int((stream_end_time - stream_start_time) * 1000)
+                                int(
+                                    (stream_end_time - (turn_started_at or stream_start_time))
+                                    * 1000
+                                )
                                 if idx == len(message_ids_to_store) - 1
                                 else None
                             ),

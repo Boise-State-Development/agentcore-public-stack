@@ -63,6 +63,43 @@ class TestMarks:
         assert _emitted(prelude)["totalMs"] == 7000
 
 
+class TestStartedAt:
+    """The value handed to the stream coordinator for the turn recap."""
+
+    def test_is_wall_clock_not_perf_counter(self):
+        """Mixing clock domains yields a meaningless number, not a close one.
+
+        The coordinator subtracts this from a `time.time()` reading. A
+        `perf_counter` value — seconds since an arbitrary origin — would make
+        the recap read as decades, or negative.
+        """
+        import time
+
+        before = time.time()
+        prelude = TurnPrelude()
+        after = time.time()
+
+        assert before <= prelude.started_at <= after
+
+    def test_marks_are_immune_to_the_wall_clock_moving(self, monkeypatch):
+        """The stage deltas must not inherit the wall clock.
+
+        NTP can step `time.time()` backwards mid-turn, which would produce a
+        negative stage. The marks use `perf_counter`, so a wall clock that
+        jumps a decade must change nothing.
+        """
+        prelude = TurnPrelude()
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.time", lambda: 0.0
+        )
+        prelude.mark("preamble")
+
+        payload = _emitted(prelude)
+
+        assert payload["stages"]["preamble"] >= 0
+        assert payload["totalMs"] >= 0
+
+
 class TestPayload:
     def test_carries_the_session_and_the_caller_s_extras(self):
         prelude = TurnPrelude()
