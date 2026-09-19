@@ -425,10 +425,13 @@ export class InferenceAgentCoreConstruct extends Construct {
         // deployed environment requires an out-of-band Runtime update until a
         // slot is freed.
 
-        // Directories
-        UPLOAD_DIR: '/tmp/uploads',
-        OUTPUT_DIR: '/tmp/output',
-        GENERATED_IMAGES_DIR: '/tmp/generated_images',
+        // NOTE: UPLOAD_DIR / OUTPUT_DIR / GENERATED_IMAGES_DIR used to be set
+        // here to /tmp/*. The runtime never read them for anything but a log
+        // line — the directories actually resolved from __file__, inside the
+        // source tree — so they pointed operators at paths nothing used. The
+        // real control is RUNTIME_DATA_DIR, which the image sets (see
+        // backend/Dockerfile.inference-api and apis/shared/runtime_paths.py).
+        // Retiring them freed three of the 50 slots called out below.
 
         // URLs
         FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',
