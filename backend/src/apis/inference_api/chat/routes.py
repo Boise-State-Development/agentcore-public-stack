@@ -3132,6 +3132,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # memory, agent binding).
             prelude.mark("tools")
 
+            def _mark_build_stage(stage: str) -> None:
+                """Namespace a build sub-stage under `agent_build.` so the
+                emitted line groups them the way the preamble's are."""
+                prelude.mark(f"agent_build.{stage}")
+
             async def _build_main_agent():
                 """The turn's agent. Called eagerly here, or from the stream.
 
@@ -3158,6 +3163,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     extra_tools_key_described=extra_tools_key_described,
                     has_document_tools=bool(document_tools),
                     assistant_id=input_data.rag_assistant_id,
+                    build_stage_recorder=_mark_build_stage,
                 )
 
             # Defer the build into the stream so it can be narrated.
@@ -3177,7 +3183,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 deferred_build = True
             else:
                 agent = await _build_main_agent()
-                prelude.mark("agent_build")
+                # The remainder after the sub-stages the build itself recorded;
+                # `groups.agent_build` sums them, keeping the pre-split
+                # number comparable exactly as it did for the preamble.
+                prelude.mark("agent_build.rest")
 
         # Resume requests must target interrupts that the cached agent
         # actually has paused. Cache eviction, a process restart, or a
@@ -3526,7 +3535,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                         ):
                             yield frame
                         return
-                    prelude.mark("agent_build")
+                    prelude.mark("agent_build.rest")
 
                     # Tell the client the build is OVER.
                     #

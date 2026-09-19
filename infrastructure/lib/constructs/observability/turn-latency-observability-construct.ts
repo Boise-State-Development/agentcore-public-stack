@@ -196,6 +196,42 @@ export class TurnLatencyObservabilityConstruct extends Construct {
       }),
     );
 
+    // Row 3b — inside the agent build. `agent_build` is the largest number
+    // left in the prelude (~2950ms cold against 1-47ms warm) and nothing said
+    // which part of it that was; these are the same decomposition move that
+    // opened the preamble. `AgentBuildMs` above is their sum, so the pre-split
+    // series stays comparable.
+    //
+    // p90 rather than p50: a warm build is ~0 across the board, so p50 would
+    // be a row of flat lines. The cold builds — the ones worth fixing — live
+    // in the upper percentiles by construction.
+    this.dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Agent build breakdown (p90) — which part of a cold build is slow',
+        left: [
+          stage('AgentBuildPromptMs', 'p90', 'system prompt'),
+          stage('AgentBuildRegistryMs', 'p90', 'tool registry'),
+          stage('AgentBuildSessionMgrMs', 'p90', 'session manager (memory restore)'),
+          stage('AgentBuildToolsMs', 'p90', 'tools (incl. MCP pre-flight)'),
+        ],
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Agent build breakdown, part 2 (p90)',
+        left: [
+          stage('AgentBuildHooksMs', 'p90', 'hooks'),
+          stage('AgentBuildPluginsMs', 'p90', 'plugins'),
+          stage('AgentBuildFinalizeMs', 'p90', 'finalize'),
+          stage('AgentBuildRestMs', 'p90', 'remainder'),
+        ],
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+    );
+
     // Row 4 — the slicing that dimensions would have done, done in Logs
     // Insights instead. A resume skips most of the preamble, so mixing the two
     // populations is what would make a traffic-mix shift look like a latency

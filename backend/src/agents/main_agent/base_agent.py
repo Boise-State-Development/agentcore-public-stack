@@ -33,6 +33,8 @@ from agents.main_agent.multimodal import PromptBuilder
 from agents.main_agent.streaming import StreamCoordinator
 from apis.shared.tools.scoped_ids import base_tool_id
 
+from apis.shared.observability.build_stages import mark_stage
+
 logger = logging.getLogger(__name__)
 
 
@@ -160,12 +162,17 @@ class BaseAgent(ABC):
         # prior turns; only the system-prompt date line shifts.
         self._construction_snapshot["system_prompt"] = system_prompt
 
+        # Sub-stages of `agent_build` (docs/specs/turn-latency-preamble.md).
+        # A no-op unless the inference-api turn path installed a recorder.
+        mark_stage("prompt")
+
         # Initialize tool registry and filter
         self.tool_registry = create_default_registry()
         self.tool_filter = ToolFilter(self.tool_registry)
 
         # Register external MCP tool IDs from enabled tools
         self._register_external_mcp_tools()
+        mark_stage("registry")
 
         # Initialize gateway integration
         self.gateway_integration = GatewayIntegration()
@@ -177,12 +184,16 @@ class BaseAgent(ABC):
         self.session_manager = SessionFactory.create_session_manager(
             session_id=session_id, user_id=self.user_id, caching_enabled=self.model_config.caching_enabled
         )
+        # Conversation restore from AgentCore Memory happens in here, so this
+        # is a prime suspect for the cold build and has never been timed.
+        mark_stage("session_mgr")
 
         # Initialize streaming coordinator
         self.stream_coordinator = StreamCoordinator()
 
         # Create the agent (subclass-specific)
         self._create_agent()
+        mark_stage("finalize")
 
     @abstractmethod
     def _create_agent(self) -> None:

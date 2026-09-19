@@ -8,7 +8,7 @@ import json
 import logging
 import hashlib
 import os
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any, Callable, Dict, Optional, List, Tuple
 
 import boto3
 
@@ -261,6 +261,7 @@ async def get_agent(
     cache_write: bool = True,
     has_document_tools: bool = False,
     assistant_id: Optional[str] = None,
+    build_stage_recorder: Optional[Callable[[str], None]] = None,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -410,7 +411,23 @@ async def get_agent(
     # kwarg, so keep it off that path.
     if resolved_agent_type != "voice":
         create_kwargs["accessible_skill_ids"] = accessible_skill_ids
-    agent = create_agent(**create_kwargs)
+    # Decompose the build into sub-stages, same move that opened the preamble
+    # (docs/specs/turn-latency-preamble.md). A contextvar rather than a kwarg:
+    # the explicit alternative threads a parameter through a type registry and
+    # three agent classes that do not share constructor signatures, and a
+    # mis-set timing mark costs a wrong number, not wrong behaviour. See
+    # `apis/shared/observability/build_stages.py` for why that asymmetry with
+    # PR-2's explicit snapshot is deliberate.
+    from apis.shared.observability.build_stages import (
+        reset_stage_recorder,
+        set_stage_recorder,
+    )
+
+    _stage_token = set_stage_recorder(build_stage_recorder)
+    try:
+        agent = create_agent(**create_kwargs)
+    finally:
+        reset_stage_recorder(_stage_token)
 
     # One session is one conversation, even when a turn runs under a different
     # configuration (an `@`-mention, a different toolset). Runs before the

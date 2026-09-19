@@ -53,6 +53,15 @@ describe('TurnLatencyObservabilityConstruct', () => {
       'RagMs',
       'ToolsMs',
       'AgentBuildMs',
+      // Sub-stages of the build (docs/specs/turn-latency-preamble.md PR-4).
+      'AgentBuildPromptMs',
+      'AgentBuildRegistryMs',
+      'AgentBuildSessionMgrMs',
+      'AgentBuildToolsMs',
+      'AgentBuildHooksMs',
+      'AgentBuildPluginsMs',
+      'AgentBuildFinalizeMs',
+      'AgentBuildRestMs',
     ]) {
       expect(body).toContain(metric);
     }

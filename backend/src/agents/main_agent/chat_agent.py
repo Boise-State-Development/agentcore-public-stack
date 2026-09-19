@@ -13,6 +13,8 @@ from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.core import AgentFactory
 from agents.main_agent.skills.strands_mapping import build_skills_runtime
 
+from apis.shared.observability.build_stages import mark_stage
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,7 +54,11 @@ class ChatAgent(BaseAgent):
         """Create Strands Agent with filtered tools, hooks, and skills plugin."""
         try:
             tools = self._build_filtered_tools()
+            # External MCP pre-flight lives in here — the spec's standing
+            # (and unverified) hypothesis for the cold build.
+            mark_stage("tools")
             hooks = self._create_hooks()
+            mark_stage("hooks")
 
             # Skills disclosure: the AgentSkills plugin injects the catalog +
             # activation tool; read_skill_file is the S3 adapter for reference
@@ -90,6 +96,7 @@ class ChatAgent(BaseAgent):
                 plugins.append(offloader)
             plugins = plugins or None
 
+            mark_stage("plugins")
             self.agent = AgentFactory.create_agent(
                 model_config=self.model_config,
                 system_prompt=self._system_prompt_for(tools),
