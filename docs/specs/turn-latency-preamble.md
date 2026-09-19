@@ -1,7 +1,8 @@
 # Turn latency: inside the preamble
 
-**Status:** PR-1 (sub-stage instrumentation) BUILT. PR-2+ NOT STARTED — they are
-deliberately blocked on PR-1's measurement.
+**Status:** PR-1 (sub-stage instrumentation) + PR-1b (EMF metrics, dashboard,
+validation method) BUILT. PR-2+ NOT STARTED — they are deliberately blocked on
+the measurement PR-1/PR-1b make possible.
 **Follow-up to:** `docs/specs/agent-state-feedback.md` — its PR-3 measured the
 pre-stream window into four stages and then declined to narrate three of them.
 This spec opens the one that was left closed.
@@ -155,6 +156,144 @@ already believe:
   than `groups.preamble`. The stages are contiguous by construction, so a gap
   means time is being spent between them — in code this spec has not accounted
   for.
+
+## PR-1b — make the improvement provable (BUILT)
+
+PR-1 makes the preamble *attributable*. It does not make a fix *provable*, and
+those are different problems: attribution needs one turn, proof needs a
+population.
+
+### The field that would lie to us
+
+There is already a persisted field called `time_to_first_token`
+(`apis/app_api/messages/models.py`, computed in `stream_coordinator.py`). It is
+the obvious instrument and it is the wrong one. It measures
+`first_token_time - stream_start_time`, and `stream_start_time` is set *inside*
+the coordinator's generator — which, since `agent-state-feedback.md` PR-3
+deferred the build, runs after the preamble **and** after the agent build. So it
+is structurally blind to:
+
+| Excluded from `time_to_first_token` | Size |
+|---|---|
+| app-api hop + auth + Runtime routing | ~478ms warm, ~1.5s cold |
+| the whole preamble | 450–900ms |
+| the agent build | 0–2728ms |
+
+**A successful PR-2 moves that field by exactly zero.** Anyone validating with
+it concludes the work was pointless. This is the same trap this repo already
+documented once for `latency.endToEndLatency` vs `turnDurationMs` — a field
+whose name describes what you want and whose definition does not. Do not use it
+here; it is a *model* TTFT, and it is correct at that job.
+
+### Server side: percentiles, not grepped lines
+
+`TurnPrelude.emit` now also writes one EMF record per turn into
+`AgentCoreStack/TurnLatency`, through the existing
+`apis/shared/observability/emf.py` helper — no new infrastructure, no new IAM.
+Metric names are *derived* from the stage names (`preamble.session_state` →
+`PreambleSessionStateMs`) rather than listed, so a new mark cannot silently go
+unmeasured; the price is that a new mark quietly creates a metric stream
+(~$0.30/month), which is the cheaper mistake.
+
+Dimension-less, like every other EMF caller here. `isResume`, `deferredBuild`
+and `sessionId` ride as queryable log properties and the dashboard's Logs
+Insights widgets do the slicing. That is not only metric-stream cost: a
+dimension invites reading a p99 off a slice too thin to have one.
+
+The widgets go on the **existing AgentCore Runtime dashboard**, not a new one.
+That was not the first design: a dedicated `TurnLatencyObservabilityConstruct`
+was built and then removed, because `observability-platform-dashboard.test.ts`
+pins the stack at exactly three dashboards with the note *"CloudWatch charges
+$3/month beyond three"*. The ceiling is a deliberate cost decision with a test
+guarding it, and $3/month is not worth spending silently as a side effect of
+adding widgets.
+
+Folding them in turned out to be the better design anyway. That dashboard
+already graphs AWS's own `Latency` p50/p90/p99 for the runtime, measured at the
+**data plane** — so it sits directly above our stages, and the gap between it
+and `PreludeTotalMs` is another read on the routing overhead no server-side
+stage can see.
+
+Alongside the percentile graphs are two widgets that exist to catch our own
+errors: a split by turn shape (a resume skips most of the preamble, so a
+traffic-mix shift toward resumes would look exactly like a latency win) and an
+**unaccounted-time** widget
+(`PreludeTotalMs − (PreambleMs + RagMs + ToolsMs + AgentBuildMs)`), which is how
+we find out the decomposition is incomplete.
+
+**No alarms.** A threshold needs a baseline and there is none yet. Inventing one
+is the guessing this spec exists to prevent; add them once the dashboard has run
+long enough to say what normal is.
+
+**Kill switch:** `TURN_LATENCY_METRICS_ENABLED` (default on). Note this differs
+from PR-1's marks, which are deliberately ungated — a `perf_counter()` call
+costs nothing, while an EMF line costs log ingestion and custom-metric charges.
+Same reasoning that gave `PROMPT_CACHE_OBSERVABILITY_ENABLED` its switch. Like
+every other flag of its kind here it is not threaded through CDK.
+
+### Client side: the part the server structurally cannot see
+
+No metric in `AgentCoreStack/TurnLatency` sees the app-api hop, auth or Runtime
+routing, because they all start at handler entry. That is up to 20% of the turn,
+and it is where a fix can be real on the server and invisible to the user.
+
+`tests/load` already covers it. The Locust harness measures **true client-side
+TTFT** — dispatch of `POST /chat/stream` → first `content_block_delta` — through
+CloudFront → ALB → app-api → AgentCore Runtime (`agentcore_load/users.py`).
+
+And the architecture hands us a clean decomposition for free. Because PR-3
+deferred the agent build into the stream generator, inference-api returns its
+`StreamingResponse` **after the preamble but before the build**, so response
+headers arrive at exactly the boundary between the two fixes:
+
+| Measure | Covers | Which fix it judges |
+|---|---|---|
+| **TTFB** (Locust's built-in `POST /chat/stream` time — headers) | fixed hop + **preamble** | PR-2 |
+| **TTFT − TTFB** | **agent build** + model | the MCP pre-flight fix |
+
+**Verify this before trusting it.** It depends on headers flushing through the
+AgentCore data plane ahead of the first body byte. The proxy's own half has a
+regression test (`test_ttfb_under_200ms_with_x_accel_buffering`) but that test
+mocks the upstream, so it proves the *proxy* does not buffer — not the data
+plane. The check: run turns and compare Locust TTFB against `groups.preamble`
+from the same turns. If TTFB tracks preamble, the channel is clean. If TTFB
+tracks TTFT instead, the data plane is buffering and TTFB is useless as a
+preamble proxy — fall back to comparing the EMF percentiles and accept that the
+client-side half is only measurable end to end.
+
+### Design the comparison as A/B, not before/after
+
+Before/after across a deploy confounds with the two largest variance terms on
+this path — container warmth and traffic mix — either of which can swamp the
+effect being measured. The template already exists:
+`scripts/probe_runtime_session_affinity.py` is a two-arm probe differing by
+exactly one header, and its docstring makes the point that it deliberately
+bypasses shared code rather than "building the fix to test the hypothesis."
+
+### Acceptance criteria, stated before the data
+
+| Claim | Passes if | Fails if |
+|---|---|---|
+| The eight reads are real cost | `PreambleSessionStateMs` p50 ≥ 100ms | < 40ms — the reads are cheap; drop PR-2 |
+| PR-2 removes them | `PreambleMs` p50 falls ≥ 50ms | < 20ms — the reads were not the cost |
+| It reaches the user | Locust TTFB p50 falls by the same amount | TTFB flat while `PreambleMs` falls — something downstream absorbs it |
+| The decomposition is complete | unaccounted-time widget ≈ 0 | a visible gap — time is going somewhere unmodelled |
+
+### The arithmetic that does not close
+
+Stated plainly because it is the strongest argument against this spec's own
+hypothesis. Eight serialized GSI queries at an in-region p50 of 10–15ms is
+~100–150ms. The preamble is 460–494ms on a warm turn. **So even if the read
+count is entirely right, PR-2 recovers roughly a quarter of the stage** — and
+~300ms is unexplained by anything here.
+
+Two readings, and PR-1's sub-marks separate them: either DynamoDB latency from
+an AgentCore Runtime container is much worse than in-region typical (in which
+case `session_state` is larger than modelled and PR-2 is worth more), or a large
+part of the preamble is something not yet identified (in which case PR-2 is a
+rounding error and the real win is elsewhere). Either way the answer arrives
+before the refactor is written, which is the entire point of sequencing it this
+way.
 
 ## PR-2 — read the session row once (NOT STARTED, blocked on PR-1)
 

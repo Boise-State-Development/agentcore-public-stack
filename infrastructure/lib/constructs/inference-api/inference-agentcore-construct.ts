@@ -690,6 +690,148 @@ export class InferenceAgentCoreConstruct extends Construct {
       }),
     );
 
+    // ============================================================
+    // Pre-stream stage latency (docs/specs/turn-latency-preamble.md)
+    // ============================================================
+    //
+    // These ride THIS dashboard rather than a fourth one on purpose:
+    // `observability-platform-dashboard.test.ts` pins the stack at three
+    // dashboards because CloudWatch charges $3/month beyond that, and the
+    // AWS-reported `Latency` graph directly above is the number these
+    // decompose. Reading them side by side is the point — AWS measures at the
+    // data plane, `PreludeTotalMs` starts at handler entry, so the gap between
+    // them IS the routing overhead no server-side stage can see.
+    //
+    // Emitted as EMF by `apis/inference_api/chat/turn_timing.py` into its own
+    // namespace, dimension-less like every other EMF caller here; `isResume` /
+    // `deferredBuild` ride as queryable log properties and the Logs Insights
+    // widget below does the slicing a dimension would have done.
+    //
+    // No alarms: a threshold needs a baseline and there is none yet. Inventing
+    // one is the guessing the spec these support exists to prevent.
+    const turnLatencyNamespace = 'AgentCoreStack/TurnLatency';
+
+    // Must match TURN_LATENCY_EMF_NAMESPACE's default in turn_timing.py. CDK
+    // does not set that env var (dev and prod are separate accounts), so the
+    // default IS the contract and a drift here renders empty graphs — which
+    // look exactly like "no traffic".
+    const stageMetric = (
+      metricName: string,
+      statistic: string,
+      label?: string,
+    ) => new cloudwatch.Metric({
+      namespace: turnLatencyNamespace,
+      metricName,
+      statistic,
+      period: cdk.Duration.minutes(5),
+      label: label ?? `${metricName} ${statistic}`,
+    });
+
+    const preambleSubStages = (statistic: string) => [
+      stageMetric('PreambleOwnershipMs', statistic, 'ownership'),
+      stageMetric('PreambleSkillsMs', statistic, 'skills'),
+      stageMetric('PreambleFilesMs', statistic, 'files'),
+      stageMetric('PreambleSessionStateMs', statistic, 'session_state'),
+      stageMetric('PreambleQuotaMs', statistic, 'quota'),
+    ];
+
+    dashboard.addWidgets(
+      new cloudwatch.TextWidget({
+        markdown: [
+          '## Pre-stream stages — where the wait before the first token goes',
+          '',
+          '_Every metric below starts at **inference-api handler entry**. None of them sees '
+          + 'the app-api hop, auth, or Runtime routing — ~478ms on a warm path, ~1.5s on a cold '
+          + 'one. A stage falling here is necessary but **not sufficient** evidence that the '
+          + 'user waits less; the client-side check is `tests/load` (Locust TTFB + TTFT). '
+          + 'See `docs/specs/turn-latency-preamble.md`._',
+          '',
+          '_`PreambleMs` is the sum of the five `Preamble*Ms` sub-stages, kept so the '
+          + 'pre-split baseline stays comparable._',
+        ].join('\n'),
+        width: 24,
+        height: 4,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Prelude total vs preamble (p50 / p90) — PR-2 moves these or it did not work',
+        left: [
+          stageMetric('PreludeTotalMs', 'p50', 'prelude total p50'),
+          stageMetric('PreludeTotalMs', 'p90', 'prelude total p90'),
+          stageMetric('PreambleMs', 'p50', 'preamble p50'),
+          stageMetric('PreambleMs', 'p90', 'preamble p90'),
+        ],
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        // Bimodal by construction — an agent-cache hit is ~0ms and a miss is
+        // 1.5-2.7s — so p50 and p99 describe two different populations and the
+        // gap between them is the cache hit rate showing through.
+        title: 'Agent build (p50 / p90 / p99) — the spread is the cache hit/miss split',
+        left: [
+          stageMetric('AgentBuildMs', 'p50'),
+          stageMetric('AgentBuildMs', 'p90'),
+          stageMetric('AgentBuildMs', 'p99'),
+        ],
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Preamble breakdown (p50) — which sub-stage owns it',
+        left: preambleSubStages('p50'),
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Preamble breakdown (p90) — where the tail lives',
+        left: preambleSubStages('p90'),
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.LogQueryWidget({
+        // A resume skips most of the preamble, so mixing the populations is
+        // what would make a traffic-mix shift look like a latency win.
+        title: 'Preamble by turn shape (resume turns skip most of it)',
+        logGroupNames: [this.runtimeLogGroupName],
+        queryLines: [
+          'filter ispresent(PreambleMs)',
+          'stats count(*) as turns, pct(PreambleMs, 50) as p50, '
+            + 'pct(PreambleMs, 90) as p90 by isResume, deferredBuild',
+          'sort turns desc',
+        ],
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.LogQueryWidget({
+        // The honesty check on the decomposition itself: if the stages do not
+        // account for the total, time is going somewhere the spec has not
+        // modelled, and that gap is the next thing to chase.
+        title: 'Unaccounted prelude time (total − preamble − rag − tools − agent_build)',
+        logGroupNames: [this.runtimeLogGroupName],
+        queryLines: [
+          'filter ispresent(PreludeTotalMs)',
+          'fields PreludeTotalMs - (PreambleMs + RagMs + ToolsMs + AgentBuildMs) as unaccountedMs',
+          'stats count(*) as turns, avg(unaccountedMs) as avgUnaccounted, '
+            + 'pct(unaccountedMs, 90) as p90Unaccounted',
+        ],
+        width: 12,
+        height: 6,
+      }),
+    );
+
     dashboard.addWidgets(
       new cloudwatch.GraphWidget({
         title: 'Sessions created vs currently active',

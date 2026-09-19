@@ -9,7 +9,7 @@ measures.
 import json
 import logging
 
-from apis.inference_api.chat.turn_timing import TurnPrelude
+from apis.inference_api.chat.turn_timing import TurnPrelude, _metric_name
 
 
 class TestMarks:
@@ -224,6 +224,140 @@ class TestGroups:
         prelude._marks.append((None, 5.0))  # type: ignore[arg-type]
 
         prelude.emit(session_id="s", stream_kind="agent")  # must not raise
+
+
+class TestMetricNames:
+    """The EMF metric name is derived from the stage name, not looked up.
+
+    A hand-kept table drifts silently: the dashboard widget renders an empty
+    graph, which is indistinguishable from "that stage never ran".
+    """
+
+    def test_dotted_and_snake_stages_become_camel_case_ms(self):
+        assert _metric_name("preamble.session_state") == "PreambleSessionStateMs"
+        assert _metric_name("preamble.ownership") == "PreambleOwnershipMs"
+        assert _metric_name("agent_build") == "AgentBuildMs"
+        assert _metric_name("rag") == "RagMs"
+
+    def test_a_group_prefix_renders_the_same_either_way(self):
+        """`groups.preamble` and a flat `preamble` mark must not disagree —
+        they are the same quantity, so the same name is correct."""
+        assert _metric_name("preamble") == "PreambleMs"
+
+
+class TestMetrics:
+    """One EMF record per turn, so the fleet has percentiles.
+
+    The log line answers "where did THIS turn go"; only an aggregate can
+    answer "did the change help", which is the question
+    docs/specs/turn-latency-preamble.md exists to make answerable.
+    """
+
+    def test_emits_every_stage_plus_the_group_and_the_total(self, monkeypatch):
+        record = _emf_record(monkeypatch, ["preamble.ownership", "preamble.quota", "agent_build"])
+
+        assert set(record["metrics"]) == {
+            "PreludeTotalMs",
+            "PreambleOwnershipMs",
+            "PreambleQuotaMs",
+            "PreambleMs",
+            "AgentBuildMs",
+        }
+
+    def test_every_metric_is_milliseconds(self, monkeypatch):
+        record = _emf_record(monkeypatch, ["preamble.quota"])
+
+        assert set(record["units"].values()) == {"Milliseconds"}
+
+    def test_the_group_total_rides_along_with_its_substages(self, monkeypatch):
+        """Both, not either: the sub-stages answer the new question and the
+        group keeps the pre-split baseline comparable."""
+        record = _emf_record(monkeypatch, ["preamble.ownership", "preamble.quota"])
+
+        assert "PreambleMs" in record["metrics"]
+        assert "PreambleOwnershipMs" in record["metrics"]
+
+    def test_turn_shape_rides_as_properties_not_dimensions(self, monkeypatch):
+        """Dimensions multiply metric streams AND invite reading a p99 off a
+        slice too thin to have one. The Logs Insights widgets slice instead."""
+        record = _emf_record(
+            monkeypatch,
+            ["preamble.quota"],
+            extra={"isResume": True, "deferredBuild": False, "hasAssistant": True},
+        )
+
+        assert record["properties"]["isResume"] is True
+        assert record["properties"]["deferredBuild"] is False
+        assert record["properties"]["streamKind"] == "agent"
+
+    def test_carries_no_message_content(self, monkeypatch):
+        """Same content-free rule as the log line and the cost rows."""
+        record = _emf_record(monkeypatch, ["preamble.quota"])
+
+        assert set(record["properties"]) <= {
+            "streamKind",
+            "sessionId",
+            "isResume",
+            "deferredBuild",
+            "hasAssistant",
+        }
+
+    def test_the_kill_switch_suppresses_only_the_metrics(self, monkeypatch, caplog):
+        """The marks stay ungated — they cost a perf_counter. The metrics cost
+        log ingestion and custom-metric charges, hence the switch."""
+        monkeypatch.setenv("TURN_LATENCY_METRICS_ENABLED", "false")
+        calls = []
+        monkeypatch.setattr(
+            "apis.shared.observability.emf.emit_emf_metrics",
+            lambda **kw: calls.append(kw),
+        )
+
+        prelude = TurnPrelude()
+        prelude.mark("preamble.quota")
+        with caplog.at_level(logging.INFO, logger="apis.inference_api.chat.turn_timing"):
+            prelude.emit(session_id="s", stream_kind="agent")
+
+        assert calls == []
+        assert [r for r in caplog.records if r.getMessage().startswith("turn_prelude ")]
+
+    def test_an_empty_flag_value_leaves_metrics_on(self, monkeypatch):
+        """House rule: a workflow env var can materialize as "" and that must
+        not read as off."""
+        monkeypatch.setenv("TURN_LATENCY_METRICS_ENABLED", "")
+
+        assert _emf_record(monkeypatch, ["preamble.quota"])["metrics"]
+
+    def test_a_metrics_failure_never_costs_the_log_line(self, monkeypatch, caplog):
+        """Two independent readers of the same turn; neither may take the
+        other down, and neither may take the turn down."""
+        def _boom(**_kwargs):
+            raise RuntimeError("cloudwatch exploded")
+
+        monkeypatch.setattr(
+            "apis.shared.observability.emf.emit_emf_metrics", _boom
+        )
+
+        prelude = TurnPrelude()
+        prelude.mark("preamble.quota")
+        with caplog.at_level(logging.INFO, logger="apis.inference_api.chat.turn_timing"):
+            prelude.emit(session_id="s", stream_kind="agent")  # must not raise
+
+        assert [r for r in caplog.records if r.getMessage().startswith("turn_prelude ")]
+
+
+def _emf_record(monkeypatch, stages, *, extra=None):
+    """Capture the kwargs the prelude hands to `emit_emf_metrics`."""
+    captured = {}
+    monkeypatch.setattr(
+        "apis.shared.observability.emf.emit_emf_metrics",
+        lambda **kw: captured.update(kw),
+    )
+
+    prelude = TurnPrelude()
+    for stage in stages:
+        prelude.mark(stage)
+    prelude.emit(session_id="s", stream_kind="agent", extra=extra)
+    return captured
 
 
 def _emitted(prelude, *, session_id="s", extra=None):
