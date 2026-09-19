@@ -30,6 +30,7 @@ interface Harness {
   connectCalls: any[];
   post(url?: string): void;
   postFrom(origin: string, url?: string): void;
+  fireAuthError(): void;
   extraSearchParams(): URLSearchParams;
   status(): string;
   failAuth(): void;
@@ -87,6 +88,7 @@ function load(): Harness {
       listeners.forEach((fn) => fn(event));
     },
     status: () => (statusEl.hidden ? '' : statusEl.textContent),
+    fireAuthError: () => authConfig.error({}, { code: 10 }),
     extraSearchParams: () => authConfig.httpExtraSearchParams() as URLSearchParams,
     failAuth: () => authConfig.error({}, { code: 10 }),
     succeedAuth: () => authConfig.success({}, [{ sessionId: 's', authToken: 't' }]),
@@ -208,6 +210,31 @@ describe('browser live-view viewer', () => {
     // must not become an unhandled rejection.
     expect(() => h.connectCalls[0].observers.firstFrame(conn)).not.toThrow();
     await new Promise((r) => setTimeout(r, 0));
+  });
+
+  it('does not report failure for an auth error that lands AFTER success', () => {
+    const h = load();
+    h.post();
+    h.succeedAuth();
+    h.connectCalls[0].observers.firstFrame({});
+
+    // The SDK closes the auth socket once it is done and reports that close
+    // through `error` even though authentication SUCCEEDED — measured on dev,
+    // where `connect` is already running when code 10 arrives and the stream
+    // then establishes normally. #status is an absolutely-positioned overlay,
+    // so surfacing this would paint an error across a working stream.
+    h.fireAuthError();
+
+    expect(h.status()).toBe('');
+  });
+
+  it('still reports failure when auth fails before any session exists', () => {
+    const h = load();
+    h.post();
+
+    h.fireAuthError();
+
+    expect(h.status()).toContain('Could not start the session');
   });
 
   it('ignores a connect message from any other origin', () => {

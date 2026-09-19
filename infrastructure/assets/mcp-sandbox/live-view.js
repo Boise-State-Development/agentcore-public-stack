@@ -44,6 +44,15 @@
   // apart both reach `dcv.authenticate` and the second socket's open closes
   // the first — surfacing as `Close received after close` and auth code 10.
   var starting = false;
+  // Set once `authenticate` has handed us a session. The SDK closes the auth
+  // WebSocket as soon as it is done, and reports that close through the
+  // `error` callback EVEN THOUGH authentication succeeded — measured on dev:
+  // `connect` is already running when `dcv.authenticate failed {code: 10}`
+  // arrives, and the stream then establishes normally. In Node the same close
+  // is a clean code 1000. Without this flag the error handler paints
+  // "Could not start the session" over a working stream, because #status is
+  // an absolutely-positioned overlay covering the whole display.
+  var authenticated = false;
 
   function setStatus(text) {
     if (!statusEl) return;
@@ -142,6 +151,13 @@
       // configuration with a missing auth callback.
       promptCredentials: function () {},
       error: function (_auth, error) {
+        // A failure reported AFTER we already have a session is the auth
+        // socket closing behind a successful handshake, not a failure to
+        // reach the service. Surfacing it would hide a live stream.
+        if (authenticated) {
+          if (window.console) console.info('dcv auth socket closed', error);
+          return;
+        }
         starting = false;
         setStatus('Could not start the session. It may have ended.');
         if (window.console) console.error('dcv.authenticate failed', error);
@@ -153,6 +169,7 @@
           setStatus('The session could not be opened.');
           return;
         }
+        authenticated = true;
         connect(first.sessionId, first.authToken, viewport, extras);
       },
       httpExtraSearchParams: extras,
@@ -238,6 +255,7 @@
           disconnect: function (_conn, reason) {
             connection = null;
             starting = false;
+            authenticated = false;
             setStatus('The sign-in session ended.');
             if (window.console) console.info('dcv disconnected', reason);
           },
