@@ -62,12 +62,30 @@ COPY backend/src /app/src
 # which is the right time to learn about it.
 RUN python -m compileall -q /app/src
 
-# Create necessary directories
-RUN mkdir -p /app/output /app/uploads /app/generated_images
+# Create non-root user for security (AgentCore Runtime best practice).
+# Note what is NOT here any more: `chown -R bedrock_agentcore /app`. A recursive
+# chown rewrites every file it touches into a fresh layer, so /app shipped
+# TWICE — on this image that is the venv plus the whole source tree, duplicated
+# for nothing. Code and dependencies now stay root-owned, which is both smaller
+# and safer: a runtime compromise cannot rewrite the source it executes or drop
+# a backdoor into site-packages.
+#
+# This is only possible because nothing writes into the source tree any more.
+# It used to: main.py resolved base_dir from __file__ (landing in /app/src/apis)
+# and os.makedirs() there on every startup, and agents/utils/config.py did the
+# same one level up — the latter on the hot path, since tool_result_processor
+# saves base64 tool output under it. Both now go through
+# apis/shared/runtime_paths.py and the RUNTIME_DATA_DIR below.
+# backend/tests/architecture/test_source_tree_not_written.py is the regression
+# guard — if it fails, this image stops booting.
+RUN useradd -m -u 1000 -s /bin/bash bedrock_agentcore
 
-# Create non-root user for security (AgentCore Runtime best practice)
-RUN useradd -m -u 1000 -s /bin/bash bedrock_agentcore && \
-    chown -R bedrock_agentcore:bedrock_agentcore /app
+# The ONE writable location. Everything the runtime creates (the static
+# output/uploads/generated_images dirs, and the agents package's per-session
+# tool output) resolves under here. Must be writable: on AgentCore each session
+# can land on a fresh micro-VM, so this starts empty every time.
+ENV RUNTIME_DATA_DIR=/app/var
+RUN install -d -o bedrock_agentcore -g bedrock_agentcore /app/var
 
 # Switch to non-root user
 USER bedrock_agentcore

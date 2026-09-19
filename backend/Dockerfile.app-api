@@ -13,10 +13,9 @@ WORKDIR /app
 # from this image parsed the whole dependency tree (fastapi, boto3, strands,
 # ...) on its first request. Unlike inference-api this is a long-lived ECS
 # service, so the cost is paid per task start — deploys, scale-out, and Fargate
-# task replacement — not per session. Unlike the Lambda images, appuser does own
-# /app and so CAN write .pyc at runtime; that just means each new task pays the
-# compile once and then throws the result away when it is replaced. Baking it
-# into the image is what makes the work survive a task boundary.
+# task replacement — not per session. The final stage ships /app/.venv and
+# /app/src root-owned, so the runtime user cannot write .pyc at all: baking them
+# in at build time is the only place the bytecode can live.
 ENV UV_COMPILE_BYTECODE=1
 
 # Install system dependencies needed for any native builds
@@ -53,41 +52,40 @@ RUN apt-get update && apt-get install -y \
     curl=8.14.1-2+deb13u* \
     && rm -rf /var/lib/apt/lists/*
 
-# Create the non-root user BEFORE the COPYs, so each one can land with the right
-# ownership via --chown. This ordering is the whole point: a trailing
-# `chown -R appuser:appuser /app` rewrites every file it touches into a fresh
-# layer, so /app was shipped TWICE — once in the COPY layers and again in the
-# chown layer (313MB of duplicate before this image carried bytecode, 454MB
-# after). --chown moves the ownership into the COPY itself, which costs nothing.
+# Create the non-root user up front so the writable directory below can be
+# handed to it without a recursive chown. A trailing `chown -R appuser /app`
+# rewrites every file it touches into a fresh layer, so /app used to ship TWICE
+# — 313MB of duplicate before this image carried bytecode, 454MB after.
 RUN useradd -m -u 1000 -s /bin/bash appuser
 
-# /app itself (created by WORKDIR as root) — a single non-recursive chown, so it
-# stays a ~0-byte layer rather than a copy of the tree.
-RUN chown appuser:appuser /app
-
-# Copy the virtual environment from builder
-COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
-
-# Copy application code. appuser MUST own this tree, not just be able to read
-# it: main.py's lifespan resolves base_dir to Path(__file__).parent.parent —
-# i.e. /app/src/apis, NOT /app — and os.makedirs() the output/uploads/
-# generated_images directories there on every startup. Drop the ownership here
-# and the service dies on a PermissionError at boot.
-COPY --chown=appuser:appuser backend/src /app/src
-
-# Create necessary directories. These are /app/*, which the base_dir above means
-# nothing actually reads or writes today; kept (and kept appuser-owned, which
-# the old recursive chown did implicitly) so this stays a pure layer change.
-RUN install -d -o appuser -g appuser /app/output /app/uploads /app/generated_images
-
-# Switch to non-root user
-USER appuser
+# Code and dependencies ship ROOT-OWNED. appuser can read and execute them and
+# cannot modify them, so a process that is compromised at runtime cannot
+# rewrite its own source or drop a backdoor into site-packages.
+#
+# This is only possible because nothing writes into the source tree any more.
+# It used to: main.py resolved base_dir from __file__ (landing in /app/src/apis)
+# and os.makedirs() there on every startup, and agents/utils/config.py did the
+# same one level up. Both now go through apis/shared/runtime_paths.py and the
+# RUNTIME_DATA_DIR below. backend/tests/architecture/test_source_tree_not_written.py
+# is the regression guard — if it fails, this image stops booting.
+COPY --from=builder /app/.venv /app/.venv
+COPY backend/src /app/src
 
 # Precompile our own source the same way the venv was (see UV_COMPILE_BYTECODE
 # above). `-q` keeps the layer log quiet; a syntax error still fails the build,
-# which is the right time to learn about it. Runs after USER so the .pyc land
-# owned by appuser rather than root.
+# which is the right time to learn about it. Runs as root, before USER, because
+# /app/src is no longer writable by appuser — which is the point: the .pyc are
+# baked now and can never be rewritten at runtime.
 RUN python -m compileall -q /app/src
+
+# The ONE writable location. Everything the services create at runtime (the
+# static output/uploads/generated_images dirs, and the agents package's
+# per-session tool output) resolves under here via RUNTIME_DATA_DIR.
+ENV RUNTIME_DATA_DIR=/app/var
+RUN install -d -o appuser -g appuser /app/var
+
+# Switch to non-root user
+USER appuser
 
 # Version injection (defaults to "unknown" if not provided via --build-arg)
 ARG APP_VERSION=unknown
