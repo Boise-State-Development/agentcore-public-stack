@@ -172,6 +172,44 @@ describe('browser live-view viewer', () => {
     expect(typeof cfg.observers.disconnect).toBe('function');
   });
 
+  it('sizes the display only once the first frame has arrived', () => {
+    const h = load();
+    h.post();
+    h.succeedAuth();
+
+    const cfg = h.connectCalls[0];
+    const conn = {
+      requestDisplayLayout: jest.fn((_layout: any[]) => Promise.resolve()),
+    };
+
+    // Nothing may be requested before the display channel exists: calling it
+    // when the connect promise resolves rejects with "Display channel is not
+    // available", and since it returns a PROMISE a try/catch never sees it —
+    // it lands as an unhandled rejection. Measured on dev.
+    expect(conn.requestDisplayLayout).not.toHaveBeenCalled();
+
+    cfg.observers.firstFrame(conn);
+
+    expect(conn.requestDisplayLayout).toHaveBeenCalledTimes(1);
+    const layout = conn.requestDisplayLayout.mock.calls[0][0];
+    expect(layout[0].rect).toEqual({ x: 0, y: 0, width: 1280, height: 800 });
+  });
+
+  it('swallows a rejected display-layout request rather than leaking it', async () => {
+    const h = load();
+    h.post();
+    h.succeedAuth();
+
+    const conn = {
+      requestDisplayLayout: () => Promise.reject(new Error('Display channel is not available')),
+    };
+
+    // The stream is still usable at whatever size the server chose, so this
+    // must not become an unhandled rejection.
+    expect(() => h.connectCalls[0].observers.firstFrame(conn)).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
   it('ignores a connect message from any other origin', () => {
     const h = load();
 

@@ -159,6 +159,40 @@
     });
   }
 
+/**
+   * Pin the remote display to the browser session's real viewport.
+   *
+   * Mismatched dimensions are what crop or letterbox the stream, which is why
+   * the viewport travels on the event rather than being a constant in the
+   * frontend.
+   *
+   * Called from `firstFrame`, NOT from `connect().then()`. The display channel
+   * is not up when the connect promise resolves, so calling it there rejects
+   * with "Display channel is not available" — and because it returns a PROMISE,
+   * a try/catch around it never saw the failure; it surfaced as an unhandled
+   * rejection in the console instead. Measured on dev.
+   */
+  function applyDisplayLayout(conn, viewport) {
+    if (!conn || typeof conn.requestDisplayLayout !== 'function') return;
+    try {
+      var result = conn.requestDisplayLayout([
+        {
+          name: 'Main Display',
+          rect: { x: 0, y: 0, width: viewport.width, height: viewport.height },
+          primary: true,
+        },
+      ]);
+      // Not fatal either way: the stream renders at whatever the server chose.
+      if (result && typeof result.catch === 'function') {
+        result.catch(function (e) {
+          if (window.console) console.info('requestDisplayLayout declined', e);
+        });
+      }
+    } catch (e) {
+      if (window.console) console.info('requestDisplayLayout threw', e);
+    }
+  }
+
   function connect(sessionId, authToken, viewport, extras) {
     // The query is supplied through `httpExtraSearchParams`, so strip it here
     // rather than sending it twice — the transport appends to whatever URL it
@@ -197,8 +231,9 @@
         // callbacks, never both.
         observers: {
           httpExtraSearchParams: extras,
-          firstFrame: function (_conn) {
+          firstFrame: function (conn) {
             setStatus('');
+            applyDisplayLayout(conn, viewport);
           },
           disconnect: function (_conn, reason) {
             connection = null;
@@ -210,23 +245,6 @@
       })
       .then(function (conn) {
         connection = conn;
-        // Pin the remote display to the browser session's real viewport.
-        // Mismatched dimensions are what crop or letterbox the stream, which
-        // is why the viewport travels on the event rather than being a
-        // constant anywhere in the frontend.
-        if (conn && typeof conn.requestDisplayLayout === 'function') {
-          try {
-            conn.requestDisplayLayout([
-              {
-                name: 'Main Display',
-                rect: { x: 0, y: 0, width: viewport.width, height: viewport.height },
-                primary: true,
-              },
-            ]);
-          } catch (e) {
-            /* Not fatal: the stream renders at whatever the server chose. */
-          }
-        }
       })
       .catch(function (error) {
         starting = false;
