@@ -112,6 +112,40 @@ describe('BrowserLoginPromptComponent', () => {
       expect(el.querySelector('iframe')).not.toBeNull();
     });
 
+    it('mints once per open, however many times the button is activated', async () => {
+      const el = render();
+      const open = el.querySelector('button') as HTMLButtonElement;
+
+      // Two activations in the same tick: measured on dev as two
+      // `POST .../browser/live-view` 30ms apart for a single open. Each mint
+      // is a live signed credential, and the second drove a second
+      // `dcv.authenticate` that failed while the first was still connecting.
+      open.click();
+      open.click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(service.mintLiveView).toHaveBeenCalledTimes(1);
+    });
+
+    it('retires the open affordance once the viewer is up', async () => {
+      const el = render();
+      (el.querySelector('button') as HTMLButtonElement).click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      // The re-entry guard covers a programmatic second call; this covers the
+      // UI half — there is no longer a control that could ask for another
+      // mint. Asserted as "the button is gone" rather than clicking it again,
+      // because clicking a control that does not exist passes whether or not
+      // the guard works.
+      const stillOffersOpen = Array.from(el.querySelectorAll('button')).some((b) =>
+        b.textContent?.includes('Open sign-in'),
+      );
+      expect(stillOffersOpen).toBe(false);
+      expect(service.mintLiveView).toHaveBeenCalledTimes(1);
+    });
+
     it('frames the sandbox origin and declares the stream host in the CSP', async () => {
       const el = render();
       (el.querySelector('button') as HTMLButtonElement).click();

@@ -301,6 +301,13 @@ export class BrowserLoginPromptComponent {
   });
 
   protected async openViewer(): Promise<void> {
+    // Re-entry guard. Without it a second activation of the button mints a
+    // second live-view URL ~30ms after the first: two `POST .../live-view`
+    // for one open, measured on dev. Each mint is a live SigV4-signed
+    // credential, and the second one drove a second `dcv.authenticate` that
+    // failed while the first was still connecting.
+    if (this.minting() || this.open()) return;
+
     this.error.set(null);
     this.minting.set(true);
     try {
