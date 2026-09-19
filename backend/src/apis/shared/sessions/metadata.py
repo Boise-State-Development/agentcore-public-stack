@@ -29,6 +29,8 @@ import math
 import os
 import base64
 from dataclasses import dataclass
+
+from apis.shared.aws_clients import get_dynamodb_table
 from typing import Iterable, List, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
@@ -174,11 +176,9 @@ async def store_user_display_text(
         return
 
     try:
-        import boto3
         from datetime import datetime, timezone, timedelta
 
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         timestamp = datetime.now(timezone.utc).isoformat()
         ttl = int((datetime.now(timezone.utc) + timedelta(days=365)).timestamp())
@@ -247,12 +247,10 @@ async def _store_message_metadata_cloud(
         - TTL only affects cost records (sessions don't have ttl)
     """
     try:
-        import boto3
         import uuid as uuid_lib
         from datetime import datetime, timezone, timedelta
 
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table(table_name)
+        table = get_dynamodb_table(table_name)
 
         # Prepare item for DynamoDB
         metadata_dict = message_metadata.model_dump(by_alias=True, exclude_none=True)
@@ -958,12 +956,10 @@ async def _store_session_metadata_cloud(
     - Direct session lookup via GSI
     """
     try:
-        import boto3
         from botocore.exceptions import ClientError
         from datetime import datetime, timezone
 
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table(table_name)
+        table = get_dynamodb_table(table_name)
 
         # First, check if session exists via GSI to get current SK
         existing_session = await _get_session_by_gsi(session_id, user_id, table)
@@ -1141,12 +1137,10 @@ async def ensure_session_metadata_exists(
         raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
 
     try:
-        import boto3
         from botocore.exceptions import ClientError
         from datetime import datetime, timezone
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         # Catch a pre-existing row (legacy S#ACTIVE#… or already-migrated S#{id}) so
         # we don't create a second row for the same session.
@@ -1237,10 +1231,8 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> Non
         raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -1284,10 +1276,8 @@ async def set_session_unread(session_id: str, user_id: str, unread: bool) -> Non
         raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -1362,11 +1352,9 @@ async def update_session_activity(
         raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
 
     try:
-        import boto3
         from datetime import datetime, timezone
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -1499,10 +1487,8 @@ async def set_selected_prompt_id(
         return False
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -1618,8 +1604,7 @@ async def load_session_meta(session_id: str, user_id: str) -> SessionMetaSnapsho
         import boto3
         from boto3.dynamodb.conditions import Key
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         response = table.query(
             IndexName="SessionLookupIndex",
@@ -1681,8 +1666,7 @@ async def session_owned_by_other_user(session_id: str, user_id: str) -> bool:
         import boto3
         from boto3.dynamodb.conditions import Key
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         response = table.query(
             IndexName="SessionLookupIndex",
@@ -2162,8 +2146,7 @@ async def session_exists_for_other_user(session_id: str, current_user_id: str) -
         import boto3
         from boto3.dynamodb.conditions import Key
 
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         response = table.query(
             IndexName='SessionLookupIndex',
@@ -2229,8 +2212,7 @@ async def _get_all_message_metadata_cloud(session_id: str, user_id: str, table_n
         import boto3
         from boto3.dynamodb.conditions import Key
 
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table(table_name)
+        table = get_dynamodb_table(table_name)
 
         logger.info(f"🔍 Querying cost records via GSI for session {session_id}")
 
@@ -2342,8 +2324,7 @@ async def _get_session_metadata_cloud(
         import boto3
         from boto3.dynamodb.conditions import Key
 
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table(table_name)
+        table = get_dynamodb_table(table_name)
 
         # Use GSI for session lookup by ID
         response = table.query(
@@ -2637,8 +2618,7 @@ async def _list_user_sessions_cloud(
         from boto3.dynamodb.conditions import Key
         from botocore.exceptions import ClientError
 
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table(table_name)
+        table = get_dynamodb_table(table_name)
 
         cursor = _decode_list_cursor(next_token)
         want = (limit + 1) if limit else None
@@ -2852,10 +2832,8 @@ async def add_pending_interrupt(
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -2910,10 +2888,8 @@ async def add_export_receipt(
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -2961,10 +2937,8 @@ async def remove_pending_interrupts(
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -3027,10 +3001,8 @@ async def clear_pending_interrupts(
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         # The preamble reads this row once and shares it (PR-2); `None` keeps
         # the original per-call read for every other caller.
@@ -3095,10 +3067,8 @@ async def set_paused_turn(
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -3149,10 +3119,8 @@ async def clear_paused_turn(
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         # The preamble reads this row once and shares it (PR-2); `None` keeps
         # the original per-call read for every other caller.
@@ -3223,10 +3191,8 @@ async def set_browser_session(
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -3268,10 +3234,8 @@ async def clear_browser_session(session_id: str, user_id: str) -> None:
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing or not existing.get("SK"):
@@ -3314,10 +3278,8 @@ async def set_truncated_turn(session_id: str, user_id: str) -> None:
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -3355,10 +3317,8 @@ async def clear_truncated_turn(
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         # The preamble reads this row once and shares it (PR-2); `None` keeps
         # the original per-call read for every other caller.
@@ -3441,12 +3401,10 @@ async def set_interrupted_turn(
         reason = "unknown"
 
     try:
-        import boto3
         from datetime import datetime, timezone
         from botocore.exceptions import ClientError
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -3530,10 +3488,8 @@ async def clear_interrupted_turn(
         return None
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         # The preamble reads this row once and shares it (PR-2); `None` keeps
         # the original per-call read for every other caller.
@@ -3624,11 +3580,9 @@ async def set_pending_attachments(
         return
 
     try:
-        import boto3
         from datetime import datetime, timezone
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -3676,10 +3630,8 @@ async def clear_pending_attachments(session_id: str, user_id: str) -> None:
         return
 
     try:
-        import boto3
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
@@ -3724,11 +3676,9 @@ async def pop_pending_attachments(
         return []
 
     try:
-        import boto3
         from datetime import datetime, timezone
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(sessions_metadata_table)
+        table = get_dynamodb_table(sessions_metadata_table)
 
         # The preamble reads this row once and shares it (PR-2); `None` keeps
         # the original per-call read for every other caller.

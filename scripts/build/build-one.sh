@@ -145,6 +145,7 @@ case "$SERVICE" in
             "backend/src/apis/shared/timestamps.py"
             "backend/src/apis/shared/dynamo_errors.py"
             "backend/src/apis/shared/feature_flags.py"
+            "backend/src/apis/shared/aws_clients.py"
         )
         # Both kb-sync Lambdas are arm64 (see the kb-sync CDK construct).
         PLATFORM="linux/arm64"

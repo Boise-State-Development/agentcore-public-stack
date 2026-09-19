@@ -36,6 +36,10 @@ COPY backend/src/apis/shared/errors.py ${LAMBDA_TASK_ROOT}/apis/shared/errors.py
 # Leaf module (imports only os); reached via apis/shared/sessions/metadata.py,
 # which reads the COST_DIAGNOSTICS_ENABLED kill switch at aggregate-bump time.
 COPY backend/src/apis/shared/feature_flags.py ${LAMBDA_TASK_ROOT}/apis/shared/feature_flags.py
+# Leaf module (imports boto3 lazily); reached via apis/shared/sessions/metadata.py,
+# which now takes its DynamoDB handles from the shared client cache instead of
+# constructing a resource per call.
+COPY backend/src/apis/shared/aws_clients.py ${LAMBDA_TASK_ROOT}/apis/shared/aws_clients.py
 COPY backend/src/apis/shared/harness/ ${LAMBDA_TASK_ROOT}/apis/shared/harness/
 COPY backend/src/apis/shared/scheduled_prompts/ ${LAMBDA_TASK_ROOT}/apis/shared/scheduled_prompts/
 COPY backend/src/apis/shared/sessions_bff/ ${LAMBDA_TASK_ROOT}/apis/shared/sessions_bff/

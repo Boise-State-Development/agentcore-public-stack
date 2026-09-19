@@ -496,7 +496,34 @@ recovery — is paid for by a measured 275ms rather than by a guess. Scope widen
 to include `ownership`, `files` and the quota session-notice, which read the
 same item.
 
-## PR-2b — the quota session-notice read (BUILT)
+## PR-2b — the quota session-notice read (SHIPPED #1193, VALIDATED on dev)
+
+**`preamble.quota` 61-65ms -> 4ms. Warm preamble 163ms -> 95ms; the whole
+pre-stream window 349ms -> 263ms.** Measured on dev 2026-09-19:
+
+| Sub-stage | Baseline | After PR-2 | **After PR-2b** |
+|---|---:|---:|---:|
+| `ownership` | 53-55 | 59 | **54** |
+| `skills` | 5-17 | 17 | **15** |
+| `files` | 53 | 4 | **4** |
+| `session_state` | 272-278 | 17-21 | **18** |
+| `quota` | 62 | 61-65 | **4** |
+| **`groups.preamble`** | **451-459** | **163** | **95** |
+| **`totalMs`** | **591-656** | **349** | **263** |
+
+**The warm preamble is 79% below where this spec started**, and the whole
+pre-stream window is down 57%.
+
+Regression: new session created, title generated, turns stream, recap footer
+renders (6.8s then 2.2s).
+
+The COLD turn still shows `quota` at 237ms, and that is not a miss. On a fresh
+container the quota **tier resolver** and the **user cost summary** are both
+uncached, so their own reads dominate; only the session-notice read was ever in
+scope here. On the warm path, where those caches are hot, it is the whole of
+what remains.
+
+
 
 The eighth read, worth a measured **62ms**. Left out of PR-2 because it is not
 the same shape as the others.
@@ -527,7 +554,44 @@ read, pinned by `test_default_call_is_unchanged_for_callers_that_pass_nothing`.
 
 Expected: `preamble.quota` 62ms -> ~0, warm preamble ~163ms -> ~100ms.
 
-## PR-3 — `asyncio.to_thread` the blocking DynamoDB calls (NOT STARTED)
+## PR-3 — cache the boto3 clients (BUILT)
+
+PR-2 made this measurable. With the preamble's eight reads collapsed to one,
+`preamble.session_state` still measured **17-21ms on dev while doing no IO at
+all** — six helpers each constructing `boto3.resource("dynamodb")` before
+reaching their snapshot short-circuit, at the ~1.5ms per construction measured
+at the top of this spec. That residual is now ~25% of the remaining preamble.
+
+`apis/shared/aws_clients.py` caches resources and clients per
+`(service, region)` and exposes `get_dynamodb_table()`. All **29** construction
+sites in `sessions/metadata.py` are converted and 23 now-dead `import boto3`
+lines removed.
+
+**Seven of those sites used single quotes** (`boto3.resource('dynamodb')`) and
+the first pass silently missed them. Worth recording: a partial conversion
+would have left the residual half-present and read on the dashboard as "the
+cache underperforms" rather than "the cache was not applied", which is a much
+harder thing to notice.
+
+### The moto trap
+
+`moto.mock_aws()` is entered **per test**. A client cached under one test's
+mock keeps pointing at a backend that is torn down when that test ends, so the
+next test silently talks to a dead backend — or to a live AWS endpoint. The
+failure is order-dependent, which is the same shape as the static-memo leak
+this repo already paid for across SPA spec files.
+
+So the cache is explicitly resettable, and all three `aws` fixtures
+(`tests/shared`, `tests/lambdas`, `tests/fine_tuning`) reset it on entry **and**
+on exit. `test_the_aws_fixture_leaves_no_client_behind` pins the teardown half,
+because an entry-only reset would still let the last test in a file leak into a
+file that never uses the fixture.
+
+Expected: `session_state` 17-21ms -> ~2-5ms, with smaller shavings on
+`ownership` and `quota`. Combined with PR-2b the warm preamble should reach
+**~80ms, from the 455ms this spec started at**.
+
+## PR-4 — `asyncio.to_thread` the blocking DynamoDB calls (NOT STARTED)
 
 Independent of PR-2 and independent of the measurement: whatever the reads cost,
 doing them on the event loop is wrong under concurrency, and the codebase already
@@ -559,7 +623,8 @@ Found on the same sweep. Recorded so they are not re-derived; none is committed 
   generator's `finally` because closing it via `async with` buffers the whole SSE
   stream. A pooled module-level client has to outlive the request without
   reintroducing that.
-- **A shared cached-boto3-client module.** 89 construction sites at ~1.5ms each.
+- **A shared cached-boto3-client module.** Promoted out of this list into
+  PR-3 below, once PR-2 made the cost visible.
 
 ## The other two open items from `agent-state-feedback.md`
 
