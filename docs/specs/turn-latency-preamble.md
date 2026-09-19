@@ -554,7 +554,66 @@ read, pinned by `test_default_call_is_unchanged_for_callers_that_pass_nothing`.
 
 Expected: `preamble.quota` 62ms -> ~0, warm preamble ~163ms -> ~100ms.
 
-## PR-3 — cache the boto3 clients (BUILT)
+## PR-3 — cache the boto3 clients (SHIPPED #1198, VALIDATED — and it corrects this spec)
+
+**Warm preamble 95ms -> 22-37ms. Whole pre-stream window 263ms -> 128-189ms.**
+Cumulatively the preamble is **down 95%** from the 455ms this spec opened with,
+and the pre-stream window is down ~75%.
+
+| Stage | Baseline | PR-2 | PR-2b | **PR-3** |
+|---|---:|---:|---:|---:|
+| `ownership` | 53-55 | 59 | 54 | **6-7** |
+| `skills` | 5-17 | 17 | 15 | 6-21 |
+| `files` | 53 | 4 | 4 | **1** |
+| `session_state` | 272-278 | 17-21 | 18 | **3-4** |
+| `quota` | 62 | 61-65 | 4 | 5 |
+| **`groups.preamble`** | **451-459** | **163** | **95** | **22-37** |
+| **`totalMs`** | **591-656** | **349** | **263** | **128-189** |
+
+### THE CORRECTION: the 53ms was never the network
+
+This spec asserted, in bold, after PR-1:
+
+> a DynamoDB GSI query from inside an AgentCore Runtime container costs **~53ms**,
+> not 10-15ms — 4-5x the in-region figure this spec assumed.
+
+**That was wrong.** `preamble.ownership` is exactly one GSI query and nothing
+else. It measured 53-55ms across every run. With a cached client it measures
+**6-7ms**. So the 53ms decomposes as:
+
+| | |
+|---|---:|
+| boto3 resource construction (throttled container CPU) | **~47ms** |
+| the actual DynamoDB round trip | **~6ms** — entirely normal in-region |
+
+The local measurement recorded at the top of this spec — ~1.5ms per
+construction — is a laptop number. On the container it is ~47ms, **thirty times
+higher**, and this spec anchored on the laptop figure and then found a story
+that fit it. The container numbers appeared to corroborate "DynamoDB is slow
+here", and nothing challenged that until a fix aimed at something else moved
+the wrong metric.
+
+**So PR-2 was the right fix for the wrong stated reason.** Collapsing eight
+reads into one removed eight *client constructions*, not eight slow network
+calls. The villain was always client construction — which is why PR-3, scoped
+here as a modest ~15ms cleanup, produced a larger proportional win than the PR
+written specifically to fix the problem.
+
+The reusable lesson is not about boto3. It is that **a number measured on a
+laptop is not a measurement of production**, and that a hypothesis which keeps
+fitting the data can still be wrong about mechanism while being right about
+remedy. The sub-stage marks are what made the error visible at all: a single
+`preamble` number would have shown the same total improvement and hidden the
+fact that the explanation was wrong.
+
+### The new largest warm stage
+
+`tools` is now **98-102ms warm** (196-244ms cold) — larger than the entire
+preamble. It covers system-prompt assembly, the single-flight lease, skill
+resolution and every tool builder, and it has never been decomposed. On the
+evidence above, the right move is to measure it before proposing a fix.
+
+
 
 PR-2 made this measurable. With the preamble's eight reads collapsed to one,
 `preamble.session_state` still measured **17-21ms on dev while doing no IO at
