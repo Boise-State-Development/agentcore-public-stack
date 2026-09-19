@@ -4,7 +4,10 @@
 Cleanup + instrumentation SHIPPED (#1163). PR-3 SHIPPED (#1165) and VERIFIED on dev, which exposed a starved-timer
 bug in it; the fix is the follow-up described in its section.
 **Follow-up to:** `d2ee13e2` (emit agent_status and tool-batch summaries), `9bc9bc6b` / `5f0cd52a` / `67234329` (loading-indicator series)
-**Related:** `docs/specs/mid-turn-steering.md` (the other consumer of the drain), CLAUDE.md § SSE Event Types → `agent_status`
+**Related:** `docs/specs/mid-turn-steering.md` (the other consumer of the drain), CLAUDE.md § SSE Event Types → `agent_status`,
+`docs/specs/turn-latency-preamble.md` — which opens the `preamble` stage this spec
+measured and then left closed. That stage is the largest remaining pre-stream wait
+and is deliberately NOT a status problem: no label makes it shorter.
 
 ## Problem
 
@@ -224,6 +227,12 @@ Two conclusions:
 2. **A cold agent build is the whole problem.** 1478ms in one stage, and the
    6.7s cold turn measured earlier is worse. It is the only place in the
    prelude where a phase label earns its keep.
+
+That second conclusion is about *narration*, and it should not be read as a
+verdict on `preamble`. On a warm turn `preamble` is the largest stage in the
+table — 460–494ms of a 641–678ms total — and nothing here looked inside it. It
+is taken up in `docs/specs/turn-latency-preamble.md`, as a latency problem
+rather than a status one.
 
 ### The plan
 

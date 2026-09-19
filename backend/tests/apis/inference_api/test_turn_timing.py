@@ -123,6 +123,13 @@ class TestPayload:
 
         assert set(payload) == {"sessionId", "streamKind", "totalMs", "stages"}
 
+    def test_a_flat_prelude_carries_no_groups_key(self):
+        """A group of one is noise — the number is already in `stages`."""
+        prelude = TurnPrelude()
+        prelude.mark("rag")
+
+        assert "groups" not in _emitted(prelude)
+
 
 class TestFailSoft:
     def test_a_mark_that_cannot_be_taken_never_raises(self, monkeypatch):
@@ -159,6 +166,64 @@ class TestFailSoft:
 
         lines = [r for r in caplog.records if r.getMessage().startswith("turn_prelude ")]
         assert len(lines) == 1
+
+
+class TestGroups:
+    """Sub-stages sum back into the stage they decompose.
+
+    docs/specs/turn-latency-preamble.md splits `preamble` into five. The only
+    measurement anyone has of the pre-stream window is stated in terms of the
+    single coarse number, so the split has to keep reproducing it or it
+    discards its own baseline.
+    """
+
+    def test_dotted_substages_sum_into_their_prefix(self, monkeypatch):
+        clock = iter([0.0, 0.1, 0.4, 1.0, 1.1])
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+
+        prelude = TurnPrelude()  # consumes 0.0
+        prelude.mark("preamble.ownership")  # 100ms
+        prelude.mark("preamble.quota")  # 300ms
+        prelude.mark("rag")  # 600ms
+
+        payload = _emitted(prelude)  # total_ms consumes 1.1
+
+        assert payload["groups"] == {"preamble": 400}
+
+    def test_the_substages_stay_visible_alongside_the_group(self):
+        """The group is an addition, not a replacement: the whole point of the
+        split is knowing WHICH sub-stage owns the time."""
+        prelude = TurnPrelude()
+        prelude.mark("preamble.ownership")
+        prelude.mark("preamble.quota")
+
+        payload = _emitted(prelude)
+
+        assert list(payload["stages"]) == ["preamble.ownership", "preamble.quota"]
+
+    def test_undotted_stages_are_not_grouped(self, monkeypatch):
+        clock = iter([0.0, 0.2, 0.5, 0.6])
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+
+        prelude = TurnPrelude()
+        prelude.mark("preamble.files")  # 200ms
+        prelude.mark("agent_build")  # 300ms
+
+        assert _emitted(prelude)["groups"] == {"preamble": 200}
+
+    def test_a_group_never_breaks_the_turn_it_measures(self, monkeypatch):
+        """Same fail-soft contract as `mark`: a stage name that is not a string
+        must cost a log line, not the turn."""
+        prelude = TurnPrelude()
+        prelude._marks.append((None, 5.0))  # type: ignore[arg-type]
+
+        prelude.emit(session_id="s", stream_kind="agent")  # must not raise
 
 
 def _emitted(prelude, *, session_id="s", extra=None):

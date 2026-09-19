@@ -1690,6 +1690,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             _sanitize_log(input_data.session_id),
         )
         raise HTTPException(status_code=404, detail="Session not found")
+    # First of the preamble's five sub-stages (docs/specs/turn-latency-preamble.md).
+    # The coarse `preamble` number survives as `groups.preamble` in the emitted
+    # line, so the four-turn baseline in the agent-state-feedback spec stays
+    # comparable across this split.
+    prelude.mark("preamble.ownership")
     # Resume requests reuse the cached agent and its paused interrupt state;
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
@@ -1724,6 +1729,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             await _resolve_accessible_skill_ids(current_user),
             input_data.enabled_skills,
         )
+    # Near-zero on a turn that selects no skills — the opt-in default (D6)
+    # short-circuits before touching RBAC or the skill table. A non-trivial
+    # number here means the RBAC cache missed or the owner-index query is slow.
+    prelude.mark("preamble.skills")
     # A "Continue" after a max_tokens truncation. Like resume, it bypasses
     # quota / RAG / file resolution and does NOT clear the turn state; unlike
     # resume there is no interrupt to validate — the agent is rebuilt from the
@@ -2048,6 +2057,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         all_files, oversized_inline + over_budget_inline
     )
 
+    # Covers the unconsumed-attachment recovery read, the S3 fetch behind
+    # `resolve_files`, and the inline/tabular/oversized partitioning. Expected
+    # to be ~0 on a turn with no attachments; if it is not, the hypothesis in
+    # docs/specs/turn-latency-preamble.md is wrong about where the time is.
+    prelude.mark("preamble.files")
+
     # Pre-create session metadata so OAuth interrupts and other state can
     # attach to the session row from turn one. Best-effort; on failure the
     # post-stream lazy-create in StreamCoordinator still covers it.
@@ -2135,6 +2150,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             )
         )
 
+    # The prime suspect: five of the preamble's eight reads of the session's
+    # META row live in this stage (pre-create plus the four stale-marker
+    # clears), each on its own round trip, and four of them short-circuit
+    # without writing anything. The title task is inside the boundary because
+    # spawning it is first-turn session state; it is an `asyncio.create_task`,
+    # so it contributes nothing to the number.
+    prelude.mark("preamble.session_state")
+
     # Check quota if enforcement is enabled
     quota_warning_event = None
     quota_session_notice_event = None
@@ -2171,9 +2194,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Log error but don't block request - fail open for quota errors
             logger.error("Error checking quota for user", exc_info=True)
 
-    # Covers request validation, model/settings resolution, file handling and
-    # the quota round trip — everything before RAG.
-    prelude.mark("preamble")
+    # The quota round trip: a cached tier resolve, a cached O(1) cost-summary
+    # GetItem, and — the uncached one — the per-session notice, which reads the
+    # META row for the eighth time this turn.
+    prelude.mark("preamble.quota")
 
     # If quota exceeded, stream the quota exceeded message instead of agent response
     if quota_exceeded_event:

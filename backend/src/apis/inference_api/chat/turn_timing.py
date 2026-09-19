@@ -39,6 +39,11 @@ unusable, so read it with ``filter-log-events``::
 slowest one is the answer. ``totalMs`` is click-adjacent: it starts when the
 handler is entered, so it excludes the app-api hop and any Runtime cold start —
 compare it against the client-side gap to size what is left.
+
+A stage name may carry a dotted prefix (``preamble.quota``) to record a
+sub-stage. ``groups`` then sums every stage sharing a prefix, so the coarse
+number a stage used to report survives its own decomposition — see
+``emit``.
 """
 
 from __future__ import annotations
@@ -74,7 +79,11 @@ class TurnPrelude:
         self._marks: List[Tuple[str, float]] = []
 
     def mark(self, stage: str) -> None:
-        """Close the stage that just finished and open the next one."""
+        """Close the stage that just finished and open the next one.
+
+        ``stage`` may be dotted (``preamble.quota``) to record a sub-stage;
+        ``emit`` sums the prefix back into ``groups``.
+        """
         try:
             now = time.perf_counter()
             self._marks.append((stage, (now - self._last) * 1000.0))
@@ -114,6 +123,27 @@ class TurnPrelude:
     def total_ms(self) -> int:
         return max(0, int((time.perf_counter() - self._t0) * 1000))
 
+    def _groups(self) -> Dict[str, int]:
+        """Sum the dotted sub-stages back into the stage they decompose.
+
+        A stage that gets split into sub-stages would otherwise take its own
+        history with it: the four-turn dev baseline in
+        docs/specs/agent-state-feedback.md is stated in terms of a single
+        ``preamble`` number, and nothing else in the log reproduces it. Summing
+        the prefix keeps the coarse series comparable across the split while
+        ``stages`` answers the new question.
+
+        Undotted stages are deliberately absent — a group of one is noise, and
+        the reader already has that number in ``stages``.
+        """
+        totals: Dict[str, int] = {}
+        for name, ms in self._marks:
+            prefix, dot, _ = name.partition(".")
+            if not dot:
+                continue
+            totals[prefix] = totals.get(prefix, 0) + int(ms)
+        return totals
+
     def emit(
         self,
         *,
@@ -133,6 +163,9 @@ class TurnPrelude:
                 "totalMs": self.total_ms,
                 "stages": {name: int(ms) for name, ms in self._marks},
             }
+            groups = self._groups()
+            if groups:
+                payload["groups"] = groups
             if extra:
                 payload.update(extra)
             logger.info("turn_prelude %s", json.dumps(payload, default=str))
