@@ -4,6 +4,94 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.23.0] - 2026-09-20
+
+The agent stops working in silence, and stops paying to re-read what it already knows. **Live turn narration** replaces the cycling placeholder with what the agent is actually doing — thinking, which tool is running, how long it took, and a one-line model-written summary of each tool batch — drained concurrently so "Using list_assignments" arrives *while* that tool runs rather than after it. **Document context offload** stops an attached PDF being re-sent on every turn: a digest replaces the bytes and a `document_read` tool pulls back the pages the model actually asks for, measured on a 60-page canary at a **109.1K → ~15K prefix drop**. A five-part **compaction overhaul** makes thresholds model-relative, bounds the summary at 8k tokens, parks cuts until the re-write is free, and offloads oversized tool results at intake. **Browser sign-in handover** lets the agent pause and hand the user a live, interactive browser to sign in to a site it cannot reach, then continue in the authenticated session — gated behind its own RBAC tool id and a MANAGED Chromium URL blocklist. **Response feedback** ships thumbs, retry-with-correction, implicit copy/continue signals and fleet-level attribution by config arm. Plus **.docx / .pptx / .csv / .xlsx previews** in a docked pane, **Agent Templates**, and a performance pass worth ~500ms off the pre-stream window. **A CDK deploy is required**, and operators who use the browser tool must set `CDK_BROWSER_URL_BLOCKLIST`.
+
+### 🚀 Added
+
+- **Browser sign-in handover (`request_user_login`)** — the agent pauses the turn and hands the user a live, interactive browser to sign in to a site it cannot reach, then continues in the authenticated session. New `browser_login_required` SSE event; the interrupt is raised by the tool itself via `ToolContext`, so the `PausedTurnSnapshot`, resume route and `PendingInterrupt` breadcrumb need no special case. While the user holds the browser the automation stream is `DISABLED` at the service, so the agent provably cannot act. Gated by `BROWSER_TAKEOVER_ENABLED` **and** its own catalog entry (`enabledByDefault: false`) (#1177, #1183)
+- **Live-view viewer with no third-party code** — DCV streamed into a first-party viewer page. The event deliberately carries **no URL**: `generate_live_view_url` signs with SigV4 query auth and caps at 300s, so app-api mints one per request instead, and `assert_no_url` enforces that on the interrupt, the event and the persisted row (#1178, #1186, #1189, #1190, #1196, #1199, #1200, #1203)
+- **MANAGED Chromium URL blocklist** — a per-environment hostname blocklist applied as a browser-session policy, so a human holding the browser cannot navigate to a system the agent must not act inside (#1180, #1181, #1202)
+- **Document context offload** — `document_read` tool, `DocumentDigest` built at upload and persisted on `FileMetadata`, restore rehydrating stripped documents as digests, and live offload of unpinned documents once the re-write is free. Gated by `DOCUMENT_READ_ENABLED` / `DOCUMENT_OFFLOAD_ENABLED`, bucketed by `DOCUMENT_OFFLOAD_ROLLOUT_PERCENT` (#1137, #1138, #1139, #1140, #1143)
+- **Per-call context ledger** — prefix split (system / tools / messages), window trims and compaction events on every `C#` cost row, surfaced through the admin cost drill-down (#1130)
+- **Model-relative compaction thresholds** — floor-seeking cut with hysteresis, replacing fixed token ceilings that scaled wrong across models (#1129)
+- **Bounded compaction summary + per-cut metrics** — summary capped at 8k tokens (#1131)
+- **Deferred compaction apply** — cuts are parked post-turn and applied in place when the prefix re-write is free (#1132)
+- **Tool-result offload at intake** — oversized tool results go to S3 with a text preview in context, `document_read` exempt (#1133)
+- **Selective 1h prompt-cache TTL on the static prefix**, behind a flag and priced honestly against the 2× write premium (#1134)
+- **Live turn narration (`agent_status`)** — `thinking` / `tool_start` / `tool_end` phases with Strands' own measured durations, drained concurrently with the agent stream so a status line lands while its tool is running. Deliberately no "responding" phase, and durations are live-only, never persisted (#1160, #1165)
+- **Model-written tool-batch summaries (`tool_group_summary`)** — a Nova Micro side-channel task, structured like `session_title`: its own call on its own messages, so it never appends to the conversation or the cacheable prefix. Persisted as `TSUM#` rows and replayed on `GET /messages` (#1161)
+- **Thinking time and turn recap** — how long the model spent thinking, and how long a finished turn took, shown in the loader's slot on the latest turn only (#1157, #1170, #1174)
+- **Response feedback** — content-free thumbs on assistant messages joined to cost rows (`F#` rows), six reason buckets, and an explicit/implicit signal discriminator (#1142, #1146)
+- **Retry-with-correction** — the consequence behind a thumbs down (#1148)
+- **Implicit feedback signals** — copy and continue as unweighted positive signals (#1151)
+- **Eval sampling** — down-thumbed turns feed AgentCore Evaluations. Opt-in at both CDK and runtime (`FEEDBACK_EVAL_SAMPLING_ENABLED`), because it sends real conversations to an AWS-managed judge (#1153)
+- **Fleet-level feedback attribution** — down-thumb rate by config arm (model, tools, skills), plus a down-thumb reason split on the per-session profile (#1152, #1159)
+- **File previews in a docked pane** — `.docx` and `.pptx` (uploaded or generated), `.csv` as a data grid, and `.xlsx` read server-side with openpyxl. The preview pane opens on a file the turn just created (#1119, #1121, #1122, #1123, #1136)
+- **Agent Templates** — create-form prefill backed by an admin-managed template store (#1149)
+- **Spreadsheet Analysis auto-enables** for a session that holds a spreadsheet, so an uploaded `.xlsx` is answerable without the user finding the toggle (#1163)
+- **Turn-latency observability construct** — EMF metrics decomposing the pre-stream window into named stages (#1184, #1201)
+
+### ✨ Improved
+
+- **gzip on app-api JSON responses**, with SSE passed through un-buffered (#1125, #1127)
+- **Spreadsheet previews show ten times the rows** and the scroller is no longer frozen (#1124)
+- **Copy and thumbs reveal on response hover** rather than occupying the transcript permanently (#1179)
+- **Agent-state orb** gains a halo and settles on finished turns (#1182)
+- **Attachment turn guard** holds a turn's inline attachments to the AgentCore Memory event quota (#1145)
+
+### 🐛 Fixed
+
+- **KaTeX swallowed the prose between two currency amounts** — `$4.50 … $9.00` rendered as math. The earlier HTML-entity workaround never worked and leaked `&#36;` into generated files; both are removed (#1128, #1135)
+- **A new frontend build was not actually served** — the deploy sent no `Cache-Control`, so CloudFront served the old bundle from cache. Hashed filenames do not save you when `index.html` itself is stale (#1197)
+- **The system-prompt date line carried the hour**, re-writing the prompt-cache prefix every hour for the life of every session (#1126)
+- **Deleted conversations were invisible to the admin cost drill-down**, so a user's costs did not reconcile (#1120)
+- **`documentTokens` understated PDFs by ~14×** — `bytes/4` ignores that Bedrock dual-encodes each PDF page as an image on top of the text layer. Every analytic built on it was low by that factor (#1144)
+- **`DOCUMENT_READ_ENABLED=false` left the other two paths running**, so pulling the kill switch still evicted bytes and emitted handles for a tool that was not injected (#1147)
+- **ReDoS in `document_read` pattern mode** — a valid but catastrophic regex ran unbounded. Two defences: a structural `catastrophic_pattern` check that degrades to literal search, and a scan budget (#1147)
+- **Synth now fails when the uploads bucket would have no CORS rule** — a truthy-but-empty origin list synthesised green with no rule at all (#1166, #1172)
+- **The tool/skill lists are awaited before a chat turn is assembled**, closing a first-turn race that re-wrote the prompt-cache prefix (#1168)
+- **Browser policy fixes** — MANAGED was being sent at session level (breaking every session), the policy object key was double-prefixed, and the caller needed read on the policy object (#1173, #1175, #1176, #1183)
+- **`state-*` colour steps that failed AA** in light mode for file-type chips and success text (#1118, #1119)
+
+### ⚠️ Changed
+
+- **The browser URL blocklist ships empty and is supplied per environment.** It was hardcoded to `instructure.com`, and `platform.yml` never forwarded `CDK_BROWSER_URL_BLOCKLIST` — so the list was effectively unconfigurable through the deploy pipeline and every fork inherited one institution's policy. **Set the variable for any environment that needs a blocklist**; the synth log prints the list or warns when it is empty (#1205)
+- **`list_spreadsheets` and `analyze_spreadsheet` are now seeded.** They were catalogued but never written to the tool-catalog table, so a fresh deployment could not grant them to any role (#1205)
+
+### ⚡ Performance
+
+- **~500ms off the pre-stream window.** The session row was read **eight times** per turn — 445ms of a 455ms stage (#1191). boto3 clients rebuilt per call cost 21ms, ~20% of the remaining warm preamble (#1198). Quota now takes session cost from the row the preamble already read (#1193)
+- **Bytecode precompiled in the app-api, inference-api and Lambda images** — `uv` does not compile by default, unlike `pip`, so first-touch import was paid at runtime (#1155, #1169)
+- **CountTokens bounded on the reply path**, and the model id is no longer swapped mid-call; a throttle now costs one failed request instead of a 5.8s stall (#1158)
+- **Long-term memory retrieved through a bounded client**, and the session's own summary is no longer re-fetched per message (#1164)
+- **Agent cache extended to four more tool families**, and spreadsheet-analysis sessions are cached by carrying `assistant_id` in the key (#1156, #1162)
+- **mermaid lazy-loaded** out of the eager scripts bundle (#1119)
+- **app-api and inference-api ship code root-owned**, and app-api no longer ships `/app` twice (#1167, #1171)
+
+### 🔒 Security
+
+- **No test reaches AWS.** 25 test cases across 6 files were making real authenticated AWS calls, hidden by fail-open error handling. An off-box socket guard now blocks them, and the quarantine is burned down — the suite also runs in half the time (#1154, #1157)
+
+### 🏗️ Infrastructure
+
+- **New `browser-policy-construct`** — S3-backed MANAGED Chromium policy object for browser sessions, with `ConnectBrowserLiveViewStream` granted on `*` as AWS requires (#1180, #1194)
+- **New `turn-latency-observability-construct`** — EMF metrics for the decomposed pre-stream stages (#1184)
+- **New `agent-templates` table** — no GSIs (#1149)
+- **`connect-src` allows `data:`/`blob:` in the MCP sandbox CSP** so DCV can load its decoder (#1192)
+- **The Platform Stack deploy triggers on the assets it actually deploys** (#1187)
+
+### 📦 Dependencies
+
+- Backend: `openpyxl` 3.1.5 (new — server-side `.xlsx` reading)
+- Frontend: `docx-preview` 0.4.0, `pptx-preview` 1.0.7 (new), `echarts` stubbed via a local shim
+
+### 🔧 CI/CD
+
+- **Off-box socket guard** in `tests/conftest.py`, with tiktoken warmed before the guard arms (#1154, #1157)
+- **Seed/catalog parity test** — every tool in `TOOL_CATALOG` must have a row in `seed_bootstrap_data.py` (#1205)
+
 ## [1.22.0] - 2026-09-14
 
 The agent can stop guessing. **Clarifying questions** ship end to end: when a request is genuinely ambiguous the agent pauses the turn, the SPA renders a multiple-choice picker in the transcript, and the answer resumes that same tool call — surviving a page refresh. The tool worked from PR-2 but the model reached for it 4 times in 24 ambiguous requests; a measured system-prompt clause takes that to 24/24 while leaving clear requests at 0/18. On the admin side, the **cost drill-down** closes the gap between "top users by cost" and the per-session anatomy: an admin walks user → conversations → session profile with 15 diagnosis rules, a context trajectory chart and a copyable diagnostic JSON — all **content-free by construction**, enforced by a denylist test and a moto test that seeds content and proves none returns. Two silent data bugs are fixed: deleting a knowledge-base document mid-upload **permanently leaked its byte reservation**, and born-managed provisioning **mistook an established legacy agent for a new one** and stranded its corpus. And an `@`-mention now **binds the conversation** instead of borrowing one turn — measured on prod, 247 of 247 mentions started the conversation, so the borrow was paying an invisible tool-loss failure for a case that has never occurred. **No CDK deploy required.** One operator step: enable the Clarifying Questions tool in each existing environment's catalog — the seed skips a tool row that already exists.

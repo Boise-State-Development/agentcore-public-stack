@@ -1,3 +1,244 @@
+# Release Notes — v1.23.0
+
+**Release Date:** September 20, 2026
+**Previous Release:** v1.22.0 (September 14, 2026)
+
+---
+
+> 🏗️ **A CDK deploy is required.** This release adds two constructs (browser policy, turn-latency observability), a new `agent-templates` table, a CSP change for the MCP sandbox, and a synth-time guard on the uploads bucket. Deploy order is unchanged: `platform.yml` → `backend.yml` → `frontend-deploy.yml`. **No GSI operation** — the one new table is created with no indexes, so no existing table is updated. **No data backfill.**
+>
+> 🛠️ **Operator step — set `CDK_BROWSER_URL_BLOCKLIST` per environment.** The browser URL blocklist previously hardcoded `instructure.com` and the deploy pipeline never forwarded the variable. It now ships **empty** and is supplied per environment. Any environment that uses the browser tool and needs a blocklist must set this variable **before** deploying, or browser sessions can reach any host and the RBAC grant on `browse_web` / `request_user_login` becomes the only control. The synth log prints the list, or warns when it is empty — read it after the deploy. See Deployment notes.
+>
+> ⚠️ **Managed knowledge bases: this deploy applies `CDK_MANAGED_KB_MIGRATION_ENABLED` wherever it is already set to `true`.** The variable is read at deploy time, so an environment where it was set since the last platform deploy gets the Upgrade card on **this** release. Nothing migrates on its own — enrolment is a user-initiated `POST` — but the card becomes visible and users can opt their knowledge bases in one at a time. Confirm the value you want before deploying.
+>
+> 🔑 **`request_user_login` ships off.** Browser sign-in handover is the most restrictive default in the tool catalog: it is its own catalog entry with `enabledByDefault: false`, because while a takeover is live the user has a fully interactive Chromium running inside your AWS account with your egress. Grant it to named staff or evaluator roles, never by default.
+
+---
+
+## Highlights
+
+The agent stops working in silence. **Live turn narration** replaces the cycling "Thinking…" placeholder with what is actually happening — which tool is running, how long it took, and a one-line model-written summary of each finished tool batch ("Found the Syllabus Acknowledgment assignment in BIO 101"). The detail that makes it feel live rather than retrospective is the concurrent drain: status transitions are merged into the SSE stream against a short timer instead of between agent yields, so "Using list_assignments" reaches the client **while that tool is running** rather than after its result. A three-tool browse turn used to narrate nothing for 4.5 seconds. None of it costs anything against the model — nothing the status layer produces reaches the prompt.
+
+And it stops paying to re-read what it already knows. **Document context offload** was the largest single cost item in the fleet: attachments were 31% of production spend, because an attached PDF is re-sent in full on every subsequent turn at the cache-write premium. Now the bytes are replaced by a structured digest and a `document_read` tool pulls back exactly the pages the model asks for. On a 60-page canary the prefix went from **109.1K tokens to roughly 15K** — an 86% drop — and the feature turned out to work *far* better than its own spec predicted, because the instrument was hiding it: `documentTokens` estimated `bytes/4` and Bedrock dual-encodes each PDF page as an image on top of the text layer, understating documents by about **14×**. That is fixed, and every analytic built on it moved with it.
+
+Alongside it, a five-part **compaction overhaul**: thresholds are now model-relative rather than fixed token ceilings that scaled wrong across models, the summary is bounded at 8k tokens, cuts are parked post-turn and applied in place when the prefix re-write is free, oversized tool results are offloaded to S3 at intake with a preview left in context, and the static prefix can take a selective 1-hour cache TTL — priced honestly against the 2× write premium that buys.
+
+**Browser sign-in handover** is the release's one genuinely new user-facing capability. When the agent hits a site it cannot reach, it pauses the turn and hands the user a live, interactive browser to sign in, then continues in the authenticated session. While the user holds it, the automation stream is `DISABLED` at the service — the agent *provably* cannot act, rather than being trusted not to. It ships off by default behind its own RBAC tool id, with a MANAGED Chromium URL blocklist as the second control.
+
+**Response feedback** closes the loop the cost drill-down opened: content-free thumbs joined to cost rows, six reason buckets, retry-with-correction as the consequence behind a thumbs down, implicit copy/continue signals, and fleet-level attribution that reads down-thumb rate by config arm — so "which model/tool/skill combination is actually worse" becomes a number rather than an argument.
+
+Rounding out the release: **`.docx`, `.pptx`, `.csv` and `.xlsx` previews** in a docked pane, **Agent Templates**, a performance pass worth about **500ms off the pre-stream window** (the session row was being read eight times per turn), and a test-integrity fix worth calling out — **25 test cases across 6 files were making real authenticated AWS calls**, hidden by fail-open error handling. An off-box socket guard now blocks them, and the suite runs in half the time.
+
+---
+
+## Browser sign-in handover
+
+The agent can now pause a turn and hand the user a live, interactive browser to sign in to a site it cannot reach — then continue browsing the authenticated session. It is the answer to the class of task that used to dead-end: anything behind an institutional login, an MFA prompt, or a consent screen no automation should be clicking on a user's behalf.
+
+### Backend
+- `agents/builtin_tools/browser/request_user_login` — raises the interrupt from the **tool itself** via `ToolContext`, the same shape as `ask_user_question`. Strands routes it through `_stop_for_interrupts`, so the `PausedTurnSnapshot`, the resume route and the `PendingInterrupt` breadcrumb (`kind: "browser_login"`) need no special case.
+- New `browser_login_required` SSE event, emitted after `message_stop` alongside `oauth_required` and `user_question_required`. Resume posts `{completed: true}` / `{skipped: true}` — always an object, **never null**, or the interrupt re-raises forever.
+- **The event deliberately carries no URL.** `generate_live_view_url` signs with SigV4 *query* auth and caps at 300 seconds, so a minted URL is dead before a human reacts and dead again on reload. app-api mints one per request instead, owner-scoped by conversation, and `assert_no_url` enforces the absence on the interrupt, the event and the persisted row rather than trusting it.
+- While the user holds the browser the automation stream is **`DISABLED` at the service** — the agent cannot act, as a property of the system rather than a promise. The idle reaper exempts the session until `deadlineAt` and no further, which is what stops a walked-away-from takeover billing to its TTL.
+
+### Frontend
+- A first-party sign-in viewer with **no third-party code**: DCV is streamed into a viewer page the SPA frames, sized from the `viewport` the event carries (DCV's `remoteWidth`/`remoteHeight` must match the session viewport or the stream crops, and a second copy of `1280x800` in the SPA is a copy that will drift). Full-screen, and it says plainly that it can be driven.
+
+### Infrastructure
+- `browser-policy-construct.ts` — an S3-backed **MANAGED** Chromium policy object applied per browser session. `URLBlocklist` is a flat list of Chromium URL-filter patterns; a bare host blocks that host on every scheme, port and path.
+- `ConnectBrowserLiveViewStream` is granted on `*`, as AWS requires.
+- `connect-src` in the MCP sandbox CSP now allows `data:` and `blob:` so DCV can load its decoder.
+
+### Gating
+Two independent controls, and the tool needs both. `BROWSER_TAKEOVER_ENABLED` is the kill switch; `request_user_login` is its **own catalog entry** with `enabledByDefault: false` — deliberately separate from `browse_web`, because RBAC granularity is one `tool_id` and an *action* on `browse_web` would have shipped an interactive browser in your AWS account to every user who can browse.
+
+---
+
+## Document context offload
+
+An attached PDF used to be re-sent in full on every subsequent turn, at the cache-write premium. Attachments were **31% of production spend**. Now the bytes are replaced by a structured digest, and a `document_read` tool pulls back exactly the pages the model asks for.
+
+### Backend
+- `document_read` — page ranges and pattern search over an attached document, hard-capped at 20 pages per call.
+- `DocumentDigest` built at upload and persisted on `FileMetadata`: an outline plus a bounded abstract, rendered into context in place of the document.
+- The **restore** path rehydrates stripped documents as digests, and the **live** path offloads unpinned documents once the prefix re-write is free. Both route through one gate, so a single flag read governs them.
+- `estimate_document_tokens` — PDFs count `max(pages × PDF_PAGE_TOKEN_ESTIMATE, bytes/4)`, wired into every consumer of that quantity so a row and a decision can never disagree.
+
+### Measured
+On a 60-page canary in dev: prefix **109.1K → ~15K**. Every mechanism fired correctly — digest-only from turn 2, a `document_read` on turn 3 pulling one page in 170ms, the slice ageing out exactly at `DOCUMENT_SLICE_MAX_TURNS`.
+
+### The instrument was hiding the win
+`documentTokens` estimated `bytes/4`, which ignores that Bedrock **dual-encodes each PDF page as an image** on top of the text layer — understating documents by about **14×**. It reported documents as ~6% of the prefix when they were ~86%. Fixed, with every downstream analytic moved with it.
+
+### Hardened during validation
+An independent sweep of the merged epic produced six findings, all closed before this release: the PDF token estimate above; `DOCUMENT_READ_ENABLED=false` not being coupled to the offload and rehydrate paths (pulling the one kill switch an operator would reach for left the live path still evicting bytes — strictly worse than pre-epic behaviour); **ReDoS in pattern mode**, where a valid but catastrophic regex ran unbounded; an inline byte budget sitting exactly on the quota it existed to stay under; and a soft digest token cap that XML-escaping could overshoot.
+
+### Rollout
+`DOCUMENT_OFFLOAD_ROLLOUT_PERCENT` defaults to **100**. The `crc32(session_id) % 100` bucket exists so an evaluation can run concurrent arms; at 100 there is no control arm, only before/after across the release boundary. Set it lower in an environment where you want both.
+
+---
+
+## Compaction overhaul
+
+Five parts, shipped together, all with kill switches.
+
+- **Model-relative thresholds** (`COMPACTION_MODEL_RELATIVE_ENABLED`) — the cut point scales with the model's window instead of a fixed token ceiling that was right for one model and wrong for the rest. Floor-seeking, with hysteresis so a session does not oscillate across the threshold.
+- **Bounded summary** (`COMPACTION_SUMMARY_MODEL_ENABLED`) — capped at 8k tokens, with per-cut metrics.
+- **Deferred apply** (`COMPACTION_DEFERRED_APPLY_ENABLED`) — cuts are parked post-turn and applied in place when the prefix re-write is free, so compaction stops paying for a re-write it could have had for nothing.
+- **Tool-result offload at intake** (`TOOL_RESULT_OFFLOAD_ENABLED`) — oversized tool results go to S3 with a text preview left in context. `document_read` is exempt: offloading the page slice the model just asked for would undo the read and cost a second round trip.
+- **Selective 1h prompt-cache TTL** on the static prefix, behind a flag and priced against the 2× write premium a 1-hour TTL costs.
+
+The compaction ledger records forced cuts, floor-unreachable decisions, in-place applies and head-of-turn promotions, so a cut's cost is attributable after the fact rather than inferred.
+
+---
+
+## Live turn narration
+
+### `agent_status`
+`thinking` / `tool_start` / `tool_end` phases from `AgentStatusHook`, carrying Strands' own measured `durationMs` and `ok=false` for both a raised exception and a result with `status: "error"`. There is deliberately **no "responding" phase** — the SPA already knows text is streaming from the deltas, and a backend-derived duplicate of a fact the client holds first-hand would only disagree at the edges. Durations are live-only and **not persisted**: a reloaded conversation shows summaries without timings, where a client-invented number would be one the user could not trust.
+
+The concurrent drain is what makes it feel live. Status transitions are merged against a short timer rather than between agent yields, so a status line reaches the client while its tool is still running — a three-tool browse turn previously narrated nothing for 4.5 seconds.
+
+### `tool_group_summary`
+A Nova Micro side-channel task structured exactly like `session_title`: its own Bedrock call on its own messages, concurrent with the agent stream, so it **never appends to the conversation** and adds nothing to the cacheable prefix. Persisted as `TSUM#` rows reusing an existing GSI — zero new infrastructure — and replayed on `GET /messages`, because the event never re-streams. Deliberately **not** written onto the message content blocks: that is the Converse payload, and a display string there would be paid at model rates on every subsequent turn.
+
+With `TOOL_SUMMARIES_ENABLED=false` the SPA's deterministic client-side formatter still renders ("Listed 4 assignments"), so absence is a downgrade in specificity, never a blank.
+
+### Turn timing
+Thinking time and a turn recap, shown in the loader's slot on the latest turn only. The recap is measured from the turn, not the stream.
+
+---
+
+## Response feedback
+
+### Backend
+- Content-free thumbs on assistant messages, persisted as `F#` rows and joined to the turn's cost rows. Turn-class precedence is full > retrieved > digest.
+- Six reason buckets on a down-thumb, plus an explicit/implicit signal discriminator.
+- **Implicit signals** — copy and continue, recorded as unweighted positive signal.
+- **Eval sampling** — down-thumbed turns feed AgentCore Evaluations. **Opt-in at both CDK and runtime**, and deliberately so: it sends real conversations to an AWS-managed judge, which is a scoping decision each environment makes explicitly. An unset GitHub Actions variable cannot enable it.
+
+### Frontend
+- Copy and thumbs reveal on response hover rather than occupying the transcript permanently.
+- **Fleet-level attribution** — down-thumb rate by config arm (model, tools, skills), and a down-thumb reason split on the per-session cost profile.
+
+---
+
+## File previews
+
+`.docx`, `.pptx`, `.csv` and `.xlsx` render in a docked pane — uploaded or generated, and the pane opens automatically on a file the turn just created.
+
+- **`.docx`** via `docx-preview` 0.4.0. Office Online was evaluated and rejected; the renderer needs a detached container to mount correctly.
+- **`.pptx`** via `pptx-preview` 1.0.7, with `echarts` stubbed through a local shim to keep it out of the bundle.
+- **`.csv`** as a data grid, and **`.xlsx`** read server-side with `openpyxl` — which needs two passes, or formulas render blank.
+- One docked rail, extracted into `DockedPaneService` so the preview and artifact panes share it.
+
+---
+
+## Agent Templates
+
+A create-form prefill backed by an admin-managed template store, so a new agent can start from a curated shape rather than an empty form. New `agent-templates` table, no GSIs.
+
+---
+
+## 🐛 Bug fixes
+
+- **Currency in prose rendered as math.** `$4.50 … $9.00` made KaTeX treat everything between the two amounts as a formula, swallowing the prose. An earlier HTML-entity workaround (`$` → `&#36;`) never actually worked — `marked` strips it — and it leaked the entity into generated files, where a user would find `&#36;` in a document the agent wrote. Both are removed and the delimiter handling is fixed at the source.
+- **A new frontend build was not actually served.** The deploy sent no `Cache-Control`, so CloudFront kept serving the old bundle. Hashed filenames do not save you here: `index.html` itself is the stale object, and it is what points at the hashes.
+- **The system-prompt date line carried the hour**, so the cacheable prefix was re-written every hour, for the life of every session, in every conversation.
+- **Deleted conversations were invisible to the admin cost drill-down**, so a user's session list did not reconcile against their total.
+- **A first-turn race re-wrote the prompt-cache prefix** — the chat turn was assembled before the tool and skill lists resolved. The turn now waits for them.
+- **`DOCUMENT_READ_ENABLED=false` left two of three paths running.** It was read only at the tool-injection gate, so pulling the kill switch left restore emitting handles for a tool that was not injected, and left the live path still evicting bytes — strictly worse than pre-epic behaviour, where live bytes never left.
+- **ReDoS in `document_read` pattern mode.** A valid but catastrophic pattern compiled and ran unbounded; the search runs in `asyncio.to_thread`, so the turn hung to the 600s SSE timeout. Now a structural check refuses nested unbounded quantifiers and degrades to literal search (with a note on the payload, so a literal result is never passed off as the regex one), plus a scan budget between lines and pages. **Residual by construction:** a single `re.search` cannot be interrupted, so the budget bounds the walk, never one pathological line.
+- **Synth passed with no CORS rule on the uploads bucket.** A truthy-but-empty origin list (`","`) produced a green synth and no rule at all — the guard existed and the value slipped past it.
+- **Browser policy fixes** — `MANAGED` was being sent at session level, which broke every session; the policy object key was double-prefixed; the caller needed read on the policy object, not just the browser; the live view connected once per `postMessage` instead of once; SigV4 parameters were sent twice; the stream socket was unsigned; the display was sized before the first frame; two live-view URLs were minted per open; and an error was painted over an already-live stream.
+- **Colour steps that failed AA** in light mode — file-type chip text and success-state text both moved to the passing ramp step.
+
+---
+
+## ⚡ Performance
+
+- **~500ms off the pre-stream window.** Instrumentation opened the preamble stage first and showed it was **494ms of a 641–678ms handler total**. The cause was not what anyone guessed: the session row was being read **eight times per turn**, and 445ms of a 455ms stage was DynamoDB reading one item over and over. Reading it once fixed it. A second pass found boto3 clients being rebuilt per call at 1.5ms each, ~21ms and about 20% of the 95ms the warm preamble then cost; quota now takes session cost from the row the preamble already read.
+- **Bytecode precompiled** in the app-api, inference-api and Lambda images. `pip` compiles by default and `uv` does not, so first-touch import was silently being paid at runtime on the first message.
+- **CountTokens bounded on the reply path**, and the model id is no longer swapped mid-call. A throttle now costs one failed request rather than a 5.8-second stall.
+- **Long-term memory through a bounded client**, and the session's own summary is no longer re-fetched on every user message — it re-injected a conversation the model already held, at a lookup per message.
+- **Agent cache widened** to four more injected tool families, and spreadsheet-analysis sessions became cacheable by carrying `assistant_id` in the key. That cohort is the dominant one.
+- **gzip on app-api JSON**, with SSE explicitly passed through un-buffered so response headers are not delayed.
+- **mermaid lazy-loaded** out of the eager scripts bundle; app-api and inference-api ship code root-owned, and app-api no longer ships `/app` twice.
+
+---
+
+## 🔒 Security
+
+- **No test reaches AWS.** 25 test cases across 6 files were making **real authenticated AWS calls** against whatever credentials the runner had, hidden because the code paths fail open — a real call that succeeded looked identical to a mocked one, and a real call that failed was swallowed. An off-box socket guard in `tests/conftest.py` now blocks outbound connections, the quarantine has been burned down, and the suite runs in **half the time**. tiktoken is warmed before the guard arms.
+- **The browser URL blocklist is a security control supplied from outside the repo**, so a deploy that ships an empty one now says so in the synth log rather than failing silently.
+
+---
+
+## ⚠️ Breaking changes
+
+None for end users. Two configuration changes operators must act on:
+
+1. **`CDK_BROWSER_URL_BLOCKLIST` is now required** for any environment that needs a browser blocklist. It previously defaulted to `instructure.com` in code. See Deployment notes.
+2. **`request_user_login` must be granted** to the roles that should have it. It ships `enabledByDefault: false` and is its own catalog entry.
+
+---
+
+## 🏗️ Infrastructure
+
+- **`browser-policy-construct.ts`** — S3-backed MANAGED Chromium policy object for browser sessions, with `ConnectBrowserLiveViewStream` granted on `*` (AWS requires the wildcard).
+- **`turn-latency-observability-construct.ts`** — EMF metrics decomposing the pre-stream window into named stages, so a latency fix is provable rather than asserted.
+- **New `agent-templates` table** — created with **no GSIs**, so no existing table takes a GSI operation in this release.
+- **MCP sandbox CSP** — `connect-src` allows `data:` and `blob:` for the DCV decoder.
+- **Uploads bucket CORS** — synth now fails rather than producing a bucket with no CORS rule.
+- **Platform Stack deploy triggers** on the assets it actually deploys.
+
+---
+
+## 📦 Dependencies
+
+| Component | Package | From | To |
+|---|---|---|---|
+| Backend | `openpyxl` | — | 3.1.5 (new) |
+| Frontend | `docx-preview` | — | 0.4.0 (new) |
+| Frontend | `pptx-preview` | — | 1.0.7 (new) |
+| Frontend | `echarts` | — | local stub shim |
+
+`echarts` is a `pptx-preview` peer that would otherwise pull a large charting library into the bundle for slides that rarely contain charts; the shim needs to be a top-level `file:` dependency to resolve.
+
+---
+
+## 🧪 Test coverage
+
+**19,500+ lines** of test changes across **163 files**, including the off-box socket guard and the quarantine burn-down, 39 tests for `document_read` pattern safety, 7 for the `DOCUMENT_READ_ENABLED` coupling, and a seed/catalog parity test that fails when a tool is catalogued without a row in the bootstrap seeder.
+
+---
+
+## 🚀 Deployment notes
+
+**Deploy order:** `platform.yml` (CDK) → `backend.yml` → `frontend-deploy.yml`.
+
+**Before deploying:**
+
+1. **Set `CDK_BROWSER_URL_BLOCKLIST`** on every environment that needs a browser blocklist — comma-separated hostnames, e.g. `instructure.com,vendor.example.com`. It is a GitHub Actions **environment** variable. Unset resolves to an empty list, and the RBAC grant becomes the only control.
+
+   Chromium's `URLBlocklist` matches on **host**, not on the service behind it, so a site is only as blocked as its hostname list is complete. Prefer the registrable domain (`instructure.com` covers `.test.` and `.beta.` instances) and enumerate vendor, vanity-CNAME, regional and mobile hostnames before you consider an entry done. Do **not** block a vendor's institutional sign-in page — reaching a login page is exactly what an accessibility or VPAT review needs to do; block where it leads.
+
+2. **Confirm `CDK_MANAGED_KB_MIGRATION_ENABLED`** is the value you want. It is read at deploy time, so an environment where it was set to `true` since the last platform deploy gets the Upgrade card on this release. Nothing migrates on its own — enrolment is a user-initiated `POST` — but the card appears and users can opt in.
+
+3. **Decide `DOCUMENT_OFFLOAD_ROLLOUT_PERCENT`.** It defaults to **100**. Leave it there to ship the feature to every session; set it lower in an environment where you want a concurrent control arm to measure against.
+
+**After deploying:**
+
+- **Read the synth log for the blocklist line.** It prints `Browser URL blocklist (N): …`, or warns that the list is empty. An empty list on an environment that expected one means the variable did not reach the synth.
+- **Grant `request_user_login`** to the roles that should have browser sign-in handover. `seed_bootstrap_data.py` **skips any tool row that already exists**, so in an environment whose catalog predates this release the row is created only if it was never there; the grant is always a separate step.
+- **`list_spreadsheets` and `analyze_spreadsheet`** are now in the seeder. Existing environments already have these rows (they were created by hand) and the seeder will skip them; a **fresh** deployment gets them for the first time.
+
+**No data backfill is required.** **No GSI operation** is performed against an existing table.
+
+**Kill switches.** Every feature in this release ships with one, and all default on except where noted: `BROWSER_TAKEOVER_ENABLED`, `AGENT_STATUS_ENABLED`, `AGENT_STATUS_LIVE_DRAIN_ENABLED`, `AGENT_PREPARING_PHASE_ENABLED`, `TOOL_SUMMARIES_ENABLED`, `DOCUMENT_READ_ENABLED`, `DOCUMENT_OFFLOAD_ENABLED`, `DOCUMENT_REHYDRATE_ENABLED`, `DOCUMENT_DIGEST_ENABLED`, `TOOL_RESULT_OFFLOAD_ENABLED`, `COMPACTION_MODEL_RELATIVE_ENABLED`, `COMPACTION_SUMMARY_MODEL_ENABLED`, `COMPACTION_DEFERRED_APPLY_ENABLED`, `RESPONSE_FEEDBACK_ENABLED`, `ATTACHMENT_TURN_GUARD_ENABLED`, `ATTACHMENT_TOOL_AUTOENABLE_ENABLED`, `TURN_LATENCY_METRICS_ENABLED`, `INFERENCE_WARMUP_ENABLED`. Opt-in (default **off**): `FEEDBACK_EVAL_SAMPLING_ENABLED`, `MEMORY_SUMMARY_NAMESPACE_RETRIEVAL_ENABLED`, `BEDROCK_RESPONSES_EXPLICIT_CACHE_ENABLED`.
+
+---
+
 # Release Notes — v1.22.0
 
 **Release Date:** September 14, 2026
