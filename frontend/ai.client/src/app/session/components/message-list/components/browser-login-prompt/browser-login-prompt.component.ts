@@ -14,6 +14,8 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowTopRightOnSquare,
+  heroArrowsPointingIn,
+  heroArrowsPointingOut,
   heroCheck,
   heroLockClosed,
 } from '@ng-icons/heroicons/outline';
@@ -61,9 +63,18 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, SpinnerComponent],
   providers: [
-    provideIcons({ heroArrowTopRightOnSquare, heroCheck, heroLockClosed }),
+    provideIcons({
+      heroArrowTopRightOnSquare,
+      heroArrowsPointingIn,
+      heroArrowsPointingOut,
+      heroCheck,
+      heroLockClosed,
+    }),
   ],
-  host: { class: 'block' },
+  // Escape leaves full screen. Bound on the document because focus is usually
+  // inside the cross-origin viewer iframe, where a host-element binding would
+  // never see the key.
+  host: { class: 'block', '(document:keydown.escape)': 'collapse()' },
   template: `
     <section
       class="w-full rounded-2xl bg-gray-50/80 p-5 ring-1 ring-gray-200/70 dark:bg-white/[0.035] dark:ring-white/10"
@@ -171,21 +182,78 @@ import { SpinnerComponent } from '../../../../../components/spinner/spinner.comp
       </div>
 
       @if (open() && frameSrc(); as src) {
-        <!-- Sized from the event's viewport, not a constant here: DCV's
-             remoteWidth/remoteHeight must match the browser session or the
-             stream crops, and a second copy of 1280x800 in the SPA is a copy
-             that will drift. -->
+        <!-- The frame is ONE element in both states: expanding must not
+             re-create the iframe, or the DCV stream tears down and the user
+             loses a half-typed password. Only the wrapper's classes change.
+             This is also why the expanded state is NOT a CDK Dialog, as the
+             Angular guide otherwise requires: a dialog (or a CDK portal)
+             re-parents the content, and browsers reload an iframe when it
+             moves in the DOM — which would drop the stream every time the user
+             expanded it. Escape, an explicit close and the ARIA roles are
+             wired by hand instead. -->
         <div
-          class="mt-4 overflow-hidden rounded-xl bg-black ring-1 ring-gray-900/10 dark:ring-white/10"
-          [style.aspectRatio]="aspectRatio()"
+          [class]="
+            expanded()
+              ? 'fixed inset-0 z-50 flex flex-col bg-gray-950/95 p-4 backdrop-blur-sm'
+              : 'mt-4'
+          "
+          [attr.role]="expanded() ? 'dialog' : null"
+          [attr.aria-modal]="expanded() ? 'true' : null"
+          [attr.aria-label]="expanded() ? 'Browser sign-in, full screen' : null"
         >
-          <iframe
-            #viewerFrame
-            class="h-full w-full border-0"
-            title="Browser sign-in"
-            [src]="src"
-            (load)="onFrameLoad()"
-          ></iframe>
+          <div
+            class="flex items-center justify-between gap-3 pb-2"
+            [class.hidden]="!expanded()"
+          >
+            <p class="text-sm/6 font-medium text-white">
+              You're driving this browser — click and type in it as you normally would.
+            </p>
+            <button
+              type="button"
+              class="inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm/6 font-medium text-gray-200 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+              (click)="collapse()"
+            >
+              <ng-icon name="heroArrowsPointingIn" size="16" />
+              Exit full screen
+            </button>
+          </div>
+
+          <!-- Sized from the event's viewport, not a constant here: DCV's
+               remoteWidth/remoteHeight must match the browser session or the
+               stream crops, and a second copy of 1280x800 in the SPA is a copy
+               that will drift. Inline it keeps that aspect ratio; expanded it
+               fills the pane and letterboxes inside, so the remote display is
+               never scaled to a shape it is not rendering. -->
+          <div
+            class="relative overflow-hidden bg-black"
+            [class]="
+              expanded()
+                ? 'min-h-0 flex-1 rounded-xl'
+                : 'rounded-xl ring-1 ring-gray-900/10 dark:ring-white/10'
+            "
+            [style.aspectRatio]="expanded() ? null : aspectRatio()"
+          >
+            <iframe
+              #viewerFrame
+              class="h-full w-full border-0"
+              title="Browser sign-in"
+              [src]="src"
+              (load)="onFrameLoad()"
+            ></iframe>
+
+            @if (!expanded()) {
+              <!-- The inline frame reads as a screenshot, so say plainly that
+                   it is live and offer the room to use it. -->
+              <button
+                type="button"
+                class="absolute bottom-3 right-3 inline-flex items-center gap-2 rounded-2xl bg-gray-900/80 px-3.5 py-2 text-sm/6 font-medium text-white ring-1 ring-white/20 backdrop-blur-sm hover:bg-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                (click)="expand()"
+              >
+                <ng-icon name="heroArrowsPointingOut" size="16" />
+                Take over full screen
+              </button>
+            }
+          </div>
         </div>
       }
     </section>
@@ -199,6 +267,7 @@ export class BrowserLoginPromptComponent {
   private readonly destroyRef = inject(DestroyRef);
 
   protected readonly open = signal(false);
+  protected readonly expanded = signal(false);
   protected readonly minting = signal(false);
   protected readonly error = signal<string | null>(null);
 
@@ -252,6 +321,17 @@ export class BrowserLoginPromptComponent {
   protected readonly lapsed = computed(() =>
     this.service.hasLapsed(this.request(), this.now()),
   );
+
+  /**
+   * Leave full screen the moment the window closes.
+   *
+   * Without this, a deadline that passes while the user is expanded strands a
+   * full-viewport overlay over a stream that has already gone — covering the
+   * conversation with a dead black rectangle whose only exit is one button.
+   */
+  private readonly collapseOnLapse = effect(() => {
+    if (this.lapsed()) this.expanded.set(false);
+  });
 
   protected readonly canFrame = computed(() => !!this.request().sandboxOrigin);
 
@@ -346,6 +426,14 @@ export class BrowserLoginPromptComponent {
     this.postToFrame();
   }
 
+  protected expand(): void {
+    this.expanded.set(true);
+  }
+
+  protected collapse(): void {
+    this.expanded.set(false);
+  }
+
   /**
    * Hand the freshly minted URL to the viewer.
    *
@@ -404,12 +492,14 @@ export class BrowserLoginPromptComponent {
 
   protected async finish(): Promise<void> {
     this.clearRefresh();
+    this.collapse();
     this.open.set(false);
     await this.service.complete(this.request().interruptId);
   }
 
   protected async dismiss(): Promise<void> {
     this.clearRefresh();
+    this.collapse();
     this.open.set(false);
     await this.service.skip(this.request().interruptId);
   }

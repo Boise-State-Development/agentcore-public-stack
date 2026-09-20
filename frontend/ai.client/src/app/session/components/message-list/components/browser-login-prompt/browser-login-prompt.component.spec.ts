@@ -198,6 +198,106 @@ describe('BrowserLoginPromptComponent', () => {
     });
   });
 
+  describe('full screen', () => {
+    async function openViewer(req = request()) {
+      const el = render(req);
+      (el.querySelector('button') as HTMLButtonElement).click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+      return el;
+    }
+
+    function expand(el: HTMLElement) {
+      const btn = Array.from(el.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('Take over full screen'),
+      ) as HTMLButtonElement;
+      btn.click();
+      fixture.detectChanges();
+    }
+
+    it('offers a way into full screen once the viewer is up', async () => {
+      const el = await openViewer();
+
+      // The inline frame reads as a screenshot; without this the user has no
+      // signal that it is live and drivable.
+      const labels = Array.from(el.querySelectorAll('button')).map((b) =>
+        b.textContent?.trim(),
+      );
+      expect(labels.some((t) => t?.includes('Take over full screen'))).toBe(true);
+    });
+
+    it('keeps the SAME iframe element when expanding', async () => {
+      const el = await openViewer();
+      const before = el.querySelector('iframe');
+
+      expand(el);
+
+      // Non-negotiable: re-creating the iframe reloads it, which tears down
+      // the DCV stream and loses a half-typed password. Expanding must only
+      // restyle the wrapper.
+      expect(el.querySelector('iframe')).toBe(before);
+    });
+
+    it('says plainly that the user is driving, once expanded', async () => {
+      const el = await openViewer();
+      expand(el);
+
+      expect(el.textContent).toContain("You're driving this browser");
+    });
+
+    it('marks the expanded layer as a modal for assistive tech', async () => {
+      const el = await openViewer();
+      expand(el);
+
+      const layer = el.querySelector('[role="dialog"]');
+      expect(layer).not.toBeNull();
+      expect(layer?.getAttribute('aria-modal')).toBe('true');
+      expect(layer?.getAttribute('aria-label')).toContain('full screen');
+    });
+
+    it('is not a modal while inline, so it never traps the conversation', async () => {
+      const el = await openViewer();
+
+      expect(el.querySelector('[role="dialog"]')).toBeNull();
+    });
+
+    it('collapses back, keeping the same iframe', async () => {
+      const el = await openViewer();
+      expand(el);
+      const framed = el.querySelector('iframe');
+
+      const exit = Array.from(el.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('Exit full screen'),
+      ) as HTMLButtonElement;
+      exit.click();
+      fixture.detectChanges();
+
+      expect(el.querySelector('[role="dialog"]')).toBeNull();
+      expect(el.querySelector('iframe')).toBe(framed);
+    });
+
+    it('drops out of full screen when the window closes', async () => {
+      const el = await openViewer();
+      expand(el);
+      expect(el.querySelector('[role="dialog"]')).not.toBeNull();
+
+      // A deadline passing while expanded would otherwise strand a
+      // full-viewport black rectangle over the conversation.
+      //
+      // Driven through the INPUT rather than the clock: `lapsed` depends on
+      // both `request()` and the component's 1s ticker, and that ticker is a
+      // real `setInterval` created in the constructor — installing fake timers
+      // afterwards never drives it, so a timer-based version of this test
+      // passed for the wrong reason.
+      service.hasLapsed.mockReturnValue(true);
+      fixture.componentRef.setInput('request', request({ toolUseId: 'tu-2' }));
+      TestBed.tick();
+      fixture.detectChanges();
+
+      expect(el.querySelector('[role="dialog"]')).toBeNull();
+    });
+  });
+
   describe('the ready handshake', () => {
     it('ignores a ready message from any other origin', async () => {
       const el = render();
