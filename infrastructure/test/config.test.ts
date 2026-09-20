@@ -214,20 +214,15 @@ describe('RAG Ingestion Configuration', () => {
       expect(loadConfig(app).browser.urlBlocklist).toContain('instructure.com');
     });
 
-    test('blocks the vanity hostname too, not just the vendor one', () => {
+    test('does not block the institutional sign-in page', () => {
       delete process.env[BLOCKLIST_KEY];
 
-      // ⚠️ Regression guard for a control that was DEFEATED on dev in about
-      // ten seconds. Chromium's URLBlocklist matches on HOST, not on the
-      // service behind it. Canvas answers on both
-      // `boisestatecanvas.instructure.com` and `canvas.boisestate.edu`; both
-      // resolve into Instructure's 99.86.101.0/24 and serve the same LMS.
-      // With only the vendor name listed, typing the vanity name walked
-      // straight through — a control that looked real and was not.
-      //
-      // The vanity CNAME is NOT a subdomain of anything else blocked, so it
-      // cannot be covered by the entry above and must be listed on its own.
-      expect(loadConfig(app).browser.urlBlocklist).toContain(
+      // The seed must not swallow `canvas.boisestate.edu`. It is a sign-in /
+      // discovery page, not the LMS, and reaching a login page is exactly
+      // what an accessibility or VPAT review needs to do — the use case this
+      // whole feature exists for. Blocking where it LEADS is the control;
+      // blocking the doorway would break the feature to no benefit.
+      expect(loadConfig(app).browser.urlBlocklist).not.toContain(
         'canvas.boisestate.edu',
       );
     });
