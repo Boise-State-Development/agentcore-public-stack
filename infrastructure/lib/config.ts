@@ -1011,7 +1011,23 @@ export function loadConfig(scope: cdk.App): AppConfig {
               .map((h) => h.trim())
               .filter(Boolean)
           : scope.node.tryGetContext('browser')?.urlBlocklist ?? [
-              'boisestatecanvas.instructure.com',
+              // ⚠️ ONE SERVICE CAN HAVE MORE THAN ONE HOSTNAME, and Chromium's
+              // URLBlocklist matches on HOST, not on the service behind it.
+              // Blocking only the Instructure name was defeated in about ten
+              // seconds on dev by typing the vanity name instead: both resolve
+              // into Instructure's 99.86.101.0/24 and serve the same Canvas.
+              //
+              // `instructure.com` covers the host AND its subdomains, so it
+              // also catches the `.test.` and `.beta.` instances. The vanity
+              // CNAME has to be listed separately — it is not a subdomain of
+              // anything blocked.
+              //
+              // When adding a site here, enumerate its aliases FIRST: vanity
+              // CNAMEs, regional hosts, and the mobile/app hostname. A list
+              // that names only the obvious host is a control that looks real
+              // and is not.
+              'instructure.com',
+              'canvas.boisestate.edu',
             ],
     },
     mcpSandbox: {
