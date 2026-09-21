@@ -10,6 +10,30 @@ export interface CognitoConfig {
   // COGNITO is always included; entries here are added on top.
   supportedIdentityProviders?: string[];
   passwordMinLength?: number;  // Override default 8
+  // Whether anyone on the internet can self-register a native Cognito account
+  // through the Hosted UI's "Sign up" link.
+  //
+  // Defaults to FALSE — closed. Nothing in this stack needs it open:
+  //  - Federated sign-in is unaffected. This gates the `SignUp` API only; users
+  //    arriving through Entra/Okta are still provisioned just-in-time. Per AWS:
+  //    with self-registration off, "new users must be created by administrative
+  //    API actions using IAM API credentials or by sign-in with federated
+  //    providers."
+  //  - First-boot is unaffected. `CognitoService.create_admin_user` uses
+  //    `AdminCreateUser` + `AdminSetUserPassword`, which ignore this setting, so
+  //    a fresh fork still bootstraps its first admin through /auth/first-boot.
+  //
+  // Set `CDK_COGNITO_SELF_SIGNUP_ENABLED=true` to run an open-registration
+  // environment. Defaulting closed rather than open is deliberate: an operator
+  // who forgets to set the variable gets the safe posture, not a public signup
+  // page. This intentionally departs from the repo's "flags default ON" rule,
+  // which is about feature rollout, not access control.
+  //
+  // This MUST live here rather than being toggled in the console: CDK always
+  // renders `AdminCreateUserConfig.allowAdminCreateUserOnly` into the template,
+  // so the next deploy that touches the user pool for any reason overwrites an
+  // out-of-band console change without saying so.
+  selfSignUpEnabled?: boolean;
 }
 
 export interface AppConfig {
@@ -741,6 +765,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
       passwordMinLength: parseIntEnv(process.env.CDK_COGNITO_PASSWORD_MIN_LENGTH)
         || scope.node.tryGetContext('cognito')?.passwordMinLength
         || 8,
+      selfSignUpEnabled: parseBooleanEnv(process.env.CDK_COGNITO_SELF_SIGNUP_ENABLED)
+        ?? scope.node.tryGetContext('cognito')?.selfSignUpEnabled
+        ?? false,
     },
     frontend: {
       certificateArn: process.env.CDK_FRONTEND_CERTIFICATE_ARN || scope.node.tryGetContext('frontend').certificateArn,

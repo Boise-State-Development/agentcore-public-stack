@@ -56,6 +56,41 @@ describe('CognitoConstruct — detailed', () => {
     });
   });
 
+  // Security default: an operator who configures nothing gets a closed pool.
+  // First-boot still works — it uses AdminCreateUser, which ignores this.
+  it('self-signup defaults to CLOSED', () => {
+    t.hasResourceProperties('AWS::Cognito::UserPool', {
+      AdminCreateUserConfig: Match.objectLike({
+        AllowAdminCreateUserOnly: true,
+      }),
+    });
+  });
+
+  it('selfSignUpEnabled: true opts an environment into open registration', () => {
+    const stack = testStack();
+    new CognitoConstruct(stack, 'Cog', {
+      config: createMockConfig({
+        cognito: { domainPrefix: 'test-project', selfSignUpEnabled: true },
+      }),
+    });
+    Template.fromStack(stack).hasResourceProperties('AWS::Cognito::UserPool', {
+      AdminCreateUserConfig: Match.objectLike({
+        AllowAdminCreateUserOnly: false,
+      }),
+    });
+  });
+
+  // Regression guard: CDK renders AdminCreateUserConfig unconditionally, so a
+  // console toggle of self-signup is overwritten by the next deploy that
+  // updates the pool. If this property ever stops appearing in the template,
+  // the config value has silently stopped being authoritative.
+  it('always renders AdminCreateUserConfig so the setting is deploy-authoritative', () => {
+    const pools = t.findResources('AWS::Cognito::UserPool');
+    const props = Object.values(pools)[0].Properties;
+    expect(props.AdminCreateUserConfig).toBeDefined();
+    expect(props.AdminCreateUserConfig.AllowAdminCreateUserOnly).toBeDefined();
+  });
+
   it('user pool client generates a secret', () => {
     t.hasResourceProperties('AWS::Cognito::UserPoolClient', {
       GenerateSecret: true,

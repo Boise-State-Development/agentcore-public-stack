@@ -13,9 +13,22 @@ export interface CognitoConstructProps {
  * CognitoConstruct — Cognito user pool, BFF app client, hosted UI domain.
  *
  * Central identity broker for all authentication. Federates to external
- * IdPs (Entra ID, Okta, Google) and issues its own JWTs. Self-signup is
- * enabled initially for first-boot; the App API disables it after the
- * first admin user is created.
+ * IdPs (Entra ID, Okta, Google) and issues its own JWTs.
+ *
+ * Self-signup is controlled by `config.cognito.selfSignUpEnabled`, which
+ * defaults to FALSE — users are admitted by a federated IdP or created by an
+ * administrator, never by a public "Sign up" link. Two things that used to be
+ * believed about it are wrong and worth stating so they don't get re-derived:
+ *
+ *  - First-boot does NOT need it. `CognitoService.create_admin_user` uses
+ *    `AdminCreateUser` + `AdminSetUserPassword`, which are unaffected by
+ *    `AllowAdminCreateUserOnly`. An environment can ship with self-signup
+ *    off from day one.
+ *  - The App API's `disable_self_signup()` at the end of first-boot is not
+ *    durable. CDK renders `adminCreateUserConfig` unconditionally, so the
+ *    next deploy that updates the user pool for any reason pushes this
+ *    property back and silently re-opens signup. The config value is the
+ *    only setting that holds; a console toggle is likewise transient.
  *
  * The BFF App Client is a confidential client used by app-api for the
  * server-side OAuth token exchange in the Token Handler BFF flow. The
@@ -50,7 +63,7 @@ export class CognitoConstruct extends Construct {
       // ESSENTIALS, so this is a no-op for current deployments. The feature
       // itself stays opt-in (default off) — this only guarantees capability.
       featurePlan: cognito.FeaturePlan.ESSENTIALS,
-      selfSignUpEnabled: true,
+      selfSignUpEnabled: config.cognito.selfSignUpEnabled ?? false,
       signInAliases: { username: true, email: true },
       autoVerify: { email: true },
       standardAttributes: {

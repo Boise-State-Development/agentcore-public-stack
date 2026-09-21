@@ -119,6 +119,11 @@ jobs:
       CDK_COGNITO_CALLBACK_URLS: ${{ vars.CDK_COGNITO_CALLBACK_URLS }}
       CDK_COGNITO_LOGOUT_URLS: ${{ vars.CDK_COGNITO_LOGOUT_URLS }}
       CDK_COGNITO_SUPPORTED_IDPS: ${{ vars.CDK_COGNITO_SUPPORTED_IDPS }}
+      # Public "Sign up" link on the Cognito Hosted UI. Unset/empty means
+      # CLOSED — users arrive via a federated IdP or an administrator creates
+      # them. Set to "true" only for an environment that wants open public
+      # registration. Federated sign-in works either way.
+      CDK_COGNITO_SELF_SIGNUP_ENABLED: ${{ vars.CDK_COGNITO_SELF_SIGNUP_ENABLED }}
       CDK_ARTIFACTS_CERTIFICATE_ARN: ${{ vars.CDK_ARTIFACTS_CERTIFICATE_ARN }}
       # Extra origins allowed to frame the artifacts iframe via CSP
       # frame-ancestors (beyond the deployed SPA origin) — e.g.
