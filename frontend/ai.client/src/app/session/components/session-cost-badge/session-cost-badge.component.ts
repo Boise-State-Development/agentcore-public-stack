@@ -10,6 +10,7 @@ import {
   signal,
 } from '@angular/core';
 import { ChatStateService } from '../../services/chat/chat-state.service';
+import { QuotaStatusService } from '../../../services/quota/quota-status.service';
 
 const RING_RADIUS = 7;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -55,9 +56,41 @@ const RING_FILL_DELAY_MS = 750;
         aria-live="polite"
       >
         <span
-          class="badge-cost-enter"
-          [attr.aria-label]="'Session cost: ' + costLabel()"
-        >{{ costLabel() }}</span>
+          class="badge-cost-enter group/quota relative inline-flex items-center rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
+          [attr.tabindex]="hasQuotaTooltip() ? 0 : null"
+          [attr.aria-label]="costAriaLabel()"
+        >{{ costLabel() }}
+
+          @if (hasQuotaTooltip()) {
+            <span
+              role="tooltip"
+              class="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-60 -translate-x-1/2 rounded-md border border-gray-200 bg-white p-3 text-left shadow-lg opacity-0 transition-opacity duration-150 group-hover/quota:opacity-100 group-focus-within/quota:opacity-100 dark:border-gray-700 dark:bg-gray-800"
+            >
+              <span class="block text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                Quota usage
+              </span>
+
+              @if (quotaInfo(); as q) {
+                <span class="mt-1 flex items-baseline gap-1.5">
+                  <span [class]="quotaPctClass()" class="text-lg font-semibold leading-none">{{ q.pctLabel }}</span>
+                  <span class="text-[11px] leading-none text-gray-500 dark:text-gray-400">used this {{ q.periodWord }}</span>
+                </span>
+                <span class="mt-2 block text-xs text-gray-700 dark:text-gray-300">
+                  {{ q.usageLabel }}
+                  <span class="text-gray-500 dark:text-gray-400">of</span>
+                  {{ q.limitLabel }}
+                </span>
+                <span class="mt-1 block text-[11px] leading-snug text-gray-500 dark:text-gray-400">
+                  {{ q.remainingLabel }} remaining@if (q.resetInfo) { · {{ q.resetInfo }} }
+                </span>
+              } @else {
+                <span class="mt-1 block text-xs text-gray-700 dark:text-gray-300">
+                  Unlimited quota — no spending limit applies to your account.
+                </span>
+              }
+            </span>
+          }
+        </span>
 
         @if (showContext()) {
           <span
@@ -131,6 +164,7 @@ const RING_FILL_DELAY_MS = 750;
 })
 export class SessionCostBadgeComponent {
   private chatStateService = inject(ChatStateService);
+  private quotaStatusService = inject(QuotaStatusService);
   private injector = inject(Injector);
 
   /**
@@ -281,5 +315,65 @@ export class SessionCostBadgeComponent {
     const tokens = this.contextTokens().toLocaleString();
     const window = this.contextWindow().toLocaleString();
     return `Context window: ${this.contextLabel()} used by the most recent turn (${tokens} of ${window} tokens, includes system prompt and tools)`;
+  });
+
+  // ==========================================================================
+  // Quota tooltip — the user's monthly quota context behind the cost counter.
+  // Sourced from GET /costs/quota-status (loaded lazily on first read).
+  // ==========================================================================
+
+  private readonly quotaStatus = this.quotaStatusService.status;
+
+  private formatUsd(value: number): string {
+    if (value > 0 && value < 1) return `$${value.toFixed(4)}`;
+    return `$${value.toFixed(2)}`;
+  }
+
+  /** Quota breakdown for the tooltip, or null when there's no real limit. */
+  protected readonly quotaInfo = computed(() => {
+    const status = this.quotaStatus.value();
+    if (!status || !status.configured || status.unlimited) return null;
+    const limit = status.monthlyLimit;
+    if (!limit || limit <= 0) return null;
+
+    const pct = Math.max(0, status.usagePercentage);
+    const remaining = status.remaining ?? Math.max(0, limit - status.currentUsage);
+    return {
+      pct,
+      pctLabel: pct < 1 && pct > 0 ? '<1%' : `${Math.round(pct)}%`,
+      periodWord: status.periodType === 'daily' ? 'day' : 'month',
+      usageLabel: this.formatUsd(status.currentUsage),
+      limitLabel: this.formatUsd(limit),
+      remainingLabel: this.formatUsd(remaining),
+      resetInfo: status.resetInfo,
+    };
+  });
+
+  /** True when the user is on an unlimited tier/override (still worth a note). */
+  protected readonly quotaUnlimited = computed(() => {
+    const status = this.quotaStatus.value();
+    return !!status && status.configured && status.unlimited;
+  });
+
+  /** Whether the cost counter should carry a quota hover/focus tooltip. */
+  protected readonly hasQuotaTooltip = computed(
+    () => this.quotaInfo() !== null || this.quotaUnlimited(),
+  );
+
+  protected readonly quotaPctClass = computed(() => {
+    const pct = this.quotaInfo()?.pct ?? 0;
+    if (pct >= 90) return 'text-state-danger-600 dark:text-state-danger-400';
+    if (pct >= 75) return 'text-state-warning-600 dark:text-state-warning-400';
+    return 'text-state-success-600 dark:text-state-success-400';
+  });
+
+  protected readonly costAriaLabel = computed(() => {
+    const base = `Session cost: ${this.costLabel()}`;
+    const q = this.quotaInfo();
+    if (q) {
+      return `${base}. Monthly quota: ${q.usageLabel} of ${q.limitLabel} used (${q.pctLabel}), ${q.remainingLabel} remaining.`;
+    }
+    if (this.quotaUnlimited()) return `${base}. Unlimited quota.`;
+    return base;
   });
 }

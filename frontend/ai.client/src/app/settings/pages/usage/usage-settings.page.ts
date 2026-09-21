@@ -8,6 +8,7 @@ import {
 import { DecimalPipe } from '@angular/common';
 import { CostService } from './services/cost.service';
 import { UserCostSummary } from './models/cost-summary.model';
+import { QuotaStatusService } from '../../../services/quota/quota-status.service';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
@@ -87,6 +88,56 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
 
       <!-- Cost Summary Cards -->
       @else if (activeData()) {
+        <!-- Quota progress bar: how this period's spend sits against the
+             monthly quota. Shown for every period so users can compare past
+             usage to their limit, not just the current month. -->
+        @if (quotaBar(); as q) {
+          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
+            <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <h3 class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                Quota usage
+                <span class="font-normal text-gray-500 dark:text-gray-400">· {{ periodLabel() }}</span>
+              </h3>
+              <p class="text-sm/6 text-gray-700 dark:text-gray-300">
+                <span class="font-semibold text-gray-900 dark:text-white">{{ formatCurrency(q.usage) }}</span>
+                <span class="text-gray-500 dark:text-gray-400"> of </span>
+                <span class="font-semibold text-gray-900 dark:text-white">{{ formatCurrency(q.limit) }}</span>
+                <span class="text-gray-500 dark:text-gray-400"> {{ q.periodWord }} quota</span>
+              </p>
+            </div>
+            <div
+              class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-white/10"
+              role="progressbar"
+              [attr.aria-valuenow]="q.pct"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              [attr.aria-label]="'Quota usage: ' + q.pct + ' percent used'"
+            >
+              <div
+                class="h-full rounded-full transition-[width] duration-500 ease-out"
+                [class]="q.fillClass"
+                [style.width.%]="q.pct"
+              ></div>
+            </div>
+            <div class="mt-2 flex flex-wrap items-center justify-between gap-x-4 text-xs">
+              <span [class]="q.textClass">{{ q.pct | number: '1.0-1' }}% used</span>
+              <span class="text-gray-500 dark:text-gray-400">
+                {{ formatCurrency(q.remaining) }} remaining
+                @if (quotaResetInfo()) {
+                  · {{ quotaResetInfo() }}
+                }
+              </span>
+            </div>
+          </div>
+        } @else if (quotaUnlimited()) {
+          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
+            <h3 class="text-sm/6 font-medium text-gray-900 dark:text-white">Quota usage</h3>
+            <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
+              You have an unlimited quota — no spending limit applies to your account.
+            </p>
+          </div>
+        }
+
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
             <h3 class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Total Cost</h3>
@@ -172,8 +223,10 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
 })
 export class UsageSettingsPage {
   private costService = inject(CostService);
+  private quotaStatusService = inject(QuotaStatusService);
 
   readonly costSummary = this.costService.currentMonthSummary;
+  readonly quotaStatus = this.quotaStatusService.status;
   readonly customReportData = signal<UserCostSummary | null>(null);
   readonly selectedPeriodType = signal<'current' | 'last30' | 'month'>('current');
   readonly selectedMonthValue = signal('');
@@ -203,6 +256,52 @@ export class UsageSettingsPage {
   readonly totalOutputTokens = computed(() => this.activeData()?.totalOutputTokens ?? 0);
   readonly totalCacheSavings = computed(() => this.activeData()?.totalCacheSavings ?? 0);
   readonly models = computed(() => this.activeData()?.models ?? []);
+
+  /**
+   * Quota progress bar for the selected period, or null when there is nothing
+   * to show a bar against (quota still loading, unconfigured, unlimited, or a
+   * zero limit). Numerator is the *selected period's* spend; denominator is
+   * the resolved monthly (or daily) limit — so a past month is compared to the
+   * user's current quota, which is what they asked to see.
+   */
+  readonly quotaBar = computed(() => {
+    const status = this.quotaStatus.value();
+    if (!status || !status.configured || status.unlimited) return null;
+    const limit = status.monthlyLimit;
+    if (!limit || limit <= 0) return null;
+
+    const usage = this.totalCost();
+    const pct = Math.min(100, Math.max(0, (usage / limit) * 100));
+    const remaining = Math.max(0, limit - usage);
+    const periodWord = status.periodType === 'daily' ? 'daily' : 'monthly';
+
+    let fillClass = 'bg-state-success-500 dark:bg-state-success-400';
+    let textClass = 'text-gray-500 dark:text-gray-400';
+    if (pct >= 90) {
+      fillClass = 'bg-state-danger-500 dark:bg-state-danger-400';
+      textClass = 'text-state-danger-600 dark:text-state-danger-400 font-medium';
+    } else if (pct >= 75) {
+      fillClass = 'bg-state-warning-500 dark:bg-state-warning-400';
+      textClass = 'text-state-warning-600 dark:text-state-warning-400 font-medium';
+    }
+
+    return { usage, limit, pct, remaining, periodWord, fillClass, textClass };
+  });
+
+  /** True when the user is on an unlimited tier/override. */
+  readonly quotaUnlimited = computed(() => {
+    const status = this.quotaStatus.value();
+    return !!status && status.configured && status.unlimited;
+  });
+
+  /**
+   * Reset note ("Quota resets in N day(s)") — only meaningful for the current
+   * period, since the backend figure is relative to now.
+   */
+  readonly quotaResetInfo = computed(() => {
+    if (this.selectedPeriodType() !== 'current') return null;
+    return this.quotaStatus.value()?.resetInfo ?? null;
+  });
 
   readonly averageCostPerRequest = computed(() => {
     const total = this.totalCost();
@@ -264,6 +363,7 @@ export class UsageSettingsPage {
     this.customReportError.set(null);
     this.customReportData.set(null);
     this.costService.reloadCurrentMonthSummary();
+    this.quotaStatusService.reload();
   }
 
   formatCurrency(value: number): string {
