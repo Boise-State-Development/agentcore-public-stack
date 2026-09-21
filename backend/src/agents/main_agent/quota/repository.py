@@ -339,29 +339,58 @@ class QuotaRepository:
             raise
 
     async def update_assignment(self, assignment_id: str, updates: dict) -> Optional[QuotaAssignment]:
-        """Update quota assignment (partial update)"""
+        """Update quota assignment (partial update).
+
+        ``updates`` keys may be model field names (``tier_id``) or their
+        camelCase aliases (``tierId``) — callers dump the request either way.
+        The two uses of a key are incompatible and must stay separate (#718):
+
+        * ``setattr`` on the ``QuotaAssignment`` model requires the **field
+          name** (``tier_id``); Pydantic v2 raises ``"QuotaAssignment" object
+          has no field "tierId"`` for an alias key.
+        * The DynamoDB ``UpdateExpression`` must use the **stored attribute
+          name**, which is the **alias** (``tierId``) — items are written with
+          ``model_dump(by_alias=True)`` in create/update.
+
+        So we normalize each incoming key to its field name for ``setattr`` and
+        to its alias for the DynamoDB expression, rather than reusing one dict
+        for both.
+        """
         try:
             # Get current assignment to rebuild GSI keys if needed
             current = await self.get_assignment(assignment_id)
             if not current:
                 return None
 
+            # Map every accepted key (field name OR alias) to both forms.
+            alias_to_field = {}
+            field_to_alias = {}
+            for field_name, field in QuotaAssignment.model_fields.items():
+                alias = field.alias or field_name
+                field_to_alias[field_name] = alias
+                alias_to_field[alias] = field_name
+                alias_to_field[field_name] = field_name  # tolerate field-name input
+
             # Build update expression
             update_parts = []
             expr_attr_names = {}
             expr_attr_values = {}
 
-            # Apply updates to current assignment
+            # Apply updates to current assignment (field name) and collect the
+            # aliased attribute names for the DynamoDB expression.
+            aliased_updates = {}
             for key, value in updates.items():
-                setattr(current, key, value)
+                field_name = alias_to_field.get(key, key)
+                setattr(current, field_name, value)
+                aliased_updates[field_to_alias.get(field_name, field_name)] = value
 
-            # Rebuild GSI keys with updated values
+            # Rebuild GSI keys with updated values (already stored-attr names)
             gsi_keys = self._build_gsi_keys(current)
             for key, value in gsi_keys.items():
-                updates[key] = value
+                aliased_updates[key] = value
 
-            # Build update expression
-            for key, value in updates.items():
+            # Build update expression from aliased (stored) attribute names
+            for key, value in aliased_updates.items():
                 update_parts.append(f"#{key} = :{key}")
                 expr_attr_names[f"#{key}"] = key
                 expr_attr_values[f":{key}"] = value
