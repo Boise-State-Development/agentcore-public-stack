@@ -931,6 +931,59 @@ import {
                 </select>
               </div>
 
+              <!--
+                Retirement metadata. Only meaningful on a non-active tool, so the
+                block is hidden while Status is Active rather than sitting there
+                inviting a note nobody will ever see. Hidden, NOT disabled: the
+                controls keep their values, so flipping Status back and forth
+                while drafting does not silently discard what was typed.
+                See docs/specs/mcp-server-retirement.md §7.
+              -->
+              @if (selectedStatus() !== 'active') {
+                <div class="space-y-6 rounded-2xl border border-state-warning-200 bg-state-warning-50 p-4 dark:border-state-warning-800 dark:bg-state-warning-900/20">
+                  <p class="text-xs/5 text-state-warning-800 dark:text-state-warning-200">
+                    A non-active tool keeps working for everyone who already has it — it just
+                    can't be newly enabled or bound to an agent. These two fields are what
+                    users see in its place, so leaving them blank means the only thing anyone
+                    is told is that the tool is going away.
+                  </p>
+
+                  <div>
+                    <label for="retirementNote" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      What should people use instead?
+                    </label>
+                    <input
+                      id="retirementNote"
+                      type="text"
+                      formControlName="retirementNote"
+                      maxlength="300"
+                      placeholder="Replaced by Canvas for Faculty"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    />
+                    <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                      One sentence, shown wherever this tool appears. "No replacement — contact
+                      OIT" is a perfectly good answer; saying nothing is not.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label for="retiresOn" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      Stops working on
+                    </label>
+                    <input
+                      id="retiresOn"
+                      type="date"
+                      formControlName="retiresOn"
+                      class="mt-1 block rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    />
+                    <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                      The day access is revoked and agents bound to this tool start failing.
+                      Advisory — nothing happens automatically on this date.
+                    </p>
+                  </div>
+                </div>
+              }
+
               <div>
                 <label class="flex items-center gap-3">
                   <input
@@ -1120,6 +1173,14 @@ export class ToolFormPage implements OnInit {
 
   readonly isEditMode = computed(() => !!this.toolId());
   readonly selectedProtocol = signal<ToolProtocol>('local');
+  /**
+   * Mirrors the Status control, so the retirement block can appear the moment an
+   * admin picks a non-active status. Kept as a signal rather than read off
+   * `form.controls` in the template for the same reason `selectedProtocol` is:
+   * `fb.group` yields an index-signature type that the template compiler
+   * rejects, and `form.get('status')?.value` is not reactive.
+   */
+  readonly selectedStatus = signal<string>('active');
 
   /** Available connectors for dropdown */
   readonly oauthProviders = computed(() => this.connectorsService.getEnabledConnectors());
@@ -1131,6 +1192,8 @@ export class ToolFormPage implements OnInit {
     category: ['utility'],
     protocol: ['local'],
     status: ['active'],
+    retirementNote: [''],
+    retiresOn: [''],
     isPublic: [false],
     // One control for what the backend still stores as two booleans, so the
     // incoherent pair (off by default + always on) cannot be produced here.
@@ -1465,6 +1528,10 @@ export class ToolFormPage implements OnInit {
       this.selectedProtocol.set(value);
     });
 
+    this.form.get('status')?.valueChanges.subscribe(value => {
+      this.selectedStatus.set(value ?? 'active');
+    });
+
     // Mutual exclusivity across the three per-user auth modes. All three put a
     // credential in the Authorization header and there is only one, so selecting
     // any clears the others. The backend enforces this too (tools service
@@ -1536,6 +1603,8 @@ export class ToolFormPage implements OnInit {
         category: tool.category,
         protocol: tool.protocol,
         status: tool.status,
+        retirementNote: tool.retirementNote ?? '',
+        retiresOn: tool.retiresOn ?? '',
         isPublic: tool.isPublic,
         toolEnablement: toolEnablementOf(tool),
         // An already-saved always-on server was acknowledged when it was set;
@@ -1548,6 +1617,7 @@ export class ToolFormPage implements OnInit {
 
       // Update protocol signal
       this.selectedProtocol.set(tool.protocol);
+      this.selectedStatus.set(tool.status);
       // Drives the "nothing grants this yet" warning on the always-on option.
       this.allowedAppRoles.set(tool.allowedAppRoles ?? []);
 
@@ -1720,6 +1790,12 @@ export class ToolFormPage implements OnInit {
           category: formValue.category,
           protocol: formValue.protocol,
           status: formValue.status,
+          // Always sent, including as '' — the backend normalises blank to null,
+          // which is how an admin clears a note after re-activating a tool.
+          // Omitting them instead would make the values unclearable, because
+          // the update route dumps with `exclude_unset=True`.
+          retirementNote: formValue.retirementNote ?? '',
+          retiresOn: formValue.retiresOn ?? '',
           isPublic: formValue.isPublic,
           ...toolEnablementFlags(formValue.toolEnablement),
           requiresOauthProvider: requiresOauthProvider,
@@ -1738,6 +1814,12 @@ export class ToolFormPage implements OnInit {
           category: formValue.category,
           protocol: formValue.protocol,
           status: formValue.status,
+          // Always sent, including as '' — the backend normalises blank to null,
+          // which is how an admin clears a note after re-activating a tool.
+          // Omitting them instead would make the values unclearable, because
+          // the update route dumps with `exclude_unset=True`.
+          retirementNote: formValue.retirementNote ?? '',
+          retiresOn: formValue.retiresOn ?? '',
           isPublic: formValue.isPublic,
           ...toolEnablementFlags(formValue.toolEnablement),
           requiresOauthProvider: requiresOauthProvider,

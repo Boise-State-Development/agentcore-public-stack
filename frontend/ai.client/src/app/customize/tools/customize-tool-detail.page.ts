@@ -17,7 +17,13 @@ import {
   heroMagnifyingGlass,
   heroPlay,
 } from '@ng-icons/heroicons/outline';
-import { ServerTool, Tool, ToolService, isRetiring } from '../../services/tool/tool.service';
+import {
+  ServerTool,
+  Tool,
+  ToolService,
+  isRetiring,
+  retirementDetail,
+} from '../../services/tool/tool.service';
 import {
   McpPrompt,
   ResolvedPrompt,
@@ -214,6 +220,7 @@ interface PromptRun {
                   } @else {
                     Being retired and can no longer be turned on.
                   }
+                  {{ retirementDetail(t) }}
                 } @else {
                   Applies to every conversation, including ones already open.
                 }
@@ -809,6 +816,12 @@ export class CustomizeToolDetailPage {
       { label: 'Status', value: t.status },
       { label: 'On by default', value: t.enabledByDefault ? 'yes' : 'no' },
     ];
+    if (t.retirementNote) {
+      rows.push({ label: 'Replaced by', value: t.retirementNote });
+    }
+    if (t.retiresOn) {
+      rows.push({ label: 'Retires on', value: t.retiresOn });
+    }
     if (t.alwaysOn) {
       rows.push({ label: 'Always on', value: 'required by your organization' });
     }
@@ -983,8 +996,9 @@ export class CustomizeToolDetailPage {
     return !!sub.alwaysOn || !!tool.alwaysOn;
   }
 
-  /** Template access to the shared predicate. */
+  /** Template access to the shared predicate and copy helper. */
   protected readonly isRetiring = isRetiring;
+  protected readonly retirementDetail = retirementDetail;
 
   /**
    * Retiring AND already off — the one state in which a switch on this page

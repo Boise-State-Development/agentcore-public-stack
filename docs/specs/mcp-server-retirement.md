@@ -429,15 +429,38 @@ Retirement is a property of the **server**, never of one of its tools —
 be adopted one sub-tool at a time, while narrowing a server someone already has
 stays open.
 
-### Backend — one field
+### Backend — `status`, plus the two fields that answer "then what?"
 
-`bindable_catalog._list_tools` now carries `status` on each `kind: "tool"` item's
+`bindable_catalog._list_tools` carries `status` on each `kind: "tool"` item's
 `meta`. `BindableItem.meta` is a free-form `Dict[str, Any]`, so this breaks no
 contract, and a `str`-Enum serialises as `"deprecated"` rather than an enum
 member — which the SPA's `!== 'active'` comparison depends on.
 
+`status` alone only says a tool is going away. Two nullable fields on
+`ToolDefinition` say what to do about it, and ride the same path out through
+`UserToolAccess`, `AdminToolResponse` and `BindableItem.meta`:
+
+| Field | Holds |
+|---|---|
+| `retirementNote` | Free text, ≤300 chars — *"Replaced by Canvas for Faculty"*, *"No replacement — contact OIT"* |
+| `retiresOn` | ISO `YYYY-MM-DD`; the day Stage 3 revokes the grant |
+
+**Free text rather than a `replacedBy` tool id**, because a retirement often has
+no drop-in successor, or splits across several, and an id cannot say so. A
+structured pointer can be added later *underneath* this; it cannot replace it.
+
+Both are **display only** — nothing reads them for access, and neither reaches
+the model's `toolConfig`, so they cost nothing per turn. They are also not gated
+on `status`: an admin may fill them in while drafting, and `isRetiring` alone
+decides whether anything renders. Coupling them would discard a note typed
+before the status was flipped.
+
+`retiresOn` is stored as a string because it is displayed, never computed with —
+which is exactly why it is validated on the way in. Without the guard, `"soon"`
+or `"9/30/26"` would persist happily and reach the SPA.
+
 `GET /tools/` already returned `status` on every `UserToolAccess`, so the chat
-picker needed no backend change at all.
+picker needed no backend change for that half.
 
 **Nothing is filtered out.** `binding_validation._validate_tool` reads the same
 `get_user_accessible_tools` as the palette, so dropping a retiring tool from
@@ -457,6 +480,36 @@ picker exactly as it is today.
 | Customize → Tools → detail (`customize-tool-detail.page`) | `isRetireLocked(tool)` on the master switch *and* on every sub-tool switch |
 | New scheduled run (`schedule-form.page`) | `isToolRetiring(toolId)` on the checkbox. A schedule's `enabledTools` is a snapshot, so adding one here books it into a run that may fire months from now |
 | `ToolService.toggleTool` / `toggleServerTool` | The service-level backstop all of the above sit on, for the keyboard and programmatic paths that never see a `disabled` attribute |
+| Admin tool form | The two retirement inputs, revealed when Status leaves `active`. **Hidden, not disabled** — the controls keep their values, so toggling Status while drafting does not silently discard what was typed |
+
+### One sentence, four surfaces
+
+`retirementDetail()` composes the note and the date into the single sentence
+each surface appends after its own lead-in. It exists so the Customize card, the
+detail page, the Designer notice and the schedule chip cannot drift into four
+phrasings of the same fact. Both fields are independently optional, so it has
+four shapes and all four must stay grammatical:
+
+| Recorded | Renders |
+|---|---|
+| note + date | *"Replaced by Canvas for Faculty. It stops working on October 31, 2026."* |
+| note only | *"Replaced by Canvas for Faculty."* |
+| date only | *"It stops working on October 31, 2026."* |
+| neither | **nothing** |
+
+The last row is deliberate. "No replacement is available" would be a claim
+invented on the admin's behalf; absence of information is not information. The
+Designer notice is the one exception — it falls back to *"It will stop working
+once the retirement completes"*, because a notice with a blank second half reads
+like a rendering bug.
+
+⚠️ **The date is parsed at UTC noon.** `new Date('2026-10-31')` is midnight UTC
+and prints as the 30th for every timezone west of Greenwich — which is all of
+ours. A retirement date that reads a day early is the one kind of wrong here
+that actually costs someone. `Date.UTC` also **rolls over** rather than failing
+(`2026-13-45` becomes February 2027), so the parts are re-read and compared
+after construction; the backend validator rejects that shape, but a hand-edited
+DynamoDB item can still carry it.
 
 **Nothing is hidden from a list.** An author who opens an Agent binding a
 retiring server must *see* the binding — a ref that silently vanished from the
@@ -498,6 +551,26 @@ aws dynamodb scan --table-name "$APP_ROLES_TABLE" --region us-west-2 \
 
 Any row it prints is one whose pickers change on deploy. Flip it back to
 `active` on the admin tool form if that is not what you want.
+
+### Verified live against dev (2026-09-22, retirement metadata)
+
+Branch code against dev's real catalog, with `retirementNote: "Replaced by Hello
+World"` / `retiresOn: "2026-10-31"` set on `pe12_probe_mcp` (restored after).
+
+| Surface | Observed |
+|---|---|
+| Customize card | *"Being retired and can no longer be turned on. Replaced by Hello World. It stops working on October 31, 2026."* — same string on the switch's `title` |
+| Admin tool form | Block revealed because Status is Disabled, both inputs populated from the row |
+| Admin form, Status → Active → Disabled | Block hides, then returns **with the value intact** — the "hidden, not disabled" claim |
+| Designer notice, metadata set | *"PE12 Probe MCP is being retired. Replaced by Hello World. It stops working on October 31, 2026."* |
+| Designer notice, metadata absent | *"SK Hello Approval Test is being retired. It will stop working once the retirement completes."* — the fallback, promising no date it cannot show |
+
+⚠️ **Clearing a note stores `""`, not an absent attribute.** `repository.update_tool`
+skips `None` (so `null` cannot clear a field) and `setattr`s the `""` straight onto
+an already-constructed model, which does not re-run field validators. The value
+normalises to `None` on the next `from_dynamo_item`, so all three read surfaces
+report `null` and nothing renders — but the stored row is `""` rather than
+missing. Harmless and self-healing; documented because a row diff will show it.
 
 ### Verified live against dev (2026-09-21)
 

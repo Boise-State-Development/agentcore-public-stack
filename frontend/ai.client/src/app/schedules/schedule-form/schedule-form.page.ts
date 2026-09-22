@@ -14,7 +14,7 @@ import { ScheduleService } from '../services/schedule.service';
 import { RunNowService } from '../services/run-now.service';
 import { AgentService } from '../../agents/services/agent.service';
 import { Agent } from '../../agents/models/agent.model';
-import { ToolService, isRetiring } from '../../services/tool/tool.service';
+import { Tool, ToolService, isRetiring, retirementDetail } from '../../services/tool/tool.service';
 import {
   CreateScheduleRequest,
   IntervalUnit,
@@ -247,6 +247,13 @@ export class ScheduleFormPage implements OnInit {
   isToolRetiring(toolId: string): boolean {
     const tool = this.tools().find((t) => t.toolId === toolId);
     return !!tool && isRetiring(tool) && !this.isToolSelected(toolId);
+  }
+
+  /** Hover text on the `retiring` chip: why it is refused, and what to use instead. */
+  retiringReason(tool: Tool): string {
+    const detail = retirementDetail(tool);
+    const lead = 'Being retired and can no longer be added to a schedule.';
+    return detail ? `${lead} ${detail}` : lead;
   }
 
   toggleTool(toolId: string): void {

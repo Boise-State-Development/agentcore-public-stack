@@ -275,7 +275,7 @@
                     />
                     {{ tool.displayName }}
                     @if (isToolRetiring(tool.toolId)) {
-                      <span class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">retiring</span>
+                      <span [attr.title]="retiringReason(tool)" class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">retiring</span>
                     }
                   </label>
                 } @empty {

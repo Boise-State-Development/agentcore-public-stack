@@ -135,6 +135,12 @@ async def _list_tools(user: User, svc: ToolCatalogService) -> List[BindableItem]
                 # author editing an Agent that keeps the binding — for a tool
                 # that Agent can still run.
                 "status": t.status,
+                # Only ever set on a non-active tool. They ride here rather than
+                # being looked up separately so the Designer's notice can name
+                # the replacement and the date in the same render that decides a
+                # chip is retiring.
+                "retirementNote": t.retirement_note,
+                "retiresOn": t.retires_on,
                 "requiresOauthProvider": t.requires_oauth_provider,
                 "serverTools": [
                     {

@@ -645,6 +645,60 @@ class ToolDefinition(BaseModel):
     # Technical metadata
     protocol: ToolProtocol = Field(..., description="How the tool is invoked")
     status: ToolStatus = Field(default=ToolStatus.ACTIVE)
+    retirement_note: Optional[str] = Field(
+        None,
+        description=(
+            "What a user should do instead, shown wherever a non-active tool is "
+            "surfaced (e.g. 'Replaced by Canvas for Faculty', 'No replacement — "
+            "contact OIT'). Free text rather than a replacedBy tool id on purpose: "
+            "a retirement often has no drop-in successor, or splits across several, "
+            "and an id cannot say so. Display only — it never reaches the model's "
+            "toolConfig, so it costs nothing per turn. "
+            "See docs/specs/mcp-server-retirement.md §7."
+        ),
+    )
+    retires_on: Optional[str] = Field(
+        None,
+        description=(
+            "ISO date (YYYY-MM-DD) the tool stops working — i.e. when Stage 3 "
+            "revokes its grant and every Agent binding it starts failing. Display "
+            "only, and advisory: nothing schedules off it, because a retirement is "
+            "driven by the runbook, not by a timer."
+        ),
+    )
+
+    @field_validator("retirement_note", "retires_on", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v: object) -> object:
+        """Treat an empty or whitespace-only value as unset.
+
+        The admin form posts ``""`` for an untouched optional input, and a tool
+        carrying ``retirementNote: ""`` would render an empty reason line rather
+        than none at all.
+        """
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    @field_validator("retires_on")
+    @classmethod
+    def _validate_retires_on(cls, v: Optional[str]) -> Optional[str]:
+        """Reject anything that is not a plain ISO date.
+
+        Stored as a string rather than a ``date`` because it is displayed, never
+        computed with, and a string round-trips through DynamoDB unchanged. That
+        is exactly why it needs a guard on the way in: without one, "soon" or
+        "9/30/26" would persist happily and reach the SPA as-is.
+        """
+        if v is None:
+            return None
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"retiresOn must be an ISO date (YYYY-MM-DD), got '{v}'")
+        return v
+
     requires_oauth_provider: Optional[str] = Field(
         None,
         description="OAuth provider ID if tool requires user OAuth connection (e.g., 'google_workspace')",
@@ -809,6 +863,8 @@ class ToolDefinition(BaseModel):
             "category": self.category if isinstance(self.category, str) else self.category.value,
             "protocol": self.protocol if isinstance(self.protocol, str) else self.protocol.value,
             "status": self.status if isinstance(self.status, str) else self.status.value,
+            "retirementNote": self.retirement_note,
+            "retiresOn": self.retires_on,
             "requiresOauthProvider": self.requires_oauth_provider,
             "forwardAuthToken": self.forward_auth_token,
             "tokenExchangeAudience": self.token_exchange_audience,
@@ -874,6 +930,10 @@ class ToolDefinition(BaseModel):
             category=item.get("category", ToolCategory.UTILITY),
             protocol=protocol,
             status=item.get("status", ToolStatus.ACTIVE),
+            # Absent on every row written before retirement metadata shipped, so
+            # they read back None and the tool renders exactly as it did.
+            retirement_note=item.get("retirementNote"),
+            retires_on=item.get("retiresOn"),
             requires_oauth_provider=item.get("requiresOauthProvider"),
             forward_auth_token=item.get("forwardAuthToken", False),
             token_exchange_audience=item.get("tokenExchangeAudience"),
@@ -969,6 +1029,11 @@ class UserToolAccess(BaseModel):
     category: ToolCategory
     protocol: ToolProtocol
     status: ToolStatus
+    # What to do instead, and when it stops working. Only ever set on a
+    # non-active tool; the SPA shows them beside the `retiring` badge so the
+    # answer to "then what?" is on the same card as the bad news.
+    retirement_note: Optional[str] = Field(None, alias="retirementNote")
+    retires_on: Optional[str] = Field(None, alias="retiresOn")
     requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
 
     # For MCP-server tools (protocol 'mcp'/'mcp_external'): the individual tools
@@ -1189,6 +1254,8 @@ class ToolCreateRequest(BaseModel):
     category: ToolCategory = Field(default=ToolCategory.UTILITY)
     protocol: ToolProtocol = Field(default=ToolProtocol.LOCAL)
     status: ToolStatus = Field(default=ToolStatus.ACTIVE)
+    retirement_note: Optional[str] = Field(None, max_length=300, alias="retirementNote")
+    retires_on: Optional[str] = Field(None, alias="retiresOn")
     requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
     forward_auth_token: bool = Field(default=False, alias="forwardAuthToken")
     token_exchange_audience: Optional[str] = Field(None, alias="tokenExchangeAudience")
@@ -1216,6 +1283,11 @@ class ToolUpdateRequest(BaseModel):
     category: Optional[ToolCategory] = None
     protocol: Optional[ToolProtocol] = None
     status: Optional[ToolStatus] = None
+    # Same partial-update contract as `always_on` below: absent means "leave it
+    # alone", and the admin form posts an explicit "" to clear one (normalised
+    # to None by ToolDefinition's validator).
+    retirement_note: Optional[str] = Field(None, max_length=300, alias="retirementNote")
+    retires_on: Optional[str] = Field(None, alias="retiresOn")
     requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
     forward_auth_token: Optional[bool] = Field(None, alias="forwardAuthToken")
     token_exchange_audience: Optional[str] = Field(None, alias="tokenExchangeAudience")
@@ -1409,6 +1481,8 @@ class AdminToolResponse(BaseModel):
     category: ToolCategory
     protocol: ToolProtocol
     status: ToolStatus
+    retirement_note: Optional[str] = Field(None, alias="retirementNote")
+    retires_on: Optional[str] = Field(None, alias="retiresOn")
     requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
     forward_auth_token: bool = Field(default=False, alias="forwardAuthToken")
     token_exchange_audience: Optional[str] = Field(None, alias="tokenExchangeAudience")
@@ -1457,6 +1531,8 @@ class AdminToolResponse(BaseModel):
             category=tool.category,
             protocol=tool.protocol,
             status=tool.status,
+            retirement_note=tool.retirement_note,
+            retires_on=tool.retires_on,
             requires_oauth_provider=tool.requires_oauth_provider,
             forward_auth_token=tool.forward_auth_token,
             token_exchange_audience=tool.token_exchange_audience,

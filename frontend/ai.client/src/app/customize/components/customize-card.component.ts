@@ -80,7 +80,7 @@ export type CustomizeCardBadge = 'connected' | 'connect' | null;
         }
         @if (retiring()) {
           <p class="mt-1 text-xs/5 font-medium text-state-warning-700 dark:text-state-warning-300">
-            {{ enabled() ? retiringOnReason : retiringOffReason }}
+            {{ enabled() ? retiringOnReason : retiringOffReason }}{{ retiringDetail() ? ' ' + retiringDetail() : '' }}
           </p>
         }
       </div>
@@ -97,7 +97,7 @@ export type CustomizeCardBadge = 'connected' | 'connect' | null;
               : (enabled() ? 'Disable ' : 'Enable ') + name()
         "
         [attr.aria-disabled]="locked() || retiringLocked() ? 'true' : null"
-        [attr.title]="locked() ? lockedReason : retiringLocked() ? retiringOffReason : null"
+        [attr.title]="locked() ? lockedReason : retiringLocked() ? retiringTooltip() : null"
         [disabled]="pending() || locked() || retiringLocked()"
         (click)="toggled.emit()"
         [class.opacity-50]="pending() && !locked()"
@@ -140,10 +140,27 @@ export class CustomizeCardComponent {
    * it still works. See docs/specs/mcp-server-retirement.md §7.
    */
   readonly retiring = input<boolean>(false);
-  protected readonly retiringOnReason = 'Being retired — turn it off when you can';
-  protected readonly retiringOffReason = 'Being retired and can no longer be turned on';
+  /**
+   * What to do instead, and when it stops working — already composed into one
+   * sentence by `retirementDetail()` so this component holds no copy rules of
+   * its own. Empty when the admin recorded neither, in which case the card says
+   * only that the capability is going away, which is all we actually know.
+   */
+  readonly retiringDetail = input<string>('');
+  protected readonly retiringOnReason = 'Being retired — turn it off when you can.';
+  protected readonly retiringOffReason = 'Being retired and can no longer be turned on.';
   /** Retiring AND already off — the one state in which the switch refuses. */
   protected readonly retiringLocked = computed(() => this.retiring() && !this.enabled());
+  /**
+   * The hover text on a refusing switch. Carries the detail too, since "why
+   * won't this turn on?" and "what do I use instead?" are the same question.
+   * The card body states both regardless, so nothing here is title-only —
+   * a `title` reaches neither touch users nor a statically-browsing reader.
+   */
+  protected readonly retiringTooltip = computed(() => {
+    const detail = this.retiringDetail();
+    return detail ? `${this.retiringOffReason} ${detail}` : this.retiringOffReason;
+  });
   /** In-flight save: the switch stays visually settled but refuses a second click. */
   readonly pending = input<boolean>(false);
   readonly badge = input<CustomizeCardBadge>(null);

@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroMagnifyingGlass } from '@ng-icons/heroicons/outline';
-import { Tool, ToolService, isRetiring } from '../../services/tool/tool.service';
+import { Tool, ToolService, isRetiring, retirementDetail } from '../../services/tool/tool.service';
 import { ConnectorStatusService } from '../../settings/connectors/services/connector-status.service';
 import { splitToolDescription } from '../../shared/utils/tool-description';
 import { monogramFor } from '../../shared/utils/monogram';
@@ -23,6 +23,8 @@ interface ToolCard {
   locked: boolean;
   /** An admin is retiring this tool: can be turned off, cannot be turned on. */
   retiring: boolean;
+  /** Replacement + date, pre-composed. Empty when the admin recorded neither. */
+  retiringDetail: string;
   badge: CustomizeCardBadge;
   /** Where the card's name drills in to. Encoded: ids are opaque catalog keys. */
   detailLink: string;
@@ -157,6 +159,7 @@ interface ToolCard {
                   [enabled]="card.enabled"
                   [locked]="card.locked"
                   [retiring]="card.retiring"
+                  [retiringDetail]="card.retiringDetail"
                   [badge]="card.badge"
                   [detailLink]="card.detailLink"
                   [pending]="pending().has(card.tool.toolId)"
@@ -234,6 +237,7 @@ export class CustomizeToolsPage {
       enabled: tool.isEnabled,
       locked: !!tool.alwaysOn,
       retiring: isRetiring(tool),
+      retiringDetail: retirementDetail(tool),
       badge: this.badgeFor(tool),
       detailLink: `/customize/tools/${encodeURIComponent(tool.toolId)}`,
     }));

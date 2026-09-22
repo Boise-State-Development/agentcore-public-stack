@@ -134,6 +134,13 @@ export interface AdminTool {
   category: ToolCategory;
   protocol: ToolProtocol;
   status: ToolStatus;
+  /**
+   * Shown to users wherever a non-`active` tool is surfaced: what to use
+   * instead, and the date it stops working. Optional on the wire so an older
+   * backend reads `undefined` and the surfaces say only that it is going away.
+   */
+  retirementNote?: string | null;
+  retiresOn?: string | null;
   requiresOauthProvider: string | null;
   forwardAuthToken: boolean;
   tokenExchangeAudience?: string | null;
@@ -194,6 +201,8 @@ export interface ToolCreateRequest {
   category?: ToolCategory;
   protocol?: ToolProtocol;
   status?: ToolStatus;
+  retirementNote?: string | null;
+  retiresOn?: string | null;
   requiresOauthProvider?: string | null;
   forwardAuthToken?: boolean;
   tokenExchangeAudience?: string | null;
@@ -244,6 +253,8 @@ export interface ToolUpdateRequest {
   category?: ToolCategory;
   protocol?: ToolProtocol;
   status?: ToolStatus;
+  retirementNote?: string | null;
+  retiresOn?: string | null;
   requiresOauthProvider?: string | null;
   forwardAuthToken?: boolean;
   tokenExchangeAudience?: string | null;

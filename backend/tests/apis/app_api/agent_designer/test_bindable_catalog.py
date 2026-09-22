@@ -66,6 +66,7 @@ def _tool(**kw):
     base = dict(
         tool_id="wikipedia", display_name="Wikipedia", description="Search Wikipedia",
         category="research", protocol="mcp", status=ToolStatus.ACTIVE,
+        retirement_note=None, retires_on=None,
         requires_oauth_provider=None,
         server_tools=[SimpleNamespace(name="search", description="d", needs_approval=False, enabled=True)],
     )
@@ -104,6 +105,30 @@ class TestTools:
         make every tool read as retiring."""
         items = await bc.list_bindable("tool", _user(), tool_service=_tool_svc([_tool()]))
         assert items[0].model_dump(mode="json")["meta"]["status"] == "active"
+
+    @pytest.mark.asyncio
+    async def test_retirement_metadata_rides_on_meta(self):
+        """Without these the Designer notice can say a tool is going away but not
+        what to use instead — which is the question an author actually has."""
+        items = await bc.list_bindable(
+            "tool",
+            _user(),
+            tool_service=_tool_svc([
+                _tool(
+                    status=ToolStatus.DEPRECATED,
+                    retirement_note="Replaced by Canvas for Faculty",
+                    retires_on="2026-10-31",
+                )
+            ]),
+        )
+        assert items[0].meta["retirementNote"] == "Replaced by Canvas for Faculty"
+        assert items[0].meta["retiresOn"] == "2026-10-31"
+
+    @pytest.mark.asyncio
+    async def test_retirement_metadata_is_none_on_an_ordinary_tool(self):
+        items = await bc.list_bindable("tool", _user(), tool_service=_tool_svc([_tool()]))
+        assert items[0].meta["retirementNote"] is None
+        assert items[0].meta["retiresOn"] is None
 
     @pytest.mark.asyncio
     async def test_a_retiring_tool_is_still_listed(self):

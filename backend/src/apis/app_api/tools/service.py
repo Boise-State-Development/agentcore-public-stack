@@ -158,6 +158,8 @@ class ToolCatalogService:
                     category=tool.category,
                     protocol=tool.protocol,
                     status=tool.status,
+                    retirement_note=tool.retirement_note,
+                    retires_on=tool.retires_on,
                     # UserToolAccess has always declared this field; nothing ever
                     # passed it, so every tool reported `requiresOauthProvider:
                     # null` and the SPA had no way to tell that 13 of the 31

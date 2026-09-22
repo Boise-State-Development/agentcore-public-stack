@@ -384,10 +384,17 @@
           <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Tools</h2>
         </div>
         <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Capabilities this agent can call.</p>
-        @if (retiringSelectedTools().length) {
-          <p class="mt-2 rounded-lg bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">
-            {{ retiringSelectedTools().join(', ') }} {{ retiringSelectedTools().length === 1 ? 'is' : 'are' }} being retired. This agent keeps working for now — please remove {{ retiringSelectedTools().length === 1 ? 'it' : 'them' }} before the retirement date. If this agent is published, resubmit it so the change reaches the people using it.
-          </p>
+        @if (retiringSelectedTools().length; as retiringCount) {
+          <div class="mt-2 rounded-lg bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">
+            <ul class="flex flex-col gap-1">
+              @for (t of retiringSelectedTools(); track t.label) {
+                <li><span class="font-medium">{{ t.label }}</span> is being retired. {{ t.detail }}</li>
+              }
+            </ul>
+            <p class="mt-1.5">
+              This agent keeps working until then — please remove {{ retiringCount === 1 ? 'it' : 'them' }}. If this agent is published, resubmit it so the change reaches the people using it.
+            </p>
+          </div>
         }
         <div class="mt-4 flex flex-wrap gap-2">
           @for (t of tools(); track t.ref) {
@@ -406,7 +413,7 @@
               the backend still admits it (docs/specs/mcp-server-retirement.md §7).
             -->
             <span class="inline-flex items-stretch rounded-full border transition" [class.border-primary-500]="isToolSelected(t.ref)" [class.bg-gray-100]="isToolSelected(t.ref)" [class.dark:bg-gray-700]="isToolSelected(t.ref)" [class.border-gray-200]="!isToolSelected(t.ref)" [class.dark:border-gray-700]="!isToolSelected(t.ref)">
-              <button type="button" (click)="toggleTool(t.ref)" [disabled]="isToolRetiring(t) && !isToolSelected(t.ref)" class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60" [class.text-primary-accessible]="isToolSelected(t.ref)" [class.dark:text-primary-50]="isToolSelected(t.ref)" [class.text-gray-700]="!isToolSelected(t.ref)" [class.dark:text-gray-300]="!isToolSelected(t.ref)" [appTooltip]="isToolRetiring(t) ? (isToolSelected(t.ref) ? 'Being retired — remove it from this agent when you can. ' + t.description : 'Being retired and can no longer be added to an agent. ' + t.description) : t.description" appTooltipPosition="top">
+              <button type="button" (click)="toggleTool(t.ref)" [disabled]="isToolRetiring(t) && !isToolSelected(t.ref)" class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60" [class.text-primary-accessible]="isToolSelected(t.ref)" [class.dark:text-primary-50]="isToolSelected(t.ref)" [class.text-gray-700]="!isToolSelected(t.ref)" [class.dark:text-gray-300]="!isToolSelected(t.ref)" [appTooltip]="toolTooltip(t)" appTooltipPosition="top">
                 @if (isToolSelected(t.ref)) { <ng-icon name="heroCheck" class="size-3.5" /> }
                 {{ t.label }}
                 @if (isToolRetiring(t)) {
