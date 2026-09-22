@@ -499,6 +499,36 @@ aws dynamodb scan --table-name "$APP_ROLES_TABLE" --region us-west-2 \
 Any row it prints is one whose pickers change on deploy. Flip it back to
 `active` on the admin tool form if that is not what you want.
 
+### Verified live against dev (2026-09-21)
+
+Local branch code (SPA on `:4200`, app-api on `:8000`) against dev's real
+catalog, which carries two `disabled` rows. All four states observed:
+
+| State | Observed |
+|---|---|
+| Retiring, **not** enabled — Customize card | `retiring` badge, reason line, switch `disabled` + `aria-disabled="true"`, accessible name *"PE12 Probe MCP is being retired and can no longer be turned on"* |
+| Retiring, **not** bound — Designer chip | `retiring` badge, chip `disabled`, still listed among the active chips |
+| Retiring, **already bound** — Designer chip | Chip **selected**, **not** disabled, badge shown, sub-tool caret available; section notice named it and told the author to remove and resubmit |
+| Removal | One click deselected it, the chip went `disabled` in the same frame (cannot be re-added), the notice disappeared, and Save enabled |
+| `active` control (Calculator / Word Documents) | No badge, live switch/chip, unchanged `aria-label` |
+
+Contrast, canvas-normalized (the tokens resolve to `oklch()`, which a naive
+`rgb()` parse gets wrong):
+
+| Theme | Reason line on card | Badge on badge fill |
+|---|---|---|
+| light | 5.03:1 | 4.85:1 |
+| dark | 10.14:1 | 9.22:1 |
+
+Both clear AA (4.5:1) at the 10px/12px sizes used — light mode with the smaller
+margin, and identical token pairs to the existing `connected` / `connect`
+badges, so the badge is no worse than the pattern it joins.
+
+⚠️ The backend **accepted** a `POST /agents/` binding a `disabled` tool, as it
+must — that is the design (§4), and it is what let this be verified with a
+throwaway agent rather than a fixture. That agent was deleted; its partition
+reads zero rows.
+
 ### What was deliberately left alone
 
 `get_user_accessible_tools`, `_tool_grant_set`, `get_public_tool_ids` and
