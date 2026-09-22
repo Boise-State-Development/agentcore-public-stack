@@ -91,12 +91,13 @@ export interface Agent {
   updatedAt: string;
 
   /**
-   * Configurable source citations & document download (#111). Both default `true`, so a
-   * legacy agent reads exactly as before. `allowDocumentDownload` is only meaningful when
-   * `showCitations` is true (citations off ⇒ downloads off).
+   * Configurable source citations & document download (#111). Optional on the client
+   * type so existing `Agent` fixtures/mocks stay valid; the backend always sends both
+   * (default true), and readers treat absent as true. `allowDocumentDownload` is only
+   * meaningful when `showCitations` is true (citations off ⇒ downloads off).
    */
-  showCitations: boolean;
-  allowDocumentDownload: boolean;
+  showCitations?: boolean;
+  allowDocumentDownload?: boolean;
   // Marketplace listing (Phase 1) + the detail read (Phase 3). All are absent on the
   // list route and on an agent that was never submitted.
   tagline?: string;
