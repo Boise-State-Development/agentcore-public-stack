@@ -6,8 +6,39 @@
   <app-announcement-banner [placement]="announcementPlacement()" />
 }
 
-<!-- Cost quota warning indicator -->
-<app-quota-warning-banner />
+<!--
+  Composer meta row: one line above the composer carrying the quota tab(s) in
+  the centre and the projected cost + context badge on the right.
+
+  Grid, not flex, because the tab has to stay centred on the *composer* rather
+  than on whatever is left over: in a flex row the badge's own width pulls the
+  centred item off-centre by half of it (~50px), and it would move again every
+  time the cost label grew a digit. `1fr auto 1fr` pins the middle column to
+  the composer's centre line whatever the two edges hold, and the leading
+  column is the slot a future left-aligned control drops into.
+
+  Stacking is a container query rather than flex wrapping: `1fr` columns cannot
+  wrap, so below the width where the tab and the badge stop fitting side by
+  side the row becomes single-column. `order` puts the badge on the upper line
+  there, because stacking the other way would break the tab's weld to the
+  composer's top edge.
+-->
+<div class="@container/meta">
+  <div
+    class="grid grid-cols-[1fr_auto_1fr] items-end gap-x-3 gap-y-1 @max-[512px]/meta:grid-cols-1"
+  >
+    <!-- Reserved for a future left-aligned control; it is also the left half of
+         the centring, so it stays in the DOM while it is empty. -->
+    <div class="min-w-0 @max-[512px]/meta:hidden"></div>
+    <!-- Cost quota warning indicator -->
+    <app-quota-warning-banner class="min-w-0 justify-self-center @max-[512px]/meta:order-2" />
+    <!-- The right inset lives on the cell, not the row: row padding would shift
+         the middle column off the composer's centre line. -->
+    <div class="justify-self-end pr-[10px] @max-[512px]/meta:order-1">
+      <ng-content select="[composerMeta]" />
+    </div>
+  </div>
+</div>
 
 <!-- Storage quota warning indicator (only shows when files are attached) -->
 <app-storage-quota-banner [showWhenFilesAttached]="showFileAttachments()" />

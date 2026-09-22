@@ -4,7 +4,21 @@ import {
   QuotaWarning,
   QuotaExceeded,
   QuotaSessionNotice,
+  DISMISSED_QUOTA_WARNING_KEY,
 } from './quota-warning.service';
+
+function makeWarning(overrides: Partial<QuotaWarning> = {}): QuotaWarning {
+  return {
+    type: 'quota_warning',
+    warningLevel: '50%',
+    currentUsage: 5,
+    quotaLimit: 10,
+    percentageUsed: 50,
+    remaining: 5,
+    message: 'Warning message',
+    ...overrides,
+  };
+}
 
 function makeSessionNotice(
   overrides: Partial<QuotaSessionNotice> = {},
@@ -25,6 +39,7 @@ describe('QuotaWarningService', () => {
   let service: QuotaWarningService;
 
   beforeEach(() => {
+    localStorage.clear();
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({});
     service = TestBed.inject(QuotaWarningService);
@@ -32,6 +47,94 @@ describe('QuotaWarningService', () => {
 
   afterEach(() => {
     TestBed.resetTestingModule();
+    localStorage.clear();
+  });
+
+  /** A fresh service instance, as after a reload or in a new tab. */
+  function reloadService(): QuotaWarningService {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({});
+    return TestBed.inject(QuotaWarningService);
+  }
+
+  describe('dismissal persists per rung', () => {
+    it('stays dismissed when the same rung re-arrives with higher usage', () => {
+      service.setWarning(makeWarning({ currentUsage: 5 }));
+      service.dismissWarning();
+
+      // The backend re-sends the rung on the next turn, usage moved on.
+      service.setWarning(makeWarning({ currentUsage: 5.4, percentageUsed: 54 }));
+
+      expect(service.activeWarning()?.currentUsage).toBe(5.4);
+      expect(service.hasVisibleWarning()).toBe(false);
+    });
+
+    it('stays dismissed across a reload / new conversation', () => {
+      service.setWarning(makeWarning());
+      service.dismissWarning();
+
+      const fresh = reloadService();
+      fresh.setWarning(makeWarning({ currentUsage: 6, percentageUsed: 60 }));
+
+      expect(fresh.hasVisibleWarning()).toBe(false);
+    });
+
+    it('shows again when a higher rung fires', () => {
+      service.setWarning(makeWarning());
+      service.dismissWarning();
+
+      service.setWarning(makeWarning({ warningLevel: '80%', currentUsage: 8, percentageUsed: 80 }));
+
+      expect(service.hasVisibleWarning()).toBe(true);
+    });
+
+    it('keeps a lower rung hidden after a higher one was dismissed', () => {
+      service.setWarning(makeWarning({ warningLevel: '80%', currentUsage: 8, percentageUsed: 80 }));
+      service.dismissWarning();
+
+      service.setWarning(makeWarning({ warningLevel: '50%', currentUsage: 8.1 }));
+
+      expect(service.hasVisibleWarning()).toBe(false);
+    });
+
+    it('forgets the dismissal when usage drops (new period)', () => {
+      service.setWarning(makeWarning({ currentUsage: 6 }));
+      service.dismissWarning();
+
+      service.setWarning(makeWarning({ currentUsage: 5.1 }));
+
+      expect(service.hasVisibleWarning()).toBe(true);
+      expect(localStorage.getItem(DISMISSED_QUOTA_WARNING_KEY)).toBeNull();
+    });
+
+    it('forgets the dismissal when the quota limit changes', () => {
+      service.setWarning(makeWarning());
+      service.dismissWarning();
+
+      service.setWarning(makeWarning({ quotaLimit: 20, currentUsage: 10 }));
+
+      expect(service.hasVisibleWarning()).toBe(true);
+    });
+
+    it('ignores a corrupt stored entry', () => {
+      localStorage.setItem(DISMISSED_QUOTA_WARNING_KEY, '{not json');
+      const fresh = reloadService();
+
+      fresh.setWarning(makeWarning());
+
+      expect(fresh.hasVisibleWarning()).toBe(true);
+    });
+
+    it('resetForSignOut clears the persisted dismissal', () => {
+      service.setWarning(makeWarning());
+      service.dismissWarning();
+      service.resetForSignOut();
+
+      expect(localStorage.getItem(DISMISSED_QUOTA_WARNING_KEY)).toBeNull();
+      const fresh = reloadService();
+      fresh.setWarning(makeWarning({ currentUsage: 6 }));
+      expect(fresh.hasVisibleWarning()).toBe(true);
+    });
   });
 
   describe('setWarning', () => {

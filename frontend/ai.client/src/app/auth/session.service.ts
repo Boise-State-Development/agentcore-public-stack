@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../services/config.service';
 import { BffLogoutResponse, BffSessionResponse, BffSessionUser } from './bff-session.model';
 import { ComposerDraftStorageService } from '../session/services/session/composer-draft-storage.service';
+import { QuotaWarningService } from '../services/quota/quota-warning.service';
 
 /**
  * SessionService — backs the BFF Token-Handler cookie session.
@@ -37,6 +38,9 @@ export class SessionService {
    * the session here: claimed on bootstrap, cleared on logout.
    */
   private readonly composerDrafts = inject(ComposerDraftStorageService);
+
+  /** Holds a persisted quota-warning dismissal, which is also this user's. */
+  private readonly quotaWarnings = inject(QuotaWarningService);
 
   private readonly _user = signal<BffSessionUser | null>(null);
   private readonly _csrfToken = signal<string | null>(null);
@@ -256,6 +260,7 @@ export class SessionService {
       this._user.set(null);
       this._csrfToken.set(null);
       this.composerDrafts.clear();
+      this.quotaWarnings.resetForSignOut();
     }
     if (postLogoutUrl) {
       window.location.href = postLogoutUrl;
