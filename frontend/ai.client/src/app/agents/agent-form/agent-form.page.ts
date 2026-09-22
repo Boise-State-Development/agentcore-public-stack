@@ -285,6 +285,9 @@ export class AgentFormPage implements OnInit, OnDestroy {
   readonly liveFormDescription = signal('');
   readonly liveFormEmoji = signal('');
   readonly liveFormStarters = signal<string[]>([]);
+  /** #111: mirrors the showCitations control so the template can grey out and
+   *  explain the dependent "Allow document downloads" toggle. */
+  readonly liveShowCitations = signal(true);
 
   /** Model/params/bindings resolve from the SAVED record, so the preview needs a
    * save to reflect changes to them. Persona/instructions preview live. `form.dirty`
@@ -312,6 +315,17 @@ export class AgentFormPage implements OnInit, OnDestroy {
       tags: [[] as string[]],
       starters: this.fb.array([]),
       emoji: [''],
+      // #111: default on — a new agent shows citations and allows downloads, exactly
+      // as today. The author opts out per-agent.
+      showCitations: [true],
+      allowDocumentDownload: [true],
+    });
+
+    // #111 dependency: downloads are only meaningful when citations are shown. When the
+    // citations toggle goes off, force downloads off and disable the control; when it
+    // comes back on, re-enable it. emitEvent:false so this doesn't re-enter valueChanges.
+    this.form.get('showCitations')!.valueChanges.subscribe((on: boolean) => {
+      this.syncDownloadToggleEnabled(!!on);
     });
 
     // Mirror form values into the live signals so the OnPush preview updates as the
@@ -353,6 +367,24 @@ export class AgentFormPage implements OnInit, OnDestroy {
     this.liveFormDescription.set(this.form.get('description')?.value || '');
     this.liveFormEmoji.set(this.form.get('emoji')?.value || '');
     this.liveFormStarters.set(this.starters.value || []);
+    this.liveShowCitations.set(this.form.get('showCitations')?.value !== false);
+  }
+
+  /**
+   * #111: keep the "Allow document downloads" control consistent with the citations
+   * toggle. Citations off ⇒ downloads are meaningless, so force the value false and
+   * disable the control; citations on ⇒ re-enable it. emitEvent:false so this never
+   * re-enters the form's valueChanges pipeline.
+   */
+  private syncDownloadToggleEnabled(citationsOn: boolean): void {
+    const dl = this.form.get('allowDocumentDownload');
+    if (!dl) return;
+    if (citationsOn) {
+      dl.enable({ emitEvent: false });
+    } else {
+      dl.setValue(false, { emitEvent: false });
+      dl.disable({ emitEvent: false });
+    }
   }
 
   private async loadPalettes(): Promise<void> {
@@ -502,7 +534,12 @@ export class AgentFormPage implements OnInit, OnDestroy {
       visibility: agent.visibility ?? this.form.get('visibility')?.value ?? 'PRIVATE',
       tags: agent.tags ?? [],
       emoji: agent.emoji ?? '',
+      // #111: absent (legacy agent or template draft) ⇒ default on.
+      showCitations: agent.showCitations ?? true,
+      allowDocumentDownload: agent.allowDocumentDownload ?? true,
     });
+    // Reflect the citations→downloads dependency for the freshly loaded values.
+    this.syncDownloadToggleEnabled(agent.showCitations ?? true);
     this.starters.clear();
     (agent.starters ?? []).forEach((s) => this.starters.push(new FormControl(s, Validators.required)));
 
@@ -842,6 +879,10 @@ export class AgentFormPage implements OnInit, OnDestroy {
         ...(Object.keys(params).length ? { params } : {}),
       },
       bindings: this.buildBindings(),
+      // #111: citations on/off, and downloads AND-ed under citations (a disabled
+      // downloads control is dropped from form.value, so derive it explicitly).
+      showCitations: v.showCitations !== false,
+      allowDocumentDownload: v.showCitations !== false ? v.allowDocumentDownload !== false : false,
     };
 
     this.saving.set(true);

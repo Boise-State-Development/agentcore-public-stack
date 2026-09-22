@@ -220,7 +220,9 @@ export class MessageListComponent {
 
   /** The conversation itself, offered to attach to that feedback. */
   sessionId = input<string | null>(null);
-
+  /** #111: whether the active agent permits source-document download from citations.
+   *  Passed straight to the citation card to hide its download button. Default true. */
+  allowDownload = input<boolean>(true);
   /** Bubbled up when the user clicks "Continue" on a max_tokens-truncated
    *  assistant message. The page reuses the normal submit path with a
    *  canned prompt. */

@@ -19,6 +19,10 @@ export interface Assistant {
   status: 'DRAFT' | 'COMPLETE';
   imageUrl?: string;
 
+  /** Configurable source citations & document download (#111); default true. */
+  showCitations?: boolean;
+  allowDocumentDownload?: boolean;
+
   // Share metadata (only present for shared assistants)
   firstInteracted?: boolean;
   isSharedWithMe?: boolean;

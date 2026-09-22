@@ -389,6 +389,21 @@ class Assistant(BaseModel):
         None, description="Uniform primitive bindings (D3); absent = synthesize legacy KB binding via compat"
     )
 
+    # Configurable citations & document download (issue #111): additive, optional.
+    # ``extra="allow"`` + these ``True`` defaults mean every legacy row (no attribute)
+    # keeps today's behavior — citations shown, source docs downloadable — with no
+    # backfill. A creator opts a specific agent OUT by setting either to False.
+    show_citations: bool = Field(
+        True,
+        alias="showCitations",
+        description="Whether RAG source-citation SSE events are streamed to the client and persisted (#111)",
+    )
+    allow_document_download: bool = Field(
+        True,
+        alias="allowDocumentDownload",
+        description="Whether source documents may be downloaded from citations (#111); only meaningful when showCitations is True",
+    )
+
     # Agent Marketplace Phase 1: additive, optional, absent on every existing row. There
     # is no backfill — an absent ``listing`` IS the D3 default and means "never submitted".
     tagline: Optional[str] = Field(
@@ -427,6 +442,11 @@ class CreateAssistantRequest(BaseModel):
     model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig", description="Governed single-select model")
     bindings: Optional[List[AgentBinding]] = Field(None, description="Uniform primitive bindings")
     tagline: Optional[str] = Field(None, max_length=80, description="Shelf subtitle (D4)")
+    # Configurable citations & document download (#111); default True = today's behavior.
+    show_citations: bool = Field(True, alias="showCitations", description="Stream/persist source citations (#111)")
+    allow_document_download: bool = Field(
+        True, alias="allowDocumentDownload", description="Allow source-document download from citations (#111)"
+    )
 
 
 class UpdateAssistantRequest(BaseModel):
@@ -449,6 +469,11 @@ class UpdateAssistantRequest(BaseModel):
     # Marketplace: the author owns their own tagline. Admins may also edit it, but only
     # through PATCH /admin/agents/{id}/listing, which records the edit (D13).
     tagline: Optional[str] = Field(None, max_length=80, description="Shelf subtitle (D4)")
+    # Configurable citations & document download (#111); None = leave the stored value unchanged.
+    show_citations: Optional[bool] = Field(None, alias="showCitations", description="Stream/persist source citations (#111)")
+    allow_document_download: Optional[bool] = Field(
+        None, alias="allowDocumentDownload", description="Allow source-document download from citations (#111)"
+    )
 
 
 class AssistantResponse(BaseModel):
@@ -471,6 +496,13 @@ class AssistantResponse(BaseModel):
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 update timestamp")
     status: Literal["DRAFT", "COMPLETE"] = Field(..., description="Lifecycle status")
     image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to assistant avatar/image")
+
+    # Configurable citations & document download (#111). Always present (default True) so
+    # the SPA can render the download affordance without waiting for a 403.
+    show_citations: bool = Field(True, alias="showCitations", description="Whether source citations are shown (#111)")
+    allow_document_download: bool = Field(
+        True, alias="allowDocumentDownload", description="Whether source documents may be downloaded from citations (#111)"
+    )
 
     # Share metadata (only present for shared assistants)
     first_interacted: Optional[bool] = Field(None, alias="firstInteracted", description="Whether user has interacted with this shared assistant")
@@ -582,6 +614,14 @@ class AgentResponse(BaseModel):
     status: Literal["DRAFT", "COMPLETE"] = Field(..., description="Lifecycle status")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 creation timestamp")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 update timestamp")
+
+    # Configurable citations & document download (#111). Carried on the agent surface so
+    # the citation card can hide its download button without probing for a 403. Defaults
+    # True, so a legacy agent's payload reads exactly as before.
+    show_citations: bool = Field(True, alias="showCitations", description="Whether source citations are shown (#111)")
+    allow_document_download: bool = Field(
+        True, alias="allowDocumentDownload", description="Whether source documents may be downloaded from citations (#111)"
+    )
 
     # Marketplace Phase 1. All three are ``None`` on an agent that has never been
     # submitted, and the routes serve this model with ``response_model_exclude_none``,

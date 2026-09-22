@@ -3330,14 +3330,32 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 )
 
         # Build citations list for persistence (convert context chunks to citation format)
+        # Build citations list for persistence (convert context chunks to citation format)
+        #
+        # #111: when the agent's ``show_citations`` flag is off, suppress citations
+        # entirely — leaving this list empty is a single choke point that turns off all
+        # three downstream consumers at once: the ``event: citation`` SSE below, the
+        # ``citations=...`` persisted on the stored message, and the copy handed to
+        # ``agent.stream_async``. RAG retrieval and prompt augmentation above are
+        # deliberately untouched: the model still receives the context chunks, the user
+        # just is not shown (or able to download) the sources.
+        show_citations = getattr(assistant, "show_citations", True)
         citations_for_storage = []
-        if context_chunks:
+        if context_chunks and show_citations:
             for chunk in context_chunks:
                 citations_for_storage.append(
                     {
                         "assistantId": input_data.rag_assistant_id,
                         "documentId": chunk.get("metadata", {}).get("document_id", ""),
-                        "fileName": chunk.get("metadata", {}).get("source", "Unknown Source"),
+                        # Managed KBs carry the filename under ``filename`` (set at ingest,
+                        # managed_backend.py); legacy S3-Vectors used ``source``. Read
+                        # managed first, fall back to legacy, then the placeholder — before
+                        # this, every managed-KB citation rendered "Unknown Source".
+                        "fileName": (
+                            chunk.get("metadata", {}).get("filename")
+                            or chunk.get("metadata", {}).get("source")
+                            or "Unknown Source"
+                        ),
                         "text": chunk.get("text", "")[:500],  # Limit excerpt length
                     }
                 )

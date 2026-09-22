@@ -325,4 +325,32 @@ describe('CitationDisplayComponent', () => {
       vi.restoreAllMocks();
     });
   });
+
+  describe('Download button visibility (#111)', () => {
+    const one: Citation[] = [
+      { assistantId: 'a1', documentId: 'd1', fileName: 'test.pdf', text: 'excerpt' },
+    ];
+
+    it('shows the Download source button by default (allowDownload defaults true)', () => {
+      fixture.componentRef.setInput('citations', one);
+      component.isExpanded.set(true);
+      fixture.detectChanges();
+
+      const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(component.allowDownload()).toBe(true);
+      expect(text).toContain('Download source');
+    });
+
+    it('hides the Download source button when allowDownload is false, keeping the citation', () => {
+      fixture.componentRef.setInput('citations', one);
+      fixture.componentRef.setInput('allowDownload', false);
+      component.isExpanded.set(true);
+      fixture.detectChanges();
+
+      const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(text).not.toContain('Download source');
+      // The citation itself still renders — only the download affordance is withheld.
+      expect(text).toContain('test.pdf');
+    });
+  });
 });

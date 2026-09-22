@@ -90,6 +90,13 @@ export interface Agent {
   createdAt: string;
   updatedAt: string;
 
+  /**
+   * Configurable source citations & document download (#111). Both default `true`, so a
+   * legacy agent reads exactly as before. `allowDocumentDownload` is only meaningful when
+   * `showCitations` is true (citations off ⇒ downloads off).
+   */
+  showCitations: boolean;
+  allowDocumentDownload: boolean;
   // Marketplace listing (Phase 1) + the detail read (Phase 3). All are absent on the
   // list route and on an agent that was never submitted.
   tagline?: string;
@@ -151,6 +158,9 @@ export interface CreateAgentRequest {
   imageUrl?: string;
   modelConfig?: AgentModelConfig;
   bindings?: AgentBinding[];
+  /** #111 — default true when omitted. */
+  showCitations?: boolean;
+  allowDocumentDownload?: boolean;
 }
 
 export interface UpdateAgentRequest {
@@ -165,6 +175,9 @@ export interface UpdateAgentRequest {
   imageUrl?: string;
   modelConfig?: AgentModelConfig;
   bindings?: AgentBinding[];
+  /** #111 — omit to leave the stored value unchanged. */
+  showCitations?: boolean;
+  allowDocumentDownload?: boolean;
 }
 
 export interface AgentsListResponse {

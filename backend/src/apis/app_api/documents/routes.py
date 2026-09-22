@@ -504,8 +504,31 @@ async def get_download_url(
     URL is generated fresh each time to ensure it's valid.
     """
     try:
-        assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
-        document = await get_document_service(assistant_id, document_id, assistant_owner_id)
+        # Resolve the assistant + permission once (owner|editor gate), then apply the
+        # #111 download floor. resolve_assistant_permission is exactly what
+        # _require_edit_permission calls internally, so this adds no extra read.
+        assistant, permission = await resolve_assistant_permission(
+            assistant_id=assistant_id, user_id=current_user.user_id, user_email=current_user.email
+        )
+        if not assistant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Assistant not found: {assistant_id}")
+        if permission not in ("owner", "editor"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to manage documents for this assistant",
+            )
+
+        # #111 server-side floor: downloads are allowed only when BOTH flags are on.
+        # ``allow_document_download`` is only meaningful when ``show_citations`` is true —
+        # citations off implies downloads off — so the two are AND-ed here. This mirrors
+        # the SPA hiding the button but does not trust it.
+        if not (getattr(assistant, "show_citations", True) and getattr(assistant, "allow_document_download", True)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Source-document download is disabled for this agent.",
+            )
+
+        document = await get_document_service(assistant_id, document_id, assistant.owner_id)
 
         if not document:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document not found: {document_id}")

@@ -152,6 +152,8 @@ async def create_assistant_endpoint(request: CreateAssistantRequest, current_use
             emoji=request.emoji,
             bindings=request.bindings,
             model_settings=request.model_settings,
+            show_citations=request.show_citations,
+            allow_document_download=request.allow_document_download,
         )
 
         # Convert to response model (excludes owner_id for privacy)
@@ -386,6 +388,8 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
             image_url=request.image_url,
             bindings=request.bindings,
             model_settings=request.model_settings,
+            show_citations=request.show_citations,
+            allow_document_download=request.allow_document_download,
         )
 
         if not updated_assistant:

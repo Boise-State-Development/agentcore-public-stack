@@ -87,7 +87,8 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                         {{ citation.text }}
                       </p>
 
-                      <!-- Download button -->
+                      <!-- Download button (#111: hidden when downloads are disabled) -->
+                      @if (allowDownload()) {
                       <button
                         type="button"
                         class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary-accessible hover:text-primary-700 hover:underline
@@ -108,6 +109,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                           <span class="sr-only">(opens in new tab)</span>
                         }
                       </button>
+                      }
                     </div>
                   </div>
                 </div>
@@ -130,6 +132,12 @@ export class CitationDisplayComponent {
   private readonly documentService = inject(DocumentService);
 
   citations = input<Citation[]>([]);
+  /**
+   * #111: when false, the "Download source" button is hidden on every citation card.
+   * The citations themselves still render (filename + excerpt) — only the download
+   * affordance is withheld. Defaults true so nothing changes for existing agents.
+   */
+  allowDownload = input<boolean>(true);
   isExpanded = signal<boolean>(false);
 
   // Track which document is currently loading

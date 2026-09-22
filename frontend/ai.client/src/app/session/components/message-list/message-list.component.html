@@ -54,7 +54,7 @@
                     <app-message-metadata-badges [metadata]="segment.last.metadata"></app-message-metadata-badges>
                 }
                 @if (segment.last.citations && segment.last.citations.length > 0) {
-                    <app-citation-display [citations]="segment.last.citations"></app-citation-display>
+                    <app-citation-display [citations]="segment.last.citations" [allowDownload]="allowDownload()"></app-citation-display>
                 }
             </div>
         </div>

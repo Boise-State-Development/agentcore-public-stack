@@ -94,6 +94,8 @@ async def create_assistant(
     bindings: Optional[List[AgentBinding]] = None,
     model_settings: Optional[AgentModelConfig] = None,
     tagline: Optional[str] = None,
+    show_citations: bool = True,
+    allow_document_download: bool = True,
 ) -> Assistant:
     """
     Create a complete assistant with all required fields
@@ -138,6 +140,8 @@ async def create_assistant(
         bindings=bindings,
         model_settings=model_settings,
         tagline=tagline,
+        show_citations=show_citations,
+        allow_document_download=allow_document_download,
     )
 
     # Store the assistant
@@ -471,6 +475,8 @@ async def update_assistant(
     bindings: Optional[List[AgentBinding]] = None,
     model_settings: Optional[AgentModelConfig] = None,
     tagline: Optional[str] = None,
+    show_citations: Optional[bool] = None,
+    allow_document_download: Optional[bool] = None,
 ) -> Optional[Assistant]:
     """
     Update assistant fields (deep merge)
@@ -527,6 +533,11 @@ async def update_assistant(
         updates["model_settings"] = model_settings
     if tagline is not None:
         updates["tagline"] = tagline
+    # #111: explicit False persists (opt-out); None leaves the stored value untouched.
+    if show_citations is not None:
+        updates["show_citations"] = show_citations
+    if allow_document_download is not None:
+        updates["allow_document_download"] = allow_document_download
 
     # Always update the updated_at timestamp
     updates["updated_at"] = _get_current_timestamp()

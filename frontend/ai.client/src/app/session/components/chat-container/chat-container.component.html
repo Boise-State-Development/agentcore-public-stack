@@ -264,6 +264,7 @@
             [isChatLoading]="isChatLoading()"
             [streamingMessageId]="streamingMessageId()"
             [embeddedMode]="true"
+            [allowDownload]="citationsDownloadAllowed()"
             (continueRequested)="continueRequested.emit()" />
         </div>
       </div>
@@ -334,6 +335,7 @@
           [streamingMessageId]="streamingMessageId()"
           [feedbackAgent]="feedbackAgent()"
           [sessionId]="sessionId()"
+          [allowDownload]="citationsDownloadAllowed()"
           (continueRequested)="continueRequested.emit()" />
       </div>
     </div>

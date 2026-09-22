@@ -63,3 +63,72 @@ class TestAgentFieldsPersistence:
         )
         got = await get_assistant(created.assistant_id, "u1")
         assert got.bindings is not None and got.bindings[0].kind == "tool"
+
+
+class TestCitationDownloadFlags:
+    """Issue #111 — showCitations / allowDocumentDownload persistence + defaults."""
+
+    @pytest.fixture(autouse=True)
+    def _set_env(self, monkeypatch):
+        monkeypatch.setenv("S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME", "test-index")
+
+    @pytest.mark.asyncio
+    async def test_legacy_create_defaults_both_flags_true(self, assistants_table):
+        from apis.shared.assistants.service import create_assistant, get_assistant
+
+        created = await create_assistant(
+            owner_id="u1", owner_name="Alice", name="Plain", description="d", instructions="i"
+        )
+        got = await get_assistant(created.assistant_id, "u1")
+        # No migration: an agent created without the flags behaves exactly as today.
+        assert got.show_citations is True
+        assert got.allow_document_download is True
+
+    @pytest.mark.asyncio
+    async def test_create_opt_out_roundtrips(self, assistants_table):
+        from apis.shared.assistants.service import create_assistant, get_assistant
+
+        created = await create_assistant(
+            owner_id="u1", owner_name="Alice", name="Private", description="d", instructions="i",
+            show_citations=False, allow_document_download=False,
+        )
+        got = await get_assistant(created.assistant_id, "u1")
+        assert got.show_citations is False
+        assert got.allow_document_download is False
+
+    @pytest.mark.asyncio
+    async def test_update_can_toggle_and_none_leaves_unchanged(self, assistants_table):
+        from apis.shared.assistants.service import create_assistant, get_assistant, update_assistant
+
+        created = await create_assistant(
+            owner_id="u1", owner_name="Alice", name="Bot", description="d", instructions="i"
+        )
+        # Opt out of downloads only; show_citations left None → unchanged (stays True).
+        await update_assistant(
+            assistant_id=created.assistant_id, owner_id="u1", allow_document_download=False
+        )
+        got = await get_assistant(created.assistant_id, "u1")
+        assert got.show_citations is True
+        assert got.allow_document_download is False
+
+        # Now turn citations off; downloads value untouched by this call.
+        await update_assistant(
+            assistant_id=created.assistant_id, owner_id="u1", show_citations=False
+        )
+        got = await get_assistant(created.assistant_id, "u1")
+        assert got.show_citations is False
+        assert got.allow_document_download is False
+
+    @pytest.mark.asyncio
+    async def test_agent_view_projects_flags(self, assistants_table):
+        from apis.shared.assistants.service import create_assistant, get_assistant
+        from apis.shared.assistants.compat import to_agent_view
+
+        created = await create_assistant(
+            owner_id="u1", owner_name="Alice", name="Bot", description="d", instructions="i",
+            show_citations=True, allow_document_download=False,
+        )
+        got = await get_assistant(created.assistant_id, "u1")
+        view = to_agent_view(got)
+        assert view["showCitations"] is True
+        assert view["allowDocumentDownload"] is False
