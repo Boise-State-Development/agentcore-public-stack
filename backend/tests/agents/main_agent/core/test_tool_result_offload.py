@@ -243,3 +243,51 @@ class TestChatAgentWiring:
         monkeypatch.setattr(ChatAgent, "_create_hooks", lambda self: [], raising=False)
         agent._create_agent()
         assert captured["plugins"] is None
+
+
+class TestHookRegistration:
+    """The plugin is only useful if Strands actually calls it.
+
+    Every other test in this file invokes ``_handle_tool_result`` directly, so
+    all of them passed while the callback was never registered with an agent:
+    the mixin's undecorated override shadowed the base's ``@hook`` method by
+    name, ``_discovery._discover_methods`` resolved the name through the MRO,
+    found no ``_hook_event_types``, and dropped it. In prod that meant a
+    107k-token tool result reaching the prompt with the offloader loaded.
+    """
+
+    def test_hook_is_discoverable(self, offloader):
+        from strands.plugins._discovery import discover_hooks
+
+        plugin, _ = offloader
+        names = {h.__name__ for h in discover_hooks(plugin, "offload")}
+        assert "_handle_tool_result" in names, (
+            "the tool-result callback is not discoverable — an override without "
+            "@hook hides it and the offloader silently stops offloading"
+        )
+        # The eviction callback comes from the base untouched; if it ever goes
+        # missing too, discovery itself changed shape.
+        assert "_on_before_model_call" in names
+
+    def test_hook_is_bound_for_the_right_event(self, offloader):
+        from strands.hooks.events import AfterToolCallEvent
+        from strands.plugins._discovery import discover_hooks
+
+        plugin, _ = offloader
+        by_name = {h.__name__: h for h in discover_hooks(plugin, "offload")}
+        assert by_name["_handle_tool_result"]._hook_event_types == [AfterToolCallEvent]
+
+    @pytest.mark.asyncio
+    async def test_discovered_callback_still_offloads(self, offloader):
+        """The discovered bound method is the real path, not just a marker."""
+        from strands.plugins._discovery import discover_hooks
+
+        plugin, storage = offloader
+        callback = next(h for h in discover_hooks(plugin, "offload") if h.__name__ == "_handle_tool_result")
+
+        ev = _event("x" * 40_000, count_tokens=AsyncMock(return_value=10_000))
+        before = ev.result
+        await callback(ev)
+
+        assert ev.result is not before, "the discovered callback did not replace the oversized result"
+        assert storage.objects, "nothing was written to storage"
