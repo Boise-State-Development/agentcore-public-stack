@@ -53,8 +53,9 @@ client already reads. The rename stops at the seam; no caller has to change.
 
 import logging
 import os
+import re
 import time
-from typing import Any, Dict, List, Mapping, Optional, Set
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 import boto3
 
@@ -252,8 +253,20 @@ async def search_assistant_knowledgebase_with_formatting(
                 }
             )
 
-        logger.info(f"Found {len(formatted_results)} relevant chunks for assistant {assistant_id}")
-        return formatted_results
+        # Remove duplicate content before returning (issue #1236). One pass here
+        # cleans both the model-facing context and the citation cards, which are
+        # built from this same list downstream. No-op when results are distinct.
+        deduped_results = dedupe_context_chunks(formatted_results)
+        if len(deduped_results) < len(formatted_results):
+            logger.info(
+                "Deduplicated context chunks for assistant %s: %d → %d",
+                assistant_id,
+                len(formatted_results),
+                len(deduped_results),
+            )
+
+        logger.info(f"Found {len(deduped_results)} relevant chunks for assistant {assistant_id}")
+        return deduped_results
 
     except Exception as e:
         logger.error(f"Error searching knowledge base for assistant {assistant_id}: {e}", exc_info=True)
@@ -399,6 +412,162 @@ def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_
             f"(removed {len(vectors) - len(filtered)} from non-complete docs)"
         )
     return filtered
+
+
+# ── Duplicate-content removal (issue #1236) ──────────────────────────────────
+#
+# Managed knowledge bases can hand back near-identical content two ways, and both
+# reach the user because the formatted result list feeds the model prompt AND the
+# citation cards from one source (see ``search_assistant_knowledgebase_with_formatting``
+# → ``augment_prompt_with_context`` and the ``citations_for_storage`` build off the
+# same ``context_chunks`` in ``inference_api/chat/routes.py``):
+#
+#   1. The image-to-text parser on poster/infographic PDFs repeats a descriptive
+#      sentence several times *inside* one chunk.
+#   2. Fixed-window chunking (~300 tokens, 20% overlap) lets reranking surface two
+#      chunks that are substantially the same text.
+#
+# Deduplication lives here, above the seam, for the same reason the other parity
+# rules do: it must hold identically on every backend. It is a no-op on
+# already-distinct results, so legacy — which rarely duplicates — is unaffected.
+# It deliberately does NOT change chunking or re-ingest anything; it cleans the
+# retrieved set at answer time.
+
+#: Segments shorter than this (normalized character length) are never dropped as
+#: intra-chunk repeats. Short recurring lines — a header, "Yes.", a label — can
+#: legitimately appear more than once; the vision-repeat this targets is whole
+#: descriptive sentences.
+_MIN_DEDUP_SEGMENT_CHARS = 25
+
+#: Below this token count, only *exact* or *substring* duplication is trusted;
+#: fuzzy set-overlap is skipped. Two short chunks can share most of their few
+#: words while being genuinely distinct, so set-overlap on tiny token sets
+#: over-drops.
+_MIN_TOKENS_FOR_FUZZY = 8
+
+#: Two chunks are near-duplicates when their normalized word sets reach this
+#: Jaccard similarity, OR when the smaller set is this-fraction contained in the
+#: larger. 0.9 catches reranked near-twins and substantially-contained chunks
+#: while leaving genuinely distinct ~20%-overlap window neighbours (which share
+#: only their edges) in place.
+_NEAR_DUPLICATE_JACCARD = 0.9
+_CONTAINMENT_RATIO = 0.9
+
+_WHITESPACE_RE = re.compile(r"\s+")
+#: Split a chunk into sentence/line segments: after sentence-ending punctuation
+#: followed by whitespace, or on any run of newlines.
+_SEGMENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _normalize_for_compare(text: str) -> str:
+    """Whitespace-collapsed, case-folded form used only for equality/overlap tests.
+
+    Never stored or returned to a caller — the original text is always what
+    survives. This exists so "Foo  bar" and "foo bar\n" compare equal.
+    """
+    return _WHITESPACE_RE.sub(" ", text).strip().casefold()
+
+
+def _collapse_repeated_segments(text: str) -> str:
+    """Drop duplicate sentences/lines within a single chunk, order-preserving.
+
+    Targets the vision-extraction repetition (cause 1). A segment is a maximal run
+    split on newlines or after sentence-ending punctuation. Only segments at least
+    :data:`_MIN_DEDUP_SEGMENT_CHARS` long (normalized) are eligible to be dropped,
+    and the first occurrence's original text is kept verbatim. Segments are rejoined
+    with a single space, so the only change to surviving text is whitespace
+    normalization at the split points.
+
+    Limitation: repetition with no sentence/line separator between the copies is
+    not collapsed here; the cross-chunk pass and exact-duplicate handling cover the
+    whole-chunk-repeated case.
+    """
+    if not text or not text.strip():
+        return text
+    segments = _SEGMENT_SPLIT_RE.split(text)
+    if len(segments) < 2:
+        return text
+    seen: Set[str] = set()
+    kept: List[str] = []
+    dropped = False
+    for segment in segments:
+        norm = _normalize_for_compare(segment)
+        if len(norm) >= _MIN_DEDUP_SEGMENT_CHARS:
+            if norm in seen:
+                dropped = True
+                continue
+            seen.add(norm)
+        kept.append(segment.strip())
+    if not dropped:
+        return text
+    return " ".join(part for part in kept if part)
+
+
+def _is_near_duplicate(
+    a_norm: str,
+    a_tokens: "frozenset[str]",
+    b_norm: str,
+    b_tokens: "frozenset[str]",
+) -> bool:
+    """True when chunk *a* is a duplicate of, or substantially contained in, *b*.
+
+    Cheap tests first: exact normalized equality, then whole-text substring
+    containment (one chunk's text sits verbatim inside the other). Set-overlap
+    (Jaccard and smaller-in-larger containment) is only consulted when both chunks
+    clear :data:`_MIN_TOKENS_FOR_FUZZY`, so short distinct chunks that happen to
+    share words are never fused.
+    """
+    if a_norm == b_norm:
+        return True
+    if a_norm in b_norm or b_norm in a_norm:
+        return True
+    if len(a_tokens) < _MIN_TOKENS_FOR_FUZZY or len(b_tokens) < _MIN_TOKENS_FOR_FUZZY:
+        return False
+    intersection = len(a_tokens & b_tokens)
+    if not intersection:
+        return False
+    union = len(a_tokens | b_tokens)
+    if union and intersection / union >= _NEAR_DUPLICATE_JACCARD:
+        return True
+    smaller = min(len(a_tokens), len(b_tokens))
+    return smaller > 0 and intersection / smaller >= _CONTAINMENT_RATIO
+
+
+def dedupe_context_chunks(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Remove duplicate content from formatted retrieval results (issue #1236).
+
+    Two order-preserving, best-first passes over the formatted result dicts
+    (``{"text", "distance", "metadata", "key"}``):
+
+      1. Collapse repeated sentences/lines within each chunk's ``text``.
+      2. Drop a chunk whose (collapsed) text is a near-duplicate of one already
+         kept.
+
+    Because the same list feeds the model prompt and the citation cards, one pass
+    here cleans both. Returns new dicts (originals are not mutated); metadata and
+    all other keys are carried through untouched. Safe to run on any engine.
+    """
+    kept: List[Dict[str, Any]] = []
+    kept_compare: List[Tuple[str, "frozenset[str]"]] = []
+    for result in results:
+        collapsed = _collapse_repeated_segments(result.get("text", "") or "")
+        cleaned = {**result, "text": collapsed}
+        norm = _normalize_for_compare(collapsed)
+        if not norm:
+            # Nothing to compare; keep it (the formatter drops empty text later).
+            kept.append(cleaned)
+            kept_compare.append((norm, frozenset()))
+            continue
+        tokens = frozenset(norm.split())
+        if any(
+            _is_near_duplicate(norm, tokens, k_norm, k_tokens)
+            for k_norm, k_tokens in kept_compare
+            if k_norm
+        ):
+            continue
+        kept.append(cleaned)
+        kept_compare.append((norm, tokens))
+    return kept
 
 
 def augment_prompt_with_context(user_message: str, context_chunks: List[Dict[str, Any]], max_context_length: int = MAX_CONTEXT_CHARS) -> str:
