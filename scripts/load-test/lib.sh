@@ -34,7 +34,15 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_plan()    { echo -e "${BLUE}[PLAN]${NC} $1"; }
 
 # Temp files hold credentials; make sure they never survive the process.
-_LOAD_TEST_TMPDIR=""
+#
+# Created here, in the sourcing shell, not lazily inside _tmpdir. Every caller
+# reads it as "$(_tmpdir)", which runs in a subshell, so a lazy assignment never
+# reached the parent: each call made a fresh directory, the EXIT trap saw an
+# empty variable and removed none of them, and a password file stranded by a
+# failing `aws` call (set -e exits before its `rm`) outlived the process. One
+# teardown of 600 users left 1,000+ directories behind.
+_LOAD_TEST_TMPDIR="$(mktemp -d)"
+chmod 700 "${_LOAD_TEST_TMPDIR}"
 _cleanup_tmp() {
     if [ -n "${_LOAD_TEST_TMPDIR}" ] && [ -d "${_LOAD_TEST_TMPDIR}" ]; then
         rm -rf "${_LOAD_TEST_TMPDIR}"
@@ -43,10 +51,6 @@ _cleanup_tmp() {
 trap _cleanup_tmp EXIT INT TERM
 
 _tmpdir() {
-    if [ -z "${_LOAD_TEST_TMPDIR}" ]; then
-        _LOAD_TEST_TMPDIR="$(mktemp -d)"
-        chmod 700 "${_LOAD_TEST_TMPDIR}"
-    fi
     printf '%s' "${_LOAD_TEST_TMPDIR}"
 }
 
