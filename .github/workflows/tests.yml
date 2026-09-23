@@ -66,6 +66,15 @@ jobs:
         # Verbosity/--tb live in backend/pytest.ini. The nightly coverage run
         # (scripts/backend/test.sh) is deliberately left serial.
         run: uv run pytest tests/ -n auto
+      # The repo-ROOT supply-chain suite (not backend/tests/supply_chain):
+      # cross-package contracts that read CDK, the backup/restore scripts and
+      # the python env-var readers side by side, so it lives above backend/.
+      # Nothing ran it before this step, and it rotted twice unnoticed. It
+      # is pure stdlib + pytest, so it borrows the backend venv synced above;
+      # --no-sync keeps uv from re-resolving that env without its extras.
+      # Scoped to supply_chain/ because tests/load has its own deps and job.
+      - name: Run root supply-chain pytest
+        run: uv run --project backend --no-sync pytest tests/supply_chain/ -v
 
   test-frontend:
     if: ${{ inputs.run_frontend }}
