@@ -337,7 +337,16 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
   - **Transfer requires the target editor to have signed in** (their `userId` is back-filled on first resolve), because META's owner is keyed by user id.
   - kb-sync's image now copies `apis/shared/projects/` (import closure only; the worker never takes the harness access path).
 - **1.3 Directory:** `apis/shared/directory/` adapter protocol + `UsersTableDirectory` (paginates `StatusLoginIndex` instead of the 100-row cap; adds a lowercase-prefix scan on `EmailIndex`), `/projects/{id}/directory`, `DIRECTORY_PROVIDER` config; email fallback for unknown people.
-- **1.4 Harness wiring:** `preferences.projectId` on session create; `resolve_agent_invocation` for project harness (membership → role, degrade policy §9.6), `projectId` on `C#` rows + `COST#` rollup, `## Project Instructions` heading, `UserSettings.personalInstructions` + injection. Tests: prompt block order golden test, cache-key stability across two members.
+- **1.4 Harness wiring:** `preferences.projectId` on session create; `resolve_agent_invocation` for project harness (membership → role, degrade policy §9.6), `projectId` on `C#` rows + `COST#` rollup, `## Project Instructions` heading, `UserSettings.personalInstructions` + injection. Tests: prompt block order golden test, cache-key stability across two members. **Split in two.** **1.4a (as built):**
+  - Membership needed no route change: the agent access check already delegates to the project (1.2). The route adds an **archived refusal** (a conversational error naming the project).
+  - **Degrade with notice** is `resolve_agent_invocation(..., degrade=True)`, passed only for a harness. It records drops in `plan.unavailable`, which the route streams as a new **`agent_notice`** SSE event before `message_start` (added to CLAUDE.md's event table). Nothing about a drop enters the prompt.
+  - `## Project Instructions` comes from `compose_agent_system_prompt`, which takes no user argument, so members of one project render byte-identical text. Every other agent's heading is unchanged.
+  - The in-process agent cache is keyed per session *and* user, so "cache-key stability across two members" is really Bedrock prefix stability, which the no-user signature guarantees.
+  - `preferences.projectId` is written at session binding.
+  - `projectId` rides the `C#` row like `turnAgentId`. **Rollup shape changed:** instead of a `byUser` map on `COST#{YYYY-MM}`, each member gets a `COST#{YYYY-MM}#USER#{userId}` row. Each write is one atomic `ADD`, and member rows are bounded by membership, so there is no top-N trimming. Both are `UpdateItem` (the runtime has no `PutItem`).
+  - Gaps inherited from `turnAgentId`: interrupted-turn and resume rows carry no project id.
+
+  **1.4b:** personal instructions (`UserSettings.personalInstructions` + precedence sentence). Separate because it changes every user's system prompt, not only project turns.
 - **1.5 Knowledge + tools + skills tabs:** proxy routes, `addedBy` on documents, upload-time "shared with all members" notice, instruction versions on save.
 - **1.6 Tasks:** `ProjectSessionIndex` writes, `/projects/{id}/tasks`, `access_level: "project"` on shares, `SHARED_TASK#` pointer, fork keeps `projectId`.
 - **1.7 Notifications + audit:** `NOTIF#` inbox rows + `/notifications`, `project.*` audit actions, `/projects/{id}/audit`, `admin.projects` scope (registry + route-coverage test).

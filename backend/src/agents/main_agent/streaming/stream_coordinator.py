@@ -249,6 +249,7 @@ class StreamCoordinator:
         citations: Optional[List] = None,
         original_message: Optional[str] = None,
         turn_agent_id: Optional[str] = None,
+        turn_project_id: Optional[str] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
@@ -272,6 +273,9 @@ class StreamCoordinator:
                 nondeterministic-ordering regression the fingerprints exist to catch.
                 Passed per turn rather than read off the agent: the agent instance is cached
                 and shared across turns, so per-turn state must never live on it (#741/#751).
+            turn_project_id: The Shared Project whose harness ran this turn (None for any
+                other turn). Recorded on each cost row as ``projectId``; the metadata writer
+                also adds the call to the project's monthly ``COST#`` rollup.
             turn_lease: This turn's single-flight ``SessionLease``, which doubles as the
                 mid-turn steering inbox. Stamped onto the session manager for the life of
                 the turn so ``SteeringHook`` can read it at each tool boundary — and
@@ -1386,6 +1390,7 @@ class StreamCoordinator:
                                 else None
                             ),
                             turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
+                            turn_project_id=turn_project_id,
                             tool_calls=(
                                 tool_census_hook.tally_for_call(idx)
                                 if tool_census_hook is not None else None
@@ -3236,6 +3241,7 @@ class StreamCoordinator:
         citations: Optional[List] = None,
         call_index: Optional[int] = None,
         turn_agent_id: Optional[str] = None,
+        turn_project_id: Optional[str] = None,
         tool_calls: Optional[Dict[str, Dict[str, int]]] = None,
         context_ledger: Optional[Dict[str, Any]] = None,
         turn_duration_ms: Optional[int] = None,
@@ -3424,6 +3430,10 @@ class StreamCoordinator:
                 # else on the row distinguishes them.
                 if turn_agent_id:
                     metadata_kwargs["turnAgentId"] = turn_agent_id
+                # Shared Projects: which project this call is billed to. The metadata
+                # writer reads it back to bump PROJECT#{id}/COST#{YYYY-MM}.
+                if turn_project_id:
+                    metadata_kwargs["projectId"] = turn_project_id
 
                 # Content-free tool census for this call (tool name → calls /
                 # errors), another extra field. Read by the admin session

@@ -54,6 +54,7 @@ from apis.shared.rbac.service import get_app_role_service
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.inference_api.chat.agent_binding_resolver import (
     AgentBindingBlockedError,
+    AgentNoticeEvent,
     resolve_agent_invocation,
 )
 from apis.shared.sessions.metadata import (
@@ -278,6 +279,41 @@ async def _find_managed_model(model_id: str | None):
         # model_id is request-controlled; sanitize before logging to keep
         # CRLF / control chars from forging extra log lines.
         logger.warning("Failed to look up managed model %s", _sanitize_log(model_id))
+    return None
+
+
+def compose_agent_system_prompt(base_prompt: str, instructions: str, *, project_harness: bool) -> str:
+    """The agent's system text: platform base prompt, then the agent's instructions.
+
+    A project's harness gets its own heading (shared-projects §4.5); every other agent keeps
+    ``Assistant-Specific Instructions`` byte for byte, so no existing agent's cached prefix
+    moves. Deliberately takes nothing about the invoking user: this text is the head of the
+    cacheable system block, and two members of one project must render it identically or
+    each member pays a cache write for the same project (the prompt-cache contract).
+    """
+    heading = "Project Instructions" if project_harness else "Assistant-Specific Instructions"
+    return f"{base_prompt}\n\n## {heading}\n\n{instructions}"
+
+
+async def _project_turn_refusal(project_id: Optional[str]) -> Optional[str]:
+    """Why a project harness may not start a turn right now, or None if it may.
+
+    Membership was already checked by the agent access check (it delegates to the
+    project). What that check deliberately allows is *reading* an archived project, so a
+    new turn is refused here: an archived project is read-only (shared-projects §3.1).
+    """
+    from apis.shared.projects.repository import ProjectRepository
+
+    if not project_id:
+        return "This project agent isn't attached to a project. Ask the project owner for help."
+    project = await asyncio.to_thread(ProjectRepository().get_project, project_id)
+    if project is None:
+        return "This project no longer exists."
+    if project.status != "active":
+        return (
+            f'The project "{project.name}" is archived, so it can\'t start new conversations. '
+            "Ask the project owner to restore it."
+        )
     return None
 
 
@@ -2380,6 +2416,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # request's skills AND force skill-mode (agent_type="skill") for the turn. None ⇒ the
     # Agent binds no skills ⇒ the request's agent_type/enabled_skills drive the turn.
     agent_skills_override = None
+    # Shared Projects: set when this turn's agent is a project's hidden harness. Carried to
+    # the session binding and to every cost row of the turn (``projectId`` plus the
+    # project's monthly rollup). ``agent_notice_event`` names what a degraded resolution
+    # dropped (§9.6) and is streamed before ``message_start``; it never reaches the prompt.
+    turn_project_id: Optional[str] = None
+    agent_notice_event: Optional[AgentNoticeEvent] = None
     # Version snapshots (§4): which Agent snapshot this turn resolved to, for the log line
     # below. ``None`` means the live record ran — a plain chat turn with no Agent, an Agent
     # with nothing published, or the owner running their own draft.
@@ -2679,16 +2721,52 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     f"{scrub_log(input_data.rag_assistant_id)}: {scrub_log(bump_err)}"
                 )
 
+        # 2a'. Shared Projects — a project's harness only runs while its project is
+        # active. Access (membership) was already settled by the check above.
+        from apis.shared.assistants.service import is_project_harness
+
+        runs_project_harness = is_project_harness(assistant)
+        if runs_project_harness:
+            refusal = await _project_turn_refusal(assistant.project_id)
+            if refusal:
+                refused_event = ConversationalErrorEvent(
+                    code=ErrorCode.FORBIDDEN, message=refusal, recoverable=False
+                )
+                return StreamingResponse(
+                    stream_conversational_message(
+                        message=refusal,
+                        stop_reason="error",
+                        metadata_event=refused_event,
+                        session_id=input_data.session_id,
+                        user_id=user_id,
+                        user_input=input_data.message,
+                    ),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": input_data.session_id},
+                )
+            turn_project_id = assistant.project_id
+
         # 2b. Agent Designer Phase 3 — resolve the Agent's governed capabilities
         # for the INVOKING user (D5), before the expensive KB search. v1 blocks
         # with a conversational message when the invoker lacks a required model.
+        # A project's harness degrades instead (shared-projects §9.6): a member missing
+        # one bound tool still gets to work, and is told what was left out.
         if agents_enabled():
             try:
-                agent_plan = await resolve_agent_invocation(assistant, current_user)
+                agent_plan = await resolve_agent_invocation(
+                    assistant, current_user, degrade=runs_project_harness
+                )
                 agent_model_override = agent_plan.model_override
                 agent_memory = agent_plan.memory
                 agent_tools_override = agent_plan.tools
                 agent_skills_override = agent_plan.skills
+                if agent_plan.unavailable:
+                    agent_notice_event = AgentNoticeEvent.from_unavailable(
+                        agent_plan.unavailable,
+                        session_id=input_data.session_id,
+                        agent_id=input_data.rag_assistant_id,
+                        project_id=turn_project_id,
+                    )
             except AgentBindingBlockedError as block:
                 blocked_event = ConversationalErrorEvent(
                     code=ErrorCode.FORBIDDEN, message=block.message, recoverable=False
@@ -2759,8 +2837,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             base_prompt_builder = SystemPromptBuilder()
             base_prompt = base_prompt_builder.build(include_date=True)
 
-            # Append assistant instructions to the base prompt
-            system_prompt = f"{base_prompt}\n\n## Assistant-Specific Instructions\n\n{effective_instructions}"
+            # Append assistant instructions to the base prompt.
+            system_prompt = compose_agent_system_prompt(
+                base_prompt, effective_instructions, project_harness=bool(turn_project_id)
+            )
             if preview_instructions_override:
                 logger.info(
                     "Using live preview instructions override"
@@ -2839,6 +2919,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                         else {}
                     )
                     prefs_dict["assistant_id"] = input_data.rag_assistant_id
+                    if turn_project_id:
+                        prefs_dict["project_id"] = turn_project_id
                     merged_preferences = SessionPreferences(**prefs_dict)
 
                     updated_metadata = existing_metadata.model_copy(
@@ -2850,7 +2932,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     from datetime import datetime, timezone
 
                     now = datetime.now(timezone.utc).isoformat()
-                    preferences = SessionPreferences(assistantId=input_data.rag_assistant_id)
+                    preferences = SessionPreferences(
+                        assistantId=input_data.rag_assistant_id, projectId=turn_project_id
+                    )
 
                     updated_metadata = SessionMetadata(
                         sessionId=input_data.session_id,
@@ -3400,6 +3484,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             if quota_session_notice_event:
                 yield quota_session_notice_event.to_sse_format()
 
+            # …then what a project's harness is running without for this member (§9.6).
+            if agent_notice_event:
+                yield agent_notice_event.to_sse_format()
+
             # Yield citation events BEFORE the agent stream starts
             # This allows the UI to display sources immediately
             if citations_for_storage:
@@ -3535,6 +3623,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # cached and shared across turns, so per-turn state must never live on it
                 # (see #741/#751).
                 turn_agent_id=input_data.rag_assistant_id,
+                # The project whose harness ran this turn, for the same cost row and the
+                # project's monthly rollup. Per turn for the same reason as turn_agent_id.
+                turn_project_id=turn_project_id,
                 # This turn's lease doubles as the mid-turn steering inbox
                 # (docs/specs/mid-turn-steering.md). Passed per turn for the
                 # same reason as turn_agent_id — the agent is cached, the lease
