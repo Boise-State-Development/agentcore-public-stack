@@ -5,7 +5,8 @@
       <div>
         <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Manage Models</h1>
         <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-          Enable, configure, and remove the models available to users.
+          Enable, configure, and remove the models available to users. Their order here
+          is the order they appear in the chat model picker.
         </p>
       </div>
       <a
@@ -75,6 +76,13 @@
     <div class="mb-3 flex flex-col gap-1 text-xs/5 sm:flex-row sm:items-center sm:justify-between">
       <p class="text-gray-500 dark:text-gray-400">
         {{ filteredModels().length }} model{{ filteredModels().length !== 1 ? 's' : '' }}
+        @if (savingOrder()) {
+          <span class="text-gray-400 dark:text-gray-500">· Saving order…</span>
+        } @else if (canReorder()) {
+          <span class="text-gray-400 dark:text-gray-500">· Drag to reorder</span>
+        } @else if (hasActiveFilters() && filteredModels().length > 1) {
+          <span class="text-gray-400 dark:text-gray-500">· Clear filters to reorder</span>
+        }
       </p>
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span class="text-gray-400 dark:text-gray-500">Add from catalog:</span>
@@ -113,11 +121,42 @@
         </p>
       </div>
     } @else {
-      <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
-        @for (model of filteredModels(); track model.id) {
-          <li>
+      <!-- Announces keyboard and pointer moves; the list itself doesn't. -->
+      <p class="sr-only" aria-live="polite">{{ reorderAnnouncement() }}</p>
+
+      <ul
+        cdkDropList
+        cdkDropListLockAxis="y"
+        [cdkDropListData]="filteredModels()"
+        [cdkDropListDisabled]="!canReorder()"
+        (cdkDropListDropped)="onDrop($event)"
+        class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800"
+      >
+        @for (model of filteredModels(); track model.id; let i = $index) {
+          <li
+            cdkDrag
+            [cdkDragData]="model"
+            cdkDragPreviewClass="manage-models-drag-preview"
+            class="bg-white dark:bg-gray-800"
+          >
             <!-- Row -->
             <div class="flex items-center gap-3 px-3 py-2.5 sm:px-4">
+              <!-- Drag handle. Absent while filtered: see canReorder(). -->
+              @if (canReorder()) {
+                <button
+                  type="button"
+                  cdkDragHandle
+                  [id]="'reorder-handle-' + model.id"
+                  (keydown)="onHandleKeydown($event, i)"
+                  [attr.aria-label]="'Reorder ' + model.modelName + ', position ' + (i + 1) + ' of ' + filteredModels().length + '. Use the arrow keys to move.'"
+                  [appTooltip]="'Drag to reorder'"
+                  appTooltipPosition="top"
+                  class="-mx-1 flex size-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 active:cursor-grabbing dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                >
+                  <ng-icon name="heroBars2" class="size-4" aria-hidden="true" />
+                </button>
+              }
+
               <!-- Expand toggle -->
               <button
                 type="button"

@@ -313,6 +313,70 @@ class TestCreateManagedModel:
         assert role_ids == ["staff"]
 
 
+class TestReorderManagedModels:
+    """PUT /admin/managed-models/order sets the catalog order."""
+
+    def test_reorder_returns_the_reordered_catalog(self, app, make_user):
+        admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
+        _override_require_admin(app, admin)
+
+        ordered = SAMPLE_MODEL.model_copy(update={"sort_order": 0})
+        with patch(
+            f"{MANAGED_MODELS_PATH}.reorder_managed_models",
+            new_callable=AsyncMock,
+            return_value=[ordered],
+        ) as reorder:
+            client = TestClient(app)
+            resp = client.put("/admin/managed-models/order", json={"modelIds": ["model-001"]})
+
+        assert resp.status_code == 200
+        reorder.assert_awaited_once_with(["model-001"])
+        body = resp.json()
+        assert body["totalCount"] == 1
+        assert body["models"][0]["sortOrder"] == 0
+
+    def test_is_not_routed_to_the_per_model_update(self, app, make_user):
+        """"order" must not be captured as a model id by PUT /managed-models/{model_id}."""
+        admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
+        _override_require_admin(app, admin)
+
+        with patch(
+            f"{MANAGED_MODELS_PATH}.reorder_managed_models",
+            new_callable=AsyncMock,
+            return_value=[],
+        ), patch(
+            f"{MANAGED_MODELS_PATH}.update_managed_model",
+            new_callable=AsyncMock,
+        ) as update:
+            client = TestClient(app)
+            client.put("/admin/managed-models/order", json={"modelIds": ["model-001"]})
+
+        update.assert_not_awaited()
+
+    def test_stale_catalog_returns_409(self, app, make_user):
+        admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
+        _override_require_admin(app, admin)
+
+        with patch(
+            f"{MANAGED_MODELS_PATH}.reorder_managed_models",
+            new_callable=AsyncMock,
+            side_effect=ValueError("Model order doesn't match the current catalog"),
+        ):
+            client = TestClient(app)
+            resp = client.put("/admin/managed-models/order", json={"modelIds": ["model-001"]})
+
+        assert resp.status_code == 409
+
+    def test_empty_order_is_rejected(self, app, make_user):
+        admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
+        _override_require_admin(app, admin)
+
+        client = TestClient(app)
+        resp = client.put("/admin/managed-models/order", json={"modelIds": []})
+
+        assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # Requirement 7.7: DELETE managed model returns 204 for admin
 # ---------------------------------------------------------------------------

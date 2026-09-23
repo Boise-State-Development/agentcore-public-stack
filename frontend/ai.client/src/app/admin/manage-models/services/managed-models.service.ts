@@ -203,6 +203,59 @@ export class ManagedModelsService {
   }
 
 
+  /** The latest order not yet sent — see `reorderModels`. */
+  private pendingOrder: string[] | null = null;
+  private orderSave: Promise<void> | null = null;
+
+  /**
+   * Set the catalog order — the order the chat model picker shows models in.
+   *
+   * Optimistic: the list reorders immediately so a dropped row stays where it
+   * was dropped instead of snapping back for the length of a round trip.
+   *
+   * Saves are serialized and coalesced. Moves made while a save is in flight
+   * (an admin holding an arrow key) collapse into one follow-up save of the
+   * latest order, so two PUTs never race on the server, and a response is
+   * never applied over a newer local order — the local order is already the
+   * truth, which is why a successful response isn't read back at all.
+   *
+   * On failure the list is reloaded, restoring whatever order actually stuck
+   * (a reorder that fails partway may have moved some rows).
+   *
+   * @param orderedIds - Every managed model's record id (the UUID), first to
+   *   last. The backend rejects a partial list with 409 — it means this copy of
+   *   the catalog is stale.
+   * @returns Resolves once every queued order has been saved.
+   */
+  reorderModels(orderedIds: string[]): Promise<void> {
+    const current = this.modelsResource.value();
+    if (current) {
+      const byId = new Map(current.models.map(m => [m.id, m]));
+      const models = orderedIds
+        .map(id => byId.get(id))
+        .filter((m): m is ManagedModel => m !== undefined);
+      this.modelsResource.set({ ...current, models });
+    }
+
+    this.pendingOrder = orderedIds;
+    this.orderSave ??= this.flushOrder().finally(() => (this.orderSave = null));
+    return this.orderSave;
+  }
+
+  private async flushOrder(): Promise<void> {
+    while (this.pendingOrder) {
+      const modelIds = this.pendingOrder;
+      this.pendingOrder = null;
+      try {
+        await firstValueFrom(this.http.put<void>(`${this.baseUrl()}/order`, { modelIds }));
+      } catch (error) {
+        this.pendingOrder = null;
+        this.modelsResource.reload();
+        throw error;
+      }
+    }
+  }
+
   /**
    * Upload a custom icon for a model.
    *

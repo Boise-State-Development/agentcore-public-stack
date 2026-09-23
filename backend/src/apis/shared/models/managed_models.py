@@ -506,6 +506,23 @@ def _scan_managed_model_items(table_name: str) -> List[dict]:
     return items
 
 
+def _sort_models(models: List[ManagedModel]) -> None:
+    """Order models in place: admin-ordered first, then unordered newest first.
+
+    Every reader of the catalog — the admin list and the user-facing picker —
+    goes through the list path, so sorting here is what makes the admin's drag
+    order the order users see. Two stable passes rather than one compound key
+    because the tiebreak runs the opposite direction (newest first) to the
+    primary key (lowest first).
+
+    An unordered model is one created before the catalog was ever ordered, or
+    since the last reorder. Sorting it last keeps a fresh addition from
+    displacing the curated top of the picker until an admin places it.
+    """
+    models.sort(key=lambda m: m.created_at, reverse=True)
+    models.sort(key=lambda m: (m.sort_order is None, m.sort_order or 0))
+
+
 async def _list_managed_models_cloud(table_name: str) -> List[ManagedModel]:
     """
     List all managed models from DynamoDB
@@ -551,8 +568,7 @@ async def _list_managed_models_cloud(table_name: str) -> List[ManagedModel]:
                 logger.warning(f"Failed to parse model from DynamoDB: {e}")
                 continue
 
-        # Sort by creation date (newest first)
-        models.sort(key=lambda x: x.created_at, reverse=True)
+        _sort_models(models)
 
         logger.info(f"Found {len(models)} managed models in DynamoDB")
         return models
@@ -730,6 +746,73 @@ async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate
             return None  # Model not found
         logger.error(f"Failed to update managed model in DynamoDB: {e}")
         raise
+
+
+async def reorder_managed_models(ordered_ids: List[str]) -> List[ManagedModel]:
+    """Persist the catalog order: each model's ``sortOrder`` becomes its index.
+
+    A dedicated writer rather than a field on ``ManagedModelUpdate`` for the same
+    reason as ``write_model_icon_key``: an order is a property of the whole
+    catalog, not of one record. A per-model field would let the model form save
+    a stale position over a drag that happened after the form was opened.
+
+    Args:
+        ordered_ids: Every managed model's record id (the UUID), exactly once.
+
+    Returns:
+        The full catalog in its new order.
+
+    Raises:
+        ValueError: If ``ordered_ids`` has duplicates, or isn't exactly the set of
+            models in the table — the caller reordered a stale catalog.
+    """
+    table_name = os.environ.get('DYNAMODB_MANAGED_MODELS_TABLE_NAME')
+    if not table_name:
+        raise RuntimeError("DYNAMODB_MANAGED_MODELS_TABLE_NAME environment variable is required")
+
+    if len(set(ordered_ids)) != len(ordered_ids):
+        raise ValueError("Model order lists a model more than once")
+
+    # Read the table, not the cache: validating against a copy up to a minute
+    # old could accept an order that omits a model created in that window.
+    items = await asyncio.to_thread(_scan_managed_model_items, table_name)
+    current = {item.get('id'): item.get('sortOrder') for item in items}
+    if set(ordered_ids) != set(current):
+        raise ValueError(
+            "Model order doesn't match the current catalog — it was changed "
+            "elsewhere. Reload and try again."
+        )
+
+    table = dynamodb.Table(table_name)
+    try:
+        for index, model_id in enumerate(ordered_ids):
+            # A drag moves a few rows; skip the ones already in place.
+            if current[model_id] is not None and int(current[model_id]) == index:
+                continue
+            # The condition matters: update_item on a missing key creates it,
+            # and a model deleted mid-reorder would come back as a bare
+            # {PK, SK, sortOrder} item that fails to parse on every list.
+            table.update_item(
+                Key={'PK': f'MODEL#{model_id}', 'SK': f'MODEL#{model_id}'},
+                UpdateExpression='SET #sortOrder = :sortOrder',
+                ExpressionAttributeNames={'#sortOrder': 'sortOrder'},
+                ExpressionAttributeValues={':sortOrder': index},
+                ConditionExpression='attribute_exists(PK)',
+            )
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            raise ValueError(
+                "A model was deleted while the catalog was being reordered. "
+                "Reload and try again."
+            ) from e
+        logger.error(f"Failed to reorder managed models: {e}")
+        raise
+    finally:
+        # Also on failure: a reorder that dies partway has still moved rows.
+        config_cache.invalidate(config_cache.MANAGED_MODELS)
+
+    logger.info(f"↕️ Reordered {len(ordered_ids)} managed models")
+    return await _list_managed_models_cloud(table_name)
 
 
 async def write_model_icon_key(model_id: str, icon_key: Optional[str]) -> None:
