@@ -4,6 +4,67 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.24.0] - 2026-09-22
+
+Admins get a say over the toolset, and everyone gets a clearer view of what things cost. **Admin-managed always-on tools** pin a tool into every granted user's turn, enforced server-side and shown as locked in the picker, with no effect on deploy until an admin flags a tool. **Tool retirement** gains a staged runbook, one-way picker guards, and a replacement note plus stop date shown on five surfaces. The cost surfaces fill in: users now see their **quota limit** next to their spend, the session cost badge **counts up** each turn, and the admin cost dashboard is **tabbed** and can report **all-in platform cost from the AWS bill** (opt-in). **Unsent composer state is kept per conversation**, agents gain **per-agent citation and download controls**, and **Kimi K3** joins the catalog. Two fixes matter more than their size: the **tool-result offloader shipped in 1.23.0 had never run** and now does, and **Cognito self-signup now defaults to closed**. **A CDK deploy is required**, and in any environment that has not set `CDK_COGNITO_SELF_SIGNUP_ENABLED` this deploy closes public self-registration.
+
+### 🚀 Added
+
+- **Admin-managed always-on tools** — a catalog flag (`alwaysOn`, per tool or per `MCPToolEntry`) that pins a tool into every turn for users whose roles grant it. Enforced server-side at the same seam as attachment auto-enable, so the main turn, MCP App dispatch and voice compute the same toolset; it enables and never grants. An Agent that binds its own toolset is exempt; an unbound Agent is not. Gated by `ADMIN_ALWAYS_ON_TOOLS_ENABLED` (default on with a kill switch) (#1215, #1217, #1220, #1223, #1227, #1229, #1231)
+- **Locked always-on tools in the user's tool picker** — `GET /tools` carries the effective lock; a stored opt-out is kept but not honoured while the pin is in force, and a preference `PUT` that contradicts a pin is normalized rather than rejected (#1226)
+- **MCP server retirement** — a staged runbook (`docs/specs/mcp-server-retirement.md`) and picker guards on six surfaces: a retiring tool can be turned off but not on, and nothing is filtered out of any list (#1230)
+- **Retirement replacement and stop date** — `retirementNote` (≤300 chars) and `retiresOn` (validated ISO date) on the tool record, rendered as one shared sentence across the Agent Designer, Customize → Tools, the tool detail page and the scheduled-run form. Display-only; neither reaches `toolConfig` (#1237)
+- **Quota limit shown with usage** — read-only `GET /costs/quota-status` (caller-scoped, records no enforcement events), a quota progress bar on the Usage page for every period, and a quota tooltip on the composer cost counter (#1210)
+- **All-in platform cost on the admin dashboard** — a daily Cost Explorer sync writes `PLATFORM#*` rows into the existing system cost rollup table, scoped to this deployment by the `Project` tag, falling back to account scope and labelling it as such. Opt-in via the `CDK_PLATFORM_COSTS_ENABLED` GitHub variable or `platformCosts.enabled` context (#1235, #1245)
+- **Per-agent source citations and document download** — `showCitations` and `allowDocumentDownload` on the agent record, both default `true` with no migration. Citations off suppresses the SSE event and its persistence; the download endpoint 403s unless both are on (#1240)
+- **Kimi K3** curated on `bedrock-responses`, with explicit prompt caching required per model — its default implicit caching measured 25% more expensive than no caching at all (#1212)
+- **Unsent composer state kept per conversation** — text, the bound `@`-mention, unarmed queued follow-ups and attachments are saved in `localStorage` per conversation and restored on return; attachments reconcile against the server before they are trusted. Cleared on sign-out and wiped at sign-in when the owner differs (#1228)
+
+### ✨ Improved
+
+- **Tabbed admin cost analytics** — Model Usage, Cost Trends, Top Users and Conversations each get the full console width; the period KPIs stay pinned above the tabs (#1235)
+- **The admin console takes over the sidenav** — admin navigation replaces the chat list in the sidebar, and admin pages drop the `max-w-7xl` cap, driven by `data.chrome: 'admin'` on the route (#1232)
+- **Agent Composer tools as a searchable, category-grouped list** instead of a chip cloud; descriptions visible, per-tool scoping nested under its own row (#1233)
+- **Session cost badge counts up** to each turn's new total; reduced motion snaps (#1234)
+- **Quota warning and cost badge share one row** above the composer, and dismissing a warning holds until a higher threshold fires, across reloads and new conversations (#1243)
+- **Model-family logos** (Claude, Kimi, Qwen) preferred over company marks, matched on `modelId` (#1238)
+- **Context window reconciled against Strands' model table** — the catalog value wins, Strands fills an absence, and a disagreement is logged. Both the context badge and the compaction policy now read one resolver (#1221)
+
+### 🐛 Fixed
+
+- **The tool-result offloader never offloaded anything.** An undecorated override hid Strands' `@hook` registration, so `BoundedToolResultOffloader` published `retrieve_offloaded_content` every turn but never saw a tool result. One production session carried a 107,802-token calendar result for 15 calls, about 75% of its cost (#1239)
+- **Browsing failed permanently after a sign-in handback** — the service closes the CDP socket when the automation stream is disabled, and the pool kept returning the dead socket. It now reconnects to the session the user signed into (#1208)
+- **Managed-KB retrieval returned duplicate content** to both the model and the citation cards; repeated sentences within a chunk and near-duplicate chunks are now removed at answer time (#1241)
+- **Managed-KB citations read "Unknown Source"** — the builder now reads `metadata["filename"]` before `source` (#1240)
+- **Attaching an image or spreadsheet injected `document_read`** and re-wrote the prompt-cache prefix, sometimes flapping per microVM. The gate now classifies the turn's uploads (#1218)
+- **Broken thumbnails for files with non-ASCII names** (e.g. macOS screenshots) — S3 rejected the `response-content-disposition`. A shared RFC 6266/5987 header builder now serves three call sites (#1214)
+- **Changing a quota assignment's tier returned 400** (#1225)
+- **Context attribution reported unstable tool token counts** on `bedrock-responses`/mantle models, where token counting is a heuristic; the split is now withheld there (#1216)
+- **`prefixTokens` splits larger than the prompt they sit inside** are dropped rather than rendered (#1222)
+- **A partial tool update could persist an incoherent `alwaysOn`/`enabledByDefault` pair** — patched state is now re-validated before persisting (#1231)
+- **`asyncio.get_event_loop()` raised on Python 3.12** in the external-MCP tool build when no loop was running (#1213)
+
+### 🔒 Security
+
+- **Cognito self-signup defaults to closed**, set by `CDK_COGNITO_SELF_SIGNUP_ENABLED` (only an explicit `true` opens it). The runtime `disable_self_signup()` call is removed: CDK re-rendered the setting on every deploy, so it never held. First-boot (`AdminCreateUser`) and federated sign-in are unaffected (#1211)
+
+### 🏗️ Infrastructure
+
+- **New `PlatformCostSyncConstruct`** — Lambda + daily EventBridge rule (07:10 UTC) with `ce:GetCostAndUsage` / `ce:GetDimensionValues`, created only when `platformCosts.enabled` is true (#1235)
+- **app-api ECS tasks now receive the service's tags** (`propagateTags: SERVICE`), so Fargate appears in tag-scoped cost queries (#1235)
+- **Cognito user pool `selfSignUpEnabled` read from config** (#1211)
+
+### 🔧 CI/CD
+
+- **Deploy runs pushed out of the shared concurrency group are re-dispatched** — a `recover-evicted-peer` job in `platform.yml` and `backend.yml` finds a peer run cancelled before it ran any jobs and dispatches it again (#1224)
+- **CSP tests** now cover the `/api/*` edge policy's `sandbox` omission and the artifact CSP parity between the edge and the render Lambda (#1219)
+- **`platform.yml` forwards `CDK_PLATFORM_COSTS_ENABLED`** — the variable `config.ts` reads for platform cost sync was never passed to the CDK deploy, so setting it in GitHub had no effect (#1245)
+
+### 📚 Docs
+
+- **Shared Projects implementation plan** (`docs/specs/shared-projects.md`) — spec only (#1242)
+- **Kaizen**: POC comment loop retired, quality vetoes waived with written triggers (#1221)
+
 ## [1.23.0] - 2026-09-20
 
 The agent stops working in silence, and stops paying to re-read what it already knows. **Live turn narration** replaces the cycling placeholder with what the agent is actually doing — thinking, which tool is running, how long it took, and a one-line model-written summary of each tool batch — drained concurrently so "Using list_assignments" arrives *while* that tool runs rather than after it. **Document context offload** stops an attached PDF being re-sent on every turn: a digest replaces the bytes and a `document_read` tool pulls back the pages the model actually asks for, measured on a 60-page canary at a **109.1K → ~15K prefix drop**. A five-part **compaction overhaul** makes thresholds model-relative, bounds the summary at 8k tokens, parks cuts until the re-write is free, and offloads oversized tool results at intake. **Browser sign-in handover** lets the agent pause and hand the user a live, interactive browser to sign in to a site it cannot reach, then continue in the authenticated session — gated behind its own RBAC tool id and a MANAGED Chromium URL blocklist. **Response feedback** ships thumbs, retry-with-correction, implicit copy/continue signals and fleet-level attribution by config arm. Plus **.docx / .pptx / .csv / .xlsx previews** in a docked pane, **Agent Templates**, and a performance pass worth ~500ms off the pre-stream window. **A CDK deploy is required**, and operators who use the browser tool must set `CDK_BROWSER_URL_BLOCKLIST`.
