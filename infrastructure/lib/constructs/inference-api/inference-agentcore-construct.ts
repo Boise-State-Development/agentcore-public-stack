@@ -160,8 +160,6 @@ export class InferenceAgentCoreConstruct extends Construct {
 
     // ── Additional SSM reads needed by the runtime container env ──
     const authProviderSecretsArn = props.refs.authProviderSecretsSecret.secretArn;
-    const oauthTokenEncryptionKeyArn = props.refs.oauthTokenEncryptionKey.keyArn;
-    const oauthClientSecretsArn = props.refs.oauthClientSecretsSecret.secretArn;
 
     // Memory + Code Interpreter + Browser are owned by PlatformStack
     // IDs flow in via typed props (`props.memoryArn`, etc.). We grant
@@ -365,10 +363,6 @@ export class InferenceAgentCoreConstruct extends Construct {
         // Auth providers
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
-
-        // OAuth configuration
-        OAUTH_TOKEN_ENCRYPTION_KEY_ARN: oauthTokenEncryptionKeyArn,
-        OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
 
         // AgentCore resources
         AGENTCORE_MEMORY_ID: props.memoryId,
