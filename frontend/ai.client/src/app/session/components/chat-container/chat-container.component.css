@@ -87,18 +87,6 @@
   min-width: 0;
 }
 
-/* Assistant indicator wrapper - positioned above chat input */
-.assistant-indicator-input-wrapper {
-  display: flex;
-  justify-content: center;
-  padding-bottom: 0.75rem;
-}
-
-/* Embedded mode indicator - same styling */
-.assistant-indicator-input-wrapper.embedded {
-  padding-bottom: 0.5rem;
-}
-
 /* Sidenav-aware positioning for lg screens */
 @media (min-width: 1024px) {
   .chat-input-footer.full-page.sidenav-expanded,

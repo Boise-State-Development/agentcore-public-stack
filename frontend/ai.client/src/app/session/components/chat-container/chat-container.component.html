@@ -6,14 +6,7 @@
     class="chat-topnav-wrapper"
     [class.sidenav-expanded]="!isSidenavCollapsed()"
     [class.artifact-pane-open]="artifactPanelOpen()">
-    <app-topnav
-      [assistant]="assistant()"
-      [agentGovernance]="agentGovernance()"
-      [isAssistantOwner]="isAssistantOwner()"
-      [isLoadingAssistant]="isLoadingAssistant()"
-      (assistantNewSession)="onAssistantNewSession()"
-      (assistantEdit)="onAssistantEdit()"
-      (assistantShare)="onAssistantShare()" />
+    <app-topnav />
   </div>
 }
 
@@ -275,31 +268,6 @@
 
       <!-- Fixed input at bottom -->
       <div class="chat-input-footer embedded">
-        <!-- Assistant Indicator (floating badge above input) -->
-        @if (isLoadingAssistant()) {
-          <div class="flex justify-center mb-2">
-            <div class="animate-pulse inline-flex items-center gap-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 pr-3 h-10">
-              <div class="w-9 h-full rounded-l-xl bg-gray-200 dark:bg-gray-700"></div>
-              <div class="flex flex-col gap-1">
-                <div class="h-3 w-32 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
-                <div class="h-2 w-16 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
-              </div>
-              <div class="h-3 w-3 rounded-full bg-gray-200 dark:bg-gray-700"></div>
-            </div>
-          </div>
-        } @else if (assistant()) {
-          <div class="assistant-indicator-input-wrapper embedded">
-            <app-assistant-indicator
-              [name]="assistant()!.name"
-              [emoji]="assistant()!.emoji ?? ''"
-              [ownerName]="assistant()!.ownerName"
-              [isOwner]="isAssistantOwner()"
-              [governance]="agentGovernance()"
-              (newSessionClicked)="onAssistantNewSession()"
-              (editClicked)="onAssistantEdit()"
-              (shareClicked)="onAssistantShare()" />
-          </div>
-        }
         <app-chat-input
           [showAnnouncements]="showAnnouncements()"
           [announcementPlacement]="announcementPlacement()"
@@ -312,6 +280,9 @@
           (messageCancelled)="onMessageCancelled()"
           (fileAttached)="onFileAttached($event)"
 >
+          <ng-container composerMetaStart>
+            <ng-container *ngTemplateOutlet="agentIndicator" />
+          </ng-container>
           <!-- Cost + context, sharing the composer's meta row with the quota
                tab. Pinned to this chat's own session: an embedded chat is
                deliberately NOT the viewed session, so an unpinned badge would
@@ -362,6 +333,9 @@
           (messageCancelled)="onMessageCancelled()"
           (fileAttached)="onFileAttached($event)"
 >
+          <ng-container composerMetaStart>
+            <ng-container *ngTemplateOutlet="agentIndicator" />
+          </ng-container>
           <!-- Cost + context, sharing the composer's meta row with the quota
                tab; unpinned so it follows the viewed session. -->
           <app-session-cost-badge composerMeta class="pb-1" />
@@ -370,6 +344,29 @@
     </div>
   }
 }
+
+<!-- The bound agent, projected into the left edge of the composer's meta row
+     opposite the cost badge. Only the messages view carries it: the empty
+     state already introduces the agent with its launch card. -->
+<ng-template #agentIndicator>
+  @if (isLoadingAssistant()) {
+    <div
+      class="h-5 w-28 animate-pulse rounded-md bg-gray-200/70 dark:bg-white/5"
+      role="status"
+      aria-label="Loading agent"
+    ></div>
+  } @else if (assistant(); as agent) {
+    <app-agent-indicator
+      [name]="agent.name"
+      [emoji]="agent.emoji ?? ''"
+      [ownerName]="agent.ownerName"
+      [isOwner]="isAssistantOwner()"
+      [governance]="agentGovernance()"
+      (newSessionClicked)="onAssistantNewSession()"
+      (editClicked)="onAssistantEdit()"
+      (shareClicked)="onAssistantShare()" />
+  }
+</ng-template>
 
 <!-- Voice Conversation Overlay -->
 @if (isVoiceActive()) {

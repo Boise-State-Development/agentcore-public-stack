@@ -12,7 +12,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPencilSquare,
   heroPlusCircle,
-  heroChevronDown,
+  heroChevronUp,
   heroUserGroup,
   heroLockClosed,
 } from '@ng-icons/heroicons/outline';
@@ -44,17 +44,23 @@ export interface AgentGovernance {
 }
 
 /**
- * A prominent assistant indicator chip with gradient accent and
- * action dropdown menu (Share, Edit, New Session).
+ * The agent bound to the conversation, as a compact chip in the composer's
+ * meta row — the left-hand counterpart of the cost + context badge on the
+ * right. Sized and coloured to sit at the badge's weight, so the row reads as
+ * one line of quiet metadata rather than a control competing with the input.
+ *
+ * Opens an actions menu (New session, and for the owner Edit / Share) upward
+ * and anchored to its own left edge, because it lives on the composer's left
+ * edge: a centred menu would hang off the side of a narrow composer.
  */
 @Component({
-  selector: 'app-assistant-indicator',
+  selector: 'app-agent-indicator',
   imports: [NgIcon],
   providers: [
     provideIcons({
       heroPencilSquare,
       heroPlusCircle,
-      heroChevronDown,
+      heroChevronUp,
       heroUserGroup,
       heroLockClosed,
     }),
@@ -66,82 +72,47 @@ export interface AgentGovernance {
   },
   template: `
     <div class="indicator-wrapper">
-      @if (variant() === 'compact') {
-        <!-- Compact pill: subtle badge, name only, opens the actions menu -->
-        <button
-          type="button"
-          (click)="toggleMenu()"
-          class="assistant-pill"
-          [class.open]="menuOpen()"
-          [attr.aria-label]="'Agent: ' + name() + '. Click for options.'"
-          [attr.aria-expanded]="menuOpen()"
-          aria-haspopup="menu"
-        >
-          @if (emoji()) {
-            <span class="pill-emoji leading-none">{{ emoji() }}</span>
-          }
-          <span class="pill-name">{{ name() }}</span>
-          @if (isGoverned()) {
-            <ng-icon
-              name="heroLockClosed"
-              class="pill-lock"
-              [attr.aria-label]="governanceLabel()"
-            />
-          }
-        </button>
-      } @else {
-        <button
-          type="button"
-          (click)="toggleMenu()"
-          class="assistant-indicator"
-          [attr.aria-label]="'Agent: ' + name() + '. Click for options.'"
-          [attr.aria-expanded]="menuOpen()"
-          aria-haspopup="menu"
-        >
-          <!-- Avatar -->
-          <div class="indicator-avatar" [style.background]="avatarGradient()">
-            @if (emoji()) {
-              <span class="text-lg leading-none">{{ emoji() }}</span>
-            } @else {
-              <span class="text-sm font-bold leading-none text-white">{{ firstLetter() }}</span>
-            }
-          </div>
-
-          <!-- Name + owner -->
-          <div class="indicator-text">
-            <span class="indicator-name">
-              {{ name() }}
-              @if (isGoverned()) {
-                <ng-icon
-                  name="heroLockClosed"
-                  class="indicator-lock"
-                  [attr.aria-label]="governanceLabel()"
-                />
-              }
-            </span>
-            @if (ownerName()) {
-              <span class="indicator-owner">by {{ ownerName() }}</span>
-            }
-          </div>
-
-          <!-- Chevron -->
+      <button
+        type="button"
+        (click)="toggleMenu()"
+        class="agent-pill"
+        [class.open]="menuOpen()"
+        [attr.aria-label]="'Agent: ' + name() + '. Click for options.'"
+        [attr.aria-expanded]="menuOpen()"
+        aria-haspopup="menu"
+      >
+        @if (emoji()) {
+          <span class="pill-emoji" aria-hidden="true">{{ emoji() }}</span>
+        } @else {
+          <span class="pill-avatar" [style.background]="avatarGradient()" aria-hidden="true">
+            {{ firstLetter() }}
+          </span>
+        }
+        <span class="pill-name">{{ name() }}</span>
+        @if (isGoverned()) {
           <ng-icon
-            name="heroChevronDown"
-            class="indicator-chevron"
-            [class.rotated]="menuOpen()"
-            aria-hidden="true"
+            name="heroLockClosed"
+            class="pill-lock"
+            [attr.aria-label]="governanceLabel()"
           />
-        </button>
-      }
+        }
+        <ng-icon
+          name="heroChevronUp"
+          class="pill-chevron"
+          [class.rotated]="menuOpen()"
+          aria-hidden="true"
+        />
+      </button>
 
-      <!-- Dropdown menu -->
       @if (menuOpen()) {
-        <div
-          class="indicator-menu"
-          [class.placement-down]="menuPlacement() === 'down'"
-          role="menu"
-          aria-label="Agent actions"
-        >
+        <div class="indicator-menu" role="menu" aria-label="Agent actions">
+          <div class="menu-header">
+            <span class="menu-title">{{ name() }}</span>
+            @if (ownerName()) {
+              <span class="menu-owner">by {{ ownerName() }}</span>
+            }
+          </div>
+
           @if (isGoverned()) {
             <div class="menu-governance">
               <p class="governance-title">
@@ -206,19 +177,33 @@ export interface AgentGovernance {
     :host {
       display: inline-flex;
       min-width: 0;
+      max-width: 100%;
     }
 
-    /* ── Compact pill (top nav) ── */
-    .assistant-pill {
+    .indicator-wrapper {
+      position: relative;
+      display: inline-flex;
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    /* ── Chip ──
+       Same type size and ink as the cost badge it mirrors (text-xs, gray-500),
+       with a hover surface as the only hint that it is a control. */
+    .agent-pill {
       display: inline-flex;
       align-items: center;
       gap: 0.375rem;
+      min-width: 0;
       max-width: 100%;
-      padding: 0.1875rem 0.5rem;
-      border-radius: 0.5rem;
-      background: var(--color-gray-100);
-      color: var(--color-gray-600);
+      height: 1.25rem;
+      padding: 0 0.375rem;
+      border-radius: 0.375rem;
+      font-size: 0.75rem;
+      line-height: 1;
+      color: var(--color-gray-500);
       cursor: pointer;
+      animation: pill-enter 0.25s ease-out 0.35s backwards;
       transition: background 0.15s ease, color 0.15s ease;
 
       &:hover,
@@ -229,183 +214,138 @@ export interface AgentGovernance {
 
       &:focus-visible {
         outline: 2px solid var(--color-primary-accessible);
-        outline-offset: 2px;
+        outline-offset: 1px;
       }
     }
 
-    :host-context(html.dark) .assistant-pill {
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--color-gray-300);
+    :host-context(html.dark) .agent-pill {
+      color: var(--color-gray-400);
 
       &:hover,
       &.open {
-        background: rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.1);
         color: var(--color-gray-100);
       }
     }
 
     .pill-emoji {
-      font-size: 0.875rem;
+      font-size: 0.8125rem;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    .pill-avatar {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 0.875rem;
+      height: 0.875rem;
+      border-radius: 0.25rem;
+      font-size: 0.5625rem;
+      font-weight: 700;
+      color: var(--color-white);
       flex-shrink: 0;
     }
 
     .pill-name {
-      font-size: 0.8125rem;
-      font-weight: 600;
-      letter-spacing: -0.01em;
+      font-weight: 500;
       white-space: nowrap;
-      max-width: 200px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .indicator-wrapper {
-      position: relative;
-      display: inline-flex;
-    }
-
-    .assistant-indicator {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.625rem;
-      padding: 0.25rem 0.75rem 0.25rem 0;
-      border-radius: 0.75rem;
-      position: relative;
-      overflow: hidden;
-
-      /* Card-like surface */
-      background: var(--color-white);
-      border: 1px solid var(--color-gray-200);
-      box-shadow:
-        0 1px 3px rgba(0, 0, 0, 0.06),
-        0 4px 12px rgba(0, 0, 0, 0.04);
-
-      /* Animation */
-      animation: indicator-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-      opacity: 0;
-
-      /* Interaction */
-      cursor: pointer;
-      transition:
-        transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
-        box-shadow 0.2s ease,
-        border-color 0.2s ease;
-
-      &:hover {
-        transform: translateY(-1px);
-        border-color: var(--color-gray-300);
-        box-shadow:
-          0 2px 8px rgba(0, 0, 0, 0.08),
-          0 8px 24px rgba(0, 0, 0, 0.06);
-      }
-
-      &:active {
-        transform: translateY(0);
-      }
-
-      &:focus-visible {
-        outline: 2px solid var(--color-primary-accessible);
-        outline-offset: 2px;
-      }
-    }
-
-    /* Dark mode */
-    :host-context(html.dark) .assistant-indicator {
-      background: var(--color-gray-800);
-      border-color: rgba(255, 255, 255, 0.1);
-      box-shadow:
-        0 1px 3px rgba(0, 0, 0, 0.2),
-        0 4px 12px rgba(0, 0, 0, 0.15);
-
-      &:hover {
-        border-color: rgba(255, 255, 255, 0.18);
-        box-shadow:
-          0 2px 8px rgba(0, 0, 0, 0.25),
-          0 8px 24px rgba(0, 0, 0, 0.2);
-      }
-    }
-
-    .indicator-avatar {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 2.25rem;
-      align-self: stretch;
-      margin: -0.25rem 0;
-      border-radius: 0.75rem 0 0 0.75rem;
-      flex-shrink: 0;
-    }
-
-    .indicator-text {
-      display: flex;
-      flex-direction: column;
       min-width: 0;
-    }
-
-    .indicator-name {
-      font-size: 0.8125rem;
-      font-weight: 600;
-      color: var(--color-gray-800);
-      letter-spacing: -0.01em;
-      white-space: nowrap;
-      max-width: 200px;
+      max-width: 12rem;
       overflow: hidden;
       text-overflow: ellipsis;
-      line-height: 1.2;
     }
 
-    :host-context(html.dark) .indicator-name {
-      color: var(--color-gray-100);
-    }
-
-    .indicator-owner {
-      font-size: 0.6875rem;
-      color: var(--color-gray-400);
-      line-height: 1.2;
-      white-space: nowrap;
-    }
-
-    :host-context(html.dark) .indicator-owner {
-      color: var(--color-gray-500);
-    }
-
-    .indicator-chevron {
-      font-size: 0.875rem;
-      color: var(--color-gray-400);
-      flex-shrink: 0;
-      transition: transform 0.2s ease;
-    }
-
-    .indicator-chevron.rotated {
-      transform: rotate(180deg);
-    }
-
-    :host-context(html.dark) .indicator-chevron {
-      color: var(--color-gray-500);
-    }
-
-    /* ── Dropdown menu ── */
     .pill-lock,
-    .indicator-lock {
+    .pill-chevron {
       width: 0.75rem;
       height: 0.75rem;
       flex-shrink: 0;
       color: var(--color-gray-400);
     }
 
-    .indicator-lock {
-      display: inline-block;
-      vertical-align: -0.0625rem;
-      margin-left: 0.25rem;
+    .pill-chevron {
+      transition: transform 0.2s ease;
+    }
+
+    .pill-chevron.rotated {
+      transform: rotate(180deg);
     }
 
     :host-context(html.dark) .pill-lock,
-    :host-context(html.dark) .indicator-lock {
+    :host-context(html.dark) .pill-chevron {
       color: var(--color-gray-500);
     }
 
+    /* ── Menu ── */
+    .indicator-menu {
+      position: absolute;
+      bottom: calc(100% + 0.375rem);
+      left: 0;
+      /* Sizes to content so a governance row like "Model  Claude Sonnet 5"
+         reads on one line, but never wider than the viewport allows. */
+      width: max-content;
+      min-width: 12rem;
+      max-width: min(20rem, calc(100vw - 2rem));
+      padding: 0.25rem;
+      border-radius: 0.75rem;
+      background: var(--color-white);
+      border: 1px solid var(--color-gray-200);
+      box-shadow:
+        0 4px 16px rgba(0, 0, 0, 0.1),
+        0 1px 4px rgba(0, 0, 0, 0.06);
+      transform-origin: bottom left;
+      animation: menu-enter 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      z-index: 50;
+    }
+
+    :host-context(html.dark) .indicator-menu {
+      background: var(--color-gray-800);
+      border-color: rgba(255, 255, 255, 0.1);
+      box-shadow:
+        0 4px 16px rgba(0, 0, 0, 0.3),
+        0 1px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    /* The chip truncates a long name and drops the owner, so the menu is where
+       both read in full. */
+    .menu-header {
+      display: flex;
+      flex-direction: column;
+      gap: 0.125rem;
+      padding: 0.5rem 0.625rem;
+      border-bottom: 1px solid var(--color-gray-200);
+      margin-bottom: 0.25rem;
+    }
+
+    :host-context(html.dark) .menu-header {
+      border-bottom-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .menu-title {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      line-height: 1.25rem;
+      color: var(--color-gray-900);
+      overflow-wrap: anywhere;
+    }
+
+    .menu-owner {
+      font-size: 0.6875rem;
+      line-height: 1rem;
+      color: var(--color-gray-500);
+    }
+
+    :host-context(html.dark) .menu-title {
+      color: var(--color-gray-100);
+    }
+
+    :host-context(html.dark) .menu-owner {
+      color: var(--color-gray-400);
+    }
+
     .menu-governance {
-      padding: 0.5rem 0.625rem 0.625rem;
+      padding: 0.25rem 0.625rem 0.625rem;
       border-bottom: 1px solid var(--color-gray-200);
       margin-bottom: 0.25rem;
     }
@@ -480,44 +420,6 @@ export interface AgentGovernance {
       color: var(--color-gray-400);
     }
 
-    .indicator-menu {
-      position: absolute;
-      bottom: calc(100% + 0.375rem);
-      left: 50%;
-      transform: translateX(-50%);
-      /* Sizes to content so a governance row like "Model  Claude Sonnet 5"
-         reads on one line, but never wider than the viewport allows. */
-      width: max-content;
-      min-width: 11rem;
-      max-width: min(20rem, 90vw);
-      padding: 0.25rem;
-      border-radius: 0.75rem;
-      background: var(--color-white);
-      border: 1px solid var(--color-gray-200);
-      box-shadow:
-        0 4px 16px rgba(0, 0, 0, 0.1),
-        0 1px 4px rgba(0, 0, 0, 0.06);
-      animation: menu-enter 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-      z-index: 50;
-    }
-
-    :host-context(html.dark) .indicator-menu {
-      background: var(--color-gray-800);
-      border-color: rgba(255, 255, 255, 0.1);
-      box-shadow:
-        0 4px 16px rgba(0, 0, 0, 0.3),
-        0 1px 4px rgba(0, 0, 0, 0.2);
-    }
-
-    /* Open below the chip instead of above (e.g. in the top nav). */
-    .indicator-menu.placement-down {
-      top: calc(100% + 0.375rem);
-      bottom: auto;
-      left: 0;
-      transform: none;
-      animation: menu-enter-down 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-    }
-
     .menu-item {
       display: flex;
       align-items: center;
@@ -563,32 +465,23 @@ export interface AgentGovernance {
       color: var(--color-gray-500);
     }
 
-    @keyframes indicator-enter {
-      0% {
+    /* Matches the cost badge's entrance so the two ends of the meta row
+       arrive together. */
+    @keyframes pill-enter {
+      from {
         opacity: 0;
-        transform: translateY(-6px) scale(0.97);
+        transform: translateY(6px);
       }
-      100% {
+      to {
         opacity: 1;
-        transform: translateY(0) scale(1);
+        transform: translateY(0);
       }
     }
 
     @keyframes menu-enter {
       0% {
         opacity: 0;
-        transform: translateX(-50%) translateY(4px) scale(0.96);
-      }
-      100% {
-        opacity: 1;
-        transform: translateX(-50%) translateY(0) scale(1);
-      }
-    }
-
-    @keyframes menu-enter-down {
-      0% {
-        opacity: 0;
-        transform: translateY(-4px) scale(0.96);
+        transform: translateY(4px) scale(0.96);
       }
       100% {
         opacity: 1;
@@ -597,22 +490,14 @@ export interface AgentGovernance {
     }
   `],
 })
-export class AssistantIndicatorComponent {
+export class AgentIndicatorComponent {
   private elementRef = inject(ElementRef);
 
   // Inputs
   readonly name = input.required<string>();
   readonly emoji = input<string>('');
-  readonly imageUrl = input<string | null>(null);
   readonly ownerName = input<string>('');
   readonly isOwner = input<boolean>(false);
-  /** Direction the actions dropdown opens. Use 'down' in the top nav. */
-  readonly menuPlacement = input<'up' | 'down'>('up');
-  /**
-   * Visual style. 'card' is the full chip (avatar + owner); 'compact' is a
-   * subtle name-only pill for dense contexts like the top nav.
-   */
-  readonly variant = input<'card' | 'compact'>('card');
   /**
    * What this Agent fixes for the conversation. Null (the default) means the
    * caller does not know — say nothing rather than guess. See `AgentGovernance`.
