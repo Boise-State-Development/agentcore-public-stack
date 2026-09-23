@@ -123,6 +123,15 @@ def extract_backup_buckets() -> set[str]:
     return buckets
 
 
+def extract_restore_buckets() -> set[str]:
+    """Parse the restore script's BUCKET_SSM_MAP keys."""
+    content = RESTORE_SCRIPT.read_text()
+    section = re.search(r"BUCKET_SSM_MAP.*?\}", content, re.DOTALL)
+    if not section:
+        return set()
+    return set(re.findall(r'"([^"]+)":\s*"/', section.group()))
+
+
 def extract_restore_tables() -> set[str]:
     """Parse the restore script to find which tables it can restore."""
     content = RESTORE_SCRIPT.read_text()
@@ -280,6 +289,17 @@ class TestBackupCoversAllTables:
         )
 
 
+# CDK buckets deliberately absent from S3_BUCKETS. Every entry needs a reason:
+# a bucket lands here only when a redeploy recreates its contents or losing
+# them loses no user data.
+NON_DATA_BUCKETS: dict[str, str] = {
+    "mcp-sandbox": "static proxy shell deployed by CDK, no user data",
+    "frontend": "SPA build artifacts, reproducible from source",
+    "alb-access-logs": "operational request logs on a short expiry lifecycle, not user data",
+    "browser-policy": "Chromium policy rendered from CDK config by a BucketDeployment on every deploy",
+}
+
+
 class TestBackupCoversAllBuckets:
     """Every user-data S3 bucket in the CDK constructs must be in the backup inventory."""
 
@@ -295,9 +315,7 @@ class TestBackupCoversAllBuckets:
     def test_user_data_buckets_are_backed_up(self):
         """Every user-data bucket must be in the backup inventory.
 
-        Excludes:
-          - mcp-sandbox (static shell, no user data)
-          - frontend (build artifacts, reproducible from source)
+        Excludes the buckets in NON_DATA_BUCKETS, each with its reason.
 
         CDK resource name → backup logical name mapping:
           - artifacts-content → artifacts (SSM resolves)
@@ -305,17 +323,27 @@ class TestBackupCoversAllBuckets:
           - user-file-uploads → user-file-uploads (matches)
           - fine-tuning-data → fine-tuning-data (matches)
         """
-        non_data_buckets = {"mcp-sandbox", "frontend"}
         cdk_to_backup = {
             "artifacts-content": "artifacts",
         }
-        data_buckets = self.cdk_buckets - non_data_buckets
+        data_buckets = self.cdk_buckets - set(NON_DATA_BUCKETS)
         mapped = {cdk_to_backup.get(b, b) for b in data_buckets}
         missing = mapped - self.backup_buckets
         assert missing == set(), (
             f"Data buckets in CDK but NOT in backup script:\n"
             + "\n".join(f"  - {t}" for t in sorted(missing))
-            + "\n\nAdd them to S3_BUCKETS in scripts/backup-data/backup.py"
+            + "\n\nAdd them to S3_BUCKETS in scripts/backup-data/backup.py, "
+            + "or to NON_DATA_BUCKETS here with the reason they need no backup"
+        )
+
+    def test_every_backed_up_bucket_is_restorable(self):
+        """Every bucket backup.py copies must be in restore.py's BUCKET_SSM_MAP,
+        or restore skips it with "target bucket not found via SSM"."""
+        missing = self.backup_buckets - extract_restore_buckets()
+        assert missing == set(), (
+            f"Buckets backed up but NOT restorable:\n"
+            + "\n".join(f"  - {b}" for b in sorted(missing))
+            + "\n\nAdd them to BUCKET_SSM_MAP in scripts/restore-data/restore.py"
         )
 
 
