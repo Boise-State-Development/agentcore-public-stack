@@ -137,6 +137,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     memorySpaces: {
       enabled: false,
     },
+    projects: {
+      enabled: false,
+    },
     feedbackEvalSampling: { enabled: false },
     skills: {
       enabled: false,

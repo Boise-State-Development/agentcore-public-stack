@@ -40,6 +40,10 @@
       "ProviderUsersIndex"
     ],
     "oidc-state": [],
+    "projects": [
+      "MemberIndex",
+      "OwnerIndex"
+    ],
     "quota-events": [
       "TierEventIndex"
     ],

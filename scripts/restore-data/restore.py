@@ -113,6 +113,7 @@ TABLE_SSM_MAP: dict[str, str] = {
 # cleanly with "target table not found via SSM".
 TABLE_CONVENTION_MAP: dict[str, str] = {
     "memory-spaces": "memory-spaces",
+    "projects": "projects",
 }
 
 BUCKET_SSM_MAP: dict[str, str] = {

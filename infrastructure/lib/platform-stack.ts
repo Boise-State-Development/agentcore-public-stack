@@ -40,6 +40,7 @@ import { AuthTablesConstruct } from './constructs/data/auth-tables-construct';
 import { CostTrackingTablesConstruct } from './constructs/data/cost-tracking-tables-construct';
 import { FileUploadConstruct } from './constructs/data/file-upload-construct';
 import { AuditLogConstruct } from './constructs/data/audit-log-construct';
+import { ProjectsConstruct } from './constructs/data/projects-construct';
 import { QuotaTablesConstruct } from './constructs/data/quota-tables-construct';
 import { SharedConversationsConstruct } from './constructs/data/shared-conversations-construct';
 
@@ -242,6 +243,7 @@ export class PlatformStack extends cdk.Stack {
   // ── Memory Spaces — S3 content bucket + DynamoDB single-table
   public readonly memorySpacesBucket: s3.IBucket;
   public readonly memorySpacesTable: dynamodb.ITable;
+  public readonly projectsTable: dynamodb.ITable;
 
   // ── Fine-tuning
   public readonly fineTuningJobsTable: dynamodb.ITable;
@@ -619,6 +621,17 @@ export class PlatformStack extends cdk.Stack {
     this.memorySpacesBucket = memorySpaces.bucket;
     this.memorySpacesTable = memorySpaces.table;
 
+    // ============================================================
+    // Shared Projects — project META, email-keyed membership, pointers,
+    // cost rollups and the notification inbox. The harness is an Agent
+    // record in rag-assistants and project memory is a Memory Space, so
+    // neither needs storage here. Threaded via PlatformComputeRefs
+    // .projectsTable below.
+    // ============================================================
+    this.projectsTable = new ProjectsConstruct(this, 'Projects', {
+      config,
+    }).projectsTable;
+
     const artifactsDomainName = config.domainName!;
     this.artifactsFrameAncestors = [
       `https://${artifactsDomainName}`,
@@ -883,6 +896,7 @@ export class PlatformStack extends cdk.Stack {
       skillResourcesBucket: this.skillResourcesBucket,
       memorySpacesBucket: this.memorySpacesBucket,
       memorySpacesTable: this.memorySpacesTable,
+      projectsTable: this.projectsTable,
       fineTuningJobsTable: this.fineTuningJobsTable,
       fineTuningAccessTable: this.fineTuningAccessTable,
       fineTuningDataBucket: this.fineTuningDataBucket,
@@ -1066,6 +1080,7 @@ export class PlatformStack extends cdk.Stack {
         { name: 'rag-assistants', table: this.ragAssistantsTable },
         { name: 'user-artifacts', table: this.artifactsTable },
         { name: 'memory-spaces', table: this.memorySpacesTable },
+        { name: 'projects', table: this.projectsTable },
         { name: 'fine-tuning-jobs', table: this.fineTuningJobsTable },
         { name: 'fine-tuning-access', table: this.fineTuningAccessTable },
       ],

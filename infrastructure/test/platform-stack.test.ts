@@ -152,7 +152,9 @@ describe('PlatformStack', () => {
 
   describe('DynamoDB tables', () => {
     it('creates all shared tables', () => {
-      // 28 tables. Was 27 — the agent-templates table was added for the
+      // 29 tables. Was 28 — the projects table was added for Shared Projects
+      // (docs/specs/shared-projects.md §3.1). Before that, 27 → 28: the
+      // agent-templates table was added for the
       // admin-managed Agent Templates catalog (mirrors system-prompts,
       // read by app_api only). Before that: the announcements table was
       // added for the feature-announcement system (admin-authored notices
@@ -165,7 +167,7 @@ describe('PlatformStack', () => {
       // table was decommissioned (the python app uses rag-assistants for
       // both assistant config and document metadata via
       // DYNAMODB_ASSISTANTS_TABLE_NAME).
-      template.resourceCountIs('AWS::DynamoDB::Table', 28);
+      template.resourceCountIs('AWS::DynamoDB::Table', 29);
     });
   });
 

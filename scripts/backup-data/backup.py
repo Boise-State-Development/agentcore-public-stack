@@ -93,6 +93,7 @@ DYNAMODB_TABLES: list[dict[str, Any]] = [
 # Convention-named tables (no SSM parameter): `{prefix}-{suffix}`.
 DYNAMODB_TABLES_BY_CONVENTION: list[dict[str, str]] = [
     {"logical": "memory-spaces",        "suffix": "memory-spaces"},
+    {"logical": "projects",             "suffix": "projects"},
 ]
 
 # Ephemeral / TTL-driven tables. Excluded by default; include with --include-ephemeral.

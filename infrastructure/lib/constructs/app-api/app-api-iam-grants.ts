@@ -215,6 +215,7 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     { sid: 'VoiceTicketReplayAccess', arn: props.refs.voiceTicketReplayTable.tableArn },
     { sid: 'UserFilesTableAccess', arn: props.refs.fileUploadTable.tableArn },
     { sid: 'SharedConversationsAccess', arn: props.refs.sharedConversationsTable.tableArn },
+    { sid: 'ProjectsTableAccess', arn: props.refs.projectsTable.tableArn },
   ];
 
   for (const { sid, arn } of coreTables) {
