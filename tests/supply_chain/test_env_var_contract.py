@@ -63,11 +63,6 @@ INTENTIONAL_NOT_READ_BY_PYTHON: dict[str, str] = {
     # harmless to set.
     "AGENTCORE_MEMORY_TYPE": "documents memory backend choice; not currently read by python",
     "COGNITO_ISSUER_URL": "documents configured issuer; not currently read by python",
-    # Shared Projects PR-1.1 provisions infra ahead of its reader. PR-1.2's
-    # apis/shared/projects/ reads both, and test_intentional_dead_list_has_no_strays
-    # will fail until these two lines are deleted — the entries cannot outlive it.
-    "DYNAMODB_PROJECTS_TABLE_NAME": "infra ahead of reader; apis/shared/projects/ lands in PR-1.2",
-    "PROJECTS_ENABLED": "infra ahead of reader; apis/shared/feature_flags.py gains it in PR-1.2",
 }
 
 # Python env vars CDK is *not* expected to set (tunable knobs with

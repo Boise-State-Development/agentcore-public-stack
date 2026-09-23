@@ -364,6 +364,15 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
                 status_code=400,
                 detail="Only the owner can change assistant visibility",
             )
+        # A project's harness stays PRIVATE: who can use it is the project's membership.
+        if (
+            getattr(assistant, "kind", None) == "project"
+            and request.visibility is not None
+            and request.visibility != assistant.visibility
+        ):
+            raise HTTPException(
+                status_code=400, detail="A project's agent stays private; manage access from the project's members"
+            )
 
         # Design-time binding/model validation (D4/D5), after the auth gate above.
         try:

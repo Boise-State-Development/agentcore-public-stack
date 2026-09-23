@@ -73,7 +73,15 @@ def runs_own_draft(assistant: Assistant, user_id: Optional[str]) -> bool:
     The owner running their own draft is not a loophole: it is the only way to iterate
     before resubmitting, and it affects nobody else. It does need to be *visible* in the UI
     that they are running an unpublished draft, which is a surface concern, not this one.
+
+    **A project's harness is the one exception:** every member runs the live record
+    (shared-projects §3.2). That is not the editor bypass above — a harness can never be
+    submitted to the store (``submit_listing`` refuses it), so there is no reviewed version
+    to bypass. The project's instructions *are* the live record, and its history is the
+    ``VERSION#`` rows cut on save.
     """
+    if getattr(assistant, "kind", None) == "project":
+        return True
     return bool(user_id) and assistant.owner_id == user_id
 
 

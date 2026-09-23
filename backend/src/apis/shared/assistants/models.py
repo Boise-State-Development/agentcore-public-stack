@@ -415,6 +415,15 @@ class Assistant(BaseModel):
     listing: Optional[AgentListing] = Field(
         None, description="Marketplace publication state (D2); absent = never submitted (D3)"
     )
+    # Shared Projects (docs/specs/shared-projects.md §3.2). A project's harness is an
+    # ordinary Agent record marked with the project that owns it: access resolves through
+    # project membership, and it never appears in agent lists, pins or the store.
+    kind: Optional[Literal["project"]] = Field(
+        None, description="'project' for a Shared Project's hidden harness; absent for every other agent"
+    )
+    project_id: Optional[str] = Field(
+        None, alias="projectId", description="The owning project when kind == 'project'"
+    )
 
 
 class CreateAssistantDraftRequest(BaseModel):

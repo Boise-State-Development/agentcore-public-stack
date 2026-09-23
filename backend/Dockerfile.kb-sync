@@ -58,6 +58,11 @@ COPY backend/src/apis/shared/observability/ ${LAMBDA_TASK_ROOT}/apis/shared/obse
 # get_assistant before soft-deleting; the worker's miss-eviction path
 # (_delete_missing_web_document) goes through it.
 COPY backend/src/apis/shared/assistants/ ${LAMBDA_TASK_ROOT}/apis/shared/assistants/
+# projects/ — assistants/service.py resolves a project harness's access through
+# projects/access.py (a lazy import). The worker never takes that path (it uses
+# the owner-checked get_assistant), so this is import closure only: no projects
+# table access, env var or IAM grant is needed here.
+COPY backend/src/apis/shared/projects/ ${LAMBDA_TASK_ROOT}/apis/shared/projects/
 COPY backend/src/apis/app_api/file_sources/ ${LAMBDA_TASK_ROOT}/apis/app_api/file_sources/
 COPY backend/src/apis/app_api/documents/ ${LAMBDA_TASK_ROOT}/apis/app_api/documents/
 COPY backend/src/apis/app_api/web_sources/ ${LAMBDA_TASK_ROOT}/apis/app_api/web_sources/

@@ -134,6 +134,9 @@ case "$SERVICE" in
             "backend/src/apis/shared/oauth"
             "backend/src/apis/shared/embeddings"
             "backend/src/apis/shared/assistants"
+            # projects/ — assistants/service.py imports projects/access.py
+            # (lazily) for a project harness's access check.
+            "backend/src/apis/shared/projects"
             # caching/ — oauth/provider_repository.py memoizes its provider
             # list in the process-wide config cache.
             "backend/src/apis/shared/caching"

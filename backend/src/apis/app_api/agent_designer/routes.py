@@ -467,6 +467,15 @@ async def update_agent_endpoint(
             raise HTTPException(status_code=403, detail="You do not have permission to edit this agent")
         if permission == "editor" and request.visibility is not None and request.visibility != assistant.visibility:
             raise HTTPException(status_code=400, detail="Only the owner can change agent visibility")
+        # A project's harness stays PRIVATE: who can use it is the project's membership.
+        if (
+            getattr(assistant, "kind", None) == "project"
+            and request.visibility is not None
+            and request.visibility != assistant.visibility
+        ):
+            raise HTTPException(
+                status_code=400, detail="A project's agent stays private; manage access from the project's members"
+            )
 
         try:
             await validate_agent_write(
