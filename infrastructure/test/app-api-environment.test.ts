@@ -54,6 +54,21 @@ describe('buildAppApiEnvironment — Memory Spaces', () => {  it('wires the tabl
   });
 });
 
+describe('buildAppApiEnvironment — dictation', () => {
+  it('threads the kill switch and the language list', () => {
+    const env = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(env.DICTATION_ENABLED).toBe('true');
+    expect(env.DICTATION_LANGUAGES).toBe('en-US');
+
+    const off = buildAppApiEnvironment(
+      createMockConfig({ dictation: { enabled: false, languages: 'en-US,es-US' } }),
+      stubParams(),
+    );
+    expect(off.DICTATION_ENABLED).toBe('false');
+    expect(off.DICTATION_LANGUAGES).toBe('en-US,es-US');
+  });
+});
+
 /**
  * Agent Templates: the admin CRUD routes and the public `/templates` picker
  * feed read the table name from `DYNAMODB_AGENT_TEMPLATES_TABLE_NAME`. Mirrors

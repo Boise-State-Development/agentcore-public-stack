@@ -301,6 +301,25 @@ describe('Security policy hardening', () => {
     });
   });
 
+  describe('App-api Transcribe dictation grant', () => {
+    // Streaming transcription has no resource-level permissions, so the
+    // resource is necessarily `*` — which makes the action list the whole
+    // boundary. It must stay the single WebSocket action the dictation proxy
+    // presigns, never `transcribe:*` (batch jobs, vocabularies, call analytics).
+    it('app-api role may open a Transcribe WebSocket stream and nothing else', () => {
+      const matches = statementsWithSid('TranscribeStreamingDictation');
+      if (matches.length === 0) {
+        throw new Error(
+          "Could not locate the app-api Transcribe grant. " +
+            "Looked for Sid 'TranscribeStreamingDictation'. If the Sid was renamed, update this test.",
+        );
+      }
+      for (const s of matches) {
+        expect(asArray(s.Action)).toEqual(['transcribe:StartStreamTranscriptionWebSocket']);
+      }
+    });
+  });
+
   describe('AgentCore runtime user-settings grant', () => {
     // Regression guard: inference-agentcore-construct.ts injects
     // DYNAMODB_USER_SETTINGS_TABLE_NAME, which makes UserSettingsRepository

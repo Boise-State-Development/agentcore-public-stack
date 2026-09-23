@@ -110,6 +110,8 @@ The per-origin cert vars below are **optional overrides** — set one only if yo
 | `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` | — | Comma-separated extra origins (beyond `https://{CDK_DOMAIN_NAME}`) allowed to embed the MCP Apps sandbox proxy via CSP `frame-ancestors`. Set to `http://localhost:4200` to point a local SPA at this deployment. **Leave unset in production.** |
 | `CDK_FINE_TUNING_CORS_ORIGINS` | — | Comma-separated extra CORS origins for the SageMaker fine-tuning data bucket, beyond `https://{CDK_DOMAIN_NAME}`. Optional — fine-tuning itself is always provisioned. |
 | `CDK_FINE_TUNING_ENABLED` | `true` | Mounts the fine-tuning routers. Default ON — leave unset unless you want the kill switch. Note this is a *runtime* flag on the app-api container; the identically-named CDK stack gate was removed in the single-stack migration. |
+| `CDK_DICTATION_ENABLED` | `true` | Composer dictation via Amazon Transcribe Streaming. Default ON — leave unset unless you want the kill switch. |
+| `CDK_DICTATION_LANGUAGES` | `en-US` | Dictation language codes, comma-separated. Two or more enable automatic language identification (first is preferred). |
 | `CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS` | `0` | Monthly GPU-hour quota auto-granted to any authenticated user. `0` = whitelist-only (an admin grants each user). A positive value (e.g. `10`) = open access with that budget. |
 
 ### Managed Knowledge Bases

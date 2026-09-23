@@ -81,6 +81,7 @@ export interface AppConfig {
   skills: SkillsConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
+  dictation: DictationConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
@@ -394,6 +395,26 @@ export interface AgentsConfig {
  */
 export interface AgentMarketplaceConfig {
   enabled: boolean;
+}
+
+/**
+ * Composer dictation — speech-to-text into the message box via Amazon
+ * Transcribe Streaming, proxied by app-api (`/dictation/*`).
+ *
+ * Default ON with a kill switch: CDK_DICTATION_ENABLED=false (or a
+ * `dictation.enabled: false` cdk.json context) makes the routes 404, and the
+ * SPA hides the Dictate button on the first 404. Sets DICTATION_ENABLED and
+ * DICTATION_LANGUAGES on **app-api only**.
+ */
+export interface DictationConfig {
+  enabled: boolean;
+  /**
+   * Comma-separated Transcribe language codes. One code (the default,
+   * `en-US`) pins the language; two or more switch on automatic language
+   * identification with the first as the preferred language. At most one
+   * dialect per language (`en-US,en-GB` is rejected by the service).
+   */
+  languages: string;
 }
 
 export interface FineTuningConfig {
@@ -1020,6 +1041,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_AGENT_MARKETPLACE_ENABLED
         ? process.env.CDK_AGENT_MARKETPLACE_ENABLED !== 'false'
         : scope.node.tryGetContext('agentMarketplace')?.enabled ?? true,
+    },
+    dictation: {
+      // Default ON with a kill switch, same empty-string-safe ternary as
+      // `agentMarketplace` above.
+      enabled: process.env.CDK_DICTATION_ENABLED
+        ? process.env.CDK_DICTATION_ENABLED !== 'false'
+        : scope.node.tryGetContext('dictation')?.enabled ?? true,
+      languages:
+        process.env.CDK_DICTATION_LANGUAGES
+        || scope.node.tryGetContext('dictation')?.languages
+        || 'en-US',
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,
