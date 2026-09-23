@@ -93,6 +93,9 @@ TABLE_SSM_MAP: dict[str, str] = {
     "managed-models":       "/admin/managed-models-table-name",
     "user-menu-links":      "/admin/user-menu-links-table-name",
     "announcements":        "/admin/announcements-table-name",
+    "system-prompts":       "/admin/system-prompts-table-name",
+    "agent-templates":      "/admin/agent-templates-table-name",
+    "audit-log":            "/audit/audit-log-table-name",
     "user-settings":        "/settings/user-settings-table-name",
     "user-file-uploads":    "/user-file-uploads/table-name",
     "shared-conversations": "/shares/shared-conversations-table-name",
@@ -102,20 +105,24 @@ TABLE_SSM_MAP: dict[str, str] = {
     "fine-tuning-access":   "/fine-tuning/access-table-name",
 }
 
-# Convention-named tables (not in SSM).
-# Currently empty — the previously-listed `assistants` table was
-# decommissioned in commit c977e04e (the project uses the
-# rag-assistants table for both assistant config and document
-# metadata via DYNAMODB_ASSISTANTS_TABLE_NAME). Restoring an
-# `assistants` component from an old backup will skip cleanly with
-# "target table not found via SSM".
-TABLE_CONVENTION_MAP: dict[str, str] = {}
+# Convention-named tables (not in SSM): `{prefix}-{suffix}`.
+# The previously-listed `assistants` table was decommissioned in commit
+# c977e04e (the project uses the rag-assistants table for both assistant
+# config and document metadata via DYNAMODB_ASSISTANTS_TABLE_NAME).
+# Restoring an `assistants` component from an old backup will skip
+# cleanly with "target table not found via SSM".
+TABLE_CONVENTION_MAP: dict[str, str] = {
+    "memory-spaces": "memory-spaces",
+}
 
 BUCKET_SSM_MAP: dict[str, str] = {
     "user-file-uploads": "/user-file-uploads/bucket-name",
     "rag-documents":     "/rag/documents-bucket-name",
     "artifacts":         "/artifacts/bucket-name",
     "fine-tuning-data":  "/fine-tuning/data-bucket-name",
+    "shared-conversations": "/shares/shared-conversations-bucket-name",
+    "memory-spaces":     "/memory-spaces/bucket-name",
+    "skill-resources":   "/skills/skill-resources-bucket-name",
 }
 
 # S3 Vectors indexes. Mirrors `VECTOR_INDEXES` in scripts/backup-data/backup.py.

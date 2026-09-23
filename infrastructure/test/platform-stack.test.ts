@@ -236,9 +236,13 @@ describe('PlatformStack', () => {
       // Raised 49 → 51 for the agent-templates table name + ARN publishes
       // (mirrors the system-prompts name+arn pair; consumed by restore
       // tooling and ad-hoc IAM scoping).
+      //
+      // Raised 51 → 53 for the memory-spaces and skill-resources bucket
+      // name publishes — restore tooling only (S3_BUCKETS / BUCKET_SSM_MAP);
+      // compute still takes both buckets via PlatformComputeRefs.
       const params = template.findResources('AWS::SSM::Parameter');
       expect(Object.keys(params).length).toBeGreaterThanOrEqual(30);
-      expect(Object.keys(params).length).toBeLessThanOrEqual(51);
+      expect(Object.keys(params).length).toBeLessThanOrEqual(53);
     });
   });
 
