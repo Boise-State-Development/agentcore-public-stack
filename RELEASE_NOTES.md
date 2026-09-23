@@ -9,7 +9,7 @@
 >
 > 🔒 **This deploy closes Cognito self-signup wherever `CDK_COGNITO_SELF_SIGNUP_ENABLED` is unset — which today is every environment, production included.** That is the intended fix: production self-registration has been open, because CDK hardcoded `selfSignUpEnabled: true` and re-applied it on every deploy. Existing accounts keep working, and federated sign-in (Entra/Okta) and first-boot admin creation are unaffected. Only the Hosted UI's public "Sign up" path closes. An environment that genuinely wants open registration must set the variable to `true` **before** deploying.
 >
-> 💰 **Platform cost sync is opt-in and can currently be turned on only through CDK context.** `platform.yml` does not forward `CDK_PLATFORM_COSTS_ENABLED`, so setting it as a GitHub variable does nothing yet. Use `"platformCosts": { "enabled": true }` in `cdk.json` context, or wait for the workflow fix. See Deployment notes.
+> 💰 **Platform cost sync is opt-in (default off).** Turn it on per environment by setting the `CDK_PLATFORM_COSTS_ENABLED` GitHub variable to `true` before the `platform.yml` deploy, or with `"platformCosts": { "enabled": true }` in `cdk.json` context. See Deployment notes.
 
 ---
 
@@ -167,7 +167,7 @@ No dependency changes.
 
 **To enable platform cost sync (optional):**
 
-1. Add `"platformCosts": { "enabled": true }` to the `cdk.json` context for that environment. The `CDK_PLATFORM_COSTS_ENABLED` variable is read by `config.ts` but **not forwarded by `platform.yml`** yet, so a GitHub variable alone has no effect.
+1. Set the `CDK_PLATFORM_COSTS_ENABLED` variable to `true` in that GitHub environment **before** the `platform.yml` deploy, which forwards it to CDK (#1245). Only the literal `true` enables it. Alternatively, add `"platformCosts": { "enabled": true }` to the `cdk.json` context; the variable, when set, takes precedence over the context.
 2. The account needs Cost Explorer enabled, and no SCP may deny `ce:GetCostAndUsage`.
 3. To scope figures to this deployment rather than the whole account, **activate the `Project` cost allocation tag in the payer account.** A linked account cannot do this, and activation is not retroactive. Until then the dashboard labels the figures as account-scoped.
 4. Backfill history by invoking the Lambda directly:

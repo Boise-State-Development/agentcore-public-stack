@@ -58,6 +58,7 @@ Admins get a say over the toolset, and everyone gets a clearer view of what thin
 
 - **Deploy runs pushed out of the shared concurrency group are re-dispatched** — a `recover-evicted-peer` job in `platform.yml` and `backend.yml` finds a peer run cancelled before it ran any jobs and dispatches it again (#1224)
 - **CSP tests** now cover the `/api/*` edge policy's `sandbox` omission and the artifact CSP parity between the edge and the render Lambda (#1219)
+- **`platform.yml` forwards `CDK_PLATFORM_COSTS_ENABLED`** — the variable `config.ts` reads for platform cost sync was never passed to the CDK deploy, so setting it in GitHub had no effect (#1245)
 
 ### 📚 Docs
 
