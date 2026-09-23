@@ -9,6 +9,7 @@ import {
   effect,
   untracked,
   afterNextRender,
+  DestroyRef,
   ElementRef,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -18,6 +19,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPlus,
   heroArrowTurnDownRight,
+  heroCheck,
   heroClock,
   heroMicrophone,
   heroXMark,
@@ -42,6 +44,11 @@ import {
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { VoiceChatService, type VoiceStatus } from '../../services/voice';
+import {
+  DictationService,
+  DictationUnavailableError,
+  type DictationEndReason,
+} from '../../services/dictation';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import {
   AgentMentionService,
@@ -71,6 +78,34 @@ const MAX_TEXTAREA_HEIGHT_PX = 200;
 
 /** The composer's resting placeholder, and the string the rotation settles back on. */
 const IDLE_PLACEHOLDER = 'How can I help you today?';
+
+/**
+ * Where dictated text goes: the composer's text either side of the caret (or
+ * selection, which dictation replaces) when the user pressed Dictate.
+ */
+export interface DictationAnchor {
+  before: string;
+  after: string;
+}
+
+/**
+ * Splice dictated text into the composer at its anchor, padding with a space
+ * only where the neighbouring text does not already supply whitespace.
+ * Returns the new value and where the caret belongs — just after the insert.
+ */
+export function spliceDictation(
+  anchor: DictationAnchor,
+  dictated: string,
+): { value: string; caret: number } {
+  const text = dictated.trim();
+  if (!text) {
+    return { value: anchor.before + anchor.after, caret: anchor.before.length };
+  }
+  const lead = anchor.before && !/\s$/.test(anchor.before) ? ' ' : '';
+  const trail = anchor.after && !/^\s/.test(anchor.after) ? ' ' : '';
+  const head = anchor.before + lead + text;
+  return { value: head + trail + anchor.after, caret: head.length };
+}
 
 /** Dwell per rotating hint. Long enough to read a short line without hurrying. */
 const HINT_ROTATION_MS = 4500;
@@ -206,6 +241,7 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
     provideIcons({
       heroPlus,
       heroArrowTurnDownRight,
+      heroCheck,
       heroClock,
       heroMicrophone,
       heroXMark,
@@ -225,6 +261,7 @@ export class ChatInputComponent {
   private readonly draftStorage = inject(ComposerDraftStorageService);
   private readonly toolService = inject(ToolService);
   private readonly voiceChatService = inject(VoiceChatService);
+  private readonly dictation = inject(DictationService);
   protected readonly systemPromptsService = inject(SystemPromptsService);
   private readonly router = inject(Router);
 
@@ -240,6 +277,11 @@ export class ChatInputComponent {
   // Input: show voice mode toggle (defaults to true). Disabled where voice
   // is not meaningful, e.g. the assistant editor preview.
   readonly showVoiceControl = input<boolean>(true);
+
+  // Input: show the Dictate (speech-to-text) button (defaults to true). Unlike
+  // voice, dictation only fills this composer, so it stays on in the preview
+  // panes; the input is here for an embedder that has no use for it.
+  readonly showDictationControl = input<boolean>(true);
 
   // Input: auto-focus the textarea on load and session change (defaults to true).
   // Disabled where the input sits beside an editable form (e.g. assistant preview).
@@ -407,6 +449,11 @@ export class ChatInputComponent {
    * ends, learns not to trust the affordance.
    */
   protected readonly placeholder = computed(() => {
+    // Shown only until the first words arrive; after that the transcript is
+    // the textarea's value.
+    if (this.isDictating()) {
+      return this.dictationStatus() === 'connecting' ? 'Starting dictation…' : 'Listening…';
+    }
     // A prompt awaiting an answer holds the queue, and the turn is NOT
     // streaming while it does — so the idle placeholder would be the most
     // wrong of the three: it promises immediate delivery on the one path that
@@ -501,10 +548,26 @@ export class ChatInputComponent {
     () =>
       !this.prefersReducedMotion &&
       this.userInput().length === 0 &&
+      !this.isDictating() &&
       !this.isLoading() &&
       !this.queueHeld() &&
       this.composerHints().length > 1,
   );
+
+  /**
+   * Placeholder colour follows the hint overlay (the two must never both show);
+   * text colour goes italic and a step lighter while a dictation preview is
+   * showing, so heard-but-not-inserted words read as provisional.
+   */
+  protected readonly textareaClass = computed(() => {
+    const placeholder = this.showHintOverlay()
+      ? 'placeholder:text-transparent'
+      : 'placeholder:text-gray-500 dark:placeholder:text-gray-400';
+    const text = this.isDictating()
+      ? 'italic text-gray-600 dark:text-gray-300'
+      : 'text-gray-900 dark:text-gray-100';
+    return `${placeholder} ${text}`;
+  });
 
   /** Whether the hint is still advancing, as opposed to resting on the idle line. */
   protected readonly rotateHints = computed(
@@ -586,6 +649,45 @@ export class ChatInputComponent {
       default: return 'Voice mode';
     }
   });
+
+  // =========================================================================
+  // Dictation
+  //
+  // Speech-to-text into this composer. While it runs the textarea shows the
+  // anchored text with the live transcript spliced in, read-only and in
+  // italics; `userInput` is not touched until Done, so a Cancel restores the
+  // composer exactly and a draft never captures a half-heard partial.
+  //
+  // `DictationService` is a root singleton; `ownsDictation` scopes its state
+  // to the composer that started it, so an embedded preview composer never
+  // renders another composer's dictation.
+  // =========================================================================
+
+  private readonly ownsDictation = signal(false);
+  private readonly dictationAnchor = signal<DictationAnchor | null>(null);
+
+  protected readonly isDictating = computed(
+    () => this.ownsDictation() && this.dictation.isActive(),
+  );
+  protected readonly dictationStatus = this.dictation.status;
+  protected readonly dictationLevels = this.dictation.levels;
+
+  protected readonly showDictateButton = computed(
+    () =>
+      this.showDictationControl() &&
+      this.dictation.isSupported() &&
+      !this.dictation.unavailable(),
+  );
+
+  /** The live composed text while dictating, or null when not. */
+  private readonly dictationPreview = computed(() => {
+    const anchor = this.dictationAnchor();
+    if (!anchor || !this.isDictating()) return null;
+    return spliceDictation(anchor, this.dictation.transcript()).value;
+  });
+
+  /** What the textarea shows: the dictation preview while it runs, else the user's text. */
+  protected readonly composerText = computed(() => this.dictationPreview() ?? this.userInput());
 
   // =========================================================================
   // `@`-mention (Marketplace D11)
@@ -894,6 +996,33 @@ export class ChatInputComponent {
         invokedSkillIds: next.invokedSkillIds,
       });
     });
+
+    // Keep the textarea's height tracking the transcript as it grows, and
+    // keep the newest words in view.
+    effect(() => {
+      const preview = this.dictationPreview();
+      if (preview === null) return;
+      const textarea = this.messageInput()?.nativeElement;
+      if (!textarea) return;
+      textarea.value = preview;
+      this.autoResize(textarea);
+      textarea.scrollTop = textarea.scrollHeight;
+    });
+
+    // The conversation changed under a running dictation (the route moving
+    // from a new chat to its id after a send, or the user switching threads).
+    // Re-anchor at the end of the composer that is now showing rather than
+    // cancel: the user is mid-sentence, and the old anchor's text has already
+    // been parked with its own conversation by the draft effect above.
+    effect(() => {
+      this.draftKey();
+      untracked(() => {
+        if (!this.ownsDictation()) return;
+        this.dictationAnchor.set({ before: this.userInput(), after: '' });
+      });
+    });
+
+    inject(DestroyRef).onDestroy(() => this.cancelDictation());
   }
 
   private focusInput(): void {
@@ -1233,6 +1362,90 @@ export class ChatInputComponent {
     this.messageCancelled.emit();
   }
 
+  async startDictation(): Promise<void> {
+    if (this.isDictating() || this.isVoiceActive()) return;
+    const textarea = this.messageInput()?.nativeElement;
+    const text = this.userInput();
+    const start = textarea?.selectionStart ?? text.length;
+    const end = textarea?.selectionEnd ?? text.length;
+    this.dictationAnchor.set({ before: text.slice(0, start), after: text.slice(end) });
+    this.ownsDictation.set(true);
+    this.settleHints();
+    this.closeMentionMenu();
+    this.closeSkillMenu();
+    // The Dictate button is about to be replaced; keep focus in the composer so
+    // Enter (done) and Escape (cancel) work straight from the keyboard.
+    textarea?.focus();
+
+    try {
+      await this.dictation.start({
+        onEnd: (dictated, reason) => this.commitDictation(dictated, reason),
+        onError: message => {
+          this.releaseDictation();
+          this.toastService.error('Dictation', message);
+        },
+      });
+    } catch (err) {
+      this.releaseDictation();
+      if (err instanceof DictationUnavailableError) {
+        this.toastService.info('Dictation', 'Dictation is not available here.');
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Could not start dictation.';
+      this.toastService.error('Dictation', message);
+    }
+  }
+
+  /** Done: stop listening; the text lands via `commitDictation` once the tail is in. */
+  finishDictation(): void {
+    if (!this.isDictating()) return;
+    this.dictation.finish();
+  }
+
+  /** Throw the dictation away and put the composer back exactly as it was. */
+  cancelDictation(): void {
+    if (!this.ownsDictation()) return;
+    this.dictation.cancel();
+    this.releaseDictation();
+  }
+
+  private commitDictation(dictated: string, reason: DictationEndReason): void {
+    const anchor = this.dictationAnchor();
+    this.ownsDictation.set(false);
+    this.dictationAnchor.set(null);
+    if (anchor && dictated.trim()) {
+      const { value, caret } = spliceDictation(anchor, dictated);
+      this.userInput.set(value);
+      const textarea = this.messageInput()?.nativeElement;
+      if (textarea) {
+        textarea.value = value;
+        this.autoResize(textarea);
+        textarea.focus();
+        textarea.setSelectionRange(caret, caret);
+      }
+    } else {
+      this.restoreComposerAfterDictation();
+    }
+    if (reason === 'limit') {
+      this.toastService.info('Dictation', 'Dictation stopped at its time limit.');
+    }
+  }
+
+  private releaseDictation(): void {
+    this.ownsDictation.set(false);
+    this.dictationAnchor.set(null);
+    this.restoreComposerAfterDictation();
+  }
+
+  /** The textarea was showing the preview; put the user's own text back in it. */
+  private restoreComposerAfterDictation(): void {
+    const textarea = this.messageInput()?.nativeElement;
+    if (!textarea) return;
+    textarea.value = this.userInput();
+    this.sizeTextareaTo(this.userInput());
+    textarea.focus();
+  }
+
   async toggleVoice() {
     if (this.isVoiceActive()) {
       await this.voiceChatService.disconnect();
@@ -1550,6 +1763,19 @@ export class ChatInputComponent {
   }
 
   onKeyDown(event: KeyboardEvent) {
+    // While dictating the textarea is read-only and the keyboard drives the
+    // dictation: Enter inserts what was heard, Escape throws it away.
+    if (this.isDictating()) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        this.finishDictation();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        this.cancelDictation();
+      }
+      return;
+    }
+
     // Any key at all — including the arrows and Escape a menu consumes below —
     // means the user is working, not reading hints.
     this.settleHints();
