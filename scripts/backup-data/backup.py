@@ -87,8 +87,10 @@ DYNAMODB_TABLES: list[dict[str, Any]] = [
 # table from the pre-refactor architecture. That table was decommissioned in
 # commit c977e04e — the python app uses the rag-assistants table for both
 # assistant config and document metadata via DYNAMODB_ASSISTANTS_TABLE_NAME.
-# Empty for now; convention-named tables that show up later go here.
-DYNAMODB_TABLES_BY_CONVENTION: list[dict[str, str]] = []
+# Convention-named tables (no SSM parameter): `{prefix}-{suffix}`.
+DYNAMODB_TABLES_BY_CONVENTION: list[dict[str, str]] = [
+    {"logical": "projects",             "suffix": "projects"},
+]
 
 # Ephemeral / TTL-driven tables. Excluded by default; include with --include-ephemeral.
 DYNAMODB_TABLES_EPHEMERAL: list[dict[str, str]] = [

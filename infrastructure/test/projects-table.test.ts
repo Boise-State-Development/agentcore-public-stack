@@ -1,17 +1,9 @@
 /**
  * Shared Projects storage and wiring (docs/specs/shared-projects.md §3.1, PR-1.1).
  *
- * Two contracts live here that nothing else checks:
- *
- *   1. The table name. inference-api derives it as `${PROJECT_PREFIX}-projects`
- *      instead of reading `DYNAMODB_PROJECTS_TABLE_NAME`, because the AgentCore
- *      Runtime is capped at 50 env vars (runtime-env-var-limit.test.ts). If the
- *      construct ever names the table differently, every membership check on the
- *      invocation path hits a missing table — and only in the cloud.
- *
- *   2. The runtime's grant is read + update only. Project rows are created and
- *      deleted by app-api's CRUD surface; the invocation path resolves
- *      membership, back-fills a member's userId and bumps COST# rollups.
+ * The runtime's grant is read + update only. Project rows are created and
+ * deleted by app-api's CRUD surface; the invocation path resolves membership,
+ * back-fills a member's userId and bumps COST# rollups.
  */
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
@@ -31,7 +23,7 @@ describe('ProjectsConstruct', () => {
     t = Template.fromStack(stack);
   });
 
-  it('names the table `${projectPrefix}-projects` — the name inference-api derives', () => {
+  it('names the table `${projectPrefix}-projects` with PK/SK string keys', () => {
     t.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: `${config.projectPrefix}-projects`,
       KeySchema: [
@@ -94,10 +86,17 @@ describe('Shared Projects compute wiring', () => {
     runtimeEnv = (Object.values(runtimes)[0] as any).Properties.EnvironmentVariables;
   });
 
-  it('gives the Runtime the kill switch and the prefix, not a table-name variable', () => {
+  it('gives the Runtime the table name and the kill switch', () => {
     expect(runtimeEnv.PROJECTS_ENABLED).toBe('true');
-    expect(runtimeEnv.PROJECT_PREFIX).toBeDefined();
-    expect(runtimeEnv).not.toHaveProperty('DYNAMODB_PROJECTS_TABLE_NAME');
+    expect(runtimeEnv).toHaveProperty('DYNAMODB_PROJECTS_TABLE_NAME');
+  });
+
+  it('no longer sets the OAuth variables nothing on the Runtime reads', () => {
+    // Retired to make room: no Python has read either since OAuth tokens moved
+    // to the AgentCore Identity vault (1.0.0-beta.23). The KMS key and secret
+    // grants stay; only the env entries were dead.
+    expect(runtimeEnv).not.toHaveProperty('OAUTH_TOKEN_ENCRYPTION_KEY_ARN');
+    expect(runtimeEnv).not.toHaveProperty('OAUTH_CLIENT_SECRETS_ARN');
   });
 
   it('grants the Runtime read + update on the table and its indexes, never put or delete', () => {

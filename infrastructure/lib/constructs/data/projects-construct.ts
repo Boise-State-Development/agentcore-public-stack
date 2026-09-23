@@ -27,12 +27,6 @@ export interface ProjectsConstructProps {
  *
  * `ttl` expires notification rows (90 days). Project rows carry no TTL:
  * deletion is explicit (archive, then purge).
- *
- * The table name is a contract with the backend. inference-api derives it as
- * `${PROJECT_PREFIX}-projects` rather than taking a `DYNAMODB_PROJECTS_TABLE_NAME`
- * env var, because the AgentCore Runtime caps environment variables at 50 and has
- * almost none free (`runtime-env-var-limit.test.ts`). app-api is on ECS and gets
- * the name explicitly.
  */
 export class ProjectsConstruct extends Construct {
   public readonly projectsTable: dynamodb.Table;

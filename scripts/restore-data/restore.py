@@ -109,7 +109,9 @@ TABLE_SSM_MAP: dict[str, str] = {
 # metadata via DYNAMODB_ASSISTANTS_TABLE_NAME). Restoring an
 # `assistants` component from an old backup will skip cleanly with
 # "target table not found via SSM".
-TABLE_CONVENTION_MAP: dict[str, str] = {}
+TABLE_CONVENTION_MAP: dict[str, str] = {
+    "projects": "projects",
+}
 
 BUCKET_SSM_MAP: dict[str, str] = {
     "user-file-uploads": "/user-file-uploads/bucket-name",
