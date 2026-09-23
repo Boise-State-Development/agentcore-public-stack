@@ -247,6 +247,16 @@ export interface ManagedModel {
    */
   isFeatured?: boolean;
   /**
+   * Position in the catalog, lowest first — the order the admin list and the
+   * chat model picker show models in. The backend returns the catalog already
+   * sorted, so clients render it as-is rather than sorting on this.
+   *
+   * Set only by `PUT /admin/managed-models/order` (the admin list's drag and
+   * drop), never through the model form. Absent on a model that has never been
+   * placed; those sort after every ordered model, newest first.
+   */
+  sortOrder?: number | null;
+  /**
    * OpenAI-compatible API surface: `chat` (OpenAI Chat Completions, the
    * default) or `responses` (OpenAI Responses API — required by models that
    * don't serve Chat Completions, e.g. openai.gpt-5.x).

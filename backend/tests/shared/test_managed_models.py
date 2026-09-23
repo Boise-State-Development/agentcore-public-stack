@@ -136,6 +136,91 @@ class TestManagedModels:
         assert model.mantle_region is None
 
 
+class TestReorderManagedModels:
+    """The admin's drag order is the order every catalog reader sees."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_dynamodb(self, managed_models_table, monkeypatch):
+        import apis.shared.models.managed_models as mm
+        monkeypatch.setattr(mm, "dynamodb", boto3.resource("dynamodb", region_name="us-east-1"))
+
+    async def _create(self, *model_ids):
+        from apis.shared.models.managed_models import create_managed_model
+        return [await create_managed_model(_make_model_data(mid)) for mid in model_ids]
+
+    @pytest.mark.asyncio
+    async def test_unordered_catalog_lists_newest_first(self):
+        from apis.shared.models.managed_models import list_all_managed_models
+        await self._create("m1", "m2", "m3")
+        listed = [m.model_id for m in await list_all_managed_models()]
+        assert listed == ["m3", "m2", "m1"]
+
+    @pytest.mark.asyncio
+    async def test_reorder_persists_and_lists_in_that_order(self):
+        from apis.shared.models.managed_models import (
+            list_all_managed_models,
+            reorder_managed_models,
+        )
+        m1, m2, m3 = await self._create("m1", "m2", "m3")
+
+        returned = await reorder_managed_models([m2.id, m1.id, m3.id])
+
+        assert [m.model_id for m in returned] == ["m2", "m1", "m3"]
+        assert [m.sort_order for m in returned] == [0, 1, 2]
+        # A fresh read, not just the return value: the cache was invalidated.
+        assert [m.model_id for m in await list_all_managed_models()] == ["m2", "m1", "m3"]
+
+    @pytest.mark.asyncio
+    async def test_model_added_after_reorder_sorts_last(self):
+        from apis.shared.models.managed_models import (
+            list_all_managed_models,
+            reorder_managed_models,
+        )
+        m1, m2 = await self._create("m1", "m2")
+        await reorder_managed_models([m1.id, m2.id])
+        await self._create("m3")
+
+        listed = [m.model_id for m in await list_all_managed_models()]
+        assert listed == ["m1", "m2", "m3"]
+
+    @pytest.mark.asyncio
+    async def test_order_missing_a_model_is_rejected(self):
+        from apis.shared.models.managed_models import reorder_managed_models
+        m1, m2, _ = await self._create("m1", "m2", "m3")
+        with pytest.raises(ValueError, match="current catalog"):
+            await reorder_managed_models([m1.id, m2.id])
+
+    @pytest.mark.asyncio
+    async def test_order_with_unknown_id_is_rejected(self):
+        from apis.shared.models.managed_models import reorder_managed_models
+        m1, = await self._create("m1")
+        with pytest.raises(ValueError, match="current catalog"):
+            await reorder_managed_models([m1.id, "nope"])
+
+    @pytest.mark.asyncio
+    async def test_duplicate_id_is_rejected(self):
+        from apis.shared.models.managed_models import reorder_managed_models
+        m1, m2 = await self._create("m1", "m2")
+        with pytest.raises(ValueError, match="more than once"):
+            await reorder_managed_models([m1.id, m1.id, m2.id])
+
+    @pytest.mark.asyncio
+    async def test_update_does_not_disturb_sort_order(self):
+        from apis.shared.models.managed_models import (
+            list_all_managed_models,
+            reorder_managed_models,
+            update_managed_model,
+        )
+        from apis.shared.models.models import ManagedModelUpdate
+        m1, m2 = await self._create("m1", "m2")
+        await reorder_managed_models([m1.id, m2.id])
+
+        updated = await update_managed_model(m2.id, ManagedModelUpdate(modelName="Renamed"))
+
+        assert updated.sort_order == 1
+        assert [m.model_id for m in await list_all_managed_models()] == ["m1", "m2"]
+
+
 class TestMaxTokensCeiling:
     """max_tokens spec must not exceed the model's declared output ceiling."""
 

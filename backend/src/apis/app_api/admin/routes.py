@@ -22,6 +22,7 @@ from .models import (
     MantleModelsResponse,
     MantleModelSummary,
     ManagedModelIconResponse,
+    ManagedModelOrderRequest,
     ManagedModelsListResponse,
 )
 from apis.shared.models.models import (
@@ -38,6 +39,7 @@ from apis.shared.models.managed_models import (
     list_managed_models,
     update_managed_model,
     delete_managed_model,
+    reorder_managed_models,
 )
 from .services.model_icons import (
     ModelIconError,
@@ -561,6 +563,48 @@ async def list_managed_models_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error listing enabled models: {str(e)}"
+        )
+
+
+# Declared ahead of PUT /managed-models/{model_id}: routes match in order, and
+# that one would otherwise take "order" as a model id.
+@router.put("/managed-models/order", response_model=ManagedModelsListResponse)
+async def reorder_managed_models_endpoint(
+    order: ManagedModelOrderRequest,
+    admin_user: User = Depends(require_models_admin),
+):
+    """
+    Set the catalog order (admin only).
+
+    The order is what both the admin list and the chat model picker show.
+    Takes every managed model's record id exactly once, first to last.
+
+    Returns:
+        ManagedModelsListResponse with the full catalog in its new order
+
+    Raises:
+        HTTPException:
+            - 409 if the ids aren't exactly the current catalog (reload and retry)
+            - 500 if server error
+    """
+    logger.info("Admin reordering managed models")
+
+    try:
+        models = await reorder_managed_models(order.model_ids)
+        await get_model_role_service().hydrate_model_roles(models)
+
+        return ManagedModelsListResponse(
+            models=[model.model_dump(by_alias=True) for model in models],
+            total_count=len(models),
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        logger.error("Unexpected error reordering managed models", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reordering managed models: {str(e)}"
         )
 
 

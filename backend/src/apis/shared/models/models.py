@@ -483,6 +483,16 @@ class ManagedModel(BaseModel):
                     "submenu. Defaults to True so an uncurated catalog keeps showing "
                     "every model where it always has."
     )
+    sort_order: Optional[int] = Field(
+        None,
+        alias="sortOrder",
+        description="Position in the catalog, lowest first — the order the admin "
+                    "list and the chat model picker show models in. Set only by "
+                    "the admin reorder endpoint, never by create/update, so a "
+                    "model form save can't collide with a drag. None (never "
+                    "ordered, or created since the last reorder) sorts after "
+                    "every ordered model, newest first."
+    )
     mantle_api_mode: Optional[str] = Field(
         None,
         alias="apiMode",
