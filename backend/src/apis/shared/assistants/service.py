@@ -96,9 +96,14 @@ async def create_assistant(
     tagline: Optional[str] = None,
     show_citations: bool = True,
     allow_document_download: bool = True,
+    project_id: Optional[str] = None,
 ) -> Assistant:
     """
     Create a complete assistant with all required fields
+
+    Pass ``project_id`` only from the Shared Projects service: it marks the record as that
+    project's hidden harness (``kind="project"``), which changes how every access check,
+    list and store surface treats it.
 
     Args:
         owner_id: User identifier who owns this assistant (internal)
@@ -142,6 +147,8 @@ async def create_assistant(
         tagline=tagline,
         show_citations=show_citations,
         allow_document_download=allow_document_download,
+        kind="project" if project_id else None,
+        project_id=project_id,
     )
 
     # Store the assistant
@@ -215,6 +222,25 @@ async def get_assistant(assistant_id: str, owner_id: str) -> Optional[Assistant]
     return await _get_assistant_cloud(assistant_id, owner_id, assistants_table)
 
 
+def is_project_harness(assistant: Optional[Assistant]) -> bool:
+    """True for a Shared Project's hidden harness Agent."""
+    return bool(assistant) and getattr(assistant, "kind", None) == "project"
+
+
+def _project_harness_role(assistant: Assistant, user_id: str, user_email: Optional[str]) -> Optional[str]:
+    """The caller's agent permission on a harness: exactly their project role.
+
+    Imported lazily: ``apis.shared.projects`` creates harnesses through this module, and
+    ``access`` is the one projects module that does not import back.
+    """
+    from apis.shared.projects.access import resolve_project_role
+
+    if not assistant.project_id:
+        return None
+    _, role = resolve_project_role(assistant.project_id, user_id, user_email)
+    return role
+
+
 async def get_assistant_with_access_check(
     assistant_id: str, user_id: str, user_email: str = None
 ) -> Tuple[Optional[Assistant], Optional[str]]:
@@ -245,6 +271,12 @@ async def get_assistant_with_access_check(
 
     if not assistant:
         return None, None
+
+    # A project's harness answers to project membership, never to its own owner field
+    # or visibility — so this runs first, or a transferred-away owner keeps full access.
+    if is_project_harness(assistant):
+        role = _project_harness_role(assistant, user_id, user_email)
+        return (assistant, role) if role else (None, None)
 
     # Owner always has full access regardless of visibility
     if assistant.owner_id == user_id:
@@ -296,6 +328,9 @@ async def resolve_assistant_permission(
     assistant = await _get_assistant_cloud_without_ownership_check(assistant_id, assistants_table)
     if not assistant:
         return None, None
+
+    if is_project_harness(assistant):
+        return assistant, _project_harness_role(assistant, user_id, user_email)
 
     if assistant.owner_id == user_id:
         return assistant, "owner"
@@ -611,7 +646,7 @@ async def _update_assistant_cloud(assistant: Assistant, table_name: str) -> None
             "GSI_PK", "GSI_SK", "GSI2_PK", "GSI2_SK", "GSI5_PK", "GSI5_SK",
             "GSI7_PK", "GSI7_SK",
             "assistantId", "createdAt", "ownerId",
-            "listing",
+            "listing", "kind", "projectId",
         }
 
         # Always update updatedAt
@@ -810,9 +845,17 @@ async def _list_user_assistants_cloud(
         filter_parts = []
         expression_attribute_values = {}
 
+        expression_attribute_names = {}
+
         if not include_drafts:
             filter_parts.append("#status <> :draft")
             expression_attribute_values[":draft"] = "DRAFT"
+            expression_attribute_names["#status"] = "status"
+
+        # A project's harness is owned by whoever created the project but belongs to the
+        # project; it is reached through /projects, never through an agent list.
+        filter_parts.append("attribute_not_exists(#kind)")
+        expression_attribute_names["#kind"] = "kind"
 
         # Parse pagination token
         owner_exclusive_start_key = None
@@ -834,8 +877,9 @@ async def _list_user_assistants_cloud(
 
         if filter_parts:
             base_query_params["FilterExpression"] = " AND ".join(filter_parts)
-            base_query_params["ExpressionAttributeNames"] = {"#status": "status"}
-            base_query_params["ExpressionAttributeValues"] = expression_attribute_values
+            base_query_params["ExpressionAttributeNames"] = expression_attribute_names
+            if expression_attribute_values:
+                base_query_params["ExpressionAttributeValues"] = expression_attribute_values
 
         # Query user's own assistants
         owner_query_params = {
@@ -898,6 +942,20 @@ class AssistantListedError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class ProjectHarnessError(AssistantListedError):
+    """An agent-level operation refused because the Agent is a project's harness.
+
+    A subclass of ``AssistantListedError`` on purpose: both delete routes already map that
+    to a 409 carrying ``message``, and "managed elsewhere, here is where" is the same shape
+    of refusal.
+    """
+
+
+PROJECT_HARNESS_DELETE_MESSAGE = (
+    "This agent belongs to a project. Delete or archive the project instead."
+)
 
 
 async def assert_deletable(assistant_id: str, owner_id: str) -> None:
@@ -979,12 +1037,39 @@ async def delete_assistant(assistant_id: str, owner_id: str) -> bool:
     if not existing:
         return False
 
+    if is_project_harness(existing):
+        raise ProjectHarnessError(PROJECT_HARNESS_DELETE_MESSAGE)
+
     _assert_listing_allows_delete(existing)
 
     assistants_table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
     if not assistants_table:
         raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
 
+    return await _delete_assistant_cloud(assistant_id, assistants_table)
+
+
+async def delete_project_harness(assistant_id: str) -> bool:
+    """Delete a project's harness record. For ``apis.shared.projects`` only.
+
+    ``delete_assistant`` refuses a harness (a user must never delete one out from under
+    its project), so the project service deletes through here: on a create that failed
+    part-way, and on project purge. It removes what ``_delete_assistant_cloud`` removes
+    (the record, its versions and reports). Documents and sync policies are the caller's:
+    purge runs the same cleanup as ``DELETE /assistants`` first.
+
+    Returns False if the record is absent; raises ``ValueError`` if it is not a harness,
+    so a wrong id can never delete an ordinary agent.
+    """
+    assistants_table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not assistants_table:
+        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
+
+    existing = await _get_assistant_cloud_without_ownership_check(assistant_id, assistants_table)
+    if existing is None:
+        return False
+    if not is_project_harness(existing):
+        raise ValueError(f"Agent {assistant_id} is not a project harness")
     return await _delete_assistant_cloud(assistant_id, assistants_table)
 
 
@@ -1084,7 +1169,8 @@ async def share_assistant(
 
     # Verify ownership first
     assistant = await get_assistant(assistant_id, owner_id)
-    if not assistant:
+    # A project's harness has no shares: who can use it is the project's membership.
+    if not assistant or is_project_harness(assistant):
         logger.warning(f"Cannot share assistant {assistant_id}: not found or not owned by {owner_id}")
         return False
 
@@ -1158,7 +1244,8 @@ async def update_share_permission(
         return False
 
     assistant = await get_assistant(assistant_id, owner_id)
-    if not assistant:
+    # A project's harness has no shares: who can use it is the project's membership.
+    if not assistant or is_project_harness(assistant):
         logger.warning(
             f"Cannot update share permission on {assistant_id}: not found or not owned by {owner_id}"
         )
@@ -1221,7 +1308,8 @@ async def unshare_assistant(assistant_id: str, owner_id: str, emails: List[str])
     """
     # Verify ownership first
     assistant = await get_assistant(assistant_id, owner_id)
-    if not assistant:
+    # A project's harness has no shares: who can use it is the project's membership.
+    if not assistant or is_project_harness(assistant):
         logger.warning(f"Cannot unshare assistant {assistant_id}: not found or not owned by {owner_id}")
         return False
 
@@ -1463,7 +1551,8 @@ async def list_shared_with_user(user_email: str) -> List[Assistant]:
             if assistant_id:
                 # Get the full assistant metadata
                 assistant = await _get_assistant_cloud_without_ownership_check(assistant_id, assistants_table)
-                if assistant:
+                # A harness never has SHARE# rows; skipping it here keeps a stray one inert.
+                if assistant and not is_project_harness(assistant):
                     # Attach share metadata as dynamic attributes
                     assistant.first_interacted = first_interacted
                     assistant.user_permission = share_permission

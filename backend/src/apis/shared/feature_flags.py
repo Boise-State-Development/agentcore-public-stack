@@ -571,3 +571,19 @@ def dictation_enabled() -> bool:
     chooses to send, so the flag has no prompt-cache or token surface.
     """
     return os.environ.get("DICTATION_ENABLED", "").strip().lower() != "false"
+
+
+def projects_enabled() -> bool:
+    """Whether Shared Projects exist in this environment.
+
+    Covers app-api's ``/projects`` surface and, from PR-1.4, the project harness
+    on the invocation path (``docs/specs/shared-projects.md``). **Default ON with
+    a kill switch** (house style, mirroring ``SCHEDULED_RUNS_ENABLED``): unset or
+    empty resolves to enabled; only the literal ``"false"`` (case-insensitive)
+    disables. CDK sets it on both app-api and the AgentCore Runtime from
+    ``config.projects.enabled`` with the same empty-string-safe ternary.
+
+    While off the routes 404 after authentication (the auth sweep requires a
+    401 first), and existing project rows are left untouched.
+    """
+    return os.environ.get("PROJECTS_ENABLED", "").strip().lower() != "false"
