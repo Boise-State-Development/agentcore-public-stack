@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
 import {
@@ -37,7 +38,10 @@ export interface SkillResourcesConstructProps {
  *
  * The bucket name is threaded to the compute roles via
  * `PlatformComputeRefs.skillResourcesBucket` (typed ref, not SSM) — see
- * the CLAUDE.md File Creation Rules.
+ * the CLAUDE.md File Creation Rules. The name is ALSO published to SSM,
+ * but only for the backup/restore tooling (`scripts/backup-data`,
+ * `scripts/restore-data`), which discovers buckets that way; no compute
+ * construct reads it.
  */
 export class SkillResourcesConstruct extends Construct {
   public readonly bucket: s3.Bucket;
@@ -64,6 +68,13 @@ export class SkillResourcesConstruct extends Construct {
       ],
       removalPolicy: getRemovalPolicy(config),
       autoDeleteObjects: getAutoDeleteObjects(config),
+    });
+
+    new ssm.StringParameter(this, 'SkillResourcesBucketNameParameter', {
+      parameterName: `/${config.projectPrefix}/skills/skill-resources-bucket-name`,
+      stringValue: this.bucket.bucketName,
+      description: 'Skill reference-file bucket name (backup/restore discovery)',
+      tier: ssm.ParameterTier.STANDARD,
     });
   }
 }

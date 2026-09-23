@@ -290,11 +290,10 @@ def assistants_table(aws, monkeypatch):
 # KMS key
 # ===================================================================
 @pytest.fixture()
-def kms_key_arn(aws, monkeypatch):
+def kms_key_arn(aws):
     kms = boto3.client("kms", region_name=AWS_REGION)
     key = kms.create_key(Description="test-oauth-encryption")
     arn = key["KeyMetadata"]["Arn"]
-    monkeypatch.setenv("OAUTH_TOKEN_ENCRYPTION_KEY_ARN", arn)
     return arn
 
 
@@ -318,8 +317,6 @@ def secrets_manager(aws, monkeypatch):
     sm = boto3.client("secretsmanager", region_name=AWS_REGION)
     sm.create_secret(Name="auth-provider-secrets", SecretString="{}")
     monkeypatch.setenv("AUTH_PROVIDER_SECRETS_ARN", "auth-provider-secrets")
-    sm.create_secret(Name="oauth-client-secrets", SecretString="{}")
-    monkeypatch.setenv("OAUTH_CLIENT_SECRETS_ARN", "oauth-client-secrets")
     return sm
 
 

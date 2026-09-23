@@ -74,6 +74,9 @@ DYNAMODB_TABLES: list[dict[str, Any]] = [
     {"logical": "managed-models",       "ssm": "/admin/managed-models-table-name"},
     {"logical": "user-menu-links",      "ssm": "/admin/user-menu-links-table-name"},
     {"logical": "announcements",        "ssm": "/admin/announcements-table-name",       "optional": True},
+    {"logical": "system-prompts",       "ssm": "/admin/system-prompts-table-name",      "optional": True},
+    {"logical": "agent-templates",      "ssm": "/admin/agent-templates-table-name",     "optional": True},
+    {"logical": "audit-log",            "ssm": "/audit/audit-log-table-name",           "optional": True},
     {"logical": "user-settings",        "ssm": "/settings/user-settings-table-name"},
     {"logical": "user-file-uploads",    "ssm": "/user-file-uploads/table-name"},
     {"logical": "shared-conversations", "ssm": "/shares/shared-conversations-table-name"},
@@ -89,6 +92,7 @@ DYNAMODB_TABLES: list[dict[str, Any]] = [
 # assistant config and document metadata via DYNAMODB_ASSISTANTS_TABLE_NAME.
 # Convention-named tables (no SSM parameter): `{prefix}-{suffix}`.
 DYNAMODB_TABLES_BY_CONVENTION: list[dict[str, str]] = [
+    {"logical": "memory-spaces",        "suffix": "memory-spaces"},
     {"logical": "projects",             "suffix": "projects"},
 ]
 
@@ -104,6 +108,9 @@ S3_BUCKETS: list[dict[str, Any]] = [
     {"logical": "rag-documents",        "ssm": "/rag/documents-bucket-name"},
     {"logical": "artifacts",            "ssm": "/artifacts/bucket-name",                "optional": True},
     {"logical": "fine-tuning-data",     "ssm": "/fine-tuning/data-bucket-name",         "optional": True},
+    {"logical": "shared-conversations", "ssm": "/shares/shared-conversations-bucket-name", "optional": True},
+    {"logical": "memory-spaces",        "ssm": "/memory-spaces/bucket-name",            "optional": True},
+    {"logical": "skill-resources",      "ssm": "/skills/skill-resources-bucket-name",   "optional": True},
 ]
 
 # S3 Vectors indexes. Distinct from S3_BUCKETS because S3 Vectors is a

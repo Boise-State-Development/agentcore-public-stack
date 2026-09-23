@@ -36,6 +36,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_scripts:
+        description: 'Run operational script unit suites (restore-data; stubbed boto3, no AWS)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -66,6 +71,15 @@ jobs:
         # Verbosity/--tb live in backend/pytest.ini. The nightly coverage run
         # (scripts/backend/test.sh) is deliberately left serial.
         run: uv run pytest tests/ -n auto
+      # The repo-ROOT supply-chain suite (not backend/tests/supply_chain):
+      # cross-package contracts that read CDK, the backup/restore scripts and
+      # the python env-var readers side by side, so it lives above backend/.
+      # Nothing ran it before this step, and it rotted twice unnoticed. It
+      # is pure stdlib + pytest, so it borrows the backend venv synced above;
+      # --no-sync keeps uv from re-resolving that env without its extras.
+      # Scoped to supply_chain/ because tests/load has its own deps and job.
+      - name: Run root supply-chain pytest
+        run: uv run --project backend --no-sync pytest tests/supply_chain/ -v
 
   test-frontend:
     if: ${{ inputs.run_frontend }}
@@ -204,3 +218,42 @@ jobs:
         run: |
           uv run locust -f locustfile.py --list
           uv run locust -f locustfile_readonly.py --list
+
+  # Unit tests for the operational data scripts. scripts/restore-data has 48
+  # tests (test_restore.py) covering manifest indirection, sub remapping and
+  # Cognito/Memory replay; nothing ran them, so they could only rot between
+  # the rare real restores. scripts/backup-data has no tests of its own — its
+  # cross-script contract lives in tests/supply_chain/test_backup_coverage.py,
+  # which test-backend already runs.
+  #
+  # Syncs the script's OWN uv project rather than borrowing the backend venv:
+  # restore-data.yml runs restore.py against this lockfile's boto3/botocore,
+  # so that is the pair worth testing. --frozen installs the lock as-is.
+  #
+  # Offline by construction: every AWS call goes through a MagicMock session
+  # or a patched get_ssm_param, and this job has no AWS credentials. Disabling
+  # IMDS keeps an accidental unmocked call from stalling on a metadata probe.
+  test-scripts:
+    if: ${{ inputs.run_scripts }}
+    name: Test operational scripts (pytest)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.7.12'
+          enable-cache: true
+          cache-dependency-glob: 'scripts/restore-data/uv.lock'
+      - name: Sync restore-data deps
+        working-directory: scripts/restore-data
+        run: uv sync --frozen
+      - name: Run restore-data pytest
+        working-directory: scripts/restore-data
+        run: uv run --frozen pytest test_restore.py -v

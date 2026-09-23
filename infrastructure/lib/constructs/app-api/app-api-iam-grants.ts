@@ -262,7 +262,6 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
 
   // ── Secrets Manager ──
   const secrets = [
-    props.refs.oauthClientSecretsSecret.secretArn,
     props.refs.authProviderSecretsSecret.secretArn,
     props.refs.voiceTicketSigningSecret.secretArn,
     props.refs.bffCookieDataKeySecret.secretArn,
@@ -296,10 +295,12 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   // ── KMS (OAuth token encryption + BFF cookie signing) ──
   // Two separate statements because the access patterns differ:
   //
-  //   - OAuth token encryption key: the app encrypts external-MCP
-  //     OAuth tokens before persisting them to DDB and decrypts on
-  //     read. Needs the full Encrypt + Decrypt + GenerateDataKey
-  //     trio.
+  //   - OAuth token encryption key: the CMK on the oauth-user-tokens
+  //     table. The app never calls KMS on it directly (tokens live in
+  //     the AgentCore Identity vault since 1.0.0-beta.23), but the
+  //     /connectors disconnect flag is a row in that table, and
+  //     DynamoDB calls Encrypt/Decrypt/GenerateDataKey on the
+  //     caller's behalf for every read and write.
   //   - BFF cookie signing key: the app NEVER calls KMS directly
   //     on this key. The plaintext data key lives in Secrets
   //     Manager (BFF_COOKIE_DATA_KEY_SECRET_ARN); the cookie codec

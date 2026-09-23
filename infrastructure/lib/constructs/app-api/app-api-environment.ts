@@ -37,8 +37,6 @@ export interface AppApiSsmParams {
   oauthProvidersTableArn: string;
   oauthUserTokensTableName: string;
   oauthUserTokensTableArn: string;
-  oauthTokenEncryptionKeyArn: string;
-  oauthClientSecretsArn: string;
   userQuotasTableName: string;
   userQuotasTableArn: string;
   quotaEventsTableName: string;
@@ -163,8 +161,6 @@ export function resolveAppApiParams(
     oauthProvidersTableArn: refs.oauthProvidersTable.tableArn,
     oauthUserTokensTableName: refs.oauthUserTokensTable.tableName,
     oauthUserTokensTableArn: refs.oauthUserTokensTable.tableArn,
-    oauthTokenEncryptionKeyArn: refs.oauthTokenEncryptionKey.keyArn,
-    oauthClientSecretsArn: refs.oauthClientSecretsSecret.secretArn,
     userQuotasTableName: refs.userQuotasTable.tableName,
     userQuotasTableArn: refs.userQuotasTable.tableArn,
     quotaEventsTableName: refs.quotaEventsTable.tableName,
@@ -306,8 +302,6 @@ export function buildAppApiEnvironment(
     AGENTCORE_MEMORY_TYPE: 'dynamodb',
     AGENTCORE_MEMORY_ID: params.memoryId,
     DYNAMODB_API_KEYS_TABLE_NAME: params.apiKeysTableName,
-    OAUTH_TOKEN_ENCRYPTION_KEY_ARN: params.oauthTokenEncryptionKeyArn,
-    OAUTH_CLIENT_SECRETS_ARN: params.oauthClientSecretsArn,
     DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: params.oauthProvidersTableName,
     DYNAMODB_OAUTH_USER_TOKENS_TABLE_NAME: params.oauthUserTokensTableName,
     AGENTCORE_RUNTIME_WORKLOAD_NAME: params.workloadIdentityName,

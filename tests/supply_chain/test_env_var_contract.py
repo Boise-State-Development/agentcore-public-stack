@@ -63,8 +63,6 @@ INTENTIONAL_NOT_READ_BY_PYTHON: dict[str, str] = {
     # harmless to set.
     "AGENTCORE_MEMORY_TYPE": "documents memory backend choice; not currently read by python",
     "COGNITO_ISSUER_URL": "documents configured issuer; not currently read by python",
-    "OAUTH_CLIENT_SECRETS_ARN": "documents configured ARN; not currently read by python",
-    "OAUTH_TOKEN_ENCRYPTION_KEY_ARN": "documents configured KMS key; not currently read by python",
 }
 
 # Python env vars CDK is *not* expected to set (tunable knobs with
