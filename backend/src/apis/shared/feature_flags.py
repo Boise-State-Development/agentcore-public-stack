@@ -554,3 +554,20 @@ def feedback_eval_sampling_enabled() -> bool:
     numbers only and tolerate the absence of any judged row.
     """
     return os.environ.get("FEEDBACK_EVAL_SAMPLING_ENABLED", "false").strip().lower() == "true"
+
+
+def dictation_enabled() -> bool:
+    """Whether the composer's Dictate button may transcribe speech.
+
+    Covers app-api's ``POST /dictation/ticket`` and ``WS /dictation/stream``,
+    the Amazon Transcribe Streaming proxy behind the composer's Dictate button.
+    **Default ON with a kill switch** (house style, mirroring
+    ``mid_turn_steering_enabled``): unset or empty resolves to enabled; only
+    the literal ``"false"`` (case-insensitive) disables.
+
+    While off both routes 404 (the socket closes before accept), and the SPA
+    hides the Dictate button on the first 404 for the rest of the tab session.
+    Nothing dictation produces reaches the model except the text the user
+    chooses to send, so the flag has no prompt-cache or token surface.
+    """
+    return os.environ.get("DICTATION_ENABLED", "").strip().lower() != "false"

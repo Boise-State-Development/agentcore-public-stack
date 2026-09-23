@@ -147,6 +147,10 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     agentMarketplace: {
       enabled: false,
     },
+    dictation: {
+      enabled: true,
+      languages: 'en-US',
+    },
     fineTuning: {
       enabled: true,
       defaultQuotaHours: 0,

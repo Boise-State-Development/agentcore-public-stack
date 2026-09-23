@@ -198,7 +198,8 @@
         id="user-message"
         name="user-message"
         rows="1"
-        [value]="userInput()"
+        [value]="composerText()"
+        [readOnly]="isDictating()"
         (input)="onTextareaInput($event)"
         (keydown)="onKeyDown($event)"
         (keyup)="onTextareaCaretMove($event)"
@@ -223,12 +224,8 @@
               ? 'skill-command-option-' + skillActiveIndex()
               : null
         "
-        class="block w-full resize-none bg-transparent px-6 py-4 text-base text-gray-900 dark:text-gray-100 focus:outline-hidden overflow-y-auto"
-        [class]="
-          showHintOverlay()
-            ? 'placeholder:text-transparent'
-            : 'placeholder:text-gray-500 dark:placeholder:text-gray-400'
-        "
+        class="block w-full resize-none bg-transparent px-6 py-4 text-base focus:outline-hidden overflow-y-auto"
+        [class]="textareaClass()"
         style="min-height: 60px; max-height: 200px;"
       ></textarea>
 
@@ -284,7 +281,8 @@
           <button
             type="button"
             (click)="toggleVoice()"
-            [class]="voiceButtonClass()"
+            [disabled]="isDictating()"
+            [class]="voiceButtonClass() + ' disabled:cursor-not-allowed disabled:opacity-40'"
             [attr.aria-label]="voiceAriaLabel()"
             [appTooltip]="voiceTooltip()"
             appTooltipPosition="top"
@@ -306,8 +304,14 @@
               <!-- Spinner for connecting -->
               <app-spinner size="md" label="Connecting" />
             } @else {
-              <!-- Mic icon for idle -->
-              <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
+              <!--
+                Waveform for idle. Voice mode used to wear the microphone; the mic now
+                means Dictate (speech into the composer), and a conversation is sound
+                both ways — hence the waveform.
+              -->
+              <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                <path d="M3 10.5v3M7 7.5v9M11 4v16M15 7.5v9M19 10.5v3" />
+              </svg>
             }
           </button>
           }
@@ -367,9 +371,67 @@
         </div>
 
         <!-- Right Controls -->
-        <div class="flex items-center gap-3" role="group" aria-label="Model selection and send">
+        <div class="flex items-center gap-3" role="group" [attr.aria-label]="isDictating() ? 'Dictation' : 'Model selection and send'">
+          @if (isDictating()) {
+          <!--
+            Dictation in progress: the waveform stands where the model picker was,
+            and Cancel / Done stand where Send was. The textarea stays focused
+            (read-only), so Enter and Escape do the same as the two buttons.
+          -->
+          <span class="sr-only" role="status">
+            {{ dictationStatus() === 'connecting' ? 'Starting dictation' : 'Dictating. Press Enter to insert, or Escape to cancel.' }}
+          </span>
+          <div class="flex h-8 items-center gap-[3px]" aria-hidden="true">
+            @for (level of dictationLevels(); track $index) {
+              <span
+                class="w-[3px] rounded-full bg-gray-500 transition-[height] duration-100 dark:bg-gray-300"
+                [style.height.px]="3 + level * 21"
+              ></span>
+            }
+          </div>
+          <button
+            type="button"
+            (click)="cancelDictation()"
+            class="flex size-10 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+            aria-label="Cancel dictation"
+            appTooltip="Cancel"
+            appTooltipPosition="top"
+          >
+            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            (click)="finishDictation()"
+            [disabled]="dictationStatus() === 'finishing'"
+            class="flex size-10 items-center justify-center rounded-full bg-secondary-500 text-white shadow-sm transition-all hover:bg-secondary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 disabled:cursor-wait disabled:opacity-60"
+            [attr.aria-label]="dictationStatus() === 'finishing' ? 'Finishing dictation' : 'Insert dictated text'"
+            appTooltip="Done"
+            appTooltipPosition="top"
+          >
+            @if (dictationStatus() === 'finishing') {
+              <app-spinner size="sm" variant="on-solid" label="Finishing" />
+            } @else {
+              <ng-icon name="heroCheck" class="size-5" aria-hidden="true" />
+            }
+          </button>
+          } @else {
           <!-- Model Selector -->
           <app-model-dropdown />
+
+          @if (showDictateButton()) {
+          <!-- Dictate: speech-to-text into this composer -->
+          <button
+            type="button"
+            (click)="startDictation()"
+            [disabled]="isVoiceActive()"
+            class="flex size-10 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+            aria-label="Dictate"
+            appTooltip="Dictate"
+            appTooltipPosition="top"
+          >
+            <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
+          </button>
+          }
 
           <!-- Submit/Stop Button -->
           <button
@@ -389,6 +451,7 @@
               <ng-icon name="heroArrowUpSolid" class="size-5" aria-hidden="true" />
             }
           </button>
+          }
         </div>
       </div>
     </div>

@@ -371,6 +371,10 @@ export function buildAppApiEnvironment(
     // inference-api routes. It reads and writes the same assistants table the Agent
     // surface already uses, so there is no extra wiring beyond the flag.
     AGENT_MARKETPLACE_ENABLED: config.agentMarketplace.enabled ? 'true' : 'false',
+    // Composer dictation (Transcribe Streaming via the `/dictation` WS proxy).
+    // Rides the voice ticket signing secret + replay table wired below.
+    DICTATION_ENABLED: config.dictation.enabled ? 'true' : 'false',
+    DICTATION_LANGUAGES: config.dictation.languages,
     VOICE_TICKET_REPLAY_TABLE_NAME: params.voiceTicketReplayTableName,
     VOICE_TICKET_SIGNING_SECRET_ARN: params.voiceTicketSigningSecretArn,
   };

@@ -28,6 +28,12 @@ export class AudioRecorderService {
   /** Callback invoked with each base64 PCM chunk */
   onAudioChunk: ((base64Pcm: string, sampleRate: number) => void) | null = null;
 
+  /**
+   * Callback invoked with each raw PCM16 chunk (same cadence as `onAudioChunk`).
+   * Dictation sends binary WebSocket frames, so it skips the base64 step.
+   */
+  onPcmChunk: ((pcm: Int16Array) => void) | null = null;
+
   constructor() {
     this._isSupported.set(this.checkSupport());
   }
@@ -110,19 +116,22 @@ export class AudioRecorderService {
       const chunk = this.sampleBuffer.slice(0, SAMPLES_PER_CHUNK);
       this.sampleBuffer = this.sampleBuffer.slice(SAMPLES_PER_CHUNK);
 
-      const pcm = float32ToPcm16(chunk);
-      const base64 = pcm16ToBase64(pcm);
-      this.onAudioChunk?.(base64, VOICE_SAMPLE_RATE);
+      this.emit(float32ToPcm16(chunk));
     }
   }
 
   /** Flush any remaining samples in the buffer as a final chunk. */
   private flushBuffer(): void {
     if (this.sampleBuffer.length > 0) {
-      const pcm = float32ToPcm16(this.sampleBuffer);
-      const base64 = pcm16ToBase64(pcm);
-      this.onAudioChunk?.(base64, VOICE_SAMPLE_RATE);
+      this.emit(float32ToPcm16(this.sampleBuffer));
       this.sampleBuffer = new Float32Array(0);
+    }
+  }
+
+  private emit(pcm: Int16Array): void {
+    this.onPcmChunk?.(pcm);
+    if (this.onAudioChunk) {
+      this.onAudioChunk(pcm16ToBase64(pcm), VOICE_SAMPLE_RATE);
     }
   }
 

@@ -245,6 +245,20 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Transcribe Streaming (composer dictation) ──
+  // The `/dictation/stream` proxy presigns a Transcribe WebSocket URL with the
+  // task role's credentials. Streaming transcription has no resource-level
+  // permissions, so the resource is `*`. Granted regardless of
+  // DICTATION_ENABLED so flipping the kill switch never needs an IAM deploy.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'TranscribeStreamingDictation',
+      effect: iam.Effect.ALLOW,
+      actions: ['transcribe:StartStreamTranscriptionWebSocket'],
+      resources: ['*'],
+    }),
+  );
+
   // ── Secrets Manager ──
   const secrets = [
     props.refs.oauthClientSecretsSecret.secretArn,

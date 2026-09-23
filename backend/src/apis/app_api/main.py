@@ -227,6 +227,7 @@ from apis.app_api.sync_policies.routes import router as sync_policies_router
 from apis.app_api.system.routes import router as system_router
 from apis.app_api.shares.routes import conversations_share_router, shares_router, shared_view_router
 from apis.app_api.voice import router as voice_router
+from apis.app_api.dictation import router as dictation_router
 from apis.app_api.user_menu_links.routes import router as user_menu_links_router
 from apis.app_api.announcements.routes import router as announcements_router
 from apis.app_api.system_prompts.routes import router as system_prompts_router
@@ -267,6 +268,7 @@ app.include_router(conversations_share_router)  # Share conversations endpoints
 app.include_router(shares_router)  # Share management (update, revoke, export)
 app.include_router(shared_view_router)  # Shared conversation read-only view
 app.include_router(voice_router)  # Cookie-authenticated WS proxy for Nova Sonic voice mode (#211)
+app.include_router(dictation_router)  # Composer dictation: ticketed WS proxy to Transcribe Streaming; 404s while DICTATION_ENABLED off
 app.include_router(user_menu_links_router)  # Public read of admin-managed user-menu links
 app.include_router(announcements_router)  # Feature announcements feed + ack; 404s while ANNOUNCEMENTS_ENABLED off
 app.include_router(system_prompts_router)   # Public read of admin-managed system prompts

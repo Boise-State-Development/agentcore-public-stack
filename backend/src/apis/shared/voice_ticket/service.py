@@ -17,7 +17,7 @@ from typing import Optional
 
 import boto3
 
-from .codec import VoiceTicketClaims, VoiceTicketCodec, VoiceTicketError
+from .codec import PURPOSE_VOICE, VoiceTicketClaims, VoiceTicketCodec, VoiceTicketError
 from .replay import VoiceTicketReplayStore, get_default_store
 
 logger = logging.getLogger(__name__)
@@ -46,22 +46,32 @@ class VoiceTicketService:
     def ttl_seconds(self) -> int:
         return self._ttl_seconds
 
-    def issue(self, *, user_id: str, session_id: str) -> tuple[str, VoiceTicketClaims]:
+    def issue(
+        self, *, user_id: str, session_id: str, purpose: str = PURPOSE_VOICE
+    ) -> tuple[str, VoiceTicketClaims]:
         return self._codec.issue(
             user_id=user_id,
             session_id=session_id,
             ttl_seconds=self._ttl_seconds,
+            purpose=purpose,
         )
 
-    async def verify_and_consume(self, ticket: str) -> VoiceTicketClaims:
+    async def verify_and_consume(
+        self, ticket: str, *, purpose: str = PURPOSE_VOICE
+    ) -> VoiceTicketClaims:
         """Verify the ticket and mark its jti consumed.
 
         Raises ``VoiceTicketError`` on signature/expiry/format failure or on
-        replay (jti already recorded). Replays are reported as a generic
+        replay (jti already recorded), or when the ticket was minted for a
+        different ``purpose`` — a dictation ticket cannot open voice mode. Replays are reported as a generic
         ``VoiceTicketError`` so callers don't branch on the cause — the user
         flow is identical: reject the WS upgrade, ask the SPA to re-fetch.
         """
         claims = self._codec.verify(ticket)
+        # Checked before consuming: a ticket presented at the wrong socket is
+        # rejected without burning it, though the SPA never does that.
+        if claims.purpose != purpose:
+            raise VoiceTicketError("ticket purpose mismatch")
         accepted = await self._replay_store.consume(claims.jti, exp=claims.exp)
         if not accepted:
             raise VoiceTicketError("ticket already consumed")

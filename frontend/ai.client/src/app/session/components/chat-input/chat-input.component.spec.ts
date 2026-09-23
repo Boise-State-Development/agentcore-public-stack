@@ -9,10 +9,17 @@ import { SystemPromptsService } from '../../../services/system-prompts/system-pr
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { VoiceChatService } from '../../services/voice';
+import {
+  DictationService,
+  DictationUnavailableError,
+  type DictationEndReason,
+  type DictationHandlers,
+  type DictationStatus,
+} from '../../services/dictation';
 import { SteeringService } from '../../services/chat/steering.service';
 import { ComposerDraftService } from '../../services/session/composer-draft.service';
 import { NEW_CONVERSATION_DRAFT_KEY } from '../../services/session/composer-draft-storage.service';
-import { ChatInputComponent } from './chat-input.component';
+import { ChatInputComponent, spliceDictation } from './chat-input.component';
 
 const AGENTS: MentionableAgent[] = [
   { agentId: 'a1', name: 'Alpha', group: 'own' },
@@ -1733,5 +1740,264 @@ describe('ChatInputComponent — unsent text survives leaving the conversation',
     fixture.detectChanges();
 
     expect(component.mentionedAgent()).toBeNull();
+  });
+});
+
+
+describe('spliceDictation', () => {
+  it('pads with a space only where the neighbours lack whitespace', () => {
+    expect(spliceDictation({ before: 'Hi', after: 'there' }, 'you')).toEqual({
+      value: 'Hi you there',
+      caret: 6,
+    });
+    expect(spliceDictation({ before: 'Hi ', after: ' there' }, 'you')).toEqual({
+      value: 'Hi you there',
+      caret: 6,
+    });
+    expect(spliceDictation({ before: '', after: '' }, '  Hello.  ')).toEqual({
+      value: 'Hello.',
+      caret: 6,
+    });
+  });
+
+  it('leaves the text alone when nothing was heard', () => {
+    expect(spliceDictation({ before: 'a', after: 'b' }, '   ')).toEqual({ value: 'ab', caret: 1 });
+  });
+});
+
+/** DictationService as a DI stand-in: the test drives status, transcript and the end. */
+class DictationServiceStub {
+  readonly status = signal<DictationStatus>('idle');
+  readonly levels = signal<number[]>([0, 0.5, 1]);
+  readonly unavailable = signal(false);
+  readonly isSupported = signal(true);
+  readonly transcript = signal('');
+  readonly isActive = computed(() => this.status() !== 'idle');
+  handlers: DictationHandlers | null = null;
+  startError: Error | null = null;
+
+  readonly start = vi.fn(async (handlers: DictationHandlers) => {
+    if (this.startError) throw this.startError;
+    this.handlers = handlers;
+    this.status.set('listening');
+  });
+  readonly finish = vi.fn(() => this.status.set('finishing'));
+  readonly cancel = vi.fn(() => {
+    this.status.set('idle');
+    this.transcript.set('');
+  });
+
+  /** The server's `done`: what DictationService does when Done completes. */
+  end(text: string, reason: DictationEndReason = 'stopped'): void {
+    const handlers = this.handlers;
+    this.handlers = null;
+    this.status.set('idle');
+    this.transcript.set('');
+    handlers?.onEnd(text, reason);
+  }
+}
+
+describe('ChatInputComponent — dictation', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  let textarea: HTMLTextAreaElement;
+  let dictation: DictationServiceStub;
+  let toast: { error: ReturnType<typeof vi.fn>; warning: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn> };
+  let voiceActive: ReturnType<typeof signal<boolean>>;
+
+  beforeEach(async () => {
+    dictation = new DictationServiceStub();
+    toast = { error: vi.fn(), warning: vi.fn(), info: vi.fn() };
+    voiceActive = signal(false);
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: signal([]),
+            readyUploads: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [],
+          },
+        },
+        { provide: ToastService, useValue: toast },
+        { provide: ToolService, useValue: {} },
+        {
+          provide: VoiceChatService,
+          useValue: { status: signal('idle'), isVoiceActive: voiceActive, agentTranscript: signal('') },
+        },
+        { provide: DictationService, useValue: dictation },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, {
+        set: { imports: [], schemas: [NO_ERRORS_SCHEMA] },
+      })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('showFileControls', false);
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.detectChanges();
+    textarea = fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement;
+  });
+
+  function type(value: string, caret = value.length): void {
+    textarea.value = value;
+    textarea.dispatchEvent(new Event('input'));
+    textarea.setSelectionRange(caret, caret);
+    fixture.detectChanges();
+  }
+
+  function button(label: string): HTMLButtonElement | null {
+    return fixture.nativeElement.querySelector(`button[aria-label="${label}"]`);
+  }
+
+  async function startDictating(): Promise<void> {
+    button('Dictate')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  function hear(text: string): void {
+    dictation.transcript.set(text);
+    fixture.detectChanges();
+  }
+
+  it('offers Dictate only where the browser can record and the server allows it', () => {
+    expect(button('Dictate')).not.toBeNull();
+
+    dictation.unavailable.set(true);
+    fixture.detectChanges();
+    expect(button('Dictate')).toBeNull();
+
+    dictation.unavailable.set(false);
+    fixture.componentRef.setInput('showDictationControl', false);
+    fixture.detectChanges();
+    expect(button('Dictate')).toBeNull();
+  });
+
+  it('is disabled while voice mode is live', () => {
+    voiceActive.set(true);
+    fixture.detectChanges();
+    expect(button('Dictate')!.disabled).toBe(true);
+  });
+
+  it('previews the transcript at the caret, read-only, without touching the typed text', async () => {
+    type('Please  tomorrow', 7);
+    await startDictating();
+
+    expect(dictation.start).toHaveBeenCalledTimes(1);
+    expect(textarea.readOnly).toBe(true);
+    expect(textarea.classList).toContain('italic');
+    expect(button('Cancel dictation')).not.toBeNull();
+    expect(button('Insert dictated text')).not.toBeNull();
+
+    hear('email the dean');
+    expect(textarea.value).toBe('Please email the dean tomorrow');
+    expect(component.userInput()).toBe('Please  tomorrow');
+  });
+
+  it('Done inserts the final text at the anchor and puts the caret after it', async () => {
+    type('Hi');
+    await startDictating();
+    hear('there');
+
+    button('Insert dictated text')!.click();
+    expect(dictation.finish).toHaveBeenCalledTimes(1);
+
+    dictation.end('there friend.');
+    fixture.detectChanges();
+
+    expect(component.userInput()).toBe('Hi there friend.');
+    expect(textarea.value).toBe('Hi there friend.');
+    expect(textarea.readOnly).toBe(false);
+    expect(textarea.selectionStart).toBe('Hi there friend.'.length);
+    expect(button('Dictate')).not.toBeNull();
+  });
+
+  it('Cancel restores the composer exactly', async () => {
+    type('Keep me');
+    await startDictating();
+    hear('throw this away');
+
+    button('Cancel dictation')!.click();
+    fixture.detectChanges();
+
+    expect(dictation.cancel).toHaveBeenCalledTimes(1);
+    expect(component.userInput()).toBe('Keep me');
+    expect(textarea.value).toBe('Keep me');
+    expect(textarea.readOnly).toBe(false);
+  });
+
+  it('Enter finishes and Escape cancels, and neither sends', async () => {
+    const sent: unknown[] = [];
+    component.messageSubmitted.subscribe(message => sent.push(message));
+    type('Draft');
+    await startDictating();
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true }));
+    expect(dictation.finish).toHaveBeenCalledTimes(1);
+    dictation.end('more words');
+    fixture.detectChanges();
+
+    await startDictating();
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+    expect(dictation.cancel).toHaveBeenCalledTimes(1);
+
+    expect(sent).toEqual([]);
+    expect(component.userInput()).toBe('Draft more words');
+  });
+
+  it('an empty dictation leaves the text as it was', async () => {
+    type('Unchanged');
+    await startDictating();
+    dictation.end('   ');
+    fixture.detectChanges();
+    expect(component.userInput()).toBe('Unchanged');
+    expect(textarea.value).toBe('Unchanged');
+  });
+
+  it('says so when the environment has dictation switched off', async () => {
+    dictation.startError = new DictationUnavailableError();
+    type('Still here');
+    await startDictating();
+
+    expect(toast.info).toHaveBeenCalledWith('Dictation', 'Dictation is not available here.');
+    expect(textarea.readOnly).toBe(false);
+    expect(textarea.value).toBe('Still here');
+  });
+
+  it('a failure mid-dictation surfaces the message and restores the composer', async () => {
+    type('Before');
+    await startDictating();
+    hear('lost words');
+
+    const handlers = dictation.handlers!;
+    dictation.status.set('idle');
+    handlers.onError('Dictation was interrupted.');
+    fixture.detectChanges();
+
+    expect(toast.error).toHaveBeenCalledWith('Dictation', 'Dictation was interrupted.');
+    expect(textarea.value).toBe('Before');
+    expect(component.userInput()).toBe('Before');
+  });
+
+  it('a time-limit end still inserts, and explains why it stopped', async () => {
+    await startDictating();
+    dictation.end('long speech', 'limit');
+    fixture.detectChanges();
+    expect(component.userInput()).toBe('long speech');
+    expect(toast.info).toHaveBeenCalledWith('Dictation', 'Dictation stopped at its time limit.');
   });
 });

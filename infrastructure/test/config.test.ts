@@ -664,6 +664,45 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Composer dictation — default ON with a kill switch; languages default en-US
+  // ============================================================
+
+  describe('Dictation config', () => {
+    // Per-key deletion, not the suite's `process.env` snapshot restore — see
+    // the RAG_ENV_KEYS note at the top of this file.
+    afterEach(() => {
+      delete process.env.CDK_DICTATION_ENABLED;
+      delete process.env.CDK_DICTATION_LANGUAGES;
+    });
+
+    test('defaults to enabled, English only', () => {
+      delete process.env.CDK_DICTATION_ENABLED;
+      delete process.env.CDK_DICTATION_LANGUAGES;
+
+      expect(loadConfig(app).dictation).toEqual({ enabled: true, languages: 'en-US' });
+    });
+
+    test('empty strings (unset GitHub Actions variables) keep the defaults', () => {
+      process.env.CDK_DICTATION_ENABLED = '';
+      process.env.CDK_DICTATION_LANGUAGES = '';
+
+      expect(loadConfig(app).dictation).toEqual({ enabled: true, languages: 'en-US' });
+    });
+
+    test('CDK_DICTATION_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_DICTATION_ENABLED = 'false';
+
+      expect(loadConfig(app).dictation.enabled).toBe(false);
+    });
+
+    test('CDK_DICTATION_LANGUAGES passes the list through', () => {
+      process.env.CDK_DICTATION_LANGUAGES = 'en-US,es-US';
+
+      expect(loadConfig(app).dictation.languages).toBe('en-US,es-US');
+    });
+  });
+
+  // ============================================================
   // Managed_KB flags — default OFF, opt-in (the inverse posture of
   // every kill-switch flag above, which is the whole point of these
   // tests). Validates Requirements 19.1-19.5, 19.8, 12.2, 14.7, 15.11.
