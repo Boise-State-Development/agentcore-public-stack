@@ -267,6 +267,13 @@ jobs:
       # `CDK_AGENTS_API_ENABLED` variable to "true" in an environment (e.g. dev)
       # to enable it there for dogfooding.
       CDK_AGENTS_API_ENABLED: ${{ vars.CDK_AGENTS_API_ENABLED }}
+      # Platform cost sync from AWS Cost Explorer (docs/specs/platform-cost-visibility.md).
+      # Default OFF (opt-in): only the literal "true" enables it. Unset resolves
+      # to empty string, which config.ts treats as "not set" and falls back to
+      # the `platformCosts.enabled` cdk.json context (itself default off). Set
+      # the `CDK_PLATFORM_COSTS_ENABLED` variable to "true" in an environment to
+      # deploy the daily sync Lambda there.
+      CDK_PLATFORM_COSTS_ENABLED: ${{ vars.CDK_PLATFORM_COSTS_ENABLED }}
       # MCP user-identity forwarding — optional Cognito Pre-Token-Generation v2
       # Lambda that copies user attributes into access-token claims so
       # personalized MCP tools can identify the caller
