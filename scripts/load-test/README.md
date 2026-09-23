@@ -248,9 +248,12 @@ It queries `<prefix>-users` through `EmailDomainIndex` for
 
 1. have a well-formed sub, `PK = USER#<sub>`, and an email shaped like
    `loadtest-…@load.invalid`, and
-2. have **no Cognito account** for that sub (`list-users --filter 'sub = "…"'`).
-   A sub that still has one is reported as "still in Cognito" and left for
-   `--manifest`.
+2. have **no Cognito account** for that sub. The pool is listed once, unfiltered
+   and paginated, and each candidate is looked up in that set — a per-sub
+   `sub = "…"` filter gives the same answer but ran at ~26 subs a minute
+   against the production pool. A sub that still has an account is reported as
+   "still in Cognito" and left for `--manifest`; an empty listing is treated as
+   a failed read, never as "everyone is orphaned".
 
 Each survivor then goes through the same owner check, inventory, plan and
 delete as a manifest entry — with no Cognito or override-by-id step, since

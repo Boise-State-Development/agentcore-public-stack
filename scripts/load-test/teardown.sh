@@ -194,24 +194,6 @@ TARGETS=()
 # work directory, reads the target record from "$dir/target", and leaves its
 # results as files there for the parent to read once every job has finished.
 
-# Orphan mode only. A sub that still has a Cognito account is not an orphan:
-# either its run is in progress or its manifest still exists. It is left for
-# `--manifest`, which also removes the account and its override.
-_job_cognito() {
-    local sub="$1" dir="$2" count
-    count="$(aws cognito-idp list-users \
-        --user-pool-id "${USER_POOL_ID}" \
-        --filter "sub = \"${sub}\"" \
-        --query "length(Users)" \
-        --output text \
-        --region "${CDK_AWS_REGION}")" || return 1
-    if [ "${count}" = "0" ]; then
-        echo gone > "${dir}/cognito"
-    else
-        echo live > "${dir}/cognito"
-    fi
-}
-
 _job_users_row() {
     local sub="$1" dir="$2"
     user_rows "${sub}" > "${dir}/users.items" || return 1
@@ -309,20 +291,36 @@ else
         CANDIDATES+=("${sub}")
     done < <(jq -r '[.userId.S // "", .email.S // "", .PK.S // ""] | join("\u001f")' "${WORK}/candidates.jsonl" | sort -t"${SEP}" -k2)
 
-    if [ ${#CANDIDATES[@]} -gt 0 ]; then
-        log_info "Checking ${#CANDIDATES[@]} sub(s) against Cognito…"
-        parallel_each cognito _job_cognito "${CANDIDATES[@]}"
-        failed="$(_failed_step cognito "${CANDIDATES[@]}")"
-        if [ -n "${failed}" ]; then
-            log_error "Could not query Cognito for: $(echo "${failed}" | tr '\n' ' ')"
-            log_error "Nothing was deleted."
-            exit 1
-        fi
+    # A sub that still has a Cognito account is not an orphan: either its run
+    # is in progress or its manifest still exists. It is left for `--manifest`,
+    # which also removes the account and its override.
+    #
+    # One unfiltered, paginated listing of the pool (60 users per call) rather
+    # than a `sub = "…"` filter per candidate. Both are exact, but the filtered
+    # call ran at ~26 subs a minute against the production pool, which made
+    # this step alone take ~25 minutes for 620 candidates.
+    log_info "Listing every sub in ${USER_POOL_ID}…"
+    if ! aws cognito-idp list-users \
+            --user-pool-id "${USER_POOL_ID}" \
+            --attributes-to-get sub \
+            --output json \
+            --region "${CDK_AWS_REGION}" \
+        | jq -r '.Users[].Attributes[]? | select(.Name == "sub") | .Value' \
+        | sort -u > "${WORK}/cognito-subs"; then
+        log_error "Could not list ${USER_POOL_ID}. Nothing was deleted."
+        exit 1
+    fi
+    # An empty listing would make every candidate look orphaned. A pool that
+    # serves the app is never empty, so treat it as a failed read.
+    if [ ! -s "${WORK}/cognito-subs" ]; then
+        log_error "Listing ${USER_POOL_ID} returned no users; refusing to treat every candidate as orphaned."
+        log_error "Nothing was deleted."
+        exit 1
     fi
 
     skipped_live=0
     for sub in "${CANDIDATES[@]}"; do
-        if [ "$(cat "${WORK}/users/${sub}/cognito")" = "live" ]; then
+        if grep -qxF "${sub}" "${WORK}/cognito-subs"; then
             skipped_live=$((skipped_live + 1))
             continue
         fi
