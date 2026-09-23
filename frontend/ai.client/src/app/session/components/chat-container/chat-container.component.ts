@@ -9,6 +9,7 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { Message } from '../../services/models/message.model';
 import { MessageListComponent } from '../message-list/message-list.component';
 import { ChatInputComponent } from '../chat-input/chat-input.component';
@@ -27,8 +28,8 @@ import {
 } from '../../../agents/components/agent-launch-card.component';
 import {
   AgentGovernance,
-  AssistantIndicatorComponent,
-} from '../assistant-indicator/assistant-indicator.component';
+  AgentIndicatorComponent,
+} from '../agent-indicator/agent-indicator.component';
 import { ModelService } from '../../services/model/model.service';
 import { SessionCostBadgeComponent } from '../session-cost-badge/session-cost-badge.component';
 import { VoiceOverlayComponent } from '../voice-overlay';
@@ -68,13 +69,14 @@ export interface ChatContainerConfig {
   selector: 'app-chat-container',
   standalone: true,
   imports: [
+    NgTemplateOutlet,
     MessageListComponent,
     ChatInputComponent,
     AnimatedTextComponent,
     ParagraphSkeletonComponent,
     Topnav,
     AgentLaunchCardComponent,
-    AssistantIndicatorComponent,
+    AgentIndicatorComponent,
     SessionCostBadgeComponent,
     VoiceOverlayComponent,
   ],

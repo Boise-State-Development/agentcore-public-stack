@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import {
   AgentGovernance,
-  AssistantIndicatorComponent,
-} from './assistant-indicator.component';
+  AgentIndicatorComponent,
+} from './agent-indicator.component';
 
-describe('AssistantIndicatorComponent', () => {
+describe('AgentIndicatorComponent', () => {
   beforeEach(() => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({});
@@ -13,16 +13,35 @@ describe('AssistantIndicatorComponent', () => {
 
   afterEach(() => TestBed.resetTestingModule());
 
-  function create(governance: AgentGovernance | null = null, variant: 'card' | 'compact' = 'card') {
-    const fixture = TestBed.createComponent(AssistantIndicatorComponent);
+  function create(governance: AgentGovernance | null = null, ownerName = '') {
+    const fixture = TestBed.createComponent(AgentIndicatorComponent);
     fixture.componentRef.setInput('name', 'Rubric Builder');
-    fixture.componentRef.setInput('variant', variant);
+    fixture.componentRef.setInput('ownerName', ownerName);
     fixture.componentRef.setInput('governance', governance);
     fixture.detectChanges();
     return fixture;
   }
 
   const text = (fixture: { nativeElement: HTMLElement }) => fixture.nativeElement.textContent ?? '';
+
+  describe('menu header', () => {
+    it('names the agent and its owner, which the compact chip leaves out', () => {
+      const fixture = create(null, 'Dana Reyes');
+      fixture.componentInstance.menuOpen.set(true);
+      fixture.detectChanges();
+
+      const header = fixture.nativeElement.querySelector('.menu-header') as HTMLElement;
+      expect(header.textContent).toContain('Rubric Builder');
+      expect(header.textContent).toContain('by Dana Reyes');
+    });
+
+    it('omits the owner line when there is no owner', () => {
+      const fixture = create(null);
+      fixture.componentInstance.menuOpen.set(true);
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('.menu-owner')).toBeNull();
+    });
+  });
 
   describe('governance', () => {
     it('says nothing when the caller does not know', () => {
@@ -32,7 +51,6 @@ describe('AssistantIndicatorComponent', () => {
       const fixture = create(null);
       expect(fixture.componentInstance.isGoverned()).toBe(false);
       expect(fixture.nativeElement.querySelector('.pill-lock')).toBeNull();
-      expect(fixture.nativeElement.querySelector('.indicator-lock')).toBeNull();
     });
 
     it('says nothing when an agent binds nothing', () => {
@@ -43,11 +61,6 @@ describe('AssistantIndicatorComponent', () => {
     it('shows a lock on the chip once anything is fixed', () => {
       const fixture = create({ modelName: null, toolCount: 4, skillCount: null });
       expect(fixture.componentInstance.isGoverned()).toBe(true);
-      expect(fixture.nativeElement.querySelector('.indicator-lock')).toBeTruthy();
-    });
-
-    it('shows the lock on the compact pill too', () => {
-      const fixture = create({ modelName: 'Claude Sonnet 5', toolCount: null, skillCount: null }, 'compact');
       expect(fixture.nativeElement.querySelector('.pill-lock')).toBeTruthy();
     });
 
