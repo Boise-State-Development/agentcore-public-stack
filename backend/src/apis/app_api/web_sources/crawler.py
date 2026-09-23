@@ -496,7 +496,12 @@ async def run_crawl(
             async def enqueue_links(html: str, url: str, depth: int) -> None:
                 if depth >= settings.max_depth:
                     return
-                for normalized, _raw in _extract_links(html, url):
+                # _extract_links runs BeautifulSoup (CPU-bound); offload it to
+                # the default thread pool so parsing a large page can't stall
+                # the shared event loop that serves all other HTTP traffic.
+                loop = asyncio.get_running_loop()
+                links = await loop.run_in_executor(None, _extract_links, html, url)
+                for normalized, _raw in links:
                     if normalized in visited:
                         continue
                     if len(visited) >= settings.max_pages:
@@ -590,7 +595,13 @@ async def run_crawl(
                         # miss counter (not this run) decides their fate.
                         return
 
-                    markdown, title = _extract_markdown(html, url)
+                    # _extract_markdown runs trafilatura.extract() (and a
+                    # BeautifulSoup fallback) — both CPU-bound. Offload to the
+                    # thread pool so extraction never blocks the shared loop.
+                    loop = asyncio.get_running_loop()
+                    markdown, title = await loop.run_in_executor(
+                        None, _extract_markdown, html, url
+                    )
                     if not markdown.strip():
                         if existing is None:
                             await update_document_status(
