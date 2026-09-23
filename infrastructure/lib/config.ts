@@ -77,6 +77,7 @@ export interface AppConfig {
   scheduledRuns: ScheduledRunsConfig;
   platformCosts: PlatformCostsConfig;
   memorySpaces: MemorySpacesConfig;
+  projects: ProjectsConfig;
   feedbackEvalSampling: FeedbackEvalSamplingConfig;
   skills: SkillsConfig;
   agents: AgentsConfig;
@@ -343,6 +344,18 @@ export interface PlatformCostsConfig {
  * are provisioned unconditionally, so this only gates route mounting at runtime.
  */
 export interface MemorySpacesConfig {
+  enabled: boolean;
+}
+
+/**
+ * Shared Projects feature flag (docs/specs/shared-projects.md). Default ON with a
+ * kill switch, disabled per environment with CDK_PROJECTS_ENABLED=false (or a
+ * `projects.enabled: false` cdk.json context). Sets the PROJECTS_ENABLED env var
+ * on app-api and inference-api. The projects table is provisioned
+ * unconditionally, so this only gates route mounting and the project harness on
+ * the invocation path at runtime.
+ */
+export interface ProjectsConfig {
   enabled: boolean;
 }
 
@@ -1008,6 +1021,15 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_MEMORY_SPACES_ENABLED
         ? process.env.CDK_MEMORY_SPACES_ENABLED !== 'false'
         : scope.node.tryGetContext('memorySpaces')?.enabled ?? true,
+    },
+    projects: {
+      // Default ON with a kill switch, same empty-string-safe ternary as
+      // `memorySpaces` above: the workflow forwards an EMPTY STRING when the
+      // variable is unset, so treat empty/unset as the default (on) and only the
+      // literal "false" as the kill switch.
+      enabled: process.env.CDK_PROJECTS_ENABLED
+        ? process.env.CDK_PROJECTS_ENABLED !== 'false'
+        : scope.node.tryGetContext('projects')?.enabled ?? true,
     },
     skills: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

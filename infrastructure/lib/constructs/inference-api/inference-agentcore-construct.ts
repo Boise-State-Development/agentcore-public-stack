@@ -425,6 +425,13 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_MEMORY_SPACES_TABLE_NAME: props.refs.memorySpacesTable.tableName,
         MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
 
+        // Shared Projects kill switch (default ON). Deliberately the ONLY
+        // projects variable on the Runtime: the table name is derived from
+        // PROJECT_PREFIX as `${PROJECT_PREFIX}-projects` (see
+        // projects-construct.ts), because this resource is capped at 50 env
+        // vars and has almost no headroom (runtime-env-var-limit.test.ts).
+        PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
+
         // Skills v2 (default ON with a kill switch, mirroring the app-api flag).
         // Gates skill resolution on the invocation path — the AgentSkills plugin's
         // <available_skills> block, the `skills` activation tool, and

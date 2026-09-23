@@ -626,6 +626,38 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Shared Projects feature flag — default ON with a kill switch
+  // (empty GitHub Actions variable must not disable)
+  // ============================================================
+
+  describe('Shared Projects feature flag', () => {
+    test('defaults to enabled when CDK_PROJECTS_ENABLED is unset', () => {
+      delete process.env.CDK_PROJECTS_ENABLED;
+
+      expect(loadConfig(app).projects.enabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      process.env.CDK_PROJECTS_ENABLED = '';
+
+      expect(loadConfig(app).projects.enabled).toBe(true);
+    });
+
+    test('CDK_PROJECTS_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_PROJECTS_ENABLED = 'false';
+
+      expect(loadConfig(app).projects.enabled).toBe(false);
+    });
+
+    test('cdk.json context projects.enabled=false disables when env is unset', () => {
+      delete process.env.CDK_PROJECTS_ENABLED;
+      app.node.setContext('projects', { enabled: false });
+
+      expect(loadConfig(app).projects.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Agents API (Agent Designer) feature flag — default ON with a kill switch
   // (complete feature; ships enabled for forkers, empty var must not disable)
   // ============================================================

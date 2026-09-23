@@ -343,6 +343,19 @@ export function createRuntimeExecutionRole(
     resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
   }));
 
+  // ── Shared Projects (DynamoDB) ──
+  // The invocation path resolves membership (META + MEMBER#), back-fills a
+  // member's userId on first resolve, and bumps the COST# monthly rollup. It
+  // never creates or deletes project rows — that is app-api's CRUD surface.
+  const projectsTableArn = refs.projectsTable.tableArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'ProjectsTableReadUpdate',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:GetItem', 'dynamodb:BatchGetItem', 'dynamodb:Query',
+              'dynamodb:UpdateItem'],
+    resources: [projectsTableArn, `${projectsTableArn}/index/*`],
+  }));
+
   // ── S3 Vectors (RAG query) ──
   const vectorBucketName = refs.ragVectorBucketName;
   const vectorIndexName = refs.ragVectorIndexName;

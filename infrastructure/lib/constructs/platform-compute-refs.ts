@@ -119,6 +119,9 @@ export interface PlatformComputeRefs {
   memorySpacesBucket: s3.IBucket;
   memorySpacesTable: dynamodb.ITable;
 
+  // ── Shared Projects — single-table (META, MEMBER#, pointers, COST#, NOTIF#)
+  projectsTable: dynamodb.ITable;
+
   // ── Fine-tuning
   fineTuningJobsTable: dynamodb.ITable;
   fineTuningAccessTable: dynamodb.ITable;

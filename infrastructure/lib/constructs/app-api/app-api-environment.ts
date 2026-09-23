@@ -103,6 +103,7 @@ export interface AppApiSsmParams {
   memoryId: string;
   // Memory Spaces
   memorySpacesTableName: string;
+  projectsTableName: string;
   memorySpacesBucketName: string;
   // Workload identity
   workloadIdentityName: string;
@@ -227,6 +228,7 @@ export function resolveAppApiParams(
     memoryId: overrides.memoryId,
     // Memory Spaces
     memorySpacesTableName: refs.memorySpacesTable.tableName,
+    projectsTableName: refs.projectsTable.tableName,
     memorySpacesBucketName: refs.memorySpacesBucket.bucketName,
     // Workload identity
     workloadIdentityName: refs.platformWorkloadIdentity.name,
@@ -357,6 +359,10 @@ export function buildAppApiEnvironment(
     AGENTCORE_RUNTIME_LOG_GROUP: params.agentCoreRuntimeLogGroupName,
     DYNAMODB_MEMORY_SPACES_TABLE_NAME: params.memorySpacesTableName,
     S3_MEMORY_SPACES_BUCKET_NAME: params.memorySpacesBucketName,
+    // Shared Projects (default ON with a kill switch per env). The table name
+    // is always wired; only PROJECTS_ENABLED gates whether the routes mount.
+    PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
+    DYNAMODB_PROJECTS_TABLE_NAME: params.projectsTableName,
     // Skills v2 (default ON with a kill switch per env). Skills live in the
     // shared app-roles table, which is already wired, so this only gates route
     // mounting. Cohort access is the separate `skills` RBAC capability — this
