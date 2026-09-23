@@ -41,4 +41,7 @@ jobs:
       # deploy workflows run test suites to protect a deploy, and the load
       # suite has no bearing on one.
       run_load_unit: true
+      # Offline unit tests for scripts/restore-data. PR gate only, like the
+      # load suite: a deploy gains nothing from them.
+      run_scripts: true
 
