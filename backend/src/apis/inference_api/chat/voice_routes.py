@@ -296,6 +296,18 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
             except Exception:
                 pass
 
+        # Voice prices from the catalog row for the Sonic model id; with no row
+        # the whole session is free against quota. Make that visible.
+        if cost is None and total_tokens > 0:
+            from apis.shared.observability.emf import emit_unmetered_model_call
+
+            reason = "calculation_failed" if pricing else "no_pricing"
+            logger.warning(
+                f"Unmetered voice session: model={_sanitize_log(model_id)} reason={reason} — "
+                "usage recorded with no cost; not counted against quota"
+            )
+            emit_unmetered_model_call(model_id, reason, surface="voice", session_id=session_id)
+
         message_metadata = MessageMetadata(
             token_usage=token_usage,
             model_info=model_info,
