@@ -107,6 +107,9 @@ export interface ManageSharesDialogData {
                     @if (share.accessLevel === 'public') {
                       <ng-icon name="heroGlobeAlt" class="size-4 shrink-0 text-state-success-500" />
                       <span class="text-sm font-medium text-gray-900 dark:text-white">Public</span>
+                    } @else if (share.accessLevel === 'project') {
+                      <ng-icon name="heroUserGroup" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" />
+                      <span class="text-sm font-medium text-gray-900 dark:text-white">Project members</span>
                     } @else {
                       <ng-icon name="heroLockClosed" class="size-4 shrink-0 text-state-warning-500" />
                       <span class="text-sm font-medium text-gray-900 dark:text-white">Limited Access</span>

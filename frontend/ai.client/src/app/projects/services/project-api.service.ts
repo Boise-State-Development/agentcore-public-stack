@@ -15,12 +15,18 @@ import {
   ModelConfig,
   ModelResponse,
   Project,
+  ProjectDocument,
+  ProjectDocumentsResponse,
   ProjectListResponse,
   ProjectMember,
+  ProjectTasksResponse,
+  ProjectUploadUrlResponse,
   SettingsVersion,
   SettingsVersionsResponse,
+  SharedTasksResponse,
   UpdateProjectRequest,
 } from '../models/project.model';
+import { CreateDocumentRequest, DownloadUrlResponse } from '../../assistants/models/document.model';
 
 /**
  * HTTP surface for `/projects` (shared-projects §5).
@@ -137,5 +143,57 @@ export class ProjectApiService {
 
   version(projectId: string, number: number): Observable<SettingsVersion> {
     return this.http.get<SettingsVersion>(this.url(projectId, `/instructions/versions/${number}`), this.options());
+  }
+
+  // ---- tasks ------------------------------------------------------------
+
+  /** The caller's own tasks in the project, newest first. */
+  tasks(projectId: string, limit = 20, nextToken?: string | null): Observable<ProjectTasksResponse> {
+    let params = new HttpParams().set('limit', limit);
+    if (nextToken) params = params.set('nextToken', nextToken);
+    return this.http.get<ProjectTasksResponse>(this.url(projectId, '/tasks'), this.options(params));
+  }
+
+  /** Tasks members shared with the project, newest first. */
+  sharedTasks(projectId: string): Observable<SharedTasksResponse> {
+    return this.http.get<SharedTasksResponse>(this.url(projectId, '/shared-tasks'), this.options());
+  }
+
+  // ---- files ------------------------------------------------------------
+
+  files(projectId: string, limit = 100, nextToken?: string | null): Observable<ProjectDocumentsResponse> {
+    let params = new HttpParams().set('limit', limit);
+    if (nextToken) params = params.set('nextToken', nextToken);
+    return this.http.get<ProjectDocumentsResponse>(this.url(projectId, '/knowledge'), this.options(params));
+  }
+
+  file(projectId: string, documentId: string): Observable<ProjectDocument> {
+    return this.http.get<ProjectDocument>(this.fileUrl(projectId, documentId), this.options());
+  }
+
+  fileDownloadUrl(projectId: string, documentId: string): Observable<DownloadUrlResponse> {
+    return this.http.get<DownloadUrlResponse>(this.fileUrl(projectId, documentId, '/download'), this.options());
+  }
+
+  /** Start an upload (editor): a presigned S3 PUT plus the sharing notice. */
+  fileUploadUrl(projectId: string, request: CreateDocumentRequest): Observable<ProjectUploadUrlResponse> {
+    return this.http.post<ProjectUploadUrlResponse>(this.url(projectId, '/knowledge/upload-url'), request, this.options());
+  }
+
+  /** Mark an upload failed after the S3 PUT failed, so the file doesn't sit in `uploading`. */
+  reportFileUploadFailure(projectId: string, documentId: string, error: string, details?: string): Observable<ProjectDocument> {
+    return this.http.post<ProjectDocument>(
+      this.fileUrl(projectId, documentId, '/upload-failed'),
+      { error, details },
+      this.options(),
+    );
+  }
+
+  deleteFile(projectId: string, documentId: string): Observable<void> {
+    return this.http.delete<void>(this.fileUrl(projectId, documentId), this.options());
+  }
+
+  private fileUrl(projectId: string, documentId: string, suffix = ''): string {
+    return this.url(projectId, `/knowledge/${encodeURIComponent(documentId)}${suffix}`);
   }
 }

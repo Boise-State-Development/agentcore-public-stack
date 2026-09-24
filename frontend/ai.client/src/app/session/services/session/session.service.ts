@@ -931,8 +931,18 @@ export class SessionService {
     // Filter out API sessions that are already in local cache
     const uniqueApiSessions = apiSessions.filter(s => !localSessionIds.has(s.sessionId));
 
+    // An optimistic row is created before the backend has bound the session to an
+    // agent or a project, so it carries no preferences. Once the API row has them,
+    // use them: the list opens the row on its agent and groups a project task
+    // under its project without waiting for a reload.
+    const apiById = new Map(apiSessions.map(s => [s.sessionId, s] as const));
+    const merged = localSessions.map(local => {
+      const api = apiById.get(local.sessionId);
+      return api?.preferences && !local.preferences ? { ...local, preferences: api.preferences } : local;
+    });
+
     // Return local sessions first (most recent), then unique API sessions
-    return [...localSessions, ...uniqueApiSessions];
+    return [...merged, ...uniqueApiSessions];
   }
 
   /**

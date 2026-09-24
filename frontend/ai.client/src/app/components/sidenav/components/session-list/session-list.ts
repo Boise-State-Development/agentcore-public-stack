@@ -1,11 +1,12 @@
 import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector, effect, untracked } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { ChatStateService } from '../../../../session/services/chat/chat-state.service';
@@ -18,11 +19,45 @@ import { ToastService } from '../../../../services/toast/toast.service';
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../confirmation-dialog';
 import { parseIso } from '../../../../utils/date';
 import { InViewDirective } from './in-view.directive';
+import { ProjectsService } from '../../../../projects/services/projects.service';
+
+/**
+ * One row of a time bucket: a plain conversation, or the tasks of one project
+ * under a small project heading. Grouping happens INSIDE each bucket, so the
+ * buckets and their order stay exactly as they were (shared-projects §6).
+ */
+export type SessionListEntry =
+  | { kind: 'session'; session: SessionMetadata }
+  | { kind: 'project'; projectId: string; name: string; sessions: SessionMetadata[] };
+
+/** Where a project's group sits: where its most recent task in the bucket would. */
+export function groupProjectSessions(
+  sessions: SessionMetadata[],
+  projectNames: ReadonlyMap<string, string>,
+): SessionListEntry[] {
+  const entries: SessionListEntry[] = [];
+  const groups = new Map<string, Extract<SessionListEntry, { kind: 'project' }>>();
+  for (const session of sessions) {
+    const projectId = session.preferences?.projectId;
+    if (!projectId) {
+      entries.push({ kind: 'session', session });
+      continue;
+    }
+    let group = groups.get(projectId);
+    if (!group) {
+      group = { kind: 'project', projectId, name: projectNames.get(projectId) ?? 'Project', sessions: [] };
+      groups.set(projectId, group);
+      entries.push(group);
+    }
+    group.sessions.push(session);
+  }
+  return entries;
+}
 
 @Component({
   selector: 'app-session-list',
-  imports: [RouterLink, RouterLinkActive, NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem, InViewDirective],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen })],
+  imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, InViewDirective],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -36,6 +71,13 @@ export class SessionList {
   private router = inject(Router);
   private injector = inject(Injector);
   private userService = inject(UserService);
+  private projectsService = inject(ProjectsService);
+
+  /** Project names for the group headings; a project not in the list reads "Project". */
+  private readonly projectNames = computed(
+    () => new Map(this.projectsService.projects$().map(p => [p.projectId, p.name] as const)),
+  );
+  private projectsRequested = false;
 
   /**
    * Signal tracking which session is currently being deleted.
@@ -121,8 +163,27 @@ export class SessionList {
     }
 
     // Only return groups that have sessions
-    return groups.filter(g => g.sessions.length > 0);
+    const names = this.projectNames();
+    return groups
+      .filter(g => g.sessions.length > 0)
+      .map(g => ({ ...g, entries: groupProjectSessions(g.sessions, names) }));
   });
+
+  constructor() {
+    // Project names load once, and only for someone who has a project task. The
+    // projects page shares this list, so a project created or renamed there is
+    // already current here.
+    effect(() => {
+      if (this.projectsRequested) return;
+      if (!this.sessions()?.some(s => s.preferences?.projectId)) return;
+      this.projectsRequested = true;
+      untracked(() => {
+        if (this.projectsService.available$() === null && !this.projectsService.loading$()) {
+          void this.projectsService.load();
+        }
+      });
+    });
+  }
 
   /**
    * Computed signal for pagination token.
@@ -353,6 +414,11 @@ export class SessionList {
     this.sidenavService.close();
   }
 
+  /** A project heading opens the project; on mobile the drawer gets out of the way. */
+  protected onProjectHeadingClick(): void {
+    this.sidenavService.close();
+  }
+
   /**
    * Enters rename mode for a session. Populates the input with the current title.
    * Focus is handled in the template via a callback on the input element.
@@ -442,6 +508,7 @@ export class SessionList {
       data: {
         sessionId: session.sessionId,
         ownerEmail: this.userService.currentUser()?.email ?? '',
+        projectId: session.preferences?.projectId ?? null,
       } as ShareModalData,
     });
   }

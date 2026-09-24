@@ -160,6 +160,23 @@ describe('SessionService', () => {
       expect(service.isNewSession('s1')).toBe(false);
     });
 
+    it('takes preferences from the API row for an optimistic row that has none', () => {
+      // A task started in this tab is cached before the backend binds it to the
+      // project; without this the sidebar could not group it until a reload.
+      const local: SessionMetadata = { ...mockSession, sessionId: 's1', title: 'Local title' };
+      const api: SessionMetadata = {
+        ...mockSession, sessionId: 's1', title: 'Api title',
+        preferences: { assistantId: 'ast-1', projectId: 'prj_1' },
+      };
+      const merged: SessionMetadata[] = (service as any).mergeSessions([local], [api, { ...mockSession, sessionId: 's2' }]);
+      expect(merged.map(s => s.sessionId)).toEqual(['s1', 's2']);
+      expect(merged[0].title).toBe('Local title');
+      expect(merged[0].preferences?.projectId).toBe('prj_1');
+
+      const withOwn: SessionMetadata = { ...local, preferences: { assistantId: 'mine' } };
+      expect((service as any).mergeSessions([withOwn], [api])[0].preferences).toEqual({ assistantId: 'mine' });
+    });
+
     it('should clear cache', () => {
       service.addSessionToCache('s1', 'u1');
       service.addSessionToCache('s2', 'u1');

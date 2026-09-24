@@ -7,13 +7,17 @@ import { Project, ProjectRole } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { ProjectsService, isUnavailable, projectErrorMessage } from '../services/projects.service';
 import { ProjectOverviewComponent } from './project-overview.component';
+import { ProjectTasksComponent } from './project-tasks.component';
+import { ProjectFilesComponent } from './project-files.component';
 import { ProjectMembersComponent } from './project-members.component';
 import { ProjectSettingsComponent } from './project-settings.component';
 
-export type ProjectTab = 'overview' | 'members' | 'settings';
+export type ProjectTab = 'overview' | 'tasks' | 'files' | 'members' | 'settings';
 
 const TABS: { value: ProjectTab; label: string }[] = [
   { value: 'overview', label: 'Overview' },
+  { value: 'tasks', label: 'Tasks' },
+  { value: 'files', label: 'Files' },
   { value: 'members', label: 'Members' },
   { value: 'settings', label: 'Settings' },
 ];
@@ -23,7 +27,7 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
 /**
  * `/projects/:id[/:tab]` — one project (shared-projects §6).
  *
- * The tab is part of the URL so a link can point at Members or Settings. Tabs
+ * The tab is part of the URL so a link can point at Tasks, Files, Members or Settings. Tabs
  * receive the loaded project and hand back a changed one (`projectChange`), so the
  * header and every tab always agree about the name, the role and whether the
  * project is archived.
@@ -31,7 +35,15 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
 @Component({
   selector: 'app-project-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, ProjectOverviewComponent, ProjectMembersComponent, ProjectSettingsComponent],
+  imports: [
+    NgIcon,
+    RouterLink,
+    ProjectOverviewComponent,
+    ProjectTasksComponent,
+    ProjectFilesComponent,
+    ProjectMembersComponent,
+    ProjectSettingsComponent,
+  ],
   providers: [provideIcons({ heroArchiveBox, heroArrowLeft, heroEye, heroLockClosed, heroPencilSquare })],
   templateUrl: './project-detail.page.html',
 })

@@ -18,6 +18,7 @@ import {
   validateSessionTitleEvent,
   validateSteeringAppliedEvent,
   validateOAuthRequiredEvent,
+  validateAgentNoticeEvent,
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
@@ -598,6 +599,32 @@ describe('stream-parser-core', () => {
     });
   });
 
+  describe('validateAgentNoticeEvent', () => {
+    const valid = {
+      type: 'agent_notice',
+      sessionId: 'sess-1',
+      agentId: 'ast-1',
+      message: 'Running without your usual model.',
+      unavailableModelId: 'm-1',
+      unavailableTools: [],
+      unavailableSkills: [],
+    };
+
+    it('accepts the backend shape, with the optional fields omitted', () => {
+      expect(validateAgentNoticeEvent(valid)).toBe(true);
+      const { unavailableModelId: _omitted, ...withoutModel } = valid;
+      expect(validateAgentNoticeEvent(withoutModel)).toBe(true);
+    });
+
+    it('rejects a missing session, message or list', () => {
+      expect(validateAgentNoticeEvent({ ...valid, sessionId: '' })).toBe(false);
+      expect(validateAgentNoticeEvent({ ...valid, message: '' })).toBe(false);
+      expect(validateAgentNoticeEvent({ ...valid, unavailableTools: undefined })).toBe(false);
+      expect(validateAgentNoticeEvent({ ...valid, type: 'model_retry' })).toBe(false);
+      expect(validateAgentNoticeEvent(null)).toBe(false);
+    });
+  });
+
   describe('processStreamEvent', () => {
     let callbacks: StreamParserCallbacks;
 
@@ -619,6 +646,7 @@ describe('stream-parser-core', () => {
         onToolInputPartial: vi.fn(),
         onSessionTitle: vi.fn(),
         onSteeringApplied: vi.fn(),
+        onAgentNotice: vi.fn(),
         onParseError: vi.fn(),
         onDone: vi.fn(),
         onError: vi.fn(),
@@ -680,6 +708,31 @@ describe('stream-parser-core', () => {
       processStreamEvent('session_title', { type: 'session_title', title: '' }, callbacks);
       expect(callbacks.onSessionTitle).not.toHaveBeenCalled();
       expect(callbacks.onParseError).toHaveBeenCalledWith('session_title: invalid data structure');
+    });
+
+    it('should call onAgentNotice for a valid agent_notice event', () => {
+      const data = {
+        type: 'agent_notice',
+        sessionId: 'sess-1',
+        agentId: 'ast-1',
+        projectId: 'prj_1',
+        message: 'This task runs without Canvas, which you don’t have access to.',
+        unavailableTools: ['canvas'],
+        unavailableSkills: [],
+      };
+      processStreamEvent('agent_notice', data, callbacks);
+      expect(callbacks.onAgentNotice).toHaveBeenCalledWith(data);
+      expect(callbacks.onParseError).not.toHaveBeenCalled();
+    });
+
+    it('should call onParseError for an agent_notice with no message', () => {
+      processStreamEvent(
+        'agent_notice',
+        { type: 'agent_notice', sessionId: 'sess-1', agentId: 'ast-1', message: ' ', unavailableTools: [], unavailableSkills: [] },
+        callbacks,
+      );
+      expect(callbacks.onAgentNotice).not.toHaveBeenCalled();
+      expect(callbacks.onParseError).toHaveBeenCalledWith('agent_notice: invalid data structure');
     });
 
     it('should call onSteeringApplied for a valid steering_applied event', () => {

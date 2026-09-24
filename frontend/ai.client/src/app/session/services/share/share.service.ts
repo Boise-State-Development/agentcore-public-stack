@@ -1,7 +1,8 @@
 import { inject, Injectable, computed } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { Message } from '../models/message.model';
 import type { RenderToken } from '../artifacts/artifact-http.service';
 
@@ -9,13 +10,20 @@ import type { RenderToken } from '../artifacts/artifact-http.service';
 // Interfaces
 // ------------------------------------------------------------------
 
+/**
+ * Who can open a share. `project` means the members of the task's project
+ * (shared-projects §5, 1.6): only offered for a session with
+ * `preferences.projectId`.
+ */
+export type ShareAccessLevel = 'public' | 'specific' | 'project';
+
 export interface CreateShareRequest {
-  accessLevel: 'public' | 'specific';
+  accessLevel: ShareAccessLevel;
   allowedEmails?: string[];
 }
 
 export interface UpdateShareRequest {
-  accessLevel?: 'public' | 'specific';
+  accessLevel?: ShareAccessLevel;
   allowedEmails?: string[];
 }
 
@@ -23,8 +31,10 @@ export interface ShareResponse {
   shareId: string;
   sessionId: string;
   ownerId: string;
-  accessLevel: 'public' | 'specific';
+  accessLevel: ShareAccessLevel;
   allowedEmails?: string[];
+  /** Set on a `project` share. */
+  projectId?: string | null;
   createdAt: string;
   shareUrl: string;
 }
@@ -56,7 +66,7 @@ export interface SharedConversationArtifact {
 export interface SharedConversationResponse {
   shareId: string;
   title: string;
-  accessLevel: 'public' | 'specific';
+  accessLevel: ShareAccessLevel;
   createdAt: string;
   ownerId: string;
   messages: Message[];
@@ -83,14 +93,31 @@ export class ShareService {
   private readonly sharesUrl = computed(() => `${this.config.appApiUrl()}/shares`);
   private readonly sharedUrl = computed(() => `${this.config.appApiUrl()}/shared`);
 
-  async createShare(sessionId: string, accessLevel: string, allowedEmails?: string[]): Promise<ShareResponse> {
+  /**
+   * For callers that show the failure inline themselves (the share modal, a
+   * project's Tasks tab), so the global toast doesn't repeat it.
+   */
+  private quiet(suppressErrorToast: boolean | undefined) {
+    return suppressErrorToast ? { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) } : {};
+  }
+
+  async createShare(
+    sessionId: string,
+    accessLevel: ShareAccessLevel,
+    allowedEmails?: string[],
+    options?: { suppressErrorToast?: boolean },
+  ): Promise<ShareResponse> {
     const body: CreateShareRequest = {
-      accessLevel: accessLevel as CreateShareRequest['accessLevel'],
+      accessLevel,
       ...(allowedEmails?.length ? { allowedEmails } : {}),
     };
 
     return firstValueFrom(
-      this.http.post<ShareResponse>(`${this.conversationsUrl()}/${sessionId}/share`, body)
+      this.http.post<ShareResponse>(
+        `${this.conversationsUrl()}/${sessionId}/share`,
+        body,
+        this.quiet(options?.suppressErrorToast),
+      )
     );
   }
 
@@ -133,9 +160,9 @@ export class ShareService {
     return { url: res.url, expiresAt: res.expires_at };
   }
 
-  async updateShare(shareId: string, accessLevel?: string, allowedEmails?: string[]): Promise<ShareResponse> {
+  async updateShare(shareId: string, accessLevel?: ShareAccessLevel, allowedEmails?: string[]): Promise<ShareResponse> {
     const body: UpdateShareRequest = {};
-    if (accessLevel) body.accessLevel = accessLevel as UpdateShareRequest['accessLevel'];
+    if (accessLevel) body.accessLevel = accessLevel;
     if (allowedEmails) body.allowedEmails = allowedEmails;
 
     return firstValueFrom(
@@ -143,15 +170,23 @@ export class ShareService {
     );
   }
 
-  async revokeShare(shareId: string): Promise<void> {
+  async revokeShare(shareId: string, options?: { suppressErrorToast?: boolean }): Promise<void> {
     await firstValueFrom(
-      this.http.delete(`${this.sharesUrl()}/${shareId}`)
+      this.http.delete(`${this.sharesUrl()}/${shareId}`, this.quiet(options?.suppressErrorToast))
     );
   }
 
-  async exportSharedConversation(shareId: string): Promise<ExportResponse> {
+  /**
+   * Fork a share into a new session of the caller's. A member forking a task
+   * of an active project gets a task in that project, on its current agent.
+   */
+  async exportSharedConversation(shareId: string, options?: { suppressErrorToast?: boolean }): Promise<ExportResponse> {
     return firstValueFrom(
-      this.http.post<ExportResponse>(`${this.sharesUrl()}/${shareId}/export`, {})
+      this.http.post<ExportResponse>(
+        `${this.sharesUrl()}/${shareId}/export`,
+        {},
+        this.quiet(options?.suppressErrorToast),
+      )
     );
   }
 }

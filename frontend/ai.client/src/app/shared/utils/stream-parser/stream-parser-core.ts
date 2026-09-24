@@ -52,6 +52,7 @@ import type {
   SessionTitleEvent,
   SteeringAppliedEvent,
   ModelRetryEvent,
+  AgentNoticeEvent,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
 
@@ -143,6 +144,11 @@ export interface StreamParserCallbacks {
   // Advisory only — the turn continues; this exists so the resulting silence
   // reads as "working" instead of "hung".
   onModelRetry?: (data: ModelRetryEvent) => void;
+
+  // A project's agent is running this turn without some of its tools, skills,
+  // model or memory (the member can't use them). Informational: the turn
+  // continues. Arrives before message_start.
+  onAgentNotice?: (data: AgentNoticeEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -780,6 +786,29 @@ export function validateToolGroupSummaryEvent(
   );
 }
 
+/**
+ * Validate an `agent_notice` event. `message` is what the user reads, so an
+ * empty one is rejected rather than rendered as a blank notice.
+ */
+export function validateAgentNoticeEvent(data: unknown): data is AgentNoticeEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<AgentNoticeEvent>;
+
+  return (
+    event.type === 'agent_notice' &&
+    typeof event.sessionId === 'string' &&
+    event.sessionId.length > 0 &&
+    typeof event.agentId === 'string' &&
+    typeof event.message === 'string' &&
+    event.message.trim().length > 0 &&
+    Array.isArray(event.unavailableTools) &&
+    Array.isArray(event.unavailableSkills)
+  );
+}
+
 export function validateModelRetryEvent(data: unknown): data is ModelRetryEvent {
   if (!data || typeof data !== 'object') {
     return false;
@@ -1036,6 +1065,14 @@ export function processStreamEvent(
           callbacks.onModelRetry?.(data);
         } else {
           callbacks.onParseError?.('model_retry: invalid data structure');
+        }
+        break;
+
+      case 'agent_notice':
+        if (validateAgentNoticeEvent(data)) {
+          callbacks.onAgentNotice?.(data);
+        } else {
+          callbacks.onParseError?.('agent_notice: invalid data structure');
         }
         break;
 
