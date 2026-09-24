@@ -13,13 +13,13 @@ import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
-  heroArrowRight,
   heroCheck,
   heroCheckBadge,
   heroCheckCircle,
   heroExclamationTriangle,
   heroFlag,
   heroLockClosed,
+  heroMicrophone,
   heroNoSymbol,
   heroPlus,
 } from '@ng-icons/heroicons/outline';
@@ -72,13 +72,13 @@ import { parseIso } from '../../utils/date';
   providers: [
     provideIcons({
       heroArrowLeft,
-      heroArrowRight,
       heroCheck,
       heroCheckBadge,
       heroCheckCircle,
       heroExclamationTriangle,
       heroFlag,
       heroLockClosed,
+      heroMicrophone,
       heroNoSymbol,
       heroPlus,
     }),
@@ -201,26 +201,56 @@ import { parseIso } from '../../utils/date';
           }
 
           <!--
-            Hero: the @-mention prompt this agent answers to. Display-only — the
-            composer has no prompt-prefill entry point, and @-mention itself is
-            Phase 7, so a clickable pill here would be an affordance with no lever
-            behind it. It shows the shape of the thing; Start chat performs it.
+            Hero: the @-mention prompt this agent answers to, drawn as our compact
+            chat composer (session/components/chat-input) — same shell, the same
+            leading attach and trailing dictate / voice glyphs, and the same tint
+            the composer puts under a live @mention. No send button, because the
+            composer has none on desktop: Enter sends.
+
+            Display-only — the composer has no prompt-prefill entry point, so a
+            clickable replica would be an affordance with no lever behind it. It
+            shows the shape of the thing; Start chat performs it. Keep it in step
+            with the composer when that changes, or it teaches the wrong input.
           -->
           <div
             class="mt-6 grid place-items-center rounded-3xl bg-linear-to-br from-blue-700 to-sky-500 px-6 py-12 dark:from-blue-900 dark:to-sky-700"
           >
             <p
-              class="flex w-full max-w-xl items-center gap-4 rounded-full bg-white/95 px-5 py-3.5 text-sm/6 text-gray-900 shadow-md"
+              class="flex w-full max-w-xl items-center gap-0.5 rounded-2xl bg-white p-2 shadow-xl outline-1 -outline-offset-1 outline-gray-300 dark:bg-slate-800 dark:outline-white/10"
             >
-              <span class="min-w-0 flex-1">
-                <span class="font-semibold text-blue-700">{{ mention() }}</span>
+              <span
+                class="grid size-10 shrink-0 place-items-center text-gray-500 dark:text-gray-400"
+                aria-hidden="true"
+              >
+                <ng-icon name="heroPlus" class="size-5" />
+              </span>
+              <span class="min-w-0 flex-1 truncate px-2 py-2 text-base text-gray-900 dark:text-gray-100">
+                <span
+                  class="rounded-sm bg-primary-500/14 ring-2 ring-primary-500/14 dark:bg-primary-400/30 dark:ring-primary-400/30"
+                  >{{ mention() }}</span
+                >
                 {{ heroSuffix() }}
               </span>
               <span
-                class="grid size-7 shrink-0 place-items-center rounded-full bg-gray-900 text-white"
+                class="hidden size-10 shrink-0 place-items-center text-gray-500 sm:grid dark:text-gray-400"
                 aria-hidden="true"
               >
-                <ng-icon name="heroArrowRight" class="size-3.5" />
+                <ng-icon name="heroMicrophone" class="size-5" />
+              </span>
+              <span
+                class="grid size-10 shrink-0 place-items-center text-gray-500 dark:text-gray-400"
+                aria-hidden="true"
+              >
+                <svg
+                  class="size-5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                >
+                  <path d="M3 10.5v3M7 7.5v9M11 4v16M15 7.5v9M19 10.5v3" />
+                </svg>
               </span>
             </p>
           </div>
