@@ -1,7 +1,7 @@
 import { APP_BASE_HREF } from '@angular/common';
-import { signal } from '@angular/core';
+import { Component, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { NavigationError, provideRouter } from '@angular/router';
+import { NavigationError, Router, provideRouter } from '@angular/router';
 import { Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatStateService } from '../../session/services/chat/chat-state.service';
 import { FileUploadService } from '../file-upload/file-upload.service';
@@ -21,6 +21,9 @@ const CHUNK_ERROR = new TypeError(
   'Failed to fetch dynamically imported module: https://boisestate.ai/chunk-4DOJ3VBG.js',
 );
 const PROMPT_TITLE = 'A new version of the app is available';
+
+@Component({ template: '' })
+class BlankPage {}
 
 /** Minimal in-memory Storage — the real sessionStorage is shared across spec files. */
 function memoryStorage(): Storage {
@@ -59,7 +62,10 @@ describe('AppUpdateService', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
-        provideRouter([]),
+        provideRouter([
+          { path: 'blocked', canActivate: [() => false], component: BlankPage },
+          { path: '**', component: BlankPage },
+        ]),
         { provide: APP_BASE_HREF, useValue: '/app/' },
         { provide: PAGE_LOADER, useValue: pageLoader satisfies PageLoader },
         { provide: RELOAD_GUARD_STORAGE, useValue: () => storage },
@@ -133,6 +139,41 @@ describe('AppUpdateService', () => {
       prompts()[0].action?.handler();
 
       expect(pageLoader.assign).toHaveBeenCalledExactlyOnceWith('/app/settings/api-keys');
+    });
+
+    it('reloads where the user is once they have navigated somewhere else', async () => {
+      uploadsActive.set(true);
+      service.recoverFromFailedNavigation('/settings/api-keys');
+
+      // They gave up on API Keys and opened a conversation instead.
+      expect(await TestBed.inject(Router).navigateByUrl('/s/session-a')).toBe(true);
+      prompts()[0].action?.handler();
+
+      expect(pageLoader.assign).not.toHaveBeenCalled();
+      expect(pageLoader.reload).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the destination when the next navigation does not complete', async () => {
+      uploadsActive.set(true);
+      service.recoverFromFailedNavigation('/settings/api-keys');
+
+      // A guard refused it: the user is still where the failure left them.
+      expect(await TestBed.inject(Router).navigateByUrl('/blocked')).toBe(false);
+      prompts()[0].action?.handler();
+
+      expect(pageLoader.assign).toHaveBeenCalledExactlyOnceWith('/app/settings/api-keys');
+    });
+
+    it('takes the newest failed destination over an older one', async () => {
+      uploadsActive.set(true);
+      service.recoverFromFailedNavigation('/settings/api-keys');
+      await TestBed.inject(Router).navigateByUrl('/s/session-a');
+      service.recoverFromFailedNavigation('/settings/usage');
+
+      expect(prompts()).toHaveLength(1);
+      prompts()[0].action?.handler();
+
+      expect(pageLoader.assign).toHaveBeenCalledExactlyOnceWith('/app/settings/usage');
     });
 
     it('ignores further failures once a reload is under way', () => {
