@@ -17,6 +17,7 @@ import {
   Project,
   ProjectDocument,
   ProjectDocumentsResponse,
+  ProjectAuditResponse,
   ProjectListResponse,
   ProjectMember,
   ProjectTasksResponse,
@@ -143,6 +144,15 @@ export class ProjectApiService {
 
   version(projectId: string, number: number): Observable<SettingsVersion> {
     return this.http.get<SettingsVersion>(this.url(projectId, `/instructions/versions/${number}`), this.options());
+  }
+
+  // ---- activity ---------------------------------------------------------
+
+  /** The project's audit trail, newest first (editor). */
+  audit(projectId: string, limit = 50, cursor?: string | null): Observable<ProjectAuditResponse> {
+    let params = new HttpParams().set('limit', limit);
+    if (cursor) params = params.set('cursor', cursor);
+    return this.http.get<ProjectAuditResponse>(this.url(projectId, '/audit'), this.options(params));
   }
 
   // ---- tasks ------------------------------------------------------------

@@ -44,7 +44,7 @@
       }
 
       <nav class="mb-8 inline-flex max-w-full gap-1 overflow-x-auto rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800" aria-label="Project sections">
-        @for (t of tabs; track t.value) {
+        @for (t of tabs(); track t.value) {
           <a
             [routerLink]="['/projects', p.projectId, t.value]"
             [attr.aria-current]="activeTab() === t.value ? 'page' : null"
@@ -61,6 +61,9 @@
         }
         @case ('files') {
           <app-project-files [project]="p" />
+        }
+        @case ('activity') {
+          <app-project-activity [project]="p" />
         }
         @case ('members') {
           <app-project-members [project]="p" (projectChange)="onProjectChange($event)" />

@@ -8,8 +8,9 @@ import {
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt } from '@ng-icons/heroicons/outline';
+import { HttpErrorResponse } from '@angular/common/http';
 import { ModelService } from '../../../session/services/model/model.service';
-import { UserSettingsService } from '../../../services/user-settings.service';
+import { MAX_PERSONAL_INSTRUCTIONS, UserSettingsService } from '../../../services/user-settings.service';
 import { LocalSettingsService } from '../../../services/local-settings.service';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { isRetiring } from '../../../shared/utils/retirement';
@@ -87,6 +88,51 @@ import { isRetiring } from '../../../shared/utils/retirement';
             }
           </div>
         </div>
+      </div>
+
+      <!-- Personal instructions -->
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
+        <form class="p-6" (submit)="$event.preventDefault(); savePersonalInstructions()">
+          <label for="personal-instructions" class="text-sm/6 font-medium text-gray-900 dark:text-white">
+            Personal instructions
+          </label>
+          <p id="personal-instructions-help" class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
+            How you’d like the assistant to work with you, in every conversation, including in agents and projects.
+            Where an agent’s or a project’s own instructions disagree, theirs win.
+          </p>
+          <textarea
+            id="personal-instructions"
+            rows="5"
+            [value]="personalValue()"
+            (input)="personalDraft.set($any($event.target).value)"
+            [disabled]="!settingsLoaded()"
+            [attr.maxlength]="personalMax"
+            aria-describedby="personal-instructions-help personal-instructions-count"
+            placeholder="For example: I teach undergraduate chemistry. Keep answers brief and use SI units."
+            class="mt-3 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:ring-2 focus:ring-primary-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-400"
+          ></textarea>
+          <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
+            <p id="personal-instructions-count" class="text-xs/5 text-gray-600 dark:text-gray-400">
+              {{ personalValue().length.toLocaleString() }} / {{ personalMax.toLocaleString() }} characters
+            </p>
+            <div class="flex items-center gap-3">
+              @if (personalStatus(); as status) {
+                <p
+                  role="status"
+                  class="text-xs/5"
+                  [class]="status.error ? 'text-state-danger-600 dark:text-state-danger-400' : 'text-state-success-700 dark:text-state-success-400'"
+                >{{ status.text }}</p>
+              }
+              <button
+                type="submit"
+                [disabled]="!personalDirty() || personalSaving()"
+                class="rounded-2xl bg-primary-accessible px-3.5 py-1.5 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {{ personalSaving() ? 'Saving…' : 'Save' }}
+              </button>
+            </div>
+          </div>
+        </form>
       </div>
 
       <!-- Show Token Count toggle -->
@@ -243,6 +289,50 @@ export class ChatPreferencesSettingsPage {
       this.saveError.set('Failed to save default model. Please try again.');
     } finally {
       this.saving.set(false);
+    }
+  }
+
+  // ── Personal instructions ─────────────────────────────────────────────
+
+  protected readonly personalMax = MAX_PERSONAL_INSTRUCTIONS;
+  /** What the user has typed since the last save; null = showing the saved value. */
+  readonly personalDraft = signal<string | null>(null);
+  readonly personalSaving = signal(false);
+  readonly personalStatus = signal<{ text: string; error: boolean } | null>(null);
+
+  /** The saved settings, or undefined while loading or after a failed read (reading `value()` then would throw). */
+  private readonly savedSettings = computed(() => {
+    const settings = this.userSettingsService.settingsResource;
+    return settings.error?.() ? undefined : settings.value();
+  });
+  readonly settingsLoaded = computed(() => this.savedSettings() !== undefined);
+  private readonly personalSaved = computed(() => this.savedSettings()?.personalInstructions ?? '');
+  readonly personalValue = computed(() => this.personalDraft() ?? this.personalSaved());
+  readonly personalDirty = computed(() => {
+    const draft = this.personalDraft();
+    return draft !== null && draft.trim() !== this.personalSaved().trim();
+  });
+
+  async savePersonalInstructions(): Promise<void> {
+    if (!this.personalDirty()) return;
+    this.personalSaving.set(true);
+    this.personalStatus.set(null);
+    try {
+      // Silent: the result is said right beside the button.
+      const saved = await this.userSettingsService.updateSettings(
+        { personalInstructions: this.personalValue() },
+        { silent: true },
+      );
+      this.personalDraft.set(null);
+      this.personalStatus.set({
+        text: saved.personalInstructions ? 'Saved' : 'Cleared',
+        error: false,
+      });
+    } catch (err) {
+      const detail = err instanceof HttpErrorResponse && typeof err.error?.detail === 'string' ? err.error.detail : null;
+      this.personalStatus.set({ text: detail ?? 'Couldn’t save. Please try again.', error: true });
+    } finally {
+      this.personalSaving.set(false);
     }
   }
 

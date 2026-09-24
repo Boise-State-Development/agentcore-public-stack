@@ -185,3 +185,24 @@ export interface ProjectUploadUrlResponse extends UploadUrlResponse {
   /** "Everyone in {project} ({n} people) can open this file…" — shown at upload. */
   notice: string;
 }
+
+// ---- activity (the project's audit trail) ------------------------------
+
+/** One `project.*` audit record as editors see it: by email, never by user id. */
+export interface ProjectAuditRecord {
+  auditId: string;
+  timestamp: string;
+  /** `project.created`, `project.member_added`, … */
+  action: string;
+  actorEmail?: string | null;
+  changes?: string[] | null;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  reason?: string | null;
+}
+
+export interface ProjectAuditResponse {
+  /** Newest first. */
+  records: ProjectAuditRecord[];
+  nextCursor?: string | null;
+}

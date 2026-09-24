@@ -11,15 +11,18 @@ import { ProjectTasksComponent } from './project-tasks.component';
 import { ProjectFilesComponent } from './project-files.component';
 import { ProjectMembersComponent } from './project-members.component';
 import { ProjectSettingsComponent } from './project-settings.component';
+import { ProjectActivityComponent } from './project-activity.component';
 
-export type ProjectTab = 'overview' | 'tasks' | 'files' | 'members' | 'settings';
+export type ProjectTab = 'overview' | 'tasks' | 'files' | 'members' | 'settings' | 'activity';
 
-const TABS: { value: ProjectTab; label: string }[] = [
+/** `editorsOnly` tabs are offered to editors and the owner; the server enforces it too. */
+const TABS: { value: ProjectTab; label: string; editorsOnly?: boolean }[] = [
   { value: 'overview', label: 'Overview' },
   { value: 'tasks', label: 'Tasks' },
   { value: 'files', label: 'Files' },
   { value: 'members', label: 'Members' },
   { value: 'settings', label: 'Settings' },
+  { value: 'activity', label: 'Activity', editorsOnly: true },
 ];
 
 const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Editor', viewer: 'Viewer' };
@@ -27,7 +30,7 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
 /**
  * `/projects/:id[/:tab]` — one project (shared-projects §6).
  *
- * The tab is part of the URL so a link can point at Tasks, Files, Members or Settings. Tabs
+ * The tab is part of the URL so a link can point at any tab. Tabs
  * receive the loaded project and hand back a changed one (`projectChange`), so the
  * header and every tab always agree about the name, the role and whether the
  * project is archived.
@@ -43,6 +46,7 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
     ProjectFilesComponent,
     ProjectMembersComponent,
     ProjectSettingsComponent,
+    ProjectActivityComponent,
   ],
   providers: [provideIcons({ heroArchiveBox, heroArrowLeft, heroEye, heroLockClosed, heroPencilSquare })],
   templateUrl: './project-detail.page.html',
@@ -55,7 +59,11 @@ export class ProjectDetailPage {
   readonly id = input.required<string>();
   readonly tab = input<string | undefined>(undefined);
 
-  protected readonly tabs = TABS;
+  /** The tabs this caller may open; a viewer gets no Activity. */
+  protected readonly tabs = computed(() => {
+    const role = this.project()?.role;
+    return TABS.filter(t => !t.editorsOnly || role === 'owner' || role === 'editor');
+  });
   protected readonly roleLabels = ROLE_LABELS;
   protected readonly project = signal<Project | null>(null);
   protected readonly loading = signal(true);
@@ -63,7 +71,7 @@ export class ProjectDetailPage {
 
   protected readonly activeTab = computed<ProjectTab>(() => {
     const t = this.tab();
-    return TABS.some(x => x.value === t) ? (t as ProjectTab) : 'overview';
+    return this.tabs().some(x => x.value === t) ? (t as ProjectTab) : 'overview';
   });
 
   constructor() {

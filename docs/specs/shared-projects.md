@@ -505,6 +505,27 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
     - Dev's docling rejects `.txt`, although both upload pickers offer it.
     - The degrade notice could not be triggered with one user. It was rendered by setting the live service, and the parser path is covered by specs.
   - Axe (WCAG 2 A/AA) found nothing on Tasks, Files (including the upload panel), the share modal (both states), the notice banner and the grouped sidebar, in both themes.
+  **1.8c (as built):**
+  - **Notification bell** (`components/notification-bell/`) sits beside the user menu in the sidebar footer. It uses the same CDK menu pattern and opens upward.
+    - The badge shows `unreadCount` from `GET /notifications`, capped at "9+". The bell's label carries the count ("Notifications, 3 unread").
+    - The inbox is read when the sidebar renders, on every open, and when the tab becomes visible again, at most once a minute. There is no push.
+    - The panel shows the newest 20. It has no pager: a CDK menu item can't keep the menu open, and the inbox expires after 90 days.
+    - Each kind reads as a sentence, such as "ann@… added you to Enrollment Sync as an editor."
+    - Opening a notification marks it read (optimistically, then `POST /{id}/read`) and goes to the project. `project_removed` only marks read.
+    - "Mark all as read" sits below the list, so the menu's first item, the one keyboard focus lands on, is the newest notification inside the scroll region. That also satisfies axe's `scrollable-region-focusable`.
+    - `NotificationsService` sends every call without the error toast; the panel says "couldn’t be loaded" itself.
+  - **Activity tab** (`/projects/:id/activity`) is offered only to editors and the owner. A viewer's `/activity` URL falls back to Overview, and the server refuses it anyway.
+    - It pages `GET /projects/{id}/audit` newest first ("Show older").
+    - `describeActivity` turns each `project.*` action into a sentence. The actor shows as "You" for the caller. Unknown actions fall back to their name.
+    - A settings save shows a "Version N" link to Settings, where History has the diff.
+    - The audit API returns numbers as strings (`"version": "2"`: DynamoDB `Decimal` through pydantic), so the version is parsed from either form.
+  - **Personal instructions** (1.4b's `UserSettings.personalInstructions`) have a field on Settings › Chat.
+    - A textarea with a 4,000-character counter and Save. Save is enabled only for a real change, ignoring whitespace. It saves without the toast and reports "Saved", "Cleared" or the API's `detail` next to the button.
+    - The copy says the instructions apply in every conversation, and that an agent's or project's own instructions win a conflict.
+  - Verified against dev data: a disposable project with rename, add and role-change of a fake member, an instructions save, and removal. Four notifications, one per kind, were put in my own inbox through `NotificationService` from a synthetic actor, because nobody is notified of their own actions. Personal instructions were saved, then cleared back to empty. All of it was deleted afterwards.
+  - Axe (WCAG 2 A/AA) found nothing on the bell, panel, Activity, tabs and the settings form, in both themes, after two fixes:
+    - The Version link on the card uses `dark:text-primary-50`.
+    - A focused notification's time uses `dark:text-gray-300` (it was 3.96:1 on `gray-700`).
 - **1.9 Docs:** `docs-site/…/features/projects.md`, `admin/projects.md`, env-var table entries.
 
 ### Phase 2 — project memory
