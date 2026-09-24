@@ -3378,6 +3378,18 @@ class StreamCoordinator:
                     if cost_result is not None:
                         cost = cost_result
 
+                # Tokens spent, nothing charged: the row is written with no
+                # cost, so the rollups and the user's quota never see it.
+                if token_usage and cost is None:
+                    reason = "calculation_failed" if pricing_snapshot else "no_pricing"
+                    logger.warning(
+                        f"Unmetered model call: model={model_id} reason={reason} — "
+                        "usage recorded with no cost; not counted against quota"
+                    )
+                    from apis.shared.observability.emf import emit_unmetered_model_call
+
+                    emit_unmetered_model_call(model_id, reason, surface="chat", session_id=session_id)
+
             # Create Attribution for cost tracking foundation
             attribution = Attribution(
                 user_id=user_id,

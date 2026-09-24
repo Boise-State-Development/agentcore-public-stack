@@ -490,6 +490,36 @@ async def list_all_managed_models() -> List[ManagedModel]:
     return await _list_managed_models_cloud(managed_models_table)
 
 
+async def get_default_managed_model() -> Optional[ManagedModel]:
+    """The catalog's admin-designated default model (``isDefault``), or ``None``.
+
+    The server-side answer to "which model runs when nothing names one" — a
+    scheduled run, an Agent with no ``modelConfig``, a request with
+    ``model_id: null``. It must be a catalog row, because that is where pricing
+    lives: a fallback id with no row prices every turn at ``None``, which is
+    unmetered and free against quota (docs/specs/model-retirement.md §6).
+
+    Only an enabled, non-retired row counts (``validate_lifecycle`` already
+    refuses a retired default at write time; this is the backstop, since a
+    retired id would be denied at the next hop). Several flagged rows can only come from a race
+    in ``_clear_default_flags``; the first in catalog order wins, and that order
+    is deterministic (``_sort_models``), so every process picks the same model
+    and the agent-cache key stays stable.
+
+    Best-effort: a catalog read failure returns ``None`` so the caller falls
+    back rather than blocking the turn. Reads through the 60s config cache.
+    """
+    try:
+        models = await list_all_managed_models()
+    except Exception as e:  # noqa: BLE001 - a fallback lookup must never fail the turn
+        logger.warning(f"Could not read the model catalog for its default model: {e}")
+        return None
+    return next(
+        (m for m in models if m.is_default and m.enabled and m.status != ModelStatus.RETIRED),
+        None,
+    )
+
+
 def _scan_managed_model_items(table_name: str) -> List[dict]:
     """Scan the raw MODEL# items. Blocking; call via ``asyncio.to_thread``."""
     table = dynamodb.Table(table_name)

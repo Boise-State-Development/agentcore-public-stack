@@ -39,7 +39,7 @@ from apis.shared.files.models import (
     INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
     MAX_FILES_PER_MESSAGE,
 )
-from apis.shared.models.managed_models import list_managed_models
+from apis.shared.models.managed_models import get_default_managed_model, list_managed_models
 from apis.shared.models.retirement import resolve_effective_model, retired_model_message
 from apis.shared.quota import (
     QuotaExceededEvent,
@@ -388,7 +388,7 @@ async def _resolve_user_default_model(
     Returns ``(model_id, provider)``. When the request does not specify
     ``model_id``, callers fall back to the user's saved preference; if that
     is also unset (or the saved id no longer exists in managed models), the
-    callers in turn fall back to the agent factory's hardcoded default.
+    callers in turn fall back to :func:`_resolve_system_default_model`.
 
     The lookup is best-effort: any failure (no table, DynamoDB error, or
     deleted model) returns ``(None, None)`` so the chat turn proceeds on
@@ -412,9 +412,73 @@ async def _resolve_user_default_model(
         if effective.redirected:
             return effective.model_id, effective.provider
 
+    # A saved id with no catalog row has no pricing: running it would leave the
+    # turn unmetered and free against quota (a wildcard grant passes the RBAC
+    # re-check for any id). Treat it as unset, as the SPA already does.
     managed = await _find_managed_model(saved_id)
-    provider = managed.provider if managed else None
-    return saved_id, provider
+    if managed is None:
+        return None, None
+    return saved_id, managed.provider
+
+
+async def _resolve_fallback_model(
+    user_id: str | None,
+    current_user: User,
+    provider: str | None,
+    settings: Optional[dict] = None,
+) -> tuple[str | None, str | None]:
+    """The model for a turn whose request (and Agent) named none: user default, then catalog default.
+
+    Returns ``(model_id, provider)``. ``provider`` is the request's: it still
+    wins over a saved default's (unchanged behaviour), and yields to the
+    catalog default's, which it never described. ``(None, provider)``
+    means neither default resolved and the agent factory's ``Defaults.MODEL_ID``
+    takes over. Shared by the turn and the MCP App dispatch paths: the agent
+    cache keys on the model id, so a dispatch that resolved differently would
+    miss the turn's cached agent (and an App's pushed context with it).
+    """
+    user_default_id, user_default_provider = await _resolve_user_default_model(user_id, settings=settings)
+    if user_default_id:
+        # Re-check model access against the resolved id. The earlier guard only
+        # ran on `input_data.model_id`, so a stale saved default the user no
+        # longer has rights to would otherwise sneak past RBAC here.
+        if await get_app_role_service().can_access_model(current_user, user_default_id):
+            logger.info("Applied user default model from settings")
+            return user_default_id, provider or user_default_provider
+        logger.info("User default model exists but RBAC denies access; falling back to system default")
+
+    system_default_id, system_default_provider = await _resolve_system_default_model()
+    if system_default_id:
+        logger.info("Applied catalog default model")
+        return system_default_id, system_default_provider or provider
+    logger.warning(
+        "Model catalog has no enabled default; falling back to the hard-coded "
+        "Defaults.MODEL_ID, which may have no pricing row"
+    )
+    return None, provider
+
+
+async def _resolve_system_default_model() -> tuple[str | None, str | None]:
+    """The model a turn runs on when neither the request, an Agent, nor the user names one.
+
+    Returns ``(model_id, provider)`` of the catalog's ``isDefault`` row — the same
+    model the SPA pre-selects for a new chat, so the admin "Default" toggle and the
+    server fallback are one answer, not two. ``(None, None)`` when the catalog has
+    no enabled default (or can't be read), and the agent factory's hard-coded
+    ``Defaults.MODEL_ID`` takes over.
+
+    Deliberately not RBAC-gated, like the hard-coded fallback it replaces: the
+    SPA sends ``model_id: null`` only when the user can see *no* enabled model,
+    and gating here would send exactly those turns back to an id with no
+    catalog row — unpriced, unmetered and free against quota (model-retirement
+    spec §6). The provider travels with the id because the request's provider,
+    if any, described no model, and a default on another transport (Mantle,
+    bedrock-responses) misroutes without its own.
+    """
+    model = await get_default_managed_model()
+    if model is None:
+        return None, None
+    return model.model_id, model.provider
 
 
 def _merge_inference_params(
@@ -1976,8 +2040,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         atc = input_data.app_tool_call
         try:
             request_inference_params = dict(input_data.inference_params or {})
+            dispatch_model_id, dispatch_provider = input_data.model_id, input_data.provider
+            if not dispatch_model_id:
+                dispatch_model_id, dispatch_provider = await _resolve_fallback_model(
+                    user_id, current_user, dispatch_provider
+                )
             caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider = await _resolve_model_settings(
-                model_id=input_data.model_id,
+                model_id=dispatch_model_id,
                 explicit_caching_enabled=input_data.caching_enabled,
                 request_inference_params=request_inference_params,
             )
@@ -1996,10 +2065,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     ),
                     current_user,
                 ),
-                model_id=input_data.model_id,
+                model_id=dispatch_model_id,
                 system_prompt=await _plain_turn_prompt(input_data, user_id),
                 caching_enabled=caching_enabled,
-                provider=input_data.provider or registry_provider,
+                provider=dispatch_provider or registry_provider,
                 inference_params=inference_params,
                 mantle_api_mode=mantle_api_mode,
                 mantle_region=mantle_region,
@@ -2043,8 +2112,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         acu = input_data.app_context_update
         try:
             request_inference_params = dict(input_data.inference_params or {})
+            dispatch_model_id, dispatch_provider = input_data.model_id, input_data.provider
+            if not dispatch_model_id:
+                dispatch_model_id, dispatch_provider = await _resolve_fallback_model(
+                    user_id, current_user, dispatch_provider
+                )
             caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider = await _resolve_model_settings(
-                model_id=input_data.model_id,
+                model_id=dispatch_model_id,
                 explicit_caching_enabled=input_data.caching_enabled,
                 request_inference_params=request_inference_params,
             )
@@ -2063,10 +2137,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     ),
                     current_user,
                 ),
-                model_id=input_data.model_id,
+                model_id=dispatch_model_id,
                 system_prompt=await _plain_turn_prompt(input_data, user_id),
                 caching_enabled=caching_enabled,
-                provider=input_data.provider or registry_provider,
+                provider=dispatch_provider or registry_provider,
                 inference_params=inference_params,
                 mantle_api_mode=mantle_api_mode,
                 mantle_region=mantle_region,
@@ -3290,24 +3364,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 effective_model_id = agent_model_override.model_id
                 effective_provider = agent_model_override.provider or effective_provider
             if not effective_model_id:
-                user_default_id, user_default_provider = await _resolve_user_default_model(
-                    user_id, settings=user_settings
+                effective_model_id, effective_provider = await _resolve_fallback_model(
+                    user_id, current_user, effective_provider, settings=user_settings
                 )
-                if user_default_id:
-                    # Re-check model access against the resolved id. The
-                    # earlier guard only ran on `input_data.model_id`, so a
-                    # stale saved default the user no longer has rights to
-                    # would otherwise sneak past RBAC here.
-                    app_role_service = get_app_role_service()
-                    if await app_role_service.can_access_model(current_user, user_default_id):
-                        effective_model_id = user_default_id
-                        if not effective_provider and user_default_provider:
-                            effective_provider = user_default_provider
-                        logger.info("Applied user default model from settings")
-                    else:
-                        logger.info(
-                            "User default model exists but RBAC denies access; falling back to system default"
-                        )
 
             # Agent-authored params sit as defaults BENEATH explicit request params,
             # then flow through _resolve_model_settings' admin bounds/locks like any

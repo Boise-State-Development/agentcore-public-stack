@@ -117,6 +117,18 @@ export class PromptCacheObservabilityConstruct extends Construct {
       period: cdk.Duration.hours(24),
     });
 
+    // A model call that used tokens and priced to nothing — no catalog row for
+    // its model id (or the calculator failed). The row is written with no cost,
+    // so it reaches neither the cost rollups nor the user's quota. Any non-zero
+    // sum is a catalog gap: prod ran months of $0 fallback-Haiku and Nova Sonic
+    // voice before anyone read the rollup table.
+    const unmeteredModelCallMetric = new cloudwatch.Metric({
+      namespace,
+      metricName: 'UnmeteredModelCall',
+      statistic: 'Sum',
+      period: cdk.Duration.hours(1),
+    });
+
     // Cache efficiency: fraction of cache traffic served from cache.
     // Healthy steady-state conversations read far more than they write,
     // so this should sit near 100%; a prefix-stability regression shows
@@ -224,6 +236,27 @@ export class PromptCacheObservabilityConstruct extends Construct {
       }),
     );
 
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Unmetered model calls (tokens spent, no price, not counted against quota)',
+        left: [unmeteredModelCallMetric],
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.LogQueryWidget({
+        title: 'Unmetered calls by model (which catalog row is missing?)',
+        logGroupNames: [runtimeLogGroupName],
+        queryLines: [
+          'filter ispresent(UnmeteredModelCall)',
+          'stats sum(UnmeteredModelCall) as calls by modelId, surface, unmeteredReason',
+          'sort calls desc',
+          'limit 20',
+        ],
+        width: 12,
+        height: 6,
+      }),
+    );
+
     // ============================================================
     // Alarms
     // ============================================================
@@ -264,6 +297,21 @@ export class PromptCacheObservabilityConstruct extends Construct {
       metric: wastedUsdMetric,
       threshold: config.observability.promptCacheWastedUsdThreshold,
       evaluationPeriods: 3,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // Threshold 0 is not a tunable: there is no acceptable rate of free usage,
+    // and each distinct model id needs one catalog fix, after which it stops.
+    // The emission is deliberately outside the PROMPT_CACHE_OBSERVABILITY_ENABLED
+    // kill switch (emf.py), so this alarm cannot be silenced by it.
+    alarms.alarm('UnmeteredModelCallAlarm', {
+      name: 'unmetered-model-call',
+      alarmDescription:
+        'A model call spent tokens with no catalog pricing — it was stored at no cost and not counted against quota. Add a catalog row for the model id (see the "Unmetered calls by model" dashboard widget for which)',
+      metric: unmeteredModelCallMetric,
+      threshold: 0,
+      evaluationPeriods: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });

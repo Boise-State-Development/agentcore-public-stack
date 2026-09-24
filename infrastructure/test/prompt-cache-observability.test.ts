@@ -68,6 +68,7 @@ describe('PromptCacheObservabilityConstruct', () => {
       'PartialMissUsd',
       'WastedUsd',
       'SessionPartialMissUsd',
+      'UnmeteredModelCall',
     ]) {
       expect(body).toContain(metric);
     }
@@ -80,8 +81,8 @@ describe('PromptCacheObservabilityConstruct', () => {
     expect(body).toContain('sessionId');
   });
 
-  it('creates three alarms, all NOT_BREACHING on missing data (kill-switch tolerant)', () => {
-    t.resourceCountIs('AWS::CloudWatch::Alarm', 3);
+  it('creates four alarms, all NOT_BREACHING on missing data (kill-switch tolerant)', () => {
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 4);
     const alarms = Object.values(t.findResources('AWS::CloudWatch::Alarm'));
     for (const alarm of alarms) {
       expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
@@ -135,6 +136,23 @@ describe('PromptCacheObservabilityConstruct', () => {
     });
   });
 
+  it('alarms on any unmetered model call, and says which model in the log query', () => {
+    // A call with no catalog pricing is free against quota. There is no
+    // acceptable rate of that, so the threshold is zero, not configurable.
+    t.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: `${MOCK_PREFIX}-unmetered-model-call`,
+      MetricName: 'UnmeteredModelCall',
+      Statistic: 'Sum',
+      Period: 3600,
+      Threshold: 0,
+      EvaluationPeriods: 1,
+      ComparisonOperator: 'GreaterThanThreshold',
+    });
+    const dashboards = t.findResources('AWS::CloudWatch::Dashboard');
+    const body = JSON.stringify(Object.values(dashboards)[0].Properties.DashboardBody);
+    expect(body).toContain('by modelId, surface, unmeteredReason');
+  });
+
   /**
    * Every threshold is a single configured value. An institution that wants a
    * looser dev environment sets a different value there — it does not get one
@@ -178,7 +196,7 @@ describe('PromptCacheObservabilityConstruct', () => {
       runtimeLogGroupName: MOCK_RUNTIME_LOG_GROUP,
     });
     const noTopic = Template.fromStack(stack);
-    noTopic.resourceCountIs('AWS::CloudWatch::Alarm', 3);
+    noTopic.resourceCountIs('AWS::CloudWatch::Alarm', 4);
     for (const alarm of Object.values(noTopic.findResources('AWS::CloudWatch::Alarm'))) {
       expect((alarm as any).Properties.AlarmActions).toBeUndefined();
     }

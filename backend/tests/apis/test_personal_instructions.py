@@ -147,11 +147,14 @@ def test_the_default_model_lookup_reuses_the_turns_settings_read(monkeypatch):
     async def must_not_read(_user_id):
         raise AssertionError("settings were read twice in one turn")
 
-    async def no_managed_model(_model_id):
-        return None
+    class Managed:
+        provider = "bedrock"
+
+    async def managed_model(_model_id):
+        return Managed()
 
     monkeypatch.setattr(chat_routes, "_load_user_settings", must_not_read)
-    monkeypatch.setattr(chat_routes, "_find_managed_model", no_managed_model)
+    monkeypatch.setattr(chat_routes, "_find_managed_model", managed_model)
     assert asyncio.run(
         chat_routes._resolve_user_default_model("u-1", settings={"defaultModelId": "m-9"})
-    ) == ("m-9", None)
+    ) == ("m-9", "bedrock")
