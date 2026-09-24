@@ -7,6 +7,7 @@ app API and inference API deployments.
 from pydantic import BaseModel, Field, ConfigDict, computed_field, field_validator, model_validator
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+from enum import Enum
 
 from apis.shared.models.model_icons import model_icon_url, normalize_icon_slug
 
@@ -147,6 +148,51 @@ def _max_tokens_within_ceiling(
         raise ValueError("max_tokens default must be <= maxOutputTokens")
 
 
+class ModelStatus(str, Enum):
+    """Lifecycle of a managed model — docs/specs/model-retirement.md §7.
+
+    Deliberately separate from ``enabled``. ``enabled`` is an on/off switch that
+    already means other things (a voice-only row is off in chat), and flipping it
+    403s every Designer save of an Agent that keeps the model (§3). ``status``
+    is read by the pickers (``deprecated``: no *new* selection) and by the
+    runtime (``retired``: redirect to ``replacedBy``, or deny when there is none).
+    """
+
+    ACTIVE = "active"
+    DEPRECATED = "deprecated"
+    RETIRED = "retired"
+
+
+RETIREMENT_NOTE_MAX_LENGTH = 300
+
+
+def _blank_to_none(value: object) -> object:
+    """An empty or whitespace-only string is "unset" — the admin form posts ``""``
+    for an untouched optional input, and a stored ``""`` would render an empty
+    reason line rather than none at all."""
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return value
+
+
+def _check_retires_on(value: Optional[str]) -> Optional[str]:
+    """Reject anything that is not a plain ISO date.
+
+    Stored as a string because it is displayed, never computed with — which is
+    exactly why it is guarded on the way in: "soon" or "9/30/26" would otherwise
+    persist and reach the SPA as-is. ``""`` passes: it is the update path's
+    "clear it" sentinel.
+    """
+    if not value:
+        return value
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"retiresOn must be an ISO date (YYYY-MM-DD), got '{value}'")
+    return value
+
+
 class ManagedModelCreate(BaseModel):
     """Request model for creating a managed model."""
     model_config = ConfigDict(populate_by_name=True)
@@ -268,6 +314,40 @@ class ManagedModelCreate(BaseModel):
                     "When None, the runtime sends no inference params."
     )
 
+    status: ModelStatus = Field(
+        ModelStatus.ACTIVE,
+        description="Lifecycle: 'active', 'deprecated' (pickers refuse new selections) or "
+                    "'retired' (the runtime invokes replacedBy instead, or denies the turn "
+                    "when there is none). See docs/specs/model-retirement.md.",
+    )
+    replaced_by: Optional[str] = Field(
+        None,
+        alias="replacedBy",
+        description="modelId of the successor. A retired model with one is redirected to "
+                    "it on every runtime path; must name an existing, active model.",
+    )
+    retires_on: Optional[str] = Field(
+        None,
+        alias="retiresOn",
+        description="ISO date (YYYY-MM-DD) of the cutover (Stage 3). Display only.",
+    )
+    retirement_note: Optional[str] = Field(
+        None,
+        alias="retirementNote",
+        max_length=RETIREMENT_NOTE_MAX_LENGTH,
+        description="Free text shown wherever a non-active model is surfaced. Display only.",
+    )
+
+    @field_validator("replaced_by", "retires_on", "retirement_note", mode="before")
+    @classmethod
+    def _blank_lifecycle_to_none(cls, value: object) -> object:
+        return _blank_to_none(value)
+
+    @field_validator("retires_on")
+    @classmethod
+    def _validate_retires_on(cls, value: Optional[str]) -> Optional[str]:
+        return _check_retires_on(value)
+
     @model_validator(mode="after")
     def _check_max_tokens_within_ceiling(self) -> "ManagedModelCreate":
         _max_tokens_within_ceiling(self.max_output_tokens, self.supported_params)
@@ -382,6 +462,27 @@ class ManagedModelUpdate(BaseModel):
         alias="supportedParams",
         description="Per-model inference parameter capabilities."
     )
+
+    # Lifecycle. Same partial-update contract as iconSlug: None (absent) leaves
+    # the stored value alone, and '' clears it — the only way to say "remove",
+    # because the update dump drops None.
+    status: Optional[ModelStatus] = None
+    replaced_by: Optional[str] = Field(None, alias="replacedBy")
+    retires_on: Optional[str] = Field(None, alias="retiresOn")
+    retirement_note: Optional[str] = Field(
+        None, alias="retirementNote", max_length=RETIREMENT_NOTE_MAX_LENGTH
+    )
+
+    @field_validator("replaced_by", "retires_on", "retirement_note", mode="before")
+    @classmethod
+    def _strip_lifecycle(cls, value: object) -> object:
+        # Whitespace-only collapses to '' (clear), never to None (leave alone).
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("retires_on")
+    @classmethod
+    def _validate_retires_on(cls, value: Optional[str]) -> Optional[str]:
+        return _check_retires_on(value)
 
     @model_validator(mode="after")
     def _check_max_tokens_within_ceiling(self) -> "ManagedModelUpdate":
@@ -519,6 +620,34 @@ class ManagedModel(BaseModel):
         alias="supportedParams",
         description="Per-model inference parameter capabilities."
     )
+    status: ModelStatus = Field(
+        ModelStatus.ACTIVE,
+        description="Lifecycle — see ModelStatus. Absent on every row written before "
+                    "retirement shipped, which reads as active.",
+    )
+    replaced_by: Optional[str] = Field(None, alias="replacedBy")
+    retires_on: Optional[str] = Field(None, alias="retiresOn")
+    # Not length-capped on read, for the same reason as shortDescription: a
+    # stored value over the write cap must not take the /models listing down.
+    retirement_note: Optional[str] = Field(None, alias="retirementNote")
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _tolerate_unknown_status(cls, value: object) -> object:
+        # A hand-edited or future status must not fail validation: a row that
+        # fails to parse drops out of the catalog entirely, and a model with no
+        # row runs unmetered (docs/specs/model-retirement.md §2).
+        if value in (None, ""):
+            return ModelStatus.ACTIVE
+        if isinstance(value, str) and value not in {s.value for s in ModelStatus}:
+            return ModelStatus.ACTIVE
+        return value
+
+    @field_validator("replaced_by", "retires_on", "retirement_note", mode="before")
+    @classmethod
+    def _blank_lifecycle_to_none(cls, value: object) -> object:
+        return _blank_to_none(value)
+
     @computed_field(alias="iconUrl", return_type=Optional[str])  # type: ignore[prop-decorator]
     @property
     def icon_url(self) -> Optional[str]:

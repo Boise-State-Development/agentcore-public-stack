@@ -195,6 +195,12 @@
                       aria-label="Default model"
                     />
                   }
+                  @if (model.status && model.status !== 'active') {
+                    <span
+                      class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300"
+                      >{{ model.status }}</span
+                    >
+                  }
                 </div>
                 <p
                   class="truncate font-mono text-xs/5 text-gray-500 dark:text-gray-400"

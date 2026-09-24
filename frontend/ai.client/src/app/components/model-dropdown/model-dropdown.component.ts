@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, computed, inject } from '@angular/core';
+import { Component, ChangeDetectionStrategy, computed, inject, input } from '@angular/core';
 import { Router } from '@angular/router';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
@@ -22,7 +22,8 @@ import { ModelOptionComponent } from './components/model-option.component';
       @if (modelService.agentModelLocked()) {
         <!-- Agent-dictated: the active agent pins this model; the picker is locked. -->
         <div
-          class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm/5 text-gray-500 dark:text-gray-400"
+          class="flex items-center rounded-lg text-gray-500 dark:text-gray-400"
+          [class]="lockedClass()"
           title="This agent runs on a fixed model"
         >
           <ng-icon name="heroLockClosed" class="size-3.5 shrink-0" aria-hidden="true" />
@@ -33,8 +34,9 @@ import { ModelOptionComponent } from './components/model-option.component';
         <button
           type="button"
           [cdkMenuTriggerFor]="modelMenu"
-          [cdkMenuPosition]="menuPositions"
-          class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm/5 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+          [cdkMenuPosition]="menuPositions()"
+          [class]="triggerSizeClass()"
+          class="flex items-center rounded-lg text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
           aria-label="Select model"
         >
           <span>{{ modelService.selectedModel().modelName || 'Loading...' }}</span>
@@ -47,7 +49,8 @@ import { ModelOptionComponent } from './components/model-option.component';
             viewBox="0 0 20 20"
             fill="currentColor"
             aria-hidden="true"
-            class="size-4 transition-transform"
+            class="transition-transform"
+            [class]="size() === 'compact' ? 'size-3.5' : 'size-4'"
             [class.rotate-180]="isMenuOpen()"
           >
             <path
@@ -105,6 +108,7 @@ import { ModelOptionComponent } from './components/model-option.component';
                 cdkMenuItem
                 [model]="model"
                 [selected]="isSelected(model)"
+                [successorName]="modelService.modelNameFor(model.replacedBy)"
                 [showNewChatHint]="sessionService.hasCurrentSession()"
                 (cdkMenuItemTriggered)="selectModel(model)"
               />
@@ -203,6 +207,7 @@ import { ModelOptionComponent } from './components/model-option.component';
                       cdkMenuItem
                       [model]="model"
                       [selected]="isSelected(model)"
+                      [successorName]="modelService.modelNameFor(model.replacedBy)"
                       [showNewChatHint]="sessionService.hasCurrentSession()"
                       (cdkMenuItemTriggered)="selectModel(model)"
                     />
@@ -265,23 +270,35 @@ export class ModelDropdownComponent {
     return level ? effortLevelLabel(level) : null;
   });
 
-  // Menu positioning - align to bottom-left of trigger
-  protected menuPositions: ConnectedPosition[] = [
-    {
-      originX: 'start',
-      originY: 'bottom',
-      overlayX: 'start',
-      overlayY: 'top',
-      offsetY: 8
-    },
-    {
-      originX: 'start',
-      originY: 'top',
-      overlayX: 'start',
-      overlayY: 'bottom',
-      offsetY: -8
-    }
-  ];
+  /**
+   * `compact` is the picker as it sits in the line beneath a compact composer:
+   * the meta line's type size, and a menu that opens upward from the right,
+   * because that line is the bottom-right corner of the viewport. `default` is
+   * the picker in the empty state's control bar.
+   */
+  readonly size = input<'default' | 'compact'>('default');
+
+  protected readonly triggerSizeClass = computed(() =>
+    this.size() === 'compact' ? 'gap-1 px-2 py-1 text-xs/5' : 'gap-1.5 px-3 py-1.5 text-sm/5',
+  );
+
+  protected readonly lockedClass = computed(() =>
+    this.size() === 'compact' ? 'gap-1.5 px-2 py-1 text-xs/5' : 'gap-2 px-3 py-1.5 text-sm/5',
+  );
+
+  // Menu positioning - below the trigger's left edge, flipping above when there
+  // is no room; the compact picker prefers above its right edge (see `size`).
+  protected readonly menuPositions = computed<ConnectedPosition[]>(() =>
+    this.size() === 'compact'
+      ? [
+          { originX: 'end', originY: 'top', overlayX: 'end', overlayY: 'bottom', offsetY: -8 },
+          { originX: 'end', originY: 'bottom', overlayX: 'end', overlayY: 'top', offsetY: 8 },
+        ]
+      : [
+          { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top', offsetY: 8 },
+          { originX: 'start', originY: 'top', overlayX: 'start', overlayY: 'bottom', offsetY: -8 },
+        ],
+  );
 
   // Submenus fly out to the right of their parent row, flipping to the left
   // when there isn't room — the picker sits in the composer, which can be

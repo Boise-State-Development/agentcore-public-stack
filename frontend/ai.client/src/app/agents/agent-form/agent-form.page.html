@@ -253,7 +253,7 @@
       </div>
       <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">The agent runs on this model. Only models your role allows are shown.</p>
 
-      @if (models().length === 0) {
+      @if (visibleModels().length === 0) {
         <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">No models are available to your role.</p>
       } @else {
         <!--
@@ -276,8 +276,14 @@
           a wash reads even when its edge does not. `primary-300` measures 3.45:1. Same
           reason the check steps up with it.
         -->
+        @if (retiringModelNotice(); as notice) {
+          <div class="mt-3 rounded-lg bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">
+            <p><span class="font-medium">{{ notice.lead }}</span>{{ notice.detail ? ' ' + notice.detail : '' }}</p>
+            <p class="mt-1.5">{{ notice.action }}</p>
+          </div>
+        }
         <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          @for (m of models(); track m.ref) {
+          @for (m of visibleModels(); track m.ref) {
             <button
               type="button"
               (click)="selectModel(m.ref)"
@@ -290,7 +296,12 @@
              "
             >
               <div class="min-w-0">
-                <p class="truncate text-sm font-medium text-gray-900 dark:text-white">{{ m.label }}</p>
+                <p class="flex min-w-0 items-center gap-1.5 text-sm font-medium text-gray-900 dark:text-white">
+                  <span class="truncate">{{ m.label }}</span>
+                  @if (isModelRetiring(m)) {
+                    <span class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">retiring</span>
+                  }
+                </p>
                 <p class="truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ m.description }}</p>
               </div>
               @if (selectedModelId() === m.ref) {

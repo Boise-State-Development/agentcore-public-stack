@@ -16,7 +16,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from apis.shared.caching import config_cache
-from .models import ManagedModel, ManagedModelCreate, ManagedModelUpdate
+from .models import ManagedModel, ManagedModelCreate, ManagedModelUpdate, ModelStatus
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +305,10 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         mantle_api_mode=_resolve_mantle_api_mode(model_data.mantle_api_mode, model_data.provider),
         mantle_region=_resolve_mantle_region(model_data.mantle_region, model_data.provider),
         supported_params=model_data.supported_params,
+        status=model_data.status,
+        replaced_by=model_data.replaced_by,
+        retires_on=model_data.retires_on,
+        retirement_note=model_data.retirement_note,
         created_at=now,
         updated_at=now,
     )
@@ -330,6 +334,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         'supportsCaching': _resolve_supports_caching(model_data.supports_caching, model_data.provider),
         'isDefault': model_data.is_default,
         'isFeatured': model_data.is_featured,
+        'status': model_data.status.value,
         'createdAt': now.isoformat(),
         'updatedAt': now.isoformat(),
     }
@@ -355,6 +360,12 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         item['region'] = resolved_region
     if model_data.supported_params is not None:
         item['supportedParams'] = model_data.supported_params.model_dump(by_alias=True, exclude_none=True)
+    if model_data.replaced_by:
+        item['replacedBy'] = model_data.replaced_by
+    if model_data.retires_on:
+        item['retiresOn'] = model_data.retires_on
+    if model_data.retirement_note:
+        item['retirementNote'] = model_data.retirement_note
 
     # Convert floats to Decimal for DynamoDB
     item = _python_to_dynamodb(item)
@@ -681,10 +692,16 @@ async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate
     # the model_dump above drops None fields, which is what makes a PATCH a
     # PATCH. Removing the attribute rather than storing '' keeps the record
     # shaped like one that never had an icon.
-    if update_data.get('iconSlug') == '':
-        update_data.pop('iconSlug')
-        remove_expression_parts.append('#iconSlug')
-        expression_attribute_names['#iconSlug'] = 'iconSlug'
+    # The lifecycle strings share that contract (docs/specs/model-retirement.md §7).
+    for clearable in ('iconSlug', 'replacedBy', 'retiresOn', 'retirementNote'):
+        if update_data.get(clearable) == '':
+            update_data.pop(clearable)
+            remove_expression_parts.append(f'#{clearable}')
+            expression_attribute_names[f'#{clearable}'] = clearable
+
+    # A str-Enum member must reach DynamoDB as its plain value.
+    if 'status' in update_data:
+        update_data['status'] = ModelStatus(update_data['status']).value
 
     # Add updatedAt timestamp
     update_data['updatedAt'] = datetime.now(timezone.utc).isoformat()

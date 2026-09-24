@@ -40,6 +40,7 @@ from apis.shared.files.models import (
     MAX_FILES_PER_MESSAGE,
 )
 from apis.shared.models.managed_models import list_managed_models
+from apis.shared.models.retirement import resolve_effective_model, retired_model_message
 from apis.shared.quota import (
     QuotaExceededEvent,
     build_no_quota_configured_event,
@@ -400,6 +401,16 @@ async def _resolve_user_default_model(
     saved_id = settings.get("defaultModelId")
     if not saved_id:
         return None, None
+
+    # A saved default on a retired model follows its successor; one with no
+    # successor is treated as unset, so the turn falls back like any other
+    # default the user can no longer use.
+    effective = await resolve_effective_model(saved_id)
+    if effective is not None:
+        if effective.denied:
+            return None, None
+        if effective.redirected:
+            return effective.model_id, effective.provider
 
     managed = await _find_managed_model(saved_id)
     provider = managed.provider if managed else None
@@ -1937,6 +1948,21 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     )
     logger.info("Message received")
 
+    # Model retirement (docs/specs/model-retirement.md §7). Resolved before anything
+    # builds an agent from ``input_data.model_id``, so the App tool-call / context /
+    # continuation paths land in the same agent-cache slot as the turn itself. A
+    # redirect swaps the provider as well: the request's described the retired
+    # model, and a successor on another transport misroutes with it. A denial is
+    # streamed at the access check below, once there is a turn to answer.
+    retired_model_denial: Optional[str] = None
+    requested_model = await resolve_effective_model(input_data.model_id)
+    if requested_model is not None:
+        if requested_model.denied:
+            retired_model_denial = retired_model_message(requested_model.retired)
+        elif requested_model.redirected:
+            input_data.model_id = requested_model.model_id
+            input_data.provider = requested_model.provider
+
     # App-initiated tools/call (MCP Apps PR #5). Like resume/continuation it
     # bypasses quota / RAG / file resolution / title — there is no model
     # turn. We rebuild the conversation agent (so the MCP client session +
@@ -2438,6 +2464,27 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 message=quota_exceeded_event.message,
                 stop_reason="quota_exceeded",
                 metadata_event=quota_exceeded_event,
+                session_id=input_data.session_id,
+                user_id=user_id,
+                user_input=input_data.message,
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": input_data.session_id},
+        )
+
+    # A retired model with no successor is denied for everyone, wildcard holders
+    # included — as a conversational message, not the bare 403 below. Not on a
+    # resume: that turn finishes on its paused snapshot's model, whatever the
+    # request carries.
+    if retired_model_denial and not is_resume:
+        retired_event = ConversationalErrorEvent(
+            code=ErrorCode.FORBIDDEN, message=retired_model_denial, recoverable=False
+        )
+        return StreamingResponse(
+            stream_conversational_message(
+                message=retired_model_denial,
+                stop_reason="error",
+                metadata_event=retired_event,
                 session_id=input_data.session_id,
                 user_id=user_id,
                 user_input=input_data.message,

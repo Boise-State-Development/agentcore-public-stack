@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 
 import { ConfigService } from '../../../services/config.service';
 import { AudioRecorderService } from '../voice/audio-recorder.service';
+import { DictationChimeService, type DictationChime } from './dictation-chime.service';
 import {
   DictationService,
   DictationUnavailableError,
@@ -79,6 +80,7 @@ describe('DictationService', () => {
   let recorder: RecorderStub;
   let onEnd: Mock<(text: string, reason: DictationEndReason) => void>;
   let onError: Mock<(message: string) => void>;
+  let chime: { prime: Mock<() => void>; play: Mock<(which: DictationChime) => void> };
   const OriginalWebSocket = globalThis.WebSocket;
 
   beforeEach(() => {
@@ -87,12 +89,14 @@ describe('DictationService', () => {
     recorder = new RecorderStub();
     onEnd = vi.fn();
     onError = vi.fn();
+    chime = { prime: vi.fn(), play: vi.fn() };
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
         { provide: AudioRecorderService, useValue: recorder },
+        { provide: DictationChimeService, useValue: chime },
       ],
     });
     service = TestBed.inject(DictationService);
@@ -239,6 +243,62 @@ describe('DictationService', () => {
     await flush();
     expect(recorder.recording).toBe(false);
     expect(service.status()).toBe('idle');
+  });
+
+  describe('chimes', () => {
+    const played = () => chime.play.mock.calls.map(([which]) => which);
+
+    it('primes audio synchronously inside start, before the ticket request', () => {
+      void service.start({ onEnd, onError });
+      // Nothing has been awaited yet: the browser still counts this as the click.
+      expect(chime.prime).toHaveBeenCalledTimes(1);
+      http.expectOne('http://localhost:8000/dictation/ticket');
+    });
+
+    it('plays start only once the mic is live, not while connecting', async () => {
+      const started = service.start({ onEnd, onError });
+      http.expectOne('http://localhost:8000/dictation/ticket').flush({ ticket: 'tkt', expires_in: 60 });
+      await flush();
+      expect(played()).toEqual([]);
+
+      FakeSocket.last!.serverSends({ type: 'ready' });
+      await started;
+      expect(played()).toEqual(['start']);
+    });
+
+    it('plays stop once on Done, when the mic goes off rather than when the text lands', async () => {
+      const socket = await startListening();
+      service.finish();
+      expect(played()).toEqual(['start', 'stop']);
+
+      socket.serverSends({ type: 'done', reason: 'stopped' });
+      expect(played()).toEqual(['start', 'stop']);
+    });
+
+    it('plays stop on Cancel', async () => {
+      await startListening();
+      service.cancel();
+      expect(played()).toEqual(['start', 'stop']);
+    });
+
+    it('plays stop when the time limit or a dropped socket ends a live dictation', async () => {
+      let socket = await startListening();
+      socket.serverSends({ type: 'done', reason: 'limit' });
+      expect(played()).toEqual(['start', 'stop']);
+
+      socket = await startListening();
+      socket.onclose?.();
+      expect(played()).toEqual(['start', 'stop', 'start', 'stop']);
+    });
+
+    it('plays nothing for an attempt that never reached listening', async () => {
+      const started = service.start({ onEnd, onError });
+      http
+        .expectOne('http://localhost:8000/dictation/ticket')
+        .flush('Not Found', { status: 404, statusText: 'Not Found' });
+      await expect(started).rejects.toBeInstanceOf(DictationUnavailableError);
+      expect(played()).toEqual([]);
+    });
   });
 
   it('tracks a rolling level per chunk for the waveform', async () => {
