@@ -108,6 +108,15 @@ export class ChatStateService {
         }
     }
 
+    /**
+     * Whether ANY conversation is streaming, viewed or not. Navigating away
+     * from a streaming session keeps its stream alive on purpose, so "the
+     * viewed session is idle" does not mean a full page load is safe.
+     */
+    readonly anySessionLoading = computed(() =>
+        [...this.states().values()].some(state => state.loading())
+    );
+
     /** Whether a specific session is currently streaming (loading). */
     isSessionLoading(sessionId: string): boolean {
         return this.states().get(sessionId)?.loading() ?? false;
