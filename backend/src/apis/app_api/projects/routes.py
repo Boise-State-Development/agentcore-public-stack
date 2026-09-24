@@ -1,5 +1,6 @@
 """``/projects`` — Shared Projects CRUD, members, transfer and leave (shared-projects §5, PR-1.2),
-the people directory for inviting (PR-1.3), and the caller's own and shared tasks (PR-1.6).
+the people directory for inviting (PR-1.3), settings with version history (PR-1.5a), and the
+caller's own and shared tasks (PR-1.6).
 
 Every route authenticates by session cookie first and only then applies the
 ``PROJECTS_ENABLED`` kill switch, so an unauthenticated caller always sees 401
@@ -17,8 +18,11 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
+from apis.app_api.agent_designer.services.binding_validation import BindingValidationError
+from apis.shared.assistants.models import AgentBinding, VersionFieldChange
+from apis.shared.assistants.version_diff import changed_fields, wire_field_name, wire_value
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.directory import get_directory
@@ -36,20 +40,38 @@ from apis.shared.sessions.metadata import list_project_sessions
 from apis.shared.sessions.models import SessionMetadataResponse, SessionsListResponse
 
 from .harness_gateway import AppApiHarnessGateway
+from .harness_settings import (
+    SKILL,
+    TOOL,
+    HarnessSettingsService,
+    HarnessView,
+    created_by_email,
+    version_instructions_diff,
+)
 from .models import (
     AddMembersRequest,
     AddMembersResponse,
+    BindingRef,
+    BindingsResponse,
     CreateProjectRequest,
     DirectoryPersonResponse,
     DirectoryResponse,
+    InstructionsResponse,
     MemberResponse,
     MembersResponse,
+    ModelResponse,
     ProjectListResponse,
     ProjectResponse,
+    SettingsVersionResponse,
+    SettingsVersionSummary,
+    SettingsVersionsResponse,
     SharedTaskResponse,
     SharedTasksResponse,
     TransferOwnershipRequest,
+    UpdateBindingsRequest,
+    UpdateInstructionsRequest,
     UpdateMemberRequest,
+    UpdateModelRequest,
     UpdateProjectRequest,
 )
 
@@ -65,6 +87,10 @@ def _svc() -> ProjectService:
     if _service is None:
         _service = ProjectService(harness=AppApiHarnessGateway())
     return _service
+
+
+def _settings() -> HarnessSettingsService:
+    return HarnessSettingsService(_svc())
 
 
 async def require_projects_user(user: User = Depends(get_current_user_from_session)) -> User:
@@ -156,6 +182,157 @@ def transfer_project(
     except ProjectError as e:
         raise _translate(e)
     return ProjectResponse.from_project(project, "editor")
+
+
+# ---- settings (instructions, model, tools, skills) ---------------------
+
+
+def _refs(harness_bindings, kind: str) -> list:
+    return [BindingRef(ref=b.ref, config=b.config) for b in (harness_bindings or []) if b.kind == kind]
+
+
+async def _save(project_id: str, user: User, **changes) -> HarnessView:
+    try:
+        return await _settings().update(project_id, user, **changes)
+    except ProjectError as e:
+        raise _translate(e)
+    except BindingValidationError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+async def _view(project_id: str, user: User) -> HarnessView:
+    try:
+        return await _settings().get(project_id, user)
+    except ProjectError as e:
+        raise _translate(e)
+
+
+def _instructions(view: HarnessView) -> InstructionsResponse:
+    return InstructionsResponse(instructions=view.harness.instructions or "", version=view.version, can_edit=view.can_edit)
+
+
+def _model(view: HarnessView) -> ModelResponse:
+    return ModelResponse(model_settings=view.harness.model_settings, version=view.version, can_edit=view.can_edit)
+
+
+def _bindings(view: HarnessView, kind: str) -> BindingsResponse:
+    return BindingsResponse(bindings=_refs(view.harness.bindings, kind), version=view.version, can_edit=view.can_edit)
+
+
+@router.get("/{project_id}/instructions", response_model=InstructionsResponse, response_model_by_alias=True)
+async def get_instructions(project_id: str, user: User = Depends(require_projects_user)) -> InstructionsResponse:
+    return _instructions(await _view(project_id, user))
+
+
+@router.put("/{project_id}/instructions", response_model=InstructionsResponse, response_model_by_alias=True)
+async def put_instructions(
+    project_id: str, body: UpdateInstructionsRequest, user: User = Depends(require_projects_user)
+) -> InstructionsResponse:
+    """Replace the project's instructions (editor). Each change is a new version."""
+    return _instructions(await _save(project_id, user, instructions=body.instructions))
+
+
+@router.get("/{project_id}/model", response_model=ModelResponse, response_model_by_alias=True)
+async def get_model(project_id: str, user: User = Depends(require_projects_user)) -> ModelResponse:
+    return _model(await _view(project_id, user))
+
+
+@router.put("/{project_id}/model", response_model=ModelResponse, response_model_by_alias=True)
+async def put_model(
+    project_id: str, body: UpdateModelRequest, user: User = Depends(require_projects_user)
+) -> ModelResponse:
+    """Set the project's model (editor). The saver must be allowed to use it; a member who
+    is not falls back to their own default when they run the project (§9.6)."""
+    return _model(await _save(project_id, user, model_settings=body.model_settings))
+
+
+@router.get("/{project_id}/tools", response_model=BindingsResponse, response_model_by_alias=True)
+async def get_tools(project_id: str, user: User = Depends(require_projects_user)) -> BindingsResponse:
+    return _bindings(await _view(project_id, user), TOOL)
+
+
+@router.put("/{project_id}/tools", response_model=BindingsResponse, response_model_by_alias=True)
+async def put_tools(
+    project_id: str, body: UpdateBindingsRequest, user: User = Depends(require_projects_user)
+) -> BindingsResponse:
+    """Replace the project's tools (editor). Tools the saver adds must be ones they can use."""
+    bindings = [AgentBinding(kind=TOOL, ref=b.ref, config=b.config) for b in body.bindings]
+    return _bindings(await _save(project_id, user, kind=TOOL, bindings=bindings), TOOL)
+
+
+@router.get("/{project_id}/skills", response_model=BindingsResponse, response_model_by_alias=True)
+async def get_skills(project_id: str, user: User = Depends(require_projects_user)) -> BindingsResponse:
+    return _bindings(await _view(project_id, user), SKILL)
+
+
+@router.put("/{project_id}/skills", response_model=BindingsResponse, response_model_by_alias=True)
+async def put_skills(
+    project_id: str, body: UpdateBindingsRequest, user: User = Depends(require_projects_user)
+) -> BindingsResponse:
+    """Replace the project's skills (editor). Skills the saver adds must be ones they can use."""
+    bindings = [AgentBinding(kind=SKILL, ref=b.ref, config=b.config) for b in body.bindings]
+    return _bindings(await _save(project_id, user, kind=SKILL, bindings=bindings), SKILL)
+
+
+@router.get(
+    "/{project_id}/instructions/versions", response_model=SettingsVersionsResponse, response_model_by_alias=True
+)
+async def list_settings_versions(
+    project_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    user: User = Depends(require_projects_user),
+) -> SettingsVersionsResponse:
+    """Every saved change to the project's settings, newest first."""
+    try:
+        versions = await _settings().list_versions(project_id, user, limit)
+    except ProjectError as e:
+        raise _translate(e)
+    return SettingsVersionsResponse(versions=[
+        SettingsVersionSummary(
+            version=v.version,
+            created_at=v.created_at,
+            created_by_email=created_by_email(v),
+            changes=[wire_field_name(f) for f in fields],
+        )
+        for v, fields in versions
+    ])
+
+
+@router.get(
+    "/{project_id}/instructions/versions/{number}",
+    response_model=SettingsVersionResponse,
+    response_model_by_alias=True,
+)
+async def get_settings_version(
+    project_id: str, number: int = Path(..., ge=1), user: User = Depends(require_projects_user)
+) -> SettingsVersionResponse:
+    """One version in full, with its diff against the version before it."""
+    try:
+        detail = await _settings().get_version(project_id, user, number)
+    except ProjectError as e:
+        raise _translate(e)
+    v = detail.version
+    changes = changed_fields(detail.previous, v)
+    return SettingsVersionResponse(
+        version=v.version,
+        created_at=v.created_at,
+        created_by_email=created_by_email(v),
+        changes=[wire_field_name(f) for f, _, _ in changes],
+        instructions=v.instructions or "",
+        model_settings=v.model_settings,
+        tools=_refs(v.bindings, TOOL),
+        skills=_refs(v.bindings, SKILL),
+        field_changes=[
+            VersionFieldChange(
+                field=wire_field_name(f),
+                before=wire_value(before),
+                after=wire_value(after),
+                behavior=f in ("instructions", "bindings", "model_settings"),
+            )
+            for f, before, after in changes
+        ],
+        instructions_diff=version_instructions_diff(detail),
+    )
 
 
 # ---- tasks -------------------------------------------------------------

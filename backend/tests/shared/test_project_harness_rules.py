@@ -196,3 +196,16 @@ def test_the_harness_cannot_be_submitted_to_the_store(project):
         asyncio.run(
             submit_listing(created.harness_agent_id, OWNER, SubmitListingRequest(category="productivity"))
         )
+
+
+def test_an_archived_projects_harness_is_read_only_for_every_member(project):
+    service, created = project
+    service.update_project(created.project_id, OWNER, status="archived")
+    for user in (OWNER, EDITOR, VIEWER):
+        agent, role = access(created.harness_agent_id, user)
+        assert (agent is not None, role) == (True, "viewer")
+        assert permission(created.harness_agent_id, user)[1] == "viewer"
+    assert access(created.harness_agent_id, STRANGER) == (None, None)
+
+    service.update_project(created.project_id, OWNER, status="active")
+    assert permission(created.harness_agent_id, EDITOR)[1] == "editor"

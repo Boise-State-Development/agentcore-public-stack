@@ -47,6 +47,8 @@ from apis.shared.assistants.version_diff import (
     behavior_changed,
     changed_fields,
     instructions_diff,
+    wire_field_name,
+    wire_value,
 )
 from apis.shared.assistants.version_repository import (
     create_version,
@@ -1116,21 +1118,6 @@ async def patch_listing_presentation(
 # ── admin reads ──────────────────────────────────────────────────────────────────────
 # camelCase for the wire, so the SPA reads the same field names it already knows from
 # ``AgentResponse``. Snake_case would leak the storage attribute names into the UI.
-_DIFF_FIELD_ALIASES = {
-    "model_settings": "modelConfig",
-    "icon_key": "iconKey",
-    "publisher_id": "publisherId",
-}
-
-
-def _wire_value(value):
-    """Serialize a snapshot value for the diff payload, keeping ``None`` distinct from ``[]``."""
-    if isinstance(value, list):
-        return [_wire_value(item) for item in value]
-    dump = getattr(value, "model_dump", None)
-    return dump(by_alias=True) if dump else value
-
-
 async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
     """What the pending submission changes against what is published (§6.1).
 
@@ -1183,9 +1170,9 @@ async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
 
     changes = [
         VersionFieldChange(
-            field=_DIFF_FIELD_ALIASES.get(field, field),
-            before=_wire_value(before),
-            after=_wire_value(after),
+            field=wire_field_name(field),
+            before=wire_value(before),
+            after=wire_value(after),
             behavior=field in ("instructions", "bindings", "model_settings"),
         )
         for field, before, after in changed_fields(published, pending)
