@@ -573,6 +573,30 @@ def dictation_enabled() -> bool:
     return os.environ.get("DICTATION_ENABLED", "").strip().lower() != "false"
 
 
+def platform_self_service_enabled() -> bool:
+    """Whether the platform self-service account tools are injected on a turn.
+
+    Covers the ``system`` account tools built per request and handed to the
+    agent as ``extra_tools`` — the read-only pilot ``whoami`` / ``get_my_quota``
+    / ``get_my_settings`` (``.kiro/specs/platform-self-service/``), and the
+    confirmed-write tools as they land. **Defaults OFF** (the
+    ``FINE_TUNING_ENABLED``-style opt-in): set
+    ``PLATFORM_SELF_SERVICE_ENABLED=true`` to turn it on.
+
+    Off by default on purpose, not by caution. These tools are injected on
+    **every** turn for every authenticated user (they are platform plumbing,
+    not a picker toggle), so while off a turn carries no self-service
+    ``extra_tools`` and its agent-cache eligibility is exactly what it was
+    before this feature — no per-turn cost, no prefix change. The tools close
+    over only the invoking ``User`` (keyed by ``user_id`` in the agent cache
+    key), so when on they are key-described and cacheable; identity is
+    captured by closure, never taken as a model argument (the same pattern the
+    six existing per-request tool families use, since the runtime does not
+    populate Strands' ToolContext). See the spec's design doc.
+    """
+    return os.environ.get("PLATFORM_SELF_SERVICE_ENABLED", "false").strip().lower() == "true"
+
+
 def projects_enabled() -> bool:
     """Whether Shared Projects exist in this environment.
 

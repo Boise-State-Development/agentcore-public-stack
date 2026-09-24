@@ -582,6 +582,48 @@ def _build_spreadsheet_tools(
 
 
 # ============================================================
+# Platform Self-Service Account Tool Injection
+# ============================================================
+
+def _build_account_tools(current_user: User) -> list:
+    """Create the platform self-service account tools bound to ``current_user``.
+
+    These are ``system`` tools — platform plumbing, not a picker toggle — so
+    they are injected on EVERY turn for every authenticated user (not gated on
+    ``enabled_tools``), exactly as the always-on/system tier intends. Identity
+    is captured by closure here, never taken as a model argument, so the model
+    cannot redirect them at another user.
+
+    Gated only by ``platform_self_service_enabled()`` (default OFF). While off
+    this returns ``[]`` and a turn carries no self-service ``extra_tools``, so
+    the agent-cache eligibility and the cacheable prefix are exactly what they
+    were before this feature. When on, the tools close over only the invoking
+    ``User`` (keyed by ``user_id`` in the agent cache key), so they are
+    key-described and do not veto the cache. Read-only pilot for now;
+    confirmed-write tools land in a later phase. See
+    ``.kiro/specs/platform-self-service/``.
+    """
+    from apis.shared.feature_flags import platform_self_service_enabled
+
+    if not platform_self_service_enabled():
+        return []
+
+    from agents.local_tools.account_tools import (
+        make_get_my_quota_tool,
+        make_get_my_settings_tool,
+        make_whoami_tool,
+    )
+
+    tools = [
+        make_whoami_tool(current_user),
+        make_get_my_quota_tool(current_user),
+        make_get_my_settings_tool(current_user),
+    ]
+    logger.info("Created %d platform self-service account tools", len(tools))
+    return tools
+
+
+# ============================================================
 # Artifact Authoring Tool Injection
 # ============================================================
 
@@ -3308,7 +3350,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,
-            )
+            ) + _build_account_tools(current_user)
 
             memory_tools = _build_memory_tools(
                 agent_memory=agent_memory,

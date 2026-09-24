@@ -40,40 +40,62 @@ full suite.
 
 ## Phase 2 — Identity binding for account tools
 
-- [ ] 2.1 Establish a request-scoped `User`/`user_id` accessor for local tools,
-  set when the agent is built for a turn (contextvar), mirroring how OAuth tools
-  resolve identity. `backend/src/apis/inference_api/chat/app_tool_dispatch.py`
-  (pattern source), agent factory / turn setup. _(Req 3.1)_
+> **Implemented via closure capture, not a contextvar (deviation from the
+> design's tentative "contextvar preferred" note).** The repo's own code states
+> the runtime does not populate Strands' ToolContext, and all six existing
+> per-request tool families (spreadsheet/artifact/word/excel/powerpoint/
+> workspace) bind identity by closure via `make_*_tool(...)` factories injected
+> as `extra_tools`. Account tools follow that proven, safe pattern:
+> `make_whoami_tool(user)` etc. in
+> `backend/src/agents/local_tools/account_tools.py`. Req 3 (identity from
+> context, never a model argument) is satisfied *more strongly* — the tool
+> callables take **no** parameters at all, so there is no argument through which
+> the model could target another user. "Fail closed when identity is absent" is
+> structural: a tool cannot be built without a `User`.
 
-- [ ] 2.2 Helper `resolve_current_user()` for tools that fails closed (clear
-  error) when context identity is absent. _(Req 3.3)_
+- [x] 2.1 Identity captured by closure in the per-request factories (in place of
+  a contextvar); wired at the `extra_tools` seam in
+  `inference_api/chat/routes.py::_build_account_tools`. _(Req 3.1)_
 
-- [ ] 2.3 Test: a tool cannot be made to act on a passed-in user id; identity
-  always comes from context; absent context → fail closed. _(Req 3.2, 3.3)_
+- [x] 2.2 No `resolve_current_user()` needed — the factory requires a `User`, so
+  a tool with absent identity cannot exist (fails closed by construction). _(Req 3.3)_
+
+- [x] 2.3 Test: tools take no user/id argument (structural proof, `test_account_tools.py::TestIdentityBinding`); two tools bound to different users do not cross. _(Req 3.2, 3.3)_
 
 ---
 
 ## Phase 3 — Skill 1 pilot: Account & Usage (read-only first)
 
-- [ ] 3.1 `whoami` local tool (hidden, system): returns name, roles, tier from
-  the session `User`. New file in `backend/src/agents/local_tools/`, exported in
-  `__all__`, catalog entry `system=true, hidden=true`. _(Req 4.3)_
+> Delivered behind the **`PLATFORM_SELF_SERVICE_ENABLED`** flag (default OFF)
+> per the Rollout section. While off, no self-service `extra_tools` are added,
+> so agent-cache eligibility and the cacheable prefix are exactly as before —
+> zero per-turn cost. When on, the three tools are injected on every turn and
+> close over only the invoking `User` (keyed by `user_id` in the cache key), so
+> they are key-described and do not veto the agent cache.
 
-- [ ] 3.2 `get_my_quota` local tool (system, visible-but-locked): calls
-  `QuotaChecker.check_quota(user)` and returns `current_usage, quota_limit,
-  remaining, percentage_used, tier`. `backend/src/agents/main_agent/quota/checker.py`
-  is the backing service. _(Req 4.1, 4.4)_
+- [x] 3.1 `whoami` (system, hidden): name/email/roles + quota tier from the
+  session `User`. `agents/local_tools/account_tools.py::make_whoami_tool`. _(Req 4.3)_
 
-- [ ] 3.3 `get_my_settings` local tool (system, visible-but-locked): reads the
-  user's settings (default model, …) via
-  `backend/src/apis/shared/user_settings/repository.py`. _(Req 4.2, 4.4)_
+- [x] 3.2 `get_my_quota` (system, visible-but-locked): read-only snapshot
+  (`current_usage/quota_limit/remaining/percentage_used/tier`). **Computes via
+  the resolver + cost aggregator, NOT `QuotaChecker.check_quota`** — the latter
+  records warning/block events as a side effect, wrong for a read. _(Req 4.1, 4.4)_
 
-- [ ] 3.4 Register all three in the catalog with correct `system`/`hidden`
-  flags and friendly names/icons for transcript labeling.
-  `backend/src/agents/main_agent/tools/tool_catalog.py`. _(Req 1.3, 4)_
+- [x] 3.3 `get_my_settings` (system, visible-but-locked): reads default model
+  via `apis.shared.user_settings.repository.get_user_settings_repository()`
+  (new shared singleton, keeps agents off app_api). _(Req 4.2, 4.4)_
 
-- [ ] 3.5 Tests: each read tool returns correct data for the context user and
-  refuses to target another; quota numbers match the enforcement path.
+- [x] 3.4 Catalog metadata in `tool_catalog.py` with `system`/`hidden` flags and
+  friendly names/icons for transcript labeling. _(Req 1.3, 4)_
+  **Deferred:** seeding real DynamoDB `ToolDefinition` rows (unnecessary — the
+  closures deliver the tools directly; `resolve_system_tool_ids` remains for any
+  future *registry* system tool) and the SPA reading `hidden` to filter the
+  settings panel (frontend task, task 1.3's frontend half).
+
+- [x] 3.5 Tests: each read tool returns correct data for the context user;
+  quota maps resolver+aggregator; unlimited/daily/no-tier/error paths; flag gate;
+  catalog flags. `backend/tests/agents/local_tools/test_account_tools.py`
+  (18 tests). _(Req 4)_
 
 ---
 
