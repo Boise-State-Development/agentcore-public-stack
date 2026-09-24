@@ -237,19 +237,41 @@ class TestGetMySettings:
 
 
 class TestBuilderGate:
-    def test_disabled_by_default(self, monkeypatch):
+    ALL = ["whoami", "get_my_quota", "get_my_settings"]
+
+    def test_disabled_by_default_even_with_ids(self, monkeypatch):
         monkeypatch.delenv("PLATFORM_SELF_SERVICE_ENABLED", raising=False)
         from apis.inference_api.chat.routes import _build_account_tools
 
-        assert _build_account_tools(_user()) == []
+        assert _build_account_tools(self.ALL, _user()) == []
 
-    def test_enabled_builds_three_tools(self, monkeypatch):
+    def test_enabled_but_empty_effective_set_builds_nothing(self, monkeypatch):
+        """Flag on but the catalog resolved no account tool ids into the turn's
+        effective set (rows disabled / ungranted / unseeded) → nothing built."""
         monkeypatch.setenv("PLATFORM_SELF_SERVICE_ENABLED", "true")
         from apis.inference_api.chat.routes import _build_account_tools
 
-        tools = _build_account_tools(_user())
-        names = {t.tool_name for t in tools}
-        assert names == {"whoami", "get_my_quota", "get_my_settings"}
+        assert _build_account_tools([], _user()) == []
+        assert _build_account_tools(None, _user()) == []
+
+    def test_builds_only_ids_present_in_effective_set(self, monkeypatch):
+        """The off-switch: a tool absent from the resolved effective set (an
+        admin disabled its row, or a role isn't granted it) is not injected,
+        even though its factory exists."""
+        monkeypatch.setenv("PLATFORM_SELF_SERVICE_ENABLED", "true")
+        from apis.inference_api.chat.routes import _build_account_tools
+
+        tools = _build_account_tools(
+            ["whoami", "get_my_settings", "some_unrelated_tool"], _user()
+        )
+        assert {t.tool_name for t in tools} == {"whoami", "get_my_settings"}
+
+    def test_all_three_when_all_resolved(self, monkeypatch):
+        monkeypatch.setenv("PLATFORM_SELF_SERVICE_ENABLED", "true")
+        from apis.inference_api.chat.routes import _build_account_tools
+
+        tools = _build_account_tools(self.ALL, _user())
+        assert {t.tool_name for t in tools} == set(self.ALL)
 
 
 class TestCatalogMetadata:

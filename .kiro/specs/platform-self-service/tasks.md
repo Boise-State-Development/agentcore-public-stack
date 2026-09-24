@@ -99,6 +99,44 @@ full suite.
 
 ---
 
+## Phase 3.6 — Admin-governed runtime off-switch (design reversal)
+
+> **Reverses the earlier "system tools are not an admin knob" call.** Once the
+> pilot was run locally, the code-only delivery showed its weakness: disabling a
+> tool needed a code change + redeploy. The fix makes system tools
+> **admin-governable at runtime, without a deploy**, while keeping them invisible
+> in the *user* picker.
+
+- [x] 3.6.1 `get_system_tool_ids` now filters on **status** — a system row set
+  to `disabled`/`deprecated` drops out of the injected set on the next turn
+  (≤ the 10s freshness TTL). `apis/shared/tools/freshness.py`. This is the
+  admin's no-deploy off-switch (set via the existing admin Tools panel status
+  control + `PUT /admin/tools/{id}`).
+
+- [x] 3.6.2 `_build_account_tools(effective_enabled_tools, current_user)` injects
+  a tool ONLY when its id is already in the turn's effective set — i.e. the row
+  is `system`, `active`, AND RBAC-granted (`resolve_system_tool_ids` →
+  `_apply_admin_always_on_tools`). So a disabled row or an ungranted role
+  removes it, no deploy. `inference_api/chat/routes.py`.
+
+- [x] 3.6.3 Seed the three rows in `scripts/seed_bootstrap_data.py::DEFAULT_TOOLS`
+  (`system`, `hidden` per rule, `isPublic`, status active). Satisfies
+  `test_seed_matches_tool_catalog` (catalogued tools must have a seed row) and
+  is what makes them appear + toggleable in the admin panel. **Run the seeder
+  once** (local or per env) for the tools to exist; the master
+  `PLATFORM_SELF_SERVICE_ENABLED` flag still gates the whole feature per env.
+
+- [x] 3.6.4 Tests: freshness excludes non-active system rows
+  (`test_freshness.py::test_system_snapshot_excludes_non_active_status`); the
+  builder injects only ids present in the effective set
+  (`test_account_tools.py::TestBuilderGate`).
+
+- [ ] 3.6.5 **Deferred (frontend):** the admin Tools panel already lists these
+  rows and can set status, so the off-switch works today via the API; a
+  dedicated "system tool" affordance/label in the panel UI is a follow-on.
+
+---
+
 ## Phase 4 — Platform-knowledge skill + base-prompt pointer
 
 - [ ] 4.1 Author the platform-knowledge skill as a `system` + `internal` skill

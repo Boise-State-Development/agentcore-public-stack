@@ -582,6 +582,50 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "isPublic": True,
         "forwardAuthToken": False,
     },
+    # --- Platform self-service (Account & Usage) system tools ---
+    # .kiro/specs/platform-self-service/. `system: True` force-injects the tool
+    # on every granted turn (bypassing the user picker); an admin's runtime
+    # off-switch is this row's status (set it to `disabled` in the Tools panel —
+    # no redeploy). `hidden: True` keeps it out of the user picker list while
+    # still showing it in the transcript when invoked. isPublic so every
+    # authenticated user has it (they only ever read their OWN account); the
+    # runtime tool objects are closure-bound (agents/local_tools/account_tools.py).
+    {
+        "toolId": "whoami",
+        "displayName": "Account Lookup",
+        "description": "Look up who the signed-in user is on this platform (name, roles, plan).",
+        "category": "account",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+        "system": True,
+        "hidden": True,
+    },
+    {
+        "toolId": "get_my_quota",
+        "displayName": "Usage & Quota",
+        "description": "Report how much of the signed-in user's usage quota is left.",
+        "category": "account",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+        "system": True,
+        "hidden": False,
+    },
+    {
+        "toolId": "get_my_settings",
+        "displayName": "My Settings",
+        "description": "Report the signed-in user's account settings, such as their default model.",
+        "category": "account",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+        "system": True,
+        "hidden": False,
+    },
 ]
 
 
@@ -899,6 +943,12 @@ def seed_default_tools(
             "enabledByDefault": tool_def["enabledByDefault"],
             "isPublic": tool_def["isPublic"],
             "forwardAuthToken": tool_def["forwardAuthToken"],
+            # Platform self-service tier (.kiro/specs/platform-self-service/).
+            # Default false so every existing entry is unchanged; the account
+            # tools set them true. `system` makes the tool force-injected on
+            # granted turns; `hidden` keeps it out of the user picker list.
+            "system": tool_def.get("system", False),
+            "hidden": tool_def.get("hidden", False),
             "createdAt": now,
             "updatedAt": now,
             "createdBy": "bootstrap-seed",

@@ -585,27 +585,39 @@ def _build_spreadsheet_tools(
 # Platform Self-Service Account Tool Injection
 # ============================================================
 
-def _build_account_tools(current_user: User) -> list:
-    """Create the platform self-service account tools bound to ``current_user``.
+def _build_account_tools(effective_enabled_tools: list | None, current_user: User) -> list:
+    """Create the platform self-service account tools, admin-governed at runtime.
 
-    These are ``system`` tools — platform plumbing, not a picker toggle — so
-    they are injected on EVERY turn for every authenticated user (not gated on
-    ``enabled_tools``), exactly as the always-on/system tier intends. Identity
-    is captured by closure here, never taken as a model argument, so the model
-    cannot redirect them at another user.
+    These are ``system`` tools — platform plumbing, not a user picker toggle —
+    but they ARE admin-governable without a redeploy. The switch is the tool's
+    catalog row: ``resolve_system_tool_ids`` (called by
+    ``_apply_admin_always_on_tools`` upstream) returns a system tool's id only
+    when its row is ``system`` **and** ``status == active`` **and** the caller's
+    roles grant it. That resolved set is exactly what lands in
+    ``effective_enabled_tools`` here, so:
 
-    Gated only by ``platform_self_service_enabled()`` (default OFF). While off
-    this returns ``[]`` and a turn carries no self-service ``extra_tools``, so
-    the agent-cache eligibility and the cacheable prefix are exactly what they
-    were before this feature. When on, the tools close over only the invoking
-    ``User`` (keyed by ``user_id`` in the agent cache key), so they are
-    key-described and do not veto the cache. Read-only pilot for now;
-    confirmed-write tools land in a later phase. See
+    - an admin flipping a row to ``disabled`` in the Tools panel drops it from
+      the set on the next turn (≤ the freshness TTL, no deploy);
+    - a role that is not granted the tool never sees it;
+    - and a user cannot turn it on/off in their own picker (it is unioned in
+      regardless of their preferences, like any always-on tool).
+
+    So we inject a closure **only** for an id present in ``effective_enabled_tools``.
+    The closure captures identity (never a model argument); the catalog row is
+    the on/off authority.
+
+    Still gated by ``platform_self_service_enabled()`` (default OFF) as the
+    per-environment master switch — when off, nothing is injected and the
+    agent-cache eligibility is unchanged. See
     ``.kiro/specs/platform-self-service/``.
     """
     from apis.shared.feature_flags import platform_self_service_enabled
 
     if not platform_self_service_enabled():
+        return []
+
+    enabled = set(effective_enabled_tools or ())
+    if not enabled:
         return []
 
     from agents.local_tools.account_tools import (
@@ -614,12 +626,16 @@ def _build_account_tools(current_user: User) -> list:
         make_whoami_tool,
     )
 
-    tools = [
-        make_whoami_tool(current_user),
-        make_get_my_quota_tool(current_user),
-        make_get_my_settings_tool(current_user),
-    ]
-    logger.info("Created %d platform self-service account tools", len(tools))
+    # id -> factory. Only ids the catalog resolved into the effective set (row
+    # present, system, active, RBAC-granted) get built.
+    factories = {
+        "whoami": make_whoami_tool,
+        "get_my_quota": make_get_my_quota_tool,
+        "get_my_settings": make_get_my_settings_tool,
+    }
+    tools = [factory(current_user) for tid, factory in factories.items() if tid in enabled]
+    if tools:
+        logger.info("Injected %d platform self-service account tool(s)", len(tools))
     return tools
 
 
@@ -3350,7 +3366,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,
-            ) + _build_account_tools(current_user)
+            ) + _build_account_tools(effective_enabled_tools, current_user)
 
             memory_tools = _build_memory_tools(
                 agent_memory=agent_memory,

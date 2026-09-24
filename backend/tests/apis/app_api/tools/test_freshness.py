@@ -170,16 +170,35 @@ async def test_repository_error_falls_back_to_last_known_value():
         assert await freshness.get_tool_updated_at("gmail") is None
 
 
-def _sys_tool(tool_id: str, *, is_public: bool = False, system: bool = False):
+def _sys_tool(tool_id: str, *, is_public: bool = False, system: bool = False, status: str = "active"):
     """A catalog-tool stand-in carrying the attrs the snapshot pass reads."""
     return SimpleNamespace(
         tool_id=tool_id,
         is_public=is_public,
         system=system,
+        status=status,
         always_on=False,
         mcp_config=None,
         mcp_gateway_config=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_system_snapshot_excludes_non_active_status():
+    """The admin runtime off-switch: a system tool flipped to `disabled`
+    (or `deprecated`) drops out of the injected set, no redeploy."""
+    repo = _repo_with_tools(
+        _sys_tool("whoami", system=True, status="active"),
+        _sys_tool("get_my_quota", system=True, status="disabled"),
+        _sys_tool("get_my_settings", system=True, status="deprecated"),
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        system_ids = await freshness.get_system_tool_ids()
+
+    assert system_ids == frozenset({"whoami"})
 
 
 @pytest.mark.asyncio

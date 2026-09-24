@@ -288,11 +288,31 @@ async def _get_snapshot(
                 exc_info=True,
             )
     _always_on_tool_ids_cache[0] = (frozenset(always_on_ids), now)
+    # System snapshot is status-filtered, UNLIKE the public/always-on slots.
+    # A system tool is force-injected on every granted turn, so an admin's only
+    # runtime kill-switch is the row's status: flipping it to `disabled` (or
+    # `deprecated`) in the Tools panel must drop it from the injected set on the
+    # next turn, with no redeploy. `_is_active_status` treats a ToolStatus enum
+    # and its bare string value the same, and a missing status as active (every
+    # row written before the status field, and the seeder's "active").
     _system_tool_ids_cache[0] = (
-        frozenset(t.tool_id for t in tools if getattr(t, "system", False)),
+        frozenset(
+            t.tool_id
+            for t in tools
+            if getattr(t, "system", False) and _is_active_status(t)
+        ),
         now,
     )
     return slot[0][0]  # type: ignore[index]
+
+
+def _is_active_status(tool) -> bool:
+    """Whether a catalog row counts as active (enum or bare string, absent = active)."""
+    status = getattr(tool, "status", None)
+    if status is None:
+        return True
+    value = getattr(status, "value", status)
+    return value == "active"
 
 
 def invalidate(tool_id: Optional[str] = None) -> None:
