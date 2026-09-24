@@ -134,6 +134,12 @@ class Defaults:
     """
 
     # --- Model ---
+    # Last resort only. A turn that names no model runs on the user's saved
+    # default, then the catalog's `isDefault` row (inference-api
+    # `_resolve_fallback_model`); this id is reached only when the catalog has
+    # no enabled default. It has no pricing unless the catalog carries a row for
+    # this exact id (prod registers `global.*` ids), so a turn here is unmetered
+    # and emits `UnmeteredModelCall`.
     MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     CACHING_ENABLED = True
 

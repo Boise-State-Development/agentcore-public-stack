@@ -305,3 +305,61 @@ class TestEffortAllowed:
             }}},
         )
         assert m.supported_params.params["effort"].default is None
+
+
+class TestDefaultManagedModel:
+    """``get_default_managed_model`` — the server-side fallback's source of truth."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_dynamodb(self, managed_models_table, monkeypatch):
+        import apis.shared.models.managed_models as mm
+        monkeypatch.setattr(mm, "dynamodb", boto3.resource("dynamodb", region_name="us-east-1"))
+
+    @pytest.mark.asyncio
+    async def test_returns_the_flagged_row(self):
+        from apis.shared.models.managed_models import create_managed_model, get_default_managed_model
+        await create_managed_model(_make_model_data("m1"))
+        await create_managed_model(_make_model_data("global.m2", isDefault=True, provider="bedrock-responses"))
+        default = await get_default_managed_model()
+        assert default is not None
+        assert (default.model_id, default.provider) == ("global.m2", "bedrock-responses")
+
+    @pytest.mark.asyncio
+    async def test_none_when_no_row_is_flagged(self):
+        from apis.shared.models.managed_models import create_managed_model, get_default_managed_model
+        await create_managed_model(_make_model_data("m1"))
+        assert await get_default_managed_model() is None
+
+    @pytest.mark.asyncio
+    async def test_a_disabled_default_does_not_count(self):
+        # A turn must never land on a model the admin switched off.
+        from apis.shared.models.managed_models import create_managed_model, get_default_managed_model
+        await create_managed_model(_make_model_data("m1", isDefault=True, enabled=False))
+        assert await get_default_managed_model() is None
+
+    @pytest.mark.asyncio
+    async def test_a_catalog_read_failure_is_a_fallback_not_an_error(self, monkeypatch):
+        import apis.shared.models.managed_models as mm
+
+        async def boom():
+            raise RuntimeError("DynamoDB unavailable")
+
+        monkeypatch.setattr(mm, "list_all_managed_models", boom)
+        assert await mm.get_default_managed_model() is None
+
+
+@pytest.mark.asyncio
+async def test_a_retired_default_does_not_count(monkeypatch):
+    # validate_lifecycle refuses this state at write time; the fallback must not
+    # hand a turn to a model the runtime would then deny.
+    import apis.shared.models.managed_models as mm
+    from types import SimpleNamespace
+    from apis.shared.models.models import ModelStatus
+
+    retired = SimpleNamespace(model_id="m-old", is_default=True, enabled=True, status=ModelStatus.RETIRED)
+
+    async def catalog():
+        return [retired]
+
+    monkeypatch.setattr(mm, "list_all_managed_models", catalog)
+    assert await mm.get_default_managed_model() is None
