@@ -55,6 +55,7 @@ from apis.app_api.agent_designer.services.agent_detail import (
     _gated_bindings,
     _labels_by_kind,
     _model_label,
+    _runnable_model_check,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,8 +93,10 @@ async def _diff_against_role(
     notes: List[str] = []
 
     if assistant.model_settings is not None:
-        model_id = assistant.model_settings.model_id
-        if not _granted(_grants(role, "models"), model_id):
+        model_id, retired_missing = await _runnable_model_check(assistant.model_settings.model_id)
+        if retired_missing is not None:
+            missing.append(retired_missing)
+        elif not _granted(_grants(role, "models"), model_id):
             missing.append(
                 MissingCapability(
                     label=await _model_label(model_id) or _fallback("model"),

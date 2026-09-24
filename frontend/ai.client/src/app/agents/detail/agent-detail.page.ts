@@ -36,6 +36,7 @@ import {
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 import { parseIso } from '../../utils/date';
+import { modelRetirementDetail } from '../../shared/utils/retirement';
 
 /**
  * Agent detail — the page a shelf row taps through to (Marketplace Phase 3).
@@ -271,6 +272,11 @@ import { parseIso } from '../../utils/date';
                         {{ row.value }}
                       </dd>
                     </div>
+                    @if (row.note) {
+                      <p class="pb-1 text-right text-xs/5 text-state-warning-700 dark:text-state-warning-300">
+                        {{ row.note }}
+                      </p>
+                    }
                   }
                 </dl>
               </section>
@@ -448,15 +454,37 @@ export class AgentDetailPage implements OnInit {
     return starter.charAt(0).toLowerCase() + starter.slice(1);
   });
 
-  readonly details = computed(() => {
+  readonly details = computed<{ label: string; value: string; note?: string }[]>(() => {
     const a = this.agent();
     if (!a) return [];
     return [
       { label: 'Publisher', value: this.publisherLabel() },
       { label: 'Category', value: a.categoryLabel || '—' },
-      { label: 'Model', value: a.modelLabel || '—' },
+      { label: 'Model', value: a.modelLabel || '—', note: this.modelRetirementNote() ?? undefined },
       { label: 'Last updated', value: this.formatDate(a.updatedAt) },
     ];
+  });
+
+  /**
+   * What happens to this agent's model, when it is being retired. Without it the panel
+   * names a model the runtime no longer runs (docs/specs/model-retirement.md): a retired
+   * model answers as its successor, or not at all.
+   */
+  readonly modelRetirementNote = computed<string | null>(() => {
+    const r = this.agent()?.modelRetirement;
+    if (!r) return null;
+    const detail = modelRetirementDetail({
+      status: r.status,
+      successorName: r.successorLabel,
+      retiresOn: r.retiresOn,
+      retirementNote: r.retirementNote,
+    });
+    if (r.status === 'retired') {
+      return r.successorLabel
+        ? `Retired. ${detail}`
+        : 'Retired. This agent can’t run until its owner chooses another model.';
+    }
+    return detail ? `Being retired. ${detail}` : 'Being retired.';
   });
 
   /**

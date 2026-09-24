@@ -62,6 +62,15 @@ export interface AgentBinding {
  * Names, never refs — the backend resolves binding refs to display names so this
  * payload can be rendered to anyone who may see the Agent.
  */
+/** The pinned model's retirement, as `GET /agents/{id}` resolves it. Display names only. */
+export interface AgentModelRetirement {
+  status: 'deprecated' | 'retired';
+  /** The model that answers in its place, when there is one. */
+  successorLabel?: string | null;
+  retiresOn?: string | null;
+  retirementNote?: string | null;
+}
+
 export interface AgentCapability {
   label: string;
   kind: string;
@@ -112,6 +121,8 @@ export interface Agent {
   /** Resolved on `GET /agents/{id}` only. */
   capabilities?: AgentCapability[];
   modelLabel?: string;
+  /** Set when the pinned model is deprecated or retired (docs/specs/model-retirement.md). */
+  modelRetirement?: AgentModelRetirement | null;
   /** Attribution as the page renders it; `listing.publisherId` is an id and never shown. */
   publisher?: ListingPublisher | null;
   categoryLabel?: string;

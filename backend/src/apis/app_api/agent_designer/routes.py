@@ -39,6 +39,7 @@ from apis.app_api.agent_designer.services.bindable_catalog import (
 from apis.app_api.agent_designer.services.agent_detail import (
     resolve_capabilities,
     resolve_listing_display,
+    resolve_model_retirement,
     resolve_runnability,
 )
 from apis.app_api.agent_designer.services.binding_validation import (
@@ -413,6 +414,10 @@ async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require
             capabilities, model_label = await resolve_capabilities(assistant, current_user)
             response.capabilities = capabilities
             response.model_label = model_label
+            if assistant.model_settings is not None:
+                response.model_retirement = await resolve_model_retirement(
+                    assistant.model_settings.model_id
+                )
             response.publisher, response.category_label = await resolve_listing_display(assistant)
         except Exception:
             logger.warning(f"Failed to resolve capabilities for agent {scrub_log(agent_id)}", exc_info=True)

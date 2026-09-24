@@ -539,6 +539,24 @@ class AssistantsListResponse(BaseModel):
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for next page")
 
 
+class AgentModelRetirement(BaseModel):
+    """The pinned model is being retired, as the detail page says so (docs/specs/model-retirement.md).
+
+    Present only when the model is ``deprecated`` or ``retired``: without it the Details
+    panel names a model the runtime no longer runs. ``successorLabel`` is the model that
+    answers in its place — a display name, like every other detail-page field, never an id.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str = Field(..., description="'deprecated' or 'retired'")
+    successor_label: Optional[str] = Field(
+        None, alias="successorLabel", description="Display name of the replacement model, when there is one"
+    )
+    retires_on: Optional[str] = Field(None, alias="retiresOn", description="ISO date of the cutover")
+    retirement_note: Optional[str] = Field(None, alias="retirementNote", description="Admin note for users")
+
+
 class AgentCapability(BaseModel):
     """One thing an Agent can reach, as the detail page names it (Phase 3, D4/D6).
 
@@ -665,6 +683,11 @@ class AgentResponse(BaseModel):
         None,
         alias="modelLabel",
         description="Display name of the pinned model, for the detail Details panel; absent when no model is pinned",
+    )
+    model_retirement: Optional[AgentModelRetirement] = Field(
+        None,
+        alias="modelRetirement",
+        description="Set when the pinned model is deprecated or retired; absent for an active model",
     )
     publisher: Optional["ListingPublisher"] = Field(
         None,
