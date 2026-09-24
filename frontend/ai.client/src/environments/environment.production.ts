@@ -7,4 +7,8 @@
 // CORS preflights on every request.
 export const environment = {
     appApiUrl: '/api',
+    // Proactive new-build check (AppUpdateService): on tab focus, at most every
+    // 10 minutes, one conditional GET of index.html (a 304 when unchanged).
+    // Kill switch — chunk-failure recovery works without it.
+    versionCheckEnabled: true,
 };

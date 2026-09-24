@@ -1,5 +1,5 @@
 import { ApplicationConfig, inject, provideAppInitializer, provideBrowserGlobalErrorListeners } from '@angular/core';
-import { provideRouter, withComponentInputBinding } from '@angular/router';
+import { provideRouter, withComponentInputBinding, withNavigationErrorHandler } from '@angular/router';
 
 import { routes } from './app.routes';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
@@ -11,6 +11,10 @@ import { SessionService } from './auth/session.service';
 import { ThemeService } from './components/topnav/components/theme-toggle/theme.service';
 import { provideBuiltInToolRenderers } from './session/components/message-list/components/tool-use/built-in-renderers';
 import { AnnouncementModalService } from './services/announcements/announcement-modal.service';
+import {
+  provideStaleBuildRecovery,
+  recoverFromStaleChunkNavigation,
+} from './services/app-update/app-update.providers';
 import { ConfigService } from './services/config.service';
 import { durableDownloadUrlFromHref } from './shared/utils/file-download-url';
 import { installLazyMermaid } from './shared/utils/lazy-mermaid';
@@ -54,7 +58,15 @@ export const appConfig: ApplicationConfig = {
         deps: [ConfigService],
       },
     }),
-    provideRouter(routes, withComponentInputBinding()),
+    provideRouter(
+      routes,
+      withComponentInputBinding(),
+      // A tab opened before a deploy asks for lazy chunks the deploy deleted.
+      // The navigation becomes a full load of its destination (or a Refresh
+      // prompt when a stream/upload would be cut off, or it already tried).
+      withNavigationErrorHandler(recoverFromStaleChunkNavigation),
+    ),
+    provideStaleBuildRecovery(),
 
     // Bootstrap the BFF cookie session before the first component renders.
     // GET ${appApiUrl}/auth/session — on 401, SessionService sends the browser
