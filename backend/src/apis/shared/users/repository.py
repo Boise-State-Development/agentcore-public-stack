@@ -1,5 +1,6 @@
 """DynamoDB repository for user management."""
 
+from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 import boto3
 from botocore.exceptions import ClientError
@@ -21,6 +22,35 @@ def _heal_iso(value: str) -> str:
     trailing ``Z`` (a no-op for already-valid values).
     """
     return value.replace("+00:00Z", "Z") if value else value
+
+
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _login_instant(profile: UserProfile) -> datetime:
+    """``last_login_at`` as an aware datetime; unparseable sorts oldest.
+
+    Compared as instants, not strings: rows carry mixed precision
+    (``…:00Z`` vs ``…:00.123456Z``) and ``"."`` sorts before ``"Z"``.
+    """
+    value = profile.last_login_at or ""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return _EPOCH
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _live_profile_rank(profile: UserProfile) -> Tuple[datetime, bool, str]:
+    """Sort key (descending) that puts the live profile of an email first.
+
+    One email can own several PROFILE rows: the pre-Cognito login keyed users
+    by a numeric employee ID (``USER#<employee id>``), the current one by the
+    Cognito ``sub`` uuid, and nothing retired the old rows. Most recent login
+    wins; on a tie a non-numeric id beats a legacy numeric one; the id itself
+    breaks any remaining tie so the choice never depends on GSI order.
+    """
+    return (_login_instant(profile), not profile.user_id.isdigit(), profile.user_id)
 
 
 class UserRepository:
@@ -112,29 +142,56 @@ class UserRepository:
             logger.error(f"Error getting user by userId {user_id}: {e}")
             return None
 
-    async def get_user_by_email(self, email: str) -> Optional[UserProfile]:
-        """Get user by email (case-insensitive lookup)."""
+    async def get_users_by_email(self, email: str) -> List[UserProfile]:
+        """Every PROFILE row for an email (case-insensitive), live one first.
+
+        ``EmailIndex`` has no sort key and email is not unique in this table
+        (see ``_live_profile_rank``), so this reads every page and orders the
+        rows itself rather than trusting whichever one DynamoDB returns first.
+        """
         if not self._enabled:
-            return None
+            return []
 
         try:
-            response = self.table.query(
-                IndexName="EmailIndex",
-                KeyConditionExpression="email = :email",
-                ExpressionAttributeValues={
-                    ":email": email.lower()
-                },
-                Limit=1
-            )
-
-            items = response.get("Items", [])
-            if not items:
-                return None
-
-            return self._item_to_profile(items[0])
+            kwargs: dict = {
+                "IndexName": "EmailIndex",
+                "KeyConditionExpression": "email = :email",
+                "ExpressionAttributeValues": {":email": email.lower()},
+            }
+            items: List[dict] = []
+            while True:
+                response = self.table.query(**kwargs)
+                items.extend(response.get("Items", []))
+                last_key = response.get("LastEvaluatedKey")
+                if not last_key:
+                    break
+                kwargs["ExclusiveStartKey"] = last_key
         except ClientError as e:
-            logger.error(f"Error getting user by email {email}: {e}")
+            logger.error(f"Error getting users by email {email}: {e}")
+            return []
+
+        profiles = [self._item_to_profile(item) for item in items]
+        return sorted(profiles, key=_live_profile_rank, reverse=True)
+
+    async def get_user_by_email(self, email: str) -> Optional[UserProfile]:
+        """The live profile for an email (case-insensitive lookup).
+
+        When several rows share the email, returns the one ``get_users_by_email``
+        ranks first and logs the rest, so the duplicates stay visible until
+        they are cleaned up.
+        """
+        profiles = await self.get_users_by_email(email)
+        if not profiles:
             return None
+
+        if len(profiles) > 1:
+            logger.warning(
+                "EmailIndex has %d profiles for one email; using %s, ignoring %s",
+                len(profiles),
+                profiles[0].user_id,
+                [p.user_id for p in profiles[1:]],
+            )
+        return profiles[0]
 
     async def create_user(self, profile: UserProfile) -> UserProfile:
         """Create a new user record."""
@@ -191,7 +248,27 @@ class UserRepository:
             return profile, False
         else:
             await self.create_user(profile)
+            await self._warn_on_email_collision(profile)
             return profile, True
+
+    async def _warn_on_email_collision(self, profile: UserProfile) -> None:
+        """Log when a brand-new profile's email already belongs to another id.
+
+        That is how the legacy duplicates were born: the login changed which
+        claim becomes the user id, and the new id got a fresh row beside the
+        old one. Runs only on creation, so returning users pay nothing.
+        """
+        others = [
+            p.user_id
+            for p in await self.get_users_by_email(profile.email)
+            if p.user_id != profile.user_id
+        ]
+        if others:
+            logger.warning(
+                "New user %s shares its email with existing profile(s) %s",
+                profile.user_id,
+                others,
+            )
 
     # ========== List Operations ==========
 
