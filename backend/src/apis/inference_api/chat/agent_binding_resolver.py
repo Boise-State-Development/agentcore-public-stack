@@ -55,6 +55,11 @@ from apis.shared.assistants.models import Assistant
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import memory_spaces_enabled, skills_enabled
 from apis.shared.memory.service import MemorySpaceService
+from apis.shared.models.retirement import (
+    EffectiveModel,
+    resolve_effective_model,
+    retired_model_message,
+)
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.skills.access import resolve_invocable_skill_ids
 from apis.shared.tools.scoped_ids import base_tool_id
@@ -240,19 +245,34 @@ async def resolve_agent_invocation(
 
     model_settings = assistant.model_settings
     if model_settings is not None:
+        # A retired model runs as its successor — including from a published
+        # snapshot, which still names the model it was reviewed on — and the
+        # access check below is on the model that will actually run
+        # (docs/specs/model-retirement.md §5 Stage 3). The Agent's params ride
+        # along; the successor's own spec drops what it does not support.
+        effective = await resolve_effective_model(model_settings.model_id) or EffectiveModel(
+            requested_id=model_settings.model_id, model_id=model_settings.model_id
+        )
+        model_id = effective.model_id
+        provider = effective.provider if effective.redirected else model_settings.provider
         app_role_service = get_app_role_service()
-        if await app_role_service.can_access_model(invoker, model_settings.model_id):
+        if effective.denied:
+            if degrade:
+                plan.unavailable.model_id = model_settings.model_id
+            else:
+                raise AgentBindingBlockedError(retired_model_message(effective.retired, agent=True))
+        elif await app_role_service.can_access_model(invoker, model_id):
             plan.model_override = ResolvedModel(
-                model_id=model_settings.model_id,
-                provider=model_settings.provider,
+                model_id=model_id,
+                provider=provider,
                 params=model_settings.params,
             )
         elif degrade:
             # No override: the route's normal chain picks the invoker's default model.
-            plan.unavailable.model_id = model_settings.model_id
+            plan.unavailable.model_id = model_id
         else:
             raise AgentBindingBlockedError(
-                f"This agent runs on **{model_settings.model_id}**, which isn't available "
+                f"This agent runs on **{model_id}**, which isn't available "
                 "to your account. Ask an administrator for access, or use a different agent."
             )
 

@@ -102,6 +102,92 @@ def _skill_binding(ref: str) -> AgentBinding:
     return AgentBinding(kind="skill", ref=ref)
 
 
+def _patch_retirement(monkeypatch, catalog) -> None:
+    """Resolve against an in-memory catalog (docs/specs/model-retirement.md §7)."""
+    from apis.shared.models.retirement import resolve_from_catalog
+
+    async def _resolve(model_id):
+        return resolve_from_catalog(model_id, catalog) if model_id else None
+
+    monkeypatch.setattr(f"{MODULE}.resolve_effective_model", _resolve)
+
+
+def _catalog_row(model_id, *, status="active", replaced_by=None, provider="bedrock", name=None):
+    from datetime import datetime, timezone
+
+    from apis.shared.models.models import ManagedModel
+
+    now = datetime(2026, 9, 24, tzinfo=timezone.utc)
+    return ManagedModel(
+        id=f"uuid-{model_id}", modelId=model_id, modelName=name or model_id, provider=provider,
+        providerName="Amazon Bedrock", inputModalities=["text"], outputModalities=["text"],
+        maxInputTokens=200000, enabled=True, inputPricePerMillionTokens=1.0,
+        outputPricePerMillionTokens=5.0, status=status, replacedBy=replaced_by,
+        createdAt=now, updatedAt=now,
+    )
+
+
+class TestRetiredModel:
+    """A retired model runs as its successor, or blocks when there is none."""
+
+    @pytest.mark.asyncio
+    async def test_redirects_to_successor_and_checks_access_on_it(self, monkeypatch):
+        _patch_retirement(monkeypatch, [
+            _catalog_row("old", status="retired", replaced_by="new"),
+            _catalog_row("new", provider="bedrock-responses"),
+        ])
+        svc = _patch_access(monkeypatch, True)
+        cfg = AgentModelConfig(model_id="old", provider="bedrock", params={"effort": "high"})
+        plan = await resolve_agent_invocation(_assistant(model_settings=cfg), _user())
+        assert plan.model_override.model_id == "new"
+        # The stored provider described the retired model; the successor's wins.
+        assert plan.model_override.provider == "bedrock-responses"
+        # Params ride along — the successor's own spec filters them at merge time.
+        assert plan.model_override.params == {"effort": "high"}
+        assert svc.can_access_model.await_args.args[1] == "new"
+
+    @pytest.mark.asyncio
+    async def test_redirect_without_successor_access_blocks_naming_the_successor(self, monkeypatch):
+        _patch_retirement(monkeypatch, [
+            _catalog_row("old", status="retired", replaced_by="new"),
+            _catalog_row("new"),
+        ])
+        _patch_access(monkeypatch, False)
+        cfg = AgentModelConfig(model_id="old")
+        with pytest.raises(AgentBindingBlockedError) as ei:
+            await resolve_agent_invocation(_assistant(model_settings=cfg), _user())
+        assert "**new**" in ei.value.message
+
+    @pytest.mark.asyncio
+    async def test_retired_without_successor_blocks_even_a_wildcard_holder(self, monkeypatch):
+        _patch_retirement(monkeypatch, [_catalog_row("old", status="retired", name="Claude Old")])
+        svc = _patch_access(monkeypatch, True)
+        cfg = AgentModelConfig(model_id="old")
+        with pytest.raises(AgentBindingBlockedError) as ei:
+            await resolve_agent_invocation(_assistant(model_settings=cfg), _user())
+        assert "**Claude Old**, which has been retired" in ei.value.message
+        # Denied before RBAC: revoking grants cannot reach a `*` holder; this does.
+        svc.can_access_model.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_retired_without_successor_degrades_a_project_harness(self, monkeypatch):
+        _patch_retirement(monkeypatch, [_catalog_row("old", status="retired")])
+        _patch_access(monkeypatch, True)
+        cfg = AgentModelConfig(model_id="old")
+        plan = await resolve_agent_invocation(_assistant(model_settings=cfg), _user(), degrade=True)
+        assert plan.model_override is None
+        assert plan.unavailable.model_id == "old"
+
+    @pytest.mark.asyncio
+    async def test_deprecated_model_runs_unchanged(self, monkeypatch):
+        _patch_retirement(monkeypatch, [_catalog_row("old", status="deprecated", replaced_by="new"), _catalog_row("new")])
+        _patch_access(monkeypatch, True)
+        cfg = AgentModelConfig(model_id="old", provider="bedrock")
+        plan = await resolve_agent_invocation(_assistant(model_settings=cfg), _user())
+        assert plan.model_override.model_id == "old"
+        assert plan.model_override.provider == "bedrock"
+
+
 class TestModelResolution:
     @pytest.mark.asyncio
     async def test_no_modelconfig_is_empty_plan(self, monkeypatch):

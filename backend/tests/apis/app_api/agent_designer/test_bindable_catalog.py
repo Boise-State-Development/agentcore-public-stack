@@ -14,6 +14,7 @@ import pytest
 
 from apis.app_api.agent_designer.services import bindable_catalog as bc
 from apis.shared.auth.models import User
+from apis.shared.models.models import ModelStatus
 from apis.shared.tools.models import ToolStatus
 
 MODULE = "apis.app_api.agent_designer.services.bindable_catalog"
@@ -29,6 +30,7 @@ def _model(**kw):
         provider_name="Bedrock", is_default=True, max_input_tokens=200000,
         max_output_tokens=8192, supports_caching=True, input_modalities=["text"],
         output_modalities=["text"], supported_params=None,
+        status=ModelStatus.ACTIVE, replaced_by=None, retires_on=None, retirement_note=None,
     )
     base.update(kw)
     return SimpleNamespace(**base)
