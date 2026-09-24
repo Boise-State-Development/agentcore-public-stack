@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 META_SK = "META"
 MEMBER_SK_PREFIX = "MEMBER#"
+COST_SK_PREFIX = "COST#"
 OWNER_INDEX = "OwnerIndex"
 MEMBER_INDEX = "MemberIndex"
 
@@ -362,6 +363,47 @@ class ProjectRepository:
                 "ConditionExpression": "attribute_not_exists(PK)",
             }},
         ])
+
+    # ── cost ────────────────────────────────────────────────────────────
+
+    def add_call_cost(
+        self,
+        project_id: str,
+        user_id: str,
+        period: str,
+        cost: Decimal,
+        input_tokens: int,
+        output_tokens: int,
+        now: str,
+    ) -> None:
+        """Add one model call to the project's month and to that member's share of it.
+
+        Two rows rather than one row with a per-user map: each is a single atomic
+        ``ADD`` (a nested map needs three updates to initialise safely), and the member
+        rows are bounded by membership itself. ``UpdateItem`` creates either row on first
+        use, which is all the runtime's grant allows — it has no ``PutItem``.
+
+          - ``COST#{YYYY-MM}``                 — the project's month
+          - ``COST#{YYYY-MM}#USER#{userId}``   — one member's share of it
+        """
+        values = {
+            ":c": cost,
+            ":i": input_tokens,
+            ":o": output_tokens,
+            ":one": 1,
+            ":now": now,
+        }
+        expression = "ADD totalCost :c, inputTokens :i, outputTokens :o, calls :one SET updatedAt = :now"
+        self._table.update_item(
+            Key={"PK": project_pk(project_id), "SK": f"{COST_SK_PREFIX}{period}"},
+            UpdateExpression=expression,
+            ExpressionAttributeValues=values,
+        )
+        self._table.update_item(
+            Key={"PK": project_pk(project_id), "SK": f"{COST_SK_PREFIX}{period}#USER#{user_id}"},
+            UpdateExpression=expression + ", userId = :uid",
+            ExpressionAttributeValues={**values, ":uid": user_id},
+        )
 
     # ── whole project ───────────────────────────────────────────────────
 

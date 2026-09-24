@@ -193,6 +193,7 @@ class SessionPreferences(BaseModel):
     selected_prompt_id: Optional[str] = Field(default=None, alias="selectedPromptId", description="ID of selected prompt template")
     custom_prompt_text: Optional[str] = Field(default=None, alias="customPromptText", description="Custom prompt text if used")
     assistant_id: Optional[str] = Field(default=None, alias="assistantId", description="Assistant ID attached to this session")
+    project_id: Optional[str] = Field(default=None, alias="projectId", description="Shared Project whose harness this session runs, when assistantId is a project's agent")
     agent_type: Optional[str] = Field(default=None, alias="agentType", description="Agent mode this conversation runs in ('skill' or 'chat'); reopening the session restores it")
 
     # System prompt hash for tracking exact prompt version sent to the model

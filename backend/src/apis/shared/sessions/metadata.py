@@ -342,6 +342,14 @@ async def _store_message_metadata_cloud(
             message_metadata=message_metadata
         )
 
+        # Shared Projects: a call made by a project's harness also counts toward that
+        # project's month. Best-effort, like every aggregate above.
+        await _update_project_rollup_async(
+            user_id=user_id,
+            timestamp=timestamp,
+            message_metadata=message_metadata,
+        )
+
     except Exception as e:
         logger.error(f"Failed to store message metadata in DynamoDB: {e}", exc_info=True)
         # Propagate error - metadata storage is critical for cost tracking and audit trail
@@ -642,6 +650,48 @@ def _emit_cache_metrics(
         )
     except Exception as e:  # noqa: BLE001 - metrics must never break the write path
         logger.debug("Cache EMF emission skipped: %s", e)
+
+
+async def _update_project_rollup_async(
+    user_id: str,
+    timestamp: str,
+    message_metadata: MessageMetadata,
+) -> None:
+    """Add this call to ``PROJECT#{id}/COST#{YYYY-MM}`` when it ran a project's harness.
+
+    The project id rides on the row as the ``projectId`` extra (set per turn by the stream
+    coordinator), exactly like ``turnAgentId``. Rows without one — every call that did not
+    run a project harness — return immediately and touch nothing. Never raises: a missed
+    rollup costs a number on a usage page, and the ``C#`` row it came from is still the
+    source of truth.
+    """
+    project_id = (message_metadata.model_extra or {}).get("projectId")
+    if not project_id:
+        return
+    try:
+        import asyncio
+        from datetime import datetime, timezone
+
+        from apis.shared.projects.repository import ProjectRepository
+
+        try:
+            period = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).strftime("%Y-%m")
+        except (ValueError, AttributeError):
+            period = datetime.now(timezone.utc).strftime("%Y-%m")
+
+        usage = message_metadata.token_usage
+        await asyncio.to_thread(
+            ProjectRepository().add_call_cost,
+            project_id,
+            user_id,
+            period,
+            Decimal(str(_coerce_cost_total(message_metadata.cost))),
+            (usage.input_tokens or 0) if usage else 0,
+            (usage.output_tokens or 0) if usage else 0,
+            timestamp,
+        )
+    except Exception as e:
+        logger.warning("Project cost rollup failed for project %s: %s", project_id, e)
 
 
 async def _update_cost_summary_async(

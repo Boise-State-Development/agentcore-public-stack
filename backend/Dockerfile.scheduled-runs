@@ -52,6 +52,13 @@ COPY backend/src/apis/shared/browser_takeover/ ${LAMBDA_TASK_ROOT}/apis/shared/b
 # sessions/metadata.py lazily reaches these on its storage + EMF paths.
 COPY backend/src/apis/shared/storage/ ${LAMBDA_TASK_ROOT}/apis/shared/storage/
 COPY backend/src/apis/shared/observability/ ${LAMBDA_TASK_ROOT}/apis/shared/observability/
+# sessions/metadata.py adds a project harness's calls to the project's monthly
+# rollup through projects/repository.py (a lazy import, taken only for a row that
+# carries projectId — never one this image writes). Import closure only: no
+# projects table env var or IAM grant is needed here. dynamo_errors.py is the
+# repository's own leaf import.
+COPY backend/src/apis/shared/projects/ ${LAMBDA_TASK_ROOT}/apis/shared/projects/
+COPY backend/src/apis/shared/dynamo_errors.py ${LAMBDA_TASK_ROOT}/apis/shared/dynamo_errors.py
 
 # The two handlers themselves, as plain top-level modules.
 COPY backend/src/lambdas/scheduled_runs_dispatcher/dispatcher.py ${LAMBDA_TASK_ROOT}/dispatcher.py
