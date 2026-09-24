@@ -30,6 +30,10 @@ export class Sidenav {
   /** Whether the branding logo image failed to load (Requirement 2.8). */
   protected logoLoadFailed = signal(false);
 
+  /** Whether the chat body has scrolled off its top, which reveals the fade
+   *  under the pinned New Session button. */
+  protected bodyScrolled = signal(false);
+
   /** Re-read on every completed navigation; the value itself is unused,
    *  it exists so `isAdminChrome` recomputes when the route changes. */
   private readonly navigated = toSignal(
@@ -81,6 +85,10 @@ export class Sidenav {
   navigateToAgents() {
     this.sidenavService.close();
     this.router.navigate(['/agents']);
+  }
+
+  onBodyScroll(event: Event): void {
+    this.bodyScrolled.set((event.target as HTMLElement).scrollTop > 0);
   }
 
   toggleCollapse() {

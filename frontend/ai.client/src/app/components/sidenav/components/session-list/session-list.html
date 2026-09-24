@@ -199,6 +199,34 @@
                         </ul>
                     </section>
                 }
+
+                <!-- End of what's loaded. While more exists, this row fetches the
+                     next page as it nears the bottom of the sidebar's scroll area
+                     (see loadMoreEffect), drawn as the same skeleton the first
+                     load uses so the list simply keeps going. -->
+                @if (nextToken()) {
+                    <div appInView [appInViewMargin]="240" [appInViewRemeasure]="endOfListRemeasure()" (inView)="endOfListVisible.set($event)">
+                        @if (loadMoreError()) {
+                            <div class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400">
+                                <span>Couldn't load more</span>
+                                <button
+                                    type="button"
+                                    (click)="retryLoadMore()"
+                                    class="rounded-sm font-medium text-gray-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:text-gray-300">
+                                    Retry
+                                </button>
+                            </div>
+                        } @else {
+                            <ul class="flex flex-col gap-y-0.5" aria-hidden="true">
+                                @for (width of ['66%', '48%']; track $index) {
+                                    <li class="px-2 py-1.5">
+                                        <div class="h-4 rounded-md bg-gray-200 animate-pulse motion-reduce:animate-none dark:bg-white/5" [style.width]="width"></div>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
             </div>
         } @else {
             <div class="text-center">
