@@ -87,15 +87,16 @@ import { isPlatformBrowser } from '@angular/common';
       }
 
       /*
-       * A 14px core with a halo emanating from it.
+       * An 11px core with a halo emanating from it.
        *
        * The halo is the expanding ring this indicator used to have and lost:
        * it is what made the dot read as something happening rather than
        * something blinking. At 7px with a 13px halo it was subordinate to the
-       * text to the point of being easy to miss; 14px with a 26px halo keeps
-       * the same motion, proportions and timing at twice the footprint.
+       * text to the point of being easy to miss; at 14px with a 26px halo it
+       * outweighed the line beside it. 11px with a 21px halo keeps the same
+       * motion, proportions and timing between the two.
        *
-       * The element itself paints nothing; it is a 14px positioning box that
+       * The element itself paints nothing; it is an 11px positioning box that
        * carries the colour as a colour property, and both layers draw in
        * currentColor. That is what keeps them in sync — the dark and notice
        * variants each set one property instead of three.
@@ -110,8 +111,8 @@ import { isPlatformBrowser } from '@angular/common';
        */
       .pulse-dot {
         position: relative;
-        width: 14px;
-        height: 14px;
+        width: 11px;
+        height: 11px;
         flex: none;
         color: var(--color-secondary-500);
       }
@@ -135,7 +136,7 @@ import { isPlatformBrowser } from '@angular/common';
       .pulse-dot::before {
         content: '';
         position: absolute;
-        inset: -6px;
+        inset: -5px;
         border-radius: 9999px;
         background-color: currentColor;
         animation: loader-ring 1.25s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
@@ -153,7 +154,7 @@ import { isPlatformBrowser } from '@angular/common';
         inset: 0;
         border-radius: 9999px;
         background-color: currentColor;
-        box-shadow: 0 0 12px color-mix(in srgb, currentColor 45%, transparent);
+        box-shadow: 0 0 10px color-mix(in srgb, currentColor 45%, transparent);
         animation: loader-core 1.25s cubic-bezier(0.455, 0.03, 0.515, 0.955) -0.4s
           infinite;
       }
