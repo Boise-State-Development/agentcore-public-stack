@@ -6,7 +6,17 @@
     class="chat-topnav-wrapper"
     [class.sidenav-expanded]="!isSidenavCollapsed()"
     [class.artifact-pane-open]="artifactPanelOpen()">
-    <app-topnav />
+    <app-topnav>
+      <!-- The bound agent, as a breadcrumb before the conversation title: the
+           conversation lives inside the agent. Only once there are messages —
+           the empty state already introduces the agent with its launch card. -->
+      @if (hasMessages() && (assistant() || isLoadingAssistant())) {
+        <div topnavCrumb class="flex min-w-0 shrink-[4] items-center gap-x-1.5">
+          <ng-container *ngTemplateOutlet="agentIndicator" />
+          <span aria-hidden="true" class="text-gray-300 dark:text-gray-600">/</span>
+        </div>
+      }
+    </app-topnav>
   </div>
 }
 
@@ -279,16 +289,14 @@
           (messageSubmitted)="onMessageSubmitted($event)"
           (messageCancelled)="onMessageCancelled()"
           (fileAttached)="onFileAttached($event)"
+          [compact]="true"
 >
-          <ng-container composerMetaStart>
-            <ng-container *ngTemplateOutlet="agentIndicator" />
-          </ng-container>
-          <!-- Cost + context, sharing the composer's meta row with the quota
-               tab. Pinned to this chat's own session: an embedded chat is
+          <!-- Cost + context, on the status side of the line beneath the
+               composer. Pinned to this chat's own session: an embedded chat is
                deliberately NOT the viewed session, so an unpinned badge would
                report whatever conversation the user last opened — a plausible
                number belonging to something else. -->
-          <app-session-cost-badge composerMeta class="pb-1" [sessionId]="sessionId()" />
+          <app-session-cost-badge composerMeta [sessionId]="sessionId()" />
         </app-chat-input>
       </div>
     </div>
@@ -332,26 +340,22 @@
           (messageSubmitted)="onMessageSubmitted($event)"
           (messageCancelled)="onMessageCancelled()"
           (fileAttached)="onFileAttached($event)"
+          [compact]="true"
 >
-          <ng-container composerMetaStart>
-            <ng-container *ngTemplateOutlet="agentIndicator" />
-          </ng-container>
-          <!-- Cost + context, sharing the composer's meta row with the quota
-               tab; unpinned so it follows the viewed session. -->
-          <app-session-cost-badge composerMeta class="pb-1" />
+          <!-- Cost + context, on the status side of the line beneath the
+               composer; unpinned so it follows the viewed session. -->
+          <app-session-cost-badge composerMeta />
         </app-chat-input>
       </div>
     </div>
   }
 }
 
-<!-- The bound agent, projected into the left edge of the composer's meta row
-     opposite the cost badge. Only the messages view carries it: the empty
-     state already introduces the agent with its launch card. -->
+<!-- The bound agent, projected into the top nav as the conversation's breadcrumb. -->
 <ng-template #agentIndicator>
   @if (isLoadingAssistant()) {
     <div
-      class="h-5 w-28 animate-pulse rounded-md bg-gray-200/70 dark:bg-white/5"
+      class="h-6 w-28 animate-pulse rounded-md bg-gray-200/70 motion-reduce:animate-none dark:bg-white/5"
       role="status"
       aria-label="Loading agent"
     ></div>

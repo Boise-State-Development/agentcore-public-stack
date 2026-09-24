@@ -20,6 +20,7 @@ import { SteeringService } from '../../services/chat/steering.service';
 import { ComposerDraftService } from '../../services/session/composer-draft.service';
 import { NEW_CONVERSATION_DRAFT_KEY } from '../../services/session/composer-draft-storage.service';
 import { ChatInputComponent, spliceDictation } from './chat-input.component';
+import { ComposerHandoffService } from './composer-handoff.service';
 
 const AGENTS: MentionableAgent[] = [
   { agentId: 'a1', name: 'Alpha', group: 'own' },
@@ -224,6 +225,22 @@ describe('ChatInputComponent — the `@` menu keyboard path (D11)', () => {
     expect(component.mentionedAgent()?.name).toBe('Bravo');
     expect(component.userInput()).toBe('@Bravo ');
   });
+
+  it('un-mentions once the @Name is deleted, since the highlighted name is the only indicator', () => {
+    type('@');
+    pressKey('Enter');
+    expect(component.mentionedAgent()?.name).toBe('Alpha');
+
+    type('@Alp');
+    expect(component.mentionedAgent()).toBeNull();
+  });
+
+  it('keeps the mention while the @Name is still in the text', () => {
+    type('@');
+    pressKey('Enter');
+    type('@Alpha please summarise this');
+    expect(component.mentionedAgent()?.name).toBe('Alpha');
+  });
 });
 
 /**
@@ -383,14 +400,14 @@ describe('ChatInputComponent — the `/` skill-command menu', () => {
     expect(payload?.invokedSkillIds).toBeUndefined();
   });
 
-  it('clearing a chip edits the text, because the text is the binding', () => {
+  it('tints the command in place, and deleting it un-invokes, because the text is the binding', () => {
     type('/brand-deck make me a deck');
-    const command = component.invokedSkills()[0];
+    const marked = component['highlightSegments']()?.filter((segment) => segment.mark);
+    expect(marked?.map((segment) => segment.text)).toEqual(['/brand-deck']);
 
-    component.clearSkillCommand(command);
-
-    expect(component.userInput()).toBe('make me a deck');
+    type('make me a deck');
     expect(component.invokedSkills()).toEqual([]);
+    expect(component['highlightSegments']()).toBeNull();
   });
 });
 
@@ -567,16 +584,52 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
     expect(submitted[0].timestamp.getTime()).toBeGreaterThanOrEqual(queuedAt);
   });
 
-  it('keeps the button on Stop while streaming', () => {
+  function button(label: string): HTMLButtonElement | null {
+    return fixture.nativeElement.querySelector(`button[aria-label="${label}"]`);
+  }
+
+  it('has no send button on a keyboard device — Enter sends', () => {
+    type('something to send');
+    expect(button('Send message')).toBeNull();
+    expect(button('Stop response')).toBeNull();
+  });
+
+  it('shows Stop only while streaming, and it stops without sending the typed text', () => {
     setStreaming(true);
     type('typed but not sent');
 
-    component.onPrimaryButtonClick();
+    button('Stop response')!.click();
 
     expect(cancelled).toBe(1);
     expect(submitted).toEqual([]);
     // The text is untouched — stopping is not sending.
     expect(component.userInput()).toBe('typed but not sent');
+
+    setStreaming(false);
+    expect(button('Stop response')).toBeNull();
+  });
+
+  it('stops on Escape while streaming', () => {
+    setStreaming(true);
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true }));
+    expect(cancelled).toBe(1);
+  });
+
+  it('ignores Escape when nothing is streaming', () => {
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true }));
+    expect(cancelled).toBe(0);
+  });
+
+  it('says how to stop on the status line while a compact composer streams', () => {
+    fixture.componentRef.setInput('compact', true);
+    expect(component['statusHint']()).toBeNull();
+    setStreaming(true);
+    expect(component['statusHint']()).toBe('Esc to stop');
+  });
+
+  it('shows no stop hint under the empty-state composer, which is swapped out on send', () => {
+    setStreaming(true);
+    expect(component['statusHint']()).toBeNull();
   });
 
   it('lets a queued message be taken back before it sends', () => {
@@ -962,13 +1015,14 @@ describe('ChatInputComponent — a queue held behind a paused turn (PR-6)', () =
     ]);
   });
 
-  it('the Send button makes the same decision as Enter while held', () => {
+  it('the touch Send button makes the same decision as Enter while held', () => {
     // Two affordances that disagree about what "send" means is worse than
     // either behaviour on its own.
+    component['isCoarsePointer'].set(true);
     pauseTurn();
 
     type('via the button');
-    component.onPrimaryButtonClick();
+    (fixture.nativeElement.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click();
 
     expect(submitted).toEqual([]);
     expect(component.queuedMessages().map((q) => q.content)).toEqual(['via the button']);
@@ -1743,6 +1797,170 @@ describe('ChatInputComponent — unsent text survives leaving the conversation',
   });
 });
 
+
+describe('ChatInputComponent — compact layout, touch and first-send handoff', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  let textarea: HTMLTextAreaElement;
+  let submitted: Array<{ content: string }>;
+  let handoff: ComposerHandoffService;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: signal([]),
+            readyUploads: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [],
+          },
+        },
+        { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
+        { provide: ToolService, useValue: {} },
+        {
+          provide: VoiceChatService,
+          useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, {
+        set: { imports: [], schemas: [NO_ERRORS_SCHEMA] },
+      })
+      .compileComponents();
+
+    handoff = TestBed.inject(ComposerHandoffService);
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('showFileControls', false);
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    submitted = [];
+    component.messageSubmitted.subscribe((m) => submitted.push(m));
+  });
+
+  function render(compact: boolean): void {
+    fixture.componentRef.setInput('compact', compact);
+    fixture.detectChanges();
+    textarea = fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement;
+  }
+
+  function type(value: string): void {
+    textarea.value = value;
+    textarea.setSelectionRange(value.length, value.length);
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
+  function pressEnter(): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
+    textarea.dispatchEvent(event);
+    fixture.detectChanges();
+    return event;
+  }
+
+  const row = () => fixture.nativeElement.querySelector('.composer-row') as HTMLElement;
+
+  it('is one row in compact, and stacked in the empty state', () => {
+    render(true);
+    expect(row().classList).not.toContain('composer-row--stacked');
+
+    fixture.componentRef.setInput('compact', false);
+    fixture.detectChanges();
+    expect(row().classList).toContain('composer-row--stacked');
+    expect(row().classList).toContain('composer-row--full');
+  });
+
+  it('unfolds a compact draft once it wraps, and folds back only when it is empty', async () => {
+    render(true);
+    type('first line\nsecond line');
+    expect(component['unfolded']()).toBe(true);
+    await fixture.whenStable();
+    expect(row().classList).toContain('composer-row--stacked');
+
+    // Shortening it back onto one line does not fold: that would flicker at the wrap point.
+    type('first line');
+    expect(component['unfolded']()).toBe(true);
+
+    type('');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(component['unfolded']()).toBe(false);
+  });
+
+  it('never unfolds in the empty state, which is stacked already', () => {
+    render(false);
+    type('first line\nsecond line');
+    expect(component['unfolded']()).toBe(false);
+  });
+
+  it('keeps the model picker in the bar in the empty state and moves it under the shell in compact', () => {
+    render(false);
+    expect(fixture.nativeElement.querySelector('.composer-tools app-model-dropdown')).not.toBeNull();
+
+    fixture.componentRef.setInput('compact', true);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.composer-tools app-model-dropdown')).toBeNull();
+    expect(fixture.nativeElement.querySelector('app-model-dropdown[size="compact"]')).not.toBeNull();
+  });
+
+  it('on touch, return adds a line and a Send button appears once there is text', () => {
+    render(true);
+    component['isCoarsePointer'].set(true);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('button[aria-label="Send message"]')).toBeNull();
+
+    type('hello');
+    const enter = pressEnter();
+    expect(enter.defaultPrevented).toBe(false);
+    expect(submitted).toEqual([]);
+
+    (fixture.nativeElement.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click();
+    expect(submitted.map((m) => m.content)).toEqual(['hello']);
+  });
+
+  it('the empty-state composer leaves its height for the compact one on send', () => {
+    render(false);
+    const leave = vi.spyOn(handoff, 'leave');
+    type('first question');
+    pressEnter();
+    expect(leave).toHaveBeenCalledTimes(1);
+  });
+
+  it('a compact composer does not leave a handoff when it sends', () => {
+    render(true);
+    const leave = vi.spyOn(handoff, 'leave');
+    type('follow-up');
+    pressEnter();
+    expect(leave).not.toHaveBeenCalled();
+  });
+});
+
+describe('ComposerHandoffService', () => {
+  it('hands a height over once, and only while it is fresh', () => {
+    vi.useFakeTimers();
+    try {
+      const service = new ComposerHandoffService();
+      service.leave(132);
+      expect(service.take()).toBe(132);
+      expect(service.take()).toBeNull();
+
+      service.leave(132);
+      vi.advanceTimersByTime(2500);
+      expect(service.take()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('spliceDictation', () => {
   it('pads with a space only where the neighbours lack whitespace', () => {

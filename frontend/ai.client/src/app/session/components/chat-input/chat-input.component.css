@@ -4,7 +4,84 @@
   transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
 }
 
+/*
+ * The main input grid (see "Layout" in the component).
+ *
+ * Compact: one row — attach, text, controls — bottom-aligned so the buttons
+ * stay put while a single line is typed. Stacked: the text across the top and
+ * the controls in a bar beneath, which is the empty state's shape and what a
+ * compact draft unfolds into once it wraps.
+ */
+.composer-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'lead field tools';
+  align-items: end;
+  column-gap: 0.125rem;
+  padding: 0.5rem;
+}
 
+.composer-row--stacked {
+  grid-template-areas:
+    'field field field'
+    'lead . tools';
+  row-gap: 0.25rem;
+}
+
+/* The empty state's roomier frame: 24px from the shell to the text, as before. */
+.composer-row--full {
+  padding: 0 1rem 0.75rem;
+  row-gap: 0;
+}
+
+.composer-field {
+  grid-area: field;
+}
+
+/*
+ * One row means one line of placeholder. A long one ("Send a follow-up — it
+ * goes out when this response finishes", or the idle line at phone width)
+ * would otherwise wrap inside the 40px textarea and show a clipped second
+ * line beneath the first.
+ */
+.composer-row:not(.composer-row--stacked) textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-lead {
+  grid-area: lead;
+}
+
+.composer-tools {
+  grid-area: tools;
+}
+
+/*
+ * A live `@mention` or `/skill` in the highlight mirror. The ink is
+ * transparent — the textarea paints the real text on top — so only the tint
+ * shows. The spread shadow pads the tint without padding the text, which
+ * would push the mirror's wrapping out of step with the textarea's.
+ */
+.composer-token {
+  color: transparent;
+  background: color-mix(in srgb, var(--color-primary-500) 14%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary-500) 14%, transparent);
+  border-radius: 0.25rem;
+}
+
+:host-context(html.dark) .composer-token {
+  background: color-mix(in srgb, var(--color-primary-400) 30%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary-400) 30%, transparent);
+}
+
+/* On a phone the full 24-bar waveform would squeeze the text to a sliver; the newest half is enough. */
+@media (max-width: 480px) {
+  .composer-levels > :nth-child(-n + 12) {
+    display: none;
+  }
+}
 
 /*
  * A rotating composer hint.
