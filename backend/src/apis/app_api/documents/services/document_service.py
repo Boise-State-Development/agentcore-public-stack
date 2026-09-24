@@ -133,7 +133,8 @@ async def create_document(
     s3_key: str,
     document_id: Optional[str] = None,
     provenance: Optional[DocumentProvenance] = None,
-    status: DocumentStatus = 'uploading'
+    status: DocumentStatus = 'uploading',
+    added_by_user_id: Optional[str] = None,
 ) -> Document:
     """
     Create a new document record in DynamoDB
@@ -158,6 +159,8 @@ async def create_document(
             than patching the row afterwards keeps the document from ever being
             visible as 'uploading' to a poller, which is what would make the
             managed ingestion consumer's defer look like a stuck upload.
+        added_by_user_id: Who is adding the document. Defaults to the importer
+            in ``provenance``, so only a device upload has to pass it.
 
     Returns:
         Document object with the requested initial status
@@ -192,6 +195,7 @@ async def create_document(
         source_file_id=provenance.source_file_id if provenance else None,
         source_etag=provenance.source_etag if provenance else None,
         imported_by_user_id=provenance.imported_by_user_id if provenance else None,
+        added_by_user_id=added_by_user_id or (provenance.imported_by_user_id if provenance else None),
     )
     
     dynamodb = boto3.resource('dynamodb')

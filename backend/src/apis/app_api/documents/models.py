@@ -69,6 +69,10 @@ class Document(BaseModel):
     source_file_id: Optional[str] = Field(None, alias="sourceFileId", description="Provider-side opaque file identifier")
     source_etag: Optional[str] = Field(None, alias="sourceEtag", description="Provider-side version stamp at import time")
     imported_by_user_id: Optional[str] = Field(None, alias="importedByUserId", description="User whose credentials imported the file")
+    # Who put the document here, on every create path (shared-projects §9.5): the
+    # uploader, the importer, or whoever started the crawl or sync that fetched it.
+    # Null on documents created before it was recorded.
+    added_by_user_id: Optional[str] = Field(None, alias="addedByUserId", description="User who added the document")
     # Sync bookkeeping — populated only when the document is covered by a
     # SyncPolicy (scheduled re-index from source).
     content_hash: Optional[str] = Field(None, alias="contentHash", description="SHA-256 of the last-ingested raw bytes (change-detection second gate)")

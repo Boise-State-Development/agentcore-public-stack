@@ -393,6 +393,19 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
     - Settings shows a read-only view when `canEdit` is false: viewers, and everyone on an archived project.
     - An editor adding a tool or skill they can't use gets a 403 naming it. Nothing is saved.
     - History has a version 1 labelled as the project's starting state (`createdByEmail: null`), then one entry per save naming who made it and what changed.
+  **1.5b (as built):**
+  - **`/projects/{id}/knowledge`** is the project's Files, over the harness's documents (`app_api/projects/knowledge_routes.py`).
+    - **Reads:** list (with `kbUsage` and `canEdit`), status and download are open to any role. The agent document routes are editor-only, so these call the document service directly with the harness's owner id. Download keeps the agent's citation/download floor.
+    - **Writes:** `upload-url`, `import`, `{doc}/upload-failed`, `DELETE {doc}` and `crawl`/`crawls/{id}` need an editor on an active project. They call the agent's own route handlers on the harness, so provisioning, the byte cap, connector import and cleanup are not duplicated.
+    - `{doc}/chunks` and the crawl reads need an editor but work on an archived project.
+    - The crawl routes are declared before `/{document_id}`.
+  - **`addedByUserId` on every document create path (§9.5).** `create_document` takes `added_by_user_id` and defaults it to the provenance importer, which covers connector import, the crawl root and pages, and a sync refresh. A device upload passes the uploader. Project responses turn it into `addedByEmail` from the current member list, falling back to `importedByUserId` for older imports. Unknown adders and former members show null, and user ids are never returned.
+  - **Upload notice.** `upload-url`, `import` and `crawl` responses carry `notice` ("Everyone in {project} ({n} people) can open this file, and the project's agent can use it…"), so every client says it the same way.
+  - Not proxied: sync policies. An editor still reaches `/assistants/{harnessAgentId}/sync-policies`, which delegates to the project and refuses while archived. A project-scoped route can follow if the Files tab needs one.
+  - **UI impact (for the 1.8 mockup re-sync):**
+    - Files shows "Added by {email}" or "Added by unknown" per file.
+    - Viewers see and download files but get no add or delete controls (`canEdit`).
+    - The add-files flow shows the server's `notice` before or at upload.
 - **1.6 Tasks:** `ProjectSessionIndex` writes, `/projects/{id}/tasks`, `access_level: "project"` on shares, `SHARED_TASK#` pointer, fork keeps `projectId`.
   - **1.6-infra (as built):** `ProjectSessionIndex` on sessions-metadata, `GSI5_PK = PROJECT#{projectId}#USER#{userId}`, `GSI5_SK = {lastMessageAt}#{sessionId}`, projection ALL. It is the recency key of `SessionRecencyIndex`/GSI4, and the backend should write and remove it at exactly the points GSI4 is (active only, dropped on soft-delete). Deployed alone: it is this table's one new GSI, and the index is inert until the 1.6 backend writes GSI5 keys. `preferences.projectId` (1.4a) is the source of `projectId`.
   - **1.6 backend (as built):**
