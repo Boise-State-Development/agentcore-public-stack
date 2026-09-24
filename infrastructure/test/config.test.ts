@@ -658,6 +658,41 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // SPA CloudFront access logs — default ON with a kill switch
+  // (empty GitHub Actions variable must not disable)
+  // ============================================================
+
+  describe('SPA access logs flag', () => {
+    test('defaults to enabled when CDK_FRONTEND_ACCESS_LOGS_ENABLED is unset', () => {
+      delete process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED;
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED = '';
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(true);
+    });
+
+    test('CDK_FRONTEND_ACCESS_LOGS_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED = 'false';
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(false);
+    });
+
+    test('cdk.json context frontend.accessLogsEnabled=false disables when env is unset', () => {
+      delete process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED;
+      app.node.setContext('frontend', {
+        cloudFrontPriceClass: 'PriceClass_100',
+        accessLogsEnabled: false,
+      });
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Agents API (Agent Designer) feature flag — default ON with a kill switch
   // (complete feature; ships enabled for forkers, empty var must not disable)
   // ============================================================

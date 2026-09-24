@@ -196,6 +196,12 @@ jobs:
       # backfill.
       CDK_ARTIFACT_SHARE_INBOX_ENABLED: ${{ vars.CDK_ARTIFACT_SHARE_INBOX_ENABLED }}
       CDK_FRONTEND_CERTIFICATE_ARN: ${{ vars.CDK_FRONTEND_CERTIFICATE_ARN }}
+      # CloudFront access logs for the SPA distribution (S3, 90-day expiry,
+      # cookies excluded). Default ON with a kill switch: unset resolves to an
+      # empty string, which config.ts treats as the default (on). Set the
+      # `CDK_FRONTEND_ACCESS_LOGS_ENABLED` variable to "false" to stop logging
+      # in an environment; the log bucket stays either way.
+      CDK_FRONTEND_ACCESS_LOGS_ENABLED: ${{ vars.CDK_FRONTEND_ACCESS_LOGS_ENABLED }}
       # Hostnames Chromium refuses to navigate to during a browser session —
       # the control that stops a human in a browser takeover reaching a system
       # the agent must not act inside. Comma-separated, e.g.

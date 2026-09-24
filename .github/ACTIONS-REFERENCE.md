@@ -51,6 +51,7 @@ GitHub provides two mechanisms for storing configuration values:
 | CDK_FRONTEND_CORS_ORIGINS | Variable | No | None | Frontend | Additional CORS origins for the frontend SSM export only (appended to global CORS origins) |
 | CDK_FRONTEND_CERTIFICATE_ARN | Variable | No | Falls back to `CDK_CLOUDFRONT_CERTIFICATE_ARN` | Frontend | **Optional override** for the SPA origin (`{CDK_DOMAIN_NAME}`) cert. Leave unset to use the shared `CDK_CLOUDFRONT_CERTIFICATE_ARN`; set only to give the SPA a different cert. **Must be in `us-east-1`.** |
 | CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS | Variable | No | `PriceClass_100` | Frontend | CloudFront price class (PriceClass_100, PriceClass_200, PriceClass_All) |
+| CDK_FRONTEND_ACCESS_LOGS_ENABLED | Variable | No | `true` | Frontend | CloudFront standard access logs for the SPA distribution, delivered to the `{prefix}-frontend-access-logs-{account}` bucket under `spa/` (90-day expiry, cookies never logged). The only record of requests the edge answers itself, e.g. a 404 for a JS chunk a deploy removed, which never reaches the ALB. Set to `false` to stop logging; the bucket is kept so re-enabling is safe. |
 | CDK_FRONTEND_ENABLED | Variable | No | `true` | Frontend | Enable/disable Frontend deployment |
 | CDK_GATEWAY_API_TYPE | Variable | No | `HTTP` | Gateway | API Gateway type for Gateway (REST or HTTP) |
 | CDK_GATEWAY_ENABLE_WAF | Variable | No | `false` | Gateway | Enable AWS WAF for Gateway API protection |

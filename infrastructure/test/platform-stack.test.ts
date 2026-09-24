@@ -178,9 +178,11 @@ describe('PlatformStack', () => {
       // memory-spaces (Memory Spaces feature content bucket),
       // shared-conversations (share snapshot-body offload),
       // alb-access-logs (who terminated a connection — SSE disconnect attribution),
+      // frontend-access-logs (what the SPA edge answered on its own — 404'd
+      // chunks never reach the ALB),
       // browser-policy (the Chromium MANAGED policy every browser session
       // starts with — spec D6)
-      template.resourceCountIs('AWS::S3::Bucket', 11);
+      template.resourceCountIs('AWS::S3::Bucket', 12);
     });
   });
 
