@@ -7,6 +7,32 @@ full suite.
 
 ---
 
+## Status & re-order (2026-09-24)
+
+Re-ordered at the user's request: **finish the "about-the-user" capability as
+one complete, shippable slice, push it, then add the knowledge skill as a
+separate skill.** Progress so far, all committed on `feat/system-tool-tier`
+(not pushed):
+
+- **DONE — Phase 1** system/hidden tool tier.
+- **DONE — Phase 2** identity binding (closure capture; see note below).
+- **DONE — Phase 3** read tools: `whoami`, `get_my_quota`, `get_my_settings`.
+- **DONE — admin-governed runtime off-switch** (system tools = catalog rows an
+  admin can disable without a redeploy; honors `status`). Extra beyond the
+  original plan, at the user's request.
+- **DONE — Phase 6** confirmed write: `set_default_model` (two-step, accessibility-
+  checked, closure-bound identity).
+- **NEXT — push** the branch / open the PR.
+- **DEFERRED — knowledge layer** ("where's the page / how does X work"): to be
+  built AFTER the push as a *separate* skill — either a progressive skill or a
+  CI-generated KB doc (decision open). This replaces the earlier "Phase 5 wrap
+  tools in a skill" idea, which is **not possible**: this repo's Skills v2 are
+  knowledge-only and no longer bind tools, so tools stay eager (cheap + cached
+  in the tools+system cachePoint) and the progressive win lives in the knowledge
+  skill's body.
+
+---
+
 ## Phase 1 — System / hidden tool tier (foundation)
 
 - [ ] 1.1 Add `system: bool = False` and `hidden: bool = False` to
