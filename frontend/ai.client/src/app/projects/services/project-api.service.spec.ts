@@ -67,6 +67,8 @@ describe('ProjectApiService', () => {
     ['fileDownloadUrl', 'GET', `${BASE}/prj_1/knowledge/doc_1/download`, () => service.fileDownloadUrl('prj_1', 'doc_1')],
     ['fileUploadUrl', 'POST', `${BASE}/prj_1/knowledge/upload-url`, () => service.fileUploadUrl('prj_1', { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 3 })],
     ['reportFileUploadFailure', 'POST', `${BASE}/prj_1/knowledge/doc_1/upload-failed`, () => service.reportFileUploadFailure('prj_1', 'doc_1', 'nope')],
+    ['audit', 'GET', `${BASE}/prj_1/audit?limit=50`, () => service.audit('prj_1')],
+    ['audit (page 2)', 'GET', `${BASE}/prj_1/audit?limit=50&cursor=c1`, () => service.audit('prj_1', 50, 'c1')],
     ['deleteFile', 'DELETE', `${BASE}/prj_1/knowledge/doc_1`, () => service.deleteFile('prj_1', 'doc_1')],
   ];
 

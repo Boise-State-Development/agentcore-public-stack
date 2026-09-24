@@ -9,13 +9,14 @@ import { SessionService } from '../../session/services/session/session.service';
 import { UserService } from '../../auth/user.service';
 import { SessionService as BffSessionService } from '../../auth/session.service';
 import { UserDropdownComponent } from '../topnav/components/user-dropdown.component';
+import { NotificationBellComponent } from '../notification-bell/notification-bell.component';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { BrandingService } from '../../../branding/branding.service';
 
 @Component({
   selector: 'app-sidenav',
-  imports: [SessionList, AdminNav, UserDropdownComponent, TooltipDirective, RouterLink, RouterLinkActive],
+  imports: [SessionList, AdminNav, UserDropdownComponent, NotificationBellComponent, TooltipDirective, RouterLink, RouterLinkActive],
   templateUrl: './sidenav.html',
   styleUrl: './sidenav.css',
 })

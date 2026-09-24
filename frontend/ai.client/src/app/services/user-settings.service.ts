@@ -6,7 +6,16 @@ import { SUPPRESS_ERROR_TOAST } from '../auth/error.interceptor';
 
 export interface UserSettings {
   defaultModelId: string | null;
+  /**
+   * Standing preferences added to the system prompt of every conversation
+   * (not agent previews). Agent and project instructions win a conflict.
+   * Blank clears; the backend caps it at {@link MAX_PERSONAL_INSTRUCTIONS}.
+   */
+  personalInstructions?: string | null;
 }
+
+/** `MAX_PERSONAL_INSTRUCTIONS_CHARS` in `apis/shared/user_settings/models.py`. */
+export const MAX_PERSONAL_INSTRUCTIONS = 4000;
 
 @Injectable({
   providedIn: 'root'

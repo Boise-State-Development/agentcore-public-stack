@@ -10,6 +10,7 @@ import { ProjectOverviewComponent } from './project-overview.component';
 import { ProjectTasksComponent } from './project-tasks.component';
 import { ProjectFilesComponent } from './project-files.component';
 import { ProjectMembersComponent } from './project-members.component';
+import { ProjectActivityComponent } from './project-activity.component';
 import { ProjectSettingsComponent } from './project-settings.component';
 import { ProjectApiService } from '../services/project-api.service';
 import { Project } from '../models/project.model';
@@ -25,6 +26,8 @@ class OverviewStub { readonly project = input<Project>(); }
 class TasksStub { readonly project = input<Project>(); }
 @Component({ selector: 'app-project-files', template: 'files-tab' })
 class FilesStub { readonly project = input<Project>(); }
+@Component({ selector: 'app-project-activity', template: 'activity-tab' })
+class ActivityStub { readonly project = input<Project>(); }
 @Component({ selector: 'app-project-members', template: 'members-tab' })
 class MembersStub { readonly project = input<Project>(); }
 @Component({ selector: 'app-project-settings', template: 'settings-tab' })
@@ -65,9 +68,9 @@ describe('ProjectDetailPage', () => {
     });
     TestBed.overrideComponent(ProjectDetailPage, {
       remove: {
-        imports: [ProjectOverviewComponent, ProjectTasksComponent, ProjectFilesComponent, ProjectMembersComponent, ProjectSettingsComponent],
+        imports: [ProjectOverviewComponent, ProjectTasksComponent, ProjectFilesComponent, ProjectMembersComponent, ProjectSettingsComponent, ProjectActivityComponent],
       },
-      add: { imports: [OverviewStub, TasksStub, FilesStub, MembersStub, SettingsStub] },
+      add: { imports: [OverviewStub, TasksStub, FilesStub, MembersStub, SettingsStub, ActivityStub] },
     });
   });
 
@@ -88,10 +91,24 @@ describe('ProjectDetailPage', () => {
     expect(el.querySelector('[aria-current=page]')?.textContent?.trim()).toBe('Overview');
   });
 
-  it('lists the tabs in order: Overview · Tasks · Files · Members · Settings', async () => {
+  it('lists the tabs in order, with Activity for an editor', async () => {
     const { el } = await open('/projects/prj_1');
     const labels = Array.from(el.querySelectorAll('nav[aria-label="Project sections"] a')).map(a => a.textContent?.trim());
-    expect(labels).toEqual(['Overview', 'Tasks', 'Files', 'Members', 'Settings']);
+    expect(labels).toEqual(['Overview', 'Tasks', 'Files', 'Members', 'Settings', 'Activity']);
+  });
+
+  it('opens Activity for an editor', async () => {
+    const { el } = await open('/projects/prj_1/activity');
+    expect(el.textContent).toContain('activity-tab');
+  });
+
+  it('gives a viewer no Activity tab, and sends /activity to Overview', async () => {
+    api.get.mockReturnValue(of({ ...PROJECT, role: 'viewer' }));
+    const { el } = await open('/projects/prj_1/activity');
+    const labels = Array.from(el.querySelectorAll('nav[aria-label="Project sections"] a')).map(a => a.textContent?.trim());
+    expect(labels).not.toContain('Activity');
+    expect(el.textContent).not.toContain('activity-tab');
+    expect(el.textContent).toContain('overview-tab');
   });
 
   it.each([
