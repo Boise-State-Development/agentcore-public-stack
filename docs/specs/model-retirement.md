@@ -1,8 +1,9 @@
 # Retiring a managed model
 
-**Status:** Proposal. Stage 0 and the migration stages run on today's code; the
-two stages that make retirement *safe* — deprecate (Stage 1) and cut over
-(Stage 3) — need the change in §7, which is not built.
+**Status:** Runbook, with the §7 change that Stages 1 and 3 depend on built
+alongside it (PR #1271). The one §7 piece still missing is the AWS
+end-of-life error classifier, which needs the exception text Bedrock actually
+returns (§4).
 **Scope:** A row in the managed-models table (`MODEL#<uuid>`, looked up by
 `modelId` through `ModelIdIndex`) that users select in chat, Agents bind through
 `modelConfig`, and roles grant through `grantedModels`. Models the backend names
@@ -382,26 +383,44 @@ today. Follow-up 3 fixes that by making the backend read `isDefault`.
 
 ---
 
-## 7. The change Stages 1 and 3 need (proposed)
+## 7. The change Stages 1 and 3 need
 
 ### Backend
 
-Four nullable fields on `ManagedModel` (create/update/read, the DynamoDB write
-path, `AdminModelResponse`, `BindableItem.meta` for `kind: "model"`):
+Four fields on `ManagedModel` (`apis/shared/models/models.py`), carried on the
+create/update/read models, the DynamoDB write path and `BindableItem.meta` for
+`kind: "model"` (plus `replacedByName`, so the Designer can name a successor
+the author may not hold yet):
 
 | Field | Holds |
 |---|---|
-| `status` | `active` (default; absent reads as active) · `deprecated` · `retired` |
-| `replacedBy` | a successor `modelId`. Unlike tools, where free text was right because successors split or don't exist, a model successor is *invoked*, so it has to be an id. Validated on write: must exist, must be `active`, must not be the model itself |
+| `status` | `active` (default; absent reads as active) · `deprecated` · `retired`. An unknown stored value also reads as `active` rather than failing validation: a row that fails to parse drops out of the catalog, and a model with no row runs unmetered (§2) |
+| `replacedBy` | a successor `modelId`. Unlike tools, where free text was right because successors split or don't exist, a model successor is *invoked*, so it has to be an id. Validated on write: must exist, must be `active` **and enabled** (the SPA only follows a redirect to a model it offers), must not be the model itself |
 | `retiresOn` | ISO `YYYY-MM-DD`, validated exactly as on `ToolDefinition` |
 | `retirementNote` | free text ≤ 300 chars |
 
-**One resolution function** in `apis/shared/models/`:
-`resolve_effective_model(model_id) -> (effective_id, redirected_from | None,
-denied: bool)`. It reads the catalog (already cached 60 s), follows `replacedBy`
-through `retired` rows with a depth cap and cycle guard (A → B, and later
-B → C), and is called **before** the access check at every runtime entry point
-in the §1 table. The access check then runs on the effective id.
+On an update, absent leaves a field alone and `""` clears it (the attribute is
+`REMOVE`d, not stored as `""`), the same contract as `iconSlug`. The admin
+write path (`validate_lifecycle`) also refuses a non-active model as the
+default, and `DELETE` refuses a model that another row names as `replacedBy`
+with a 409.
+
+**One resolution function**, `resolve_effective_model` in
+`apis/shared/models/retirement.py`, returning an `EffectiveModel` (the id to
+invoke, the successor's row and provider, the retired row, `denied`). It reads
+the catalog (already cached 60 s), follows `replacedBy` through `retired` rows
+with a depth cap and cycle guard (A → B, and later B → C), and **fails open**:
+if the catalog can't be read, the id runs as requested. It is called before the
+access check at every runtime entry point, and the access check then runs on
+the effective id:
+
+| Entry point | Redirect | Deny |
+|---|---|---|
+| `/invocations`, request `model_id` (top of the handler, so the App tool-call / context / continuation paths share the turn's agent-cache slot) | `model_id` **and `provider`** swapped to the successor's | conversational `stream_error`, not the bare 403 |
+| `_resolve_user_default_model` | successor id + provider | treated as unset → system default |
+| `agent_binding_resolver` (live record **and** published snapshot) | `model_override` on the successor, Agent `params` riding along | `AgentBindingBlockedError`; a project harness degrades instead |
+| `/chat/api-converse` | `request.model_id` swapped, so the response names the model that answered | `410 Gone` |
+| Paused-turn resume | **not redirected** — the turn finishes on its snapshot's model, which is what rebuilds the paused agent's cache slot. Snapshots are short-lived | — |
 
 This makes the runtime catalog-aware for exactly one thing — `retired` — and
 leaves `AppRoleService.can_access_model` itself untouched. A model with no row
@@ -412,24 +431,28 @@ so `_validate_model` keeps accepting an Agent that keeps its deprecated model.
 That is the tool runbook's §4 rule carried over: display-layer guard, one
 grant set.
 
-**An EOL error classifier** in `stream_processor`/`errors.py`: *"<Model> has
-been retired by AWS and can no longer be used. Choose another model."* in
-place of "Something went wrong … try again". This is the belt-and-braces for
-the model nobody ran this runbook on. It needs the real exception text first
-(§4).
+**Not built: an EOL error classifier** in `stream_processor`/`errors.py`:
+*"<Model> has been retired by AWS and can no longer be used. Choose another
+model."* in place of "Something went wrong … try again". This is the
+belt-and-braces for the model nobody ran this runbook on. It needs the real
+exception text first (§4).
 
 ### SPA
 
-Move `isRetiring`, `formatRetiresOn` and `retirementDetail` out of
-`tool.service.ts` into a neutral `shared/retirement.ts`. The last two are
-already generic.
+`isRetiring`, `formatRetiresOn` and `retirementDetail` moved out of
+`tool.service.ts` into `shared/utils/retirement.ts` (`tool.service.ts`
+re-exports them, so no tool surface changed), joined by
+`modelRetirementDetail`. The model sentence differs from the tool one in a
+single way: a model usually has a successor answering in its place, so
+*"it stops working"* is only said when it has none.
 
 | Surface | Guard |
 |---|---|
 | Chat model dropdown | A non-`active` model is not offered, *unless* it is the current selection, where it shows with a retiring badge and the `retirementDetail` line. Hiding is right here (unlike the tool picker's disabled row), because the successor is the obvious alternative and a disabled menu row is noise |
 | `ModelService.loadModels` fallback | When the saved or session model is `retired` and has a `replacedBy`, select the successor **and say so** with a one-line toast, instead of today's silent swap |
-| Agent Designer model cards | The tool pattern: a deprecated card that isn't selected is disabled with a badge; a selected one stays selected, with a section notice naming the successor. For `retired`, the notice says *"runs on <successor> for everyone"* |
-| Settings → default model | The option is `[disabled]` unless it is the current value |
+| Agent Designer model cards | A non-`active` card is **hidden unless it is the agent's model** — a departure from the tool pattern's disabled row, because a retired model stays in the catalog as a tombstone for good and would otherwise grow a permanent graveyard of dead cards. The agent's own model stays selected with a `retiring` badge and a section notice: what happens (the successor, the date), and what to do (choose another model; resubmit if published). `selectModel` refuses a retiring ref in the add direction as the backstop |
+| Settings → default model | The option is `[disabled]` unless it is the current value. A saved default on a *retired* model matches no option, so a line under the select names the successor now answering in its place |
+| Admin model list | A `deprecated` / `retired` badge beside the name |
 | Admin model form | The four fields, revealed when Status leaves `active` (hidden, not disabled, as on the tool form); `replacedBy` is a select over active models |
 
 **Compatibility on deploy:** every existing row lacks `status` and reads
@@ -502,12 +525,15 @@ stop running and tell its users to contact an administrator."*)
    `get_managed_model`, which keys on the row UUID, with a provider model id,
    so it always misses and saves anyway (`user_settings/routes.py:47`).
    `_validate_model` in the Designer documents the same trap and avoids it.
-5. **Paused-turn resume does not re-check model access** (`routes.py:3094`).
-   It's short-lived, so low severity, but it is the one runtime path that would
-   bypass Stage 3 if the §7 resolver isn't added there.
+5. **Paused-turn resume re-checks neither model access nor retirement**
+   (`routes.py`, the `is_resume` branch). Deliberate for retirement — the
+   resume must rebuild the paused agent's cache slot — and low severity because
+   snapshots are short-lived, but it is the one runtime path Stage 3 does not
+   reach.
 6. **The delete endpoint deletes the row before revoking**, and can't revoke
-   wildcards (§2). Once tombstones exist, the admin Delete button should
-   refuse a model that still has holders, or become the tombstone action.
+   wildcards (§2). It now refuses a model that another row names as its
+   replacement (409); it should go further and refuse a model that still has
+   holders, or become the tombstone action.
 7. **CLAUDE.md's "single `_grants_access` predicate" note** describes
    `ModelAccessService` accurately but implies it guards the runtime, which it
    doesn't (§1). Correct it when §7 lands.
