@@ -184,3 +184,24 @@ class SharedTasksResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     tasks: List[SharedTaskResponse] = Field(..., description="Most recently shared first")
+
+
+class DirectoryPersonResponse(BaseModel):
+    """Someone the caller could invite. ``memberRole`` is set if they are already in the project."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    email: str
+    name: str
+    has_signed_in: bool = Field(..., alias="hasSignedIn")
+    member_role: Optional[ProjectRole] = Field(None, alias="memberRole")
+
+
+class DirectoryResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    people: List[DirectoryPersonResponse] = Field(
+        ...,
+        description="Best match first. A well-formed email nobody has signed in with is returned last, "
+        "with hasSignedIn false, so it can always be invited.",
+    )
