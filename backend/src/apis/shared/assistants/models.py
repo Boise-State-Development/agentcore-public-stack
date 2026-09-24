@@ -102,6 +102,13 @@ class AgentModelConfig(BaseModel):
     )
 
 
+# The most an author may write as an agent's instructions (characters). Enforced where
+# instructions are saved and where a preview sends them live. The prompt builder's
+# runtime bound is this plus room for the platform text composed around it, so a saved
+# agent is never truncated. Prod's longest was 32,887 on 2026-09-24.
+MAX_AGENT_INSTRUCTIONS_CHARS = 100_000
+
+
 class AgentBinding(BaseModel):
     """A single primitive binding on an Agent (D3).
 
@@ -441,7 +448,7 @@ class CreateAssistantRequest(BaseModel):
 
     name: str = Field(..., description="Assistant display name")
     description: str = Field(..., description="Short summary")
-    instructions: str = Field(..., description="System prompt")
+    instructions: str = Field(..., max_length=MAX_AGENT_INSTRUCTIONS_CHARS, description="System prompt")
     visibility: Literal["PRIVATE", "PUBLIC", "SHARED"] = Field("PRIVATE", description="Access control")
     tags: Optional[List[str]] = Field(default_factory=list, description="Search keywords")
     starters: Optional[List[str]] = Field(default_factory=list, description="Conversation starter prompts")
@@ -465,7 +472,7 @@ class UpdateAssistantRequest(BaseModel):
 
     name: Optional[str] = Field(None, description="Assistant display name")
     description: Optional[str] = Field(None, description="Short summary")
-    instructions: Optional[str] = Field(None, description="System prompt")
+    instructions: Optional[str] = Field(None, max_length=MAX_AGENT_INSTRUCTIONS_CHARS, description="System prompt")
     visibility: Optional[Literal["PRIVATE", "PUBLIC", "SHARED"]] = Field(None, description="Access control")
     tags: Optional[List[str]] = Field(None, description="Search keywords")
     starters: Optional[List[str]] = Field(None, description="Conversation starter prompts")

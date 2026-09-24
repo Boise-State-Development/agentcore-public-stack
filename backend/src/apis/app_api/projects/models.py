@@ -19,7 +19,7 @@ from apis.app_api.documents.models import (
     UploadUrlResponse,
 )
 from apis.app_api.web_sources.models import StartCrawlResponse
-from apis.shared.assistants.models import AgentModelConfig, VersionFieldChange
+from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS, AgentModelConfig, VersionFieldChange
 from apis.shared.projects.models import (
     MemberRole,
     Project,
@@ -217,7 +217,7 @@ class DirectoryResponse(BaseModel):
 
 # ---- settings (the harness) -------------------------------------------
 
-INSTRUCTIONS_MAX_LENGTH = 100_000
+INSTRUCTIONS_MAX_LENGTH = MAX_AGENT_INSTRUCTIONS_CHARS
 MAX_BINDINGS_PER_KIND = 100
 
 

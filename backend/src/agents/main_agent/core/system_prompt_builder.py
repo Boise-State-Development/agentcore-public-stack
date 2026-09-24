@@ -5,17 +5,23 @@ System prompt construction for agent
 import logging
 from typing import Optional
 from agents.main_agent.utils.timezone import get_current_date_pacific
+from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
 
 logger = logging.getLogger(__name__)
 
 
-# Hard upper bound on the length of a user-supplied custom system prompt.
-# Defense in depth: token-count limits are model-specific and the LLM
-# won't error meaningfully on an absurdly large prompt — we'd rather
-# fail fast at the boundary. 8 KiB is comfortably more than every
-# legitimate assistant ``instructions`` value and assistant test prompt
-# we've seen in production.
-MAX_USER_PROMPT_LENGTH = 8 * 1024  # 8 KiB
+# Hard upper bound on the text wrapped in ``<user_instructions>``: defense in depth
+# against an absurd prompt, not a budget for authors. It has to hold everything composed
+# into that block: the default platform prompt and date, an agent's instructions (capped
+# at save by MAX_AGENT_INSTRUCTIONS_CHARS), a bound memory block (MEMORY_INJECTION_MAX_BYTES,
+# 24 KB by default) and an active prompt template.
+#
+# It used to be 8 KiB, sized for instructions alone, while the default prompt sharing it
+# had grown to ~6.8K characters, so every agent's instructions were silently cut after
+# ~1,400 characters (133 of 232 prod agents, 2026-09-24). A test in
+# ``test_system_prompt_safety_floor`` keeps the headroom honest as the platform text grows.
+PLATFORM_PROMPT_HEADROOM = 64 * 1024
+MAX_USER_PROMPT_LENGTH = MAX_AGENT_INSTRUCTIONS_CHARS + PLATFORM_PROMPT_HEADROOM
 
 # Floor that always sits above any user-supplied custom system prompt.
 # Tool-safety policies, code-execution limits, and the agent's identity
