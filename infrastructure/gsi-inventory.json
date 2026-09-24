@@ -58,6 +58,7 @@
     ],
     "sessions-metadata": [
       "DueScheduleIndex",
+      "ProjectSessionIndex",
       "SessionLookupIndex",
       "SessionRecencyIndex",
       "UserTimestampIndex"
