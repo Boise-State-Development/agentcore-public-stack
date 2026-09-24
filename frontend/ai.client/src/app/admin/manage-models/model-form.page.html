@@ -1151,6 +1151,33 @@
           </div>
         </div>
       </form>
+
+      <!-- Delete lives here rather than on the list row: a deleted model's usage
+           prices to nothing, and a retired model must keep its row. -->
+      @if (isEditMode()) {
+        <section class="mt-12 rounded-2xl border border-state-danger-200 p-4 sm:p-6 dark:border-state-danger-800">
+          <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Danger zone</h2>
+          <div class="mt-2 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+              Deleting removes the model from the catalog and revokes it for every user.
+              To stop a model running without losing its history, set Status to Retired instead.
+            </p>
+            <button
+              type="button"
+              (click)="deleteModel()"
+              [disabled]="isDeleting() || isSubmitting()"
+              class="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl border border-state-danger-300 px-4 py-2 text-sm/6 font-medium text-state-danger-700 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-state-danger-700 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
+            >
+              <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+              @if (isDeleting()) {
+                Deleting…
+              } @else {
+                Delete model
+              }
+            </button>
+          </div>
+        </section>
+      }
     }
   </div>
 </div>

@@ -9,7 +9,6 @@ import {
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { Dialog } from '@angular/cdk/dialog';
 import {
   CdkDrag,
   CdkDragDrop,
@@ -17,28 +16,19 @@ import {
   CdkDropList,
   moveItemInArray,
 } from '@angular/cdk/drag-drop';
-import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPlus,
   heroMagnifyingGlass,
-  heroChevronDown,
   heroPencilSquare,
-  heroTrash,
   heroBars2,
 } from '@ng-icons/heroicons/outline';
 import { heroStarSolid } from '@ng-icons/heroicons/solid';
 import { ManagedModelsService } from './services/managed-models.service';
-import { AppRolesService } from '../roles/services/app-roles.service';
 import type { ManagedModel } from './models/managed-model.model';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 import { ModelIconComponent } from '../../components/model-icon/model-icon.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
-import {
-  DeleteModelDialogComponent,
-  DeleteModelDialogData,
-  DeleteModelDialogResult,
-} from './components/delete-model-dialog.component';
 
 @Component({
   selector: 'app-manage-models-page',
@@ -57,9 +47,7 @@ import {
     provideIcons({
       heroPlus,
       heroMagnifyingGlass,
-      heroChevronDown,
       heroPencilSquare,
-      heroTrash,
       heroBars2,
       heroStarSolid,
     }),
@@ -70,8 +58,6 @@ import {
 })
 export class ManageModelsPage {
   protected managedModelsService = inject(ManagedModelsService);
-  private appRolesService = inject(AppRolesService);
-  private dialog = inject(Dialog);
   private injector = inject(Injector);
 
   // Search and filter signals
@@ -79,14 +65,8 @@ export class ManageModelsPage {
   providerFilter = signal<string>('');
   enabledFilter = signal<string>('');
 
-  // Row detail expansion state (set of model ids currently expanded)
-  private expandedIds = signal<ReadonlySet<string>>(new Set());
-
   // Models with an in-flight enable/disable request
   private togglingIds = signal<ReadonlySet<string>>(new Set());
-
-  // Model currently being deleted (single in-flight delete at a time)
-  private deletingId = signal<string | null>(null);
 
   private allModels = computed(() => this.managedModelsService.getManagedModels());
 
@@ -219,22 +199,6 @@ export class ManageModelsPage {
     this.enabledFilter.set('');
   }
 
-  isExpanded(modelId: string): boolean {
-    return this.expandedIds().has(modelId);
-  }
-
-  toggleExpand(modelId: string): void {
-    this.expandedIds.update(current => {
-      const next = new Set(current);
-      if (next.has(modelId)) {
-        next.delete(modelId);
-      } else {
-        next.add(modelId);
-      }
-      return next;
-    });
-  }
-
   isToggling(modelId: string): boolean {
     return this.togglingIds().has(modelId);
   }
@@ -259,50 +223,5 @@ export class ManageModelsPage {
         return next;
       });
     }
-  }
-
-  isDeleting(modelId: string): boolean {
-    return this.deletingId() === modelId;
-  }
-
-  /**
-   * Open the confirmation dialog and, if confirmed, delete the model.
-   * Errors stay on this page so the admin keeps their place in the list.
-   */
-  async deleteModel(model: ManagedModel): Promise<void> {
-    if (this.deletingId() !== null) {
-      return;
-    }
-
-    const dialogRef = this.dialog.open<DeleteModelDialogResult>(
-      DeleteModelDialogComponent,
-      {
-        data: { modelId: model.modelId, modelName: model.modelName } as DeleteModelDialogData,
-      },
-    );
-
-    const confirmed = await firstValueFrom(dialogRef.closed);
-    if (!confirmed) {
-      return;
-    }
-
-    this.deletingId.set(model.id);
-    try {
-      await this.managedModelsService.deleteModel(model.id);
-    } catch (error) {
-      console.error('Error deleting model:', error);
-      alert('Failed to delete model. Please try again.');
-    } finally {
-      this.deletingId.set(null);
-    }
-  }
-
-  /**
-   * Get the display name for a role ID.
-   * Falls back to the role ID if not found.
-   */
-  getRoleDisplayName(roleId: string): string {
-    const role = this.appRolesService.getRoleById(roleId);
-    return role?.displayName ?? roleId;
   }
 }
