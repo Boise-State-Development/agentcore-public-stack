@@ -527,6 +527,12 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
     - The Version link on the card uses `dark:text-primary-50`.
     - A focused notification's time uses `dark:text-gray-300` (it was 3.96:1 on `gray-700`).
 - **1.9 Docs:** `docs-site/…/features/projects.md`, `admin/projects.md`, env-var table entries.
+  **1.9 (as built):**
+  - `docs-site/…/features/projects.md` is the user guide: roles table, tabs, tasks and sharing, files, settings history and the degrade notice, notifications, personal instructions, archive/delete/transfer.
+  - `docs-site/…/admin/projects.md` covers the `admin.projects` routes (there is no admin page yet), what the kill switch does, the configuration table and where the data lives.
+  - Env-var entries: a Shared Projects section in `backend/src/.env.example` (table, switch, audit table, `PROJECTS_MAX_MEMBERS`, `PROJECTS_EDITORS_MANAGE_MEMBERS_DEFAULT`, `DIRECTORY_PROVIDER`) and a table on the docs-site environment-variables page.
+  - §8 values that nothing reads yet are left out of the docs until their phase ships: `PROJECTS_MAX_KNOWLEDGE_ITEMS`, the Graph directory settings, memory lint and budgets, `PROJECTS_DISALLOWED_TOOL_IDS`, email notifications, archive retention.
+  - **Documented gap:** `PROJECTS_ENABLED` gates app-api only. The inference API reads no flag, so while the switch is off a member can still run a turn in an existing project task on the project's harness. The admin page says so.
 
 ### Phase 2 — project memory
 - **2.1** Memory tools cacheable (`_create_cache_key` gains space ids) — prerequisite, its own PR with `C#`-row proof of cache hits across turns.
