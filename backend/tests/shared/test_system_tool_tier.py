@@ -93,6 +93,30 @@ class TestRoundTrip:
         assert restored.always_on is True  # via the validator
 
 
+class TestAccountCategory:
+    """The account tools (whoami, get_my_quota, get_my_settings) are seeded
+    with category='account'. Regression: that value must be a valid
+    ToolCategory member, or list_tools() 500s when reading the seeded rows
+    back (it built ToolDefinition from every catalog item)."""
+
+    def test_account_is_a_valid_category(self):
+        assert ToolCategory.ACCOUNT.value == "account"
+
+    def test_account_category_survives_from_dynamo_item(self):
+        tool = ToolDefinition.from_dynamo_item(
+            {
+                "toolId": "get_my_quota",
+                "displayName": "Check my quota",
+                "description": "d",
+                "category": "account",
+                "system": True,
+                "hidden": False,
+            }
+        )
+        assert tool.category == ToolCategory.ACCOUNT
+        assert tool.system is True
+
+
 class TestUserToolAccessCarriesHidden:
     def test_hidden_defaults_false_and_round_trips_by_alias(self):
         access = UserToolAccess(

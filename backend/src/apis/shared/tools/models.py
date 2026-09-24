@@ -35,6 +35,7 @@ class ToolCategory(str, Enum):
     RESEARCH = "research"
     FINANCE = "finance"
     GATEWAY = "gateway"
+    ACCOUNT = "account"  # Platform self-service tools (whoami, get_my_quota, etc.)
     CUSTOM = "custom"
 
 
