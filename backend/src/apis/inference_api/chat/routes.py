@@ -362,6 +362,12 @@ async def _plain_turn_prompt(input_data, user_id: Optional[str]) -> Optional[str
     )
 
 
+PROJECTS_DISABLED_MESSAGE = (
+    "Projects are turned off here, so this project task can't continue. "
+    "Your conversation history is still here, and nothing in the project was deleted."
+)
+
+
 async def _project_turn_refusal(project_id: Optional[str]) -> Optional[str]:
     """Why a project harness may not start a turn right now, or None if it may.
 
@@ -2887,6 +2893,28 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             logger.warning(
                 "Assistant lookup returned None (review_preview=%s)", is_review_preview
             )
+            # A project task while Projects are switched off: the harness refuses
+            # everyone, so say why in the conversation rather than as a bare 403.
+            from apis.shared.assistants.service import is_disabled_project_harness
+
+            if await is_disabled_project_harness(input_data.rag_assistant_id):
+                refusal = PROJECTS_DISABLED_MESSAGE
+                refused_event = ConversationalErrorEvent(
+                    code=ErrorCode.FORBIDDEN, message=refusal, recoverable=False
+                )
+                return StreamingResponse(
+                    stream_conversational_message(
+                        message=refusal,
+                        stop_reason="error",
+                        metadata_event=refused_event,
+                        session_id=input_data.session_id,
+                        user_id=user_id,
+                        user_input=input_data.message,
+                    ),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": input_data.session_id},
+                )
+
             # Check if assistant exists at all to provide better error message
             from apis.shared.assistants.service import assistant_exists
 
