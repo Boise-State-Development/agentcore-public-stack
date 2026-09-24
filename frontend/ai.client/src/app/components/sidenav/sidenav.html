@@ -42,7 +42,13 @@
     @if (isAdminChrome()) {
         <app-admin-nav />
     } @else {
-        <div class="sidenav-body-enter shrink-0 px-3 pb-2">
+        <!--
+            New Session is the only part of the chat body pinned in place; the
+            nav entries and the session list scroll together beneath it, so a
+            short window gives the conversations the whole column instead of
+            what is left under a frozen block of links.
+        -->
+        <div class="sidenav-body-enter shrink-0 px-3">
             <!-- New Session -->
             <button
                 (click)="newSession()"
@@ -55,104 +61,117 @@
                 </div>
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">New Session</span>
             </button>
-
-            <!--
-                Agents (Agent Designer + Marketplace) — the ONE noun (Marketplace D1).
-
-                Ungated, and deliberately so. This used to hang on `showAgents()` — "the
-                /agents list call did not 404", i.e. the AGENTS_API_ENABLED /
-                AGENT_MARKETPLACE_ENABLED kill switches — which meant the entry could only
-                appear after a network round-trip, popping into a nav the user was already
-                reading. A kill switch that is off in no environment we run bought a visible
-                layout shift on every single page load, and the probe it rode was the sidenav's
-                only reason to fetch the agent list at boot (every real consumer — the agents
-                page, the composer `@`-menu, the schedule form — loads it itself).
-
-                With the switch off the entry now leads to an empty agents page rather than
-                being absent. That is the trade: the page degrades on its own (`load()` swallows
-                the error), and the nav stays still.
-            -->
-            <a
-                routerLink="/agents"
-                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
-                (click)="sidenavService.close()"
-                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
-                <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
-                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
-                    </svg>
-                </div>
-                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Agents</span>
-            </a>
-
-            <!-- Shared Projects (shared-projects §6). Always shown, like Agents: the page
-                 itself says so when Projects is switched off in this environment. -->
-            <a
-                routerLink="/projects"
-                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
-                (click)="sidenavService.close()"
-                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
-                <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
-                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
-                    </svg>
-                </div>
-                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Projects</span>
-            </a>
-
-            <!--
-                Artifacts — the library of everything the assistant has made, across
-                every conversation. Ungated like Agents above, and more simply so:
-                `/artifacts` carries only `authGuard`, so there is no kill switch for
-                the entry to ride in the first place.
-            -->
-            <a
-                routerLink="/artifacts"
-                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
-                (click)="sidenavService.close()"
-                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
-                <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
-                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-                    </svg>
-                </div>
-                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Artifacts</span>
-            </a>
-
-            <!--
-                Customize — the capabilities hub: tools and skills now, connectors in
-                step 2. Ungated like Agents and Artifacts above; `/customize/*` carries
-                only `authGuard`, so there is no kill switch for the entry to ride.
-
-                `/my-skills` no longer exists as its own route — Customize → Skills
-                absorbed it, so authoring and enablement are one surface reached from
-                this one entry, without a fourth top-level item competing with the
-                three that matter.
-
-                See `docs/specs/customize-surface.md`.
-            -->
-            <a
-                routerLink="/customize"
-                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
-                (click)="sidenavService.close()"
-                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
-                <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
-                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75" />
-                    </svg>
-                </div>
-                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Customize</span>
-            </a>
         </div>
 
-        <nav class="flex-1 overflow-y-auto px-3 pb-4">
-            <app-session-list></app-session-list>
-        </nav>
+        <div class="relative flex min-h-0 flex-1 flex-col">
+            <!-- Fade under New Session, shown once the region has scrolled, so
+                 rows slide out beneath the button instead of being sliced by it. -->
+            <div
+                aria-hidden="true"
+                class="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-linear-to-b from-gray-100 to-transparent transition-opacity duration-200 motion-reduce:transition-none dark:from-gray-900"
+                [class.opacity-0]="!bodyScrolled()"></div>
+
+            <div class="flex-1 overflow-y-auto px-3 pb-4" (scroll)="onBodyScroll($event)">
+                <div class="sidenav-body-enter pb-2">
+                    <!--
+                        Agents (Agent Designer + Marketplace) — the ONE noun (Marketplace D1).
+
+                        Ungated, and deliberately so. This used to hang on `showAgents()` — "the
+                        /agents list call did not 404", i.e. the AGENTS_API_ENABLED /
+                        AGENT_MARKETPLACE_ENABLED kill switches — which meant the entry could only
+                        appear after a network round-trip, popping into a nav the user was already
+                        reading. A kill switch that is off in no environment we run bought a visible
+                        layout shift on every single page load, and the probe it rode was the sidenav's
+                        only reason to fetch the agent list at boot (every real consumer — the agents
+                        page, the composer `@`-menu, the schedule form — loads it itself).
+
+                        With the switch off the entry now leads to an empty agents page rather than
+                        being absent. That is the trade: the page degrades on its own (`load()` swallows
+                        the error), and the nav stays still.
+                    -->
+                    <a
+                        routerLink="/agents"
+                        routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                        (click)="sidenavService.close()"
+                        class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                        <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                            <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
+                            </svg>
+                        </div>
+                        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Agents</span>
+                    </a>
+
+                    <!-- Shared Projects (shared-projects §6). Always shown, like Agents: the page
+                         itself says so when Projects is switched off in this environment. -->
+                    <a
+                        routerLink="/projects"
+                        routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                        (click)="sidenavService.close()"
+                        class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                        <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                            <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
+                            </svg>
+                        </div>
+                        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Projects</span>
+                    </a>
+
+                    <!--
+                        Artifacts — the library of everything the assistant has made, across
+                        every conversation. Ungated like Agents above, and more simply so:
+                        `/artifacts` carries only `authGuard`, so there is no kill switch for
+                        the entry to ride in the first place.
+                    -->
+                    <a
+                        routerLink="/artifacts"
+                        routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                        (click)="sidenavService.close()"
+                        class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                        <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                            <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                            </svg>
+                        </div>
+                        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Artifacts</span>
+                    </a>
+
+                    <!--
+                        Customize — the capabilities hub: tools and skills now, connectors in
+                        step 2. Ungated like Agents and Artifacts above; `/customize/*` carries
+                        only `authGuard`, so there is no kill switch for the entry to ride.
+
+                        `/my-skills` no longer exists as its own route — Customize → Skills
+                        absorbed it, so authoring and enablement are one surface reached from
+                        this one entry, without a fourth top-level item competing with the
+                        three that matter.
+
+                        See `docs/specs/customize-surface.md`.
+                    -->
+                    <a
+                        routerLink="/customize"
+                        routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                        (click)="sidenavService.close()"
+                        class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                        <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                            <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75" />
+                            </svg>
+                        </div>
+                        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Customize</span>
+                    </a>
+                </div>
+
+                <nav>
+                    <app-session-list></app-session-list>
+                </nav>
+            </div>
+        </div>
     }
 
     <!-- User dropdown fixed at bottom -->
     @if (userService.currentUser(); as user) {
-        <div class="shrink-0 border-t border-gray-200 px-3 py-3 dark:border-white/10">
+        <div class="shrink-0 border-t border-gray-200 px-3 py-2 dark:border-white/10">
             <app-user-dropdown [user]="user" [isAdmin]="isAdmin()" (logout)="handleLogout()"></app-user-dropdown>
         </div>
     }

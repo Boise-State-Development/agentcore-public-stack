@@ -170,15 +170,17 @@ def test_the_platform_text_fits_in_its_headroom() -> None:
     """Fails when the default prompt grows toward the room reserved for it.
 
     Everything besides the author's instructions shares PLATFORM_PROMPT_HEADROOM: the
-    default prompt and date, a bound memory block at its default cap, and slack for
-    headings and a prompt template. Outgrowing it would silently truncate the end of
+    default prompt and date, a bound memory block at its default cap, the user's personal
+    instructions, and slack for headings and a prompt template. Outgrowing it would silently truncate the end of
     the block again, so raise the headroom rather than weakening this.
     """
     from agents.main_agent.core.system_prompt_builder import PLATFORM_PROMPT_HEADROOM
     from apis.shared.memory.hydration import _DEFAULT_MAX_TOTAL_BYTES
+    from apis.shared.user_settings.models import MAX_PERSONAL_INSTRUCTIONS_CHARS
 
     platform = len(SystemPromptBuilder().build(include_date=True))
-    assert platform + _DEFAULT_MAX_TOTAL_BYTES + 16 * 1024 <= PLATFORM_PROMPT_HEADROOM
+    reserved = _DEFAULT_MAX_TOTAL_BYTES + MAX_PERSONAL_INSTRUCTIONS_CHARS + 16 * 1024
+    assert platform + reserved <= PLATFORM_PROMPT_HEADROOM
 
 
 def test_saved_and_previewed_instructions_share_one_cap() -> None:
