@@ -137,6 +137,22 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        // Shared Projects (shared-projects §6). The tab is part of the URL so a link can
+        // land on Members or Settings; the bare project URL opens its Overview.
+        path: 'projects/:id/:tab',
+        loadComponent: () => import('./projects/detail/project-detail.page').then(m => m.ProjectDetailPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'projects/:id',
+        redirectTo: 'projects/:id/overview',
+    },
+    {
+        path: 'projects',
+        loadComponent: () => import('./projects/projects.page').then(m => m.ProjectsPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'schedules/new',
         loadComponent: () => import('./schedules/schedule-form/schedule-form.page').then(m => m.ScheduleFormPage),
         canActivate: [authGuard],

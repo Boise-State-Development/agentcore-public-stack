@@ -102,6 +102,21 @@
                         <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Agents</span>
                     </a>
 
+                    <!-- Shared Projects (shared-projects §6). Always shown, like Agents: the page
+                         itself says so when Projects is switched off in this environment. -->
+                    <a
+                        routerLink="/projects"
+                        routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                        (click)="sidenavService.close()"
+                        class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                        <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                            <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
+                            </svg>
+                        </div>
+                        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Projects</span>
+                    </a>
+
                     <!--
                         Artifacts — the library of everything the assistant has made, across
                         every conversation. Ungated like Agents above, and more simply so:
