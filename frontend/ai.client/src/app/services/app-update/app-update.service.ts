@@ -1,5 +1,8 @@
 import { DOCUMENT, Location } from '@angular/common';
 import { DestroyRef, Injectable, InjectionToken, inject } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { NavigationEnd, Router } from '@angular/router';
+import { filter } from 'rxjs';
 import { ChatStateService } from '../../session/services/chat/chat-state.service';
 import { FileUploadService } from '../file-upload/file-upload.service';
 import { ToastService } from '../toast/toast.service';
@@ -84,6 +87,7 @@ const PROMPT_MESSAGE_BUSY =
 export class AppUpdateService {
   private readonly document = inject(DOCUMENT);
   private readonly location = inject(Location);
+  private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   private readonly toast = inject(ToastService);
   private readonly chatState = inject(ChatStateService);
@@ -105,6 +109,23 @@ export class AppUpdateService {
 
   private lastVersionCheckAt = 0;
   private versionCheckInFlight = false;
+
+  constructor() {
+    // The failed destination is only "where the user is going" until they
+    // successfully go somewhere else. After that, Refresh reloads the page
+    // they are on — sending them back to the view that failed minutes ago,
+    // away from the conversation they have since opened, would be a surprise.
+    // A failed navigation ends in NavigationError, not NavigationEnd, so the
+    // failure that set the destination never clears it.
+    this.router.events
+      .pipe(
+        filter(event => event instanceof NavigationEnd),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe(() => {
+        this.refreshHref = null;
+      });
+  }
 
   /**
    * A navigation to `targetUrl` (a router URL such as `/settings/api-keys`)
@@ -180,7 +201,7 @@ export class AppUpdateService {
 
   private promptRefresh(href: string | null): void {
     // A navigation's destination beats "reload where I am" — it is where the
-    // user was trying to go.
+    // user was trying to go (until they navigate elsewhere; see the constructor).
     if (href) this.refreshHref = href;
     const live =
       this.promptToastId !== null &&
