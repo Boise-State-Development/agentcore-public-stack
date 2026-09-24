@@ -8,6 +8,17 @@ import { Message } from '../models/message.model';
 import type { UiResourceEvent } from '../../../shared/utils/stream-parser';
 
 /**
+ * Sessions the sidebar asks for at a time: the first load, and each page
+ * fetched as the user scrolls toward the end of the list. A little more than
+ * a tall window shows, so the first screen is full without front-loading a
+ * user's whole history.
+ */
+export const SIDEBAR_PAGE_SIZE = 30;
+
+/** `GET /sessions` rejects a `limit` above this (`le=1000` on the route). */
+const MAX_SESSIONS_LIMIT = 1000;
+
+/**
  * Query parameters for listing sessions.
  */
 export interface ListSessionsParams {
@@ -173,12 +184,26 @@ export class SessionService {
   });
 
   /**
-   * Signal for pagination parameters used by the sessions resource.
-   * Update this signal to trigger a refetch with new parameters.
-   * Angular's resource API automatically tracks signals read within the loader,
-   * so reading this signal inside the loader makes it reactive.
+   * How many sessions the sidebar holds from the API — one page to start,
+   * growing by a page each time `loadMoreSessions` appends one.
+   *
+   * Every reload re-fetches this whole window in one request rather than
+   * just the first page. Reloads happen constantly (new session, delete,
+   * rename, tab focus, mark unread), and a first-page-only refetch would
+   * drop rows: a new session pushes page one's last row down past the page
+   * boundary, where the pages already appended below it — cut from the old
+   * cursor — do not have it either.
    */
-  private sessionsParams = signal<ListSessionsParams>({});
+  private sessionsWindow = signal(SIDEBAR_PAGE_SIZE);
+
+  /** A scroll-triggered page is in flight. */
+  readonly isLoadingMoreSessions = signal(false);
+
+  /**
+   * The last scroll-triggered page failed. Stops the sidebar re-requesting it
+   * in a loop while the sentinel stays on screen; cleared by the next attempt.
+   */
+  readonly loadMoreSessionsError = signal(false);
 
   /**
    * Signal to control when the sessions resource should load.
@@ -219,8 +244,10 @@ export class SessionService {
   /**
    * Reactive resource for fetching sessions.
    *
-   * This resource automatically refetches when `sessionsParams` or `sessionsRequest` signals change
-   * because Angular's resource API tracks signals read within the loader function.
+   * The loader runs untracked, so nothing it reads triggers a fetch — loads
+   * happen through `reload()` (see `enableSessionsLoading` and `refreshSessions`).
+   * Each load fetches the sidebar's current window (`sessionsWindow`); further
+   * pages are appended by `loadMoreSessions`.
    * Provides reactive signals for data, loading state, and errors.
    *
    * The resource ensures the user is authenticated before making the HTTP request.
@@ -252,14 +279,11 @@ export class SessionService {
    * // Handle errors
    * const error = sessionService.sessionsResource.error();
    *
-   * // Update pagination to trigger refetch
-   * sessionService.updateSessionsParams({ limit: 50 });
-   *
-   * // Get next page
-   * sessionService.updateSessionsParams({ limit: 50, next_token: nextToken });
+   * // Append the next page
+   * await sessionService.loadMoreSessions();
    *
    * // Manually refetch
-   * sessionService.sessionsResource.refetch();
+   * sessionService.sessionsResource.reload();
    * ```
    */
   readonly sessionsResource = resource({
@@ -269,12 +293,8 @@ export class SessionService {
         return null;
       }
 
-      // Read params signal to make resource reactive to pagination changes
-      const params = this.sessionsParams();
-
-      // Ensure user is authenticated before making the request
       // Fetch sessions from API (without merging cache here)
-      return this.getSessions(params);
+      return this.getSessions({ limit: Math.min(this.sessionsWindow(), MAX_SESSIONS_LIMIT) });
     }
   });
 
@@ -331,23 +351,43 @@ export class SessionService {
    */
   disableSessionsLoading(): void {
     this.sessionsRequest.set(false);
+    // The next user to sign in starts from one page, not this one's scroll depth.
+    this.sessionsWindow.set(SIDEBAR_PAGE_SIZE);
+    this.loadMoreSessionsError.set(false);
   }
 
   /**
-   * Updates the pagination parameters for the sessions resource.
-   * This will automatically trigger a refetch of the resource.
+   * Appends the next page of sessions to the sidebar list.
    *
-   * @param params - New pagination parameters
+   * No-op while a load or reload is running, while another page is in
+   * flight, or once the list is exhausted. A page that lands after a reload
+   * has started is dropped: writing it would abort that reload (`set()`
+   * cancels the in-progress load), and it was cut from a cursor the reload is
+   * about to replace. The caller asks again once the reload settles.
    */
-  updateSessionsParams(params: Partial<ListSessionsParams>): void {
-    this.sessionsParams.update(current => ({ ...current, ...params }));
-  }
+  async loadMoreSessions(): Promise<void> {
+    if (this.isLoadingMoreSessions() || this.sessionsResource.isLoading()) return;
+    const token = this.sessionsResource.hasValue() ? this.sessionsResource.value()?.nextToken : null;
+    if (!token) return;
 
-  /**
-   * Resets pagination parameters to default values and triggers a refetch.
-   */
-  resetSessionsParams(): void {
-    this.sessionsParams.set({});
+    this.isLoadingMoreSessions.set(true);
+    this.loadMoreSessionsError.set(false);
+    try {
+      const page = await this.getSessions({ limit: SIDEBAR_PAGE_SIZE, next_token: token });
+
+      const latest = this.sessionsResource.hasValue() ? this.sessionsResource.value() : null;
+      if (this.sessionsResource.isLoading() || !latest || latest.nextToken !== token) return;
+
+      const seen = new Set(latest.sessions.map(s => s.sessionId));
+      const sessions = [...latest.sessions, ...page.sessions.filter(s => !seen.has(s.sessionId))];
+      this.sessionsResource.set({ ...latest, sessions, nextToken: page.nextToken });
+      this.sessionsWindow.set(Math.max(SIDEBAR_PAGE_SIZE, sessions.length));
+    } catch (error) {
+      console.error('Failed to load more sessions:', error);
+      this.loadMoreSessionsError.set(true);
+    } finally {
+      this.isLoadingMoreSessions.set(false);
+    }
   }
 
   /**

@@ -1,4 +1,4 @@
-import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector, effect, untracked } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
@@ -17,10 +17,11 @@ import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../confirmation-dialog';
 import { parseIso } from '../../../../utils/date';
+import { InViewDirective } from './in-view.directive';
 
 @Component({
   selector: 'app-session-list',
-  imports: [RouterLink, RouterLinkActive, NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem],
+  imports: [RouterLink, RouterLinkActive, NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem, InViewDirective],
   providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
@@ -130,6 +131,47 @@ export class SessionList {
     const response = this.mergedSessionsResource();
     return response?.nextToken ?? null;
   });
+
+  /** The end-of-list sentinel was last reported on (or just below) screen. */
+  protected readonly endOfListVisible = signal(false);
+
+  /** Bumped after every page attempt, so the sentinel re-reports once it lays out. */
+  protected readonly endOfListRemeasure = signal(0);
+
+  protected readonly loadMoreError = this.sessionService.loadMoreSessionsError;
+
+  /**
+   * Fetch the next page while the end of the list is in view.
+   *
+   * Each sighting pays for one page. It is spent the moment the fetch starts,
+   * and the sentinel is re-measured once the attempt settles — after the new
+   * rows have laid out. Without that, the effect re-runs the instant the page
+   * lands, still holding the stale "visible" from before the rows pushed the
+   * sentinel down, and every scroll to the bottom fetches a page too many.
+   *
+   * The re-measure also keeps a short list pulling: a page that leaves the
+   * sentinel on screen (a tall window, or a page dropped because a reload
+   * overtook it) reports visible again and fetches the next. A sighting that
+   * arrives mid-reload waits for it rather than being spent. An error stops
+   * the loop until retried.
+   */
+  private readonly loadMoreEffect = effect(() => {
+    if (!this.endOfListVisible() || !this.nextToken()) return;
+    if (this.sessionService.isLoadingMoreSessions() || this.loadMoreError()) return;
+    if (this.sessionsResource.isLoading()) return;
+    untracked(() => {
+      this.endOfListVisible.set(false);
+      this.loadMore();
+    });
+  });
+
+  protected retryLoadMore(): void {
+    this.loadMore();
+  }
+
+  private loadMore(): void {
+    void this.sessionService.loadMoreSessions().finally(() => this.endOfListRemeasure.update(n => n + 1));
+  }
 
   /**
    * Computed signal for loading state — i.e. "we have nothing to draw yet".

@@ -31,7 +31,10 @@ describe('SessionList', () => {
       mergedSessionsResource: signal({ sessions: [mockSession], nextToken: null }),
       currentSession: signal(mockSession),
       deleteSession: vi.fn().mockResolvedValue(undefined),
-      sessionsResource: { value: vi.fn().mockReturnValue({ sessions: [mockSession], nextToken: null }), error: vi.fn().mockReturnValue(null), isPending: vi.fn().mockReturnValue(false) },
+      sessionsResource: { value: vi.fn().mockReturnValue({ sessions: [mockSession], nextToken: null }), error: vi.fn().mockReturnValue(null), isPending: vi.fn().mockReturnValue(false), isLoading: signal(false) },
+      isLoadingMoreSessions: signal(false),
+      loadMoreSessionsError: signal(false),
+      loadMoreSessions: vi.fn().mockResolvedValue(undefined),
       isLocallyRead: vi.fn().mockReturnValue(false),
       markSessionRead: vi.fn().mockResolvedValue(undefined),
       markSessionUnread: vi.fn().mockResolvedValue(undefined),
@@ -106,6 +109,64 @@ describe('SessionList', () => {
       const component = await createComponent();
 
       expect(component.isLoading()).toBe(false);
+    });
+  });
+
+  describe('loading more as the end of the list comes into view', () => {
+    beforeEach(() => {
+      mockSessionService.mergedSessionsResource.set({ sessions: [mockSession], nextToken: 'p2' });
+    });
+
+    it('fetches one page per sighting, then asks the sentinel to re-measure', async () => {
+      const component = await createComponent();
+      component['endOfListVisible'].set(true);
+      TestBed.tick();
+
+      expect(mockSessionService.loadMoreSessions).toHaveBeenCalledTimes(1);
+      // The sighting is spent — a stale "visible" must not buy a second page.
+      expect(component['endOfListVisible']()).toBe(false);
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).toHaveBeenCalledTimes(1);
+
+      await vi.waitFor(() => expect(component['endOfListRemeasure']()).toBe(1));
+    });
+
+    it('does nothing until the sentinel is in view', async () => {
+      await createComponent();
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).not.toHaveBeenCalled();
+    });
+
+    it('does nothing once the list is exhausted', async () => {
+      mockSessionService.mergedSessionsResource.set({ sessions: [mockSession], nextToken: null });
+      const component = await createComponent();
+      component['endOfListVisible'].set(true);
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).not.toHaveBeenCalled();
+    });
+
+    it('holds a sighting that arrives mid-reload until the reload settles', async () => {
+      mockSessionService.sessionsResource.isLoading.set(true);
+      const component = await createComponent();
+      component['endOfListVisible'].set(true);
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).not.toHaveBeenCalled();
+      expect(component['endOfListVisible']()).toBe(true);
+
+      mockSessionService.sessionsResource.isLoading.set(false);
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops after a failed page until the user retries', async () => {
+      mockSessionService.loadMoreSessionsError.set(true);
+      const component = await createComponent();
+      component['endOfListVisible'].set(true);
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).not.toHaveBeenCalled();
+
+      component['retryLoadMore']();
+      expect(mockSessionService.loadMoreSessions).toHaveBeenCalledTimes(1);
     });
   });
 
